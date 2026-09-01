@@ -431,10 +431,8 @@ const RESTORABLE_SIBLING_GROUPS: ReadonlyArray<readonly string[]> = [
   [SQLITE_ROLLBACK_JOURNAL_SUFFIX],
 ]
 
-const assertRestorableSet = (suffixes: readonly string[]): void => {
-  const siblings = suffixes.filter(suffix => suffix !== '')
-  if (siblings.length === 0) return
-  if (RESTORABLE_SIBLING_GROUPS.some(group => siblings.every(s => group.includes(s)))) return
+const assertRestorableSet = (siblingSuffixes: readonly string[]): void => {
+  if (RESTORABLE_SIBLING_GROUPS.some(group => siblingSuffixes.every(s => group.includes(s)))) return
   throw new Error(
     'These files cannot be restored together. Select the database on its own, with its ' +
     `${WRITE_AHEAD_SIDECAR_SUFFIXES.join(' / ')} pair, or with its ` +
@@ -687,18 +685,6 @@ export async function importRawSqliteDb(
   }
 }
 
-/**
- * Whether a `PRAGMA wal_checkpoint` result says nothing is left outstanding.
- *
- * Read positionally because the two VFSes answer differently, and the first
- * cell means "nothing outstanding" as zero under both: `OPFSWriteAheadVFS`
- * returns one cell whose column NAME is the remaining page count, while under
- * `OPFSCoopSyncVFS` SQLite answers its own pragma with `busy, log, checkpointed`
- * — busy 0 in rollback-journal mode, where there is no WAL to drain at all.
- *
- * An unrecognised shape is NOT drained: the caller is about to copy the main
- * file alone, and a loud refusal beats a backup that quietly omits writes.
- */
 const EXPORT_LOCK_TIMEOUT_MS = 180_000
 
 /**
@@ -763,6 +749,18 @@ const withDeadline = async <T,>(
   }
 }
 
+/**
+ * Whether a `PRAGMA wal_checkpoint` result says nothing is left outstanding.
+ *
+ * Read positionally because the two VFSes answer differently, and the first
+ * cell means "nothing outstanding" as zero under both: `OPFSWriteAheadVFS`
+ * returns one cell whose column NAME is the remaining page count, while under
+ * `OPFSCoopSyncVFS` SQLite answers its own pragma with `busy, log, checkpointed`
+ * — busy 0 in rollback-journal mode, where there is no WAL to drain at all.
+ *
+ * An unrecognised shape is NOT drained: the caller is about to copy the main
+ * file alone, and a loud refusal beats a backup that quietly omits writes.
+ */
 const checkpointDrained = (result: unknown): boolean => {
   const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
   const row = Array.isArray(rows) ? rows[0] : undefined
