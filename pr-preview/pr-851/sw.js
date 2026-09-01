@@ -46,12 +46,16 @@
 	*/
 	/** `OPFSWriteAheadVFS`'s write-ahead log — two files, alternated WAL2-style. */
 	var WRITE_AHEAD_SIDECAR_SUFFIXES = ["-wa0", "-wa1"];
-	/** Everything derived from the main `.db` name, for inventory and backup. */
-	var DB_FILE_SIBLING_SUFFIXES = [...[
+	/**
+	* SQLite's own crash-recovery files. These must be removed BEFORE the main
+	* `.db`: left beside a fresh database of the same name, SQLite replays them.
+	*/
+	var SQLITE_JOURNAL_SUFFIXES = [
 		"-journal",
 		"-wal",
 		"-shm"
-	], ...WRITE_AHEAD_SIDECAR_SUFFIXES];
+	];
+	[...SQLITE_JOURNAL_SUFFIXES, ...WRITE_AHEAD_SIDECAR_SUFFIXES];
 	//#endregion
 	//#region src/sw/preview.ts
 	/**
@@ -411,9 +415,10 @@
 		const deleteOpfsSqliteDatabase = async (databaseName) => {
 			if (typeof env.storage?.getDirectory !== "function") return;
 			const root = await env.storage.getDirectory();
-			const siblingFailure = (await Promise.allSettled(DB_FILE_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)))).find((result) => result.status === "rejected");
-			if (siblingFailure) throw siblingFailure.reason;
+			const journalFailure = (await Promise.allSettled(SQLITE_JOURNAL_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)))).find((result) => result.status === "rejected");
+			if (journalFailure) throw journalFailure.reason;
 			await removeOpfsEntryIfExists(root, databaseName);
+			await Promise.allSettled(WRITE_AHEAD_SIDECAR_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)));
 		};
 		const removeOpfsEntryIfExists = async (root, name) => {
 			try {
@@ -505,7 +510,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "cbecf56bfb4a",
+		buildId: "f337e5c9b27a",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
