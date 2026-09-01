@@ -1255,6 +1255,27 @@ const resolveDocumentAlias = async (
   return null
 }
 
+/** The stored alias bag, or `null` when it cannot be decoded.
+ *
+ *  Sync apply can land a bag the local codec rejects, and every write path here
+ *  reads the bag before deciding. A strict read fails the book on that document
+ *  forever — `runSync` holds the cursor for a failed book, so the same window
+ *  is refetched and fails identically on every sync.
+ *
+ *  `null` rather than `[]` on purpose: an empty bag reads as "the sync's to
+ *  fill", which would overwrite the very data that could not be parsed. What
+ *  cannot be read is not ours to replace, so every caller leaves it alone. */
+const readAliasBag = async (tx: any, blockId: string): Promise<readonly string[] | null> => {
+  const row = await tx.get(blockId)
+  const raw = row?.properties?.[aliasesProp.name]
+  if (raw === undefined) return []
+  try {
+    return aliasesProp.codec.decode(raw) as readonly string[]
+  } catch {
+    return null
+  }
+}
+
 /** Drop the name the document holds, so the transaction that RENAMES it can
  *  commit. Splitting the alias write out (below) is not enough on its own: A3
  *  reacts to the bag the row ALREADY has, and appends the new title to it. An
@@ -1273,8 +1294,8 @@ const releaseSyncOwnedAlias = async (
   blockId: string,
   previousContent: string,
 ): Promise<void> => {
-  const current: readonly string[] = await tx.getProperty(blockId, aliasesProp)
-  if (current.length === 0) return
+  const current = await readAliasBag(tx, blockId)
+  if (current === null || current.length === 0) return
   const claim: string | undefined = await tx.getProperty(blockId, aliasClaimProp)
   if (!isSyncOwnedAliasBag(current, claim, previousContent)) return
   await tx.setProperty(blockId, aliasesProp, [])
@@ -1310,8 +1331,8 @@ const releaseCoClaimedFallback = async (
   if (!doc || doc.deleted) return
   const claim: string | undefined = await tx.getProperty(blockId, aliasClaimProp)
   if (claim === undefined || claim === doc.content) return
-  const current: readonly string[] = await tx.getProperty(blockId, aliasesProp)
-  if (!current.includes(claim)) return
+  const current = await readAliasBag(tx, blockId)
+  if (current === null || !current.includes(claim)) return
   const claimants: readonly {id: string}[] = await tx.aliasClaimants(claim, workspaceId)
   if (claimants.every(row => row.id === blockId)) return
   await tx.setProperty(blockId, aliasesProp, current.filter(alias => alias !== claim))
@@ -1341,7 +1362,8 @@ const ensureDocumentAlias = async (
   description: string,
 ): Promise<void> => {
   await repo.tx(async (tx: any) => {
-    const current: readonly string[] = await tx.getProperty(blockId, aliasesProp)
+    const current = await readAliasBag(tx, blockId)
+    if (current === null) return
     const claim: string | undefined = await tx.getProperty(blockId, aliasClaimProp)
     if (!isSyncOwnedAliasBag(current, claim, title)) return
     const claimable = await resolveDocumentAlias(tx, blockId, title, workspaceId)
@@ -1758,7 +1780,8 @@ const ROOT_ALIAS = 'Readwise Library'
 const reclaimRootAlias = async (repo: any, rootId: string, workspaceId: string): Promise<void> => {
   try {
     await repo.tx(async (tx: any) => {
-      const stored: readonly string[] = await tx.getProperty(rootId, aliasesProp)
+      const stored = await readAliasBag(tx, rootId)
+      if (stored === null) return
       const claimable = await partitionClaimableAliases(tx, rootId, [ROOT_ALIAS], workspaceId)
       const missing = claimable.filter(alias => !stored.includes(alias))
       // Compared before writing: while the name stays contested this runs on

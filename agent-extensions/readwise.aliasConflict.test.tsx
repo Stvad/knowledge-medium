@@ -445,6 +445,32 @@ describe('readwise document alias — the title is already a page name', () => {
     expect(found.map(c => c.documentId)).toEqual([documentId(1)])
   })
 
+  it('syncs a book whose alias bag cannot be decoded, and leaves the bag alone', async () => {
+    const rootId = await createRoot()
+    await sync(rootId, book(1, 'Deep Work', 11))
+
+    // Only the alias cell — overwriting the whole bag would drop the type tag
+    // and the document would stop being a Readwise document at all.
+    const corrupt = await repo.load(documentId(1))
+    const malformed = {...corrupt!.properties, [aliasesProp.name]: ['Deep Work', 7]}
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify(malformed), documentId(1)],
+    )
+
+    // The book must still sync. Failing it holds `lastSyncedAt`, so the same
+    // window is refetched and fails the same way on every later sync.
+    await expect(syncBookToBlocks(
+      repo, WS, rootId, {...book(1, 'Deep Work', 11), author: 'C. Newport'},
+      '{title}', '', '{text}', [], [], [], REVIEW_DATE,
+    )).resolves.toBeUndefined()
+
+    // And the unreadable cell is left exactly as it was: what cannot be parsed
+    // is not the sync's to replace.
+    const after = await repo.load(documentId(1))
+    expect(after?.properties[aliasesProp.name]).toEqual(['Deep Work', 7])
+  })
+
   it('retires the placeholder when a re-title lands on a free name', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')
