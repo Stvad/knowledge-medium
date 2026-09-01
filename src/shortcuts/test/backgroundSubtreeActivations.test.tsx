@@ -201,18 +201,15 @@ describe('shortcut-surface suspension', () => {
     expect(owner(CONTESTED)).toBe('left')
   })
 
-  // KNOWN GAP, asserted as the contract we want rather than the outcome we
-  // get. Split the handover above across two commits — the arriver registers
-  // first, the leaver suspends after — and the leaver's blind
-  // `deactivate(CONTESTED)` is the only effect that re-runs. It deletes the
-  // arriver's live claim, whose own effect deps never moved, so nothing
-  // re-registers and the context ends up owned by NOBODY ('none' today).
+  // The same handover split across two commits: the arriver registers first,
+  // the leaver goes background after, so the leaver's release is the only
+  // effect that re-runs. Because releases are scoped to the claimer, it cannot
+  // take the arriver's live claim with it — a by-type removal would, and the
+  // context would end up owned by nobody, since the arriver's effect deps
+  // never moved and nothing would re-register it.
   //
-  // Suspension does not cause this — `deactivate`-by-type does
-  // (docs/activeContexts-ownership-bug.md) — but suspension is what makes it
-  // reachable without an unmount, so it belongs pinned here. Ownership-aware
-  // claims make the release scoped to the claimer and this passes; when that
-  // lands, drop the `.fails`.
+  // Background-ness is what makes that reachable without an unmount, which is
+  // why the case is pinned here rather than only with the ownership tests.
   it('hands a contested context over when the halves land in different commits', () => {
     const tree = (leftSuspended: boolean, rightMounted: boolean) => (
       <Harness>
