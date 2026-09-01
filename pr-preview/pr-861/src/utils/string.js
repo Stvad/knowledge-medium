@@ -1,0 +1,2 @@
+var e=e=>t.test(e),t=/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,n=(e,t)=>{if(e.length<=t)return e;let n=[...e];return n.length<=t?e:`${n.slice(0,t-1).join(``)}…`},r=e=>e.match(/^[^\r\n]*/)?.[0]??``,i=(e,t)=>{if(e.length<=t)return e;let n=[...e];if(n.length<=t)return e;if(t<=1)return`…`;let r=t-1,i=Math.ceil(r/2);return`${n.slice(0,i).join(``)}…${n.slice(n.length-(r-i)).join(``)}`};export{r as firstLine,e as hasLoneSurrogate,n as truncate,i as truncateMiddle};
+//# sourceMappingURL=string.js.map
