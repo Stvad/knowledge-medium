@@ -34,6 +34,12 @@ export const mergeAliasCollision = async (
     // otherwise refuses to let you delete.
     if (!await ensureDeletableThroughUi(rivalIds.map(id => repo.block(id)))) return false
 
+    // Re-read after the preflight, not before it: that await puts UI in front of
+    // the user, and the merge dispatches through the repo's AMBIENT workspace
+    // and read-only state, which a switch in the meantime has already changed.
+    // A caller checking once before calling is checking a stale answer.
+    if (repo.activeWorkspaceId !== workspaceId) return false
+
     await repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId,
       fromIds: [...rivalIds],

@@ -397,6 +397,30 @@ describe('readwise document alias — the title is already a page name', () => {
     expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise)', 'My Notes'])
   })
 
+  it('ignores a keep for a conflict that cleared while the dialog was open', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise)'])
+
+    // The rival gives the name up and a sync takes it back, all while the dialog
+    // still shows the collision. The title on screen is still correct — what is
+    // gone is the conflict.
+    await repo.tx(
+      tx => tx.setProperty('rival', aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await sync(rootId, book(1, 'Deep Work', 11))
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work'])
+
+    await acceptFallbackAlias(repo, documentId(1), 'Deep Work', WS)
+
+    // Recording it would park an acceptance on `Deep Work` and silence the next
+    // real collision on that title.
+    expect((await repo.load(documentId(1)))?.properties['readwise:aliasFallbackAcceptedFor'])
+      .toBeUndefined()
+  })
+
   it('retires the placeholder when a re-title lands on a free name', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')
@@ -511,7 +535,7 @@ describe('readwise alias conflicts — what the sync offers to resolve', () => {
     await createRivalPage('rival', 'Deep Work')
     await sync(rootId, book(1, 'Deep Work', 11))
 
-    await acceptFallbackAlias(repo, documentId(1), 'Deep Work')
+    await acceptFallbackAlias(repo, documentId(1), 'Deep Work', WS)
 
     expect(await conflicts()).toEqual([])
     // and the answer survives the syncs that follow it, which is the whole
@@ -525,7 +549,7 @@ describe('readwise alias conflicts — what the sync offers to resolve', () => {
     await createRivalPage('rival', 'Deep Work')
     await createRivalPage('rival-2', 'Digital Minimalism')
     await sync(rootId, book(1, 'Deep Work', 11))
-    await acceptFallbackAlias(repo, documentId(1), 'Deep Work')
+    await acceptFallbackAlias(repo, documentId(1), 'Deep Work', WS)
     expect(await conflicts()).toEqual([])
 
     // Re-titled straight onto another name the user holds, without the first
@@ -553,7 +577,7 @@ describe('readwise alias conflicts — what the sync offers to resolve', () => {
     // document onto another taken name while it sat open, and the click lands
     // after that.
     await sync(rootId, book(1, 'Digital Minimalism', 11))
-    await acceptFallbackAlias(repo, documentId(1), 'Deep Work')
+    await acceptFallbackAlias(repo, documentId(1), 'Deep Work', WS)
 
     // Recording the shown title alone would leave an answer for Deep Work
     // parked on the document. Nothing spends it — the clear only fires when
@@ -581,7 +605,7 @@ describe('readwise alias conflicts — what the sync offers to resolve', () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')
     await sync(rootId, book(1, 'Deep Work', 11))
-    await acceptFallbackAlias(repo, documentId(1), 'Deep Work')
+    await acceptFallbackAlias(repo, documentId(1), 'Deep Work', WS)
 
     // The rival gives the name up, so the document takes it back and the
     // answer is spent.

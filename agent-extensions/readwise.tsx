@@ -1622,6 +1622,27 @@ export type AliasConflict = {
  *  page, and catching it here would mean an alias lookup per document on every
  *  auto-sync tick, including the ticks with nothing to import. The bag check
  *  reads properties already in hand. */
+/** The conflict itself: the document does not hold its own title and someone
+ *  live does. Returns the rivals, or null when there is nothing to offer.
+ *
+ *  ONE predicate with two readers — the scan that OFFERS and the write that
+ *  ANSWERS. A dialog can sit open while the conflict clears underneath it, and
+ *  a keep answering a collision that no longer exists parks an acceptance on
+ *  that title which silences the next real one. Re-read here rather than
+ *  compared against what the dialog captured. */
+const aliasConflictRivals = async (
+  tx: any,
+  doc: any,
+  workspaceId: string,
+): Promise<any[] | null> => {
+  if (!doc.content) return null
+  const bag: readonly string[] = await tx.getProperty(doc.id, aliasesProp)
+  if (bag.includes(doc.content)) return null
+  const rivals: any[] = (await tx.aliasClaimants(doc.content, workspaceId))
+    .filter((row: any) => row.id !== doc.id)
+  return rivals.length ? rivals : null
+}
+
 export const unresolvedAliasConflicts = async (
   repo: any,
   workspaceId: string,
@@ -1644,9 +1665,8 @@ export const unresolvedAliasConflicts = async (
   return repo.tx(async (tx: any) => {
     const conflicts: AliasConflict[] = []
     for (const doc of candidates) {
-      const rivals: any[] = (await tx.aliasClaimants(doc.content, workspaceId))
-        .filter((row: any) => row.id !== doc.id)
-      if (!rivals.length) continue
+      const rivals = await aliasConflictRivals(tx, doc, workspaceId)
+      if (rivals === null) continue
       conflicts.push({
         documentId: doc.id,
         title: doc.content,
@@ -1672,10 +1692,16 @@ export const acceptFallbackAlias = async (
   repo: any,
   documentId: string,
   shownTitle: string,
+  workspaceId: string,
 ): Promise<void> => {
   await repo.tx(async (tx: any) => {
     const doc = await tx.get(documentId)
     if (!doc || doc.deleted || doc.content !== shownTitle) return
+    // The conflict has to still be there. Same title is not the same conflict:
+    // the rival can release the name and a sync take it back while the dialog
+    // is open, and an acceptance recorded then answers nothing and silences the
+    // next real collision on that title.
+    if (await aliasConflictRivals(tx, doc, workspaceId) === null) return
     await tx.setProperty(documentId, aliasAcceptedForProp, shownTitle)
   }, { scope: ChangeScope.BlockDefault, description: 'readwise: keep fallback name' })
 }
@@ -2145,7 +2171,7 @@ const ReadwiseAliasConflictDialog = ({
     if (!inWorkspace()) return
     setBusy(conflict.documentId)
     try {
-      await acceptFallbackAlias(repo, conflict.documentId, conflict.title)
+      await acceptFallbackAlias(repo, conflict.documentId, conflict.title, workspaceId)
       done(conflict.documentId)
     } finally {
       setBusy(null)
