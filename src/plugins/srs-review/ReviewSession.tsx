@@ -98,7 +98,7 @@ const GRADE_BUTTONS: readonly GradeButton[] = [
  *  elsewhere, and uses the same formatter as the post-grade toast so the
  *  two agree. Split into its own component so the `useProperty` reads only
  *  run for the card on screen. */
-const GradeButtons = ({card, busy, keyHints, onGrade}: {
+export const GradeButtons = ({card, busy, keyHints, onGrade}: {
   card: Block
   busy: boolean
   keyHints: ReadonlyMap<string, string>
