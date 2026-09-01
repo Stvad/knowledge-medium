@@ -1687,10 +1687,12 @@ const readOptimizeRows = (result: unknown): string[] | null => {
  *  the database file, and `navigator.locks` keeps their writes apart. So two
  *  tabs can each run a pass: duplicated work, not a wrong result.
  *
- *  Corollary worth knowing before reasoning about staleness across tabs:
- *  writing `sqlite_stat1` does NOT bump `schema_version`, so a tab that was
- *  already open when another tab analyzed keeps its old query plans for the
- *  life of its connection. It heals on reload. */
+ *  Corollary worth knowing before reasoning about staleness across connections:
+ *  writing `sqlite_stat1` does NOT bump `schema_version` on its own, so an
+ *  already-open connection would keep its old query plans for its lifetime.
+ *  `analyzeUnbounded` therefore bumps the cookie explicitly once the pass is
+ *  done — which is load-bearing now that a single tab has a reader pool, not
+ *  just other tabs, reading through connections it did not analyze on. */
 let analyzeChain: Promise<unknown> = Promise.resolve()
 const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
   // `.then(run, run)`, both arms deliberately: a throwing pass must not poison

@@ -97,6 +97,12 @@ sidecars exist → write-ahead        (outranks the pin and the probe both)
 no sidecars    → probe: supported ? write-ahead : CoopSync
 ```
 
+**As shipped, the second line is gated off.** `MOVE_NEW_DATABASES` is `false`, so a
+database without sidecars stays on CoopSync and the probe is not even run — only the
+`km.local-db-vfs` pin moves one. That is Deploy 1 (see Rollout), and it is the first
+thing to check when a Chromium database has not moved: there is no failed probe to
+diagnose, because no probe ran.
+
 A database moves to write-ahead and stays there. Nothing here moves one back, so the
 first failure above cannot arise and the second has nothing to leave behind. The only
 preparation left is the third hazard: **the write-ahead VFS never sees a hot rollback

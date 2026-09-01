@@ -429,6 +429,8 @@ const EXPORT_LOCK_TIMEOUT_MS = 180_000
  */
 const ABORT_SETTLE_GRACE_MS = 5_000
 
+const TIMED_OUT = Symbol('timed-out')
+
 const withDeadline = async <T,>(
   work: (signal: AbortSignal) => Promise<T>,
   ms: number,
@@ -436,22 +438,39 @@ const withDeadline = async <T,>(
 ): Promise<T> => {
   const controller = new AbortController()
   const running = work(controller.signal)
-  // Nothing else observes this rejection once the race is decided against it.
-  running.catch(() => {})
+  // Settled either way, so the work is never an unhandled rejection while the
+  // timer decides — and so its outcome can be inspected rather than raced.
+  const settled = running.then(
+    value => ({value}),
+    (error: unknown) => ({error}),
+  )
 
   let timer: ReturnType<typeof setTimeout> | undefined
   let graceTimer: ReturnType<typeof setTimeout> | undefined
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      controller.abort()
-      void Promise.race([
-        running.catch(() => {}),
-        new Promise<void>(resolve => { graceTimer = setTimeout(resolve, ABORT_SETTLE_GRACE_MS) }),
-      ]).then(() => reject(new Error(message)))
-    }, ms)
-  })
   try {
-    return await Promise.race([running, deadline])
+    // The race is decided by the TIMER, not by the work's rejection. Racing the
+    // work itself hands back its `AbortError` — which this very deadline
+    // caused — in place of the message that tells the user what to do.
+    const outcome = await Promise.race([
+      settled,
+      new Promise<typeof TIMED_OUT>(resolve => {
+        timer = setTimeout(() => resolve(TIMED_OUT), ms)
+      }),
+    ])
+    if (outcome !== TIMED_OUT) {
+      if ('error' in outcome) throw outcome.error
+      return outcome.value
+    }
+
+    controller.abort()
+    // Let the abort procedure close the writable before the caller's cleanup
+    // touches the file — bounded, because a checkpoint stuck on another
+    // connection's lock ignores the signal and would restore the hang.
+    await Promise.race([
+      settled,
+      new Promise<void>(resolve => { graceTimer = setTimeout(resolve, ABORT_SETTLE_GRACE_MS) }),
+    ])
+    throw new Error(message)
   } finally {
     clearTimeout(timer)
     clearTimeout(graceTimer)
