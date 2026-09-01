@@ -293,3 +293,18 @@ ONE group — the `-wa0`/`-wa1` pair, or `-journal`. Two shapes fall outside tha
 
 Both refuse before anything is deleted, so a rejected archive costs a message rather than
 the database on the device.
+
+### If a restore is interrupted, run it again
+
+The files go in one at a time and OPFS cannot swap a set of them atomically, so killing the
+tab mid-restore can leave siblings with no `.db`. An orphaned `-wa0`/`-wa1` is harmless —
+the VFS truncates the pair when it opens a `.db` that is not there — but an orphaned
+`-journal` is not: the next boot creates a fresh database and SQLite rolls the stale
+journal into it, which usually surfaces as the corruption screen.
+
+This is accepted rather than guarded. Nothing unique is at stake — the restore had already
+deleted the old database on purpose, and the backup being restored is untouched on disk —
+so the answer is to reset and import it again. Detecting it would mean a durable marker
+that boot consults before opening SQLite, which puts a second source of truth next to "the
+sidecars are the record" and adds its own window: a marker left behind after a restore that
+did finish would wipe a good database.
