@@ -1,6 +1,6 @@
 # Fuzzing
 
-> **Status:** current — last verified against code 2026-07-16
+> **Status:** current — last verified against code 2026-09-01
 
 Randomized testing for the parsing and data layers, in the Dan Luu
 spirit: cheap random inputs + invariant oracles find bugs that
