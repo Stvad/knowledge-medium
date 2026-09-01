@@ -130,10 +130,13 @@ interface ParsedPress {
  *  containing `+`) tokenized identically on both sides rather than
  *  differently-wrong.
  *
- *  Whitespace around a separator is collapsed first, so spaced authoring
- *  (`cmd + k`, which the settings UI can produce) still splits — the
- *  lookbehind alone would not fire after a space. */
-const splitPressTokens = (press: string): string[] =>
+ *  Whitespace around a separator is collapsed first, so a hand-authored
+ *  `cmd + k` still splits — the lookbehind alone would not fire after a
+ *  space. Reachable only through `normalizeChord` on a single press: the
+ *  sequence-aware callers split on ' ' first, and the settings UI stores
+ *  `chordFromEvent` output, which never contains spaces.
+ */
+export const splitPressTokens = (press: string): string[] =>
   press.trim().replace(/\s*\+\s*/g, '+').split(/(?<=\w|\])\+/)
 
 /** Parse a single press ('Cmd+Shift+K') into ordered, alias-folded
