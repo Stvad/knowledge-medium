@@ -11,6 +11,8 @@
  * The versioning model this implements is documented in the sw.ts header.
  */
 import {isCacheableAsset} from './assets'
+// Relative, not `@/`: the SW is built by vite.sw.config.ts, which has no alias.
+import {DB_FILE_SIBLING_SUFFIXES} from '../data/dbFileSiblings'
 import {
   computeExpiredIds,
   computeKeepIds,
@@ -27,7 +29,7 @@ import {
 
 const CACHE_PREFIX = 'km-'
 const VENDOR_HOSTS = new Set(['esm.sh'])
-const SQLITE_DB_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
+const SQLITE_DB_SIBLING_SUFFIXES = DB_FILE_SIBLING_SUFFIXES
 
 interface PreviewDatabaseRecord {
   scopeUrl: string

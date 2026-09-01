@@ -215,3 +215,18 @@ describe('the compatibility-mode escape hatch is only offered where it leads som
     expect(handoffCompatibilityModeHelps(error)).toBe(true)
   })
 })
+
+
+describe('the handoff wrapper does not swallow a corrupt database', () => {
+  it('lets a corruption error through so the bootstrap boundary can classify it', async () => {
+    // Rewrapped, the user would get Reload instead of Export + Reset, and every
+    // reload would repeat the same failing handoff.
+    const h = harness({[DB]: 4096, [`${DB}-wa0`]: 20704})
+    h.deps.withConnection = async () => {
+      throw new Error('database disk image is malformed')
+    }
+    const error = await prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSCoopSyncVFS, h.deps).catch(e => e)
+    expect(error).not.toBeInstanceOf(LocalDbVfsHandoffError)
+    expect((error as Error).message).toContain('malformed')
+  })
+})

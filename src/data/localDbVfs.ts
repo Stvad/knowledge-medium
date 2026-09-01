@@ -19,7 +19,8 @@
  */
 
 import { WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
-import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/localDbStorage.js'
+import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/dbFileSiblings.js'
+import { isLocalDbCorruptionError } from '@/utils/localDbCorruption.js'
 
 export type LocalDbVfs = WASQLiteVFS.OPFSCoopSyncVFS | WASQLiteVFS.OPFSWriteAheadVFS
 
@@ -218,6 +219,12 @@ export const prepareLocalDbForVfs = async (
     await runHandoff(dbFilename, target, deps)
   } catch (err) {
     if (isLocalDbVfsHandoffError(err)) throw err
+    // A corrupt database can surface from the temporary open or the checkpoint.
+    // Rewrapping it would cost the user the recovery that exists for it: the
+    // bootstrap boundary classifies this error, captures forensics, and offers
+    // Export + Reset. Reload — all this wrapper's message can offer — just
+    // repeats the same failing handoff.
+    if (isLocalDbCorruptionError(err)) throw err
     // Anything else here is an OPFS DOMException or a failed open. Untranslated
     // it blocks boot with jargon in a <pre>; the causes are the same ones the
     // typed message already names.

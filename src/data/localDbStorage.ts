@@ -12,19 +12,7 @@ import {
 // 40 (user) + 3 (suffix) = 50 — safe headroom.
 const MAX_USER_SEGMENT = 40
 
-// Every file SQLite or the VFS derives from the main `.db` name. Backup,
-// wipe, import-replace and the forensic inventory all key off this ONE list:
-// a suffix missing from it is a file that survives a wipe and then replays
-// over the next database at that name.
-/** `OPFSWriteAheadVFS`'s write-ahead log — two files, alternated WAL2-style. */
-export const WRITE_AHEAD_SIDECAR_SUFFIXES = ['-wa0', '-wa1'] as const
-
-export const DB_FILE_SIBLING_SUFFIXES = [
-  '-journal',
-  '-wal',
-  '-shm',
-  ...WRITE_AHEAD_SIDECAR_SUFFIXES,
-] as const
+export { DB_FILE_SIBLING_SUFFIXES, WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/dbFileSiblings.js'
 
 // v6 = baseline (OPFSCoopSync + multi-tabs on @powersync/web@1.38.1).
 // History: v3 was the original IDB layout; v4 introduced OPFS; v5
