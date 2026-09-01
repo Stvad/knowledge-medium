@@ -351,6 +351,29 @@ describe('readwise document alias — the title is already a page name', () => {
     expect(aliasesOf(doc)).toEqual(['Deep Work (Readwise 2)'])
   })
 
+  it('updates a book whose fallback another row co-claims', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+    await coClaimRaw('other-device', 'Deep Work (Readwise)', LATE)
+
+    // A CHANGED managed property is what makes this different from the case
+    // above: it forces a properties rewrite, and rewriting the bag re-inserts
+    // every alias in it under the uniqueness trigger — including the one the
+    // other row co-holds. Unchanged properties write nothing and never trip it.
+    await syncBookToBlocks(
+      repo, WS, rootId, {...book(1, 'Deep Work', 11), author: 'C. Newport'},
+      '{title}', '', '{text}', [], [], [], REVIEW_DATE,
+    )
+
+    // The book has to land. Failing it would pin `lastSyncedAt` behind a book
+    // that fails identically on every retry.
+    const doc = await repo.load(documentId(1))
+    expect(doc?.content).toBe('Deep Work')
+    expect(doc?.properties['readwise:author']).toBeDefined()
+    expect(aliasesOf(doc)).toEqual(['Deep Work (Readwise 2)'])
+  })
+
   it('retires the placeholder when a re-title lands on a free name', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')

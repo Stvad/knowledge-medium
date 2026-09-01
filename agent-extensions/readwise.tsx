@@ -1280,6 +1280,38 @@ const releaseSyncOwnedAlias = async (
   await tx.setProperty(blockId, aliasesProp, [])
 }
 
+/** Give up a fallback another row has come to co-hold, BEFORE the book's
+ *  properties are written.
+ *
+ *  A properties rewrite re-inserts every alias in the bag under the uniqueness
+ *  trigger, so one co-claimed entry rejects the whole transaction — taking the
+ *  document, its highlights, and the naming step that would have moved it to a
+ *  free suffix. The book then fails identically on every retry and holds
+ *  `lastSyncedAt` behind it, which is the stall this branch exists to end.
+ *
+ *  Only the sync's own recorded claim, and only when it is not the content: an
+ *  alias the USER added is theirs to keep even when contested (the banner is
+ *  where that gets resolved), and dropping the alias equal to `content` is the
+ *  shape the kernel reads as a rename. `ensureDocumentAlias` re-probes after
+ *  the write and takes a free slot. */
+const releaseCoClaimedFallback = async (
+  repo: any,
+  blockId: string,
+  workspaceId: string,
+): Promise<void> => {
+  await repo.tx(async (tx: any) => {
+    const doc = await tx.get(blockId)
+    if (!doc || doc.deleted) return
+    const claim: string | undefined = await tx.getProperty(blockId, aliasClaimProp)
+    if (claim === undefined || claim === doc.content) return
+    const current: readonly string[] = await tx.getProperty(blockId, aliasesProp)
+    if (!current.includes(claim)) return
+    const claimants: readonly {id: string}[] = await tx.aliasClaimants(claim, workspaceId)
+    if (claimants.every(row => row.id === blockId)) return
+    await tx.setProperty(blockId, aliasesProp, current.filter(alias => alias !== claim))
+  }, { scope: ChangeScope.BlockDefault, description: 'readwise: release a co-claimed name' })
+}
+
 /** Name the document, in a transaction of its OWN.
  *
  *  Never the one that rewrote `content`. `alias.sync`'s A3 rule heals a content
@@ -1813,6 +1845,7 @@ export const syncBookToBlocks = async (
   // One undo entry for the two transactions below — the split is an alias-sync
   // constraint (see `ensureDocumentAlias`), not two things the user did.
   await repo.undoGroup(async (repo: any) => {
+    await releaseCoClaimedFallback(repo, bookId, workspaceId)
     await repo.tx(async (tx: any) => {
       // 1. document page
       const existing = await tx.get(bookId)
@@ -2029,8 +2062,14 @@ const runSync = async (repo: any, { silent = false } = {}) => {
       progress?.done(bookCount === 0 ? undefined : synced)
     } else {
       const message = `${synced} — ${failed.length} failed (${truncate(failed.join(', '), 80)}). Retrying next sync.`
+      // Reported on the silent syncs too. `silent` suppresses SUCCESS chatter
+      // from the auto-sync tick; a failure is not chatter. A failed book holds
+      // `lastSyncedAt`, so staying quiet would let one book stall the library
+      // and widen the re-fetch window on every tick with nothing to see — and
+      // the auto-sync path is the one most users are on. Named books rather
+      // than a count, because resolving one starts with knowing which.
       if (progress) progress.fail(message)
-      else if (!silent) showError(message)
+      else showError(message)
     }
   } catch (err: any) {
     if (progress) {
