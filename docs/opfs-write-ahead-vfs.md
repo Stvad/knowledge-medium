@@ -69,38 +69,43 @@ writing concurrently, the shared sync worker, and real transaction sizes. The ne
 measurement worth making is on the live client with its real database, not in another
 synthetic harness — and until then, nobody should claim this VFS fixes that issue.
 
-## The file format is compatible; the state outside the file is not
+## The move is one-way
 
-The main `.db` is an ordinary SQLite file under both VFSes — same path, same page size,
-and each opens a database the other created. `journal_mode` reads as `delete` under
-both: `OPFSWriteAheadVFS` implements write-ahead logging *inside the VFS*, invisible to
-SQLite, in two sidecar files (`<db>-wa0`, `<db>-wa1`, alternated WAL2-style, bounded
-around 4 MB each by its `journalSizeLimit`). Switching is therefore not a data
-migration — but each direction has a way to lose data silently:
+The main `.db` is byte-compatible — either VFS opens a file the other created,
+same page size, `journal_mode` reads as `delete` under both. So this is not a data
+migration. What is not shared is the state *outside* that file, and **both directions
+of a switch can lose data silently, with `PRAGMA integrity_check` reporting `ok`**:
 
-**Downgrade without a checkpoint loses the tail.** Committed transactions live in the
-sidecars until checkpointed. Measured: 1000 rows written under CoopSync, 500 more under
-write-ahead, then reopened with CoopSync → **1000 rows, `integrity_check` ok**. The main
-file is an intact, older database. `PRAGMA wal_checkpoint=truncate` first, and all 1500
-are there.
+- **Opening a write-ahead database with CoopSync** reads the main file as an intact,
+  older database. Measured: 1000 rows written under CoopSync + 500 under write-ahead,
+  reopened with CoopSync → 1000 rows.
+- **Leaving stale sidecars next to a CoopSync database** replays that log over
+  whatever CoopSync wrote in between. Measured: after a checkpoint, CoopSync wrote row
+  1501; reopening with write-ahead showed 1500.
 
-**Leaving the sidecars behind loses the other side.** A checkpoint does not empty the
-files. Measured: after checkpointing, CoopSync wrote row 1501 into the main file;
-reopening with write-ahead replayed the stale log and showed **1500 rows,
-`integrity_check` ok** — the newer write masked, and any subsequent checkpoint would
-have overwritten it for good. So the sidecars must be deleted, not merely checkpointed.
+The design answer is to make the move **one-way and to let the sidecars be the
+record of it**:
 
-**A hot journal is invisible to the write-ahead VFS.** Its `xAccess` only reports files
-it already has open, so SQLite never learns that `<db>-journal` exists and opens a
-database that still needs rolling back. Measured by planting a junk `-journal`: the open
-succeeded and ignored it. CoopSync does honour it, so the upgrade path opens and closes
-once under CoopSync when the journal is non-empty. (A zero-byte `-journal` is the normal
-residue of a clean CoopSync close and means nothing.)
+```
+sidecars exist → write-ahead        (outranks the pin and the probe both)
+no sidecars    → probe: supported ? write-ahead : CoopSync
+```
 
-`prepareLocalDbForVfs` in `src/data/localDbVfs.ts` is all three of these. Verified
-end-to-end on a real app database (write-ahead → coop-sync → write-ahead): sidecars
-removed, main file grew by the checkpointed pages, a row written under write-ahead
-survived both hops.
+A database moves to write-ahead and stays there. Nothing here moves one back, so the
+first failure above cannot arise and the second has nothing to leave behind. The only
+preparation left is the third hazard: **the write-ahead VFS never sees a hot rollback
+journal** (its `xAccess` reports only files it already has open), so when one is
+present CoopSync opens and closes once to clear it first.
+
+This replaced an automatic downgrade path — checkpoint the log, verify it drained,
+delete the sidecars, and refuse if any step could not be proven. That path was correct
+but it was the source of most of this change's review findings, because it ran silently
+at boot on the only copy of the user's data and every edge needed its own guard. Moving
+a database back is now a deliberate operation, not something a failed probe can
+trigger.
+
+A browser that loses the capability with sidecars on disk therefore fails to open,
+loudly, rather than degrading. Accepted: it needs a shipped API to be withdrawn.
 
 ## Mixed-version tabs fail to open; they do not corrupt
 
@@ -111,10 +116,6 @@ So the two VFSes can never write the same file concurrently. The failure mode is
 already-tracked "a stale older-version tab holds the OPFS DB and the new one hangs on
 Loading" ([#283](https://github.com/Stvad/knowledge-medium/issues/283)),
 not data loss.
-
-The same lock is what keeps the downgrade handoff safe with tabs open: it cannot
-checkpoint (and so never reaches the sidecar delete) while another tab holds the
-database.
 
 ## Consequences elsewhere
 
@@ -131,12 +132,13 @@ database.
 
 ## Rollout
 
-Ship the handoff **before or with** the flip, and revert the flip alone. A revert that
-also removes the sidecar handling leaves a Chromium user's `-wa*` files on disk with no
-code that knows to checkpoint them — which is the first failure mode above. The
-`km.local-db-vfs` localStorage pin (`coop-sync` / `write-ahead`) exists so the flip can
-be reverted per device without a deploy; pinning `coop-sync` routes through the full
-downgrade handoff.
+Reverting the feature means "stop moving new databases", not "move them back":
+databases already on write-ahead stay there, and the `km.local-db-vfs` pin
+(`coop-sync` / `write-ahead`) only affects databases that have not moved yet — it is
+ignored for one that has, because honouring it would be exactly the first failure mode
+above. Ship the sibling-file handling (`DB_FILE_SIBLING_SUFFIXES`, including the
+service worker's preview sweep) before or with the flip, since a `-wa*` file that
+survives a wipe replays over the next database of that name.
 
 ## Known gap
 

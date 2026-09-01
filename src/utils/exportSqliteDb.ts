@@ -18,7 +18,6 @@ import { v4 as uuidv4 } from 'uuid'
 import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { DB_FILE_SIBLING_SUFFIXES, dbFilenameForUser } from '@/data/localDbStorage'
-import { checkpointDrained } from '@/data/localDbVfs.js'
 
 export interface RawSqliteDbBlobExport {
   blob: Blob
@@ -391,6 +390,26 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
  * staleness back. It is a WRITE lock rather than a read lock because with a
  * reader pool a read lock no longer excludes the writer at all.
  */
+/**
+ * Whether a `PRAGMA wal_checkpoint` result says nothing is left outstanding.
+ *
+ * Read positionally because the two VFSes answer differently, and the first
+ * cell means "nothing outstanding" as zero under both: `OPFSWriteAheadVFS`
+ * returns one cell whose column NAME is the remaining page count, while under
+ * `OPFSCoopSyncVFS` SQLite answers its own pragma with `busy, log, checkpointed`
+ * — busy 0 in rollback-journal mode, where there is no WAL to drain at all.
+ *
+ * An unrecognised shape is NOT drained: the caller is about to copy the main
+ * file alone, and a loud refusal beats a backup that quietly omits writes.
+ */
+const checkpointDrained = (result: unknown): boolean => {
+  const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
+  const row = Array.isArray(rows) ? rows[0] : undefined
+  if (!row || typeof row !== 'object') return false
+  const [value] = Object.values(row as Record<string, unknown>)
+  return Number(value) === 0
+}
+
 const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>): Promise<T> => {
   const db = repo.db as unknown as Partial<PowerSyncWriteLockDb>
   if (typeof db.writeLock !== 'function') {
