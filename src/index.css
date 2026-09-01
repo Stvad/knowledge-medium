@@ -256,12 +256,16 @@
   /* Preflight strips the marker and gutter off every `ul`/`ol`, which is what
      the app's own chrome wants — menus, pickers and the recents tree are all
      unmarked `<li>`s — but leaves a list typed into a block rendering as bare
-     unindented lines. Restore both, scoped to rendered markdown. Sized in `em`
-     so the gutter scales with the surrounding text (a title block renders at
-     1.5rem). An `outside` marker is drawn in that gutter, and the content
-     container clips its overflow — so the gutter has to stay wide enough for
-     the widest marker (`100.`) or the leading digit is cut off, not merely
-     crowded. */
+     unindented lines. Restore both, scoped to rendered markdown.
+
+     `em` so the gutter scales with the surrounding text (a title block renders
+     at 1.5rem). An `outside` marker is drawn in that gutter and the content
+     container clips its overflow, so a marker wider than the gutter loses its
+     leading digits rather than merely crowding: 2em covers up to `100.`, and a
+     start beyond that (`1000.`, which markdown does allow) is accepted as
+     clipped. The alternatives cost more than the case is worth — an `inside`
+     marker breaks wrapped-line alignment for every list, and no CSS length can
+     be derived from a marker's width. */
   .markdown-content :is(ul, ol) {
     padding-left: 2em;
   }

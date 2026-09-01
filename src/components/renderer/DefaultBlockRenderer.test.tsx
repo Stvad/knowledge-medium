@@ -610,6 +610,12 @@ const FacetSurfaceRenderer = ({block}: BlockRendererProps) => (
   <div className="facet-surface">{block.id}</div>
 )
 
+// The breadcrumb shape: the text renderer asked for an inline container, so it
+// sits in the surrounding line rather than owning a row.
+const InlineTextRenderer = (props: BlockRendererProps) => (
+  <MarkdownContentRenderer {...props} containerElement="span" />
+)
+
 // The recents-page shape: a custom content renderer that draws the real page
 // title AND a surface below it (`RecentsPageBlockRenderer`).
 const TitlePlusSurfaceRenderer = (props: BlockRendererProps) => (
@@ -715,6 +721,27 @@ describe('title typography', () => {
 
     await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
     expect(titleElement()).toBeNull()
+  })
+
+  // List markers and their gutter are restored by CSS scoped to a class the
+  // text renderer puts on its container, so which surfaces carry it IS the
+  // styling decision — there is no other switch.
+  it('marks a block surface for markdown element styling', async () => {
+    renderBlock('root')
+
+    await screen.findByText('Page title')
+    expect(document.querySelector('.markdown-content')).not.toBeNull()
+  })
+
+  // An inline surface would get a bullet and a 2em gutter dropped into the
+  // middle of the surrounding sentence, or eating a breadcrumb's width. The
+  // positive above proves the class can appear at all, so this absence is the
+  // span deciding it rather than the content never having rendered.
+  it('leaves an inline text surface unmarked', async () => {
+    renderBlock('root', InlineTextRenderer)
+
+    await screen.findByText('Page title')
+    expect(document.querySelector('.markdown-content')).toBeNull()
   })
 
   it('still reaches a surface that composes the text renderer', async () => {

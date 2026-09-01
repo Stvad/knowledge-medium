@@ -67,7 +67,12 @@ export function MarkdownContentRenderer({
   // gutter) can be scoped to it. Preflight strips both from every `ul`/`ol`,
   // which is right for the app's own chrome — menus, pickers, the recents
   // tree are all `<li>`s that must stay unmarked — and wrong only here.
-  const className = ['markdown-content', baseClassName, titleClass]
+  //
+  // Not on an inline surface, where a bullet and a 2em gutter would land in
+  // the middle of the surrounding sentence or eat a breadcrumb's width. The
+  // span container IS that contract (a `div` can't sit in inline flow), so it
+  // covers the reference path and a caller that asks for one outright.
+  const className = [Container === 'span' ? '' : 'markdown-content', baseClassName, titleClass]
     .filter(Boolean).join(' ')
 
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)

@@ -106,14 +106,26 @@ describe('gfm markdown extension', () => {
   })
 
   // Same rule as a multi-paragraph quote: preflight zeroes paragraph margins,
-  // so this separator is what draws the blank line between the two paragraphs
-  // of a loose item. Only the edges are padding.
+  // so this separator is what draws the blank line the author wrote between
+  // the two blocks of a loose item. Only the edges are padding.
   it('keeps the separator between two paragraphs of a loose list item', () => {
     const {container} = renderMarkdown('- first\n\n  second')
 
     const item = container.querySelector('li')
     expect([...item!.childNodes].map(node => node.nodeName))
       .toEqual(['P', '#text', 'P'])
+  })
+
+  // The blank line is the author's whatever the second block is — a quote or a
+  // sublist earns it as much as a paragraph does. The tight item above is the
+  // contrast: there the first child is text, not a paragraph, and no blank
+  // line was written.
+  it('keeps the separator before a non-paragraph block of a loose list item', () => {
+    const {container} = renderMarkdown('- first\n\n  > quoted')
+
+    const item = container.querySelector('li')
+    expect([...item!.childNodes].map(node => node.nodeName))
+      .toEqual(['P', '#text', 'BLOCKQUOTE'])
   })
 
   // A separator is recognised by its block-level neighbours, never by being
