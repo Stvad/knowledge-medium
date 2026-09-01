@@ -41,7 +41,7 @@
  * suspension lifts. Here that is spelled with `enabled: false` on every
  * activation (the `.filter(a => a.enabled !== false)` at
  * useActionContext.ts:27) — the same empty-array state that the
- * `ShortcutSurfaceSuspensionContext` proposal (upstream #582) produces
+ * `BackgroundSubtreeContext` proposal (upstream #582) produces
  * from a React context. The hazard predates that PR; this suite targets
  * the funnel's own lifecycle, so it needs no code from it.
  *
