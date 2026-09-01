@@ -1,6 +1,6 @@
 # Fuzzing
 
-> **Status:** current — last verified against code 2026-07-16
+> **Status:** current — last verified against code 2026-09-01
 
 Randomized testing for the parsing and data layers, in the Dan Luu
 spirit: cheap random inputs + invariant oracles find bugs that
@@ -185,6 +185,17 @@ one.
   view, multi-select wrappers, undo/redo) through `invokeAction` with
   UI-shaped deps; oracles = structural invariants + scope-root
   boundary protection.
+- `src/shortcuts/test/activeContextsOwnership.fuzz.test.tsx` — shortcut
+  context ownership across the React lifecycle (happy-dom, real
+  commits): random mount / unmount / suspend / unsuspend / retarget /
+  deps-churn batches over several surfaces claiming overlapping context
+  types, including the same-commit "one lane goes dark as a sibling
+  comes live" swap and StrictMode double-invoke. Oracles = the
+  settled-state invariant (every type a LIVE surface claims has an
+  entry, owned by a live claimant; no entry for an unclaimed type),
+  key order = activation recency, and an exact differential against a
+  reference model of the pre-existing semantics for the non-overlapping
+  case.
 - `src/data/propertyDefinitionRegistry.fuzz.test.ts` — the
   schema-unification registry + resolver (PR #364): random universes of
   seed declarations and projected definition rows; oracles =
@@ -274,6 +285,23 @@ The interaction fuzzer found one more:
   rendered surface out from under the panel. The boundary rule now
   lives in `StructuralEditPolicy.canDelete` (scope-less callers like
   the agent bridge remain free to delete).
+
+The shortcut-context ownership fuzzer went red on its FIRST fixed smoke
+seed, which was its whole point: the hazard had been read out of the code
+(`docs/activeContexts-ownership-bug.md`) and a first fix attempt had been
+reverted, but four hand-run observations of the swap had all behaved, so
+nobody knew it was reachable.
+
+- Two surfaces legitimately claiming one context type, then either one
+  going away, left the type owned by NOBODY — `deactivate(type)` deleted
+  the whole entry and the survivor's effect deps never moved, so nothing
+  re-registered it. Keyboard dead, silently. Notably the counterexample
+  needs NO violation of React's destroy-before-create ordering — the
+  ordering hazard the suite was written to hunt turned out not to be the
+  reachable one. Fixed by claim/release with a per-type stack keyed on
+  activation-token identity, with the visible map re-sorted by a
+  monotonic activation counter so key order (which `resolve.ts` reads for
+  modal recency) stays what it was.
 
 The seed-materialization fuzzer (schema-unification surface, PR #364)
 found two more within its first minutes, both in the tx-layer
@@ -518,3 +546,12 @@ a test that could not fail.
    folds them to U+FFFD, which would fail their oracles for a reason
    unrelated to the property — but say so, rather than leaving a claim
    the generator doesn't meet.
+8. A generated "mode" flag that turns out to toggle nothing costs you
+   half your cases and looks fully covered — add a **non-vacuity canary**
+   asserting the flag actually changes observable behaviour. Concretely
+   for React suites: `<StrictMode>` only double-invokes effects when it
+   is at the RENDER ROOT (React 19 gates it on the root's strict flag),
+   so returning it from inside a component renders the subtree normally
+   — measured here as nested 1 effect run vs root 2. Wrap the element
+   you hand to `render`/`rerender`, not the tree inside your harness
+   component, and pin it (`activeContextsOwnership.fuzz.test.tsx`).
