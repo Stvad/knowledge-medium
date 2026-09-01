@@ -132,8 +132,12 @@ interface ParsedPress {
  *
  *  Whitespace around a separator is collapsed first, so spaced authoring
  *  (`cmd + k`, which the settings UI can produce) still splits — the
- *  lookbehind alone would not fire after a space. */
-const splitPressTokens = (press: string): string[] =>
+ *  lookbehind alone would not fire after a space.
+ *
+ *  Exported because DISPLAY has to tokenize a press the same way storage
+ *  does: `formatChord` splitting on its own dropped the key half of
+ *  `Shift++` and rendered a bare `⇧`. */
+export const splitPressTokens = (press: string): string[] =>
   press.trim().replace(/\s*\+\s*/g, '+').split(/(?<=\w|\])\+/)
 
 /** Parse a single press ('Cmd+Shift+K') into ordered, alias-folded

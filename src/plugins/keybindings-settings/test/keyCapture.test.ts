@@ -158,6 +158,16 @@ describe('formatChord', () => {
     expect(formatChord('$mod+Enter')).toBe('⌘⏎')
     expect(formatChord('f5')).toBe('F5')
   })
+
+  it('keeps `+` as a key rather than eating it as a separator', () => {
+    // What the capture path records when you press the plus key, and what
+    // storage tokenizes with tinykeys' lookbehind. Splitting on every `+`
+    // renders the modifier alone — a chord that still fires, shown as a
+    // key that isn't the one bound.
+    stubPlatform('MacIntel')
+    expect(formatChord('Shift++')).toBe('⇧+')
+    expect(formatChord('+')).toBe('+')
+  })
 })
 
 describe('normalizeChord', () => {
