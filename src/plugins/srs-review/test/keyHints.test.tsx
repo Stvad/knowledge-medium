@@ -15,6 +15,7 @@ import {
   keybindingOverridesFacet,
   type KeybindingOverride,
 } from '@/shortcuts/keybindingOverrides.js'
+import type { ActionConfig } from '@/shortcuts/types.js'
 import { SrsSignal } from '@/plugins/srs-rescheduling/scheduler.js'
 import {
   SRS_GRADE_ACTION_IDS,
@@ -23,7 +24,7 @@ import {
   srsReviewActionContext,
   srsReviewActions,
 } from '../actions.ts'
-import { useActionKeyHints } from '../keyHints.ts'
+import { keyHintsByActionId, useActionKeyHints } from '../keyHints.ts'
 
 const AGAIN_ACTION_ID = SRS_GRADE_ACTION_IDS.get(SrsSignal.AGAIN)!
 
@@ -52,19 +53,50 @@ const pushOverrides = (runtime: FacetRuntime, overrides: readonly KeybindingOver
   })
 }
 
-describe('useActionKeyHints', () => {
-  it('renders the default chords', () => {
-    const {result} = renderHints(buildRuntime())
+/** Synthetic actions, so what a chord turns into is pinned without writing
+ *  the SRS defaults down a second time. */
+const syntheticAction = (
+  id: string,
+  keys: string | string[] | undefined,
+  context: string = SRS_REVIEW_CONTEXT,
+): ActionConfig => ({
+  id,
+  description: id,
+  context,
+  ...(keys === undefined ? {} : {defaultBinding: {keys}}),
+  handler: () => {},
+} as ActionConfig)
 
-    // Reveal binds Space and Enter; the hint takes the first chord only.
-    expect(result.current.get(SRS_REVEAL_ACTION_ID)).toBe('Space')
-    expect(result.current.get(AGAIN_ACTION_ID)).toBe('1')
+describe('keyHintsByActionId', () => {
+  it('formats the first chord of a multi-chord binding', () => {
+    const hints = keyHintsByActionId(
+      [syntheticAction('multi', ['Space', 'Enter'])],
+      SRS_REVIEW_CONTEXT,
+    )
+
+    // Not "Space ⏎": one hint sits inline on a button, and the shortcut-help
+    // overlay is the surface that lists every chord.
+    expect(hints.get('multi')).toBe('Space')
   })
 
+  it('omits an action with no binding rather than mapping it to an empty hint', () => {
+    const hints = keyHintsByActionId([syntheticAction('bare', undefined)], SRS_REVIEW_CONTEXT)
+
+    expect(hints.has('bare')).toBe(false)
+  })
+
+  it('ignores actions belonging to another context', () => {
+    const hints = keyHintsByActionId([syntheticAction('elsewhere', 'KeyR', 'global')], SRS_REVIEW_CONTEXT)
+
+    expect(hints.has('elsewhere')).toBe(false)
+  })
+})
+
+describe('useActionKeyHints', () => {
   it('follows a remap without a remount', () => {
     const runtime = buildRuntime()
     const {result} = renderHints(runtime)
-    expect(result.current.get(SRS_REVEAL_ACTION_ID)).toBe('Space')
+    expect(result.current.has(SRS_REVEAL_ACTION_ID)).toBe(true)
 
     pushOverrides(runtime, [{
       actionId: SRS_REVEAL_ACTION_ID,
@@ -79,7 +111,9 @@ describe('useActionKeyHints', () => {
   it('drops the hint for an unbound action', () => {
     const runtime = buildRuntime()
     const {result} = renderHints(runtime)
-    expect(result.current.get(AGAIN_ACTION_ID)).toBe('1')
+    // The hint has to be seen present first: `has === false` passes on its
+    // own against an empty map, which is what a broken hook returns.
+    expect(result.current.has(AGAIN_ACTION_ID)).toBe(true)
 
     pushOverrides(runtime, [{
       actionId: AGAIN_ACTION_ID,
@@ -90,6 +124,6 @@ describe('useActionKeyHints', () => {
 
     expect(result.current.has(AGAIN_ACTION_ID)).toBe(false)
     // The neighbours are untouched — an unbind isn't a wipe.
-    expect(result.current.get(SRS_GRADE_ACTION_IDS.get(SrsSignal.HARD)!)).toBe('2')
+    expect(result.current.has(SRS_GRADE_ACTION_IDS.get(SrsSignal.HARD)!)).toBe(true)
   })
 })
