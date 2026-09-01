@@ -10,9 +10,9 @@ import {
   useActiveContextsState,
 } from '@/shortcuts/ActiveContexts.js'
 import {
-  ShortcutSurfaceSuspensionContext,
-  ShortcutSurfaceSuspensionProvider,
-} from '@/shortcuts/ShortcutSurfaceSuspension.js'
+  BackgroundSubtreeContext,
+  BackgroundSubtreeProvider,
+} from '@/context/backgroundSubtree.js'
 import { useActionContext, useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import type {
   ActionContextConfig,
@@ -103,9 +103,9 @@ describe('shortcut-surface suspension', () => {
   it('deregisters a subtree while suspended and re-registers it on unsuspend', () => {
     const tree = (suspended: boolean) => (
       <Harness>
-        <ShortcutSurfaceSuspensionProvider suspended={suspended}>
+        <BackgroundSubtreeProvider background={suspended}>
           <Registrant context={CTX_A} marker="a"/>
-        </ShortcutSurfaceSuspensionProvider>
+        </BackgroundSubtreeProvider>
       </Harness>
     )
 
@@ -122,12 +122,12 @@ describe('shortcut-surface suspension', () => {
   it('suspending one subtree leaves a sibling subtree registered', () => {
     const tree = (suspended: boolean) => (
       <Harness>
-        <ShortcutSurfaceSuspensionProvider suspended={suspended}>
+        <BackgroundSubtreeProvider background={suspended}>
           <Registrant context={CTX_A} marker="a"/>
-        </ShortcutSurfaceSuspensionProvider>
-        <ShortcutSurfaceSuspensionProvider suspended={false}>
+        </BackgroundSubtreeProvider>
+        <BackgroundSubtreeProvider background={false}>
           <Registrant context={CTX_B} marker="b"/>
-        </ShortcutSurfaceSuspensionProvider>
+        </BackgroundSubtreeProvider>
       </Harness>
     )
 
@@ -143,11 +143,11 @@ describe('shortcut-surface suspension', () => {
   it('keeps a nested subtree suspended even when it asks not to be', () => {
     render(
       <Harness>
-        <ShortcutSurfaceSuspensionProvider suspended={true}>
-          <ShortcutSurfaceSuspensionProvider suspended={false}>
+        <BackgroundSubtreeProvider background={true}>
+          <BackgroundSubtreeProvider background={false}>
             <Registrant context={CTX_A} marker="a"/>
-          </ShortcutSurfaceSuspensionProvider>
-        </ShortcutSurfaceSuspensionProvider>
+          </BackgroundSubtreeProvider>
+        </BackgroundSubtreeProvider>
       </Harness>,
     )
 
@@ -157,11 +157,11 @@ describe('shortcut-surface suspension', () => {
   it('lets the raw context un-suspend a descendant (documented escape hatch)', () => {
     render(
       <Harness>
-        <ShortcutSurfaceSuspensionProvider suspended={true}>
-          <ShortcutSurfaceSuspensionContext.Provider value={false}>
+        <BackgroundSubtreeProvider background={true}>
+          <BackgroundSubtreeContext.Provider value={false}>
             <Registrant context={CTX_A} marker="a"/>
-          </ShortcutSurfaceSuspensionContext.Provider>
-        </ShortcutSurfaceSuspensionProvider>
+          </BackgroundSubtreeContext.Provider>
+        </BackgroundSubtreeProvider>
       </Harness>,
     )
 
@@ -171,23 +171,21 @@ describe('shortcut-surface suspension', () => {
   // The ownership property the keep-alive host depends on: after a handover,
   // the ARRIVING subtree owns the contested context.
   //
-  // It holds today only because the handover is ONE commit. `ActiveContexts`
-  // keys one entry per context TYPE and `deactivate` removes it by type with
-  // no ownership check (docs/activeContexts-ownership-bug.md); what saves this
-  // case is React running every passive-effect DESTROY in a commit before any
-  // CREATE, so the leaver's blind `deactivate(CONTESTED)` lands first and the
-  // arriver's `activate` is the last write. That is a property of the
-  // batching, not of the suspension seam — see the `it.fails` case below for
-  // the same handover split across two commits.
+  // Both this and the split-commit case below are pinned because they used to
+  // differ. Under by-type `deactivate` only the one-commit handover worked —
+  // React runs every passive-effect DESTROY before any CREATE, so the leaver's
+  // blind deactivate landed first and the arriver's activate was the last
+  // write. Token-keyed claim/release made that accident unnecessary; keep both
+  // so a regression to by-type removal fails here rather than in a host.
   it('hands a contested context to the subtree that unsuspends in the same commit', () => {
     const tree = (leftSuspended: boolean) => (
       <Harness>
-        <ShortcutSurfaceSuspensionProvider suspended={leftSuspended}>
+        <BackgroundSubtreeProvider background={leftSuspended}>
           <Registrant context={CONTESTED} marker="left"/>
-        </ShortcutSurfaceSuspensionProvider>
-        <ShortcutSurfaceSuspensionProvider suspended={!leftSuspended}>
+        </BackgroundSubtreeProvider>
+        <BackgroundSubtreeProvider background={!leftSuspended}>
           <Registrant context={CONTESTED} marker="right"/>
-        </ShortcutSurfaceSuspensionProvider>
+        </BackgroundSubtreeProvider>
       </Harness>
     )
 
@@ -215,16 +213,16 @@ describe('shortcut-surface suspension', () => {
   // reachable without an unmount, so it belongs pinned here. Ownership-aware
   // claims make the release scoped to the claimer and this passes; when that
   // lands, drop the `.fails`.
-  it.fails('hands a contested context over when the halves land in different commits', () => {
+  it('hands a contested context over when the halves land in different commits', () => {
     const tree = (leftSuspended: boolean, rightMounted: boolean) => (
       <Harness>
-        <ShortcutSurfaceSuspensionProvider suspended={leftSuspended}>
+        <BackgroundSubtreeProvider background={leftSuspended}>
           <Registrant context={CONTESTED} marker="left"/>
-        </ShortcutSurfaceSuspensionProvider>
+        </BackgroundSubtreeProvider>
         {rightMounted ? (
-          <ShortcutSurfaceSuspensionProvider suspended={false}>
+          <BackgroundSubtreeProvider background={false}>
             <Registrant context={CONTESTED} marker="right"/>
-          </ShortcutSurfaceSuspensionProvider>
+          </BackgroundSubtreeProvider>
         ) : null}
       </Harness>
     )
@@ -251,9 +249,9 @@ describe('shortcut-surface suspension', () => {
     }
     const tree = (suspended: boolean) => (
       <Harness>
-        <ShortcutSurfaceSuspensionProvider suspended={suspended}>
+        <BackgroundSubtreeProvider background={suspended}>
           <WrapperRegistrant/>
-        </ShortcutSurfaceSuspensionProvider>
+        </BackgroundSubtreeProvider>
       </Harness>
     )
 

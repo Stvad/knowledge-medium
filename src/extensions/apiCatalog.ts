@@ -204,12 +204,12 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     types: [],
   },
   {
-    category: 'actions',
-    importPath: '@/shortcuts/ShortcutSurfaceSuspension.js',
-    description: 'Suspend a subtree\'s declarative shortcut activations WITHOUT unmounting it — for hosts that keep several layout sessions mounted and show one.',
+    category: 'ui',
+    importPath: '@/context/backgroundSubtree.js',
+    description: 'Mark a subtree BACKGROUND — alive and rendering, but not entitled to claim single-holder app resources (today the keyboard, via declarative shortcut activations). For hosts that keep several layout sessions mounted and show one. NOT a signal to stop working.',
     exports: [
-      'ShortcutSurfaceSuspensionContext', 'ShortcutSurfaceSuspensionProvider',
-      'useShortcutSurfacesSuspended',
+      'BackgroundSubtreeContext', 'BackgroundSubtreeProvider',
+      'useIsBackgroundSubtree',
     ],
     types: [],
   },

@@ -21,7 +21,7 @@ import {
   type BlockShortcutDependencies,
 } from '@/shortcuts/types'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations'
-import { ShortcutSurfaceSuspensionProvider } from '@/shortcuts/ShortcutSurfaceSuspension'
+import { BackgroundSubtreeProvider } from '@/context/backgroundSubtree'
 import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction'
 import {
   activePanelIdProp,
@@ -251,13 +251,13 @@ describe('useShortcutSurfaceActivations', () => {
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>
           <Suspense fallback={<div>Loading...</div>}>
-            <ShortcutSurfaceSuspensionProvider suspended={suspended}>
+            <BackgroundSubtreeProvider background={suspended}>
               <PanelBlockSurface
                 blockId="block-b"
                 layoutSessionBlockId="layout-session"
                 panelId="panel-b"
               />
-            </ShortcutSurfaceSuspensionProvider>
+            </BackgroundSubtreeProvider>
             <ActiveNormalModeProbe/>
           </Suspense>
         </ActiveContextsProvider>
