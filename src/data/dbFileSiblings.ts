@@ -11,9 +11,14 @@
 /** `OPFSWriteAheadVFS`'s write-ahead log — two files, alternated WAL2-style. */
 export const WRITE_AHEAD_SIDECAR_SUFFIXES = ['-wa0', '-wa1'] as const
 
+/**
+ * SQLite's own crash-recovery files. These must be removed BEFORE the main
+ * `.db`: left beside a fresh database of the same name, SQLite replays them.
+ */
+export const SQLITE_JOURNAL_SUFFIXES = ['-journal', '-wal', '-shm'] as const
+
+/** Everything derived from the main `.db` name, for inventory and backup. */
 export const DB_FILE_SIBLING_SUFFIXES = [
-  '-journal',
-  '-wal',
-  '-shm',
+  ...SQLITE_JOURNAL_SUFFIXES,
   ...WRITE_AHEAD_SIDECAR_SUFFIXES,
 ] as const

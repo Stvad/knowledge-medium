@@ -18,7 +18,11 @@ import { v4 as uuidv4 } from 'uuid'
 import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/localDbStorage'
-import { DB_FILE_SIBLING_SUFFIXES } from '@/data/dbFileSiblings.js'
+import {
+  DB_FILE_SIBLING_SUFFIXES,
+  SQLITE_JOURNAL_SUFFIXES,
+  WRITE_AHEAD_SIDECAR_SUFFIXES,
+} from '@/data/dbFileSiblings.js'
 
 export interface RawSqliteDbBlobExport {
   blob: Blob
@@ -240,22 +244,32 @@ export async function deleteLocalSqliteDb(userId: string): Promise<void> {
   const dbFilename = dbFilenameForUser(userId)
   const root = await navigator.storage.getDirectory()
 
-  // Attempt every sibling even if one fails, so a single locked file doesn't
-  // mask the others — then bail before the `.db` if any did fail.
-  const siblingResults = await Promise.allSettled(
-    DB_FILE_SIBLING_SUFFIXES.map(suffix => removeEntryIfExists(root, dbFilename + suffix)),
+  // SQLite's journals first, and bail before the `.db` if any resisted: left
+  // beside a fresh database of this name they would be replayed onto it.
+  // Attempt all of them even if one fails, so one locked file doesn't mask the
+  // rest.
+  const journalResults = await Promise.allSettled(
+    SQLITE_JOURNAL_SUFFIXES.map(suffix => removeEntryIfExists(root, dbFilename + suffix)),
   )
-  const siblingFailure = siblingResults.find((r): r is PromiseRejectedResult => r.status === 'rejected')
-  if (siblingFailure) {
+  const journalFailure = journalResults.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+  if (journalFailure) {
     throw new Error(
       'Could not delete all local database files — one may be locked by another open tab of this app. ' +
-      'The main database was left in place; close the other tabs and try again. If a write-ahead log ' +
-      '(-wa0/-wa1) was already removed, export a backup before relying on that database again.',
-      {cause: siblingFailure.reason},
+      'The main database was left in place; close the other tabs and try again.',
+      {cause: journalFailure.reason},
     )
   }
 
   await removeEntryIfExists(root, dbFilename)
+
+  // The write-ahead pair goes AFTER the main file, and its failure is not fatal.
+  // The other order loses data: deleting a log while its `.db` survives strips
+  // committed frames from a database the caller is then told was left intact.
+  // This way a surviving log is harmless — the VFS truncates both sidecars when
+  // it opens a `.db` that does not exist yet.
+  await Promise.allSettled(
+    WRITE_AHEAD_SIDECAR_SUFFIXES.map(suffix => removeEntryIfExists(root, dbFilename + suffix)),
+  )
 }
 
 /**
@@ -390,6 +404,22 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
  * An unrecognised shape is NOT drained: the caller is about to copy the main
  * file alone, and a loud refusal beats a backup that quietly omits writes.
  */
+const CHECKPOINT_TIMEOUT_MS = 30_000
+
+const withDeadline = async <T,>(work: Promise<T>, ms: number, message: string): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 const checkpointDrained = (result: unknown): boolean => {
   const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
   const row = Array.isArray(rows) ? rows[0] : undefined
@@ -418,8 +448,18 @@ const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>
   }
   return db.writeLock(async tx => {
     // Through `tx`, not `repo.db.execute` — the latter would queue for the
-    // write lock this callback is already holding.
-    await tx.execute('PRAGMA wal_checkpoint=truncate')
+    // write lock this callback is already holding. Bounded because the
+    // write-ahead VFS's checkpoint waits on every connection's transaction-id
+    // lock with no timeout of its own: a suspended reader in another tab would
+    // otherwise leave the export on a spinner forever, never reaching the
+    // verification below or its actionable message.
+    await withDeadline(
+      tx.execute('PRAGMA wal_checkpoint=truncate'),
+      CHECKPOINT_TIMEOUT_MS,
+      'Timed out flushing this device\'s pending changes into the database file, so a backup taken now ' +
+      'would be missing them. Another tab of the app is probably holding it — close the other tabs and ' +
+      'try again.',
+    )
     // A partial checkpoint does not fail the statement, and the copy below
     // takes only the main file — so an unverified flush yields a backup that
     // opens cleanly and is missing its most recent writes. Same confirmation

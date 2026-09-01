@@ -127,6 +127,16 @@ client alone with a write-ahead database acquires the handle uncontested and rea
 stale main file. Nothing at the OPFS layer prevents that — only not shipping a build
 that would do it (see Rollout).
 
+**Accepted residual, same window.** The hot-journal check in `prepareLocalDbForVfs` is
+not atomic with the open that follows it. During a mixed-version rollout an old CoopSync
+tab could, in the gap, take the handle, begin a write, and be killed — leaving a hot
+journal that the write-ahead open then ignores by design, over partially written pages.
+Closing this needs cross-context exclusion held from the check through PowerSync's open,
+and there is no primitive for that: any handle we hold to bridge the gap is one the open
+itself cannot acquire. It is accepted rather than guarded because it needs an old build
+running concurrently, writing, and dying inside a millisecond window — and it disappears
+entirely once no pre-flip build is live.
+
 ## Consequences elsewhere
 
 - **Backups.** `exportRawSqliteDb` copies the main file's bytes, so it now checkpoints

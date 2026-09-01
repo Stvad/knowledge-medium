@@ -473,7 +473,7 @@ describe('removeRecoveryBackupTemps', () => {
 })
 
 describe('deleteLocalSqliteDb', () => {
-  it('removes the -journal/-wal/-shm siblings BEFORE the .db, nothing else', async () => {
+  it('removes SQLite journals before the .db and the write-ahead pair after it', async () => {
     const removeEntry = vi.fn<(name: string) => Promise<void>>(async () => {})
     Object.defineProperty(navigator, 'storage', {
       configurable: true,
@@ -482,16 +482,19 @@ describe('deleteLocalSqliteDb', () => {
 
     await deleteLocalSqliteDb('user-1')
 
-    // Siblings first so the .db is only removed once they're gone — a fresh boot
-    // can never find the .db missing next to a replayable -wal/-journal.
+    // SQLite's journals before the .db, because a fresh boot must never find the
+    // .db missing next to a replayable one. The write-ahead pair goes AFTER,
+    // because the other order strips committed frames from a database that
+    // survives — and a surviving log is harmless, the VFS truncates both when it
+    // opens a .db that does not exist.
     const removed = removeEntry.mock.calls.map(c => c[0])
     expect(removed).toEqual([
       'kmp-v6-user-1.db-journal',
       'kmp-v6-user-1.db-wal',
       'kmp-v6-user-1.db-shm',
+      'kmp-v6-user-1.db',
       'kmp-v6-user-1.db-wa0',
       'kmp-v6-user-1.db-wa1',
-      'kmp-v6-user-1.db',
     ])
   })
 
