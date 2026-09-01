@@ -97,11 +97,9 @@ sidecars exist → write-ahead        (outranks the pin and the probe both)
 no sidecars    → probe: supported ? write-ahead : CoopSync
 ```
 
-**As shipped, the second line is gated off.** `MOVE_NEW_DATABASES` is `false`, so a
-database without sidecars stays on CoopSync and the probe is not even run — only the
-`km.local-db-vfs` pin moves one. That is Deploy 1 (see Rollout), and it is the first
-thing to check when a Chromium database has not moved: there is no failed probe to
-diagnose, because no probe ran.
+Both lines are live as of Deploy 2 (`MOVE_NEW_DATABASES = true`). Before that, only the
+`km.local-db-vfs` pin moved a database — so on a build older than Deploy 2, a Chromium
+database that has not moved has no failed probe to diagnose, because no probe ran.
 
 A database moves to write-ahead and stays there. Nothing here moves one back, so the
 first failure above cannot arise and the second has nothing to leave behind. The only
@@ -174,15 +172,35 @@ entirely once no pre-flip build is live.
 Ship this in **two deploys**, with the guard first. The constant is
 `MOVE_NEW_DATABASES` in `src/data/localDbVfs.ts`.
 
-**Deploy 1 — read the record, create none.** `MOVE_NEW_DATABASES = false`. A database
-that already has sidecars still opens write-ahead, but nothing moves on its own, so
-behaviour is identical to before: no database has sidecars yet. What this buys is that
-every build in the field now knows what to do if it ever meets one. The
-`km.local-db-vfs=write-ahead` pin still opts a single device in, which is how the
-rollout is meant to start — run on it against a real database for as long as you want
+**Deploy 1 — read the record, create none** (`MOVE_NEW_DATABASES = false`, shipped in
+[#851](https://github.com/Stvad/knowledge-medium/pull/851)). A database that already has
+sidecars opens write-ahead, but nothing moves on its own, so behaviour was identical to
+before. What it bought is that every build in the field knows what to do if it meets a
+moved database. The `km.local-db-vfs=write-ahead` pin opts a single device in, which is
+how the rollout starts — run on it against a real database for as long as you want
 confidence.
 
-**Deploy 2 — flip the constant.** Databases begin moving. To back out, deploy 1 again.
+**Deploy 2 — flip the constant** (`MOVE_NEW_DATABASES = true`). Databases begin moving.
+To back out, set it to `false` again and deploy; do NOT revert the module with it.
+
+**Deploy 2 has a precondition of its own: no tab may still be running a pre-flip
+build when the first move happens on that device.** The service worker deliberately
+does not reload open pages (`registerServiceWorker.ts`, and no `clients.claim()` in
+`sw/worker.ts`) — a new build reaches a tab only when that tab reloads. So a device can
+have one abandoned tab on the old build, resolved to CoopSync at its own boot, while a
+reloaded tab picks up Deploy 2 and moves the database. When the new tab closes, the old
+one reacquires the file and reads a main file that is now stale relative to the
+sidecars — the sequential hazard above, reached without any rollback.
+
+There is no detecting our way out of this. A new-build tab cannot see an old-build one:
+the sync SharedWorker's URL is content-hashed per build so the two do not share one, and
+PowerSync's cross-tab locks are held only for the duration of an operation, so an idle
+tab holds nothing to query. Any announce-and-detect mechanism only works between builds
+that both have it, which by definition excludes the build being upgraded from.
+
+So the procedure is the control: **close every app tab on every device before Deploy 2
+goes out, and let them come back one at a time.** With few devices that is free. The
+same reasoning is why changing the pin is a reload boundary.
 
 **The rule this exists to make possible:**
 
