@@ -1,0 +1,2 @@
+import{CallbackSet as e}from"../../utils/callbackSet.js";var t=6e4,n=new Map,r=new Map,i=new e(`agent-dispatch-asked`),a=e=>{n.set(e,Date.now()),clearTimeout(r.get(e)),r.set(e,setTimeout(()=>{r.delete(e),n.delete(e)&&i.notify()},t)),i.notify()},o=e=>{clearTimeout(r.get(e)),r.delete(e),n.delete(e)&&i.notify()},s=e=>{let t=n.get(e);return t===void 0?!1:Date.now()-t>6e4?(n.delete(e),!1):!0},c=e=>i.add(e);export{t as ASKED_TTL_MS,o as clearAskedAgent,s as isAskedAgent,a as markAskedAgent,c as subscribeAskedAgent};
+//# sourceMappingURL=askedStore.js.map
