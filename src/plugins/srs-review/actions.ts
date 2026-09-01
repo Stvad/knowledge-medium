@@ -22,9 +22,8 @@ export interface SrsReviewController {
   revealOrGradeDefault: () => void
 }
 
-/** The grade `srs-review.reveal` casts on an already-revealed card.
- *  Exported because that button's key hint has to name the reveal chord
- *  too, and a second literal is how the hint went stale before. */
+/** The grade `srs-review.reveal` casts on an already-revealed card. Read
+ *  by both the controller and that button's key hint. */
 export const SRS_DEFAULT_GRADE_SIGNAL = SrsSignal.GOOD
 
 /** Builds the controller from the session's live state. The gating lives
@@ -115,9 +114,7 @@ const GRADE_BINDINGS: readonly GradeBinding[] = [
 
 const gradeActionId = (label: string): string => `srs-review.grade.${label.toLowerCase()}`
 
-/** Action id per grade signal, so the review session's on-screen buttons
- *  can look up the key hint for the action they trigger without restating
- *  the id. */
+/** Action id per grade signal — how a button finds its own action. */
 export const SRS_GRADE_ACTION_IDS: ReadonlyMap<SrsSignal, string> = new Map(
   GRADE_BINDINGS.map(({signal, label}) => [signal, gradeActionId(label)]),
 )

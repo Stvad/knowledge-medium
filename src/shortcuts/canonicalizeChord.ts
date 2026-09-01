@@ -135,10 +135,7 @@ interface ParsedPress {
  *  space. Reachable only through `normalizeChord` on a single press: the
  *  sequence-aware callers split on ' ' first, and the settings UI stores
  *  `chordFromEvent` output, which never contains spaces.
- *
- *  Exported because DISPLAY has to tokenize a press the same way storage
- *  does: `formatChord` splitting on its own dropped the key half of
- *  `Shift++` and rendered a bare `⇧`. */
+ */
 export const splitPressTokens = (press: string): string[] =>
   press.trim().replace(/\s*\+\s*/g, '+').split(/(?<=\w|\])\+/)
 

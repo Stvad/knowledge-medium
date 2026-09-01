@@ -397,9 +397,6 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   }], [controller, surfaceFocused, currentId])
   useActionContextActivations(shortcutActivations)
 
-  // On-screen key hints, derived from the same actions the keys dispatch
-  // through, so remapping or unbinding one in settings is reflected here
-  // rather than leaving the button advertising a dead key.
   const keyHints = useActionKeyHints(SRS_REVIEW_CONTEXT)
   const revealHint = keyHints.get(SRS_REVEAL_ACTION_ID)
 
