@@ -550,9 +550,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // archive restores whole, but Safari expands zips on download, so the
         // user may only have the loose files.
         input.multiple = true
-        input.accept = ['.db', ...DB_FILE_SIBLING_SUFFIXES.map(s => `.db${s}`), '.zip']
-          .concat('application/vnd.sqlite3', 'application/octet-stream')
-          .join(',')
+        input.accept = [
+          '.db', ...DB_FILE_SIBLING_SUFFIXES.map(s => `.db${s}`), '.zip',
+          'application/vnd.sqlite3', 'application/octet-stream',
+        ].join(',')
 
         input.onchange = async (e) => {
           const files = [...((e.target as HTMLInputElement).files ?? [])]

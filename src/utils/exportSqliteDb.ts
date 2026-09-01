@@ -470,10 +470,10 @@ const stageRecoveryArchive = async (
  * new files.
  */
 export async function importRawSqliteDb(repo: Repo, files: readonly File[]): Promise<void> {
-  const archive = files.length === 1 && await startsWithMagic(files[0], ZIP_MAGIC) ? files[0] : null
+  const isArchive = files.length === 1 && await startsWithMagic(files[0], ZIP_MAGIC)
   // Classified and header-checked before OPFS is touched at all, so a
   // wrong-file pick costs nothing and leaves nothing behind.
-  const selection = archive ? null : await validateSelection(files)
+  const selection = isArchive ? null : await validateSelection(files)
 
   const dbFilename = dbFilenameForUser(repo.user.id)
   const root = await navigator.storage.getDirectory()
@@ -482,9 +482,9 @@ export async function importRawSqliteDb(repo: Repo, files: readonly File[]): Pro
   // failure reading the selection leaves that database untouched.
   const temps: string[] = []
   try {
-    const staged = selection
-      ? await stageSelection(root, dbFilename, selection, temps)
-      : await stageRecoveryArchive(root, dbFilename, archive!, temps)
+    const staged = selection === null
+      ? await stageRecoveryArchive(root, dbFilename, files[0], temps)
+      : await stageSelection(root, dbFilename, selection, temps)
 
     // Release the OPFS sync access handle the worker holds on the .db
     // file; without this, createWritable() throws NoModificationAllowedError.
@@ -792,8 +792,9 @@ const extractZipToOpfs = async (
         unzipError ??= err
         return
       }
-      // Copied: fflate hands back views it is free to reuse, and this write
-      // runs later, off the chain.
+      // Copied because the write runs after `push` returns and the view is
+      // fflate's buffer to reuse. Defence in depth — no reuse observed, and no
+      // test fails without it.
       const data = chunk.length ? chunk.slice() : null
       writeChain = writeChain.then(async () => {
         const writable = open.get(member.name)
