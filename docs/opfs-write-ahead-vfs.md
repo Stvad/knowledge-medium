@@ -152,11 +152,12 @@ entirely once no pre-flip build is live.
     truncates both when it opens a `.db` that does not exist — whereas deleting a log
     while its `.db` survives strips committed frames from a database the caller is then
     told was left intact.
-  - **Import** removes the sidecars and journals first, then the old `.db`, and only
-    then writes the replacement. Here a new `.db` *is* written afterwards, so a
-    surviving log would find a file to replay onto; and dropping the old `.db` before
-    the write means a failed import leaves no database rather than the previous one
-    silently short of the log just deleted.
+  - **Import** removes the old `.db` FIRST, then every sibling, and only then writes
+    the replacement. Everything must be gone before that write, because a new `.db`
+    gives a surviving journal or log something to replay onto — but removing siblings
+    while the old database still stands means a failure part-way leaves it short of its
+    own committed frames. Main-first makes the failure state "no database", which the
+    next open treats as fresh and the user fixes by retrying the import.
 - **Page cache.** PowerSync applies `cache_size` per connection, and a `PRAGMA` executed
   through the app takes the write lock, so it reaches only the writer. The budget is now
   passed to the open factory and divided across connections, keeping the total at the

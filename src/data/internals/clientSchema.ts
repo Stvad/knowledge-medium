@@ -1749,8 +1749,14 @@ const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promi
   // pre-ANALYZE plans too — losing most of the benefit until reload, on exactly
   // the queries ANALYZE was run for. A no-op DDL bumps the cookie, and every
   // connection reloads `sqlite_stat1` on its next statement.
+  //
+  // Both statements are idempotent because two tabs can finish ANALYZE at the
+  // same time and interleave: `analyzeChain` serialises within a tab, not
+  // across them, so an unconditional DROP can find the table already gone and
+  // report a failure for a pass that actually succeeded. Any interleaving still
+  // moves the cookie at least once, which is all this needs.
   await db.execute('CREATE TABLE IF NOT EXISTS __km_analyze_bump(x)')
-  await db.execute('DROP TABLE __km_analyze_bump')
+  await db.execute('DROP TABLE IF EXISTS __km_analyze_bump')
 }
 
 /** Unconditional `ANALYZE` for the manual command-palette command.
