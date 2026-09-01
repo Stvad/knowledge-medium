@@ -465,7 +465,7 @@ describe('importRawSqliteDb', () => {
     // database being replaced. Checking `sum(file.size)` up front passed here
     // and then destroyed the database on the second write.
     const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array(10)})
-    const incoming = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(1000)])
+    const incoming = new Uint8Array(concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(1000)]))
     // Enough free space that staging the 1016-byte import succeeded, but not
     // enough for the second copy once the 10-byte database it replaces is
     // reclaimed (1016 - 10 = 1006 still needed).
