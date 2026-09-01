@@ -5,6 +5,9 @@ import Markdown from 'react-markdown'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Block } from '@/data/block'
 import { gfmMarkdownExtension, isExternalHref } from '@/markdown/defaultMarkdownExtension.js'
+import { remarkBlockrefs } from '@/plugins/references/markdown/blockrefs/remark-blockrefs.js'
+import { remarkTimestamps } from '@/plugins/video-player/remark-timestamps.js'
+import type { PluggableList } from 'unified'
 
 const markdownConfig = gfmMarkdownExtension({
   block: {} as Block,
@@ -12,12 +15,12 @@ const markdownConfig = gfmMarkdownExtension({
   data: {content: '', references: [], workspaceId: ''},
 })
 
-const renderMarkdown = (content: string) => {
+const renderMarkdown = (content: string, extraRemarkPlugins: PluggableList = []) => {
   if (!markdownConfig) throw new Error('Expected markdown config')
 
   return render(
     <Markdown
-      remarkPlugins={markdownConfig.remarkPlugins}
+      remarkPlugins={[...markdownConfig.remarkPlugins ?? [], ...extraRemarkPlugins]}
       rehypePlugins={markdownConfig.rehypePlugins}
       components={markdownConfig.components}
     >
@@ -148,6 +151,25 @@ describe('gfm markdown extension', () => {
     const {container} = renderMarkdown('- [ ] task item')
 
     expect(container.querySelector('li')?.textContent).toBe(' task item')
+  })
+
+  // A remark plugin that splits a text node leaves unpositioned slices of its
+  // own, so being unpositioned cannot be the whole test — what separates them
+  // is that the serializer only pretty-prints between BLOCK children, while
+  // these sit among inline siblings. Driving the real plugins, because the
+  // claim is about what they emit.
+  it('keeps an authored newline between two nodes a remark plugin split apart', () => {
+    const {container} = renderMarkdown('0:30\n1:00', [remarkTimestamps])
+
+    expect(container.textContent).toBe('0:30\n1:00')
+  })
+
+  it('keeps an authored newline between two block references', () => {
+    const first = '550e8400-e29b-41d4-a716-446655440000'
+    const second = '550e8400-e29b-41d4-a716-446655440001'
+    const {container} = renderMarkdown(`((${first}))\n((${second}))`, [remarkBlockrefs])
+
+    expect(container.textContent).toContain('\n')
   })
 
   // The same rule at a block's top level, which used to be exempt: two
