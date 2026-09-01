@@ -459,6 +459,46 @@ describe('importRawSqliteDb', () => {
     expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
   })
 
+  it('budgets for the second copy, not just the first, before crossing the boundary', async () => {
+    // Staging is already on disk when this runs, so the outstanding cost is
+    // writing those bytes AGAIN under the real names — offset by deleting the
+    // database being replaced. Checking `sum(file.size)` up front passed here
+    // and then destroyed the database on the second write.
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array(10)})
+    const incoming = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(1000)])
+    // Enough free space that staging the 1016-byte import succeeded, but not
+    // enough for the second copy once the 10-byte database it replaces is
+    // reclaimed (1016 - 10 = 1006 still needed).
+    opfs.setFreeBytes(500)
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream([incoming], 'big.db')], writeAheadSupported))
+      .rejects.toThrow(/Not enough browser storage/)
+    // Refused BEFORE the boundary: the database it would have replaced is intact.
+    expect([...opfs.bytes('kmp-v6-user-1.db')]).toEqual([...new Uint8Array(10)])
+
+    // Reclaiming a database of comparable size makes the same import fit.
+    opfs.reset({'kmp-v6-user-1.db': new Uint8Array(1000)})
+    opfs.setFreeBytes(500)
+    await importRawSqliteDb(fakeRepo(), [fileWithStream([incoming], 'big.db')], writeAheadSupported)
+    expect(opfs.bytes('kmp-v6-user-1.db')).toEqual(incoming)
+  })
+
+  it('refuses an archive too large for its own directory to address', async () => {
+    // fflate's writer emits no ZIP64: past 4 GiB it wraps the directory offsets
+    // modulo 2^32, so the archive is malformed at the source. Nothing in the
+    // validation below can tell that from a truncated download, so it is named.
+    const opfs = installFakeOpfs()
+    const huge = {
+      size: 0x100000000 + 1,
+      name: 'recovery.zip',
+      slice: (start = 0, end = 4) => new Blob([new Uint8Array([0x50, 0x4b, 0x03, 0x04]).slice(start, end)]),
+    } as unknown as File
+
+    await expect(importRawSqliteDb(fakeRepo(), [huge], writeAheadSupported))
+      .rejects.toThrow(/larger than 4 GB/)
+    expect([...opfs.names()]).toEqual([])
+  })
+
   it('refuses a write-ahead backup on a browser that cannot open one', async () => {
     // Restoring the pair COMMITS the device to OPFSWriteAheadVFS — sidecar
     // existence outranks the probe at boot — so on Firefox/Safari this trades a
@@ -706,15 +746,21 @@ const installFakeOpfs = (
     },
   }
 
+  let quota = 1e9
   Object.defineProperty(navigator, 'storage', {
     configurable: true,
-    value: {getDirectory: async () => root, estimate: async () => ({quota: 1e9, usage: 0})},
+    value: {getDirectory: async () => root, estimate: async () => ({quota, usage: 0})},
   })
 
   return {
     writes,
     names: () => [...files.keys()],
     bytes: (name: string) => files.get(name)!,
+    setFreeBytes: (free: number) => void (quota = free),
+    reset: (next: Record<string, Uint8Array>) => {
+      files.clear()
+      for (const [n, b] of Object.entries(next)) files.set(n, b)
+    },
   }
 }
 

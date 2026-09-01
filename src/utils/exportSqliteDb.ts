@@ -362,17 +362,36 @@ export interface ImportDeps {
 }
 
 /**
- * The import needs room for a whole second copy before it touches anything, and
- * unlike the export paths it had no check — leaving `QuotaExceededError` to
- * surface mid-copy, which past the boundary means a destroyed database rather
- * than a refusal.
+ * Room for the SECOND copy, checked at the last moment before the boundary.
+ *
+ * Staging is already on disk by now, so `estimate()` accounts for it and the
+ * only outstanding cost is writing those bytes again under the real names —
+ * paid for, in part, by deleting the database being replaced. Anything left
+ * over has to be free already.
+ *
+ * Measuring here rather than up front is what makes it right: the staged files
+ * are the actual uncompressed bytes, so a deflated archive cannot undercount,
+ * and the database's real size is known rather than assumed. Running out of
+ * room during staging is merely a failed import; running out after the boundary
+ * destroys the database.
  */
-const assertRoomForImport = async (files: readonly File[]): Promise<void> => {
-  const required = files.reduce((sum, file) => sum + file.size, 0)
+const assertRoomToReplace = async (
+  root: FileSystemDirectoryHandle,
+  dbFilename: string,
+  staged: readonly StagedImportFile[],
+): Promise<void> => {
   const freeBytes = await estimateFreeOpfsBytes()
-  if (freeBytes !== undefined && freeBytes < required) {
-    throw new Error(insufficientOpfsSpaceMessage(required, freeBytes))
+  if (freeBytes === undefined) return
+
+  let stagedBytes = 0
+  for (const {stagingName} of staged) stagedBytes += (await opfsFile(root, stagingName)).size
+  let reclaimable = 0
+  for (const suffix of ['', ...DB_FILE_SIBLING_SUFFIXES]) {
+    reclaimable += (await readOpfsFileIfExists(root, dbFilename + suffix))?.size ?? 0
   }
+
+  const required = stagedBytes - reclaimable
+  if (freeBytes < required) throw new Error(insufficientOpfsSpaceMessage(required, freeBytes))
 }
 
 /** One file waiting in OPFS staging, and the sibling suffix it restores to (`''` = the `.db`). */
@@ -617,11 +636,6 @@ export async function importRawSqliteDb(
   const dbFilename = dbFilenameForUser(repo.user.id)
   const root = await navigator.storage.getDirectory()
 
-  // Staging writes a second full copy beside the live database, so check for
-  // the room first: the same failure AFTER the boundary below destroys the
-  // database instead of merely refusing.
-  await assertRoomForImport(files)
-
   // Everything lands in staging while the live database is still intact, so a
   // failure reading the selection leaves that database untouched.
   const temps: string[] = []
@@ -629,6 +643,9 @@ export async function importRawSqliteDb(
     const staged = selection === null
       ? await stageRecoveryArchive(root, dbFilename, files[0], temps, probeWriteAheadSupport)
       : await stageSelection(root, dbFilename, selection, temps)
+
+    // Last thing before the boundary, because it needs the staged sizes.
+    await assertRoomToReplace(root, dbFilename, staged)
 
     // Release the OPFS sync access handle the worker holds on the .db
     // file; without this, createWritable() throws NoModificationAllowedError.
@@ -1051,6 +1068,18 @@ interface ZipDirectoryEntry {
  * truncated download.
  */
 const zipCentralDirectory = async (archive: Blob): Promise<ZipDirectoryEntry[]> => {
+  // Past 4 GiB the directory's 32-bit offsets cannot address the archive, and
+  // fflate's writer wraps them modulo 2^32 rather than emitting ZIP64 — so an
+  // archive this size is malformed at the source, not damaged in transit, and
+  // no validation below could tell the difference. Measured: a 4 GiB+ archive
+  // records its directory at offset 1076.
+  if (archive.size > ZIP64_SENTINEL_32) {
+    throw new Error(
+      'This backup is larger than 4 GB, which the archive format used to write it cannot ' +
+      'describe, so it cannot be restored. Extract it and select the files inside instead.',
+    )
+  }
+
   // 22 bytes plus a trailing comment we never write and the format caps at 64K.
   const tailBytes = Math.min(archive.size, EOCD_SIZE + 0xffff)
   const tailStart = archive.size - tailBytes
