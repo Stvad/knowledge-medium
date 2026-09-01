@@ -1,2 +1,2 @@
-var e=[`-wa0`,`-wa1`],t=[`-journal`,`-wal`,`-shm`,...e];export{t as DB_FILE_SIBLING_SUFFIXES,e as WRITE_AHEAD_SIDECAR_SUFFIXES};
+var e=[`-wa0`,`-wa1`],t=[`-journal`,`-wal`,`-shm`],n=[...t,...e];export{n as DB_FILE_SIBLING_SUFFIXES,t as SQLITE_JOURNAL_SUFFIXES,e as WRITE_AHEAD_SIDECAR_SUFFIXES};
 //# sourceMappingURL=dbFileSiblings.js.map

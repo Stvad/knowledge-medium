@@ -33,12 +33,25 @@
 	* destination.
 	*/
 	var isCacheableAsset = (destination, pathname, sameOrigin) => sameOrigin && (ASSET_DESTINATIONS.has(destination) || ASSET_EXTENSION.test(pathname));
-	var DB_FILE_SIBLING_SUFFIXES = [
+	//#endregion
+	//#region src/data/dbFileSiblings.ts
+	/**
+	* Every file SQLite or the VFS derives from the main `.db` name. A suffix
+	* missing from any consumer of this list is a file that survives that
+	* consumer's cleanup and then replays over the next database of that name.
+	*
+	* Its own module, with NO imports, so the service worker's stale-preview sweep
+	* can share it: that build has no path alias and must not pull in the app's
+	* module graph.
+	*/
+	/** `OPFSWriteAheadVFS`'s write-ahead log — two files, alternated WAL2-style. */
+	var WRITE_AHEAD_SIDECAR_SUFFIXES = ["-wa0", "-wa1"];
+	/** Everything derived from the main `.db` name, for inventory and backup. */
+	var DB_FILE_SIBLING_SUFFIXES = [...[
 		"-journal",
 		"-wal",
-		"-shm",
-		...["-wa0", "-wa1"]
-	];
+		"-shm"
+	], ...WRITE_AHEAD_SIDECAR_SUFFIXES];
 	//#endregion
 	//#region src/sw/preview.ts
 	/**
@@ -492,7 +505,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "55c31b9d3ea1",
+		buildId: "f2b141c774e5",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
