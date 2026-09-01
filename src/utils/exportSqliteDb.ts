@@ -9,13 +9,16 @@
  * adapter lock while streaming the current .db image to either a user
  * chosen file (Chrome File System Access API) or an OPFS temp snapshot.
  *
- * Import validates a tiny header first, streams the selected file into
- * OPFS staging while the live DB is still intact, then closes PowerSync
- * and replaces the current user's .db from that staging file.
+ * Import validates a tiny header first, streams the selection into OPFS
+ * staging while the live DB is still intact, then closes PowerSync and
+ * replaces the current user's files from staging. The selection is a `.db`, a
+ * recovery archive, or a `.db` with the siblings extracted from one — a lone
+ * `.db` restored from a backup that had write-ahead sidecars is missing
+ * whatever they still held, and says nothing about it.
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import { Zip, ZipPassThrough } from 'fflate'
+import { Unzip, UnzipInflate, Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/localDbStorage'
 import {
@@ -342,35 +345,146 @@ const SQLITE_MAGIC = new Uint8Array([
   0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00,
 ])
 
+/** ZIP local-file-header magic, `PK\x03\x04`. */
+const ZIP_MAGIC = new Uint8Array([0x50, 0x4b, 0x03, 0x04])
+
+const startsWithMagic = async (blob: Blob, magic: Uint8Array): Promise<boolean> => {
+  if (blob.size < magic.length) return false
+  const head = new Uint8Array(await blob.slice(0, magic.length).arrayBuffer())
+  return magic.every((byte, i) => head[i] === byte)
+}
+
+/** One file waiting in OPFS staging, and the sibling suffix it restores to (`''` = the `.db`). */
+interface StagedImportFile {
+  suffix: string
+  stagingName: string
+}
+
 /**
- * Replace the current user's OPFS .db file with the supplied bytes.
- * After this resolves the live `repo` is dead (its DB connection has
- * been closed); the caller must reload the page so a fresh PowerSync
- * init opens the new file.
+ * Which member of a fileset is the database, and what each of the rest restores
+ * to. Matched by SHAPE — the database is the one member every other member
+ * extends by a known sibling suffix — so a backup taken under one account still
+ * restores under another, as a bare `.db` always could.
  */
-export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
-  // Cheap header check so a wrong-file selection fails before we
-  // tear down the live database.
-  if (file.size < SQLITE_MAGIC.length) {
+const classifyDbFileSet = (names: readonly string[]): {main: string; siblings: Array<{name: string; suffix: string}>} => {
+  const main = new Set(names).size === names.length
+    ? names.find(candidate => names.every(name =>
+        name === candidate || DB_FILE_SIBLING_SUFFIXES.some(suffix => name === candidate + suffix)))
+    : undefined
+  if (!main) {
+    throw new Error(
+      'Select a SQLite database file on its own, or together with the ' +
+      `${DB_FILE_SIBLING_SUFFIXES.join(' / ')} siblings saved beside it in the same backup.`,
+    )
+  }
+  return {
+    main,
+    siblings: names.filter(name => name !== main).map(name => ({name, suffix: name.slice(main.length)})),
+  }
+}
+
+const assertSqliteHeader = async (blob: Blob): Promise<void> => {
+  if (blob.size < SQLITE_MAGIC.length) {
     throw new Error('Selected file is too small to be a SQLite database.')
   }
-  const headerBuffer = await file.slice(0, SQLITE_MAGIC.length).arrayBuffer()
-  const head = new Uint8Array(headerBuffer)
-  for (let i = 0; i < SQLITE_MAGIC.length; i++) {
-    if (head[i] !== SQLITE_MAGIC[i]) {
-      throw new Error('Selected file is not a SQLite database (missing magic header).')
-    }
+  if (!await startsWithMagic(blob, SQLITE_MAGIC)) {
+    throw new Error('Selected file is not a SQLite database (missing magic header).')
+  }
+}
+
+const opfsFile = async (root: FileSystemDirectoryHandle, name: string): Promise<File> =>
+  (await root.getFileHandle(name)).getFile()
+
+/** The selection, classified and header-checked, before OPFS is touched at all. */
+const validateSelection = async (files: readonly File[]): Promise<Array<{suffix: string; file: File}>> => {
+  const {main, siblings} = classifyDbFileSet(files.map(file => file.name))
+  const byName = new Map(files.map(file => [file.name, file]))
+  await assertSqliteHeader(byName.get(main)!)
+  return [
+    {suffix: '', file: byName.get(main)!},
+    ...siblings.map(({name, suffix}) => ({suffix, file: byName.get(name)!})),
+  ]
+}
+
+const stageSelection = async (
+  root: FileSystemDirectoryHandle,
+  dbFilename: string,
+  selection: Array<{suffix: string; file: File}>,
+  temps: string[],
+): Promise<StagedImportFile[]> => {
+  const staged: StagedImportFile[] = []
+  for (const {suffix, file} of selection) {
+    const stagingName = tempOpfsFilename(dbFilename, 'import-staging')
+    temps.push(stagingName)
+    await pipeBlobToFileHandle(file, await root.getFileHandle(stagingName, {create: true}))
+    staged.push({suffix, stagingName})
+  }
+  return staged
+}
+
+/** Unpack a recovery archive into OPFS staging, one temp file per member. */
+const stageRecoveryArchive = async (
+  root: FileSystemDirectoryHandle,
+  dbFilename: string,
+  archive: File,
+  temps: string[],
+): Promise<StagedImportFile[]> => {
+  const declared = await zipMemberCount(archive)
+  const members = await extractZipToOpfs(root, archive, () => {
+    const stagingName = tempOpfsFilename(dbFilename, 'import-staging')
+    temps.push(stagingName)
+    return stagingName
+  })
+  // The streaming reader sees only local headers, so an archive cut short
+  // reads as a SHORTER archive rather than a broken one — restoring what
+  // arrived and dropping the rest, which is the shape this whole path exists to
+  // close. The archive's own directory is the count to trust.
+  if (members.length !== declared) {
+    throw new Error(
+      `The selected archive is incomplete — it lists ${declared} file(s) but only ` +
+      `${members.length} could be read. Re-download the backup, or extract it and select the files.`,
+    )
   }
 
-  const userId = repo.user.id
-  const dbFilename = dbFilenameForUser(userId)
-  const stagingName = tempOpfsFilename(dbFilename, 'import-staging')
+  const {main, siblings} = classifyDbFileSet(members.map(member => member.name))
+  const stagingByName = new Map(members.map(member => [member.name, member.stagingName]))
+  await assertSqliteHeader(await opfsFile(root, stagingByName.get(main)!))
 
+  return [
+    {suffix: '', stagingName: stagingByName.get(main)!},
+    ...siblings.map(({name, suffix}) => ({suffix, stagingName: stagingByName.get(name)!})),
+  ]
+}
+
+/**
+ * Replace the current user's OPFS database from files the user selected: a raw
+ * `.db`, a recovery archive from `getRawSqliteDbBackup`, or the `.db` together
+ * with the siblings extracted from one.
+ *
+ * Restoring the siblings is the point. A backup captured with committed frames
+ * still in the write-ahead sidecars, restored as a lone `.db`, opens fine and
+ * reports `integrity_check` ok with those transactions gone.
+ *
+ * After this resolves the live `repo` is dead (its DB connection has been
+ * closed); the caller must reload the page so a fresh PowerSync init opens the
+ * new files.
+ */
+export async function importRawSqliteDb(repo: Repo, files: readonly File[]): Promise<void> {
+  const archive = files.length === 1 && await startsWithMagic(files[0], ZIP_MAGIC) ? files[0] : null
+  // Classified and header-checked before OPFS is touched at all, so a
+  // wrong-file pick costs nothing and leaves nothing behind.
+  const selection = archive ? null : await validateSelection(files)
+
+  const dbFilename = dbFilenameForUser(repo.user.id)
   const root = await navigator.storage.getDirectory()
-  const stagingHandle = await root.getFileHandle(stagingName, {create: true})
 
+  // Everything lands in staging while the live database is still intact, so a
+  // failure reading the selection leaves that database untouched.
+  const temps: string[] = []
   try {
-    await pipeBlobToFileHandle(file, stagingHandle)
+    const staged = selection
+      ? await stageSelection(root, dbFilename, selection, temps)
+      : await stageRecoveryArchive(root, dbFilename, archive!, temps)
 
     // Release the OPFS sync access handle the worker holds on the .db
     // file; without this, createWritable() throws NoModificationAllowedError.
@@ -393,11 +507,18 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
       await removeEntryIfExists(root, dbFilename + suffix)
     }
 
-    const replacement = await stagingHandle.getFile()
-    const fileHandle = await root.getFileHandle(dbFilename, {create: true})
-    await pipeBlobToFileHandle(replacement, fileHandle)
+    // Writing back runs the other way: siblings first, the `.db` LAST. Until the
+    // `.db` exists the logs are inert (the VFS truncates orphaned sidecars), so
+    // a failure part-way still leaves "no database" rather than a database that
+    // opens, reports ok, and is missing whatever its log held.
+    const lastFirst = [...staged.filter(f => f.suffix !== ''), ...staged.filter(f => f.suffix === '')]
+    for (const {suffix, stagingName} of lastFirst) {
+      const replacement = await opfsFile(root, stagingName)
+      const fileHandle = await root.getFileHandle(dbFilename + suffix, {create: true})
+      await pipeBlobToFileHandle(replacement, fileHandle)
+    }
   } finally {
-    await removeEntryIfExists(root, stagingName)
+    await Promise.allSettled(temps.map(name => removeEntryIfExists(root, name)))
   }
 }
 
@@ -635,6 +756,109 @@ const streamStoredZipToOpfs = async (
     throw err
   }
   return tempHandle
+}
+
+/**
+ * Unpack a zip into one OPFS temp file per member, returning the archive name
+ * and temp name of each. Streamed for the same reason the writer is: the `.db`
+ * member can be gigabytes, so members go archive -> disk with backpressure
+ * rather than through memory.
+ *
+ * `UnzipInflate` is registered although our own archives are STORED — an archive
+ * that has been through an unzip/rezip round trip is deflated, and without a
+ * registered decompressor fflate throws "ctr is not a constructor".
+ */
+const extractZipToOpfs = async (
+  root: FileSystemDirectoryHandle,
+  archive: File,
+  nextTempName: () => string,
+): Promise<Array<{ name: string; stagingName: string }>> => {
+  const members: Array<{ name: string; stagingName: string }> = []
+  const open = new Map<string, FileSystemWritableFileStream>()
+  let writeChain: Promise<void> = Promise.resolve()
+  let unzipError: unknown = null
+
+  const unzip = new Unzip()
+  unzip.register(UnzipInflate)
+  unzip.onfile = member => {
+    const stagingName = nextTempName()
+    members.push({ name: member.name, stagingName })
+    writeChain = writeChain.then(async () => {
+      const handle = await root.getFileHandle(stagingName, { create: true })
+      open.set(member.name, await handle.createWritable({ keepExistingData: false }))
+    })
+    member.ondata = (err, chunk, final) => {
+      if (err) {
+        unzipError ??= err
+        return
+      }
+      // Copied: fflate hands back views it is free to reuse, and this write
+      // runs later, off the chain.
+      const data = chunk.length ? chunk.slice() : null
+      writeChain = writeChain.then(async () => {
+        const writable = open.get(member.name)
+        if (!writable) return
+        if (data) await writable.write(data)
+        if (final) {
+          await writable.close()
+          open.delete(member.name)
+        }
+      })
+    }
+    member.start()
+  }
+
+  try {
+    const reader = archive.stream().getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      unzip.push(done ? new Uint8Array(0) : value, done)
+      // Backpressure: drain what this chunk produced before reading the next.
+      await writeChain
+      if (unzipError) throw unzipError
+      if (done) break
+    }
+  } catch (err) {
+    // The temps themselves are the caller's to remove — it registered every one
+    // as it was minted, so a throw here still leaves nothing behind.
+    await Promise.allSettled([...open.values()].map(w => w.abort?.()))
+    throw err
+  }
+  return members
+}
+
+/** The 4-byte little-endian signatures the end-of-directory records carry. */
+const EOCD_SIGNATURE = 0x06054b50
+const ZIP64_EOCD_LOCATOR_SIGNATURE = 0x07064b50
+
+/**
+ * How many members the archive's own end-of-central-directory record says it
+ * holds — the count `stageRecoveryArchive` checks what it actually read against.
+ * Finding the record at all is half the value: it sits at the very end, so its
+ * presence is what rules out a truncated tail.
+ */
+const zipMemberCount = async (archive: Blob): Promise<number> => {
+  // 22 bytes plus a trailing comment we never write and cap at the format's max.
+  const tailBytes = Math.min(archive.size, 22 + 0xffff)
+  const tail = new DataView(await archive.slice(archive.size - tailBytes).arrayBuffer())
+  for (let at = tail.byteLength - 22; at >= 0; at--) {
+    if (tail.getUint32(at, true) !== EOCD_SIGNATURE) continue
+    const count = tail.getUint16(at + 10, true)
+    // 0xffff is the ZIP64 escape: the real count lives in a second record, and
+    // reading it is worth doing only once an archive that needs it can exist.
+    // Ours cannot — fflate writes no ZIP64 — so refuse rather than guess.
+    if (count === 0xffff && at >= 20 && tail.getUint32(at - 20, true) === ZIP64_EOCD_LOCATOR_SIGNATURE) {
+      throw new Error(
+        'This archive uses the ZIP64 format, which this app cannot verify. ' +
+        'Extract it and select the files inside instead.',
+      )
+    }
+    return count
+  }
+  throw new Error(
+    'The selected archive is truncated — its file directory is missing. ' +
+    'Re-download the backup, or extract it and select the files inside.',
+  )
 }
 
 const tempOpfsFilename = (dbFilename: string, purpose: string): string =>

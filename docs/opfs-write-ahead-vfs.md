@@ -254,8 +254,15 @@ Note that a sidecar counts by EXISTENCE, not size. The VFS creates both on every
 and removes neither on close, so an interrupted open can leave zero-byte sidecars that
 pin a database to write-ahead just as firmly as full ones.
 
-## Known gap
+## Restoring a recovery backup
 
-The recovery zip (`getRawSqliteDbBackup`, used when the database won't open) now bundles
-the sidecars, but `importRawSqliteDb` restores a single `.db`. Restoring a zip captured
-with outstanding write-ahead frames therefore drops them. Tracked in [#849](https://github.com/Stvad/knowledge-medium/issues/849).
+The recovery zip (`getRawSqliteDbBackup`, used when the database won't open) bundles the
+sidecars, because the reset that follows deletes them. `importRawSqliteDb` therefore takes
+the whole fileset, not one `.db`: the archive as downloaded, or the `.db` selected together
+with the sidecars if the browser already expanded it (Safari does). The sidecars are
+written first and the `.db` last, so an interrupted restore leaves no database rather than
+one that opens, reports `integrity_check` ok, and is missing whatever the log held.
+
+Restoring a lone `.db` extracted from such an archive still drops those frames, and nothing
+can detect it — a bare `.db` is exactly what a checkpointed export produces. That is why
+the archive is the thing to hand back.

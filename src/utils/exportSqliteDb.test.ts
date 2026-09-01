@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { unzipSync } from 'fflate'
+import { unzipSync, zipSync } from 'fflate'
 import type { Repo } from '@/data/repo'
 import {
   deleteLocalSqliteDb,
@@ -227,7 +227,7 @@ describe('importRawSqliteDb', () => {
     await expect(importRawSqliteDb({
       user: {id: 'user-1'},
       db: {close},
-    } as unknown as Repo, file)).rejects.toThrow(
+    } as unknown as Repo, [file])).rejects.toThrow(
       'Selected file is not a SQLite database (missing magic header).',
     )
 
@@ -274,7 +274,7 @@ describe('importRawSqliteDb', () => {
     await importRawSqliteDb({
       user: {id: 'user-1'},
       db: {close},
-    } as unknown as Repo, file)
+    } as unknown as Repo, [file])
 
     expect(close).toHaveBeenCalledOnce()
     expect(events.indexOf('db.close')).toBeGreaterThan(events.indexOf('close:staging.db'))
@@ -286,7 +286,177 @@ describe('importRawSqliteDb', () => {
     const importedBytes = new Uint8Array(await (await targetHandle.getFile()).arrayBuffer())
     expect([...importedBytes]).toEqual([...sqliteHeader, 1, 2, 3])
   })
+
+  it('restores the write-ahead sidecars alongside the .db, and writes the .db LAST', async () => {
+    // The whole defect: a backup taken with committed frames still in the
+    // sidecars, restored as a lone `.db`, opens fine and reports
+    // integrity_check ok with those transactions gone.
+    const opfs = installFakeOpfs()
+
+    await importRawSqliteDb(fakeRepo(), [
+      fileWithStream([SQLITE_HEADER_BYTES, new Uint8Array([1, 2, 3])], 'backup.db'),
+      fileWithStream([new Uint8Array([9, 9])], 'backup.db-wa0'),
+    ])
+
+    expect([...opfs.bytes('kmp-v6-user-1.db')]).toEqual([...SQLITE_HEADER_BYTES, 1, 2, 3])
+    expect([...opfs.bytes('kmp-v6-user-1.db-wa0')]).toEqual([9, 9])
+    // Order matters on failure: until the `.db` exists the log beside it is
+    // inert, so a crash part-way leaves "no database" rather than a database
+    // that opens and is missing whatever the log held.
+    expect(opfs.writes.indexOf('kmp-v6-user-1.db-wa0'))
+      .toBeLessThan(opfs.writes.indexOf('kmp-v6-user-1.db'))
+  })
+
+  it('restores a recovery archive whole — the two ends round-trip', async () => {
+    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array([4, 5, 6])])
+    const waBytes = new Uint8Array([7, 7, 7, 7])
+
+    const captured = installFakeOpfs({
+      'kmp-v6-user-1.db': dbBytes,
+      'kmp-v6-user-1.db-wa0': waBytes,
+    })
+    const backup = await getRawSqliteDbBackup('user-1')
+    expect(backup.contents).toEqual(['kmp-v6-user-1.db', 'kmp-v6-user-1.db-wa0'])
+    const archiveBytes = new Uint8Array(await backup.blob.arrayBuffer())
+    expect(captured.bytes('kmp-v6-user-1.db')).toEqual(dbBytes) // capture read, not moved
+
+    const restored = installFakeOpfs()
+    // In small pieces, so the streaming extractor is actually streaming.
+    await importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archiveBytes, 7), backup.filename)])
+
+    expect(restored.bytes('kmp-v6-user-1.db')).toEqual(dbBytes)
+    expect(restored.bytes('kmp-v6-user-1.db-wa0')).toEqual(waBytes)
+    // Staging is transient: nothing but the restored fileset is left behind.
+    expect([...restored.names()].sort()).toEqual(['kmp-v6-user-1.db', 'kmp-v6-user-1.db-wa0'])
+  })
+
+  it('restores a deflated archive too — an unzip/rezip round trip is not stored', async () => {
+    // Without a registered decompressor fflate throws "ctr is not a constructor".
+    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(64).fill(3)])
+    const archive = zipSync({'x.db': dbBytes, 'x.db-wa1': new Uint8Array([8])}, {level: 6})
+    const opfs = installFakeOpfs()
+
+    await importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 11), 'backup.zip')])
+
+    expect(opfs.bytes('kmp-v6-user-1.db')).toEqual(dbBytes)
+    expect([...opfs.bytes('kmp-v6-user-1.db-wa1')]).toEqual([8])
+  })
+
+  it('refuses a truncated archive instead of restoring the members that survived', async () => {
+    // fflate's streaming reader does not notice: it reports whatever local
+    // headers arrived. Cut here it hands back `x.db` alone, complete and
+    // convincing, and the sidecar simply is not there — the silent-subset
+    // restore this whole path exists to prevent.
+    const archive = zipSync({
+      'x.db': concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(200).fill(1)]),
+      'x.db-wa0': new Uint8Array(40).fill(2),
+    }, {level: 0})
+    const opfs = installFakeOpfs()
+
+    await expect(importRawSqliteDb(fakeRepo(), [
+      fileWithStream(sliceInto(archive.slice(0, 260), 9), 'backup.zip'),
+    ])).rejects.toThrow(/truncated/)
+    expect([...opfs.names()]).toEqual([])
+  })
+
+  it('refuses an archive whose directory lists a member the stream never carried', async () => {
+    // The tail survived, so the directory reads fine and the truncation check
+    // above is satisfied — but the sidecar's record is gone from the body. The
+    // count is the only thing that notices.
+    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(80).fill(1)])
+    const archive = zipSync({'x.db': dbBytes, 'x.db-wa0': new Uint8Array(40).fill(2)}, {level: 0})
+    const LOCAL_HEADER = 30, DIRECTORY_HEADER = 46, EOCD = 22
+    const endOfFirstMember = LOCAL_HEADER + 'x.db'.length + dbBytes.length
+    const directoryStart = archive.length - EOCD
+      - (DIRECTORY_HEADER + 'x.db'.length) - (DIRECTORY_HEADER + 'x.db-wa0'.length)
+    const gutted = concatChunks([archive.slice(0, endOfFirstMember), archive.slice(directoryStart)])
+    const opfs = installFakeOpfs()
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(gutted, 9), 'backup.zip')]))
+      .rejects.toThrow(/incomplete/)
+    expect([...opfs.names()]).toEqual([])
+  })
+
+  it('refuses a selection that is not one database and its own siblings', async () => {
+    const opfs = installFakeOpfs()
+    const db = fileWithStream([SQLITE_HEADER_BYTES], 'backup.db')
+
+    await expect(importRawSqliteDb(fakeRepo(), [db, fileWithStream([new Uint8Array([1])], 'notes.txt')]))
+      .rejects.toThrow(/together with the/)
+    // A second copy of the same name would silently restore one of the two.
+    await expect(importRawSqliteDb(fakeRepo(), [db, db])).rejects.toThrow(/together with the/)
+    expect([...opfs.names()]).toEqual([])
+  })
 })
+
+const SQLITE_HEADER_BYTES = new Uint8Array([
+  0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20,
+  0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00,
+])
+
+const fakeRepo = () => ({user: {id: 'user-1'}, db: {close: vi.fn(async () => {})}} as unknown as Repo)
+
+const sliceInto = (bytes: Uint8Array, size: number): Array<Uint8Array<ArrayBuffer>> => {
+  const chunks: Array<Uint8Array<ArrayBuffer>> = []
+  for (let i = 0; i < bytes.length; i += size) chunks.push(new Uint8Array(bytes.subarray(i, i + size)))
+  return chunks
+}
+
+/**
+ * An in-memory OPFS root, installed on `navigator.storage`. The import path
+ * creates, streams into, reads back and removes real files across several
+ * names, which the per-test hand-rolled handles above cannot express.
+ */
+const installFakeOpfs = (initial: Record<string, Uint8Array> = {}) => {
+  const files = new Map(Object.entries(initial).map(([n, b]) => [n, b] as const))
+  const writes: string[] = []
+
+  const root = {
+    getFileHandle: async (name: string, opts?: {create?: boolean}) => {
+      if (!files.has(name)) {
+        if (!opts?.create) throw new DOMException('not found', 'NotFoundError')
+        files.set(name, new Uint8Array(0))
+      }
+      return {
+        // Both surfaces the real FileSystemWritableFileStream has: a
+        // WritableStream for `pipeTo`, plus direct write/close/abort, which is
+        // what the streaming zip paths use.
+        createWritable: async () => {
+          const chunks: Uint8Array[] = []
+          const stream = new WritableStream<Uint8Array>({
+            write: chunk => void chunks.push(new Uint8Array(chunk)),
+            close: () => {
+              files.set(name, concatChunks(chunks))
+              writes.push(name)
+            },
+          })
+          let writer: WritableStreamDefaultWriter<Uint8Array> | null = null
+          const held = () => (writer ??= stream.getWriter())
+          return Object.assign(stream, {
+            write: (chunk: Uint8Array) => held().write(chunk),
+            close: () => held().close(),
+            abort: () => held().abort(),
+          }) as unknown as FileSystemWritableFileStream
+        },
+        getFile: async () => fileWithStream([new Uint8Array(files.get(name)!)], name),
+      }
+    },
+    removeEntry: async (name: string) => {
+      if (!files.delete(name)) throw new DOMException('not found', 'NotFoundError')
+    },
+  }
+
+  Object.defineProperty(navigator, 'storage', {
+    configurable: true,
+    value: {getDirectory: async () => root, estimate: async () => ({quota: 1e9, usage: 0})},
+  })
+
+  return {
+    writes,
+    names: () => [...files.keys()],
+    bytes: (name: string) => files.get(name)!,
+  }
+}
 
 const createCapturingFileHandle = (name: string, events: string[]) => {
   let chunks: BlobPart[] = []
