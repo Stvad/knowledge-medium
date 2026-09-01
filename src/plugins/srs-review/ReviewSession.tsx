@@ -109,7 +109,8 @@ const GradeButtons = ({card, busy, keyHints, onGrade}: {
   return (
     <div className="grid grid-cols-4 gap-2">
       {GRADE_BUTTONS.map(btn => {
-        const hint = keyHints.get(SRS_GRADE_ACTION_IDS.get(btn.signal) ?? '')
+        const actionId = SRS_GRADE_ACTION_IDS.get(btn.signal)
+        const hint = actionId ? keyHints.get(actionId) : undefined
         return (
           <Button
             key={btn.label}
