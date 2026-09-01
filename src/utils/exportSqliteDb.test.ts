@@ -11,6 +11,19 @@ import {
   removeRecoveryBackupTemps,
 } from './exportSqliteDb'
 
+// What SQLite actually answers `PRAGMA wal_checkpoint` with in rollback-journal
+// mode, i.e. every CoopSync user: busy 0, nothing outstanding.
+const DRAINED = {rows: {_array: [{busy: 0, log: -1, checkpointed: -1}]}}
+
+const fakeWriteLock = (checkpointResult: unknown = DRAINED) => {
+  const execute = vi.fn(async () => checkpointResult)
+  const writeLock = vi.fn(
+    async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({execute}),
+  )
+  return {execute, writeLock}
+}
+
+
 // Minimal File stand-ins: jsdom's Blob.stream()/arrayBuffer() are unreliable, so
 // the fakes carry their own, letting us drive the real streaming-zip code.
 const fakeFile = (bytes: Uint8Array) => ({
@@ -42,7 +55,7 @@ afterEach(() => {
 })
 
 describe('exportRawSqliteDb', () => {
-  it('copies the OPFS file under PowerSync readLock before returning a blob', async () => {
+  it('checkpoints, then copies the OPFS file under one write lock, before returning a blob', async () => {
     const snapshotFile = new File(['snapshot-data'], 'snapshot.db')
     const pipeTo = vi.fn(async () => undefined)
     const sourceFile = {
@@ -70,10 +83,10 @@ describe('exportRawSqliteDb', () => {
       value: {getDirectory},
     })
 
-    const readLock = vi.fn(async <T,>(fn: () => Promise<T>) => fn())
+    const {execute, writeLock} = fakeWriteLock()
     const result = await exportRawSqliteDb({
       user: {id: 'user-1'},
-      db: {readLock},
+      db: {writeLock},
     } as unknown as Repo)
 
     expect(getFileHandle).toHaveBeenCalledWith('kmp-v6-user-1.db')
@@ -81,11 +94,19 @@ describe('exportRawSqliteDb', () => {
       expect.stringMatching(/^\.kmp-v6-user-1\.db\.export-snapshot-/),
       {create: true},
     )
-    expect(readLock).toHaveBeenCalledOnce()
+    expect(writeLock).toHaveBeenCalledOnce()
+    // Inside the lock, so no writer can commit back into a sidecar between the
+    // flush and the byte copy.
+    expect(execute).toHaveBeenCalledWith('PRAGMA wal_checkpoint=truncate')
+    // Twice: once to size the snapshot, once INSIDE the lock — the pre-checkpoint
+    // File would copy the database as it stood before the sidecars were folded in.
+    expect(sourceHandle.getFile).toHaveBeenCalledTimes(2)
     expect(sourceFile.arrayBuffer).not.toHaveBeenCalled()
     expect(sourceFile.stream).toHaveBeenCalledOnce()
     expect(snapshotHandle.createWritable).toHaveBeenCalledWith({keepExistingData: false})
-    expect(pipeTo).toHaveBeenCalledWith(snapshotWritable)
+    // The signal is what lets a timeout stop the copy rather than merely stop
+    // awaiting it, so it has to reach pipeTo.
+    expect(pipeTo).toHaveBeenCalledWith(snapshotWritable, {signal: expect.any(AbortSignal)})
     expect(result.blob).toBe(snapshotFile)
     expect(result.filename).toMatch(/^kmp-v6-user-1-export-\d+\.db$/)
   })
@@ -102,22 +123,45 @@ describe('exportRawSqliteDb', () => {
       configurable: true,
       value: {getDirectory, estimate},
     })
-    const readLock = vi.fn(async <T,>(fn: () => Promise<T>) => fn())
+    const {writeLock} = fakeWriteLock()
 
     const promise = exportRawSqliteDb({
       user: {id: 'user-1'},
-      db: {readLock},
+      db: {writeLock},
     } as unknown as Repo)
 
     await expect(promise).rejects.toThrow(/Not enough browser storage/)
     await expect(promise).rejects.toThrow(/100\.0 MiB/) // required
     await expect(promise).rejects.toThrow(/20\.0 MiB/) // available
     // Bails before locking the DB or creating the doomed snapshot file.
-    expect(readLock).not.toHaveBeenCalled()
+    expect(writeLock).not.toHaveBeenCalled()
     expect(getFileHandle).not.toHaveBeenCalledWith(
       expect.stringContaining('export-snapshot'),
       {create: true},
     )
+  })
+
+  it('refuses rather than backing up a database whose log did not drain', async () => {
+    // A partial checkpoint does not fail the statement; copying anyway yields a
+    // backup that opens cleanly and is missing its most recent writes.
+    const {writeLock} = fakeWriteLock({rows: {_array: [{'12': '12'}]}})
+    const getFileHandle = vi.fn(async () => ({
+      getFile: vi.fn(async () => ({size: 11})),
+      createWritable: vi.fn(),
+    }))
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {
+        // The refusal drops the partial snapshot on its way out.
+        getDirectory: vi.fn(async () => ({getFileHandle, removeEntry: vi.fn(async () => {})})),
+        estimate: async () => ({quota: 1e9, usage: 0}),
+      },
+    })
+
+    await expect(exportRawSqliteDb({
+      user: {id: 'user-1'},
+      db: {writeLock},
+    } as unknown as Repo)).rejects.toThrow(/missing them/)
   })
 
   it('rewraps a QuotaExceededError from the snapshot write and removes the partial snapshot', async () => {
@@ -144,11 +188,11 @@ describe('exportRawSqliteDb', () => {
       configurable: true,
       value: {getDirectory, estimate},
     })
-    const readLock = vi.fn(async <T,>(fn: () => Promise<T>) => fn())
+    const {writeLock} = fakeWriteLock()
 
     const error: Error = await exportRawSqliteDb({
       user: {id: 'user-1'},
-      db: {readLock},
+      db: {writeLock},
     } as unknown as Repo).then(
       () => { throw new Error('expected export to reject') },
       (e: unknown) => e as Error,
@@ -431,7 +475,7 @@ describe('removeRecoveryBackupTemps', () => {
 })
 
 describe('deleteLocalSqliteDb', () => {
-  it('removes the -journal/-wal/-shm siblings BEFORE the .db, nothing else', async () => {
+  it('removes SQLite journals before the .db and the write-ahead pair after it', async () => {
     const removeEntry = vi.fn<(name: string) => Promise<void>>(async () => {})
     Object.defineProperty(navigator, 'storage', {
       configurable: true,
@@ -440,14 +484,19 @@ describe('deleteLocalSqliteDb', () => {
 
     await deleteLocalSqliteDb('user-1')
 
-    // Siblings first so the .db is only removed once they're gone — a fresh boot
-    // can never find the .db missing next to a replayable -wal/-journal.
+    // SQLite's journals before the .db, because a fresh boot must never find the
+    // .db missing next to a replayable one. The write-ahead pair goes AFTER,
+    // because the other order strips committed frames from a database that
+    // survives — and a surviving log is harmless, the VFS truncates both when it
+    // opens a .db that does not exist.
     const removed = removeEntry.mock.calls.map(c => c[0])
     expect(removed).toEqual([
       'kmp-v6-user-1.db-journal',
       'kmp-v6-user-1.db-wal',
       'kmp-v6-user-1.db-shm',
       'kmp-v6-user-1.db',
+      'kmp-v6-user-1.db-wa0',
+      'kmp-v6-user-1.db-wa1',
     ])
   })
 
@@ -461,7 +510,7 @@ describe('deleteLocalSqliteDb', () => {
     })
 
     await expect(deleteLocalSqliteDb('user-1')).resolves.toBeUndefined()
-    expect(removeEntry).toHaveBeenCalledTimes(4)
+    expect(removeEntry).toHaveBeenCalledTimes(6)
   })
 
   it('leaves the .db in place (and throws) when a journal sibling cannot be deleted', async () => {

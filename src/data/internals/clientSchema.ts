@@ -1687,10 +1687,12 @@ const readOptimizeRows = (result: unknown): string[] | null => {
  *  the database file, and `navigator.locks` keeps their writes apart. So two
  *  tabs can each run a pass: duplicated work, not a wrong result.
  *
- *  Corollary worth knowing before reasoning about staleness across tabs:
- *  writing `sqlite_stat1` does NOT bump `schema_version`, so a tab that was
- *  already open when another tab analyzed keeps its old query plans for the
- *  life of its connection. It heals on reload. */
+ *  Corollary worth knowing before reasoning about staleness across connections:
+ *  writing `sqlite_stat1` does NOT bump `schema_version` on its own, so an
+ *  already-open connection would keep its old query plans for its lifetime.
+ *  `analyzeUnbounded` therefore bumps the cookie explicitly once the pass is
+ *  done — which is load-bearing now that a single tab has a reader pool, not
+ *  just other tabs, reading through connections it did not analyze on. */
 let analyzeChain: Promise<unknown> = Promise.resolve()
 const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
   // `.then(run, run)`, both arms deliberately: a throwing pass must not poison
@@ -1741,6 +1743,22 @@ export const runAnalyzeIfStale = async (
 const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promise<void> => {
   await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
   await db.execute(sql)
+
+  // Writing `sqlite_stat1` does not bump `schema_version` (see the note on
+  // `runAnalyzeIfStale`), so a connection that was already open keeps the old
+  // plans for its lifetime. That used to cost only other TABS; with a reader
+  // pool the reads of THIS tab go to a connection that would keep the
+  // pre-ANALYZE plans too — losing most of the benefit until reload, on exactly
+  // the queries ANALYZE was run for. A no-op DDL bumps the cookie, and every
+  // connection reloads `sqlite_stat1` on its next statement.
+  //
+  // Both statements are idempotent because two tabs can finish ANALYZE at the
+  // same time and interleave: `analyzeChain` serialises within a tab, not
+  // across them, so an unconditional DROP can find the table already gone and
+  // report a failure for a pass that actually succeeded. Any interleaving still
+  // moves the cookie at least once, which is all this needs.
+  await db.execute('CREATE TABLE IF NOT EXISTS __km_analyze_bump(x)')
+  await db.execute('DROP TABLE IF EXISTS __km_analyze_bump')
 }
 
 /** Unconditional `ANALYZE` for the manual command-palette command.

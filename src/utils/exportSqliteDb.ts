@@ -18,6 +18,11 @@ import { v4 as uuidv4 } from 'uuid'
 import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/localDbStorage'
+import {
+  DB_FILE_SIBLING_SUFFIXES,
+  SQLITE_JOURNAL_SUFFIXES,
+  WRITE_AHEAD_SIDECAR_SUFFIXES,
+} from '@/data/dbFileSiblings.js'
 
 export interface RawSqliteDbBlobExport {
   blob: Blob
@@ -36,8 +41,8 @@ export interface RawSqliteDbFileExport {
   size: number
 }
 
-interface PowerSyncReadLockDb {
-  readLock<T>(callback: (db: unknown) => Promise<T>): Promise<T>
+interface PowerSyncWriteLockDb {
+  writeLock<T>(callback: (tx: {execute(sql: string): Promise<unknown>}) => Promise<T>): Promise<T>
 }
 
 interface SaveFilePickerOptions {
@@ -93,9 +98,9 @@ export async function exportRawSqliteDbToFile(
 
   const root = await navigator.storage.getDirectory()
   const fileHandle = await root.getFileHandle(dbFilename)
-  const size = await withPowerSyncReadLock(repo, async () => {
+  const size = await withCheckpointedDbLock(repo, async signal => {
     const sourceFile = await fileHandle.getFile()
-    await pipeBlobToFileHandle(sourceFile, destinationHandle)
+    await pipeBlobToFileHandle(sourceFile, destinationHandle, signal)
     return sourceFile.size
   })
 
@@ -125,8 +130,10 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
 
   const snapshotHandle = await root.getFileHandle(snapshotName, {create: true})
   try {
-    await withPowerSyncReadLock(repo, async () => {
-      await pipeBlobToFileHandle(sourceFile, snapshotHandle)
+    await withCheckpointedDbLock(repo, async signal => {
+      // A FRESH handle: `sourceFile` above predates the checkpoint, so piping it
+      // would copy the file as it stood before the sidecars were folded in.
+      await pipeBlobToFileHandle(await sourceHandle.getFile(), snapshotHandle, signal)
     })
   } catch (err) {
     // Drop the empty/partial snapshot so repeated failures don't accumulate.
@@ -237,22 +244,32 @@ export async function deleteLocalSqliteDb(userId: string): Promise<void> {
   const dbFilename = dbFilenameForUser(userId)
   const root = await navigator.storage.getDirectory()
 
-  // Attempt every sibling even if one fails, so a single locked file doesn't
-  // mask the others — then bail before the `.db` if any did fail.
-  const siblingResults = await Promise.allSettled(
-    DB_FILE_SIBLING_SUFFIXES.map(suffix => removeEntryIfExists(root, dbFilename + suffix)),
+  // SQLite's journals first, and bail before the `.db` if any resisted: left
+  // beside a fresh database of this name they would be replayed onto it.
+  // Attempt all of them even if one fails, so one locked file doesn't mask the
+  // rest.
+  const journalResults = await Promise.allSettled(
+    SQLITE_JOURNAL_SUFFIXES.map(suffix => removeEntryIfExists(root, dbFilename + suffix)),
   )
-  const siblingFailure = siblingResults.find((r): r is PromiseRejectedResult => r.status === 'rejected')
-  if (siblingFailure) {
+  const journalFailure = journalResults.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+  if (journalFailure) {
     throw new Error(
-      'Could not delete all local database files — a journal file may be locked by ' +
-      'another open tab of this app. The main database was left in place to avoid ' +
-      're-corruption; close other tabs and try again.',
-      {cause: siblingFailure.reason},
+      'Could not delete all local database files — one may be locked by another open tab of this app. ' +
+      'The main database was left in place; close the other tabs and try again.',
+      {cause: journalFailure.reason},
     )
   }
 
   await removeEntryIfExists(root, dbFilename)
+
+  // The write-ahead pair goes AFTER the main file, and its failure is not fatal.
+  // The other order loses data: deleting a log while its `.db` survives strips
+  // committed frames from a database the caller is then told was left intact.
+  // This way a surviving log is harmless — the VFS truncates both sidecars when
+  // it opens a `.db` that does not exist yet.
+  await Promise.allSettled(
+    WRITE_AHEAD_SIDECAR_SUFFIXES.map(suffix => removeEntryIfExists(root, dbFilename + suffix)),
+  )
 }
 
 /**
@@ -359,10 +376,19 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
     // file; without this, createWritable() throws NoModificationAllowedError.
     await repo.db.close()
 
-    // Rollback-journal mode normally deletes -journal on clean close and
-    // we don't run native SQLite WAL, but be defensive — a leftover sibling
-    // from a crashed prior session would be replayed against the freshly
-    // imported DB and silently corrupt it.
+    // The original `.db` goes FIRST. Every sibling has to be gone before the
+    // replacement lands — a journal or a write-ahead log beside a new file of
+    // that name gets replayed onto it — but removing siblings while the old
+    // `.db` still stands means a failure part-way leaves that database short of
+    // its own committed frames, which is the one outcome worth avoiding here.
+    // Dropping it first makes the failure state "no database", which the next
+    // open treats as fresh (the VFS truncates orphaned sidecars) and which the
+    // user fixes by retrying the import.
+    //
+    // `removeEntryIfExists` rethrows anything that is not NotFoundError, so the
+    // loop is also the check: nothing is written onto a file that resisted
+    // removal.
+    await removeEntryIfExists(root, dbFilename)
     for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
       await removeEntryIfExists(root, dbFilename + suffix)
     }
@@ -375,27 +401,162 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
   }
 }
 
-const withPowerSyncReadLock = async <T,>(repo: Repo, callback: () => Promise<T>): Promise<T> => {
-  const db = repo.db as unknown as Partial<PowerSyncReadLockDb>
-  if (typeof db.readLock !== 'function') {
-    throw new Error('PowerSync database does not expose readLock; cannot safely snapshot live SQLite DB.')
+/**
+ * Whether a `PRAGMA wal_checkpoint` result says nothing is left outstanding.
+ *
+ * Read positionally because the two VFSes answer differently, and the first
+ * cell means "nothing outstanding" as zero under both: `OPFSWriteAheadVFS`
+ * returns one cell whose column NAME is the remaining page count, while under
+ * `OPFSCoopSyncVFS` SQLite answers its own pragma with `busy, log, checkpointed`
+ * — busy 0 in rollback-journal mode, where there is no WAL to drain at all.
+ *
+ * An unrecognised shape is NOT drained: the caller is about to copy the main
+ * file alone, and a loud refusal beats a backup that quietly omits writes.
+ */
+const EXPORT_LOCK_TIMEOUT_MS = 180_000
+
+/**
+ * On expiry: abort, WAIT for the abort to settle, then reject.
+ *
+ * Aborting alone is not enough. `pipeTo`'s abort procedure is asynchronous, so
+ * returning immediately hands control back while the writable is still closing
+ * — and the caller's cleanup then deletes a snapshot whose writable is open,
+ * replacing the actionable timeout with `NoModificationAllowedError`.
+ *
+ * The wait is bounded because not everything is abortable: a checkpoint stuck
+ * on another connection's transaction-id lock ignores the signal entirely, and
+ * waiting on it forever would restore the hang this deadline exists to break.
+ */
+const ABORT_SETTLE_GRACE_MS = 5_000
+
+const TIMED_OUT = Symbol('timed-out')
+
+const withDeadline = async <T,>(
+  work: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> => {
+  const controller = new AbortController()
+  const running = work(controller.signal)
+  // Settled either way, so the work is never an unhandled rejection while the
+  // timer decides — and so its outcome can be inspected rather than raced.
+  const settled = running.then(
+    value => ({value}),
+    (error: unknown) => ({error}),
+  )
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let graceTimer: ReturnType<typeof setTimeout> | undefined
+  try {
+    // The race is decided by the TIMER, not by the work's rejection. Racing the
+    // work itself hands back its `AbortError` — which this very deadline
+    // caused — in place of the message that tells the user what to do.
+    const outcome = await Promise.race([
+      settled,
+      new Promise<typeof TIMED_OUT>(resolve => {
+        timer = setTimeout(() => resolve(TIMED_OUT), ms)
+      }),
+    ])
+    if (outcome !== TIMED_OUT) {
+      if ('error' in outcome) throw outcome.error
+      return outcome.value
+    }
+
+    controller.abort()
+    // Let the abort procedure close the writable before the caller's cleanup
+    // touches the file — bounded, because a checkpoint stuck on another
+    // connection's lock ignores the signal and would restore the hang.
+    await Promise.race([
+      settled,
+      new Promise<void>(resolve => { graceTimer = setTimeout(resolve, ABORT_SETTLE_GRACE_MS) }),
+    ])
+    throw new Error(message)
+  } finally {
+    clearTimeout(timer)
+    clearTimeout(graceTimer)
   }
-  return db.readLock(async () => callback())
+}
+
+const checkpointDrained = (result: unknown): boolean => {
+  const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
+  const row = Array.isArray(rows) ? rows[0] : undefined
+  if (!row || typeof row !== 'object') return false
+  const [value] = Object.values(row as Record<string, unknown>)
+  return Number(value) === 0
+}
+
+/**
+ * Run `callback` with NO other writer able to touch the database, having first
+ * flushed everything into the main `.db` file.
+ *
+ * Both are required because the export copies the main file's raw bytes. Under
+ * OPFSWriteAheadVFS committed transactions sit in the `-wa*` sidecars until
+ * checkpointed, so an un-checkpointed export is an intact-looking database
+ * missing its most recent writes (the checkpoint is a no-op under
+ * OPFSCoopSyncVFS). And the two steps have to share ONE exclusion: a writer
+ * admitted between them commits straight back into a sidecar, putting the
+ * staleness back. It is a WRITE lock rather than a read lock because with a
+ * reader pool a read lock no longer excludes the writer at all.
+ */
+const withCheckpointedDbLock = async <T,>(
+  repo: Repo,
+  callback: (signal: AbortSignal) => Promise<T>,
+): Promise<T> => {
+  const maybeDb = repo.db as unknown as Partial<PowerSyncWriteLockDb>
+  if (typeof maybeDb.writeLock !== 'function') {
+    throw new Error('PowerSync database does not expose writeLock; cannot safely snapshot live SQLite DB.')
+  }
+  const db = maybeDb as PowerSyncWriteLockDb
+  // The deadline wraps the WHOLE lock, not the checkpoint inside it. A deadline
+  // on the statement alone cannot surface: `writeLock`'s own `finally` awaits
+  // `completeAccess` on the same connection, which queues behind the statement
+  // that is still stuck — so the lock promise never settles and the rejection
+  // is never seen. Wrapping the lock gives the caller its error while the lease
+  // rots; only a reload frees that, which is what the message asks for.
+  //
+  // Generous, because it also covers copying the database — this exists to
+  // break a hang, not to bound a legitimate export. A very large database on
+  // slow storage could in principle trip it.
+  return withDeadline(signal => db.writeLock(async tx => {
+    // The lock REQUEST is not abortable, so this callback can start long after
+    // the deadline gave up — the abort only reaches work already running. Bail
+    // before the checkpoint, which is the expensive half and holds the writer
+    // for everyone else.
+    if (signal.aborted) throw new Error('Export abandoned before the database lock was granted.')
+    // Through `tx`, not `repo.db.execute` — the latter would queue for the
+    // write lock this callback is already holding.
+    await tx.execute('PRAGMA wal_checkpoint=truncate')
+    // A partial checkpoint does not fail the statement, and the copy below
+    // takes only the main file — so an unverified flush yields a backup that
+    // opens cleanly and is missing its most recent writes. Same confirmation
+    // the VFS handoff makes before it discards a log.
+    if (!checkpointDrained(await tx.execute('PRAGMA wal_checkpoint=noop'))) {
+      throw new Error(
+        'Could not flush this device\'s pending changes into the database file, so a backup taken now ' +
+        'would be missing them. Another tab of the app is probably still holding the database — close ' +
+        'the other tabs and try again.',
+      )
+    }
+    // Again before the copy: the checkpoint above can itself outlast the
+    // deadline, and the copy writes to the caller's chosen destination.
+    if (signal.aborted) throw new Error('Export abandoned before the copy began.')
+    return callback(signal)
+  }), EXPORT_LOCK_TIMEOUT_MS,
+    'Timed out preparing this device\'s database for backup. Another tab of the app is probably ' +
+    'holding it — close the other tabs, reload, and try again.',
+  )
 }
 
 const pipeBlobToFileHandle = async (
   blob: Blob,
   fileHandle: FileSystemFileHandle,
+  signal?: AbortSignal,
 ): Promise<void> => {
   const writable = await fileHandle.createWritable({keepExistingData: false})
-  await blob.stream().pipeTo(writable)
+  // Through `pipeTo`, so an abort tears down the writable too — a copy that
+  // merely stops being awaited keeps writing.
+  await blob.stream().pipeTo(writable, {signal})
 }
-
-// SQLite sibling files derived from the main .db name. Rollback-journal mode
-// uses -journal; -wal/-shm only appear if a WAL-capable VFS is ever used, but
-// removing them is harmless when absent and defends against a crashed prior
-// session leaving one behind.
-const DB_FILE_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
 
 const removeEntryIfExists = async (
   root: FileSystemDirectoryHandle,
