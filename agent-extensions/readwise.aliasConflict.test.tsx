@@ -421,6 +421,30 @@ describe('readwise document alias — the title is already a page name', () => {
       .toBeUndefined()
   })
 
+  it('offers other conflicts when one document has a malformed alias bag', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+    await sync(rootId, book(2, 'Digital Minimalism', 21))
+
+    // The shape sync apply can land and the local path cannot: a bag the codec
+    // rejects. Only the alias cell is corrupted — overwriting the whole bag
+    // would drop the type tag too, and the document would leave the scan's
+    // query rather than exercise it.
+    const corrupt = await repo.load(documentId(2))
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({...corrupt!.properties, [aliasesProp.name]: ['Digital Minimalism', 7]}),
+        documentId(2)],
+    )
+    expect(getBlockTypes((await repo.load(documentId(2)))!)).toContain(DOCUMENT_TYPE)
+
+    // The malformed row must cost only itself. The scan is caught as a whole by
+    // its caller, so a throw here takes every other document's conflict with it.
+    const found = await unresolvedAliasConflicts(repo, WS)
+    expect(found.map(c => c.documentId)).toEqual([documentId(1)])
+  })
+
   it('retires the placeholder when a re-title lands on a free name', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')

@@ -1579,10 +1579,7 @@ const fetchExportPage = async (
  *  bag the codec rejects, and these reads drive a WORKSPACE-WIDE scan: one such
  *  row would otherwise stop every other document's conflict from ever being
  *  offered, silently, since the caller can only catch the whole scan.
- *
- *  BOUNDARY GUARD, not pinned: producing a bag the codec rejects means writing
- *  a shape only sync apply lands, and the raw-insert fixture here goes through
- *  the same trigger-maintained index the local path does. */
+ */
 const storedProperty = <T,>(block: any, schema: { name: string; codec: any }, fallback: T): T => {
   const raw = block.properties?.[schema.name]
   if (raw === undefined) return fallback
@@ -1636,8 +1633,11 @@ const aliasConflictRivals = async (
   workspaceId: string,
 ): Promise<any[] | null> => {
   if (!doc.content) return null
-  const bag: readonly string[] = await tx.getProperty(doc.id, aliasesProp)
-  if (bag.includes(doc.content)) return null
+  // The row's own cell, through the tolerant reader — not `tx.getProperty`,
+  // whose codec throws on a bag sync apply can land. This runs inside a
+  // workspace-wide scan its caller can only catch whole, so one malformed row
+  // would take every other document's conflict down with it.
+  if (storedProperty<readonly string[]>(doc, aliasesProp, []).includes(doc.content)) return null
   const rivals: any[] = (await tx.aliasClaimants(doc.content, workspaceId))
     .filter((row: any) => row.id !== doc.id)
   return rivals.length ? rivals : null
