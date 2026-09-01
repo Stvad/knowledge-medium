@@ -89,7 +89,10 @@ describe('resolveLocalDbVfs — the move is one-way, and the sidecars are the re
   })
 
   it('still lets the pin opt a device in — that is how the rollout started', async () => {
-    const h = harness({[DB]: 4096})
+    // `supportsWriteAhead: false` so ONLY the pin can produce this answer. With
+    // the deploy gate open the probe alone would, and the test would pass with
+    // the override ignored entirely.
+    const h = harness({[DB]: 4096}, {supportsWriteAhead: false})
     vi.stubGlobal('localStorage', {getItem: () => 'write-ahead'})
     try {
       expect(await resolveLocalDbVfs(DB, h.deps)).toBe(WASQLiteVFS.OPFSWriteAheadVFS)
