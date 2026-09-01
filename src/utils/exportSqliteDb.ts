@@ -404,7 +404,7 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
  * An unrecognised shape is NOT drained: the caller is about to copy the main
  * file alone, and a loud refusal beats a backup that quietly omits writes.
  */
-const CHECKPOINT_TIMEOUT_MS = 30_000
+const EXPORT_LOCK_TIMEOUT_MS = 180_000
 
 const withDeadline = async <T,>(work: Promise<T>, ms: number, message: string): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -446,20 +446,20 @@ const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>
   if (typeof db.writeLock !== 'function') {
     throw new Error('PowerSync database does not expose writeLock; cannot safely snapshot live SQLite DB.')
   }
-  return db.writeLock(async tx => {
+  // The deadline wraps the WHOLE lock, not the checkpoint inside it. A deadline
+  // on the statement alone cannot surface: `writeLock`'s own `finally` awaits
+  // `completeAccess` on the same connection, which queues behind the statement
+  // that is still stuck — so the lock promise never settles and the rejection
+  // is never seen. Wrapping the lock gives the caller its error while the lease
+  // rots; only a reload frees that, which is what the message asks for.
+  //
+  // Generous, because it also covers copying the database — this exists to
+  // break a hang, not to bound a legitimate export. A very large database on
+  // slow storage could in principle trip it.
+  return withDeadline(db.writeLock(async tx => {
     // Through `tx`, not `repo.db.execute` — the latter would queue for the
-    // write lock this callback is already holding. Bounded because the
-    // write-ahead VFS's checkpoint waits on every connection's transaction-id
-    // lock with no timeout of its own: a suspended reader in another tab would
-    // otherwise leave the export on a spinner forever, never reaching the
-    // verification below or its actionable message.
-    await withDeadline(
-      tx.execute('PRAGMA wal_checkpoint=truncate'),
-      CHECKPOINT_TIMEOUT_MS,
-      'Timed out flushing this device\'s pending changes into the database file, so a backup taken now ' +
-      'would be missing them. Another tab of the app is probably holding it — close the other tabs and ' +
-      'try again.',
-    )
+    // write lock this callback is already holding.
+    await tx.execute('PRAGMA wal_checkpoint=truncate')
     // A partial checkpoint does not fail the statement, and the copy below
     // takes only the main file — so an unverified flush yields a backup that
     // opens cleanly and is missing its most recent writes. Same confirmation
@@ -472,7 +472,10 @@ const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>
       )
     }
     return callback()
-  })
+  }), EXPORT_LOCK_TIMEOUT_MS,
+    'Timed out preparing this device\'s database for backup. Another tab of the app is probably ' +
+    'holding it — close the other tabs, reload, and try again.',
+  )
 }
 
 const pipeBlobToFileHandle = async (

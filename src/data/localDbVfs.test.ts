@@ -56,6 +56,24 @@ describe('resolveLocalDbVfs — the move is one-way, and the sidecars are the re
     }
   })
 
+  it('re-checks for sidecars before settling on CoopSync, in case another tab moved it', async () => {
+    // The probe can take seconds; another tab reaching a different answer in
+    // that window moves the database and creates the log. Opening CoopSync over
+    // a live log is the one outcome that must never happen.
+    let probed = false
+    const files: Record<string, number> = {[DB]: 4096}
+    const vfs = await resolveLocalDbVfs(DB, {
+      fileSize: async name => (name in files ? files[name] : null),
+      supportsWriteAhead: async () => {
+        probed = true
+        files[`${DB}-wa0`] = 0   // another tab moved it while we were probing
+        return false
+      },
+    })
+    expect(probed).toBe(true)
+    expect(vfs).toBe(WASQLiteVFS.OPFSWriteAheadVFS)
+  })
+
   it('moves a database with no sidecars when the browser supports it', async () => {
     const h = harness({[DB]: 4096})
     expect(await resolveLocalDbVfs(DB, h.deps)).toBe(WASQLiteVFS.OPFSWriteAheadVFS)

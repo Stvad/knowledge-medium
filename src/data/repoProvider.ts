@@ -217,12 +217,11 @@ const assertOpfsAvailable = (): Promise<void> => {
 // others.
 const ADDITIONAL_READERS = 1
 
-// SQLite's default 2000 pages (~8 MB) is catastrophic for import-heavy
-// workspaces (250k blocks ~ 700 MB on disk): every cold page is a synchronous
-// OPFS read on the worker thread, so a page-open's load + ancestors + children
-// + backlinks queries all serialise behind cold-page I/O. Budget is TOTAL, not
-// per connection — PowerSync applies `cache_size` to each connection it opens,
-// so adding readers divides the same 256 MiB rather than multiplying it.
+// SQLite's default 2000 pages (~8 MB) leaves every cold page a synchronous OPFS
+// read on the worker thread, so a page-open's load + ancestors + children +
+// backlinks queries all serialise behind cold-page I/O. Budget is TOTAL, not per
+// connection — PowerSync applies `cache_size` to each connection it opens, so
+// adding readers divides this rather than multiplying it.
 const TOTAL_PAGE_CACHE_KB = 262144
 
 const buildPowerSyncDb = (userId: string) => {

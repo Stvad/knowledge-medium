@@ -143,7 +143,7 @@ entirely once no pre-flip build is live.
   first — otherwise the download is an intact-looking database missing its most recent
   writes.
 - **Wipe / import-replace / forensic inventory.** All three key off one
-  `DB_FILE_SIBLING_SUFFIXES` list (`src/data/localDbStorage.ts`), which now includes the
+  `DB_FILE_SIBLING_SUFFIXES` list (`src/data/dbFileSiblings.ts`), which now includes the
   sidecars. A sidecar surviving a wipe would replay over the next database at that name.
 - **Page cache.** PowerSync applies `cache_size` per connection, and a `PRAGMA` executed
   through the app takes the write lock, so it reaches only the writer. The budget is now

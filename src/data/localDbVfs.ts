@@ -131,9 +131,17 @@ export const resolveLocalDbVfs = async (
   if (await anyWriteAheadSidecar(dbFilename, deps)) return WASQLiteVFS.OPFSWriteAheadVFS
 
   const override = readLocalDbVfsOverride()
-  if (override) return override
+  const target = override ?? (await deps.supportsWriteAhead()
+    ? WASQLiteVFS.OPFSWriteAheadVFS
+    : WASQLiteVFS.OPFSCoopSyncVFS)
+  if (target === WASQLiteVFS.OPFSWriteAheadVFS) return target
 
-  return (await deps.supportsWriteAhead())
+  // Choosing CoopSync, so look again. The probe above can take seconds (its
+  // timeout alone is 5s), and another tab reaching a different answer in that
+  // window will have moved this database and created the log. CoopSync over a
+  // live log is the one outcome that must never happen, and the check is two
+  // stats — cheap enough to pay for a window this wide.
+  return (await anyWriteAheadSidecar(dbFilename, deps))
     ? WASQLiteVFS.OPFSWriteAheadVFS
     : WASQLiteVFS.OPFSCoopSyncVFS
 }
