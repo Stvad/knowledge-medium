@@ -416,28 +416,45 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
 const EXPORT_LOCK_TIMEOUT_MS = 180_000
 
 /**
- * `abort` fires before the rejection, because the work here writes to a file
- * the caller is about to report on: leaving it running would keep modifying the
- * destination after the export said it failed, and would have the cleanup
- * delete a snapshot whose writable is still open.
+ * On expiry: abort, WAIT for the abort to settle, then reject.
+ *
+ * Aborting alone is not enough. `pipeTo`'s abort procedure is asynchronous, so
+ * returning immediately hands control back while the writable is still closing
+ * — and the caller's cleanup then deletes a snapshot whose writable is open,
+ * replacing the actionable timeout with `NoModificationAllowedError`.
+ *
+ * The wait is bounded because not everything is abortable: a checkpoint stuck
+ * on another connection's transaction-id lock ignores the signal entirely, and
+ * waiting on it forever would restore the hang this deadline exists to break.
  */
+const ABORT_SETTLE_GRACE_MS = 5_000
+
 const withDeadline = async <T,>(
   work: (signal: AbortSignal) => Promise<T>,
   ms: number,
   message: string,
 ): Promise<T> => {
   const controller = new AbortController()
+  const running = work(controller.signal)
+  // Nothing else observes this rejection once the race is decided against it.
+  running.catch(() => {})
+
   let timer: ReturnType<typeof setTimeout> | undefined
+  let graceTimer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       controller.abort()
-      reject(new Error(message))
+      void Promise.race([
+        running.catch(() => {}),
+        new Promise<void>(resolve => { graceTimer = setTimeout(resolve, ABORT_SETTLE_GRACE_MS) }),
+      ]).then(() => reject(new Error(message)))
     }, ms)
   })
   try {
-    return await Promise.race([work(controller.signal), deadline])
+    return await Promise.race([running, deadline])
   } finally {
     clearTimeout(timer)
+    clearTimeout(graceTimer)
   }
 }
 

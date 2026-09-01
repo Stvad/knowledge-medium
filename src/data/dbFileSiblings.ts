@@ -1,7 +1,20 @@
 /**
- * Every file SQLite or the VFS derives from the main `.db` name. A suffix
- * missing from any consumer of this list is a file that survives that
- * consumer's cleanup and then replays over the next database of that name.
+ * Every file SQLite or the VFS derives from the main `.db` name.
+ *
+ * Read this before merging the two lists back together. Inventory and backup
+ * want all of them, but the DELETING paths must not treat them alike, and the
+ * two halves need OPPOSITE orders:
+ *
+ *  - `SQLITE_JOURNAL_SUFFIXES` go BEFORE the main file. Left beside a fresh
+ *    database of the same name, SQLite replays them onto it.
+ *  - `WRITE_AHEAD_SIDECAR_SUFFIXES` go AFTER it, best-effort — deleting a log
+ *    while its `.db` survives strips committed frames from a database the
+ *    caller is then told was left intact. A log that outlives its database is
+ *    harmless instead: `OPFSWriteAheadVFS` truncates both sidecars when it
+ *    opens a `.db` that does not exist.
+ *
+ * Import is the exception that proves it: it writes a new `.db` afterwards, so
+ * everything must be gone first, and the old database goes first of all.
  *
  * Its own module, with NO imports, so the service worker's stale-preview sweep
  * can share it: that build has no path alias and must not pull in the app's
