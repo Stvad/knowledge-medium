@@ -21,6 +21,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { Unzip, UnzipInflate, Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/localDbStorage'
+import { supportsWriteAheadVfs } from '@/data/localDbVfs.js'
 import {
   DB_FILE_SIBLING_SUFFIXES,
   SQLITE_JOURNAL_SUFFIXES,
@@ -355,6 +356,25 @@ const startsWithMagic = async (blob: Blob, magic: Uint8Array): Promise<boolean> 
   return magic.every((byte, i) => head[i] === byte)
 }
 
+/** Injection seam for the tests; production uses the real probe. */
+export interface ImportDeps {
+  probeWriteAheadSupport?: () => Promise<boolean>
+}
+
+/**
+ * The import needs room for a whole second copy before it touches anything, and
+ * unlike the export paths it had no check — leaving `QuotaExceededError` to
+ * surface mid-copy, which past the boundary means a destroyed database rather
+ * than a refusal.
+ */
+const assertRoomForImport = async (files: readonly File[]): Promise<void> => {
+  const required = files.reduce((sum, file) => sum + file.size, 0)
+  const freeBytes = await estimateFreeOpfsBytes()
+  if (freeBytes !== undefined && freeBytes < required) {
+    throw new Error(insufficientOpfsSpaceMessage(required, freeBytes))
+  }
+}
+
 /** One file waiting in OPFS staging, and the sibling suffix it restores to (`''` = the `.db`). */
 interface StagedImportFile {
   suffix: string
@@ -422,6 +442,35 @@ const assertRestorableSet = (suffixes: readonly string[]): void => {
   )
 }
 
+/**
+ * Restoring a write-ahead pair COMMITS this device to `OPFSWriteAheadVFS`:
+ * `resolveLocalDbVfs` picks it on sidecar existence alone, ahead of both the pin
+ * and the probe, because the sidecars are the record of where the database
+ * lives. On a browser without `readwrite-unsafe` that database then cannot be
+ * opened at all, and the screen it lands on offers only Reload — with the app
+ * unmounted, the import action is out of reach.
+ *
+ * So refuse before staging. Dropping the sidecars instead is NOT the fallback to
+ * suggest: that is the silent loss this whole path exists to close, so the
+ * message has to say the transactions would go with them.
+ *
+ * Probed only when the fileset actually carries sidecars — the probe spawns a
+ * worker and can take seconds, and every other restore is unaffected by it.
+ */
+const assertWriteAheadRestorable = async (
+  siblingSuffixes: readonly string[],
+  probe: () => Promise<boolean>,
+): Promise<void> => {
+  const wantsWriteAhead = siblingSuffixes.some(suffix =>
+    (WRITE_AHEAD_SIDECAR_SUFFIXES as readonly string[]).includes(suffix))
+  if (!wantsWriteAhead || await probe()) return
+  throw new Error(
+    'This backup carries a write-ahead log, which only a Chromium-based browser can open. ' +
+    'Restore it there. Importing the database file on its own would work here, but every ' +
+    'transaction still held in the log would be lost without warning.',
+  )
+}
+
 /** Bytes 18 and 19 of a SQLite header: 1 = rollback journal, 2 = WAL. */
 const SQLITE_WAL_FORMAT_VERSION = 2
 const SQLITE_HEADER_PROBE_BYTES = 20
@@ -452,11 +501,15 @@ const opfsFile = async (root: FileSystemDirectoryHandle, name: string): Promise<
   (await root.getFileHandle(name)).getFile()
 
 /** The selection, classified and header-checked, before OPFS is touched at all. */
-const validateSelection = async (files: readonly File[]): Promise<Array<{suffix: string; file: File}>> => {
+const validateSelection = async (
+  files: readonly File[],
+  probe: () => Promise<boolean>,
+): Promise<Array<{suffix: string; file: File}>> => {
   const {main, siblings} = classifyDbFileSet(files.map(file => file.name))
   const byName = new Map(files.map(file => [file.name, file]))
   await assertRestorableDatabase(byName.get(main)!)
   assertRestorableSet(siblings.map(({suffix}) => suffix))
+  await assertWriteAheadRestorable(siblings.map(({suffix}) => suffix), probe)
   return [
     {suffix: '', file: byName.get(main)!},
     ...siblings.map(({name, suffix}) => ({suffix, file: byName.get(name)!})),
@@ -479,34 +532,60 @@ const stageSelection = async (
   return staged
 }
 
+/**
+ * Every member the directory declares came out whole and unaltered.
+ *
+ * The streaming reader is not a witness to any of this. It reports whatever the
+ * local headers let it find, so a member can arrive short, a whole member can
+ * go missing, and neither shows up as an error — both restore a convincing
+ * subset, which is the failure this path exists to refuse.
+ */
+const assertArchiveFullyRead = (
+  declared: readonly ZipDirectoryEntry[],
+  read: ReadonlyArray<{ name: string; size: number; crc: number }>,
+): void => {
+  const refuse = (detail: string): never => {
+    throw new Error(
+      `The selected archive is damaged — ${detail}. ` +
+      'Re-download the backup, or extract it and select the files inside.',
+    )
+  }
+  if (read.length !== declared.length) {
+    refuse(`it lists ${declared.length} file(s) but ${read.length} could be read`)
+  }
+  const byName = new Map(read.map(member => [member.name, member]))
+  for (const entry of declared) {
+    const member = byName.get(entry.name)
+    if (!member) refuse(`"${entry.name}" is listed but was not found in it`)
+    else if (member.size !== entry.size) {
+      refuse(`"${entry.name}" should hold ${entry.size} bytes but ${member.size} could be read`)
+    } else if ((member.crc ^ -1) >>> 0 !== entry.crc) {
+      refuse(`the contents of "${entry.name}" do not match its checksum`)
+    }
+  }
+}
+
 /** Unpack a recovery archive into OPFS staging, one temp file per member. */
 const stageRecoveryArchive = async (
   root: FileSystemDirectoryHandle,
   dbFilename: string,
   archive: File,
   temps: string[],
+  probe: () => Promise<boolean>,
 ): Promise<StagedImportFile[]> => {
-  const declared = await zipMemberCount(archive)
+  const declared = await zipCentralDirectory(archive)
   const members = await extractZipToOpfs(root, archive, () => {
     const stagingName = tempOpfsFilename(dbFilename, 'import-staging')
     temps.push(stagingName)
     return stagingName
   })
-  // The streaming reader sees only local headers, so an archive cut short
-  // reads as a SHORTER archive rather than a broken one — restoring what
-  // arrived and dropping the rest, which is the shape this whole path exists to
-  // close. The archive's own directory is the count to trust.
-  if (members.length !== declared) {
-    throw new Error(
-      `The selected archive is incomplete — it lists ${declared} file(s) but only ` +
-      `${members.length} could be read. Re-download the backup, or extract it and select the files.`,
-    )
-  }
+  assertArchiveFullyRead(declared, members)
 
   const {main, siblings} = classifyDbFileSet(members.map(member => member.name))
   const stagingByName = new Map(members.map(member => [member.name, member.stagingName]))
   await assertRestorableDatabase(await opfsFile(root, stagingByName.get(main)!))
   assertRestorableSet(siblings.map(({suffix}) => suffix))
+  await assertWriteAheadRestorable(siblings.map(({suffix}) => suffix), probe)
 
   return [
     {suffix: '', stagingName: stagingByName.get(main)!},
@@ -527,21 +606,30 @@ const stageRecoveryArchive = async (
  * closed); the caller must reload the page so a fresh PowerSync init opens the
  * new files.
  */
-export async function importRawSqliteDb(repo: Repo, files: readonly File[]): Promise<void> {
+export async function importRawSqliteDb(
+  repo: Repo,
+  files: readonly File[],
+  {probeWriteAheadSupport = supportsWriteAheadVfs}: ImportDeps = {},
+): Promise<void> {
   const isArchive = files.length === 1 && await startsWithMagic(files[0], ZIP_MAGIC)
   // Classified and header-checked before OPFS is touched at all, so a
   // wrong-file pick costs nothing and leaves nothing behind.
-  const selection = isArchive ? null : await validateSelection(files)
+  const selection = isArchive ? null : await validateSelection(files, probeWriteAheadSupport)
 
   const dbFilename = dbFilenameForUser(repo.user.id)
   const root = await navigator.storage.getDirectory()
+
+  // Staging writes a second full copy beside the live database, so check for
+  // the room first: the same failure AFTER the boundary below destroys the
+  // database instead of merely refusing.
+  await assertRoomForImport(files)
 
   // Everything lands in staging while the live database is still intact, so a
   // failure reading the selection leaves that database untouched.
   const temps: string[] = []
   try {
     const staged = selection === null
-      ? await stageRecoveryArchive(root, dbFilename, files[0], temps)
+      ? await stageRecoveryArchive(root, dbFilename, files[0], temps, probeWriteAheadSupport)
       : await stageSelection(root, dbFilename, selection, temps)
 
     // Release the OPFS sync access handle the worker holds on the .db
@@ -583,7 +671,16 @@ export async function importRawSqliteDb(repo: Repo, files: readonly File[]): Pro
       }
     } catch (err) {
       await discardLocalDbFiles(root, dbFilename)
-      throw err
+      // The caller shows this as "import failed", which every reader takes to
+      // mean nothing happened. Past the boundary the previous database is
+      // already gone, so say so — and say the files they picked are fine, which
+      // is the part that decides whether they panic.
+      throw new Error(
+        `${err instanceof Error ? err.message : String(err)} — and this device's previous ` +
+        'database was already removed, so it is now empty. The files you selected are ' +
+        'untouched: reload the page and import them again.',
+        {cause: err},
+      )
     }
   } finally {
     await Promise.allSettled(temps.map(name => removeEntryIfExists(root, name)))
@@ -856,8 +953,8 @@ const extractZipToOpfs = async (
   root: FileSystemDirectoryHandle,
   archive: File,
   nextTempName: () => string,
-): Promise<Array<{ name: string; stagingName: string }>> => {
-  const members: Array<{ name: string; stagingName: string }> = []
+): Promise<Array<{ name: string; stagingName: string; size: number; crc: number }>> => {
+  const members: Array<{ name: string; stagingName: string; size: number; crc: number }> = []
   const open = new Map<string, FileSystemWritableFileStream>()
   let writeChain: Promise<void> = Promise.resolve()
   let unzipError: unknown = null
@@ -866,7 +963,9 @@ const extractZipToOpfs = async (
   unzip.register(UnzipInflate)
   unzip.onfile = member => {
     const stagingName = nextTempName()
-    members.push({ name: member.name, stagingName })
+    // Seeded and finalised the CRC-32 way: ~0 in, complement out.
+    const entry = { name: member.name, stagingName, size: 0, crc: -1 }
+    members.push(entry)
     writeChain = writeChain.then(async () => {
       const handle = await root.getFileHandle(stagingName, { create: true })
       open.set(member.name, await handle.createWritable({ keepExistingData: false }))
@@ -883,7 +982,11 @@ const extractZipToOpfs = async (
       writeChain = writeChain.then(async () => {
         const writable = open.get(member.name)
         if (!writable) return
-        if (data) await writable.write(data)
+        if (data) {
+          await writable.write(data)
+          entry.size += data.length
+          entry.crc = crc32(data, entry.crc)
+        }
         if (final) {
           await writable.close()
           open.delete(member.name)
@@ -904,6 +1007,11 @@ const extractZipToOpfs = async (
       if (done) break
     }
   } catch (err) {
+    // Drain first: a throw from `unzip.push` itself can precede the queued task
+    // that puts a member's writable into `open`, and aborting a snapshot taken
+    // before that lands leaves a writable open on a staging file — which then
+    // resists the caller's cleanup, because a locked entry cannot be removed.
+    await writeChain.catch(() => {})
     // The temps themselves are the caller's to remove — it registered every one
     // as it was minted, so a throw here still leaves nothing behind.
     await Promise.allSettled([...open.values()].map(w => w.abort?.()))
@@ -912,38 +1020,120 @@ const extractZipToOpfs = async (
   return members
 }
 
-/** The 4-byte little-endian signatures the end-of-directory records carry. */
+/** The 4-byte little-endian signatures the zip directory records carry. */
 const EOCD_SIGNATURE = 0x06054b50
+const CENTRAL_FILE_SIGNATURE = 0x02014b50
 const ZIP64_EOCD_LOCATOR_SIGNATURE = 0x07064b50
+const EOCD_SIZE = 22
+const CENTRAL_FILE_HEADER_SIZE = 46
+/** Both 32-bit fields use an all-ones sentinel to mean "see the ZIP64 record". */
+const ZIP64_SENTINEL_32 = 0xffffffff
+
+interface ZipDirectoryEntry {
+  name: string
+  /** Authoritative length. The LOCAL header carries zero for a streamed entry. */
+  size: number
+  crc: number
+}
 
 /**
- * How many members the archive's own end-of-central-directory record says it
- * holds — the count `stageRecoveryArchive` checks what it actually read against.
- * Finding the record at all is half the value: it sits at the very end, so its
- * presence is what rules out a truncated tail.
+ * The archive's central directory: one authoritative record per member.
+ *
+ * This is not belt-and-braces over the streaming reader — it is the only
+ * trustworthy account of what the archive holds. `streamStoredZipToOpfs` writes
+ * through fflate's streaming `Zip`, which always sets the data-descriptor flag
+ * and leaves the sizes in each LOCAL header as zero, so `Unzip` cannot know
+ * where a member ends and scans the payload for the next zip signature instead.
+ * A `.db` whose own bytes happen to contain `PK\x07\x08` therefore ends early,
+ * and every later frame of a sidecar is dropped — silently, because a short
+ * `.db` still carries the SQLite magic and a short log reads as end-of-log. On
+ * a multi-GB database that sequence is more likely to occur than not.
+ *
+ * Finding the record also proves the tail is present, which is what rules out a
+ * truncated download.
  */
-const zipMemberCount = async (archive: Blob): Promise<number> => {
-  // 22 bytes plus a trailing comment we never write and cap at the format's max.
-  const tailBytes = Math.min(archive.size, 22 + 0xffff)
-  const tail = new DataView(await archive.slice(archive.size - tailBytes).arrayBuffer())
-  for (let at = tail.byteLength - 22; at >= 0; at--) {
+const zipCentralDirectory = async (archive: Blob): Promise<ZipDirectoryEntry[]> => {
+  // 22 bytes plus a trailing comment we never write and the format caps at 64K.
+  const tailBytes = Math.min(archive.size, EOCD_SIZE + 0xffff)
+  const tailStart = archive.size - tailBytes
+  const tail = new DataView(await archive.slice(tailStart).arrayBuffer())
+
+  for (let at = tail.byteLength - EOCD_SIZE; at >= 0; at--) {
     if (tail.getUint32(at, true) !== EOCD_SIGNATURE) continue
+    // Validate the candidate rather than trusting the first signature found:
+    // these bytes can also occur inside member data. A real record ends exactly
+    // at EOF and points at a directory that ends exactly where it begins.
+    if (at + EOCD_SIZE + tail.getUint16(at + 20, true) !== tail.byteLength) continue
     const count = tail.getUint16(at + 10, true)
-    // 0xffff is the ZIP64 escape: the real count lives in a second record, and
-    // reading it is worth doing only once an archive that needs it can exist.
-    // Ours cannot — fflate writes no ZIP64 — so refuse rather than guess.
-    if (count === 0xffff && at >= 20 && tail.getUint32(at - 20, true) === ZIP64_EOCD_LOCATOR_SIGNATURE) {
+    const size = tail.getUint32(at + 12, true)
+    const offset = tail.getUint32(at + 16, true)
+    if (offset + size !== tailStart + at) continue
+
+    // ZIP64 escapes: reading them is worth doing only once an archive that
+    // needs one can exist. Ours cannot — fflate writes no ZIP64 — so refuse.
+    const zip64 = count === 0xffff || size === ZIP64_SENTINEL_32 || offset === ZIP64_SENTINEL_32
+      || (at >= 20 && tail.getUint32(at - 20, true) === ZIP64_EOCD_LOCATOR_SIGNATURE)
+    if (zip64) {
       throw new Error(
         'This archive uses the ZIP64 format, which this app cannot verify. ' +
         'Extract it and select the files inside instead.',
       )
     }
-    return count
+    return parseCentralDirectory(new DataView(await archive.slice(offset, offset + size).arrayBuffer()), count)
   }
   throw new Error(
     'The selected archive is truncated — its file directory is missing. ' +
     'Re-download the backup, or extract it and select the files inside.',
   )
+}
+
+const parseCentralDirectory = (directory: DataView, count: number): ZipDirectoryEntry[] => {
+  const entries: ZipDirectoryEntry[] = []
+  const names = new TextDecoder()
+  let at = 0
+  for (let i = 0; i < count; i++) {
+    if (at + CENTRAL_FILE_HEADER_SIZE > directory.byteLength
+      || directory.getUint32(at, true) !== CENTRAL_FILE_SIGNATURE) {
+      throw new Error('The selected archive\'s file directory is damaged — re-download the backup.')
+    }
+    const nameLength = directory.getUint16(at + 28, true)
+    const size = directory.getUint32(at + 24, true)
+    if (size === ZIP64_SENTINEL_32) {
+      throw new Error(
+        'This archive uses the ZIP64 format, which this app cannot verify. ' +
+        'Extract it and select the files inside instead.',
+      )
+    }
+    entries.push({
+      name: names.decode(new Uint8Array(directory.buffer, directory.byteOffset + at + CENTRAL_FILE_HEADER_SIZE, nameLength)),
+      size,
+      crc: directory.getUint32(at + 16, true),
+    })
+    at += CENTRAL_FILE_HEADER_SIZE + nameLength
+      + directory.getUint16(at + 30, true) + directory.getUint16(at + 32, true)
+  }
+  return entries
+}
+
+/**
+ * CRC-32 (IEEE), streamed. fflate exports no checksum helper, and the archive's
+ * directory records one per member — the only content check available on any
+ * restore route, so it is worth the table.
+ */
+const CRC32_TABLE = (() => {
+  const table = new Int32Array(256)
+  for (let i = 0; i < 256; i++) {
+    let value = i
+    for (let bit = 0; bit < 8; bit++) value = value & 1 ? (value >>> 1) ^ 0xedb88320 : value >>> 1
+    table[i] = value
+  }
+  return table
+})()
+
+const crc32 = (bytes: Uint8Array, seed: number): number => {
+  let crc = seed
+  for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ bytes[i]) & 0xff]
+  return crc
 }
 
 const tempOpfsFilename = (dbFilename: string, purpose: string): string =>

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { unzipSync, zipSync } from 'fflate'
+import { Zip, ZipPassThrough, unzipSync, zipSync } from 'fflate'
 import type { Repo } from '@/data/repo'
 import {
   deleteLocalSqliteDb,
@@ -296,7 +296,7 @@ describe('importRawSqliteDb', () => {
     await importRawSqliteDb(fakeRepo(), [
       fileWithStream([SQLITE_HEADER_BYTES, new Uint8Array([1, 2, 3])], 'backup.db'),
       fileWithStream([new Uint8Array([9, 9])], 'backup.db-wa0'),
-    ])
+    ], writeAheadSupported)
 
     expect([...opfs.bytes('kmp-v6-user-1.db')]).toEqual([...SQLITE_HEADER_BYTES, 1, 2, 3])
     expect([...opfs.bytes('kmp-v6-user-1.db-wa0')]).toEqual([9, 9])
@@ -322,7 +322,7 @@ describe('importRawSqliteDb', () => {
 
     const restored = installFakeOpfs()
     // In small pieces, so the streaming extractor is actually streaming.
-    await importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archiveBytes, 7), backup.filename)])
+    await importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archiveBytes, 7), backup.filename)], writeAheadSupported)
 
     expect(restored.bytes('kmp-v6-user-1.db')).toEqual(dbBytes)
     expect(restored.bytes('kmp-v6-user-1.db-wa0')).toEqual(waBytes)
@@ -336,7 +336,7 @@ describe('importRawSqliteDb', () => {
     const archive = zipSync({'x.db': dbBytes, 'x.db-wa1': new Uint8Array([8])}, {level: 6})
     const opfs = installFakeOpfs()
 
-    await importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 11), 'backup.zip')])
+    await importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 11), 'backup.zip')], writeAheadSupported)
 
     expect(opfs.bytes('kmp-v6-user-1.db')).toEqual(dbBytes)
     expect([...opfs.bytes('kmp-v6-user-1.db-wa1')]).toEqual([8])
@@ -355,26 +355,130 @@ describe('importRawSqliteDb', () => {
 
     await expect(importRawSqliteDb(fakeRepo(), [
       fileWithStream(sliceInto(archive.slice(0, 260), 9), 'backup.zip'),
-    ])).rejects.toThrow(/truncated/)
+    ], writeAheadSupported)).rejects.toThrow(/truncated/)
     expect([...opfs.names()]).toEqual([])
   })
 
   it('refuses an archive whose directory lists a member the stream never carried', async () => {
-    // The tail survived, so the directory reads fine and the truncation check
-    // above is satisfied — but the sidecar's record is gone from the body. The
-    // count is the only thing that notices.
-    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(80).fill(1)])
-    const archive = zipSync({'x.db': dbBytes, 'x.db-wa0': new Uint8Array(40).fill(2)}, {level: 0})
-    const LOCAL_HEADER = 30, DIRECTORY_HEADER = 46, EOCD = 22
-    const endOfFirstMember = LOCAL_HEADER + 'x.db'.length + dbBytes.length
-    const directoryStart = archive.length - EOCD
-      - (DIRECTORY_HEADER + 'x.db'.length) - (DIRECTORY_HEADER + 'x.db-wa0'.length)
-    const gutted = concatChunks([archive.slice(0, endOfFirstMember), archive.slice(directoryStart)])
+    // The second member's local record is blanked, leaving every offset and the
+    // directory itself intact — so the archive still validates structurally and
+    // only the per-member reconciliation notices the gap.
+    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(120).fill(0x41)])
+    const waBytes = new Uint8Array(80).fill(0x42)
+    const archive = streamedZip([['x.db', dbBytes], ['x.db-wa0', waBytes]])
+    const secondPayloadAt = archive.indexOf(0x42)
+    archive.fill(0, secondPayloadAt - 30 - 'x.db-wa0'.length, secondPayloadAt + waBytes.length)
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 9), 'backup.zip')], writeAheadSupported))
+      .rejects.toThrow(/damaged/)
+    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
+  })
+
+  it('refuses an archive whose member was cut short by a signature in its own bytes', async () => {
+    // The framing this app actually writes: fflate's STREAMING `Zip` always sets
+    // the data-descriptor flag and leaves the local header sizes at zero, so
+    // `Unzip` cannot know where a member ends and scans the payload for the next
+    // zip signature. A `.db` containing PK\x07\x08 therefore ends there. Silent
+    // without this guard — a short `.db` still carries the SQLite magic, and a
+    // short log simply reads as end-of-log. On a multi-GB database the sequence
+    // is likelier to occur than not.
+    //
+    // `zipSync` does NOT reproduce it: it writes the sizes. That is exactly why
+    // the tests around this one missed it, so build with the real writer.
+    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(600).fill(0x41)])
+    dbBytes.set([0x50, 0x4b, 0x07, 0x08], 300)
+    const archive = streamedZip([['x.db', dbBytes]])
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 64), 'recovery.zip')], writeAheadSupported))
+      .rejects.toThrow(/should hold 616 bytes but 300 could be read/)
+    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
+  })
+
+  it('refuses an archive whose member content does not match its recorded checksum', async () => {
+    // Same length, different bytes — only the directory's CRC sees this. It is
+    // the one check that catches corruption which is neither truncation nor a
+    // missing member.
+    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(400).fill(0x41)])
+    const archive = streamedZip([['x.db', dbBytes]])
+    const payloadAt = archive.indexOf(0x41)
+    expect(payloadAt).toBeGreaterThan(0)
+    archive[payloadAt] = 0x42
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 64), 'recovery.zip')], writeAheadSupported))
+      .rejects.toThrow(/do not match its checksum/)
+    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
+  })
+
+  it('round-trips an archive from the real writer, whose framing the guards above are about', async () => {
+    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(500).fill(0x43)])
+    const waBytes = new Uint8Array(300).fill(0x44)
+    const archive = streamedZip([['x.db', dbBytes], ['x.db-wa0', waBytes]])
     const opfs = installFakeOpfs()
 
-    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(gutted, 9), 'backup.zip')]))
-      .rejects.toThrow(/incomplete/)
-    expect([...opfs.names()]).toEqual([])
+    await importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 64), 'recovery.zip')], writeAheadSupported)
+
+    expect(opfs.bytes('kmp-v6-user-1.db')).toEqual(dbBytes)
+    expect(opfs.bytes('kmp-v6-user-1.db-wa0')).toEqual(waBytes)
+  })
+
+  it('refuses an unbootable sibling set inside an ARCHIVE, not just loose files', async () => {
+    // The archive is the primary route and the loose files are the fallback,
+    // but the whitelist was pinned only on the fallback — deleting its
+    // archive-path call left every test green.
+    const archive = streamedZip([
+      ['x.db', concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(40).fill(1)])],
+      ['x.db-journal', new Uint8Array(16).fill(2)],
+      ['x.db-wa0', new Uint8Array(16).fill(3)],
+    ])
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 64), 'recovery.zip')], writeAheadSupported))
+      .rejects.toThrow(/cannot be restored together/)
+    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
+  })
+
+  it('refuses a write-ahead backup on a browser that cannot open one', async () => {
+    // Restoring the pair COMMITS the device to OPFSWriteAheadVFS — sidecar
+    // existence outranks the probe at boot — so on Firefox/Safari this trades a
+    // working database for one that cannot be opened, on a screen offering only
+    // Reload. The recovery UI hands users this archive, and opening it in
+    // another browser is a natural next move.
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+    const unsupported = {probeWriteAheadSupport: async () => false}
+
+    await expect(importRawSqliteDb(fakeRepo(), [
+      fileWithStream([SQLITE_HEADER_BYTES], 'backup.db'),
+      fileWithStream([new Uint8Array([1])], 'backup.db-wa0'),
+    ], unsupported)).rejects.toThrow(/Chromium-based browser/)
+    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
+
+    // Everything without sidecars must still restore there — the gate must not
+    // become a blanket refusal on those browsers.
+    await importRawSqliteDb(fakeRepo(), [
+      fileWithStream([SQLITE_HEADER_BYTES], 'backup.db'),
+      fileWithStream([new Uint8Array([4])], 'backup.db-journal'),
+    ], unsupported)
+    expect([...opfs.bytes('kmp-v6-user-1.db-journal')]).toEqual([4])
+  })
+
+  it('clears a pre-existing write-ahead log, not just the journals', async () => {
+    // Importing a plain checkpointed `.db` over a live write-ahead database. A
+    // surviving `-wa0` is NOT truncated on the next open (the `.db` exists, so
+    // `isNewDatabase` is false), and the old database's frames get overlaid on
+    // the freshly imported one. Nothing binds a frame to a `.db`.
+    const opfs = installFakeOpfs({
+      'kmp-v6-user-1.db': new Uint8Array([9]),
+      'kmp-v6-user-1.db-wa0': new Uint8Array([1, 1]),
+      'kmp-v6-user-1.db-wa1': new Uint8Array([2, 2]),
+      'kmp-v6-user-1.db-journal': new Uint8Array([3]),
+    })
+
+    await importRawSqliteDb(fakeRepo(), [fileWithStream([SQLITE_HEADER_BYTES], 'fresh.db')], writeAheadSupported)
+
+    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
   })
 
   it('takes the whole set back down when the .db write fails, journal included', async () => {
@@ -387,7 +491,7 @@ describe('importRawSqliteDb', () => {
     await expect(importRawSqliteDb(fakeRepo(), [
       fileWithStream([SQLITE_HEADER_BYTES], 'backup.db'),
       fileWithStream([new Uint8Array([1, 2])], 'backup.db-journal'),
-    ])).rejects.toThrow(/no space/)
+    ], writeAheadSupported)).rejects.toThrow(/no space/)
 
     expect([...opfs.names()]).toEqual([])
   })
@@ -403,7 +507,7 @@ describe('importRawSqliteDb', () => {
       'kmp-v6-user-1.db-wa0': new Uint8Array([7]),
     }, {failRemoveOf: 'kmp-v6-user-1.db'})
 
-    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream([SQLITE_HEADER_BYTES], 'backup.db')]))
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream([SQLITE_HEADER_BYTES], 'backup.db')], writeAheadSupported))
       .rejects.toThrow(/locked/)
 
     expect([...opfs.names()].sort()).toEqual([
@@ -425,19 +529,19 @@ describe('importRawSqliteDb', () => {
     for (const rejected of ['backup.db-journal', 'backup.db-wal', 'backup.db-shm']) {
       await expect(importRawSqliteDb(fakeRepo(), [
         db(), fileWithStream([new Uint8Array([1])], rejected), fileWithStream([new Uint8Array([3])], 'backup.db-wa0'),
-      ])).rejects.toThrow(/cannot be restored together/)
+      ], writeAheadSupported)).rejects.toThrow(/cannot be restored together/)
     }
     await expect(importRawSqliteDb(fakeRepo(), [
       db(), fileWithStream([new Uint8Array([1])], 'backup.db-wal'),
-    ])).rejects.toThrow(/cannot be restored together/)
+    ], writeAheadSupported)).rejects.toThrow(/cannot be restored together/)
 
     // Untouched: the refusal comes before anything is destroyed.
     expect([...opfs.bytes('kmp-v6-user-1.db')]).toEqual([9])
 
     // Both legitimate shapes still restore.
-    await importRawSqliteDb(fakeRepo(), [db(), fileWithStream([new Uint8Array([3])], 'backup.db-wa0')])
+    await importRawSqliteDb(fakeRepo(), [db(), fileWithStream([new Uint8Array([3])], 'backup.db-wa0')], writeAheadSupported)
     expect([...opfs.bytes('kmp-v6-user-1.db-wa0')]).toEqual([3])
-    await importRawSqliteDb(fakeRepo(), [db(), fileWithStream([new Uint8Array([4])], 'backup.db-journal')])
+    await importRawSqliteDb(fakeRepo(), [db(), fileWithStream([new Uint8Array([4])], 'backup.db-journal')], writeAheadSupported)
     expect([...opfs.bytes('kmp-v6-user-1.db-journal')]).toEqual([4])
   })
 
@@ -450,7 +554,7 @@ describe('importRawSqliteDb', () => {
     const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
     const archive = zipSync({'kmp-v6-user-1.db-journal': new Uint8Array(32).fill(1)}, {level: 0})
 
-    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 9), 'recovery.zip')]))
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 9), 'recovery.zip')], writeAheadSupported))
       .rejects.toThrow(/not a SQLite database/)
     expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
   })
@@ -465,7 +569,7 @@ describe('importRawSqliteDb', () => {
     walHeader[18] = 2
     walHeader[19] = 2
 
-    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream([walHeader], 'wal-mode.db')]))
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream([walHeader], 'wal-mode.db')], writeAheadSupported))
       .rejects.toThrow(/WAL journal mode/)
     expect([...opfs.bytes('kmp-v6-user-1.db')]).toEqual([9])
 
@@ -474,7 +578,7 @@ describe('importRawSqliteDb', () => {
     legacy.set(SQLITE_HEADER_BYTES)
     legacy[18] = 1
     legacy[19] = 1
-    await importRawSqliteDb(fakeRepo(), [fileWithStream([legacy], 'rollback.db')])
+    await importRawSqliteDb(fakeRepo(), [fileWithStream([legacy], 'rollback.db')], writeAheadSupported)
     expect([...opfs.bytes('kmp-v6-user-1.db')]).toEqual([...legacy])
   })
 
@@ -482,10 +586,10 @@ describe('importRawSqliteDb', () => {
     const opfs = installFakeOpfs()
     const db = fileWithStream([SQLITE_HEADER_BYTES], 'backup.db')
 
-    await expect(importRawSqliteDb(fakeRepo(), [db, fileWithStream([new Uint8Array([1])], 'notes.txt')]))
+    await expect(importRawSqliteDb(fakeRepo(), [db, fileWithStream([new Uint8Array([1])], 'notes.txt')], writeAheadSupported))
       .rejects.toThrow(/together with the/)
     // A second copy of the same name would silently restore one of the two.
-    await expect(importRawSqliteDb(fakeRepo(), [db, db])).rejects.toThrow(/together with the/)
+    await expect(importRawSqliteDb(fakeRepo(), [db, db], writeAheadSupported)).rejects.toThrow(/together with the/)
     expect([...opfs.names()]).toEqual([])
   })
 })
@@ -496,6 +600,34 @@ const SQLITE_HEADER_BYTES = new Uint8Array([
 ])
 
 const fakeRepo = () => ({user: {id: 'user-1'}, db: {close: vi.fn(async () => {})}} as unknown as Repo)
+
+/**
+ * Restoring a write-ahead pair is refused where the browser cannot open one, so
+ * every test that is not ABOUT that gate states the supported answer rather
+ * than reaching for the real probe worker.
+ */
+const writeAheadSupported = {probeWriteAheadSupport: async () => true}
+
+/**
+ * An archive built the way `streamStoredZipToOpfs` builds one — streaming `Zip`
+ * with `ZipPassThrough`, which frames members with DATA DESCRIPTORS. `zipSync`
+ * writes the sizes into each local header instead, a framing the reader handles
+ * very differently, so it cannot stand in for the real writer here.
+ */
+const streamedZip = (entries: ReadonlyArray<readonly [string, Uint8Array]>): Uint8Array<ArrayBuffer> => {
+  const parts: Array<Uint8Array<ArrayBuffer>> = []
+  const zip = new Zip((err, chunk) => {
+    if (err) throw err
+    if (chunk?.length) parts.push(new Uint8Array(chunk))
+  })
+  for (const [name, bytes] of entries) {
+    const passthrough = new ZipPassThrough(name)
+    zip.add(passthrough)
+    passthrough.push(bytes, true)
+  }
+  zip.end()
+  return concatChunks(parts) as Uint8Array<ArrayBuffer>
+}
 
 const sliceInto = (bytes: Uint8Array, size: number): Array<Uint8Array<ArrayBuffer>> => {
   const chunks: Array<Uint8Array<ArrayBuffer>> = []
