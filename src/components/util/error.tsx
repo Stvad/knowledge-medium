@@ -51,11 +51,9 @@ export function BootstrapErrorFallback({error}: FallbackProps) {
     return <LocalDbCorruptionFallback userId={corruptUserId} detail={errorMessage(error)} />
   }
 
-  // The storage-mode handoff failed. Both causes (another tab holding the file,
-  // an inconclusive capability probe) are transient and the data is intact, so
-  // the generic screen's Sign out is a red herring — it leaves the DB alone and
-  // reads as the escalation path. Reload, or fall back to the storage mode that
-  // works everywhere.
+  // The storage-mode handoff failed. The data is intact and the usual cause is
+  // another tab holding the file, so the generic screen's Sign out is a red
+  // herring — it leaves the DB alone and reads as the escalation path.
   if (isLocalDbVfsHandoffError(error)) {
     return <LocalDbHandoffFallback detail={errorMessage(error)} />
   }

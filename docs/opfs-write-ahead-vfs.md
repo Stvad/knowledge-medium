@@ -1,6 +1,6 @@
 # OPFSWriteAheadVFS on Chromium
 
-> **Status:** current — last verified against code 2026-08-31 (the measurements below were taken that day on Chrome 148, `@powersync/web@1.38.4` / `@journeyapps/wa-sqlite@1.7.0`).
+> **Status:** current — last verified against code 2026-08-31. Measurements taken that day on Chrome 148, `@powersync/web@1.38.4` / `@journeyapps/wa-sqlite@1.7.0`, against a 2 GB / 350k-block copy of a production database.
 
 Chromium implements `createSyncAccessHandle({mode: 'readwrite-unsafe'})`, which lets
 several connections hold handles on one OPFS file at once. `OPFSWriteAheadVFS` is the
@@ -27,17 +27,23 @@ switch; it is a client-architecture win, not a VFS micro-benchmark win.
 **Reads, through the real app** (`db.getAll` of a 50-block page query, 5 trials per page
 load, median of trial medians, dev-sized 461-block database):
 
+Re-run on a **2 GB production database** (350,472 blocks, imported into a dev origin),
+querying the app's hottest read — a parent's child ids — through `repo.db`, 5 trials per
+page load, median of trial medians:
+
 | concurrent reads | `OPFSCoopSyncVFS` | `OPFSWriteAheadVFS` + 1 reader |
 |---|---|---|
-| 1 (serial) | 3.0ms | 1.9ms |
-| 10 | 20.5ms | 10.8ms |
-| 40 | 57.4ms | 30.9ms |
+| 1 (serial) | 0.4ms | 0.2ms |
+| 10 | 3.7ms | 1.0ms |
+| 40 | 8.9ms | 4.2ms |
 
-About 2x, which is what one extra connection should buy, and the direction held across
-all three shapes. Trial-to-trial spread on a database this small is wide (±50% within a
-single page load), and single runs disagreed with each other until the trial count went
-up — so read 2x as the size of the effect, not a precise figure. **This needs re-running
-on a production-sized database** before anyone quotes a number.
+About 2x, which is what one extra connection should buy, and at this scale the trials
+are tight (c40 spread 3.7–7.6ms vs 7.9–9.2ms) rather than the ±50% seen on a 461-block
+dev database, where single runs disagreed with each other until the trial count went up.
+
+Raw per-query cost is unchanged — one connection reading sequentially through wa-sqlite
+measures p50 0.20ms under both VFSes at 2 GB. The win is entirely the removal of
+queueing on PowerSync's single connection, which is what `additionalReaders` buys.
 
 **Writes, two raw wa-sqlite workers on one file:**
 
@@ -107,15 +113,19 @@ trigger.
 A browser that loses the capability with sidecars on disk therefore fails to open,
 loudly, rather than degrading. Accepted: it needs a shipped API to be withdrawn.
 
-## Mixed-version tabs fail to open; they do not corrupt
+## Mixed-version tabs, running at the same time, fail to open rather than corrupt
 
 During a rollout (or a revert) one tab can be on the old code and another on the new,
 with the same file. Measured: an exclusive access handle and a `readwrite-unsafe` one
 cannot coexist — whichever opens second is refused with `NoModificationAllowedError`.
 So the two VFSes can never write the same file concurrently. The failure mode is the
 already-tracked "a stale older-version tab holds the OPFS DB and the new one hangs on
-Loading" ([#283](https://github.com/Stvad/knowledge-medium/issues/283)),
-not data loss.
+Loading" ([#283](https://github.com/Stvad/knowledge-medium/issues/283)), not data loss.
+
+This says nothing about the SEQUENTIAL case, which is the dangerous one: an old-build
+client alone with a write-ahead database acquires the handle uncontested and reads the
+stale main file. Nothing at the OPFS layer prevents that — only not shipping a build
+that would do it (see Rollout).
 
 ## Consequences elsewhere
 
@@ -136,9 +146,28 @@ Reverting the feature means "stop moving new databases", not "move them back":
 databases already on write-ahead stay there, and the `km.local-db-vfs` pin
 (`coop-sync` / `write-ahead`) only affects databases that have not moved yet — it is
 ignored for one that has, because honouring it would be exactly the first failure mode
-above. Ship the sibling-file handling (`DB_FILE_SIBLING_SUFFIXES`, including the
-service worker's preview sweep) before or with the flip, since a `-wa*` file that
-survives a wipe replays over the next database of that name.
+above.
+
+**A plain `git revert` of this change is NOT that, and is unsafe.** It removes
+`resolveLocalDbVfs` along with everything else, so a reverted client opens every
+database with CoopSync unconditionally — including ones that already have sidecars,
+which is failure mode one on the spot. A revert has to KEEP the sidecar branch and
+drop only the probe-driven move. Ship the sibling-file handling
+(`DB_FILE_SIBLING_SUFFIXES`, including the service worker's preview sweep) before or
+with the flip for the same reason: a `-wa*` file that survives a wipe replays over the
+next database of that name.
+
+## Moving a database back, by hand
+
+There is deliberately no automatic path, so write this down rather than rediscovering
+it. With the app closed in every other tab: pin `km.local-db-vfs` to `coop-sync`,
+export a backup (the export checkpoints first, so the `.db` it writes is complete),
+reset the local database, then import that backup. The pin then applies, because the
+restored file has no sidecars.
+
+Note that a sidecar counts by EXISTENCE, not size. The VFS creates both on every open
+and removes neither on close, so an interrupted open can leave zero-byte sidecars that
+pin a database to write-ahead just as firmly as full ones.
 
 ## Known gap
 

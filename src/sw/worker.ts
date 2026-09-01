@@ -29,8 +29,6 @@ import {
 
 const CACHE_PREFIX = 'km-'
 const VENDOR_HOSTS = new Set(['esm.sh'])
-const SQLITE_DB_SIBLING_SUFFIXES = DB_FILE_SIBLING_SUFFIXES
-
 interface PreviewDatabaseRecord {
   scopeUrl: string
   recordUrl: string
@@ -504,7 +502,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     if (typeof env.storage?.getDirectory !== 'function') return
     const root = await env.storage.getDirectory()
     const siblingResults = await Promise.allSettled(
-      SQLITE_DB_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
+      DB_FILE_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
     )
     const siblingFailure = siblingResults.find(
       (result): result is PromiseRejectedResult => result.status === 'rejected',

@@ -12,8 +12,6 @@ import {
 // 40 (user) + 3 (suffix) = 50 — safe headroom.
 const MAX_USER_SEGMENT = 40
 
-export { DB_FILE_SIBLING_SUFFIXES, WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/dbFileSiblings.js'
-
 // v6 = baseline (OPFSCoopSync + multi-tabs on @powersync/web@1.38.1).
 // History: v3 was the original IDB layout; v4 introduced OPFS; v5
 // reverted to IDB to test whether the bucket-wipe pattern was

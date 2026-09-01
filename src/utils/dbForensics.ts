@@ -18,7 +18,7 @@
  * imported from the DB-open path without a cycle.
  */
 
-import { DB_FILE_SIBLING_SUFFIXES } from '@/data/localDbStorage.js'
+import { DB_FILE_SIBLING_SUFFIXES } from '@/data/dbFileSiblings.js'
 import { IdbKeyedStore } from '@/utils/idbKeyedStore.js'
 import { scanForZeroPages, type OpfsPageScanResult } from '@/utils/opfsPageScan.js'
 

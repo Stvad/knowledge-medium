@@ -9,10 +9,8 @@
  *
  * The choice is ONE-WAY. A database moves to the write-ahead VFS and stays
  * there: its `<db>-wa0` / `<db>-wa1` sidecars are the record of that, and they
- * outrank every other input here. Nothing moves a database back, because doing
- * that silently at boot means lifting committed transactions out of a log and
- * hoping — the direction with no safe automatic answer. Moving one back is a
- * deliberate operation, not something a failed probe can trigger.
+ * outrank every other input here. Nothing in this module moves a database back;
+ * `docs/opfs-write-ahead-vfs.md` has the manual sequence and why it is manual.
  *
  * The two VFSes share the main `.db` byte format, so the move is not a data
  * migration. The one thing it needs is `prepareLocalDbForVfs`: the write-ahead
@@ -50,9 +48,7 @@ export class LocalDbVfsHandoffError extends Error {
 
 /**
  * Recognise the handoff error across HMR / bundle boundaries where `instanceof`
- * can fail, the way `corruptErrorUserId` does for the corruption error. The
- * bootstrap fallback branches on this to offer Reload rather than the generic
- * screen's Sign out, which does nothing for a database that is merely busy.
+ * can fail, the way `corruptErrorUserId` does for the corruption error.
  */
 export const isLocalDbVfsHandoffError = (error: unknown): boolean => {
   if (error instanceof LocalDbVfsHandoffError) return true
@@ -128,10 +124,10 @@ export const resolveLocalDbVfs = async (
 ): Promise<LocalDbVfs> => {
   // Sidecars mean this database already IS a write-ahead database, and that
   // outranks the pin and the probe both. The alternative is opening it with a
-  // VFS that reads the main file as an intact, older database — which reports
-  // `integrity_check` ok and drops whatever is still in the log. If the browser
-  // has genuinely lost the capability the open fails loudly, which is the
-  // honest outcome and needs no machinery of its own.
+  // VFS that reads the main file as an intact, older database — `integrity_check`
+  // ok, and whatever is still in the log dropped. Note this is EXISTENCE, not
+  // size: a zero-byte sidecar counts, because the VFS creates both on every open
+  // and an interrupted one leaves them empty.
   if (await anyWriteAheadSidecar(dbFilename, deps)) return WASQLiteVFS.OPFSWriteAheadVFS
 
   const override = readLocalDbVfsOverride()
@@ -155,10 +151,12 @@ const anyWriteAheadSidecar = async (
 export interface LocalDbVfsHandoffDeps {
   /** Size in bytes, or null when the file does not exist. */
   fileSize: (name: string) => Promise<number | null>
-  /** Open a throwaway connection with `vfs`, run `fn`, then close it. */
+  /**
+   * Open a throwaway CoopSync connection, run `fn`, then close it. CoopSync by
+   * definition: the only thing this is for is letting it honour a hot journal.
+   */
   withConnection: (
     dbFilename: string,
-    vfs: LocalDbVfs,
     fn: (execute: (sql: string) => Promise<unknown>) => Promise<void>,
   ) => Promise<void>
   supportsWriteAhead: () => Promise<boolean>
@@ -208,11 +206,26 @@ const runHandoff = async (
   // there performs the recovery. A zero-byte journal is the normal residue of a
   // clean CoopSync close and means nothing.
   const journalBytes = await deps.fileSize(`${dbFilename}-journal`)
-  if (journalBytes !== null && journalBytes > 0) {
-    await deps.withConnection(dbFilename, WASQLiteVFS.OPFSCoopSyncVFS, async execute => {
-      await execute('PRAGMA user_version')
-    })
+  if (journalBytes === null || journalBytes === 0) return
+
+  // ...but that recovery is a CoopSync open, and CoopSync must never touch a
+  // database that has sidecars. This module's own invariant says the pair
+  // cannot co-occur — the write-ahead VFS routes `<db>-journal` to a pooled
+  // temp file and never writes that name — so reaching here means something
+  // outside this code already opened a write-ahead database with CoopSync.
+  // Recovering now would roll the journal into the main file UNDERNEATH the
+  // log: both measured data-loss shapes in one boot. Refuse instead.
+  if (await anyWriteAheadSidecar(dbFilename, deps)) {
+    throw new LocalDbVfsHandoffError(
+      'This device\'s local database is in a state this app cannot safely open: it carries both a ' +
+      'write-ahead log and an unfinished rollback journal. Export a backup before doing anything ' +
+      'else, and do not open it in an older version of the app.',
+    )
   }
+
+  await deps.withConnection(dbFilename, async execute => {
+    await execute('PRAGMA user_version')
+  })
 }
 
 const opfsFileSize = async (name: string): Promise<number | null> => {
@@ -235,12 +248,14 @@ const opfsFileSize = async (name: string): Promise<number | null> => {
 const HANDOFF_CONNECTION_TIMEOUT_MS = 15_000
 const HANDOFF_CLOSE_TIMEOUT_MS = 3_000
 
-const withTemporaryConnection: LocalDbVfsHandoffDeps['withConnection'] = async (
-  dbFilename,
-  vfs,
-  fn,
-) => {
-  const db = new WASQLiteOpenFactory({dbFilename, vfs, flags: {enableMultiTabs: true}}).openDB()
+const withTemporaryConnection: LocalDbVfsHandoffDeps['withConnection'] = async (dbFilename, fn) => {
+  const db = new WASQLiteOpenFactory({
+    dbFilename,
+    vfs: WASQLiteVFS.OPFSCoopSyncVFS,
+    flags: {enableMultiTabs: true},
+  }).openDB()
+
+  let bodyError: unknown = null
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await Promise.race([
@@ -255,28 +270,50 @@ const withTemporaryConnection: LocalDbVfsHandoffDeps['withConnection'] = async (
         )
       }),
     ])
+  } catch (err) {
+    bodyError = err
   } finally {
     clearTimeout(timer)
-    // Bounded, because close() waits on the SAME lock the open was stuck on:
-    // awaiting it unbounded would swallow the timeout just raised and put the
-    // caller back on an endless loading screen. A connection we give up on
-    // leaks its worker for the rest of the page's life — the cheaper half.
-    let closeTimer: ReturnType<typeof setTimeout> | undefined
-    await Promise.race([
-      Promise.resolve(db.close())
-        .catch(err => {
-          console.warn('[localDbVfs] handoff connection failed to close', err)
-        })
-        // Or every healthy handoff reports an abandonment a few seconds later,
-        // burying the ones that really did hang.
-        .finally(() => clearTimeout(closeTimer)),
-      new Promise<void>(resolve => {
-        closeTimer = setTimeout(() => {
-          console.warn('[localDbVfs] handoff connection did not close in time; abandoning it')
-          resolve()
-        }, HANDOFF_CLOSE_TIMEOUT_MS)
+  }
+
+  // Bounded, because close() waits on the SAME lock the open was stuck on:
+  // unbounded it would swallow whatever we are already reporting and put the
+  // caller back on an endless loading screen.
+  const closed = await closeWithin(db, HANDOFF_CLOSE_TIMEOUT_MS)
+
+  if (bodyError) throw bodyError
+  // A connection that did not close still holds an EXCLUSIVE OPFS handle, and
+  // the whole point of this one is that the caller opens the same file next —
+  // `readwrite-unsafe`, which cannot coexist with it. Proceeding would fail
+  // that open with a raw DOMException on the generic error screen. Only a
+  // reload frees the worker, which is exactly what this error asks for.
+  if (!closed) {
+    throw new LocalDbVfsHandoffError(
+      'This device\'s local database is still held by a previous connection. Reload the app; if it ' +
+      'persists, close the other tabs first.',
+    )
+  }
+}
+
+const closeWithin = async (db: {close(): void | Promise<void>}, ms: number): Promise<boolean> => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      Promise.resolve(db.close()).then(() => true, err => {
+        console.warn('[localDbVfs] handoff connection failed to close', err)
+        return false
+      }),
+      new Promise<boolean>(resolve => {
+        timer = setTimeout(() => {
+          console.warn('[localDbVfs] handoff connection did not close in time')
+          resolve(false)
+        }, ms)
       }),
     ])
+  } finally {
+    // Or a healthy close leaves a timer that fires a false alarm seconds later,
+    // burying the ones that really did hang.
+    clearTimeout(timer)
   }
 }
 

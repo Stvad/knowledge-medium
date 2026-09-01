@@ -171,17 +171,14 @@ export const syncObserverDepsFor = (
   }
 }
 
-// Resolved BEFORE the first `getPowerSyncDb` for that file. Per file, not per
-// process: every connection to ONE database must agree on the VFS, but the
-// answer itself depends on that file — when the capability probe is
-// inconclusive it turns on whether this database has write-ahead sidecars.
+// Both keyed by FILE, and resolved before the first `getPowerSyncDb` for it:
+// every connection to one database must agree on the VFS, and the answer turns
+// on that file's own sidecars. Signing in as a second user without a reload
+// opens a different `.db` with its own state.
 const resolvedLocalDbVfs = new Map<string, LocalDbVfs>()
 
-// ...but the handoff is per FILE, not per process: signing in as a second user
-// without a reload opens a different `.db`, which has its own sidecars and its
-// own possible hot journal. Keyed by the PROMISE, not the name — two concurrent
-// boots for one file would otherwise both pass a `has()` check taken before
-// either finished, and run two checkpoint connections against each other.
+// Keyed by the PROMISE, not the name — two concurrent boots for one file would
+// otherwise both pass a `has()` check taken before either finished.
 const preparedDbFiles = new Map<string, Promise<void>>()
 
 // Firefox and Safari block OPFS in private browsing — `getDirectory()`

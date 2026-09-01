@@ -25,13 +25,13 @@ const harness = (
     calls,
     deps: {
       fileSize: async name => (name in files ? files[name] : null),
-      withConnection: async (_dbFilename, vfs, fn) => {
-        calls.push(`open:${vfs}`)
+      withConnection: async (_dbFilename, fn) => {
+        calls.push('open')
         await fn(async sql => {
           calls.push(`sql:${sql}`)
           return undefined
         })
-        calls.push(`close:${vfs}`)
+        calls.push('close')
       },
       supportsWriteAhead: async () => supportsWriteAhead,
     },
@@ -78,11 +78,7 @@ describe('prepareLocalDbForVfs', () => {
   it('lets CoopSync roll back a hot journal first, because the write-ahead VFS never sees one', async () => {
     const h = harness({[DB]: 4096, [`${DB}-journal`]: 8192})
     await prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSWriteAheadVFS, h.deps)
-    expect(h.calls).toEqual([
-      `open:${WASQLiteVFS.OPFSCoopSyncVFS}`,
-      'sql:PRAGMA user_version',
-      `close:${WASQLiteVFS.OPFSCoopSyncVFS}`,
-    ])
+    expect(h.calls).toEqual(['open', 'sql:PRAGMA user_version', 'close'])
   })
 
   it('does nothing at all for a CoopSync target', async () => {
@@ -90,6 +86,16 @@ describe('prepareLocalDbForVfs', () => {
     // disk it cannot read — including a hot journal, which it handles itself.
     const h = harness({[DB]: 4096, [`${DB}-journal`]: 8192})
     await prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSCoopSyncVFS, h.deps)
+    expect(h.calls).toEqual([])
+  })
+
+  it('refuses to recover a hot journal next to sidecars instead of opening CoopSync', async () => {
+    // Both together is a state this design says cannot occur. Recovering would
+    // roll the journal into the main file underneath the log — the two measured
+    // data-loss shapes in one boot — so the only safe answer is to stop.
+    const h = harness({[DB]: 4096, [`${DB}-journal`]: 8192, [`${DB}-wa0`]: 20704})
+    await expect(prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSWriteAheadVFS, h.deps))
+      .rejects.toBeInstanceOf(LocalDbVfsHandoffError)
     expect(h.calls).toEqual([])
   })
 

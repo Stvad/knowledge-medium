@@ -17,7 +17,8 @@
 import { v4 as uuidv4 } from 'uuid'
 import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
-import { DB_FILE_SIBLING_SUFFIXES, dbFilenameForUser } from '@/data/localDbStorage'
+import { dbFilenameForUser } from '@/data/localDbStorage'
+import { DB_FILE_SIBLING_SUFFIXES } from '@/data/dbFileSiblings.js'
 
 export interface RawSqliteDbBlobExport {
   blob: Blob
@@ -247,9 +248,9 @@ export async function deleteLocalSqliteDb(userId: string): Promise<void> {
   const siblingFailure = siblingResults.find((r): r is PromiseRejectedResult => r.status === 'rejected')
   if (siblingFailure) {
     throw new Error(
-      'Could not delete all local database files — a journal file may be locked by ' +
-      'another open tab of this app. The main database was left in place to avoid ' +
-      're-corruption; close other tabs and try again.',
+      'Could not delete all local database files — one may be locked by another open tab of this app. ' +
+      'The main database was left in place; close the other tabs and try again. If a write-ahead log ' +
+      '(-wa0/-wa1) was already removed, export a backup before relying on that database again.',
       {cause: siblingFailure.reason},
     )
   }
@@ -378,19 +379,6 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
 }
 
 /**
- * Run `callback` with NO other writer able to touch the database, having first
- * flushed everything into the main `.db` file.
- *
- * Both are required because the export copies the main file's raw bytes. Under
- * OPFSWriteAheadVFS committed transactions sit in the `-wa*` sidecars until
- * checkpointed, so an un-checkpointed export is an intact-looking database
- * missing its most recent writes (the checkpoint is a no-op under
- * OPFSCoopSyncVFS). And the two steps have to share ONE exclusion: a writer
- * admitted between them commits straight back into a sidecar, putting the
- * staleness back. It is a WRITE lock rather than a read lock because with a
- * reader pool a read lock no longer excludes the writer at all.
- */
-/**
  * Whether a `PRAGMA wal_checkpoint` result says nothing is left outstanding.
  *
  * Read positionally because the two VFSes answer differently, and the first
@@ -410,6 +398,19 @@ const checkpointDrained = (result: unknown): boolean => {
   return Number(value) === 0
 }
 
+/**
+ * Run `callback` with NO other writer able to touch the database, having first
+ * flushed everything into the main `.db` file.
+ *
+ * Both are required because the export copies the main file's raw bytes. Under
+ * OPFSWriteAheadVFS committed transactions sit in the `-wa*` sidecars until
+ * checkpointed, so an un-checkpointed export is an intact-looking database
+ * missing its most recent writes (the checkpoint is a no-op under
+ * OPFSCoopSyncVFS). And the two steps have to share ONE exclusion: a writer
+ * admitted between them commits straight back into a sidecar, putting the
+ * staleness back. It is a WRITE lock rather than a read lock because with a
+ * reader pool a read lock no longer excludes the writer at all.
+ */
 const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>): Promise<T> => {
   const db = repo.db as unknown as Partial<PowerSyncWriteLockDb>
   if (typeof db.writeLock !== 'function') {
