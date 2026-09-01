@@ -1810,6 +1810,12 @@ export const ensureRoot = async (repo: any, workspaceId: string) => {
         parentId: null,
         orderKey: keyBetween(lastKey, null),
         freshContent: ROOT_ALIAS,
+        // This row owns a name, so its tombstone's bag can hold one another
+        // page has taken since. Restoring it as-is re-inserts that claim under
+        // the uniqueness trigger and the restore itself is refused; the naming
+        // below never runs to pick something free. Children that own no alias
+        // must NOT pass this — a user-set alias on them has to survive.
+        stripAliasesOnRestore: true,
       })
     }
     // Yielded rather than claimed, for the same reason a kernel page yields: a
@@ -1912,6 +1918,9 @@ export const syncBookToBlocks = async (
           parentId: rootId,
           orderKey: keyBetween(null, firstKey),
           freshContent: title,
+          // See `ensureRoot`: alias-owning row, so the tombstone's claim goes.
+          // `ensureDocumentAlias` then takes whatever name is actually free.
+          stripAliasesOnRestore: true,
         })
       } else if (existing.content !== title) {
         if (!await aliasIsFree(tx, bookId, title, workspaceId)) {

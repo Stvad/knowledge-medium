@@ -203,6 +203,19 @@ describe('readwise library root', () => {
     expect(aliasesOf(await repo.load(rootId))).toEqual(['My Library'])
   })
 
+  it('restores a deleted root whose name was taken meanwhile', async () => {
+    const rootId = await ensureRoot(repo, WS)
+    expect(aliasesOf(await repo.load(rootId))).toEqual(['Readwise Library'])
+
+    await repo.tx(tx => tx.delete(rootId), {scope: ChangeScope.BlockDefault})
+    await createRivalPage('library-squatter', 'Readwise Library')
+
+    // `ensureRoot` runs ahead of the per-book isolation, so a refused restore
+    // here costs the whole export, not one book.
+    await expect(ensureRoot(repo, WS)).resolves.toBe(rootId)
+    expect(aliasesOf(await repo.load(rootId))).toEqual([])
+  })
+
   it('takes its name back once the conflict clears', async () => {
     await createRivalPage('rival', 'Readwise Library')
     const rootId = await ensureRoot(repo, WS)
@@ -469,6 +482,28 @@ describe('readwise document alias — the title is already a page name', () => {
     // is not the sync's to replace.
     const after = await repo.load(documentId(1))
     expect(after?.properties[aliasesProp.name]).toEqual(['Deep Work', 7])
+  })
+
+  it('restores a deleted document whose old name was taken meanwhile', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise)'])
+
+    // Deleted, and while it was gone a page took the fallback it held. The
+    // tombstone still carries that name in its bag.
+    await repo.tx(tx => tx.delete(documentId(1)), {scope: ChangeScope.BlockDefault})
+    await createRivalPage('squatter', 'Deep Work (Readwise)')
+
+    // Readwise touches the book again. Restoring the bag as-is re-inserts the
+    // squatted name under the uniqueness trigger, which rejects the restore
+    // before anything can pick another suffix — and the book then fails on
+    // every retry with the cursor pinned behind it.
+    await expect(sync(rootId, book(1, 'Deep Work', 11))).resolves.toBeUndefined()
+
+    const doc = await repo.load(documentId(1))
+    expect(doc?.content).toBe('Deep Work')
+    expect(aliasesOf(doc)).toEqual(['Deep Work (Readwise 2)'])
   })
 
   it('retires the placeholder when a re-title lands on a free name', async () => {
