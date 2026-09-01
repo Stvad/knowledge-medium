@@ -199,14 +199,23 @@ PowerSync's cross-tab locks are held only for the duration of an operation, so a
 tab holds nothing to query. Announce-and-detect only works between builds that both have
 it, which excludes the build being upgraded from.
 
-Worth keeping in proportion, because the comparison that matters is not against a
-healthy baseline: multi-tab was already broken before this change
-([#255](https://github.com/Stvad/knowledge-medium/issues/255) — contended writes
-stalling around a second, [#283](https://github.com/Stvad/knowledge-medium/issues/283) —
-a stale tab holding the file and hanging the next one). Old tabs were already failing
-loudly under CoopSync, which is much of why this VFS is worth having. The window closes
-once every client has reloaded onto the post-flip build, and it is why changing the pin
-is still a reload boundary.
+**The control is still procedural, and it still applies.** The window does not close
+because both deploys shipped — it closes per device, when that device's last pre-flip tab
+reloads. Until then: close or reload every app tab, on every device. That was a merge
+precondition before the flip and it is post-deploy remediation after it; the sequence is
+the same either way, and it is why changing the pin is a reload boundary too.
+
+Two things about proportion, which pull in opposite directions and should both be said:
+
+- The comparison is *not* against a healthy baseline. Multi-tab was already degraded
+  under CoopSync — [#255](https://github.com/Stvad/knowledge-medium/issues/255)
+  (contended writes stalling around a second) and
+  [#283](https://github.com/Stvad/knowledge-medium/issues/283) (a stale tab holding the
+  file and hanging the next one). "The old tab keeps working" was never the status quo.
+- That does **not** mean this VFS fixes those. #255 was never reproduced here (see the
+  measurements above, which say so explicitly and say not to claim otherwise) and both
+  issues are open. The pre-existing failures were loud — stalls and hangs — whereas the
+  transition hazard is silent, which is the one respect in which it is worse.
 
 **The rule this exists to make possible:**
 
