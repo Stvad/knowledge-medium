@@ -392,6 +392,48 @@ describe('importRawSqliteDb', () => {
     expect([...opfs.names()]).toEqual([])
   })
 
+  it('leaves a database it could not remove completely alone, journal included', async () => {
+    // Another tab still holds the `.db`, so the removal throws and the old
+    // database is INTACT. Tearing down its siblings on the way out would strip
+    // committed frames from a database the user is then told was untouched —
+    // the same loss as the bug this PR fixes, pointed the other way.
+    const opfs = installFakeOpfs({
+      'kmp-v6-user-1.db': new Uint8Array([9]),
+      'kmp-v6-user-1.db-journal': new Uint8Array([8, 8]),
+      'kmp-v6-user-1.db-wa0': new Uint8Array([7]),
+    }, {failRemoveOf: 'kmp-v6-user-1.db'})
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream([SQLITE_HEADER_BYTES], 'backup.db')]))
+      .rejects.toThrow(/locked/)
+
+    expect([...opfs.names()].sort()).toEqual([
+      'kmp-v6-user-1.db', 'kmp-v6-user-1.db-journal', 'kmp-v6-user-1.db-wa0',
+    ])
+    expect([...opfs.bytes('kmp-v6-user-1.db-journal')]).toEqual([8, 8])
+  })
+
+  it('refuses a rollback journal and a write-ahead log in one backup, before destroying anything', async () => {
+    // No single database has both, and `prepareLocalDbForVfs` refuses the
+    // combination at boot — so restoring it trades a working database for one
+    // the app cannot open.
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+
+    await expect(importRawSqliteDb(fakeRepo(), [
+      fileWithStream([SQLITE_HEADER_BYTES], 'backup.db'),
+      fileWithStream([new Uint8Array([1, 2])], 'backup.db-journal'),
+      fileWithStream([new Uint8Array([3])], 'backup.db-wa0'),
+    ])).rejects.toThrow(/cannot open/)
+
+    // A zero-byte journal is a clean close, not a hot one — that combination
+    // is fine and must not be caught by the same rule.
+    await importRawSqliteDb(fakeRepo(), [
+      fileWithStream([SQLITE_HEADER_BYTES], 'backup.db'),
+      fileWithStream([], 'backup.db-journal'),
+      fileWithStream([new Uint8Array([3])], 'backup.db-wa0'),
+    ])
+    expect([...opfs.bytes('kmp-v6-user-1.db-wa0')]).toEqual([3])
+  })
+
   it('refuses a selection that is not one database and its own siblings', async () => {
     const opfs = installFakeOpfs()
     const db = fileWithStream([SQLITE_HEADER_BYTES], 'backup.db')
@@ -424,7 +466,7 @@ const sliceInto = (bytes: Uint8Array, size: number): Array<Uint8Array<ArrayBuffe
  */
 const installFakeOpfs = (
   initial: Record<string, Uint8Array> = {},
-  {failWriteTo}: {failWriteTo?: string} = {},
+  {failWriteTo, failRemoveOf}: {failWriteTo?: string; failRemoveOf?: string} = {},
 ) => {
   const files = new Map(Object.entries(initial).map(([n, b]) => [n, b] as const))
   const writes: string[] = []
@@ -463,6 +505,8 @@ const installFakeOpfs = (
       }
     },
     removeEntry: async (name: string) => {
+      // What another tab holding the OPFS sync access handle produces.
+      if (name === failRemoveOf) throw new DOMException('locked', 'NoModificationAllowedError')
       if (!files.delete(name)) throw new DOMException('not found', 'NotFoundError')
     },
   }

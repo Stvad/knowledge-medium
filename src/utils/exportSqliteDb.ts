@@ -390,6 +390,25 @@ const classifyDbFileSet = (names: readonly string[]): {main: string; siblings: A
   }
 }
 
+/**
+ * A hot rollback journal and a write-ahead log cannot both belong to one
+ * database. `prepareLocalDbForVfs` refuses that combination at boot — applying
+ * the journal underneath the log is the two measured data-loss shapes in one —
+ * so restoring it would replace a working database with one the app cannot
+ * open. Refused here, where it costs a message instead.
+ */
+const assertRestorableSet = (entries: ReadonlyArray<{suffix: string; size: number}>): void => {
+  const has = (suffixes: readonly string[], hot = false) =>
+    entries.some(entry => suffixes.includes(entry.suffix) && (!hot || entry.size > 0))
+  if (has(WRITE_AHEAD_SIDECAR_SUFFIXES) && has(SQLITE_JOURNAL_SUFFIXES, true)) {
+    throw new Error(
+      'This backup holds both a rollback journal and a write-ahead log, which no single ' +
+      'database can have. Restoring it would leave a database this app cannot open. ' +
+      'Select the files from one backup only.',
+    )
+  }
+}
+
 const assertSqliteHeader = async (blob: Blob): Promise<void> => {
   if (blob.size < SQLITE_MAGIC.length) {
     throw new Error('Selected file is too small to be a SQLite database.')
@@ -407,10 +426,12 @@ const validateSelection = async (files: readonly File[]): Promise<Array<{suffix:
   const {main, siblings} = classifyDbFileSet(files.map(file => file.name))
   const byName = new Map(files.map(file => [file.name, file]))
   await assertSqliteHeader(byName.get(main)!)
-  return [
+  const selection = [
     {suffix: '', file: byName.get(main)!},
     ...siblings.map(({name, suffix}) => ({suffix, file: byName.get(name)!})),
   ]
+  assertRestorableSet(selection.map(({suffix, file}) => ({suffix, size: file.size})))
+  return selection
 }
 
 const stageSelection = async (
@@ -454,13 +475,15 @@ const stageRecoveryArchive = async (
   }
 
   const {main, siblings} = classifyDbFileSet(members.map(member => member.name))
-  const stagingByName = new Map(members.map(member => [member.name, member.stagingName]))
-  await assertSqliteHeader(await opfsFile(root, stagingByName.get(main)!))
+  const byName = new Map(members.map(member => [member.name, member]))
+  await assertSqliteHeader(await opfsFile(root, byName.get(main)!.stagingName))
 
-  return [
-    {suffix: '', stagingName: stagingByName.get(main)!},
-    ...siblings.map(({name, suffix}) => ({suffix, stagingName: stagingByName.get(name)!})),
+  const staged = [
+    {suffix: '', ...byName.get(main)!},
+    ...siblings.map(({name, suffix}) => ({suffix, ...byName.get(name)!})),
   ]
+  assertRestorableSet(staged)
+  return staged
 }
 
 /**
@@ -497,23 +520,26 @@ export async function importRawSqliteDb(repo: Repo, files: readonly File[]): Pro
     // file; without this, createWritable() throws NoModificationAllowedError.
     await repo.db.close()
 
-    // Past this point the old database is gone and the new one is not there
-    // yet, so ANY failure has to take the whole set down with it — see the
-    // catch. Only the write-ahead pair is safe to strand; a stranded
-    // `-journal`/`-wal` is not inert at all, SQLite replays it onto the fresh
-    // database the next boot creates.
+    // The original `.db` goes FIRST. Every sibling has to be gone before the
+    // replacement lands — a journal or a write-ahead log beside a new file of
+    // that name gets replayed onto it — but removing siblings while the old
+    // `.db` still stands means a failure part-way leaves that database short of
+    // its own committed frames, which is the one outcome worth avoiding here.
+    //
+    // `removeEntryIfExists` rethrows anything that is not NotFoundError, so
+    // this is also the check: nothing is written onto a file that resisted
+    // removal. It sits OUTSIDE the try below because it is the boundary. Until
+    // it succeeds the old database is whole and none of it may be touched — a
+    // `.db` another tab still holds throws here, and stripping that database's
+    // journal on the way out would lose the very frames it exists to keep.
+    await removeEntryIfExists(root, dbFilename)
+
+    // Past this line the old database is gone and the new one is not there yet,
+    // so ANY failure has to take the rest down with it — see the catch. Only
+    // the write-ahead pair is safe to strand; a stranded `-journal`/`-wal` is
+    // not inert at all, SQLite replays it onto the fresh database the next boot
+    // creates.
     try {
-      // The original `.db` goes FIRST. Every sibling has to be gone before the
-      // replacement lands — a journal or a write-ahead log beside a new file of
-      // that name gets replayed onto it — but removing siblings while the old
-      // `.db` still stands means a failure part-way leaves that database short
-      // of its own committed frames, which is the one outcome worth avoiding
-      // here.
-      //
-      // `removeEntryIfExists` rethrows anything that is not NotFoundError, so
-      // the loop is also the check: nothing is written onto a file that
-      // resisted removal.
-      await removeEntryIfExists(root, dbFilename)
       for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
         await removeEntryIfExists(root, dbFilename + suffix)
       }
@@ -802,8 +828,8 @@ const extractZipToOpfs = async (
   root: FileSystemDirectoryHandle,
   archive: File,
   nextTempName: () => string,
-): Promise<Array<{ name: string; stagingName: string }>> => {
-  const members: Array<{ name: string; stagingName: string }> = []
+): Promise<Array<{ name: string; stagingName: string; size: number }>> => {
+  const members: Array<{ name: string; stagingName: string; size: number }> = []
   const open = new Map<string, FileSystemWritableFileStream>()
   let writeChain: Promise<void> = Promise.resolve()
   let unzipError: unknown = null
@@ -812,7 +838,8 @@ const extractZipToOpfs = async (
   unzip.register(UnzipInflate)
   unzip.onfile = member => {
     const stagingName = nextTempName()
-    members.push({ name: member.name, stagingName })
+    const entry = { name: member.name, stagingName, size: 0 }
+    members.push(entry)
     writeChain = writeChain.then(async () => {
       const handle = await root.getFileHandle(stagingName, { create: true })
       open.set(member.name, await handle.createWritable({ keepExistingData: false }))
@@ -829,7 +856,10 @@ const extractZipToOpfs = async (
       writeChain = writeChain.then(async () => {
         const writable = open.get(member.name)
         if (!writable) return
-        if (data) await writable.write(data)
+        if (data) {
+          await writable.write(data)
+          entry.size += data.length
+        }
         if (final) {
           await writable.close()
           open.delete(member.name)
