@@ -196,6 +196,21 @@ export const asLostWriteAheadSupport = async (
   )
 }
 
+/**
+ * The deploy gate for the rollout (`docs/opfs-write-ahead-vfs.md`).
+ *
+ * FALSE ships a build that READS the record without CREATING one: a database
+ * that already has sidecars still opens write-ahead, but no new database is
+ * moved. It must ship at least one deploy AHEAD of the flip, because the
+ * hazard this whole module exists to prevent is a build without the sidecar
+ * branch meeting a database that has moved — and a `git revert` of the flip and
+ * the branch together is exactly that build.
+ *
+ * The pin still opts a device in while this is false, which is how the rollout
+ * is meant to start.
+ */
+const MOVE_NEW_DATABASES = false
+
 export const resolveLocalDbVfs = async (
   dbFilename: string,
   deps: Pick<LocalDbVfsHandoffDeps, 'fileSize' | 'supportsWriteAhead'> = defaultHandoffDeps,
@@ -209,7 +224,9 @@ export const resolveLocalDbVfs = async (
   if (await anyWriteAheadSidecar(dbFilename, deps)) return WASQLiteVFS.OPFSWriteAheadVFS
 
   const override = readLocalDbVfsOverride()
-  const target = override ?? (await deps.supportsWriteAhead()
+  // Short-circuits before the probe while the gate is closed, so a build that
+  // moves nothing also spawns no probe worker.
+  const target = override ?? (MOVE_NEW_DATABASES && await deps.supportsWriteAhead()
     ? WASQLiteVFS.OPFSWriteAheadVFS
     : WASQLiteVFS.OPFSCoopSyncVFS)
   if (target === WASQLiteVFS.OPFSWriteAheadVFS) return target

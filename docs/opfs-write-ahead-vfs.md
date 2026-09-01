@@ -164,20 +164,43 @@ entirely once no pre-flip build is live.
 
 ## Rollout
 
-Reverting the feature means "stop moving new databases", not "move them back":
-databases already on write-ahead stay there, and the `km.local-db-vfs` pin
-(`coop-sync` / `write-ahead`) only affects databases that have not moved yet — it is
-ignored for one that has, because honouring it would be exactly the first failure mode
-above.
+Ship this in **two deploys**, with the guard first. The constant is
+`MOVE_NEW_DATABASES` in `src/data/localDbVfs.ts`.
 
-**A plain `git revert` of this change is NOT that, and is unsafe.** It removes
+**Deploy 1 — read the record, create none.** `MOVE_NEW_DATABASES = false`. A database
+that already has sidecars still opens write-ahead, but nothing moves on its own, so
+behaviour is identical to before: no database has sidecars yet. What this buys is that
+every build in the field now knows what to do if it ever meets one. The
+`km.local-db-vfs=write-ahead` pin still opts a single device in, which is how the
+rollout is meant to start — run on it against a real database for as long as you want
+confidence.
+
+**Deploy 2 — flip the constant.** Databases begin moving. To back out, deploy 1 again.
+
+**The rule this exists to make possible:**
+
+> Once Deploy 2 has run on a device, never serve that device a build older than
+> Deploy 1. Reverting the *flip* is safe. Reverting the *branch* is not.
+
+A plain `git revert` of the whole change is the second kind: it removes
 `resolveLocalDbVfs` along with everything else, so a reverted client opens every
-database with CoopSync unconditionally — including ones that already have sidecars,
-which is failure mode one on the spot. A revert has to KEEP the sidecar branch and
-drop only the probe-driven move. Ship the sibling-file handling
-(`DB_FILE_SIBLING_SUFFIXES`, including the service worker's preview sweep) before or
-with the flip for the same reason: a `-wa*` file that survives a wipe replays over the
-next database of that name.
+database with CoopSync unconditionally — including ones that have moved, which is the
+first failure mode above.
+
+**Why a stale device is not a problem.** OPFS is per-origin *per-device*, so a database
+can only have sidecars if that same device ran a build that creates them. A device that
+has not opened the app in months cannot be holding a moved database. The hazard needs
+one device to run new code and then older code, which in practice means a rollback — a
+deliberate act, which is why a rule can govern it.
+
+**Changing the pin, or flipping the constant, is a reload boundary.** The VFS is
+resolved once per tab at boot and held for that tab's lifetime, so a change does not
+reach tabs that are already open. That leaves one tab on each VFS, and they cannot
+safely share the file: at best the second fails to open (exclusive and
+`readwrite-unsafe` handles cannot coexist), and at worst the CoopSync tab — which
+releases its handle between transactions by design — reacquires after the write-ahead
+tab has gone and reads a main file that is now stale relative to the sidecars it wrote.
+Close every tab, then change it, then open one.
 
 ## Moving a database back, by hand
 

@@ -61,26 +61,51 @@ describe('resolveLocalDbVfs — the move is one-way, and the sidecars are the re
   })
 
   it('re-checks for sidecars before settling on CoopSync, in case another tab moved it', async () => {
-    // The probe can take seconds; another tab reaching a different answer in
-    // that window moves the database and creates the log. Opening CoopSync over
-    // a live log is the one outcome that must never happen.
-    let probed = false
+    // Deciding takes time — the probe's timeout alone is 5s — and another tab
+    // reaching a different answer in that window moves the database and creates
+    // the log. Opening CoopSync over a live log must never happen.
+    //
+    // The other tab is simulated in the stat rather than the probe, so this
+    // holds whether or not the deploy gate consults the probe at all.
     const files: Record<string, number> = {[DB]: 4096}
+    let stats = 0
     const vfs = await resolveLocalDbVfs(DB, {
-      fileSize: async name => (name in files ? files[name] : null),
-      supportsWriteAhead: async () => {
-        probed = true
-        files[`${DB}-wa0`] = 0   // another tab moved it while we were probing
-        return false
+      fileSize: async name => {
+        // One `anyWriteAheadSidecar` is two stats; the other tab lands between.
+        if (++stats === 2) files[`${DB}-wa0`] = 0
+        return name in files ? files[name] : null
       },
+      supportsWriteAhead: async () => false,
     })
-    expect(probed).toBe(true)
+    expect(stats).toBeGreaterThan(2)   // it looked again rather than settling
     expect(vfs).toBe(WASQLiteVFS.OPFSWriteAheadVFS)
   })
 
-  it('moves a database with no sidecars when the browser supports it', async () => {
+  it('does NOT move a database on its own while the deploy gate is closed', async () => {
+    // Deploy 1 reads the record without creating one. This expectation flips
+    // with MOVE_NEW_DATABASES, deliberately: the constant should not be able to
+    // change without a test changing with it.
     const h = harness({[DB]: 4096})
-    expect(await resolveLocalDbVfs(DB, h.deps)).toBe(WASQLiteVFS.OPFSWriteAheadVFS)
+    expect(await resolveLocalDbVfs(DB, h.deps)).toBe(WASQLiteVFS.OPFSCoopSyncVFS)
+  })
+
+  it('does not even probe while the gate is closed', async () => {
+    let probed = false
+    await resolveLocalDbVfs(DB, {
+      fileSize: async () => null,
+      supportsWriteAhead: async () => { probed = true; return true },
+    })
+    expect(probed).toBe(false)
+  })
+
+  it('still lets the pin opt a device in — that is how the rollout starts', async () => {
+    const h = harness({[DB]: 4096})
+    vi.stubGlobal('localStorage', {getItem: () => 'write-ahead'})
+    try {
+      expect(await resolveLocalDbVfs(DB, h.deps)).toBe(WASQLiteVFS.OPFSWriteAheadVFS)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('leaves it on CoopSync when the browser cannot, or the probe could not say', async () => {
