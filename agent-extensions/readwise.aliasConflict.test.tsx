@@ -374,6 +374,29 @@ describe('readwise document alias — the title is already a page name', () => {
     expect(aliasesOf(doc)).toEqual(['Deep Work (Readwise 2)'])
   })
 
+  it('keeps the fallback when the book update fails after releasing it', async () => {
+    const rootId = await createRoot()
+    await createRivalPage('rival', 'Deep Work')
+    await sync(rootId, book(1, 'Deep Work', 11))
+    // A free alias of the user's alongside the sync's own, so the release below
+    // leaves a writable bag and actually commits.
+    await repo.tx(
+      tx => tx.setProperty(documentId(1), aliasesProp, ['Deep Work (Readwise)', 'My Notes']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await coClaimRaw('other-device', 'Deep Work (Readwise)', LATE)
+
+    // Readwise re-titles the book onto a name a page already holds. The release
+    // succeeds, and the content rewrite then fails: A3 appends the new content
+    // to the bag, and appending a contested name is refused.
+    await createRivalPage('rival-2', 'Digital Minimalism')
+    await expect(sync(rootId, book(1, 'Digital Minimalism', 11))).rejects.toThrow()
+
+    // The release has to go down with the write that made it necessary.
+    // Committed separately it leaves the document holding neither name.
+    expect(aliasesOf(await repo.load(documentId(1)))).toEqual(['Deep Work (Readwise)', 'My Notes'])
+  })
+
   it('retires the placeholder when a re-title lands on a free name', async () => {
     const rootId = await createRoot()
     await createRivalPage('rival', 'Deep Work')

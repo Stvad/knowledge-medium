@@ -1293,23 +1293,28 @@ const releaseSyncOwnedAlias = async (
  *  alias the USER added is theirs to keep even when contested (the banner is
  *  where that gets resolved), and dropping the alias equal to `content` is the
  *  shape the kernel reads as a rename. `ensureDocumentAlias` re-probes after
- *  the write and takes a free slot. */
+ *  the write and takes a free slot.
+ *
+ *  In the book's OWN transaction, not one before it. `undoGroup` groups history
+ *  and does not roll back a committed prefix, so a release that commits and is
+ *  then followed by ANY failure of the book write leaves the document holding
+ *  neither its title nor its fallback — unlinkable, while the book fails the
+ *  same way on every retry. Giving up a name has to fail with the write that
+ *  made it necessary. */
 const releaseCoClaimedFallback = async (
-  repo: any,
+  tx: any,
   blockId: string,
   workspaceId: string,
 ): Promise<void> => {
-  await repo.tx(async (tx: any) => {
-    const doc = await tx.get(blockId)
-    if (!doc || doc.deleted) return
-    const claim: string | undefined = await tx.getProperty(blockId, aliasClaimProp)
-    if (claim === undefined || claim === doc.content) return
-    const current: readonly string[] = await tx.getProperty(blockId, aliasesProp)
-    if (!current.includes(claim)) return
-    const claimants: readonly {id: string}[] = await tx.aliasClaimants(claim, workspaceId)
-    if (claimants.every(row => row.id === blockId)) return
-    await tx.setProperty(blockId, aliasesProp, current.filter(alias => alias !== claim))
-  }, { scope: ChangeScope.BlockDefault, description: 'readwise: release a co-claimed name' })
+  const doc = await tx.get(blockId)
+  if (!doc || doc.deleted) return
+  const claim: string | undefined = await tx.getProperty(blockId, aliasClaimProp)
+  if (claim === undefined || claim === doc.content) return
+  const current: readonly string[] = await tx.getProperty(blockId, aliasesProp)
+  if (!current.includes(claim)) return
+  const claimants: readonly {id: string}[] = await tx.aliasClaimants(claim, workspaceId)
+  if (claimants.every(row => row.id === blockId)) return
+  await tx.setProperty(blockId, aliasesProp, current.filter(alias => alias !== claim))
 }
 
 /** Name the document, in a transaction of its OWN.
@@ -1845,8 +1850,8 @@ export const syncBookToBlocks = async (
   // One undo entry for the two transactions below — the split is an alias-sync
   // constraint (see `ensureDocumentAlias`), not two things the user did.
   await repo.undoGroup(async (repo: any) => {
-    await releaseCoClaimedFallback(repo, bookId, workspaceId)
     await repo.tx(async (tx: any) => {
+      await releaseCoClaimedFallback(tx, bookId, workspaceId)
       // 1. document page
       const existing = await tx.get(bookId)
       if (!existing || existing.deleted) {
