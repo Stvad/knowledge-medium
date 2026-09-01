@@ -312,7 +312,13 @@ export const ensurePowerSyncReady = async (
     // the file, an inconclusive probe) clear on their own, and a cached
     // rejection would make every later attempt in this process fail too.
     preparedDbFiles.delete(dbFilename)
-    throw error
+    // The handoff opens the database, so corruption surfaces HERE as well as
+    // from init below — and only tagged with the userId can the boundary route
+    // it to Export + Reset instead of a Reload that repeats the failure. Same
+    // capture + classify pair as the init catch; both are needed because
+    // neither path passes through the other.
+    captureDbOpenCorruption(userId, dbFilename, error)
+    throw toLocalDbOpenError(error, userId)
   }
   const db = getPowerSyncDb(userId)
 
