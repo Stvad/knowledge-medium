@@ -48,7 +48,13 @@ import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
 import { reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
 import { useTodayKey } from '@/plugins/daily-notes/today.js'
-import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
+import {
+  SRS_GRADE_ACTION_IDS,
+  SRS_REVEAL_ACTION_ID,
+  SRS_REVIEW_CONTEXT,
+  type SrsReviewController,
+} from './actions.ts'
+import { useActionKeyHints } from './keyHints.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
 /** Breadcrumb context overrides — mirrors the breadcrumbs plugin's own
@@ -75,16 +81,15 @@ const isInteractiveTarget = (el: HTMLElement | null): boolean => {
 interface GradeButton {
   signal: SrsSignal
   label: string
-  hint: string
   icon: typeof Check
   className: string
 }
 
 const GRADE_BUTTONS: readonly GradeButton[] = [
-  {signal: SrsSignal.AGAIN, label: 'Again', hint: '1', icon: RotateCcw, className: 'text-rose-600'},
-  {signal: SrsSignal.HARD, label: 'Hard', hint: '2', icon: Gauge, className: 'text-amber-600'},
-  {signal: SrsSignal.GOOD, label: 'Good', hint: '3', icon: Check, className: 'text-emerald-600'},
-  {signal: SrsSignal.EASY, label: 'Easy', hint: '4', icon: Sparkles, className: 'text-sky-600'},
+  {signal: SrsSignal.AGAIN, label: 'Again', icon: RotateCcw, className: 'text-rose-600'},
+  {signal: SrsSignal.HARD, label: 'Hard', icon: Gauge, className: 'text-amber-600'},
+  {signal: SrsSignal.GOOD, label: 'Good', icon: Check, className: 'text-emerald-600'},
+  {signal: SrsSignal.EASY, label: 'Easy', icon: Sparkles, className: 'text-sky-600'},
 ]
 
 /** The four grade buttons, each labelled with the interval the card would
@@ -93,32 +98,36 @@ const GRADE_BUTTONS: readonly GradeButton[] = [
  *  elsewhere, and uses the same formatter as the post-grade toast so the
  *  two agree. Split into its own component so the `useProperty` reads only
  *  run for the card on screen. */
-const GradeButtons = ({card, busy, onGrade}: {
+const GradeButtons = ({card, busy, keyHints, onGrade}: {
   card: Block
   busy: boolean
+  keyHints: ReadonlyMap<string, string>
   onGrade: (signal: SrsSignal) => void
 }) => {
   const [interval] = useProperty(card, srsIntervalProp)
   const [factor] = useProperty(card, srsFactorProp)
   return (
     <div className="grid grid-cols-4 gap-2">
-      {GRADE_BUTTONS.map(btn => (
-        <Button
-          key={btn.label}
-          type="button"
-          variant="outline"
-          className="flex h-auto flex-col gap-1 py-2"
-          disabled={busy}
-          onClick={() => onGrade(btn.signal)}
-        >
-          <btn.icon className={cn('h-4 w-4', btn.className)} />
-          <span className="text-sm font-medium">{btn.label}</span>
-          <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
-            {formatIntervalDays(estimateSrsIntervalDays({interval, factor}, btn.signal))}
-          </span>
-          <span className="text-[10px] opacity-50">{btn.hint}</span>
-        </Button>
-      ))}
+      {GRADE_BUTTONS.map(btn => {
+        const hint = keyHints.get(SRS_GRADE_ACTION_IDS.get(btn.signal) ?? '')
+        return (
+          <Button
+            key={btn.label}
+            type="button"
+            variant="outline"
+            className="flex h-auto flex-col gap-1 py-2"
+            disabled={busy}
+            onClick={() => onGrade(btn.signal)}
+          >
+            <btn.icon className={cn('h-4 w-4', btn.className)} />
+            <span className="text-sm font-medium">{btn.label}</span>
+            <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
+              {formatIntervalDays(estimateSrsIntervalDays({interval, factor}, btn.signal))}
+            </span>
+            {hint && <span className="text-[10px] opacity-50">{hint}</span>}
+          </Button>
+        )
+      })}
     </div>
   )
 }
@@ -447,6 +456,12 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   }], [controller, surfaceFocused, currentId])
   useActionContextActivations(shortcutActivations)
 
+  // On-screen key hints, derived from the same actions the keys dispatch
+  // through, so remapping or unbinding one in settings is reflected here
+  // rather than leaving the button advertising a dead key.
+  const keyHints = useActionKeyHints(SRS_REVIEW_CONTEXT)
+  const revealHint = keyHints.get(SRS_REVEAL_ACTION_ID)
+
   const handleSurfaceFocus = useCallback((e: ReactFocusEvent<HTMLDivElement>) => {
     // Active only when focus is on the session chrome itself, not the
     // answer editor or an interactive control — see the context note and
@@ -615,10 +630,15 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         {!revealed ? (
           <Button type="button" className="w-full" onClick={() => setRevealed(true)} disabled={busy}>
             Show answer
-            <span className="ml-2 text-xs opacity-70">space</span>
+            {revealHint && <span className="ml-2 text-xs opacity-70">{revealHint}</span>}
           </Button>
         ) : currentBlock ? (
-          <GradeButtons card={currentBlock} busy={busy || !dueLoaded} onGrade={signal => void grade(signal)} />
+          <GradeButtons
+            card={currentBlock}
+            busy={busy || !dueLoaded}
+            keyHints={keyHints}
+            onGrade={signal => void grade(signal)}
+          />
         ) : null}
       </div>
 

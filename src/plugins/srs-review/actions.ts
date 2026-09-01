@@ -49,8 +49,10 @@ export const srsReviewActionContext: ActionContextConfig<typeof SRS_REVIEW_CONTE
 const controllerOf = (deps: BaseShortcutDependencies): SrsReviewController =>
   (deps as SrsReviewDependencies).controller
 
+export const SRS_REVEAL_ACTION_ID = 'srs-review.reveal'
+
 const revealAction: ActionConfig<typeof SRS_REVIEW_CONTEXT> = {
-  id: 'srs-review.reveal',
+  id: SRS_REVEAL_ACTION_ID,
   description: 'SRS review: Show answer',
   context: SRS_REVIEW_CONTEXT,
   defaultBinding: {keys: ['Space', 'Enter']},
@@ -73,9 +75,18 @@ const GRADE_BINDINGS: readonly GradeBinding[] = [
   {signal: SrsSignal.EASY, key: 'Digit4', label: 'Easy', icon: Sparkles},
 ]
 
+const gradeActionId = (label: string): string => `srs-review.grade.${label.toLowerCase()}`
+
+/** Action id per grade signal, so the review session's on-screen buttons
+ *  can look up the key hint for the action they trigger without restating
+ *  the id. */
+export const SRS_GRADE_ACTION_IDS: ReadonlyMap<SrsSignal, string> = new Map(
+  GRADE_BINDINGS.map(({signal, label}) => [signal, gradeActionId(label)]),
+)
+
 const gradeActions: readonly ActionConfig<typeof SRS_REVIEW_CONTEXT>[] = GRADE_BINDINGS.map(
   ({signal, key, label, icon}) => ({
-    id: `srs-review.grade.${label.toLowerCase()}`,
+    id: gradeActionId(label),
     description: `SRS review: ${label}`,
     context: SRS_REVIEW_CONTEXT,
     icon,
