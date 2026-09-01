@@ -98,9 +98,9 @@ export async function exportRawSqliteDbToFile(
 
   const root = await navigator.storage.getDirectory()
   const fileHandle = await root.getFileHandle(dbFilename)
-  const size = await withCheckpointedDbLock(repo, async () => {
+  const size = await withCheckpointedDbLock(repo, async signal => {
     const sourceFile = await fileHandle.getFile()
-    await pipeBlobToFileHandle(sourceFile, destinationHandle)
+    await pipeBlobToFileHandle(sourceFile, destinationHandle, signal)
     return sourceFile.size
   })
 
@@ -130,10 +130,10 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
 
   const snapshotHandle = await root.getFileHandle(snapshotName, {create: true})
   try {
-    await withCheckpointedDbLock(repo, async () => {
+    await withCheckpointedDbLock(repo, async signal => {
       // A FRESH handle: `sourceFile` above predates the checkpoint, so piping it
       // would copy the file as it stood before the sidecars were folded in.
-      await pipeBlobToFileHandle(await sourceHandle.getFile(), snapshotHandle)
+      await pipeBlobToFileHandle(await sourceHandle.getFile(), snapshotHandle, signal)
     })
   } catch (err) {
     // Drop the empty/partial snapshot so repeated failures don't accumulate.
@@ -376,24 +376,22 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
     // file; without this, createWritable() throws NoModificationAllowedError.
     await repo.db.close()
 
-    // Every sibling has to go before the replacement lands, and in this order.
-    // A leftover from a crashed prior session would be replayed against the
-    // freshly imported DB and silently corrupt it.
+    // The original `.db` goes FIRST. Every sibling has to be gone before the
+    // replacement lands — a journal or a write-ahead log beside a new file of
+    // that name gets replayed onto it — but removing siblings while the old
+    // `.db` still stands means a failure part-way leaves that database short of
+    // its own committed frames, which is the one outcome worth avoiding here.
+    // Dropping it first makes the failure state "no database", which the next
+    // open treats as fresh (the VFS truncates orphaned sidecars) and which the
+    // user fixes by retrying the import.
     //
-    // Note this is the OPPOSITE order to `deleteLocalSqliteDb`, and for the
-    // same reason: there, the write-ahead pair goes last because a log that
-    // outlives its `.db` is inert (the VFS truncates both when it opens a `.db`
-    // that does not exist). Here a new `.db` IS written afterwards, so a
-    // surviving log would find a file to replay onto. Both must be gone before
-    // that write, and failing here leaves the original untouched.
-    for (const suffix of [...WRITE_AHEAD_SIDECAR_SUFFIXES, ...SQLITE_JOURNAL_SUFFIXES]) {
+    // `removeEntryIfExists` rethrows anything that is not NotFoundError, so the
+    // loop is also the check: nothing is written onto a file that resisted
+    // removal.
+    await removeEntryIfExists(root, dbFilename)
+    for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
       await removeEntryIfExists(root, dbFilename + suffix)
     }
-
-    // Drop the old `.db` before writing the new one. If the write then fails,
-    // the next boot finds no database rather than the previous one silently
-    // short of the log just deleted — and the import can simply be retried.
-    await removeEntryIfExists(root, dbFilename)
 
     const replacement = await stagingHandle.getFile()
     const fileHandle = await root.getFileHandle(dbFilename, {create: true})
@@ -417,15 +415,27 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
  */
 const EXPORT_LOCK_TIMEOUT_MS = 180_000
 
-const withDeadline = async <T,>(work: Promise<T>, ms: number, message: string): Promise<T> => {
+/**
+ * `abort` fires before the rejection, because the work here writes to a file
+ * the caller is about to report on: leaving it running would keep modifying the
+ * destination after the export said it failed, and would have the cleanup
+ * delete a snapshot whose writable is still open.
+ */
+const withDeadline = async <T,>(
+  work: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> => {
+  const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error(message))
+    }, ms)
+  })
   try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), ms)
-      }),
-    ])
+    return await Promise.race([work(controller.signal), deadline])
   } finally {
     clearTimeout(timer)
   }
@@ -452,11 +462,15 @@ const checkpointDrained = (result: unknown): boolean => {
  * staleness back. It is a WRITE lock rather than a read lock because with a
  * reader pool a read lock no longer excludes the writer at all.
  */
-const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>): Promise<T> => {
-  const db = repo.db as unknown as Partial<PowerSyncWriteLockDb>
-  if (typeof db.writeLock !== 'function') {
+const withCheckpointedDbLock = async <T,>(
+  repo: Repo,
+  callback: (signal: AbortSignal) => Promise<T>,
+): Promise<T> => {
+  const maybeDb = repo.db as unknown as Partial<PowerSyncWriteLockDb>
+  if (typeof maybeDb.writeLock !== 'function') {
     throw new Error('PowerSync database does not expose writeLock; cannot safely snapshot live SQLite DB.')
   }
+  const db = maybeDb as PowerSyncWriteLockDb
   // The deadline wraps the WHOLE lock, not the checkpoint inside it. A deadline
   // on the statement alone cannot surface: `writeLock`'s own `finally` awaits
   // `completeAccess` on the same connection, which queues behind the statement
@@ -467,7 +481,7 @@ const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>
   // Generous, because it also covers copying the database — this exists to
   // break a hang, not to bound a legitimate export. A very large database on
   // slow storage could in principle trip it.
-  return withDeadline(db.writeLock(async tx => {
+  return withDeadline(signal => db.writeLock(async tx => {
     // Through `tx`, not `repo.db.execute` — the latter would queue for the
     // write lock this callback is already holding.
     await tx.execute('PRAGMA wal_checkpoint=truncate')
@@ -482,7 +496,7 @@ const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>
         'the other tabs and try again.',
       )
     }
-    return callback()
+    return callback(signal)
   }), EXPORT_LOCK_TIMEOUT_MS,
     'Timed out preparing this device\'s database for backup. Another tab of the app is probably ' +
     'holding it — close the other tabs, reload, and try again.',
@@ -492,9 +506,12 @@ const withCheckpointedDbLock = async <T,>(repo: Repo, callback: () => Promise<T>
 const pipeBlobToFileHandle = async (
   blob: Blob,
   fileHandle: FileSystemFileHandle,
+  signal?: AbortSignal,
 ): Promise<void> => {
   const writable = await fileHandle.createWritable({keepExistingData: false})
-  await blob.stream().pipeTo(writable)
+  // Through `pipeTo`, so an abort tears down the writable too — a copy that
+  // merely stops being awaited keeps writing.
+  await blob.stream().pipeTo(writable, {signal})
 }
 
 const removeEntryIfExists = async (

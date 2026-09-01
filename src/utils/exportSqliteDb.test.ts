@@ -104,7 +104,9 @@ describe('exportRawSqliteDb', () => {
     expect(sourceFile.arrayBuffer).not.toHaveBeenCalled()
     expect(sourceFile.stream).toHaveBeenCalledOnce()
     expect(snapshotHandle.createWritable).toHaveBeenCalledWith({keepExistingData: false})
-    expect(pipeTo).toHaveBeenCalledWith(snapshotWritable)
+    // The signal is what lets a timeout stop the copy rather than merely stop
+    // awaiting it, so it has to reach pipeTo.
+    expect(pipeTo).toHaveBeenCalledWith(snapshotWritable, {signal: expect.any(AbortSignal)})
     expect(result.blob).toBe(snapshotFile)
     expect(result.filename).toMatch(/^kmp-v6-user-1-export-\d+\.db$/)
   })

@@ -1741,6 +1741,16 @@ export const runAnalyzeIfStale = async (
 const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promise<void> => {
   await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
   await db.execute(sql)
+
+  // Writing `sqlite_stat1` does not bump `schema_version` (see the note on
+  // `runAnalyzeIfStale`), so a connection that was already open keeps the old
+  // plans for its lifetime. That used to cost only other TABS; with a reader
+  // pool the reads of THIS tab go to a connection that would keep the
+  // pre-ANALYZE plans too — losing most of the benefit until reload, on exactly
+  // the queries ANALYZE was run for. A no-op DDL bumps the cookie, and every
+  // connection reloads `sqlite_stat1` on its next statement.
+  await db.execute('CREATE TABLE IF NOT EXISTS __km_analyze_bump(x)')
+  await db.execute('DROP TABLE __km_analyze_bump')
 }
 
 /** Unconditional `ANALYZE` for the manual command-palette command.

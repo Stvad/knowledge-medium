@@ -245,6 +245,15 @@ describe('a refusal carries enough context to offer a backup', () => {
     )).toBe(afterOpen)
   })
 
+  it('ignores a non-handle failure from inside init — that covers more than the open', async () => {
+    // `powerSyncDb.init()` also does buckets, schema replacement and version
+    // loading; branding any of those as lost browser support is misleading.
+    const schemaFailure = markDbOpenFailure(new Error('failed to replace schema'))
+    expect(await asLostWriteAheadSupport(
+      schemaFailure, DB, WASQLiteVFS.OPFSWriteAheadVFS, sized({[DB]: 4096, [`${DB}-wa0`]: 0}),
+    )).toBe(schemaFailure)
+  })
+
   it('carries the account so the fallback can export without an open connection', () => {
     const tagged = tagHandoffErrorUserId(new LocalDbVfsHandoffError('nope'), 'user-1')
     expect(handoffErrorUserId(tagged)).toBe('user-1')

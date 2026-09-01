@@ -161,6 +161,25 @@ export const markDbOpenFailure = <T,>(error: T): T => {
   return error
 }
 
+/**
+ * The signature of an OPFS access handle being refused, which is how a lost
+ * `readwrite-unsafe` capability actually surfaces. Matched on text rather than
+ * identity because this error has crossed a worker boundary and is typically a
+ * plain object by the time it arrives, not a DOMException.
+ */
+const HANDLE_REFUSAL_NAMES = [
+  'NoModificationAllowedError',
+  'InvalidStateError',
+  'NotAllowedError',
+] as const
+
+const looksLikeHandleRefusal = (error: unknown): boolean => {
+  if (typeof error !== 'object' || error === null) return false
+  const {name, message} = error as {name?: unknown; message?: unknown}
+  const text = `${typeof name === 'string' ? name : ''} ${typeof message === 'string' ? message : ''}`
+  return HANDLE_REFUSAL_NAMES.some(candidate => text.includes(candidate))
+}
+
 const isDbOpenFailure = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[DB_OPEN_FAILURE] === true
 
@@ -183,9 +202,11 @@ export const asLostWriteAheadSupport = async (
   // Reset) that this one does not, and every database on this path has
   // sidecars, so a blanket wrap would swallow all of them.
   if (isLocalDbCorruptionError(error) || corruptErrorUserId(error) !== null) return error
-  // Only a failure to OPEN. `initializePowerSyncDb` also runs the schema and
-  // migrations, and a failure there says nothing about browser support.
-  if (!isDbOpenFailure(error)) return error
+  // Only a failure to OPEN, and only one that looks like the handle being
+  // refused. `powerSyncDb.init()` covers far more than the open — buckets,
+  // schema replacement, version loading — and a failure in any of those says
+  // nothing about browser support, so the marker alone is too coarse.
+  if (!isDbOpenFailure(error) || !looksLikeHandleRefusal(error)) return error
   if (!(await anyWriteAheadSidecar(dbFilename, deps))) return error
   return new LocalDbVfsHandoffError(
     'This browser could not open this device\'s local database. It was last written in a storage mode ' +
