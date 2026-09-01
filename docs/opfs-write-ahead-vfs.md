@@ -180,27 +180,33 @@ moved database. The `km.local-db-vfs=write-ahead` pin opts a single device in, w
 how the rollout starts — run on it against a real database for as long as you want
 confidence.
 
-**Deploy 2 — flip the constant** (`MOVE_NEW_DATABASES = true`). Databases begin moving.
-To back out, set it to `false` again and deploy; do NOT revert the module with it.
+**Deploy 2 — flip the constant** (`MOVE_NEW_DATABASES = true`, shipped in
+[#860](https://github.com/Stvad/knowledge-medium/pull/860)). Databases move on next
+boot. To back out, set it to `false` again and deploy; do NOT revert the module with
+it.
 
-**Deploy 2 has a precondition of its own: no tab may still be running a pre-flip
-build when the first move happens on that device.** The service worker deliberately
-does not reload open pages (`registerServiceWorker.ts`, and no `clients.claim()` in
-`sw/worker.ts`) — a new build reaches a tab only when that tab reloads. So a device can
-have one abandoned tab on the old build, resolved to CoopSync at its own boot, while a
-reloaded tab picks up Deploy 2 and moves the database. When the new tab closes, the old
-one reacquires the file and reads a main file that is now stale relative to the
-sidecars — the sequential hazard above, reached without any rollback.
+**The transition window, for the record.** A tab still running a pre-flip build resolved
+to CoopSync at its own boot, and the service worker deliberately does not reload open
+pages (`registerServiceWorker.ts`, and no `clients.claim()` in `sw/worker.ts`) — a new
+build reaches a tab only when that tab reloads. So during the rollout a device could
+have an abandoned old-build tab while a reloaded tab moved the database; when the new
+tab closed, the old one would reacquire the file and read a main file stale relative to
+the sidecars.
 
-There is no detecting our way out of this. A new-build tab cannot see an old-build one:
+There was no detecting our way out of it. A new-build tab cannot see an old-build one:
 the sync SharedWorker's URL is content-hashed per build so the two do not share one, and
 PowerSync's cross-tab locks are held only for the duration of an operation, so an idle
-tab holds nothing to query. Any announce-and-detect mechanism only works between builds
-that both have it, which by definition excludes the build being upgraded from.
+tab holds nothing to query. Announce-and-detect only works between builds that both have
+it, which excludes the build being upgraded from.
 
-So the procedure is the control: **close every app tab on every device before Deploy 2
-goes out, and let them come back one at a time.** With few devices that is free. The
-same reasoning is why changing the pin is a reload boundary.
+Worth keeping in proportion, because the comparison that matters is not against a
+healthy baseline: multi-tab was already broken before this change
+([#255](https://github.com/Stvad/knowledge-medium/issues/255) — contended writes
+stalling around a second, [#283](https://github.com/Stvad/knowledge-medium/issues/283) —
+a stale tab holding the file and hanging the next one). Old tabs were already failing
+loudly under CoopSync, which is much of why this VFS is worth having. The window closes
+once every client has reloaded onto the post-flip build, and it is why changing the pin
+is still a reload boundary.
 
 **The rule this exists to make possible:**
 
