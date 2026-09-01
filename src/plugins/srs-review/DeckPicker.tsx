@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
-import { Layers, Tag } from 'lucide-react'
+import { CalendarCheck, CalendarPlus, Layers, Tag } from 'lucide-react'
 import type { Block } from '@/data/block'
-import { ChangeScope } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
 import { usePluginPrefsProperty } from '@/data/globalState.js'
 import { cn } from '@/lib/utils.js'
@@ -11,17 +10,12 @@ import {
   normalizeBlockTagsConfig,
 } from '@/plugins/block-tagging/config.js'
 import { useDueCardCount } from './useDueCards.ts'
-import { reviewDeckStartedProp, reviewDeckTagProp } from './schema.ts'
-
-const startDeck = async (deck: Block, tagName: string): Promise<void> => {
-  await deck.repo.tx(
-    async tx => {
-      await tx.setProperty(deck.id, reviewDeckTagProp, tagName)
-      await tx.setProperty(deck.id, reviewDeckStartedProp, true)
-    },
-    {scope: ChangeScope.BlockDefault, description: 'start srs review deck'},
-  )
-}
+import { startReviewDeck } from './deck.ts'
+import {
+  dailyNoteDecksProp,
+  normalizeDailyNoteDecks,
+  srsReviewPrefsType,
+} from './schema.ts'
 
 interface DeckOptionProps {
   workspaceId: string
@@ -30,46 +24,76 @@ interface DeckOptionProps {
   label: string
   icon: typeof Tag
   onPick: () => void
+  /** Whether this deck's due count is surfaced on today's daily note. */
+  pinned: boolean
+  onTogglePinned: () => void
 }
 
-const DeckOption = ({workspaceId, tagName, label, icon: Icon, onPick}: DeckOptionProps) => {
+const DeckOption = ({workspaceId, tagName, label, icon: Icon, onPick, pinned, onTogglePinned}: DeckOptionProps) => {
   // The picker wants a number, not the cards. Counting in SQLite keeps a
   // workspace with many decks from materialising every due card in each of
   // them just to render a badge.
   const count = useDueCardCount(workspaceId, tagName) ?? 0
   return (
-    <button
-      type="button"
-      onClick={onPick}
-      className={cn(
-        'flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors',
-        count > 0
-          ? 'border-border bg-background hover:bg-muted'
-          : 'border-border/60 bg-background text-muted-foreground hover:bg-muted',
-      )}
-    >
-      <Icon className="h-4 w-4 shrink-0" />
-      <span className="flex-1 truncate font-medium">{label}</span>
-      <span
+    <div className="flex items-stretch gap-1">
+      <button
+        type="button"
+        onClick={onPick}
         className={cn(
-          'rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums',
-          count > 0 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+          'flex min-w-0 flex-1 items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors',
+          count > 0
+            ? 'border-border bg-background hover:bg-muted'
+            : 'border-border/60 bg-background text-muted-foreground hover:bg-muted',
         )}
       >
-        {count} due
-      </span>
-    </button>
+        <Icon className="h-4 w-4 shrink-0" />
+        <span className="flex-1 truncate font-medium">{label}</span>
+        <span
+          className={cn(
+            'rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums',
+            count > 0 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+          )}
+        >
+          {count} due
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={onTogglePinned}
+        aria-pressed={pinned}
+        title={pinned
+          ? 'Shown on today’s daily note — click to hide'
+          : 'Show due count on today’s daily note'}
+        className={cn(
+          'flex shrink-0 items-center rounded-lg border px-2.5 transition-colors hover:bg-muted',
+          pinned ? 'border-border text-primary' : 'border-border/60 text-muted-foreground',
+        )}
+      >
+        {pinned ? <CalendarCheck className="h-4 w-4" /> : <CalendarPlus className="h-4 w-4" />}
+      </button>
+    </div>
   )
 }
 
 /** Deck selection surface shown by the deck renderer until a deck is
  *  started. Lists an "all due" deck plus every tag in the workspace's
- *  curated tag list, each with a live due count. */
+ *  curated tag list, each with a live due count and a toggle controlling
+ *  whether the deck's count is surfaced on today's daily note. */
 export const DeckPicker = ({deck}: {deck: Block}) => {
   const repo = useRepo()
   const workspaceId = deck.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const [storedTags] = usePluginPrefsProperty(blockTaggingPrefsType, blockTagsConfigProp)
   const tags = useMemo(() => normalizeBlockTagsConfig(storedTags), [storedTags])
+
+  // Same never-configured fallback the daily-note hint reads (all-due deck
+  // pinned), so the toggles here show what the note actually shows. The
+  // first toggle materialises the explicit list.
+  const [storedDecks, setStoredDecks] = usePluginPrefsProperty(srsReviewPrefsType, dailyNoteDecksProp)
+  const pinnedDecks = useMemo(() => normalizeDailyNoteDecks(storedDecks) ?? [''], [storedDecks])
+  const togglePinned = (tagName: string) =>
+    setStoredDecks(pinnedDecks.includes(tagName)
+      ? pinnedDecks.filter(t => t !== tagName)
+      : [...pinnedDecks, tagName])
 
   return (
     <div className="mx-auto w-full max-w-xl space-y-4 py-4">
@@ -86,7 +110,9 @@ export const DeckPicker = ({deck}: {deck: Block}) => {
           tagName=""
           label="All due cards"
           icon={Layers}
-          onPick={() => void startDeck(deck, '')}
+          onPick={() => void startReviewDeck(deck, '')}
+          pinned={pinnedDecks.includes('')}
+          onTogglePinned={() => togglePinned('')}
         />
         {tags.map(tag => (
           <DeckOption
@@ -95,7 +121,9 @@ export const DeckPicker = ({deck}: {deck: Block}) => {
             tagName={tag}
             label={tag}
             icon={Tag}
-            onPick={() => void startDeck(deck, tag)}
+            onPick={() => void startReviewDeck(deck, tag)}
+            pinned={pinnedDecks.includes(tag)}
+            onTogglePinned={() => togglePinned(tag)}
           />
         ))}
       </div>

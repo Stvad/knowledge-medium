@@ -48,7 +48,7 @@ import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
 import { reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
 import { useTodayKey } from '@/plugins/daily-notes/today.js'
-import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
+import { SRS_REVIEW_CONTEXT, makeSrsReviewController, type SrsReviewController } from './actions.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
 /** Breadcrumb context overrides — mirrors the breadcrumbs plugin's own
@@ -83,7 +83,7 @@ interface GradeButton {
 const GRADE_BUTTONS: readonly GradeButton[] = [
   {signal: SrsSignal.AGAIN, label: 'Again', hint: '1', icon: RotateCcw, className: 'text-rose-600'},
   {signal: SrsSignal.HARD, label: 'Hard', hint: '2', icon: Gauge, className: 'text-amber-600'},
-  {signal: SrsSignal.GOOD, label: 'Good', hint: '3', icon: Check, className: 'text-emerald-600'},
+  {signal: SrsSignal.GOOD, label: 'Good', hint: '3 · space', icon: Check, className: 'text-emerald-600'},
   {signal: SrsSignal.EASY, label: 'Easy', hint: '4', icon: Sparkles, className: 'text-sky-600'},
 ]
 
@@ -436,9 +436,11 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // Enter / 1-4. Deactivating on editable focus is cheap and keeps the
   // guarantee local, so it stays.
   const [surfaceFocused, setSurfaceFocused] = useState(false)
-  const controller = useMemo<SrsReviewController>(() => ({
-    reveal: () => { if (!busy) setRevealed(true) },
-    grade: signal => { if (revealed && !busy) void grade(signal) },
+  const controller = useMemo<SrsReviewController>(() => makeSrsReviewController({
+    busy,
+    revealed,
+    reveal: () => setRevealed(true),
+    grade: signal => void grade(signal),
   }), [busy, revealed, grade])
   const shortcutActivations = useMemo(() => [{
     context: SRS_REVIEW_CONTEXT,

@@ -17,7 +17,28 @@ export const SRS_REVIEW_CONTEXT = 'srs-review'
 export interface SrsReviewController {
   reveal: () => void
   grade: (signal: SrsSignal) => void
+  /** Reveal a hidden answer; grade a revealed one Good. Space/Enter, so a
+   *  pass through well-known cards is one key per card. */
+  revealOrGradeDefault: () => void
 }
+
+/** Builds the controller from the session's live state. The gating lives
+ *  here — grading is only reachable once the answer is on screen, and
+ *  nothing fires while a grade write is in flight. */
+export const makeSrsReviewController = ({busy, revealed, reveal, grade}: {
+  busy: boolean
+  revealed: boolean
+  reveal: () => void
+  grade: (signal: SrsSignal) => void
+}): SrsReviewController => ({
+  reveal: () => { if (!busy) reveal() },
+  grade: signal => { if (revealed && !busy) grade(signal) },
+  revealOrGradeDefault: () => {
+    if (busy) return
+    if (revealed) grade(SrsSignal.GOOD)
+    else reveal()
+  },
+})
 
 export interface SrsReviewDependencies extends BaseShortcutDependencies {
   controller: SrsReviewController
@@ -49,12 +70,14 @@ export const srsReviewActionContext: ActionContextConfig<typeof SRS_REVIEW_CONTE
 const controllerOf = (deps: BaseShortcutDependencies): SrsReviewController =>
   (deps as SrsReviewDependencies).controller
 
+// Id stays `srs-review.reveal` (saved keybinding overrides key on it) even
+// though the action now also carries the default vote.
 const revealAction: ActionConfig<typeof SRS_REVIEW_CONTEXT> = {
   id: 'srs-review.reveal',
-  description: 'SRS review: Show answer',
+  description: 'SRS review: Show answer / Good',
   context: SRS_REVIEW_CONTEXT,
   defaultBinding: {keys: ['Space', 'Enter']},
-  handler: deps => { controllerOf(deps).reveal() },
+  handler: deps => { controllerOf(deps).revealOrGradeDefault() },
 }
 
 interface GradeBinding {
