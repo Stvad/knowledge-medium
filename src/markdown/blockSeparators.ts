@@ -4,14 +4,11 @@ import { visit } from 'unist-util-visit'
 type Child = RootContent | ElementContent
 
 /** Tags `mdast-util-to-hast` can emit as a container's BLOCK children — the
- *  only positions where it pretty-prints. Nothing here judges whether a blank
- *  line is WANTED; the source positions answer that. This says only where the
- *  serializer's own line breaks can occur, which is what tells them apart from
- *  a remark plugin's: a plugin that splits a text node (`remark-blockrefs`,
- *  `remark-timestamps`) leaves unpositioned slices too, but among INLINE
- *  siblings, and deleting the newline between two refs on adjacent lines runs
- *  them together. An unknown tag falls on the inline side, where a stray blank
- *  line is cosmetic and a deletion is not. */
+ *  only positions where it pretty-prints, and so the test for whether a break
+ *  is its own. A remark plugin that splits a text node leaves unpositioned
+ *  slices too, but among INLINE siblings; reading those as layout deletes
+ *  authored text. An unknown tag therefore falls on the inline side, where a
+ *  stray blank line is cosmetic and a deletion is not. */
 const BLOCK_TAGS = new Set([
   'blockquote', 'div', 'dl', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'hr', 'li', 'ol', 'p', 'pre', 'table', 'ul',
@@ -22,18 +19,12 @@ const isBlock = (node: Child | undefined) =>
 
 /** A line break the serializer inserted between block children.
  *
- *  The block-neighbour test is the one carrying this; the other two are
- *  DEFENCE IN DEPTH — delete either and nothing through the public path
- *  changes, because the parser emits no whitespace-only node that is both
- *  adjacent to a block and authored. They stay because the predicate is
- *  asymmetric: a false positive deletes text someone typed, a false negative
- *  leaves a blank line. And they say directly what makes a break the
- *  serializer's — no source position (authored whitespace has one), and a
- *  line break rather than a space (remark-gfm's own space after a task
- *  checkbox is unpositioned too, and is content). The position clause is
- *  pinned by a unit test on a hand-built tree, no markdown input producing
- *  the shape; the line-break clause has no such test and is redundant with
- *  the block-neighbour one today. */
+ *  Only the block-neighbour test is load-bearing; the position and line-break
+ *  tests are DEFENCE IN DEPTH, kept because the predicate is asymmetric — a
+ *  false positive deletes text someone typed, a false negative leaves a blank
+ *  line. They also say directly what makes a break the serializer's: authored
+ *  whitespace carries a position, and a plugin's own synthesized whitespace is
+ *  a space rather than a break. */
 const isSerializerBreak = (node: Child, before: Child | undefined, after: Child | undefined) =>
   node.type === 'text' && !node.position &&
   node.value.trim() === '' && node.value.includes('\n') &&
@@ -55,15 +46,14 @@ const keptChildren = <T extends Child>(children: T[]): T[] =>
 
 /** `mdast-util-to-hast` pretty-prints, separating a container's block children
  *  with `"\n"` text nodes of its own. Content renders with `white-space:
- *  pre-wrap`, so each one draws a real blank line — above and below a quote,
- *  between every pair of list rows.
+ *  pre-wrap`, so each one draws a real blank line — around a quote, between
+ *  list rows.
  *
- *  Drop the serializer's, keep the author's. The two questions stay separate,
- *  because merging them is what went wrong twice: WHICH breaks are the
- *  serializer's is structural (`isSerializerBreak`), and WHETHER a blank line
- *  belongs is answered by the source positions — never by guessing from the
- *  tags either side, which was wrong about one more pair every time it was
- *  tried (a quote after a paragraph, then the rows of a loose list).
+ *  Drop the serializer's, keep the author's, and keep those two questions
+ *  apart: WHICH breaks are the serializer's is structural, WHETHER a blank
+ *  line belongs is answered by the source positions. Never infer the second
+ *  from the tags either side — intent is in the source, not in what happens
+ *  to sit around it.
  *
  *  Preflight zeroes block margins, so a kept break is the only thing drawing
  *  the line the author wrote. */
