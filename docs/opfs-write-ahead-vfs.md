@@ -1,6 +1,6 @@
 # OPFSWriteAheadVFS on Chromium
 
-> **Status:** current — last verified against code 2026-08-31. Measurements taken that day on Chrome 148, `@powersync/web@1.38.4` / `@journeyapps/wa-sqlite@1.7.0`, against a 2 GB / 350k-block copy of a production database.
+> **Status:** current — last verified against code 2026-09-01. Measurements taken 2026-08-31 on Chrome 148, `@powersync/web@1.38.4` / `@journeyapps/wa-sqlite@1.7.0`, against a 2 GB / 350k-block copy of a production database.
 
 Chromium implements `createSyncAccessHandle({mode: 'readwrite-unsafe'})`, which lets
 several connections hold handles on one OPFS file at once. `OPFSWriteAheadVFS` is the
@@ -266,3 +266,26 @@ one that opens, reports `integrity_check` ok, and is missing whatever the log he
 Restoring a lone `.db` extracted from such an archive still drops those frames, and nothing
 can detect it — a bare `.db` is exactly what a checkpointed export produces. That is why
 the archive is the thing to hand back.
+
+### Backing up captures more than restoring accepts
+
+The two halves are deliberately asymmetric, so not every archive the app can produce is
+one it will take back. Capture is generous because the reset deletes whatever it did not
+save; restore is narrow because it must leave a database that boots.
+
+A restorable fileset is a real `.db` in rollback-journal mode, with siblings drawn from
+ONE group — the `-wa0`/`-wa1` pair, or `-journal`. Two shapes fall outside that:
+
+- **Sibling-only archives.** When the `.db` is 0 bytes but a journal has content, capture
+  bundles the journal alone. That archive is forensic: read it with `sqlite3 .recover`.
+  There is no conversion that makes it importable, and there should not be — writing a
+  journal back with no database is the replay-onto-a-fresh-`.db` corruption that
+  `dbFileSiblings` exists to prevent.
+- **`-wal` / `-shm`.** Capture collects any sibling with bytes, these included. Neither VFS
+  here writes WAL mode, so they should never appear; if they do, the database they belong
+  to is one `OPFSWriteAheadVFS` cannot open at all (it throws on `SQLITE_OPEN_WAL`).
+  Converting it — `sqlite3 <file> 'PRAGMA journal_mode=delete'` — folds the WAL in and
+  leaves a plain `.db` that imports normally.
+
+Both refuse before anything is deleted, so a rejected archive costs a message rather than
+the database on the device.

@@ -441,6 +441,20 @@ describe('importRawSqliteDb', () => {
     expect([...opfs.bytes('kmp-v6-user-1.db-journal')]).toEqual([4])
   })
 
+  it('refuses the sibling-only archive that capture can emit, database intact', async () => {
+    // `getRawSqliteDbBackup` bundles a journal with content even when the `.db`
+    // is 0 bytes. That archive is forensic — writing a journal back with no
+    // database is the replay-onto-a-fresh-`.db` corruption `dbFileSiblings`
+    // exists to prevent — so restore must refuse it, and refuse it before the
+    // database on the device is touched.
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+    const archive = zipSync({'kmp-v6-user-1.db-journal': new Uint8Array(32).fill(1)}, {level: 0})
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 9), 'recovery.zip')]))
+      .rejects.toThrow(/not a SQLite database/)
+    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
+  })
+
   it('refuses a WAL-mode database, which no sibling rule can see', async () => {
     // The mode lives in the `.db` header, so a bare file carries it in with no
     // siblings at all. `OPFSWriteAheadVFS` throws on SQLITE_OPEN_WAL, so this
