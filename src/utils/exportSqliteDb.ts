@@ -571,10 +571,6 @@ const stageZipMember = async (
   }
 
   const content = await readZipMember(archive, entry)
-  if (content.size !== entry.size) {
-    refuse(`"${entry.name}" should hold ${entry.size} bytes but ${content.size} could be read`)
-  }
-
   let crc = -1
   let written = 0
   const writable = await (await root.getFileHandle(stagingName, {create: true}))
@@ -588,7 +584,10 @@ const stageZipMember = async (
     close: () => writable.close(),
     abort: reason => writable.abort?.(reason),
   }))
-  if (written !== entry.size || ((crc ^ -1) >>> 0) !== entry.crc) {
+  if (written !== entry.size) {
+    refuse(`"${entry.name}" should hold ${entry.size} bytes but ${written} could be read`)
+  }
+  if (((crc ^ -1) >>> 0) !== entry.crc) {
     refuse(`the contents of "${entry.name}" do not match its checksum`)
   }
 }
