@@ -16,7 +16,7 @@
 import type { Repo } from '@/data/repo'
 import { pluginUIStateBlockId, stateChildBlockId } from '@/data/stateBlocks.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
-import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
+import { jsonPathForProperty, type PropertyName } from '@/data/internals/typedBlockQuery.js'
 import { clientSeriesQuery } from '@/plugins/interaction-metrics/recordStore.js'
 import {
   interactionMetricsUIStateType,
@@ -110,10 +110,11 @@ export const CANDIDATE_LIMIT = HISTORY_LIMIT * 3
 export interface RecordSeries<T extends { recordedAt: number }> {
   /** Type of the hidden container this recorder's per-client groups live under. */
   typeId: string
-  /** Name of the record property — never the JSON path, which is derived below
-   *  from the same helper the writer uses, so reader and writer cannot address
-   *  different keys. */
-  recordName: string
+  /** Name of the record property — never the JSON path. `PropertyName` is what
+   *  makes that a compile error rather than a comment: an already-derived path
+   *  is not assignable to it. The path is derived below from the same helper
+   *  the writer uses, so reader and writer cannot address different keys. */
+  recordName: PropertyName
   /** Whether a parsed row carries the fields this series is READ for. The
    *  record is an opaque blob that is deliberately hand-inspectable, so a
    *  hand-edited or future-shaped row can parse cleanly and still be missing

@@ -16,7 +16,7 @@ import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
-import { appendClientRecord, clientGroupId } from './recordStore.js'
+import { appendClientRecord, clientGroupId, updateClientRecord } from './recordStore.js'
 import {
   assertStillAttributable,
   awaitRecordingAllowed,
@@ -375,25 +375,27 @@ export const writeInteractionSample = async (
   try {
     {
       if (existing) {
-        await repo.tx(async (tx) => {
-          // Placement re-taken INSIDE the transaction, not just before it: the
-          // pre-check is separated from this write by the block count, and a
-          // sync-applied or hand edit landing in that window leaves us writing
-          // this session into a row the reader can no longer find. Refusing
-          // costs one sample — the next one finds the row unusable and opens a
-          // replacement — while writing costs the session.
-          const row = await tx.get(existing.blockId)
-          // Both checks AFTER the read, so no `await` separates them from the
-          // write below. Ordered the other way they are checks on a state the
-          // read can have outlived.
-          if (!isUsableRow(row, repo, workspaceId)) throw new NoLongerEligible()
-          assertStillAttributable(repo, workspaceId, metrics.epoch)
+        // Placement re-taken INSIDE the transaction, not just before it: the
+        // pre-check is separated from this write by the block count, and a
+        // sync-applied or hand edit landing in that window leaves us writing
+        // this session into a row the reader can no longer find. Refusing costs
+        // one sample — the next one finds the row unusable and opens a
+        // replacement — while writing costs the session.
+        await updateClientRecord(repo, {
+          workspaceId,
+          blockId: existing.blockId,
+          description: 'interaction metrics record',
+          assertEligible: (r, ws) => assertStillAttributable(r, ws, metrics.epoch),
+          isStillOurs: (row) => isUsableRow(row, repo, workspaceId),
           // `skipMetadata`: a metrics sample is bookkeeping, not user intent.
-          // Without it every resample stamps `user_updated_at`, and the block-ref
-          // picker orders by exactly that — so a hidden ISO-timestamp block would
-          // hold the top of the (( completion list on any five-minute pause.
-          await tx.setProperty(existing.blockId, interactionRecordProp, data, { skipMetadata: true })
-        }, { scope: ChangeScope.Automation, telemetry: true, description: 'interaction metrics record' })
+          // Without it every resample stamps `user_updated_at`, and the
+          // block-ref picker orders by exactly that — so a hidden ISO-timestamp
+          // block would hold the top of the (( completion list on any
+          // five-minute pause.
+          setProperty: async (tx, id) => {
+            await tx.setProperty(id, interactionRecordProp, data, { skipMetadata: true })
+          },
+        })
         return existing.blockId
       }
 

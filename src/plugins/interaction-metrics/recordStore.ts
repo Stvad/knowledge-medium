@@ -11,8 +11,16 @@
  * Only what the SHAPE guarantees belongs here. A recorder with a stronger rule
  * passes it (`assertEligible`), and retention remains the interaction
  * recorder's own — sharing a write path does not make two recorders identical.
+ *
+ * THE ORDERING RULE, stated once for every write below: the eligibility check
+ * is the last statement before the write it authorises, with no `await`
+ * between. Everything earlier in a transaction is provisional — a throw
+ * anywhere rolls it back — so an earlier check is not a second line of defence,
+ * it is a check on a state the intervening reads can have outlived. Both write
+ * paths live here so neither can get that order wrong by hand; a caller
+ * supplies WHAT to check, never WHEN.
  */
-import { ChangeScope, type TypeContribution } from '@/data/api'
+import { ChangeScope, type BlockData, type TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import {
   getPluginUIStateBlock,
@@ -20,7 +28,7 @@ import {
   pluginUIStateBlockId,
   stateChildBlockId,
 } from '@/data/stateBlocks.js'
-import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
+import { jsonPathForProperty, type PropertyName } from '@/data/internals/typedBlockQuery.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { v4 as uuidv4 } from 'uuid'
@@ -51,7 +59,7 @@ export interface ClientRecordSpec {
    *  that must never be reachable by a cleanup pass. The NAME rather than the
    *  JSON path because retention needs both forms (SQL and in-transaction), and
    *  deriving the path from the name here is what keeps them the same rule. */
-  recordName: string
+  recordName: PropertyName
   /** Writes the record property. Runs inside the create transaction. */
   setProperty: (tx: Parameters<Parameters<Repo['tx']>[0]>[0], blockId: string) => Promise<void>
   /** Called as soon as the record is DURABLE, before the retention pass this
@@ -166,12 +174,7 @@ export const appendClientRecord = async (
       { systemMint: true },
     )
     await repo.addTypeInTx(tx, blockId, spec.recordType.id, {})
-    // LAST, and deliberately not also first: everything above is provisional,
-    // because a throw anywhere in this callback rolls the whole transaction
-    // back. What matters is that no `await` separates this check from the write
-    // carrying the payload — an eligibility check with an await after it is a
-    // check on a state that can have moved by the time anything is written, and
-    // adding a second one earlier narrows that window rather than closing it.
+    // LAST, per the ordering rule at the top of this module.
     assertEligible(repo, spec.workspaceId)
     await spec.setProperty(tx, blockId)
   }, { scope: ChangeScope.Automation, telemetry: true, description: spec.description })
@@ -192,6 +195,34 @@ export const appendClientRecord = async (
     }
   }
   return { blockId, groupId }
+}
+
+/** Update the record this session already owns.
+ *
+ *  Here rather than at the call site so the ordering rule above governs both
+ *  writes: the row is read first, the caller's checks run with nothing awaited
+ *  after them, and the write follows. Hand-rolled at the call site, that order
+ *  was one edit away from being wrong and had no owner to state it. */
+export const updateClientRecord = async (
+  repo: Repo,
+  spec: {
+    workspaceId: string
+    blockId: string
+    description: string
+    /** Re-taken immediately before the write; a recorder's own rule. */
+    assertEligible: (repo: Repo, workspaceId: string) => void
+    /** Is the row still one we may write to, given the in-transaction read?
+     *  `tx.get` does not filter tombstones, so liveness is asked, not implied. */
+    isStillOurs: (row: BlockData | null) => boolean
+    setProperty: (tx: Parameters<Parameters<Repo['tx']>[0]>[0], blockId: string) => Promise<void>
+  },
+): Promise<void> => {
+  await repo.tx(async (tx) => {
+    const row = await tx.get(spec.blockId)
+    if (!spec.isStillOurs(row)) throw new NoLongerEligible()
+    spec.assertEligible(repo, spec.workspaceId)
+    await spec.setProperty(tx, spec.blockId)
+  }, { scope: ChangeScope.Automation, telemetry: true, description: spec.description })
 }
 
 /**
@@ -223,7 +254,7 @@ export const clientSeriesQuery = (
   select: string,
   opts: {
     groupId: string
-    recordName: string
+    recordName: PropertyName
     deviceLabel: string
     /** Kept out of the candidate set BEFORE any offset — retention bounds the
      *  records that came before the one it just wrote, not including it. */

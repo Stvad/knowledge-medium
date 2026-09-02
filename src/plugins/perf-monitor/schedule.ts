@@ -6,8 +6,8 @@ import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
-import { metricsSessionContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
-import { blockedPerfAnalysis, runPerfAnalysis } from './analyze.js'
+import { observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
+import { runPerfAnalysis } from './analyze.js'
 import { clearPerfAnalyses, publishPerfAnalysis } from './store.js'
 
 /** Wall clock between analyses. Long: the series it reads only gains a point
@@ -86,15 +86,14 @@ export const perfAnalysisEffect: AppEffect = {
       publishedFor = repo
     }
     observeWorkspace(repo, workspaceId)
-    // Without a durable client id the reader derives a fresh group id every
-    // load, so no scan can ever find history — but the chip still has to SAY
-    // so, or the one state this environment can be in is the one it never
-    // shows. Publish the verdict, skip the scans, and stop.
-    const blockedBy = metricsSessionContext(repo, workspaceId).blockedBy
-    if (blockedBy === 'no-persistent-client') {
-      publishPerfAnalysis(blockedPerfAnalysis(workspaceId, blockedBy, Date.now()))
-      return
-    }
+    // No special case for an environment that can never record. The ordinary
+    // pass reaches the same verdict there — without a durable client id the
+    // reader derives a fresh group id every load, so both series come back
+    // empty, nothing is judged, and `recordingBlockedBy` carries the reason —
+    // and it costs two index-hit queries that return nothing. A hand-built
+    // analysis for that one state was a second constructor for every field of
+    // `PerfAnalysis`, kept in step by hand, to show the same words one idle
+    // delay sooner.
     return job.start(async () => { await runPerfAnalysisNow(repo, workspaceId) })
   },
 }
