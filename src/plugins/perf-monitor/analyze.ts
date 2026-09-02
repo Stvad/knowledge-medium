@@ -7,6 +7,7 @@ import {
   countLiveBlocks,
   interactionComparable,
   interactionMetricsUIStateType,
+  interactionRecordProp,
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record.js'
 import {
@@ -15,11 +16,10 @@ import {
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import {
   startupMetricsUIStateType,
+  startupRecordProp,
   type StartupRecordData,
 } from '@/plugins/startup-metrics/record.js'
 import {
-  INTERACTION_RECORD_PATH,
-  STARTUP_RECORD_PATH,
   isUsableInteractionRecord,
   isUsableStartupRecord,
   loadRecords,
@@ -93,11 +93,15 @@ export const runPerfAnalysis = async (
   workspaceId: string,
   now: number,
 ): Promise<PerfAnalysis> => {
+  // Allocated BEFORE the first await. The number answers "which run started
+  // first", so taking it at return time would give the run that finishes first
+  // the lower value — which is the ordering this exists to prevent.
+  const seq = nextAnalysisSeq()
   const interaction = await loadRecords<InteractionRecordData>(
-    repo, workspaceId, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH, isUsableInteractionRecord,
+    repo, workspaceId, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord,
   )
   const startup = await loadRecords<StartupRecordData>(
-    repo, workspaceId, startupMetricsUIStateType.id, STARTUP_RECORD_PATH, isUsableStartupRecord,
+    repo, workspaceId, startupMetricsUIStateType.id, startupRecordProp.name, isUsableStartupRecord,
   )
 
   // The live counters are page-global. A page session that has seen a second
@@ -146,7 +150,7 @@ export const runPerfAnalysis = async (
   return {
     workspaceId,
     analyzedAt: now,
-    seq: nextAnalysisSeq(),
+    seq,
     recordingBlockedBy: session.blockedBy,
     baseline: {
       interaction: judgedBaselineCount(interactionResults),

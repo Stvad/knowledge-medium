@@ -16,6 +16,8 @@
 import type { Repo } from '@/data/repo'
 import { pluginUIStateBlockId, stateChildBlockId } from '@/data/stateBlocks.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
+import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
+import { clientSeriesQuery } from '@/plugins/interaction-metrics/recordStore.js'
 
 /** Each series' JSON path comes from the module that owns its property, so a
  *  rename cannot leave the reader addressing a name nothing writes. */
@@ -103,31 +105,17 @@ export const loadRecords = async <T extends { recordedAt: number; deviceLabel?: 
   repo: Repo,
   workspaceId: string,
   typeId: string,
-  /** JSON path of the record property, e.g. `$.startupRecord`. Passed whole
-   *  rather than assembled from a name so escaping never becomes this
-   *  function's problem — property names may carry colons. */
-  recordPath: string,
+  /** Name of the record property. The JSON path is derived here, from the same
+   *  helper the writer uses, so reader and writer cannot address different
+   *  keys — property names may carry colons, which must be quoted in a path. */
+  recordName: string,
   /** Whether a parsed row carries the fields this series is READ for. The
    *  record is an opaque blob that is deliberately hand-inspectable, so a
    *  hand-edited or future-shaped row can parse cleanly and still be missing
    *  what the comparison and the trend table dereference. */
   isUsable: (record: T) => boolean,
 ): Promise<Array<{ id: string; record: T }>> => {
-  // One browser PROFILE can run the app as an installed PWA and as an ordinary
-  // tab. Both resolve the same `km:client-id` from shared storage, so both write
-  // to this group — while `getDeviceLabel()` deliberately distinguishes them,
-  // and their timings genuinely differ (service worker, precache). Comparing a
-  // recent window from one surface against a baseline from the other is a
-  // regression the code did not cause.
-  //
-  // Segmented on READ rather than by widening the group key: the key decides
-  // where every record already written lives, and changing it orphans the
-  // history this reader exists to use.
-  const label = getDeviceLabel()
-  const onThisSurface = (r: { deviceLabel?: unknown }): boolean =>
-    // Absent label: a record from a shape that predates the field. Admitted —
-    // dropping history on a shape question is the costlier error.
-    r.deviceLabel === undefined || r.deviceLabel === label
+  const recordPath = jsonPathForProperty(recordName)
   const groupId = stateChildBlockId(
     pluginUIStateBlockId(workspaceId, repo.user.id, typeId),
     getClientId(),
@@ -140,24 +128,16 @@ export const loadRecords = async <T extends { recordedAt: number; deviceLabel?: 
   // MAX_PAGES so a group full of unreadable rows cannot turn into a full scan.
   const records: Array<{ id: string; record: T }> = []
   for (let page = 0; page < MAX_PAGES && records.length < HISTORY_LIMIT; page++) {
+    // Built from `clientSeriesQuery` — the one definition of this client's
+    // records — so the reader and the retention pass cannot disagree about
+    // which rows are in the series or which of them is newest. They have
+    // diverged twice, and each time retention was free to evict a row this
+    // reader counted as current.
+    const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS payload', {
+      groupId, recordName, deviceLabel: getDeviceLabel(), tail: 'LIMIT ? OFFSET ?',
+    })
     const rows = await repo.db.getAll<{ id: string; payload: string | null }>(
-      // The payload filter is INSIDE the query, before the LIMIT: records are
-      // prepended, so a row carrying no record sits at the FRONT of this window.
-      //
-      // Ordered by the RECORD's own timestamp, not by tree position. A session's
-      // record is updated in place, so a long-lived tab's row stays where it was
-      // created while becoming the most recent sample — and paging by
-      // `order_key` then sorting afterwards cannot recover a row the paging
-      // already excluded. `(order_key, id)` only breaks ties, in the tree's
-      // canonical order.
-      `SELECT id, json_extract(properties_json, ?) AS payload
-         FROM blocks
-        WHERE parent_id = ? AND deleted = 0
-          AND json_extract(properties_json, ?) IS NOT NULL
-        ORDER BY json_extract(properties_json, ?) DESC, order_key, id
-        LIMIT ? OFFSET ?`,
-      [recordPath, groupId, recordPath, `${recordPath}.recordedAt`,
-       HISTORY_LIMIT, page * HISTORY_LIMIT],
+      q.sql, [recordPath, ...q.params, HISTORY_LIMIT, page * HISTORY_LIMIT],
     )
     for (const row of rows) {
       if (!row.payload) continue
@@ -167,7 +147,7 @@ export const loadRecords = async <T extends { recordedAt: number; deviceLabel?: 
         // either series' validator. Absent makes every comparison NaN and
         // randomises the whole window; `Infinity` (which `1e400` parses to)
         // sorts to the front and pushes this boot out of the currency window.
-        if (Number.isFinite(record?.recordedAt) && onThisSurface(record) && isUsable(record)) {
+        if (Number.isFinite(record?.recordedAt) && isUsable(record)) {
           records.push({ id: row.id, record })
         }
       } catch {

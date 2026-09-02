@@ -70,7 +70,7 @@ describe('loadRecords', () => {
   it('finds what the recorder wrote', async () => {
     await writeInteractionSample(repo, WS)
     const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
+      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord)
     expect(records).toHaveLength(1)
     expect(records[0].record.clientId).toBeTruthy()
     expect(records[0].id).toBeTruthy()
@@ -82,7 +82,7 @@ describe('loadRecords', () => {
   it('creates nothing when there is no history', async () => {
     const before = await blockCount()
     const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord,
+      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord,
     )
     expect(records).toEqual([])
     expect(await blockCount()).toBe(before)
@@ -117,7 +117,7 @@ describe('loadRecords', () => {
     }
 
     const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
+      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord)
     expect(records[0].id).toBe('long-lived')
   })
 
@@ -139,7 +139,7 @@ describe('loadRecords', () => {
     )
 
     const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
+      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord)
     expect(records.map((r) => r.id)).toEqual([mine])
   })
 
@@ -153,7 +153,7 @@ describe('loadRecords', () => {
       [`${PATH}.queries`, blockId],
     )
     const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord,
+      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord,
     )
     expect(records).toEqual([])
   })
@@ -190,7 +190,7 @@ describe('loadRecords', () => {
       )
     }
     const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord,
+      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord,
     )
     expect(records.map((r) => r.id)).toEqual([blockId])
   })
@@ -200,7 +200,7 @@ describe('loadRecords', () => {
     resetMetricsSession(repo) // simulate a second page session
     await writeInteractionSample(repo, WS)
     const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
+      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord)
     expect(records).toHaveLength(2)
     expect(records[0].record.recordedAt).toBeGreaterThanOrEqual(records[1].record.recordedAt)
   })

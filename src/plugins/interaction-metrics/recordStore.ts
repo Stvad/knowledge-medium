@@ -74,7 +74,21 @@ export const clientGroupId = (
     getClientId(),
   )
 
-/** This client's group under `containerType`, creating it if absent. */
+/** This client's group under `containerType`, creating it if absent.
+ *
+ *  ACCEPTED, and not what an earlier note here claimed: these creates go
+ *  through the shared ui-state helpers, which are not flagged `telemetry`, so
+ *  they land in `excludingTelemetry` as the user's work — on BOTH sides. The
+ *  extra writes enlarge the denominator and their fan-out enlarges the
+ *  numerator, so the skew is not one-directional and cannot be waved through as
+ *  "suppresses only".
+ *
+ *  Accepted anyway because of its size: two transactions, on the first append
+ *  for a client group and never again, against counters that accumulate for the
+ *  whole page session. Threading a flag through those helpers is the worse
+ *  trade — both public entry points are MEMOIZED on a key that would not
+ *  include it, so the argument would silently bind to whichever caller arrived
+ *  first. */
 export const ensureClientGroup = async (
   repo: Repo,
   workspaceId: string,
@@ -119,8 +133,14 @@ export const appendClientRecord = async (
     // matches on the derived group id, so a record written under one is
     // unreachable for good. Refusing costs this session's samples; the next
     // page load re-runs the ensure, which restores the container.
-    const group = await tx.get(groupId)
-    if (!group || group.deleted) throw new NoLongerEligible()
+    // Both derived levels this module owns, not just the group: deleting the
+    // plugin root leaves the memoized group live, and a record under a live
+    // group whose own parent is a tombstone is just as unreachable.
+    const rootId = pluginUIStateBlockId(spec.workspaceId, repo.user.id, spec.containerType.id)
+    for (const id of [rootId, groupId]) {
+      const row = await tx.get(id)
+      if (!row || row.deleted) throw new NoLongerEligible()
+    }
     await tx.create(
       {
         id: blockId,
@@ -154,40 +174,83 @@ export const appendClientRecord = async (
   return { blockId, groupId }
 }
 
+/**
+ * The ONE definition of "this client's records, newest first".
+ *
+ * The reader and the retention pass both select from a client's group, and they
+ * have now diverged twice — once on ordering, once on device surface — each
+ * time leaving retention free to evict a row the reader counted as current.
+ * They build their query from here instead, so a change to the rule reaches
+ * both or neither.
+ *
+ * Three clauses, and each is load-bearing:
+ *  - carries a record: these groups are inspectable and may hold a block a
+ *    person created, which is user content and neither ours to read nor delete;
+ *  - written from THIS surface: one browser profile resolves the same client id
+ *    as an installed PWA and as an ordinary tab, and their timings differ for
+ *    reasons the code did not cause. An unlabelled record predates the field and
+ *    is admitted — dropping history over a shape question is the costlier error;
+ *  - ordered by the RECORD's timestamp, not tree position: a record is updated
+ *    in place, so position is creation order and a long-lived tab's row is
+ *    older by position while being the newest sample. `(order_key, id)` only
+ *    breaks ties, in the tree's canonical order.
+ */
+export const clientSeriesQuery = (
+  select: string,
+  opts: {
+    groupId: string
+    recordName: string
+    deviceLabel: string
+    /** Kept out of the candidate set BEFORE any offset — retention bounds the
+     *  records that came before the one it just wrote, not including it. */
+    excludeId?: string
+    tail: string
+  },
+): { sql: string; params: unknown[] } => {
+  const record = jsonPathForProperty(opts.recordName)
+  const label = `${record}.deviceLabel`
+  return {
+    sql: `SELECT ${select} FROM blocks
+           WHERE parent_id = ? AND deleted = 0
+             ${opts.excludeId === undefined ? '' : 'AND id != ?'}
+             AND json_extract(properties_json, ?) IS NOT NULL
+             AND (json_extract(properties_json, ?) IS NULL
+                  OR json_extract(properties_json, ?) = ?)
+           ORDER BY json_extract(properties_json, ?) DESC, order_key, id
+           ${opts.tail}`,
+    params: [
+      opts.groupId,
+      ...(opts.excludeId === undefined ? [] : [opts.excludeId]),
+      record, label, label, opts.deviceLabel, `${record}.recordedAt`,
+    ],
+  }
+}
+
 /** Its own tx description, not the record's: these are separate transactions
  *  with separate failure modes, and a shared description makes them
  *  indistinguishable in the tx log — where attributing a write to a call site is
  *  the whole point. */
 const retentionDescription = (spec: ClientRecordSpec): string => `${spec.description} retention`
 
-/** Drop this client's own records past `retain`.
+/** Drop this client's own records past `retain`, from the SAME series the
+ *  reader pages — see `clientSeriesQuery`. Only this client's group, so two
+ *  devices can never fight over the same rows.
  *
- *  Ordered by the record's own timestamp, the SAME key `loadRecords` pages by.
- *  Records are updated in place, so tree position is creation order, not
- *  recency — ordering retention by position would evict the row a long-lived
- *  tab is still writing to while the reader considers it the newest sample.
- *  `(order_key, id)` only breaks ties, in the tree's canonical order; jitter
- *  makes a key collision improbable enough that no test reproduces one, so that
- *  part is unpinned defence in depth.
- *
- *  Only THIS client's group, so two devices can never fight over the same rows;
- *  and only rows carrying a record, for both the offset and the deletion set —
- *  counting a hand-created child toward the offset would eventually hand user
- *  content to `tx.delete`. */
+ *  The row just written is excluded from the candidates rather than from the
+ *  offset, so the bound is `retain` older records ALONGSIDE it. */
 const pruneGroup = async (
   repo: Repo,
   spec: ClientRecordSpec,
   groupId: string,
   keepId: string,
 ): Promise<void> => {
-  const stale = await repo.db.getAll<{ id: string }>(
-    `SELECT id FROM blocks
-      WHERE parent_id = ? AND deleted = 0 AND id != ?
-        AND json_extract(properties_json, ?) IS NOT NULL
-      ORDER BY json_extract(properties_json, ?) DESC, order_key, id
-      LIMIT -1 OFFSET ?`,
-    [groupId, keepId, jsonPathForProperty(spec.recordName),
-     `${jsonPathForProperty(spec.recordName)}.recordedAt`, spec.retain],
+  const stampPath = `${jsonPathForProperty(spec.recordName)}.recordedAt`
+  const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS stamp', {
+    groupId, recordName: spec.recordName, deviceLabel: getDeviceLabel(),
+    excludeId: keepId, tail: 'LIMIT -1 OFFSET ?',
+  })
+  const stale = await repo.db.getAll<{ id: string; stamp: number | null }>(
+    q.sql, [stampPath, ...q.params, spec.retain],
   )
   if (stale.length === 0) return
   await repo.tx(async (tx) => {
@@ -215,7 +278,14 @@ const pruneGroup = async (
       // tombstone. The parent and property clauses below are load-bearing.
       const now = await tx.get(row.id)
       if (!now || now.deleted || now.parentId !== groupId) continue
-      if (now.properties[spec.recordName] == null) continue
+      const record = now.properties[spec.recordName]
+      if (record == null) continue
+      // Unchanged since it was selected. Its RANK is what put it past the
+      // bound, and rank is a property of the whole series — not something a
+      // single row can be re-ranked against from in here. A stamp that moved
+      // means another tab wrote to this row after the selection, which is
+      // exactly the case where it may no longer be the oldest.
+      if ((record as { recordedAt?: unknown }).recordedAt !== row.stamp) continue
       // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
       await tx.delete(row.id)
     }

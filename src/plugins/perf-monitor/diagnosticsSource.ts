@@ -44,8 +44,13 @@ export const createPerfMonitorDiagnosticSource = (
     subscribe: subscribePerfAnalysis,
     getSnapshot: () => {
       const analysis = getPerfAnalysisFor(repo.activeWorkspaceId)
+      // Keyed on the publication, not on a summary of it: two analyses can
+      // share a timestamp and a regression count while differing in readiness,
+      // baselines or values, and the cache would then hand back the old
+      // snapshot while the trend view showed the new analysis. `seq` is unique
+      // per run by construction.
       const key = analysis
-        ? `${analysis.workspaceId}:${analysis.analyzedAt}:${analysis.regressions.length}`
+        ? `${analysis.workspaceId}:${analysis.seq}`
         : `none:${repo.activeWorkspaceId ?? ''}`
       if (key !== cachedKey) {
         cachedKey = key

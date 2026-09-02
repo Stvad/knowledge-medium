@@ -19,7 +19,9 @@ import {
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis } from '../analyze'
-import { INTERACTION_RECORD_PATH, isUsableInteractionRecord, loadRecords } from '../load'
+import { runPerfAnalysisNow } from '../schedule'
+import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
+import { isUsableInteractionRecord, loadRecords } from '../load'
 import { interactionMetricsUIStateType } from '@/plugins/interaction-metrics/record'
 
 const WS = 'ws-1'
@@ -112,12 +114,28 @@ describe('runPerfAnalysis', () => {
 
     const analysis = await runPerfAnalysis(repo, WS, 1000)
     const loaded = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH,
+      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name,
       isUsableInteractionRecord)
 
     expect(loaded.length).toBeGreaterThanOrEqual(14)
     expect(analysis.baseline.interaction).toBeGreaterThan(0)
     expect(analysis.baseline.interaction).toBeLessThan(loaded.length)
+  })
+
+  // The workspace can change while the history reads are in flight, and the
+  // analysis draws on AMBIENT state — `repo.isReadOnly` describes whichever
+  // workspace is active now. Publishing would attach the new workspace's
+  // recording blocker to the old one's verdict.
+  it('does not publish a verdict for a workspace that is no longer active', async () => {
+    resetPerfAnalysisStore()
+    await pastSession()
+    const analysis = await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(WS)).toBe(analysis)
+
+    resetPerfAnalysisStore()
+    repo.setActiveWorkspaceId(OTHER_WS)
+    await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(WS)).toBeNull()
   })
 
   // repo.metrics() is page-global. The recorder stops sampling once a session

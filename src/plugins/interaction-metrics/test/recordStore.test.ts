@@ -9,7 +9,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { resetClientIdCache } from '@/utils/clientId'
+import { getDeviceLabel, resetClientIdCache } from '@/utils/clientId'
+import { pluginUIStateBlockId } from '@/data/stateBlocks'
 import { ChangeScope, type User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import {
@@ -47,7 +48,7 @@ afterEach(() => { vi.restoreAllMocks() })
 
 const DATA = {
   recordedAt: 1, startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'c',
-  deviceLabel: 'd', sessionMs: 1, blockCount: 1, writes: 1,
+  deviceLabel: getDeviceLabel(), sessionMs: 1, blockCount: 1, writes: 1,
   queries: {}, fanout: {}, db: {},
   handles: { count: 0, totalDeps: 0, maxDeps: 0, p50Deps: 0, p95Deps: 0, topHeavy: [] },
 } satisfies InteractionRecordData
@@ -263,6 +264,38 @@ describe('appendClientRecord retention', () => {
     const children = await sharedDb.db.getAll<{ id: string }>(
       'SELECT id FROM blocks WHERE parent_id = ?', [groupId])
     expect(children.map((c) => c.id)).toEqual([first])
+  })
+
+  // Deleting the plugin root leaves the memoized client group live, and a record
+  // under a live group whose own parent is a tombstone is just as unreachable.
+  it('refuses to append under a group whose root was deleted', async () => {
+    await append(3)
+    const rootId = pluginUIStateBlockId(WS, USER.id, interactionMetricsUIStateType.id)
+    await repo.tx(async (tx) => { await tx.delete(rootId) },
+      { scope: ChangeScope.Automation, telemetry: true })
+
+    await expect(append(3)).rejects.toBeInstanceOf(NoLongerEligible)
+  })
+
+  // Rank is what put a row past the bound, and rank belongs to the whole
+  // series — it cannot be re-derived for one row inside the writing
+  // transaction. A stamp that moved means another tab wrote to the row after
+  // the selection, which is exactly when it may no longer be the oldest.
+  it('leaves a row alone when its timestamp moved after selection', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) ids.push((await append(3)).blockId)
+    const victim = ids[0]
+    duringRetention(async () => {
+      await sharedDb.db.execute(
+        'UPDATE blocks SET properties_json = ? WHERE id = ?',
+        [JSON.stringify({ [interactionRecordProp.name]: { ...DATA, recordedAt: 9e12 } }), victim],
+      )
+    })
+    const fresh = (await append(1)).blockId
+
+    const live = await liveIds()
+    expect(live).toContain(victim)
+    expect(live).toEqual([fresh, ids[2], victim])
   })
 
   // The record is already committed when the pass runs. Routing its failure

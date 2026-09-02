@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { analysisFixture as analysis } from './fixtures'
-import { getPerfAnalysisFor, publishPerfAnalysis, resetPerfAnalysisStore } from '../store'
+import { getPerfAnalysisFor, nextAnalysisSeq, publishPerfAnalysis, resetPerfAnalysisStore } from '../store'
 
 afterEach(() => { resetPerfAnalysisStore() })
 
@@ -32,6 +32,16 @@ describe('publishPerfAnalysis', () => {
     publishPerfAnalysis(analysis({ seq: 1, analyzedAt: 1000 }))
     publishPerfAnalysis(analysis({ seq: 2, analyzedAt: 2000 }))
     expect(getPerfAnalysisFor('ws-1')?.analyzedAt).toBe(2000)
+  })
+
+  // The sequence is allocated when a run STARTS, not when it returns, so a run
+  // that begins first and finishes last cannot overwrite a fresher verdict.
+  it('allocates the sequence before its asynchronous work', async () => {
+    const seqs: number[] = []
+    const slow = (async () => { seqs.push(nextAnalysisSeq()); await Promise.resolve() })()
+    const fast = (async () => { seqs.push(nextAnalysisSeq()) })()
+    await Promise.all([slow, fast])
+    expect(seqs[0]).toBeLessThan(seqs[1])
   })
 
   // Ordering is per workspace: an older run for one must not veto the first
