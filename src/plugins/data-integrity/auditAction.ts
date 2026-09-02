@@ -26,7 +26,7 @@ import {
   type ActionConfig,
   type BaseShortcutDependencies,
 } from '@/shortcuts/types.js'
-import { getDialogQueue, openDialog } from '@/utils/dialogs.js'
+import { isDialogOpenForWorkspace, openDialog } from '@/utils/dialogs.js'
 import { showError, showProgress } from '@/utils/toast.js'
 import {
   RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
@@ -37,18 +37,10 @@ import { ConsistencyAuditDialog } from './ConsistencyAuditDialog.tsx'
 
 /** True when an open results dialog is ALREADY pinned to `workspaceId`. Both
  *  actions pin the dialog at open (run → the scanned workspace, view → the active
- *  one), so this is an EXACT prop match — the queue entry honestly records the
- *  workspace it shows. It keeps the cheap, repeatable "View last" / "Inspect"
- *  affordances from stacking a second copy for the SAME workspace, while still
- *  letting a view of a DIFFERENT workspace through (a dialog pinned to ws-A must
- *  not suppress an Inspect for ws-B). A deliberate "Run" is never gated on this —
- *  it always surfaces its own result. */
+/** A deliberate "Run" is never gated on this — it always surfaces its own
+ *  result; only the cheap, repeatable "View last" / "Inspect" affordances are. */
 const auditDialogAlreadyShows = (workspaceId: string | null): boolean =>
-  getDialogQueue().some(
-    (entry) =>
-      (entry.Component as unknown) === ConsistencyAuditDialog &&
-      (entry.props.workspaceId as string | undefined) === (workspaceId ?? undefined),
-  )
+  isDialogOpenForWorkspace(ConsistencyAuditDialog, workspaceId)
 
 export const runDataIntegrityAuditAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,

@@ -11,7 +11,6 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import type { User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import {
-  INTERACTION_RECORD_PATH,
   interactionMetricsUIStateType,
   interactionRecordProp,
   interactionRecordType,
@@ -19,6 +18,7 @@ import {
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { getDeviceLabel } from '@/utils/clientId'
+import { jsonPathForProperty } from '@/data/internals/typedBlockQuery'
 import { clientGroupId } from '@/plugins/interaction-metrics/recordStore'
 import {
   HISTORY_LIMIT,
@@ -31,7 +31,7 @@ import {
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
-const PATH = INTERACTION_RECORD_PATH
+const PATH = jsonPathForProperty(interactionRecordProp.name)
 
 let sharedDb: TestDb
 let repo: Repo

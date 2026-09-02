@@ -21,9 +21,6 @@ const job = cadencedIdleJob({
   label: 'perf-monitor',
 })
 
-/** Test helper — drain in-flight analyses. */
-export const drainPerfAnalyses = (): Promise<void> => job.drain()
-
 /** Run now, publish, return. Used by the effect and by the trend view's manual
  *  refresh. Throws on failure so a caller can surface it. */
 export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {

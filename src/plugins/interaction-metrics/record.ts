@@ -14,7 +14,6 @@
  */
 import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { appendClientRecord, clientGroupId } from './recordStore.js'
@@ -152,7 +151,6 @@ export const INTERACTION_RETAIN = 400
 
 /** JSON path addressing the record property. The name carries a colon (the
  *  namespace separator), which must be QUOTED inside a path expression. */
-export const INTERACTION_RECORD_PATH = jsonPathForProperty(interactionRecordProp.name)
 
 /** Parent ui-state container; each session adds one child under its client's group. */
 export const interactionMetricsUIStateType = seedType({
@@ -281,44 +279,48 @@ export const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<
  *  still carrying a record.
  *
  *  All three, and the same three retention asks. A row whose record was
- *  stripped is user content by that rule — so accepting it here would let the
- *  next sample write telemetry back onto a block a person had just repurposed,
- *  with retention then refusing to clean up what the recorder had restored.
- *  Placement matters for a different reason: a record moved elsewhere is
- *  invisible to `loadRecords`, so updating it writes the session where nothing
- *  reads.
+ *  stripped is user content by that rule — so accepting it would let the next
+ *  sample write telemetry back onto a block a person had just repurposed, with
+ *  retention then refusing to clean up what the recorder had restored. Placement
+ *  matters for a different reason: a record moved elsewhere is invisible to
+ *  `loadRecords`, so updating it writes the session where nothing reads.
  *
- *  Asked twice: once to decide whether a replacement is due, and again inside
- *  the writing transaction, which several awaits later is the only place the
- *  answer is still true. */
+ *  `== null` rather than `=== undefined`: clearing the property through its
+ *  codec leaves the key present holding JSON null, which `json_extract` reports
+ *  as absent — the same spelling retention had to handle.
+ *
+ *  ONE predicate over a row shape both sources produce. It is asked twice — to
+ *  decide whether a replacement is due, and again inside the writing
+ *  transaction, which several awaits later is the only place the answer is
+ *  still true — and the two must not be able to drift. */
+const isUsableRow = (
+  row: { deleted?: boolean; parentId: string | null; properties: Record<string, unknown> } | null,
+  repo: Repo,
+  workspaceId: string,
+): boolean =>
+  !!row && !row.deleted &&
+  row.parentId === clientGroupId(repo, workspaceId, interactionMetricsUIStateType) &&
+  row.properties[interactionRecordProp.name] != null
+
+/** The pre-check, before any transaction. Selects the fields the predicate
+ *  reads rather than asking SQL the question — `tx.get` cannot filter, so
+ *  letting the WHERE clause answer half of it is what made these two drift. */
 const isUsableRecord = async (
   repo: Repo,
   blockId: string,
   workspaceId: string,
 ): Promise<boolean> => {
-  const row = await repo.db.getOptional<{ parent_id: string | null }>(
-    `SELECT parent_id FROM blocks
-      WHERE id = ? AND deleted = 0 AND json_extract(properties_json, ?) IS NOT NULL`,
-    [blockId, INTERACTION_RECORD_PATH],
+  const row = await repo.db.getOptional<{ parent_id: string | null; properties_json: string }>(
+    'SELECT parent_id, properties_json FROM blocks WHERE id = ? AND deleted = 0',
+    [blockId],
   )
-  return row?.parent_id === clientGroupId(repo, workspaceId, interactionMetricsUIStateType)
-}
-
-/** The same three questions, read through a transaction. `tx.get` does not
- *  filter tombstones, so liveness is checked rather than implied; `== null`
- *  rather than `=== undefined` because clearing the property through its codec
- *  leaves the key present holding JSON null, which `json_extract` reports as
- *  absent — the same spelling retention had to handle. */
-const isUsableRow = async (
-  tx: Parameters<Parameters<Repo['tx']>[0]>[0],
-  blockId: string,
-  repo: Repo,
-  workspaceId: string,
-): Promise<boolean> => {
-  const row = await tx.get(blockId)
-  return !!row && !row.deleted &&
-    row.parentId === clientGroupId(repo, workspaceId, interactionMetricsUIStateType) &&
-    row.properties[interactionRecordProp.name] != null
+  return isUsableRow(
+    !row ? null : {
+      parentId: row.parent_id,
+      properties: JSON.parse(row.properties_json ?? '{}') as Record<string, unknown>,
+    },
+    repo, workspaceId,
+  )
 }
 
 /**
@@ -385,7 +387,7 @@ export const writeInteractionSample = async (
           // this session into a row the reader can no longer find. Refusing
           // costs one sample — the next one finds the row unusable and opens a
           // replacement — while writing costs the session.
-          if (!(await isUsableRow(tx, existing.blockId, repo, workspaceId))) {
+          if (!isUsableRow(await tx.get(existing.blockId), repo, workspaceId)) {
             throw new NoLongerEligible()
           }
           // `skipMetadata`: a metrics sample is bookkeeping, not user intent.

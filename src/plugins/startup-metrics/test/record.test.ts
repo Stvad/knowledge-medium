@@ -9,6 +9,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks'
 import { getClientId, resetClientIdCache } from '@/utils/clientId'
+import { jsonPathForProperty } from '@/data/internals/typedBlockQuery'
 import type { User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import type { FacetRuntime } from '@/facets/facet'
@@ -17,7 +18,6 @@ import {
   collectStartupMetricsEffect,
   resetStartupMetricsRecorded,
   SETTLE_FALLBACK_MS,
-  STARTUP_RECORD_PATH,
   startupMetricsUIStateType,
   startupRecordProp,
   startupRecordType,
@@ -334,7 +334,7 @@ describe('collectStartupMetricsEffect', () => {
     const rows = await sharedDb.db.getAll<{ properties_json: string }>(
       `SELECT properties_json FROM blocks
        WHERE deleted = 0 AND json_extract(properties_json, ?) IS NOT NULL`,
-      [STARTUP_RECORD_PATH],
+      [jsonPathForProperty(startupRecordProp.name)],
     )
     expect(rows).toHaveLength(1)
     const record = JSON.parse(rows[0].properties_json)[startupRecordProp.name]

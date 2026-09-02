@@ -15,7 +15,6 @@ import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
 import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
 import { appVersion } from '@/appVersion.js'
-import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import {
   awaitRecordingAllowed,
@@ -86,7 +85,6 @@ export const startupRecordProp = seedProperty<StartupRecordData | undefined>({
  *  boots for ~880KB per client group. */
 export const STARTUP_RETAIN = 2000
 
-export const STARTUP_RECORD_PATH = jsonPathForProperty(startupRecordProp.name)
 
 /** The record blocks themselves. Typing the rows -- not just their container --
  *  is what lets them be found by typed query, audited and migrated instead of

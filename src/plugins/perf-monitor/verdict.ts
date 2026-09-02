@@ -97,8 +97,7 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
   // series makes a verdict partial. Folding the two together would report a
   // clean comparison in a read-only workspace as pending.
   const unjudged = pendingNotes(analysis)
-  const notes0 = [...unjudged, ...(blocked ? [blocked] : [])]
-  const notes = [...notes0]
+  const notes = [...unjudged, ...(blocked ? [blocked] : [])]
   const growth = graphNote(analysis.graphGrowth)
 
   if (analysis.regressions.length > 0) {
@@ -107,11 +106,10 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
     // interaction findings. Attached to a startup regression it would claim the
     // graph grew relative to a baseline that regression never used.
     const aboutInteraction = analysis.regressions.some((r) => !r.metric.startsWith('startup:'))
-    if (growth && aboutInteraction) notes.unshift(growth)
     return {
       kind: 'regressed',
       headline: `${worst.label} ${worst.ratio}× ${worsened(worst)}`,
-      notes,
+      notes: growth && aboutInteraction ? [growth, ...notes] : notes,
       regressions: analysis.regressions,
     }
   }
@@ -121,7 +119,7 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
       headline: 'Building a baseline',
       // A bare count does not say WHICH series is missing, or that one of them
       // can never fill this session; the pending notes carry both.
-      notes: [`${analysis.baseline.interaction} sessions recorded so far`, ...notes0],
+      notes: [`${analysis.baseline.interaction} sessions recorded so far`, ...notes],
       regressions: [],
     }
   }

@@ -84,7 +84,7 @@ export const clientGroupId = (
  *  flag through the helpers is the worse trade: both entry points are MEMOIZED
  *  on a key that would not include it, so the argument would bind to whichever
  *  caller arrived first. */
-export const ensureClientGroup = async (
+const ensureClientGroup = async (
   repo: Repo,
   workspaceId: string,
   containerType: TypeContribution,

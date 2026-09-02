@@ -22,7 +22,7 @@ import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { InteractionRecordData } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords } from './load.js'
-import { bootstrapGapMs, invalidationsPerWrite } from './series.js'
+import { bootstrapGapMs, invalidationsPerWrite, round2 } from './series.js'
 import { summarize } from './verdict.js'
 import { runPerfAnalysisNow } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
@@ -54,7 +54,7 @@ const slowestQuery = (r: InteractionRecordData): { name: string; p95Ms: number }
  *  than no table. */
 const perWrite = (r: InteractionRecordData): string => {
   const rate = invalidationsPerWrite(r)
-  return rate === null ? '—' : (Math.round(rate * 100) / 100).toFixed(2)
+  return rate === null ? '—' : round2(rate).toFixed(2)
 }
 
 const Th = ({ children }: { children: React.ReactNode }) => (

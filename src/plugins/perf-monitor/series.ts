@@ -87,7 +87,9 @@ export const median = (values: readonly number[]): number => {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
 }
 
-const round2 = (n: number): number => Math.round(n * 100) / 100
+/** Two decimals. Shared with the trend table so a rate charted there and the
+ *  same rate in a headline cannot round differently. */
+export const round2 = (n: number): number => Math.round(n * 100) / 100
 
 /** Median of the recent window vs median of the baseline, or null if either
  *  side is too thin or the move is within tolerance. The one place the
