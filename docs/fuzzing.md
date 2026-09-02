@@ -504,6 +504,24 @@ a test that could not fail.
   only the pre-existing suites — not by reading. Do that before writing
   a test whose value rests on a coverage gap being real.
 
+The stable-wrong-binding sweep's nightly deep run then found the
+restore half of the release-reclaim residual (issue #706, seed
+`1264869285`):
+
+- The rename ladder skips tombstones (`row.after.deleted`), deliberately
+  — a deleted page claims nothing, its inbound `[[α]]` edges are the
+  residual the add-only contract retains ON PURPOSE so restoring it
+  rebinds cleanly, and rewriting live referrers' text off a deleted
+  page's rename is the call §11 group 2 / #383 defers. But restore the
+  target under a DIFFERENT alias set and that premise is false: the
+  referrer's `[[Inbox]]` is now bound to a LIVE block claiming only
+  "ax", while a fresh seat owns "Inbox". Two live blocks disagreeing,
+  and stable — the referrer only re-parses on its own row, and the
+  audit's `content_link_recompute` diffs alias SETS, never the bound id.
+  `collectRestorePlans` invalidates those edges at the restore (never
+  rewriting content, so the deferred decision stays deferred); the drop
+  is itself the write that schedules the referrer's rebind.
+
 ## Adding a suite
 
 1. Create `<target>.fuzz.test.ts` next to the existing tests, line 1
