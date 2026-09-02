@@ -19,7 +19,7 @@ import {
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis } from '../analyze'
-import { runPerfAnalysisNow } from '../schedule'
+import { perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
 import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
 import { INTERACTION_SERIES, loadRecords } from '../load'
 
@@ -132,6 +132,25 @@ describe('runPerfAnalysis', () => {
     resetPerfAnalysisStore()
     repo.setActiveWorkspaceId(OTHER_WS)
     await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(WS)).toBeNull()
+  })
+
+  // Comparing the workspace back cannot catch A->B->A: the value is equal again
+  // by the time the run finishes, while the analysis absorbed B's ambient state
+  // on the way through. The effect restarts on every such change, so a run whose
+  // stamp is stale is describing a world that has moved on.
+  it('does not publish a run whose context changed and changed back', async () => {
+    resetPerfAnalysisStore()
+    await pastSession()
+
+    // Stamped synchronously on entry, so the restart below lands inside the run.
+    const pending = runPerfAnalysisNow(repo, WS)
+    const stop = await perfAnalysisEffect.start({ repo, workspaceId: WS } as Parameters<
+      typeof perfAnalysisEffect.start
+    >[0])
+    await pending
+    stop?.()
+
     expect(getPerfAnalysisFor(WS)).toBeNull()
   })
 

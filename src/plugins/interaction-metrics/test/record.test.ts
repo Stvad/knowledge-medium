@@ -274,6 +274,17 @@ describe('writeInteractionSample', () => {
     expect(await childIds(await groupId())).toEqual([])
   })
 
+  // A reset starts a new counter span. The attribution check ADOPTS it, so
+  // without the epoch check the write is approved on the new span's terms while
+  // the payload still holds the old span's counters — and the claim then points
+  // the session at that stale row, so the next sample updates it rather than
+  // opening a replacement.
+  it('refuses when the counters are reset mid-write', async () => {
+    lapseBeforeWrite(() => repo.resetMetrics())
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+    expect(await childIds(await groupId())).toEqual([])
+  })
+
   // These blocks are deliberately inspectable, so the group can hold a
   // hand-created child. Telemetry retention must never be able to reach
   // anything a person wrote — including by counting it toward the offset.

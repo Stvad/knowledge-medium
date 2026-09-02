@@ -119,3 +119,24 @@ describe('summarize', () => {
     expect(v.notes.join(' ')).toContain('40% larger')
   })
 })
+
+/**
+ * "Still building" is a promise that waiting will resolve it. When this session
+ * simply contributed no startup record — the recorder is independently
+ * togglable — no amount of history helps, and the chip would send the user to
+ * wait for something that is never coming.
+ */
+describe('an unjudged startup series', () => {
+  const startupUnjudged = (over: Parameters<typeof analysis>[0]) =>
+    summarize(analysis({ ready: { interaction: true, startup: false }, ...over }))
+
+  it('says history is building when that is what is happening', () => {
+    expect(startupUnjudged({}).notes.join(' ')).toContain('startup history still building')
+  })
+
+  it('names the missing current sample instead, when waiting cannot help', () => {
+    const notes = startupUnjudged({ startupAwaitingCurrentSample: true }).notes.join(' ')
+    expect(notes).toContain('no startup record for this session')
+    expect(notes).not.toContain('still building')
+  })
+})

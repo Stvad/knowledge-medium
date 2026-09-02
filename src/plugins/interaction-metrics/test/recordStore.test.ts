@@ -319,3 +319,38 @@ describe('appendClientRecord retention', () => {
     expect(stored.peekProperty(interactionRecordProp)).toMatchObject({ appSha: 'sha' })
   })
 })
+
+/**
+ * Eligibility is re-taken inside the writing transaction, but the containers
+ * are minted BEFORE it — so a check that only guards the write leaves two
+ * hidden blocks behind in a workspace the recorder was no longer allowed to
+ * target. In a read-only workspace those are Automation writes that RLS refuses
+ * and parks in the quarantine, which is the outcome the rule exists to prevent.
+ */
+describe('appendClientRecord eligibility', () => {
+  const blockCount = async (): Promise<number> =>
+    (await sharedDb.db.getAll<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0'))[0].n
+
+  it('mints no container when the recorder is already ineligible', async () => {
+    const before = await blockCount()
+    // The shape a workspace switch during the awaits leaves behind: the spec's
+    // workspace is no longer the active one.
+    repo.setActiveWorkspaceId('ws-2')
+
+    await expect(appendClientRecord(repo, spec(5))).rejects.toBeInstanceOf(NoLongerEligible)
+
+    expect(await blockCount()).toBe(before)
+  })
+
+  // The recorder-specific rule, not just the shared default: the interaction
+  // recorder's is strictly stronger, and the ensure must be behind THAT one.
+  it('honours a stronger rule than the shared default', async () => {
+    const before = await blockCount()
+    await expect(appendClientRecord(repo, {
+      ...spec(5),
+      assertEligible: () => { throw new NoLongerEligible() },
+    })).rejects.toBeInstanceOf(NoLongerEligible)
+    expect(await blockCount()).toBe(before)
+  })
+})

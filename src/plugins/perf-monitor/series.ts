@@ -57,7 +57,11 @@ export const MIN_STARTUP_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW
  *  ran. Readiness is derived from these rather than from row counts, because a
  *  row that carries no usable sample is not history. */
 export type TrendResult =
-  | { status: 'insufficient' }
+  /** `reason` separates the two ways a comparison can fail to run, because they
+   *  resolve differently: 'history' fills by waiting, 'no-current-sample' never
+   *  does — there is nothing to compare THIS session against, and telling the
+   *  user to wait is a promise that cannot be kept. */
+  | { status: 'insufficient'; reason: 'history' | 'no-current-sample' }
   /** `baselineCount` is the number of stored sessions this comparison actually
    *  consumed, which is not the number of rows loaded: a session with no
    *  writes, or one where this query ran too few times to measure, is filtered
@@ -66,7 +70,9 @@ export type TrendResult =
   | { status: 'steady'; baselineCount: number }
   | { status: 'regressed'; regression: Regression; baselineCount: number }
 
-const INSUFFICIENT: TrendResult = { status: 'insufficient' }
+const INSUFFICIENT: TrendResult = { status: 'insufficient', reason: 'history' }
+/** This session contributed no sample, so no amount of history helps. */
+const NO_CURRENT_SAMPLE: TrendResult = { status: 'insufficient', reason: 'no-current-sample' }
 
 export interface Regression {
   /** Stable machine id, e.g. `query:groupedBacklinks.forBlock`. */
@@ -145,6 +151,11 @@ export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
  *  missing their paint marks, are rows that carry no usable sample. */
 export const anyJudged = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status !== 'insufficient')
+
+/** True when nothing was judged AND waiting would not change that. */
+export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean =>
+  results.length > 0 &&
+  results.every((r) => r.status === 'insufficient' && r.reason === 'no-current-sample')
 
 /** Sessions the THINNEST judged comparison rested on, or 0 if none was judged.
  *
@@ -259,7 +270,10 @@ export const startupRegression = (
   // correction between boots sinks this boot's record below older ones — the
   // guard would still pass while the window described earlier page loads.
   if (!series.slice(0, RECENT_WINDOW).some((r) => r.timeOriginMs === currentTimeOriginMs)) {
-    return INSUFFICIENT
+    // Not "still building": the series may be long. This boot simply is not in
+    // it — the startup recorder is independently togglable, so the usual cause
+    // is that it is switched off, and waiting cannot fix that.
+    return NO_CURRENT_SAMPLE
   }
   const gaps = (rs: readonly StartupRecordData[]) =>
     rs.map(bootstrapGapMs).filter((v): v is number => v !== null)

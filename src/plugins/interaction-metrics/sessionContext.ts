@@ -296,7 +296,20 @@ export const assertStillWritable = (repo: Repo, workspaceId: string): void => {
  *  attributability: a switch is observed by the new workspace's effect, which
  *  may not have run yet, so `attributable` can still read true for a record
  *  whose snapshot already contains the new workspace's work. */
-export const assertStillAttributable = (repo: Repo, workspaceId: string): void => {
+export const assertStillAttributable = (
+  repo: Repo,
+  workspaceId: string,
+  /** `metrics().epoch` the sample being written was READ under. A
+   *  `resetMetrics()` landing between the read and this transaction starts a
+   *  new span, and the attribution check adopts it — so without this the write
+   *  is approved on the new span's terms while the payload still holds the old
+   *  span's counters, and `onCommitted` then claims that stale row as the new
+   *  span's current record. Nothing later corrects it: the row reads as this
+   *  session's, so the next sample updates it rather than opening a
+   *  replacement, and a session ending first leaves it in the trend. */
+  sampleEpoch: number,
+): void => {
   assertStillWritable(repo, workspaceId)
+  if (repo.metrics().epoch !== sampleEpoch) throw new NoLongerEligible()
   if (!metricsSessionContext(repo, workspaceId).attributable) throw new NoLongerEligible()
 }

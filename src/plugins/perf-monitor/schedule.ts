@@ -24,25 +24,28 @@ const job = cadencedIdleJob({
 /** Run now, publish, return. Used by the effect and by the trend view's manual
  *  refresh. Throws on failure so a caller can surface it. */
 export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
+  // Stamped BEFORE the awaits, compared after. The analysis draws on AMBIENT
+  // state — `repo.isReadOnly` describes whichever workspace is active now, the
+  // live counters are page-global — and its history reads plus `countLiveBlocks`
+  // are long enough for the world to move under it.
+  //
+  // TWO checks, covering different windows — neither implies the other:
+  //
+  //  - the GENERATION catches what comparing values back cannot. `A→B→A` during
+  //    the awaits leaves `activeWorkspaceId` equal to what it was while the
+  //    analysis absorbed B's ambient state, and a discarded Repo keeps its own
+  //    pin forever, so its own check passes vacuously. The effect restarts on
+  //    a Repo swap and on a workspace change alike, so one counter covers both.
+  //  - the WORKSPACE check catches the same change EARLIER. The effect restarts
+  //    through React, so between `setActiveWorkspaceId` and the restart there is
+  //    a window where the generation still matches and the workspace does not.
+  //
+  // The caller still gets the result; only the chip is spared it.
+  const generation = contextGeneration
   const analysis = await runPerfAnalysis(repo, workspaceId, Date.now())
-  // Both checks are about the same window — the history reads and
-  // `countLiveBlocks` take long enough for the world to move under them — but
-  // they answer different questions, and neither implies the other.
-  //
-  // The workspace can change, and the analysis draws on AMBIENT state
-  // (`repo.isReadOnly` describes whichever workspace is active now, the live
-  // counters are page-global), so publishing would attach the new workspace's
-  // blocker to the old one's verdict.
-  //
-  // The REPO can change too, on a local sign-out with no reload. A discarded
-  // Repo keeps its own `activeWorkspaceId` forever — nobody clears it — so its
-  // check passes vacuously and it would publish the previous user's verdict
-  // into the store the new one is reading. Ask who owns the store instead.
-  //
-  // The caller still gets the result either way; only the chip is spared it.
-  if (ownsStore(repo) && repo.activeWorkspaceId === workspaceId) {
-    publishPerfAnalysis(analysis)
-  }
+  const contextHeld =
+    generation === contextGeneration && repo.activeWorkspaceId === workspaceId
+  if (contextHeld && ownsStore(repo)) publishPerfAnalysis(analysis)
   return analysis
 }
 
@@ -51,6 +54,11 @@ export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
  *  user opening the same shared workspace would be shown the previous user's
  *  verdict until the next pass, over their own client's history. */
 let publishedFor: object | null = null
+
+/** Bumped whenever the analysis context changes. The effect restarts on a Repo
+ *  swap AND on a workspace change, so one counter covers both — and a run that
+ *  started under an earlier value is describing a world that has moved on. */
+let contextGeneration = 0
 
 /** May `repo` publish into the store? Claims it when nobody has — the manual
  *  refresh is a standalone entry point and must work without the effect having
@@ -67,6 +75,7 @@ export const perfAnalysisEffect: AppEffect = {
   id: 'perf-monitor.analyze',
   start: ({ repo, workspaceId }) => {
     if (!workspaceId) return
+    contextGeneration++
     if (!ownsStore(repo)) {
       // NOT the store's `reset`: that drops the LISTENERS too, and a
       // `useSyncExternalStore` subscriber never comes back from it — it

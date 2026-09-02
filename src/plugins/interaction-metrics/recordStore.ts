@@ -113,6 +113,16 @@ export const appendClientRecord = async (
   repo: Repo,
   spec: ClientRecordSpec,
 ): Promise<{ blockId: string; groupId: string }> => {
+  const assertEligible = spec.assertEligible ?? assertStillWritable
+  // BEFORE the ensure, which MINTS two blocks — the plugin root and this
+  // client's group. The callers check eligibility too, but several awaits back;
+  // with the first re-take inside the transaction below, a workspace that went
+  // read-only in between still got two Automation writes that RLS refuses and
+  // parks in the quarantine — the exact outcome the rule exists to prevent, and
+  // the record they were minted for is then correctly refused anyway. Re-taken
+  // inside the transaction as well, since this call is itself several awaits
+  // from the write.
+  assertEligible(repo, spec.workspaceId)
   const groupId = await ensureClientGroup(repo, spec.workspaceId, spec.containerType)
   const blockId = uuidv4()
   // Newest-first within the group: prepend before the current first sibling.
@@ -121,7 +131,7 @@ export const appendClientRecord = async (
     [groupId],
   )
   await repo.tx(async (tx) => {
-    ;(spec.assertEligible ?? assertStillWritable)(repo, spec.workspaceId)
+    assertEligible(repo, spec.workspaceId)
     // The group id comes from a MEMOIZED ensure, so a delete landing during
     // this page session is invisible to it — and `tx.create` preflights only
     // that the parent ROW exists, which a tombstone satisfies. The reader
@@ -172,11 +182,10 @@ export const appendClientRecord = async (
 /**
  * The ONE definition of "this client's records, newest first".
  *
- * The reader and the retention pass both select from a client's group, and they
- * have now diverged twice — once on ordering, once on device surface — each
- * time leaving retention free to evict a row the reader counted as current.
- * They build their query from here instead, so a change to the rule reaches
- * both or neither.
+ * The reader and the retention pass both select from a client's group, and a
+ * disagreement between them leaves retention free to evict a row the reader
+ * counts as current. They build their query from here, so a change to the rule
+ * reaches both or neither.
  *
  * Three clauses:
  *  - carries a record — DEFENCE IN DEPTH, and deliberately kept. These groups

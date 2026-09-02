@@ -10,6 +10,7 @@ export const analysisFixture = (over: Partial<PerfAnalysis> = {}): PerfAnalysis 
   seq: 1,
   regressions: [],
   ready: { interaction: true, startup: true },
+  startupAwaitingCurrentSample: false,
   interactionComparable: true,
   recordingBlockedBy: null,
   baseline: { interaction: 12, startup: 12 },

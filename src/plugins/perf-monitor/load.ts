@@ -163,9 +163,7 @@ export const loadRecords = async <T extends { recordedAt: number }>(
   for (let page = 0; page < MAX_PAGES && records.length < HISTORY_LIMIT; page++) {
     // Built from `clientSeriesQuery` — the one definition of this client's
     // records — so the reader and the retention pass cannot disagree about
-    // which rows are in the series or which of them is newest. They have
-    // diverged twice, and each time retention was free to evict a row this
-    // reader counted as current.
+    // which rows are in the series or which of them is newest.
     const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS payload', {
       groupId, recordName, deviceLabel: getDeviceLabel(),
       selectParams: [recordPath],

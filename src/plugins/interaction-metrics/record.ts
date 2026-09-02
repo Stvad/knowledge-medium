@@ -380,7 +380,7 @@ export const writeInteractionSample = async (
     {
       if (existing) {
         await repo.tx(async (tx) => {
-          assertStillAttributable(repo, workspaceId)
+          assertStillAttributable(repo, workspaceId, metrics.epoch)
           // Placement re-taken INSIDE the transaction, not just before it: the
           // check above is separated from this write by the block count, and a
           // sync-applied or hand edit landing in that window leaves us writing
@@ -409,7 +409,7 @@ export const writeInteractionSample = async (
         // STRONGER than the shared default: these counters are only meaningful
         // if they belong to one workspace, and a switch during the awaits above
         // invalidates them. The shared path cannot know that rule.
-        assertEligible: assertStillAttributable,
+        assertEligible: (r, ws) => assertStillAttributable(r, ws, metrics.epoch),
         content: new Date(startedAt).toISOString(),
         setProperty: async (tx, id) => {
           await tx.setProperty(id, interactionRecordProp, data, { skipMetadata: true })

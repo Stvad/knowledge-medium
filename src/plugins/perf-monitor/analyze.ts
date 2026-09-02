@@ -15,6 +15,7 @@ import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords } from './load.js'
 import { nextAnalysisSeq } from './store.js'
 import {
   anyJudged,
+  awaitingCurrentSample,
   judgedBaselineCount,
   baselineWindow,
   fanoutRegression,
@@ -40,6 +41,11 @@ export interface PerfAnalysis {
    *  sessions" — a clean verdict from a comparison that never ran, which is
    *  the failure this feature exists to remove. */
   ready: { interaction: boolean; startup: boolean }
+  /** Startup went unjudged because THIS session contributed no record — the
+   *  recorder is independently togglable, so the usual cause is that it is off.
+   *  Distinct from "still building": no amount of waiting resolves it, and
+   *  saying otherwise sends the user to wait for something that will not come. */
+  startupAwaitingCurrentSample: boolean
   /** False when this page session's live counters cannot be attributed to one
    *  workspace, so only startup was compared. Surfaced rather than silently
    *  folded into a clean verdict. */
@@ -70,6 +76,7 @@ export const blockedPerfAnalysis = (
   seq: nextAnalysisSeq(),
   regressions: [],
   ready: { interaction: false, startup: false },
+  startupAwaitingCurrentSample: false,
   interactionComparable: false,
   recordingBlockedBy: blockedBy,
   baseline: { interaction: 0, startup: 0 },
@@ -114,6 +121,7 @@ export const runPerfAnalysis = async (
 
   const interactionReady = anyJudged(interactionResults)
   const startupReady = anyJudged(startupResults)
+  const startupAwaitingCurrentSample = awaitingCurrentSample(startupResults)
 
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 
@@ -147,6 +155,7 @@ export const runPerfAnalysis = async (
     // comparison necessarily returns null and the chip would report "no
     // slowdowns" for a comparison that never ran.
     ready: { interaction: interactionReady, startup: startupReady },
+    startupAwaitingCurrentSample,
     interactionComparable: session.attributable,
     graphGrowth,
   }

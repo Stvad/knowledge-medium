@@ -53,7 +53,13 @@ const pendingNotes = (analysis: PerfAnalysis): string[] => {
   } else if (!analysis.ready.interaction) {
     notes.push('interaction history still building')
   }
-  if (!analysis.ready.startup) notes.push('startup history still building')
+  if (!analysis.ready.startup) {
+    // The two do not resolve the same way, so they are not one message: history
+    // fills by waiting, a missing current sample never does.
+    notes.push(analysis.startupAwaitingCurrentSample
+      ? 'no startup record for this session (startup recording may be off)'
+      : 'startup history still building')
+  }
   return notes
 }
 
