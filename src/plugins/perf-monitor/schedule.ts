@@ -6,7 +6,7 @@ import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
-import { observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
+import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysis } from './analyze.js'
 import { clearPerfAnalyses, publishPerfAnalysis } from './store.js'
 
@@ -24,36 +24,42 @@ const job = cadencedIdleJob({
 /** Run now, publish, return. Used by the effect and by the trend view's manual
  *  refresh. Throws on failure so a caller can surface it. */
 export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
-  // Stamped BEFORE the awaits, compared after. The analysis draws on AMBIENT
+  // Captured BEFORE the awaits, compared after. The analysis draws on AMBIENT
   // state — `repo.isReadOnly` describes whichever workspace is active now, the
   // live counters are page-global — and its history reads plus `countLiveBlocks`
   // are long enough for the world to move under it.
   //
-  // TWO checks, covering different windows — neither implies the other:
+  // TWO things to check, and neither implies the other:
   //
+  //  - the CONTEXT it was computed under must still describe the world: same
+  //    Repo, same workspace, same counter span. The span is why this is not
+  //    just a workspace comparison — a `resetMetrics()` mid-analysis retires
+  //    the counters the verdict rests on while every other value is unchanged.
   //  - the GENERATION catches what comparing values back cannot. `A→B→A` during
-  //    the awaits leaves `activeWorkspaceId` equal to what it was while the
-  //    analysis absorbed B's ambient state, and a discarded Repo keeps its own
-  //    pin forever, so its own check passes vacuously. The effect restarts on
-  //    a Repo swap and on a workspace change alike, so one counter covers both.
-  //  - the WORKSPACE check catches the same change EARLIER. The effect restarts
-  //    through React, so between `setActiveWorkspaceId` and the restart there is
-  //    a window where the generation still matches and the workspace does not.
+  //    the awaits leaves the context equal to what it was while the analysis
+  //    absorbed B's ambient state. The effect restarts on any of those changes,
+  //    so one counter covers the ones a value comparison cannot see.
   //
   // The caller still gets the result; only the chip is spared it.
   const generation = contextGeneration
+  const ctx = metricsContext(repo, workspaceId)
   const analysis = await runPerfAnalysis(repo, workspaceId, Date.now())
-  const contextHeld =
-    generation === contextGeneration && repo.activeWorkspaceId === workspaceId
-  if (contextHeld && ownsStore(repo)) publishPerfAnalysis(analysis)
+  const held = generation === contextGeneration && contextHolds(ctx, repo)
+  if (held && ownsStore(repo, workspaceId)) publishPerfAnalysis(analysis)
   return analysis
 }
 
-/** The Repo the published verdicts belong to. A local sign-out swaps the Repo
- *  without a reload, and the store is keyed by workspace alone — so the next
- *  user opening the same shared workspace would be shown the previous user's
- *  verdict until the next pass, over their own client's history. */
-let publishedFor: object | null = null
+/** The Repo AND workspace the published verdicts belong to.
+ *
+ *  The Repo because a local sign-out swaps it without a reload, and the store is
+ *  keyed by workspace alone — so the next user opening the same shared workspace
+ *  would be shown the previous user's verdict over their own client's history.
+ *
+ *  The workspace because the counters a verdict rests on are page-global: once
+ *  the page has been in a second workspace they are no longer attributable to
+ *  the first, so the verdict cached for it describes a comparison that would no
+ *  longer be made. Blank until the next analysis is honest; stale is not. */
+let publishedFor: { repo: object; workspaceId: string } | null = null
 
 /** Bumped whenever the analysis context changes. The effect restarts on a Repo
  *  swap AND on a workspace change, so one counter covers both — and a run that
@@ -66,24 +72,32 @@ let contextGeneration = 0
  *  case worth refusing: a discarded Repo keeps its own `activeWorkspaceId`
  *  forever, so its run resolves after the swap, finds its pin intact, and would
  *  publish the previous user's verdict into the store the new one is reading. */
-const ownsStore = (repo: object): boolean => {
-  if (publishedFor === null) publishedFor = repo
-  return publishedFor === repo
+const ownsStore = (repo: object, workspaceId: string): boolean => {
+  if (publishedFor === null) publishedFor = { repo, workspaceId }
+  return publishedFor.repo === repo && publishedFor.workspaceId === workspaceId
 }
+
+/** Test helper — forget which context owns the store.
+ *
+ *  Module state with no reset seam made these tests order-dependent: a claim
+ *  from whichever test ran first survived into the next, so a later test's
+ *  "did not publish" could hold because publication was never possible there.
+ *  A negative assertion that cannot distinguish those two is no assertion. */
+export const resetPerfSchedulingState = (): void => { publishedFor = null }
 
 export const perfAnalysisEffect: AppEffect = {
   id: 'perf-monitor.analyze',
   start: ({ repo, workspaceId }) => {
     if (!workspaceId) return
     contextGeneration++
-    if (!ownsStore(repo)) {
+    if (!ownsStore(repo, workspaceId)) {
       // NOT the store's `reset`: that drops the LISTENERS too, and a
       // `useSyncExternalStore` subscriber never comes back from it — it
       // re-subscribes only when the `subscribe` identity changes, and this one
       // is module-stable. The chip would hold the pre-swap verdict for the rest
       // of the session, deaf to every later publish.
       clearPerfAnalyses()
-      publishedFor = repo
+      publishedFor = { repo, workspaceId }
     }
     observeWorkspace(repo, workspaceId)
     // No special case for an environment that can never record. The ordinary

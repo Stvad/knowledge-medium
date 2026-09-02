@@ -19,7 +19,7 @@ import {
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis } from '../analyze'
-import { perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
+import { perfAnalysisEffect, resetPerfSchedulingState, runPerfAnalysisNow } from '../schedule'
 import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
 import { INTERACTION_SERIES, loadRecords } from '../load'
 
@@ -44,6 +44,10 @@ beforeEach(async () => {
     ],
   }).repo
   repo.setActiveWorkspaceId(WS)
+  // Each test gets its own Repo, so the store's owner must be forgotten too —
+  // otherwise a claim from the previous test decides whether this one can
+  // publish at all, and its negative assertions hold for the wrong reason.
+  resetPerfSchedulingState()
 })
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -150,6 +154,28 @@ describe('runPerfAnalysis', () => {
     >[0])
     await pending
     stop?.()
+
+    expect(getPerfAnalysisFor(WS)).toBeNull()
+  })
+
+  // A reset retires the counters the verdict rests on. Nothing else moves —
+  // same Repo, same workspace, and the effect has not restarted — so a value
+  // comparison sees an unchanged world while the analysis describes a span that
+  // no longer exists, and the chip would carry it for the whole cadence.
+  it('does not publish a verdict computed under retired counters', async () => {
+    resetPerfAnalysisStore()
+    await pastSession()
+    // The precondition, asserted rather than assumed: this Repo CAN publish
+    // here. Without it a null below proves nothing — publication is gated on
+    // several things, and the store is module state shared across these tests.
+    const published = await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(WS)).toBe(published)
+
+    resetPerfAnalysisStore()
+    // The context is captured synchronously on entry, so this lands inside.
+    const pending = runPerfAnalysisNow(repo, WS)
+    repo.resetMetrics()
+    await pending
 
     expect(getPerfAnalysisFor(WS)).toBeNull()
   })

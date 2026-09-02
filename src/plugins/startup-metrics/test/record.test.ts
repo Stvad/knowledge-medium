@@ -358,6 +358,20 @@ describe('collectStartupMetricsEffect', () => {
     expect(startEffect('ws-2')).toBeUndefined()
   })
 
+  // The Repo as well as the workspace. A local sign-out swaps it without a
+  // reload, so the next user opening the SAME shared workspace satisfies a
+  // workspace-only pin and would receive the previous user's boot.
+  it('declines to record this boot into a Repo it did not happen in', async () => {
+    markStartup('firstContentPaint')
+    expect(startEffect(WS)).toBeTypeOf('function')
+
+    const other = createTestRepo({ db: sharedDb.db, user: USER }).repo
+    other.setActiveWorkspaceId(WS)
+    expect(await collectStartupMetricsEffect.start({ repo: other, workspaceId: WS } as Parameters<
+      typeof collectStartupMetricsEffect.start
+    >[0])).toBeUndefined()
+  })
+
   // Asserted on the CAUSE: once the write has settled, the restart arms
   // nothing, so it returns no disposer. A count cannot pin this — it is already
   // 1, so both a bare assertion and a `waitFor` on it pass on the first tick

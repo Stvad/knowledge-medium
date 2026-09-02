@@ -264,6 +264,37 @@ export const awaitRecordingAllowed = async (
   }
 }
 
+/**
+ * What an artifact was computed under.
+ *
+ * Everything this feature produces — an analysis, a boot timeline, the rows in
+ * an open dialog — is derived from a Repo, a workspace, and a span of the
+ * page-global counters. Each is separately replaceable while the work is in
+ * flight: a local sign-out swaps the Repo without a reload, a switch changes
+ * the workspace, `resetMetrics()` starts a new span. An artifact outliving any
+ * of them describes a world that no longer exists, and the three had been
+ * guarded one at a time, in three different ad-hoc ways, each time a review
+ * found the next one.
+ *
+ * Captured where the work starts and compared where its result is used.
+ */
+export interface MetricsContext {
+  readonly repo: object
+  readonly workspaceId: string
+  readonly epoch: number
+}
+
+export const metricsContext = (repo: Repo, workspaceId: string): MetricsContext =>
+  ({ repo, workspaceId, epoch: repo.metrics().epoch })
+
+/** Does `ctx` still describe the world? Identity on the Repo, because a
+ *  discarded one keeps its own `activeWorkspaceId` forever and so answers every
+ *  question about itself in the affirmative. */
+export const contextHolds = (ctx: MetricsContext, repo: Repo): boolean =>
+  ctx.repo === repo &&
+  ctx.workspaceId === repo.activeWorkspaceId &&
+  ctx.epoch === repo.metrics().epoch
+
 /** Thrown to roll back a record write whose eligibility lapsed mid-transaction. */
 export class NoLongerEligible extends Error {}
 

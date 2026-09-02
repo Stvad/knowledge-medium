@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/context/repo.tsx', () => ({ useRepo: () => mocks.repo }))
 vi.mock('../schedule.ts', () => ({ runPerfAnalysisNow: mocks.runNow }))
+vi.mock('@/utils/toast.js', () => ({ showError: vi.fn(), showProgress: vi.fn() }))
 
 afterEach(() => {
   vi.clearAllMocks()
@@ -190,22 +191,72 @@ describe('a superseded refresh', () => {
 
     // The dialog goes away — the same invalidation a Repo swap performs.
     cleanup()
-    const readsBefore = countQueries()
+    // Counted at CALL time. `repo.metrics().db.getAll.calls` increments in a
+    // `finally` after the round trip, so watching it means waiting for a
+    // duration — which is what an earlier version of this test did, and it
+    // could not fail: under load the continuation outlives any window chosen
+    // here. A spy increments the instant the read is issued.
+    const reads = vi.spyOn(repo.db, 'getAll')
     release()
 
-    // A real settle, not a microtask flush: the reads this must NOT issue are
-    // DB round trips, so draining the microtask queue proves nothing — the
-    // first version of this test passed with the bug reintroduced for exactly
-    // that reason. Proving an absence has no positive event to wait on, so the
-    // window is bounded instead, and sized by mutation: with the guard removed
-    // the reads land well inside it.
-    await new Promise((r) => setTimeout(r, 250))
+    // One event-loop TURN, not a duration. The refresh resumes in a microtask
+    // off the promise just resolved and issues its reads synchronously from
+    // there, so a macrotask boundary — after which every pending microtask has
+    // run — is a language guarantee rather than a bet on timing. It neither
+    // slows a passing run nor weakens under gate load.
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(countQueries()).toBe(readsBefore)
-  }, 20_000)
+    expect(reads).not.toHaveBeenCalled()
+  })
+})
 
-  /** Reads issued through the repo so far. */
-  function countQueries(): number {
-    return repo.metrics().db.getAll.calls
-  }
+/**
+ * Rows belong to the Repo they were read from.
+ *
+ * A local sign-out swaps the Repo without a reload. Held in bare state the
+ * previous user's rows keep rendering until the new read finishes — and forever
+ * if it fails, since the catch path writes no state. Deriving what is shown
+ * from the data's owner makes that unrepresentable rather than cleared.
+ */
+describe('rows after a Repo swap', () => {
+  const WS = 'ws-A'
+  const USER: User = { id: 'user-1', name: 'Alice' }
+  let sharedDb: TestDb
+  let repo: Repo
+
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: USER,
+      extensions: [
+        definitionSeedsFacet.of(interactionRecordProp, { source: 'test' }),
+        typeSeedsFacet.of(interactionRecordType, { source: 'test' }),
+        definitionSeedsFacet.of(startupRecordProp, { source: 'test' }),
+        typeSeedsFacet.of(startupRecordType, { source: 'test' }),
+      ],
+    }).repo
+    repo.setActiveWorkspaceId(WS)
+    mocks.repo = repo
+  })
+
+  it('stops showing them when the new Repo cannot read', async () => {
+    await writeInteractionSample(repo, WS)
+    await writeStartupRecord(repo, WS)
+    const view = render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
+
+    // The swap, with a Repo whose reads FAIL — the case bare state cannot
+    // recover from, because the catch path writes nothing.
+    mocks.repo = {
+      activeWorkspaceId: WS,
+      user: USER,
+      db: { getAll: async () => { throw new Error('gone') } },
+    } as unknown as Repo
+    view.rerender(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+
+    await waitFor(() => expect(screen.queryAllByRole('table')).toHaveLength(0))
+  })
 })

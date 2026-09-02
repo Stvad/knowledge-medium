@@ -69,10 +69,23 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   const analysis = useSyncExternalStore(subscribePerfAnalysis, () =>
     getPerfAnalysisFor(workspaceId ?? repo.activeWorkspaceId),
   )
-  const [startup, setStartup] = useState<StartupRecordData[] | null>(null)
-  const [interaction, setInteraction] = useState<InteractionRecordData[] | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const ws = workspaceId ?? repo.activeWorkspaceId
+
+  /** The loaded series WITH the Repo and workspace they were read from. Kept
+   *  together so what is rendered can be derived rather than cleared: a local
+   *  sign-out swaps the Repo, and rows held in bare state would go on showing
+   *  the previous user's history until the new read finished — or forever, if
+   *  it failed, since the catch path writes nothing. */
+  const [series, setSeries] = useState<{
+    repo: object
+    workspaceId: string
+    startup: StartupRecordData[]
+    interaction: InteractionRecordData[]
+  } | null>(null)
+  const shown = series && series.repo === repo && series.workspaceId === ws ? series : null
+  const startup = shown?.startup ?? null
+  const interaction = shown?.interaction ?? null
 
   /** Reads both series. Shared by the mount effect and the manual refresh: the
    *  tables are what a reader checks the verdict against, so refreshing one
@@ -86,8 +99,11 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
         loadRecords(repo, ws, INTERACTION_SERIES),
       ])
       if (!alive()) return
-      setStartup(s.map((r) => r.record))
-      setInteraction(i.map((r) => r.record))
+      setSeries({
+        repo, workspaceId: ws,
+        startup: s.map((r) => r.record),
+        interaction: i.map((r) => r.record),
+      })
     } catch (e) {
       if (alive()) showError(`Couldn't read performance history: ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -109,7 +125,11 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     const alive = claimLoad()
     // Async IIFE: the state lands on resolve, not during the effect.
     void (async () => { await loadSeries(alive) })()
-    // Invalidates an in-flight load without needing to reach into it.
+    // Invalidates an in-flight load without needing to reach into it. Reading
+    // the ref in cleanup is the POINT here, not the hazard the rule describes:
+    // it guards against a ref to a DOM node having changed, and this one is a
+    // counter whose whole job is to be bumped on the way out.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: bump the load token on teardown
     return () => { loadToken.current++ }
   }, [loadSeries, claimLoad])
 

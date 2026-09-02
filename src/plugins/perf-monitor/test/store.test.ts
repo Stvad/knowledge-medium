@@ -7,9 +7,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { analysisFixture as analysis } from './fixtures'
 import { clearPerfAnalyses, getPerfAnalysisFor, nextAnalysisSeq, publishPerfAnalysis, resetPerfAnalysisStore, subscribePerfAnalysis } from '../store'
-import { perfAnalysisEffect } from '../schedule'
+import { perfAnalysisEffect, resetPerfSchedulingState } from '../schedule'
 
-afterEach(() => { resetPerfAnalysisStore() })
+afterEach(() => { resetPerfAnalysisStore(); resetPerfSchedulingState() })
 
 describe('publishPerfAnalysis', () => {
   // Ordered on a sequence, not the wall clock: two runs starting in the same
@@ -74,8 +74,8 @@ describe('a Repo swap', () => {
     isReadOnly: false,
     metrics: () => ({ epoch: 0, epochWorkspaceId: null }),
   })
-  const startFor = async (repo: object) => {
-    const stop = await perfAnalysisEffect.start({ repo, workspaceId: 'ws-1' } as Parameters<
+  const startFor = async (repo: object, workspaceId = 'ws-1') => {
+    const stop = await perfAnalysisEffect.start({ repo, workspaceId } as Parameters<
       typeof perfAnalysisEffect.start
     >[0])
     if (stop) stops.push(stop)
@@ -118,5 +118,43 @@ describe('a Repo swap', () => {
     resetPerfAnalysisStore()
     publishPerfAnalysis(analysis({ seq: 9 }))
     expect(notified).toBe(1)
+  })
+})
+
+/**
+ * A workspace change invalidates the verdicts too, not only a Repo swap.
+ *
+ * The counters a verdict rests on are page-global: once the page has been in a
+ * second workspace they are no longer attributable to the first, so the cached
+ * verdict describes a comparison that would no longer be made. `A→B→A` would
+ * otherwise present it again immediately, since the Repo never changed.
+ */
+describe('a workspace change', () => {
+  const stops: Array<() => void> = []
+  afterEach(() => { while (stops.length) stops.pop()?.() })
+
+  const repoStub = (activeWorkspaceId: string) => ({
+    activeWorkspaceId,
+    isReadOnly: false,
+    metrics: () => ({ epoch: 0, epochWorkspaceId: null }),
+  })
+  const startFor = async (repo: object, workspaceId: string) => {
+    const stop = await perfAnalysisEffect.start({ repo, workspaceId } as Parameters<
+      typeof perfAnalysisEffect.start
+    >[0])
+    if (stop) stops.push(stop)
+  }
+
+  it('drops the verdict cached for the workspace it left', async () => {
+    const repo = repoStub('ws-1')
+    await startFor(repo, 'ws-1')
+    publishPerfAnalysis(analysis({ seq: 1 }))
+    expect(getPerfAnalysisFor('ws-1')).not.toBeNull()
+
+    // Same Repo — only the workspace moved.
+    repo.activeWorkspaceId = 'ws-2'
+    await startFor(repo, 'ws-2')
+
+    expect(getPerfAnalysisFor('ws-1')).toBeNull()
   })
 })

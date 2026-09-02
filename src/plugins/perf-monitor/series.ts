@@ -269,12 +269,19 @@ export const startupRegression = (
   // alone only implies currency via the sort order, and a backwards clock
   // correction between boots sinks this boot's record below older ones — the
   // guard would still pass while the window described earlier page loads.
-  if (!series.slice(0, RECENT_WINDOW).some((r) => r.timeOriginMs === currentTimeOriginMs)) {
-    // Not "still building": the series may be long. This boot simply is not in
-    // it — the startup recorder is independently togglable, so the usual cause
-    // is that it is switched off, and waiting cannot fix that.
-    return NO_CURRENT_SAMPLE
-  }
+  // PRESENT AND USABLE, not merely present. A boot that stayed hidden until
+  // after first paint records through the fallback, so its row exists with no
+  // paint marks and `bootstrapGapMs` is null — the row is immutable, so no
+  // amount of waiting gives it the sample the comparison needs. Reported as
+  // present-but-unusable it would read as "still building" forever.
+  //
+  // Not "still building" in the absent case either: the series may be long, and
+  // the startup recorder is independently togglable, so the usual cause of an
+  // absent row is that it is switched off. Waiting fixes neither.
+  const current = series
+    .slice(0, RECENT_WINDOW)
+    .find((r) => r.timeOriginMs === currentTimeOriginMs)
+  if (!current || bootstrapGapMs(current) === null) return NO_CURRENT_SAMPLE
   const gaps = (rs: readonly StartupRecordData[]) =>
     rs.map(bootstrapGapMs).filter((v): v is number => v !== null)
   return trendRegression(

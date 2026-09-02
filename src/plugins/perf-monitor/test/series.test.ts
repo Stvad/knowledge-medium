@@ -204,6 +204,24 @@ describe('startupRegression', () => {
 
   const held = (n: number) => Array.from({ length: n }, (_, i) => boot(1000, 1320 + i * 10))
 
+  // A boot that stayed hidden until after first paint records through the
+  // fallback: the row exists, carries this boot's `timeOriginMs`, and has no
+  // paint marks. It is immutable, so no amount of history gives it the sample
+  // the comparison needs — reporting "still building" promises a resolution
+  // that cannot come.
+  it('reports a current row with no usable gap as an absent sample', () => {
+    const incomplete = { recordedAt: 0, timeOriginMs: THIS_BOOT } as StartupRecordData
+    const result = startupRegression([incomplete, ...held(11)], THIS_BOOT)
+    expect(result).toEqual({ status: 'insufficient', reason: 'no-current-sample' })
+  })
+
+  // ...as distinct from a series that genuinely has too little history, which
+  // waiting DOES fix.
+  it('still reports thin history as thin history', () => {
+    expect(startupRegression([boot(1000, 1320)], THIS_BOOT))
+      .toEqual({ status: 'insufficient', reason: 'history' })
+  })
+
   it('flags the step in the bootstrap gap once it persists', () => {
     const series = [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(8)]
     expect(reg(startupRegression(series, THIS_BOOT))).toMatchObject({
