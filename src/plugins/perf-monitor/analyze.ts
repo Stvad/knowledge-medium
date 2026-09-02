@@ -13,6 +13,7 @@ import {
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, countRecords, loadRecords } from './load.js'
 import { nextAnalysisSeq } from './store.js'
+import type { MonitorRun } from './monitorRun.js'
 import {
   anyJudged,
   awaitingCurrentSample,
@@ -29,6 +30,11 @@ import {
 
 export interface PerfAnalysis {
   workspaceId: string
+  /** The monitor run this was computed under, stamped at the publication
+   *  boundary. Null when nothing was running — a refresh from a dialog still
+   *  mounted after the monitor was switched off — and such an analysis is
+   *  returned to its caller but never reaches the store. */
+  run: MonitorRun | null
   analyzedAt: number
   /** Run order, so two analyses that START in the same millisecond still have
    *  one. `analyzedAt` answers WHEN, which is a different question. */
@@ -72,11 +78,16 @@ export interface PerfAnalysis {
   graphGrowth: number | null
 }
 
+/** Everything a verdict is, EXCEPT which monitor run it belongs to. That is
+ *  stamped at the publication boundary, by the caller that knows whether one is
+ *  in force — this function is equally callable from a test with none. */
+export type PerfComparison = Omit<PerfAnalysis, 'run'>
+
 export const runPerfAnalysis = async (
   repo: Repo,
   workspaceId: string,
   now: number,
-): Promise<PerfAnalysis> => {
+): Promise<PerfComparison> => {
   // Allocated BEFORE the first await. The number answers "which run started
   // first", so taking it at return time would give the run that finishes first
   // the lower value — which is the ordering this exists to prevent.

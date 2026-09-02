@@ -19,7 +19,8 @@ import {
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis } from '../analyze'
-import { perfAnalysisEffect, resetPerfSchedulingState, runPerfAnalysisNow } from '../schedule'
+import { perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
+import { resetMonitorRun } from '../monitorRun'
 import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
 import { INTERACTION_SERIES, loadRecords } from '../load'
 
@@ -44,12 +45,21 @@ beforeEach(async () => {
     ],
   }).repo
   repo.setActiveWorkspaceId(WS)
-  // Each test gets its own Repo, so the store's owner must be forgotten too —
-  // otherwise a claim from the previous test decides whether this one can
-  // publish at all, and its negative assertions hold for the wrong reason.
-  resetPerfSchedulingState()
+  // Each test gets its own Repo, so the run must be forgotten too — otherwise
+  // the previous test's run decides whether this one can publish at all, and
+  // its negative assertions hold for the wrong reason.
+  resetMonitorRun()
 })
 afterEach(() => { vi.restoreAllMocks() })
+
+/** Start the monitor for `workspaceId`. Publication requires a live run, so a
+ *  test asserting anything about the store has to start one — including the
+ *  ones whose subject is a refusal, or the refusal holds because nothing was
+ *  ever running. */
+const startEffect = async (workspaceId = WS) =>
+  perfAnalysisEffect.start({ repo, workspaceId } as Parameters<
+    typeof perfAnalysisEffect.start
+  >[0])
 
 /** Stamp a record with values a comparison can actually use. The reported
  *  baseline is now the count of sessions the comparison CONSUMED, so a test
@@ -130,6 +140,7 @@ describe('runPerfAnalysis', () => {
   it('does not publish a verdict for a workspace that is no longer active', async () => {
     resetPerfAnalysisStore()
     await pastSession()
+    const stop = await startEffect()
     const analysis = await runPerfAnalysisNow(repo, WS)
     expect(getPerfAnalysisFor(WS)).toBe(analysis)
 
@@ -137,36 +148,36 @@ describe('runPerfAnalysis', () => {
     repo.setActiveWorkspaceId(OTHER_WS)
     await runPerfAnalysisNow(repo, WS)
     expect(getPerfAnalysisFor(WS)).toBeNull()
+    stop?.()
   })
 
   // Comparing the workspace back cannot catch A->B->A: the value is equal again
   // by the time the run finishes, while the analysis absorbed B's ambient state
-  // on the way through. The effect restarts on every such change, so a run whose
-  // stamp is stale is describing a world that has moved on.
+  // on the way through. The effect restarts on every such change, and a restart
+  // mints a new run — so identity separates them where a value comparison
+  // cannot.
   it('does not publish a run whose context changed and changed back', async () => {
     resetPerfAnalysisStore()
     await pastSession()
+    const first = await startEffect()
 
-    // Stamped synchronously on entry, so the restart below lands inside the run.
+    // Captured synchronously on entry, so the restart below lands inside the run.
     const pending = runPerfAnalysisNow(repo, WS)
-    const stop = await perfAnalysisEffect.start({ repo, workspaceId: WS } as Parameters<
-      typeof perfAnalysisEffect.start
-    >[0])
+    const second = await startEffect()
     await pending
-    stop?.()
+    first?.()
+    second?.()
 
     expect(getPerfAnalysisFor(WS)).toBeNull()
   })
 
   // A run still in flight when the monitor is switched off is describing a
-  // world nobody is watching any more; teardown bumps the generation so it
-  // cannot publish afterwards.
+  // world nobody is watching any more; teardown ends the run, so it cannot
+  // publish afterwards.
   it('does not publish a run that outlived the effect', async () => {
     resetPerfAnalysisStore()
     await pastSession()
-    const stop = await perfAnalysisEffect.start({ repo, workspaceId: WS } as Parameters<
-      typeof perfAnalysisEffect.start
-    >[0])
+    const stop = await startEffect()
     // The precondition, asserted rather than assumed.
     const published = await runPerfAnalysisNow(repo, WS)
     expect(getPerfAnalysisFor(WS)).toBe(published)
@@ -179,6 +190,32 @@ describe('runPerfAnalysis', () => {
     expect(getPerfAnalysisFor(WS)).toBeNull()
   })
 
+  // The trend dialog is mounted in a shared DialogHost, so it survives the
+  // monitor being switched off and its Re-analyze button still works. A
+  // generation counter could not catch this: a refresh STARTING after teardown
+  // reads the post-teardown value and matches it back.
+  it('does not publish a refresh issued after the monitor was switched off', async () => {
+    resetPerfAnalysisStore()
+    await pastSession()
+    const stop = await startEffect()
+    // The precondition: this refresh CAN publish while the monitor is running,
+    // so the refusal below is about the teardown and nothing else. Awaited into
+    // a binding first — `expect(read()).toBe(await write())` evaluates the read
+    // before the await, so it would always see the store as it was BEFORE.
+    const published = await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(WS)).toBe(published)
+
+    resetPerfAnalysisStore()
+    stop?.()
+    const analysis = await runPerfAnalysisNow(repo, WS)
+
+    // The caller still gets its result; only the store is spared it. Asserted
+    // on a field: the analysis carries its run, whose `repo` a failure message
+    // would try to serialize.
+    expect(analysis.workspaceId).toBe(WS)
+    expect(getPerfAnalysisFor(WS)).toBeNull()
+  })
+
   // A reset retires the counters the verdict rests on. Nothing else moves —
   // same Repo, same workspace, and the effect has not restarted — so a value
   // comparison sees an unchanged world while the analysis describes a span that
@@ -186,6 +223,7 @@ describe('runPerfAnalysis', () => {
   it('does not publish a verdict computed under retired counters', async () => {
     resetPerfAnalysisStore()
     await pastSession()
+    const stop = await startEffect()
     // The precondition, asserted rather than assumed: this Repo CAN publish
     // here. Without it a null below proves nothing — publication is gated on
     // several things, and the store is module state shared across these tests.
@@ -199,6 +237,7 @@ describe('runPerfAnalysis', () => {
     await pending
 
     expect(getPerfAnalysisFor(WS)).toBeNull()
+    stop?.()
   })
 
   // repo.metrics() is page-global. The recorder stops sampling once a session

@@ -6,6 +6,7 @@
 // minute into every session.
 import { createWorkspaceSnapshotStore } from '@/utils/workspaceSnapshotStore.js'
 import type { PerfAnalysis } from './analyze.js'
+import { isCurrentRun } from './monitorRun.js'
 
 /** Id of the global action that opens the trend view for the last analysis. */
 export const VIEW_PERF_TREND_ACTION_ID = 'view_perf_trend'
@@ -25,11 +26,25 @@ export const nextAnalysisSeq = (): number => ++started
  *  its history reads would otherwise replace a fresher verdict, and the chip
  *  would carry it until the next scheduled pass. */
 export const publishPerfAnalysis = (analysis: PerfAnalysis): void => {
+  // The run that produced it must still be the current one. A discarded Repo
+  // keeps its own `activeWorkspaceId` forever, so its analysis resolves after a
+  // swap with its pin intact and every value it compares back still matching.
+  if (!isCurrentRun(analysis.run)) return
   const current = store.getFor(analysis.workspaceId)
   if (current && current.seq > analysis.seq) return
   store.publish(analysis)
 }
-export const getPerfAnalysisFor = store.getFor
+
+/** The verdict for `workspaceId`, or null when there is none THIS run.
+ *
+ *  Checked on the way out, not only on the way in: both readers take this
+ *  synchronously during render, and the effect that clears the store on a Repo
+ *  swap is a passive one that runs after. Between those two there is a commit
+ *  that would otherwise paint the previous user's verdict. */
+export const getPerfAnalysisFor = (workspaceId: string | null | undefined): PerfAnalysis | null => {
+  const analysis = store.getFor(workspaceId)
+  return analysis !== null && isCurrentRun(analysis.run) ? analysis : null
+}
 export const subscribePerfAnalysis = store.subscribe
 /** The verdicts belong to a Repo; a swap invalidates them but not the chip
  *  subscribed to them. */

@@ -4,14 +4,19 @@
  * are not serialised, so the two can be in flight together and finish in either
  * order.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { analysisFixture as analysis } from './fixtures'
 import { clearPerfAnalyses, getPerfAnalysisFor, nextAnalysisSeq, publishPerfAnalysis, resetPerfAnalysisStore, subscribePerfAnalysis } from '../store'
-import { perfAnalysisEffect, resetPerfSchedulingState } from '../schedule'
+import { perfAnalysisEffect } from '../schedule'
+import { resetMonitorRun, startMonitorRun } from '../monitorRun'
 
-afterEach(() => { resetPerfAnalysisStore(); resetPerfSchedulingState() })
+afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
 
 describe('publishPerfAnalysis', () => {
+  // These are about ORDERING, so they need a run the store will accept;
+  // whether it refuses a foreign one is the next describe's subject.
+  beforeEach(() => { startMonitorRun({}, 'ws-1') })
+
   // Ordered on a sequence, not the wall clock: two runs starting in the same
   // millisecond share an `analyzedAt` and a strict `>` lets the older win.
   it('keeps the verdict from the run that started most recently', () => {
@@ -51,6 +56,52 @@ describe('publishPerfAnalysis', () => {
     publishPerfAnalysis(analysis({ seq: 2, analyzedAt: 2000 }))
     publishPerfAnalysis(analysis({ workspaceId: 'ws-2', seq: 1, analyzedAt: 1000 }))
     expect(getPerfAnalysisFor('ws-2')?.analyzedAt).toBe(1000)
+  })
+})
+
+/**
+ * The read refuses a verdict from a previous run, on its own.
+ *
+ * Both readers take the store synchronously during render, while the effect
+ * that clears it on a Repo swap is a passive one that runs afterwards — so
+ * there is a commit in between, and a publish-side check cannot reach it. This
+ * asserts the read check WITHOUT any clear: the snapshot is still in the map.
+ */
+describe('reading across runs', () => {
+  it('returns nothing for a verdict published under a previous run', () => {
+    startMonitorRun({}, 'ws-1')
+    publishPerfAnalysis(analysis({ seq: 1 }))
+    expect(getPerfAnalysisFor('ws-1')).not.toBeNull()
+
+    // A new run, and deliberately no `clearPerfAnalyses()` — the stored
+    // snapshot is untouched and must still be unreadable.
+    startMonitorRun({}, 'ws-1')
+
+    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+  })
+
+  // The read check alone would make such a verdict invisible, but the store
+  // would still have taken it and woken every subscriber to re-read something
+  // none of them can see.
+  it('does not wake subscribers for a verdict from a run that is over', () => {
+    startMonitorRun({}, 'ws-1')
+    const stale = analysis({ seq: 1 })
+    resetMonitorRun()
+
+    let notified = 0
+    subscribePerfAnalysis(() => { notified++ })
+    publishPerfAnalysis(stale)
+
+    expect(notified).toBe(0)
+  })
+
+  it('returns nothing once no run is in force at all', () => {
+    startMonitorRun({}, 'ws-1')
+    publishPerfAnalysis(analysis({ seq: 1 }))
+
+    resetMonitorRun()
+
+    expect(getPerfAnalysisFor('ws-1')).toBeNull()
   })
 })
 
@@ -110,6 +161,7 @@ describe('a Repo swap', () => {
   // Guards the distinction itself: if `clearSnapshots` ever grows a
   // `listeners.clear()`, the test above still passes on its first assertion.
   it('is not what the test-only reset does', () => {
+    startMonitorRun({}, 'ws-1')
     let notified = 0
     subscribePerfAnalysis(() => { notified++ })
     clearPerfAnalyses()

@@ -1,5 +1,6 @@
 import type { PerfAnalysis } from '../analyze'
 import type { Regression } from '../series'
+import { currentMonitorRun } from '../monitorRun'
 
 /** A fully-judged, unregressed analysis. Shared by the verdict and chip tests:
  *  every field added to `PerfAnalysis` costs an edit per copy of this shape. */
@@ -15,6 +16,10 @@ export const analysisFixture = (over: Partial<PerfAnalysis> = {}): PerfAnalysis 
   baseline: { interaction: 12, startup: 12 },
   recorded: { interaction: 12, startup: 12 },
   graphGrowth: null,
+  // The run in force when the fixture is BUILT, so a test that started one gets
+  // a publishable analysis and a test that did not gets one the store refuses —
+  // which is what the store is for.
+  run: currentMonitorRun(),
   ...over,
 })
 
