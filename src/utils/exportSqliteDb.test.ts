@@ -424,7 +424,7 @@ describe('importRawSqliteDb', () => {
     const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(400).fill(0x41)])
     const archive = streamedZip([['x.db', dbBytes]])
     // Past the SQLite magic, which cannot occur in a zip header — unlike a bare
-    // 0x41, which the clock-derived timestamp field supplies about 1% of runs.
+    // 0x41, which the clock-derived timestamp field can supply.
     const payloadAt = indexOfBytes(archive, SQLITE_HEADER_BYTES) + SQLITE_HEADER_BYTES.length
     expect(archive[payloadAt]).toBe(0x41)
     archive[payloadAt] = 0x42
@@ -746,10 +746,9 @@ const writeAheadSupported = {probeWriteAheadSupport: async () => true}
 /**
  * Where `needle` first occurs in `haystack`, searching from `from`.
  *
- * Tests must locate archive structure by SEQUENCE, never by a single byte: the
- * local header's DOS timestamp is derived from the clock, so a one-byte search
- * lands in it about 1% of the time and silently targets the wrong offset. That
- * shipped as a 1-in-100 CI flake.
+ * Locate archive structure by SEQUENCE, never by a single byte: a zip local
+ * header carries a clock-derived DOS timestamp, so a one-byte search can land
+ * inside it and silently target the wrong offset.
  */
 const indexOfBytes = (haystack: Uint8Array, needle: Uint8Array, from = 0): number => {
   outer: for (let at = from; at <= haystack.length - needle.length; at++) {
