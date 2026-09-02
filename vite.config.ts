@@ -24,7 +24,15 @@ import fg from 'fast-glob'
 const allSrcEntries = (rootDir: string): Record<string, string> => {
     const files = fg.sync(['src/**/*.{ts,tsx}'], {
         cwd: rootDir,
-        ignore: ['**/test/**', '**/*.test.*', '**/*.spec.*', '**/*.fuzz.*', '**/*.d.ts'],
+        ignore: [
+            '**/test/**', '**/*.test.*', '**/*.spec.*', '**/*.fuzz.*', '**/*.d.ts',
+            // Example sources are imported as TEXT (`?raw`) and already emitted
+            // by that import. Adding them as entries compiles a second copy and
+            // Rollup dedups the name to `<name>2.js` — pure duplication.
+            '**/examples/**',
+            // Built by vite.sw.config.ts, a separate build with its own entries.
+            'src/sw/**',
+        ],
     })
     return Object.fromEntries(files.map(f => [f.replace(/\.tsx?$/, ''), path.resolve(rootDir, f)]))
 }
