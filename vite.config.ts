@@ -16,11 +16,11 @@ import {globSync} from 'node:fs'
 /** Every internal module as a Rollup input, so an extension can import ANY of
  *  them and get its full export surface.
  *
- *  `preserveEntrySignatures` protects ENTRY points only. A non-entry module
- *  keeps just the exports something imports across a module boundary — and
- *  because `preserveModules` still emits the file at its own path, a dropped
- *  export is a silent miss rather than a 404. Globbed rather than driven off
- *  `apiCatalog`: that catalog is a discovery surface, not a whitelist. */
+ *  `preserveEntrySignatures` protects ENTRY points only, so a non-entry module
+ *  keeps just the exports something imports across a module boundary (the
+ *  resulting silence is why scripts/check-dist-exports.ts exists). Globbed
+ *  rather than driven off `apiCatalog`: that catalog is a discovery surface,
+ *  not a whitelist. */
 const allSrcEntries = (rootDir: string): Record<string, string> => {
     const files = globSync('src/**/*.{ts,tsx,js}', {
         cwd: rootDir,

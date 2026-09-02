@@ -2,18 +2,14 @@
  * Post-build gate: every export the extension API catalog names must survive
  * into the emitted module.
  *
- * This exists because the failure it catches is SILENT. `preserveModules`
- * writes each module to its own path whether or not its exports survived, so a
- * tree-shaken export leaves the file — and therefore the extension's `import`
- * — perfectly resolvable, just missing the binding. An extension that
- * feature-detects (`'X' in mod`) reads that as "seam absent" and does nothing;
- * one that imports directly gets `undefined`, usually surfacing much later as
- * `undefined is not a component`.
+ * The failure is SILENT: `preserveModules` writes each module to its own path
+ * whether or not its exports survived, so a dropped export leaves the file —
+ * and the extension's `import` — perfectly resolvable, just missing the
+ * binding.
  *
  * It has to run against `dist/`. `apiCatalog.test.ts` makes the same assertion
- * under vitest and passed through the whole incident, because vitest resolves
- * source, where no tree-shaking has happened. Source-level checks are
- * structurally blind to this class of bug.
+ * under vitest, which resolves source, where no tree-shaking has happened;
+ * source-level checks are structurally blind to this class of bug.
  *
  * The catalog is used here as a TRIPWIRE, not as a whitelist: retention is a
  * property of the build config (every internal module is an entry), and this
