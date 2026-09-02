@@ -25,6 +25,8 @@ const allSrcEntries = (rootDir: string): Record<string, string> => {
     const files = globSync('src/**/*.{ts,tsx,js}', {
         cwd: rootDir,
         exclude: [
+            // `*.test.*` also covers the fuzz suites: docs/fuzzing.md fixes them
+            // as `*.fuzz.test.ts`, so a bare `*.fuzz.*` pattern matched nothing.
             '**/test/**', '**/*.test.*', '**/*.d.ts',
             // Example sources are imported as TEXT (`?raw`) and already emitted
             // by that import. Adding them as entries compiles a second copy and
@@ -37,6 +39,11 @@ const allSrcEntries = (rootDir: string): Record<string, string> => {
             // exports — the very bug this input list exists to prevent.
             'src/sw/{sw,worker,ledger,preview}.ts',
         ],
+        // Accepted: this also makes src/minimal-editor.tsx an entry, the script
+        // for a second page that is not itself a build input, so it emits with
+        // nothing importing it. Kept rather than special-cased — it IS an
+        // internal module, and carving out page bootstraps would reintroduce
+        // the per-file judgement this list exists to avoid. ~1 KB.
     })
     return Object.fromEntries(files.map((file: string) => {
         // globSync yields platform separators; the entry KEY becomes the emitted

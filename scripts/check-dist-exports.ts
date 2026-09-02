@@ -35,8 +35,17 @@ if (!fs.existsSync(distDir)) {
  *  module specifier — and measurably did: 10 of the 116 cataloged names
  *  survived deletion of their own export, two modules with their entire
  *  cataloged surface undetectable. Rollup emits `export{local as Public}`
- *  uniformly here; the bare `export{Public}` form is handled for safety. */
+ *  uniformly here; the bare `export{Public}` form is handled for safety.
+ *
+ *  Known limit: a clause appearing inside a STRING would be counted. No
+ *  cataloged module embeds source text (checked: all have exactly one clause),
+ *  and the error can only ever add a phantom name — a false pass, never a
+ *  false failure. `export * from` is rejected outright below rather than
+ *  silently under-reported, since it would hide names this cannot see. */
 const emittedExportNames = (text: string): Set<string> => {
+  if (/\bexport\s*\*\s*from/.test(text)) {
+    throw new Error('star re-export found; this parser cannot see the names it forwards')
+  }
   const names = new Set<string>()
   for (const [, clause] of text.matchAll(/\bexport\s*\{([^}]*)\}/g)) {
     for (const spec of clause.split(',')) {
