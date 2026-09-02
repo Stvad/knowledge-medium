@@ -9,7 +9,7 @@ import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
 import {resolveAppVersion} from './scripts/app-version'
-import fg from 'fast-glob'
+import {globSync} from 'node:fs'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
 
 
@@ -22,9 +22,9 @@ import fg from 'fast-glob'
  *  export is a silent miss rather than a 404. Globbed rather than driven off
  *  `apiCatalog`: that catalog is a discovery surface, not a whitelist. */
 const allSrcEntries = (rootDir: string): Record<string, string> => {
-    const files = fg.sync(['src/**/*.{ts,tsx}'], {
+    const files = globSync('src/**/*.{ts,tsx}', {
         cwd: rootDir,
-        ignore: [
+        exclude: [
             '**/test/**', '**/*.test.*', '**/*.spec.*', '**/*.fuzz.*', '**/*.d.ts',
             // Example sources are imported as TEXT (`?raw`) and already emitted
             // by that import. Adding them as entries compiles a second copy and
@@ -34,7 +34,12 @@ const allSrcEntries = (rootDir: string): Record<string, string> => {
             'src/sw/**',
         ],
     })
-    return Object.fromEntries(files.map(f => [f.replace(/\.tsx?$/, ''), path.resolve(rootDir, f)]))
+    return Object.fromEntries(files.map((file: string) => {
+        // globSync yields platform separators; the entry KEY becomes the emitted
+        // path, which the page importmap resolves as a URL, so it must be POSIX.
+        const posix = file.split(path.sep).join('/')
+        return [posix.replace(/\.tsx?$/, ''), path.resolve(rootDir, file)]
+    }))
 }
 
 type RollupLogLike = {
