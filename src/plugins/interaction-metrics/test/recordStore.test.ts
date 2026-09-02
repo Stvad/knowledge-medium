@@ -354,3 +354,38 @@ describe('appendClientRecord eligibility', () => {
     expect(await blockCount()).toBe(before)
   })
 })
+
+/**
+ * Retention deletes the record's SUBTREE.
+ *
+ * Writing the record property materializes field/value rows beneath the block
+ * where properties are blocks, and a bare `tx.delete` tombstones only the
+ * parent — `src/data/subtreeDelete.ts` says so outright. Those live rows would
+ * then accumulate under a tombstone on every pass, invisible and collected by
+ * nothing.
+ */
+describe('retention deletion', () => {
+  const liveDescendantsOf = async (id: string): Promise<string[]> =>
+    (await sharedDb.db.getAll<{ id: string }>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [id],
+    )).map((r) => r.id)
+
+  it('takes what lives under a pruned record, not just its row', async () => {
+    // The record that retention will evict, with a live child beneath it.
+    const { blockId: doomed } = await append(1)
+    await repo.tx(async (tx) => {
+      await tx.create({
+        id: 'nested', workspaceId: WS, parentId: doomed, orderKey: 'a1',
+        content: 'machinery', properties: {},
+      }, { systemMint: true })
+    }, { scope: ChangeScope.Automation, description: 'seed nested row' })
+    expect(await liveDescendantsOf(doomed)).toEqual(['nested'])
+
+    // Two more appends push `doomed` past a retain of 1.
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).not.toContain(doomed)
+    expect(await liveDescendantsOf(doomed)).toEqual([])
+  })
+})

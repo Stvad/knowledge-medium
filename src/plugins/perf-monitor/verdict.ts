@@ -40,7 +40,7 @@ const worsened = (r: Regression): string =>
  *  Shown only once it has moved, so the common case stays quiet. */
 const graphNote = (growth: number | null): string | null =>
   growth !== null && growth >= 1.05
-    ? `graph ${Math.round((growth - 1) * 100)}% larger than the baseline's`
+    ? `graph ${Math.round((growth - 1) * 100)}% larger than recent history's median`
     : null
 
 /** Which series went unjudged, and why. The two reasons resolve differently —

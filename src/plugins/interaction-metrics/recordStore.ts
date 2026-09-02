@@ -24,6 +24,7 @@ import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { v4 as uuidv4 } from 'uuid'
+import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
 import { assertStillWritable, NoLongerEligible } from './sessionContext.js'
 
 export interface ClientRecordSpec {
@@ -114,14 +115,22 @@ export const appendClientRecord = async (
   spec: ClientRecordSpec,
 ): Promise<{ blockId: string; groupId: string }> => {
   const assertEligible = spec.assertEligible ?? assertStillWritable
-  // BEFORE the ensure, which MINTS two blocks — the plugin root and this
-  // client's group. The callers check eligibility too, but several awaits back;
-  // with the first re-take inside the transaction below, a workspace that went
-  // read-only in between still got two Automation writes that RLS refuses and
-  // parks in the quarantine — the exact outcome the rule exists to prevent, and
-  // the record they were minted for is then correctly refused anyway. Re-taken
-  // inside the transaction as well, since this call is itself several awaits
-  // from the write.
+  // BEFORE the ensure, which MINTS blocks. The callers check eligibility too,
+  // but several awaits back; with the first re-take inside the transaction
+  // below, a workspace that went read-only in between still got Automation
+  // writes that RLS refuses and parks in the quarantine — the outcome the rule
+  // exists to prevent — while the record they were minted for was refused.
+  //
+  // This does NOT close the window, and cannot from here: the ensure runs the
+  // shared ui-state chain, which awaits a load and then opens its OWN
+  // transactions, so eligibility can still lapse inside it. ACCEPTED. The
+  // containers are the ones any ui-state consumer creates, they are created
+  // once per client group rather than per sample, and the two alternatives are
+  // both worse — reimplementing the user-page/ui-state chain inside this
+  // transaction duplicates core, and making the shared helpers eligibility-aware
+  // pushes one plugin's rule into machinery every plugin uses (and they are
+  // memoized on a key that would not include it, so the argument would bind to
+  // whichever caller arrived first).
   assertEligible(repo, spec.workspaceId)
   const groupId = await ensureClientGroup(repo, spec.workspaceId, spec.containerType)
   const blockId = uuidv4()
@@ -318,8 +327,15 @@ const pruneGroup = async (
       // which deletes from the same far end and whose deletes this loop no-ops
       // on; reaching the case needs a person hand-deleting newer rows mid-append.
       if ((record as { recordedAt?: unknown }).recordedAt !== row.stamp) continue
+      // The SUBTREE, not the row. Writing the record property materializes
+      // field/value rows beneath it where properties are blocks, and a bare
+      // delete tombstones the parent while leaving those live — invisible
+      // machinery accumulating under a tombstone on every retention pass, which
+      // nothing later collects. Takes anything nested under the record with it:
+      // these rows are ours, and stranding live descendants forever is the
+      // worse of the two errors.
       // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
-      await tx.delete(row.id)
+      await deleteSubtreeInTx(tx, row.id)
     }
   }, { scope: ChangeScope.Automation, telemetry: true, description: retentionDescription(spec) })
 }

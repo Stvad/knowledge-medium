@@ -11,7 +11,7 @@ import {
   readLiveSession,
   type RecordingBlocker,
 } from '@/plugins/interaction-metrics/sessionContext.js'
-import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords } from './load.js'
+import { INTERACTION_SERIES, STARTUP_SERIES, countRecords, loadRecords } from './load.js'
 import { nextAnalysisSeq } from './store.js'
 import {
   anyJudged,
@@ -57,11 +57,14 @@ export interface PerfAnalysis {
    *  series, because they fill independently and one number reported for the
    *  other tells a reader about history the verdict never used. */
   baseline: { interaction: number; startup: number }
-  /** Usable records ON DISK for each series. Distinct from `baseline`, which is
-   *  what the judged comparisons rested on and is 0 whenever nothing was
-   *  judged — so a "sessions recorded so far" note built from `baseline` reports
-   *  a constant zero in exactly the state that note is written for, and
-   *  contradicts the history the trend dialog is showing. */
+  /** Records ON DISK for each series, counted only when nothing was judged —
+   *  the one state whose note reports them; `{0, 0}` otherwise, and no reader
+   *  should take it for a count.
+   *
+   *  Distinct from `baseline` (what the judged comparisons rested on, 0 by
+   *  construction whenever nothing was judged) AND from the loaded series
+   *  length, which is capped at the comparison window and would report the cap
+   *  for a client with hundreds of sessions. */
   recorded: { interaction: number; startup: number }
   /** Live graph size over the baseline's, when both are known. Not used to
    *  filter or normalize — see `runPerfAnalysis` — but reported alongside a
@@ -132,6 +135,16 @@ export const runPerfAnalysis = async (
 
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 
+  // Two extra counts, and only in the state that reports them: with anything
+  // judged the verdict names what it rested on instead, and these would be two
+  // queries per analysis for a string nobody renders.
+  const recorded = interactionReady || startupReady
+    ? { interaction: 0, startup: 0 }
+    : {
+        interaction: await countRecords(repo, workspaceId, INTERACTION_SERIES),
+        startup: await countRecords(repo, workspaceId, STARTUP_SERIES),
+      }
+
   // Graph size is the dominant confound for every timing here, and it is
   // REPORTED rather than corrected for. Filtering the baseline to comparable
   // graph sizes would quietly disable the monitor on a steadily growing graph
@@ -139,6 +152,15 @@ export const runPerfAnalysis = async (
   // does not exist. A query that got twice as slow because its input doubled is
   // also a real slowdown the user feels; what they need is to be able to tell
   // which kind it is.
+  //
+  // Measured over the WHOLE baseline window, not over the sessions supporting
+  // any one regression — a query measurable in only some of them, or the
+  // fan-out's "had writes" filter, leaves each metric resting on its own
+  // subset. So this is not per-metric aligned, and the note says what it does
+  // measure rather than implying it is that metric's own baseline. Aligning it
+  // would mean carrying each result's supporting sessions through
+  // `TrendResult`, which is a lot of machinery for a hint whose job is only to
+  // prompt "was that code or data?".
   const baseCount = median(baselineWindow(history).map((r) => r.blockCount).filter((n) => n > 0))
   // Counted live, not read off the newest record: the timings on the current
   // side of every comparison are live too, so the graph size paired with them
@@ -151,7 +173,7 @@ export const runPerfAnalysis = async (
     analyzedAt: now,
     seq,
     recordingBlockedBy: session.blockedBy,
-    recorded: { interaction: interaction.length, startup: startup.length },
+    recorded,
     baseline: {
       interaction: judgedBaselineCount(interactionResults),
       startup: judgedBaselineCount(startupResults),

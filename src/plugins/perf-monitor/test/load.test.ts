@@ -22,8 +22,9 @@ import { jsonPathForProperty } from '@/data/internals/typedBlockQuery'
 import { clientGroupId } from '@/plugins/interaction-metrics/recordStore'
 import {
   HISTORY_LIMIT,
+  countRecords,
   INTERACTION_SERIES,
-  MAX_PAGES,
+  CANDIDATE_LIMIT,
   isUsableInteractionRecord,
   isUsableStartupRecord,
   loadRecords,
@@ -108,7 +109,7 @@ describe('loadRecords', () => {
     // are prepended) and re-stamped most recently.
     await insert('long-lived', 'z999', 9_000_000)
     // Enough newer-created siblings to fill every page the reader will read.
-    const buried = HISTORY_LIMIT * MAX_PAGES + 5
+    const buried = CANDIDATE_LIMIT + 5
     for (let i = 0; i < buried; i++) {
       await insert(`later-${i}`, `a${String(i).padStart(4, '0')}`, 1_000_000 + i)
     }
@@ -151,11 +152,11 @@ describe('loadRecords', () => {
     expect(records).toEqual([])
   })
 
-  // The page condition is checked BEFORE each page, so a page that ends one
-  // short of the limit runs another and the result can exceed HISTORY_LIMIT.
-  // Over-long history biases the baseline toward older, smaller-graph sessions,
-  // which reads as a regression that never happened.
-  it('truncates history that a second page overran', async () => {
+  // The candidate window is wider than the comparison window, so the read can
+  // return more usable records than the baseline should use. Over-long history
+  // biases it toward older, smaller-graph sessions, which reads as a regression
+  // that never happened.
+  it('stops at the comparison window even with more usable records', async () => {
     const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
     const row = async (id: string, orderKey: string, props: object): Promise<void> => {
       await sharedDb.db.execute(
@@ -179,6 +180,28 @@ describe('loadRecords', () => {
 
     const records = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(records).toHaveLength(HISTORY_LIMIT)
+  })
+
+  // The progress note means records ON DISK, so it must not be taken from the
+  // loaded window — which is capped at HISTORY_LIMIT and would report the cap.
+  it('counts every record on disk, past the loaded window', async () => {
+    const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
+    const total = HISTORY_LIMIT + 5
+    for (let i = 0; i < total; i++) {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+            created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
+        [`rec-${i}`, WS, groupId, `a${String(i).padStart(4, '0')}`,
+         JSON.stringify({ [interactionRecordProp.name]: { ...RECORD, recordedAt: 9e9 - i } }),
+         USER.id, USER.id],
+      )
+    }
+
+    expect(await countRecords(repo, WS, INTERACTION_SERIES)).toBe(total)
+    // ...while the comparison still reads only its window.
+    expect(await loadRecords(repo, WS, INTERACTION_SERIES)).toHaveLength(HISTORY_LIMIT)
   })
 
   // Marks stay optional, but a PRESENT one has to be finite: the comparison

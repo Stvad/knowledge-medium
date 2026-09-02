@@ -35,9 +35,9 @@ import {
 import { runConsistencyAuditNow } from './schedule.js'
 import { ConsistencyAuditDialog } from './ConsistencyAuditDialog.tsx'
 
-/** True when an open results dialog is ALREADY pinned to `workspaceId`. Both
- *  actions pin the dialog at open (run → the scanned workspace, view → the active
-/** A deliberate "Run" is never gated on this — it always surfaces its own
+/** True when an open results dialog is ALREADY pinned to `workspaceId`.
+ *
+ *  A deliberate "Run" is never gated on this — it always surfaces its own
  *  result; only the cheap, repeatable "View last" / "Inspect" affordances are. */
 const auditDialogAlreadyShows = (workspaceId: string | null): boolean =>
   isDialogOpenForWorkspace(ConsistencyAuditDialog, workspaceId)

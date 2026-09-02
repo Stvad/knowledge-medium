@@ -87,14 +87,15 @@ export const isUsableStartupRecord = (r: {
   isAbsentOrFinite(r.firstContentPaintMs) &&
   isAbsentOrFinite(r.interactiveMs)
 
-/** Pages of `HISTORY_LIMIT` rows to read before giving up on finding usable
- *  records. Bounds the cost when a group is full of unreadable rows. */
-export const MAX_PAGES = 3
-
 /** Sessions of history retained per comparison. Enough for the median to be
  *  stable across session heterogeneity, small enough that the baseline still
  *  tracks the current build rather than averaging over months of them. */
 export const HISTORY_LIMIT = 40
+
+/** Rows to consider before giving up on finding usable ones. Three times the
+ *  window, so a group whose recent rows are unreadable still yields a full
+ *  baseline, while a group full of them cannot turn this into a table scan. */
+export const CANDIDATE_LIMIT = HISTORY_LIMIT * 3
 
 /**
  * Everything it takes to read one recorder's series — named ONCE, here.
@@ -142,69 +143,83 @@ export const STARTUP_SERIES: RecordSeries<StartupRecordData> = {
  * started and its `recordedAt` reflects the sample. Sorting on the field the
  * comparison actually reads keeps those from disagreeing.
  */
+/** This client's group for one series. Derived, never `ensure`d — a reader must
+ *  not mint the subtree as a side effect of finding out it is empty. */
+const seriesGroupId = (repo: Repo, workspaceId: string, typeId: string): string =>
+  stateChildBlockId(pluginUIStateBlockId(workspaceId, repo.user.id, typeId), getClientId())
+
+/**
+ * How many records this client has ON DISK for one series.
+ *
+ * Not `loadRecords(...).length`: that is capped at the comparison window, so a
+ * count taken from it silently reports the cap — "40 sessions recorded so far"
+ * for a client with four hundred. The two answer different questions, and the
+ * only caller of this one is a progress note that means the disk.
+ */
+export const countRecords = async (
+  repo: Repo,
+  workspaceId: string,
+  series: Pick<RecordSeries<{ recordedAt: number }>, 'typeId' | 'recordName'>,
+): Promise<number> => {
+  const q = clientSeriesQuery('COUNT(*) AS n', {
+    groupId: seriesGroupId(repo, workspaceId, series.typeId),
+    recordName: series.recordName,
+    deviceLabel: getDeviceLabel(),
+    tail: '',
+  })
+  const rows = await repo.db.getAll<{ n: number }>(q.sql, q.params)
+  return rows[0]?.n ?? 0
+}
+
 export const loadRecords = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
   { typeId, recordName, isUsable }: RecordSeries<T>,
 ): Promise<Array<{ id: string; record: T }>> => {
   const recordPath = jsonPathForProperty(recordName)
-  const groupId = stateChildBlockId(
-    pluginUIStateBlockId(workspaceId, repo.user.id, typeId),
-    getClientId(),
-  )
-  // Paged until HISTORY_LIMIT USABLE records are collected, not until that many
-  // rows are read. Validation happens after JSON parse, so a limit applied to
-  // rows lets malformed or future-shaped ones at the front of the window push
-  // valid history out of reach — and the monitor then reports an insufficient
-  // baseline while the group visibly holds hundreds of good records. Bounded by
-  // MAX_PAGES so a group full of unreadable rows cannot turn into a full scan.
-  const records: Array<{ id: string; record: T }> = []
-  const seen = new Set<string>()
-  for (let page = 0; page < MAX_PAGES && records.length < HISTORY_LIMIT; page++) {
-    // Built from `clientSeriesQuery` — the one definition of this client's
-    // records — so the reader and the retention pass cannot disagree about
-    // which rows are in the series or which of them is newest.
-    const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS payload', {
-      groupId, recordName, deviceLabel: getDeviceLabel(),
-      selectParams: [recordPath],
-      tail: 'LIMIT ? OFFSET ?', tailParams: [HISTORY_LIMIT, page * HISTORY_LIMIT],
-    })
-    const rows = await repo.db.getAll<{ id: string; payload: string | null }>(q.sql, q.params)
-    for (const row of rows) {
-      if (!row.payload) continue
-      // Paging is by OFFSET, so a record PREPENDED between two page reads shifts
-      // the window and the row at the old page boundary is read twice — and the
-      // recorder appends from a different idle job than this one. A duplicate
-      // would count one past session twice in the median.
-      if (seen.has(row.id)) continue
-      try {
-        const record = JSON.parse(row.payload) as T
-        // `recordedAt` drives the sort, so it is checked here rather than in
-        // either series' validator. Absent makes every comparison NaN and
-        // randomises the whole window; `Infinity` (which `1e400` parses to)
-        // sorts to the front and pushes this boot out of the currency window.
-        if (Number.isFinite(record?.recordedAt) && isUsable(record)) {
-          seen.add(row.id)
-          records.push({ id: row.id, record })
-        }
-      } catch {
-        // A record written by a future/older shape is skipped, not fatal: the
-        // series is a diagnostic, and one unreadable row must not blind it.
-      }
-    }
-    if (rows.length < HISTORY_LIMIT) break
-  }
-  // Truncated, not merely loop-bounded: the page condition is checked BEFORE
-  // each page, so a page that ends one short of the limit runs another and can
-  // return nearly twice it. Over-long history biases the baseline toward older,
-  // smaller-graph sessions, which reads as a regression.
+  const groupId = seriesGroupId(repo, workspaceId, typeId)
+  // ONE query, not a page walk. The candidate window is bounded and small, so
+  // paging bought nothing and cost consistency: `OFFSET` over an order that
+  // other tabs are mutating — a record is UPDATED in place, moving its
+  // `recordedAt` — can read a row twice or skip it entirely, and the recorder
+  // writes from a different idle job than this reader. A single read is one
+  // snapshot, so neither can happen and the rows arrive already ordered.
   //
-  // Re-sorted because the result is CONCATENATED from up to `MAX_PAGES` reads
-  // that are not one snapshot: an append landing between two of them shifts the
-  // window, so page 1 can carry a row newer than the tail of page 0. Not, as an
-  // earlier note here claimed, to repair a hand-edited string timestamp — the
-  // `Number.isFinite` check above drops those before they reach this line.
+  // The limit is on ROWS while the window is on USABLE records, because
+  // validation happens after the JSON parse: malformed or future-shaped rows at
+  // the front would otherwise push valid history out of reach, and the monitor
+  // would report an insufficient baseline while the group visibly holds
+  // hundreds of good records.
+  //
+  // Built from `clientSeriesQuery` — the one definition of this client's
+  // records — so the reader and the retention pass cannot disagree about which
+  // rows are in the series or which of them is newest.
+  const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS payload', {
+    groupId, recordName, deviceLabel: getDeviceLabel(),
+    selectParams: [recordPath],
+    tail: 'LIMIT ?', tailParams: [CANDIDATE_LIMIT],
+  })
+  const rows = await repo.db.getAll<{ id: string; payload: string | null }>(q.sql, q.params)
+  const records: Array<{ id: string; record: T }> = []
+  for (const row of rows) {
+    // Stopping at the window rather than truncating afterwards. Over-long
+    // history biases the baseline toward older, smaller-graph sessions, which
+    // reads as a regression that never happened.
+    if (records.length >= HISTORY_LIMIT) break
+    if (!row.payload) continue
+    try {
+      const record = JSON.parse(row.payload) as T
+      // `recordedAt` orders the series, so it is checked here rather than in
+      // either validator. Absent makes every comparison NaN and randomises the
+      // window; `Infinity` (which `1e400` parses to) sorts to the front and
+      // pushes this boot out of the currency window.
+      if (Number.isFinite(record?.recordedAt) && isUsable(record)) {
+        records.push({ id: row.id, record })
+      }
+    } catch {
+      // A record written by a future/older shape is skipped, not fatal: the
+      // series is a diagnostic, and one unreadable row must not blind it.
+    }
+  }
   return records
-    .sort((a, b) => b.record.recordedAt - a.record.recordedAt)
-    .slice(0, HISTORY_LIMIT)
 }
