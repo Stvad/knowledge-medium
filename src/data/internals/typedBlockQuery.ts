@@ -15,8 +15,27 @@ export interface CompiledTypedBlockQuery {
 
 export type TypedBlockQueryProjection = 'rows' | 'ids' | 'count'
 
-export const jsonPathForProperty = (name: string): string =>
-  `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+declare const jsonPathBrand: unique symbol
+
+/** A JSON path built by {@link jsonPathForProperty}. Branded so it cannot be
+ *  passed back in where a property NAME belongs — see the parameter type
+ *  below. */
+export type JsonPath = string & { readonly [jsonPathBrand]: 'json-path' }
+
+/** A property name: any plain string, but NOT an already-derived {@link
+ *  JsonPath}. The optional `never`-typed brand is what expresses that — a plain
+ *  string has no such property and satisfies it, while a `JsonPath` carries one
+ *  typed `'json-path'`, which is not assignable to `never`.
+ *
+ *  Costs nothing at a declaration site and catches the one mistake these two
+ *  types invite: double-encoding. A path passed where a name belongs derives
+ *  `$."$.\"foo\""`, which addresses a property nothing writes — so the query
+ *  is valid, returns no rows, and the feature reads as empty rather than
+ *  broken. */
+export type PropertyName = string & { readonly [jsonPathBrand]?: never }
+
+export const jsonPathForProperty = (name: PropertyName): JsonPath =>
+  `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"` as JsonPath
 
 /** Inline a JSON path as a SQL string literal — needed so SQLite's
  *  query planner can match expression indexes. SQLite only treats

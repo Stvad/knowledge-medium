@@ -670,6 +670,35 @@ export class Repo {
    *  execute / writeTransaction). Populated by the metrics-wrapping
    *  proxy installed around `this.db` at construction. */
   readonly dbMetrics = new DbMetrics()
+  /** Committed transactions NOT flagged `telemetry`, and the handle fan-out
+   *  they caused. Counted HERE rather than reconstructed by a consumer from
+   *  before/after snapshots: a consumer's window spans its own awaits, so it
+   *  cannot tell its own work from anyone else's, while this pair is written in
+   *  the same synchronous block as the events it counts.
+   *
+   *  A transaction that CHANGED NO ROW is counted on neither side — rolled
+   *  back, or committed empty as an idempotent ensure does. It invalidates
+   *  nothing, so counting the write alone would deflate the ratio a reader
+   *  builds from the pair. */
+  private nonTelemetryWrites = 0
+  private readonly nonTelemetryFanout: Record<string, number> = {}
+  /** Bumped by `resetMetrics()`. A consumer holding figures from before a reset
+   *  can compare epochs instead of inferring the reset from a counter going
+   *  backwards, which is undetectable once other writes have carried it back up. */
+  private metricsEpoch = 0
+  /** Workspace active when the current counter span began — at construction, or
+   *  at the last `resetMetrics()`. The counters are page-global while the
+   *  features reading them attribute a span to ONE workspace, and a reset can
+   *  land in any of them: work done between the reset and the reader noticing it
+   *  belongs to whatever was active then, not to whatever is active by the time
+   *  it looks. Without this the reader can only start the new span empty, which
+   *  reads as "attributable to the first workspace observed after the reset". */
+  private metricsEpochWorkspaceId: string | null = null
+  /** Wall clock when the current counter span began. Starts at the page's time
+   *  origin, so before any reset it is page-load time. A consumer reporting a
+   *  duration alongside these counters needs the span's start, not the page's:
+   *  after a reset the two differ by everything that happened before it. */
+  private metricsEpochStartedAt = Date.now() - performance.now()
   /** Per-query-name resolve timings. The dispatcher records each
    *  `loader(ctx)` invocation here keyed by the query's full name. */
   readonly queryMetrics = new QueryMetrics()
@@ -1241,6 +1270,31 @@ export class Repo {
    *      without needing a Playwright + profiler harness. */
   metrics(): Readonly<{
     handleStore: Readonly<Record<string, number>>
+    /** The same counters, restricted to committed transactions this Repo ran
+     *  that CHANGED a row and were NOT flagged `telemetry` — the user's work,
+     *  with the app's self-measurement left out. `writes` is those
+     *  transactions; `handleStore` is the fan-out they caused, measured around
+     *  each one's own invalidation walk. A feature reporting performance
+     *  figures should read THIS rather than subtracting its own activity from
+     *  the totals above.
+     *
+     *  `handleStore` here holds only the counters that walk can ATTRIBUTE —
+     *  those bumped inside the synchronous invalidation pass. Counters bumped
+     *  later, from a loader's settle path, are absent rather than zero; see the
+     *  delta loop in `_runAndDispatch`. */
+    excludingTelemetry: Readonly<{
+      writes: number
+      handleStore: Readonly<Record<string, number>>
+    }>
+    /** Increments on every `resetMetrics()`. Compare it rather than watching a
+     *  counter for a backwards step. */
+    epoch: number
+    /** Workspace active when this span of the counters began. `null` before any
+     *  workspace has been activated. */
+    epochWorkspaceId: string | null
+    /** Wall clock when this span began — the page's time origin until the first
+     *  `resetMetrics()`. */
+    epochStartedAt: number
     /** Live-state aggregates over the registered handle set: handle
      *  count, dep-count percentiles, and the top-3 keys by dep count.
      *  Pairs with `handleStore` counters — counters describe events
@@ -1275,6 +1329,13 @@ export class Repo {
   }> {
     return Object.freeze({
       handleStore: this.handleStore.metrics.snapshot(),
+      excludingTelemetry: Object.freeze({
+        writes: this.nonTelemetryWrites,
+        handleStore: Object.freeze({...this.nonTelemetryFanout}),
+      }),
+      epoch: this.metricsEpoch,
+      epochWorkspaceId: this.metricsEpochWorkspaceId,
+      epochStartedAt: this.metricsEpochStartedAt,
       handleStoreInventory: this.handleStore.snapshotInventory(),
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
@@ -1290,6 +1351,11 @@ export class Repo {
    *  benchmark iteration, a UI interaction in a soak test, or a
    *  cold-start "open page → metrics" investigation). */
   resetMetrics(): void {
+    this.metricsEpoch++
+    this.metricsEpochWorkspaceId = this.client.activeWorkspaceId
+    this.metricsEpochStartedAt = Date.now()
+    this.nonTelemetryWrites = 0
+    for (const k of Object.keys(this.nonTelemetryFanout)) delete this.nonTelemetryFanout[k]
     this.handleStore.metrics.reset()
     this.cache.metrics.reset()
     this.queryMetrics.reset()
@@ -1934,9 +2000,36 @@ export class Repo {
     // pendingReinvalidate / kicks off a microtask, so the caller's tx
     // resolve isn't blocked on handle re-resolution.
     if (result.snapshots.size > 0) {
+      // Counted on both sides or neither. A transaction that changed no row
+      // invalidates nothing, so counting the write alone would deflate the
+      // ratio a reader builds from the pair — and idempotent ensures commit
+      // empty routinely.
+      if (!opts.telemetry) this.nonTelemetryWrites++
+      // The fan-out delta is taken across THIS call and nothing else. The walk
+      // is synchronous, so no other transaction and no sync drain can land
+      // inside it — which is the whole reason the count lives here.
+      const before = opts.telemetry ? null : this.handleStore.metrics.snapshot()
       this.handleStore.invalidate(
         snapshotsToChangeNotification(result.snapshots, this.invalidationRules),
       )
+      if (before !== null) {
+        const after = this.handleStore.metrics.snapshot()
+        for (const [k, v] of Object.entries(after)) {
+          const delta = v - (before[k] ?? 0)
+          // A zero delta does NOT create the key. Only counters bumped inside
+          // the synchronous walk can ever move here; the settle-path ones
+          // (`notifiesFired`, `notifiesSkippedByDiff`, `reloadsAfterSettle`,
+          // and the `loaderRuns` of post-settle reloads) are bumped from a
+          // `.then` / microtask after this window closes, and no per-tx token
+          // reaches them. Writing them as 0 would report "no reloads" for a
+          // counter that is simply never measured — and this map is persisted
+          // and compared against later sessions, where a 0-vs-0 comparison
+          // reads as a clean verdict rather than as missing data. Absent says
+          // what is true.
+          if (delta === 0 && !(k in this.nonTelemetryFanout)) continue
+          this.nonTelemetryFanout[k] = (this.nonTelemetryFanout[k] ?? 0) + delta
+        }
+      }
     }
     // Step 9 of the §10 pipeline — start field-watch + explicit
     // post-commit processors. Failures are caught + logged inside the

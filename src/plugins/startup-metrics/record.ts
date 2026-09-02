@@ -124,6 +124,11 @@ export const buildStartupRecord = (
  *  block (one per browser/device installation) inside the per-user
  *  startup-metrics ui-state subtree. Returns the new block id. */
 export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promise<string> => {
+  // The two container ensures below are NOT flagged `telemetry`, so they count
+  // as the user's work. Accepted for their size — one pair of transactions on a
+  // client's first boot and never again. Threading the flag through is the worse
+  // trade: both helpers are MEMOIZED on a key that would not include it, so the
+  // argument would bind to whichever caller arrived first.
   const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, startupMetricsUIStateType)
   const clientId = getClientId()
   const deviceLabel = startupDeviceLabel()
@@ -162,7 +167,7 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
       { systemMint: true },
     )
     await tx.setProperty(id, startupRecordProp, data)
-  }, { scope: ChangeScope.Automation, description: 'startup metrics record' })
+  }, { scope: ChangeScope.Automation, telemetry: true, description: 'startup metrics record' })
   return id
 }
 
