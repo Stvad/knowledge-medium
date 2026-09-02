@@ -982,6 +982,18 @@ const fetchIssues = () => {
   }
 }
 
+// One owner for "push these beads". bd takes the ids as a single --issues
+// argument, which has a per-argument ceiling (128 KiB on Linux), so a large
+// set is split across invocations instead of failing the spawn before bd
+// starts. Returns the concatenated bd output.
+const PUSH_CHUNK = 200
+const pushBeads = (ids, env) => {
+  let out = ''
+  for (let i = 0; i < ids.length; i += PUSH_CHUNK)
+    out += run('bd', ['github', 'sync', '--push-only', '--issues', ids.slice(i, i + PUSH_CHUNK).join(',')], { env }) + '\n'
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // The sync sequence
 // ---------------------------------------------------------------------------
@@ -1026,12 +1038,14 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // re-open its GitHub-closed issue). Handed only the beads bd could update
     // (planPrePullPush) — listed AFTER close-adoption, since a close bumps
     // updated_at and the pre-adoption row would look converged.
+    // A dry run cannot re-list, so the closes it would adopt are added by
+    // hand: the real close bumps updated_at and puts them in the set.
     const adoptedBeads = closes.length && !dryRun ? listAllBeads() : preBeads
-    const pushSet = planPrePullPush(adoptedBeads, issueByNumber)
+    const pushSet = [...new Set([...planPrePullPush(adoptedBeads, issueByNumber), ...(dryRun ? closes.map(c => c.id) : [])])]
     if (dryRun) {
       report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
     } else if (pushSet.length) {
-      const pushOut = run('bd', ['github', 'sync', '--push-only', '--issues', pushSet.join(',')], { env })
+      const pushOut = pushBeads(pushSet, env)
       // Zero-count lines stay out of the report: they would flip `changed`
       // below and un-quiet every converged SessionEnd run.
       report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
@@ -1149,7 +1163,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // stamp GitHub newer and bury the loss (see the restore loop above).
     const failedRestoreIds = new Set(restoreFailures)
     const pushBack = [...new Set([...fixes.map(f => f.id), ...restoredOk])].filter(id => !failedRestoreIds.has(id))
-    if (pushBack.length && !dryRun) run('bd', ['github', 'sync', '--push-only', '--issues', pushBack.join(',')], { env })
+    if (pushBack.length && !dryRun) pushBeads(pushBack, env)
 
     // 4. Carry bead closes out to issues still open (see header: via gh, not
     // a selective bd push, whose watermark silently skips older closes).

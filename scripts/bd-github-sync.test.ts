@@ -1261,6 +1261,38 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).toContain('bd github sync --push-only --issues km-a\n')
   })
 
+  // A dry run cannot re-list after adopting closes, so the closes it WOULD
+  // adopt are added to the reported set — the real close bumps updated_at
+  // and puts them there. Without this the plan underreports exactly the
+  // close-adoption case.
+  it('reports the closes it would adopt inside the dry-run push set', () => {
+    const row = syncRow({ id: 'km-a', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED')],
+      lists: [[row]],
+    })
+    const r = run('--dry-run')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('[dry-run] would close km-a')
+    expect(r.stdout).toContain('[dry-run] would push 1 bead(s) out before the pull: km-a')
+    expect(shimCalls()).not.toContain('bd close')
+    expect(shimCalls()).not.toContain('--push-only')
+  })
+
+  // bd takes the ids as ONE --issues argument, which has a per-argument
+  // ceiling; a large set is split across invocations instead of failing the
+  // spawn before bd starts.
+  it('splits a large pre-pull set across several push invocations', () => {
+    const rows = Array.from({ length: 250 }, (_, i) => syncRow({ id: `km-b${i}`, external_ref: null }))
+    const { run, shimCalls } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], lists: [rows] })
+    const r = run()
+    expect(r.status).toBe(0)
+    const pushes = shimCalls().split('\n').filter(l => l.startsWith('bd github sync --push-only --issues '))
+    expect(pushes).toHaveLength(2)
+    const ids = pushes.flatMap(l => l.slice('bd github sync --push-only --issues '.length).split(','))
+    expect(ids).toEqual(rows.map(r => r.id))
+  })
+
   it('stays silent under --quiet when a converged run changed nothing', () => {
     const row = syncRow({ id: 'km-t6', external_ref: ref(6), updated_at: '2026-08-19T00:00:00Z' })
     const { run } = makeSyncRepo({
