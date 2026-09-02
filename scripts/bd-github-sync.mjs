@@ -32,7 +32,11 @@
  *    open bead cannot re-open its issue), and beads whose local row is still
  *    newer than their GitHub copy — the push watermark skips older edits —
  *    are snapshotted before the pull and restored + re-pushed if it reverted
- *    them.
+ *    them. That push is SELECTIVE and the pull runs alone (see step 1.5):
+ *    bd 1.2.2 GETs every linked bead it is handed and PATCHes only the
+ *    local-newer ones, so the listing already names the beads it could
+ *    touch, and a converged run costs seconds rather than one GET per bead
+ *    per leg (measured: 387 beads, 90s per leg, two legs).
  *
  * Accepted race: an issue closed on GitHub DURING the sync window can be
  * re-opened by the in-flight push, and because the reopen is then the state
@@ -74,9 +78,10 @@
  *       INDEPENDENTLY of the publish legs), and the merge COMMIT of a
  *       merged PR, read back post-merge by bd-publish-verify.
  *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes.
- *       The FULL sync does not run here: converged it still costs ~60s (a GET
- *       compare per issue), which is too slow to sit in front of every PR.
- *       SessionEnd and manual runs carry it. This mode writes NOTHING, so
+ *       The FULL sync does not run here: even converged it costs several
+ *       seconds (an issue listing, bead listings, a pull) plus the lock,
+ *       which is too slow to sit in front of every PR. SessionEnd and manual
+ *       runs carry it. This mode writes NOTHING, so
  *       it needs no dry-run valve: it reads, and it blocks or allows.
  *
  * Every path no-ops silently when bd, the beads DB, or a gh token is missing
@@ -715,6 +720,21 @@ export const planLocalWins = (beads, issueByNumber) =>
     return Date.parse(b.updated_at) > Date.parse(issue.updatedAt) ? [{ id: b.id, number }] : []
   })
 
+// Beads to hand the pre-pull push. bd 1.2.2 wires no content hook: for every
+// linked bead it GETs the issue and PATCHes only when the local row is
+// STRICTLY newer, so a bead whose listed GitHub copy is same-or-newer costs a
+// GET and changes nothing — skip exactly those. Everything the listing cannot
+// prove bd would skip (no ref, a foreign ref, an issue missing from the
+// listing, a missing timestamp) still goes to bd, which decides with a fresh
+// GET as the full push did.
+export const planPrePullPush = (beads, issueByNumber) =>
+  beads
+    .filter(b => {
+      const issue = issueByNumber.get(issueNumberFromRef(b.external_ref))
+      return !(issue?.updatedAt && b.updated_at && Date.parse(issue.updatedAt) >= Date.parse(b.updated_at))
+    })
+    .map(b => b.id)
+
 // Both sides of the comparison are `bd show` rows (list rows lack assignee),
 // so assignment-only reverts are visible too; the restore replays the full
 // snapshot, close reason included. Together with the set-compared labels,
@@ -1003,12 +1023,15 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // strictly OLDER GitHub copy over newer local rows (#647) — closes and
     // edits included — so the pull must never see a GitHub copy that lags
     // local. Runs after close-adoption (an un-adopted open bead would
-    // re-open its GitHub-closed issue) and skips content-identical beads,
-    // which cannot revert anything.
+    // re-open its GitHub-closed issue). Handed only the beads bd could update
+    // (planPrePullPush) — listed AFTER close-adoption, since a close bumps
+    // updated_at and the pre-adoption row would look converged.
+    const adoptedBeads = closes.length && !dryRun ? listAllBeads() : preBeads
+    const pushSet = planPrePullPush(adoptedBeads, issueByNumber)
     if (dryRun) {
-      report.push('[dry-run] would push local state out before the pull')
-    } else {
-      const pushOut = run('bd', ['github', 'sync', '--push-only'], { env })
+      report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
+    } else if (pushSet.length) {
+      const pushOut = run('bd', ['github', 'sync', '--push-only', '--issues', pushSet.join(',')], { env })
       // Zero-count lines stay out of the report: they would flip `changed`
       // below and un-quiet every converged SessionEnd run.
       report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
@@ -1017,10 +1040,10 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // 1.6 The push's watermark silently skips older local edits, so snapshot
     // every bead whose local row is STILL newer than its GitHub copy — the
     // pull may revert exactly those; step 2.5 restores any it does. Fresh
-    // list: close-adoption just changed local rows. Snapshot via a direct
-    // spawn, not run(): `bd show` output is pretty-printed JSON, and a
-    // description line starting with "Error" would trip run()'s bd check.
-    const freshBeads = dryRun ? preBeads : listAllBeads()
+    // list: the push just minted refs. Snapshot via a direct spawn, not
+    // run(): `bd show` output is pretty-printed JSON, and a description line
+    // starting with "Error" would trip run()'s bd check.
+    const freshBeads = dryRun ? adoptedBeads : listAllBeads()
     // Print the km→#N mapping for every issue the pre-pull push just minted —
     // IMMEDIATELY, not via the end-of-run report: any later step failing
     // (snapshot abort, the pull itself) would swallow the report, and by the
@@ -1055,8 +1078,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         )
     }
 
-    // 2. The sync itself.
-    const syncOut = run('bd', ['github', 'sync', ...(dryRun ? ['--dry-run'] : [])], { env })
+    // 2. The pull. Pull-only, not bidirectional: the push leg would GET every
+    // linked bead again and could only PATCH rows step 1.5 just pushed (GitHub
+    // is the newer side once it has), and the conflict pass keys off
+    // last_sync, which that push just advanced — a second full-price no-op.
+    const syncOut = run('bd', ['github', 'sync', '--pull-only', ...(dryRun ? ['--dry-run'] : [])], { env })
     const syncSummary = syncOut
       .split('\n')
       .filter(l => /Pulled|Pushed|Created|Updated|dry-run/.test(l))
