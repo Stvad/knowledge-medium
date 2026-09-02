@@ -13,6 +13,9 @@
  *      depend on what's left in `aliases`.
  *   3. Pure add (no removed aliases) — R3: no-op.
  *
+ * It also repairs the RESTORE transition (deleted → live), where the
+ * ladder above never ran: see `collectRestorePlans`.
+ *
  * Lives next to `parseReferencesProcessor` in the references plugin
  * because it needs the `block_references` projection to find source
  * blocks.
@@ -437,6 +440,64 @@ const coReleasedAliases = (event: SameTxEvent): ReadonlySet<string> => {
   return new Set([...releaseCount].filter(([, n]) => n > 1).map(([alias]) => alias))
 }
 
+/** Inbound CONTENT edges onto `targetId`, whatever alias they are keyed
+ *  on — the restore repair's enumeration, mirroring
+ *  `SELECT_BACKLINK_SOURCES_SQL` without the alias pin.
+ *
+ *  Deliberately does NOT try to exclude raw `((id))` blockrefs by
+ *  `br.alias <> br.target_id`. The projection stores no syntax, so that
+ *  test is a value coincidence, not a classification: a page aliased to
+ *  its own uuid and referenced as `[[uuid]]` has the identical shape, and
+ *  excluding it would leave exactly the stale binding this repair exists
+ *  to clear. Letting blockref edges through costs one re-parse each — the
+ *  re-parse re-derives them unchanged — and that is nearly always zero
+ *  work anyway, since deleting a block inlines its live `((id))`
+ *  referrers before any restore can see them. */
+const SELECT_INBOUND_ALIAS_EDGES_SQL = `
+  SELECT DISTINCT br.alias AS alias, br.source_id AS sourceId
+  FROM block_references br
+  JOIN blocks source ON source.id = br.source_id
+  WHERE br.workspace_id = ?
+    AND br.target_id = ?
+    AND br.source_field = ''
+    AND source.deleted = 0
+  ORDER BY source.order_key, source.id
+`
+
+/** RESTORE repair: a block coming back live must not keep inbound
+ *  `[[α]]` edges for aliases it no longer claims.
+ *
+ *  The ladder above diffs LIVE rows and `apply` skips tombstones, so an
+ *  alias released while the target was deleted never reaches it — by
+ *  design: a tombstone claims nothing, and its inbound edges are the
+ *  release-reclaim residual the add-only contract retains so that
+ *  restoring the target rebinds cleanly. Restore it under a DIFFERENT
+ *  alias set and that premise fails, leaving a live source bound to a
+ *  live block that no longer answers to the name — which nothing else
+ *  heals, since the source re-parses only on its own row.
+ *
+ *  Invalidation only, never a content rewrite: rewriting live referrers'
+ *  text off a deleted page's rename is the call §11 group 2 / #383
+ *  defers, and dropping the edge IS the write that schedules
+ *  `parseReferences` to rebind α exactly as the renderer resolves it
+ *  (same reasoning as the handoff arm above). Aliases the row still
+ *  claims are skipped so a clean restore writes nothing. */
+const collectRestorePlans = async (
+  ctx: SameTxCtx,
+  after: BlockData,
+  plansBySourceId: Map<string, SourcePlan>,
+): Promise<void> => {
+  const claimed = new Set(getAliases(after))
+  const edges = await ctx.db.getAll<{alias: string; sourceId: string}>(
+    SELECT_INBOUND_ALIAS_EDGES_SQL,
+    [after.workspaceId, after.id],
+  )
+  for (const {alias, sourceId} of edges) {
+    if (claimed.has(alias)) continue
+    planFor(plansBySourceId, sourceId).staleEdges.push({alias, targetId: after.id})
+  }
+}
+
 /** Apply rewrites to a source's `references` list. Content edges
  *  matching `(fromTargetId, oldAlias)` are re-pointed at
  *  `(toTargetId, refAlias)`. Property-typed refs (`sourceField !== ''`)
@@ -618,30 +679,44 @@ const aliasFieldChanged = (before: BlockData, after: BlockData): boolean => {
 
 export const renameBacklinksProcessor = defineSameTxProcessor({
   name: RENAME_BACKLINKS_PROCESSOR,
-  // Properties-only: alias diffs ride this field. The source content and
-  // `references` we write are watched by the post-commit
+  // Alias diffs ride `properties`; `deleted` is watched for the restore
+  // repair alone (`collectRestorePlans`), which is why watching it does
+  // NOT reopen the deferred call below: the delete direction still exits
+  // at the `row.after.deleted` skip, and the restore direction only ever
+  // invalidates edges — it never rewrites a source's content. The source
+  // content and `references` we write are watched by the post-commit
   // `parseReferences`, which re-derives the same list and writes nothing.
-  watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  watches: {kind: 'field', table: 'blocks', fields: ['properties', 'deleted']},
   // Deliberately NOT `rerunOnDirtyRows` — see the ORDERING note in the
   // header. This processor is placed after `alias.sync` so the alias diff
   // is already settled when it fires in pass one, which keeps the
   // kernel's own re-run pass (project-property-children in particular)
   // downstream of the content we rewrite.
   //
-  // The delete flow's release rewrite is deliberately NOT here. The doc's
+  // The delete flow's release REWRITE is deliberately NOT here. The doc's
   // sibling item — "the delete flow triggers the release rewrite
   // explicitly (a bare tombstone leaves no properties diff)" — needs the
   // definition-delete surface and a scope decision (§11 group 2 on #443,
-  // overlapping #383). Watching `deleted` from this processor would
-  // generalize the release rewrite to every page deletion, which is
-  // exactly the call that issue defers (Vlad: don't change the current
-  // rule beyond what props-as-blocks needs).
+  // overlapping #383): generalizing it to every page deletion is exactly
+  // the call that issue defers (Vlad: don't change the current rule beyond
+  // what props-as-blocks needs). `deleted` is watched all the same, for
+  // the opposite direction only — see `collectRestorePlans`, which
+  // invalidates and never rewrites.
   apply: async (event: SameTxEvent, ctx: SameTxCtx) => {
     const plansBySourceId = new Map<string, SourcePlan>()
     const coReleased = coReleasedAliases(event)
     for (const row of event.changedRows) {
       if (row.before === null || row.after === null) continue
       if (row.after.deleted) continue
+      if (row.before.deleted) {
+        // Restore. The alias ladder's diff is meaningless across this
+        // edge — a tombstone claimed nothing, so every alias reads as
+        // "added" — and the repair is state-based, not diff-based:
+        // whatever the row claims NOW is what its inbound edges must
+        // agree with, however it got there.
+        await collectRestorePlans(ctx, row.after, plansBySourceId)
+        continue
+      }
       if (!aliasFieldChanged(row.before, row.after)) continue
       await collectTargetPlans(ctx, row.before, row.after, plansBySourceId, coReleased)
     }

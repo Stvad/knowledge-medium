@@ -1932,7 +1932,11 @@ export class Repo {
         opts,
         user: this.user,
         isReadOnly: this.isReadOnly,
-        newTxId: this.newId,
+        // uuid, never `this.newId`: `command_events.tx_id` is a PRIMARY KEY on
+        // a database that outlives any single Repo, while `newId` is injectable
+        // and the test harness injects per-Repo counters that restart. Deriving
+        // one from the other let two Repos over one db mint the same id (#866).
+        newTxId: uuidv4,
         newTxSeq: this.newTxSeq,
         newId: this.newId,
         blockIdPolicy: this.blockIdPolicy,
