@@ -20,10 +20,9 @@
  * shape. Shown only on the focal render, so a page mentioned in a sidebar or
  * breadcrumb stays quiet.
  *
- * Merge direction is canonical-wins — this page is `into`, the other is
- * `from` — so identity stays at the deterministic id and the name comes back
- * here along with the other page's children, properties and inbound
- * references.
+ * The merge itself — refusal, mutator call, panel retargeting, error copy —
+ * lives in `mergeAliasCollision` (`./mergeCollisionAction.ts`); this page is
+ * always the merge's `into`, the rivals its `from`.
  */
 import { useState } from 'react'
 import { Merge } from 'lucide-react'
@@ -32,17 +31,12 @@ import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import { isFocalRender } from '@/hooks/useIsFocalRender.js'
 import { PAGE_TYPE } from '@/data/blockTypes.js'
-import { MergeIntoDescendantError } from '@/data/api'
-import { showError } from '@/utils/toast.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
 import { useContent, useWorkspaceId } from '@/hooks/block.js'
-import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi.js'
-import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
-import { retargetPanelBlockIds } from '@/utils/panelLayoutProjection.js'
 import { truncate } from '@/utils/string.js'
 import type { BlockHeaderContribution } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types'
-import { ALIAS_COLLISION_MERGE_MUTATOR, AliasMergeBlockedError } from './collisionMerge.ts'
+import { mergeAliasCollision } from './mergeCollisionAction.ts'
 
 /** Every wording here has to be TRUE of the state that produced it. When this
  *  page still claims the name, "links to it go there" is false — links land
@@ -84,49 +78,7 @@ export const DuplicateNameBanner: BlockRenderer = ({block}) => {
   const merge = async (): Promise<void> => {
     setMerging(true)
     try {
-      // Merging soft-deletes the other page, so it goes through the same UI
-      // deletion refusal an explicit delete would — the merge picker does this
-      // too. Without it a one-click merge silently deletes a page the app
-      // otherwise refuses to let you delete.
-      if (!await ensureDeletableThroughUi(rivalIds.map(id => repo.block(id)))) return
-
-      await repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
-        intoId: block.id,
-        fromIds: rivalIds,
-        collisionAlias: name,
-        sourceIsAliasOwner: true,
-      })
-
-      // Any panel showing the absorbed page now points at a tombstone; move
-      // them to the survivor, as the rejection toast does after the same call.
-      const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
-      const layoutSessionBlock = await getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)
-      try {
-        for (const rivalId of rivalIds) {
-          await retargetPanelBlockIds(repo, layoutSessionBlock, rivalId, block.id)
-        }
-      } catch (error) {
-        console.error('[DuplicateNameBanner] Failed to retarget panels after merge', error)
-        showError('Merged, but panel update failed')
-      }
-    } catch (error) {
-      // Two refusals worth explaining, because the raw error says nothing
-      // useful and both are things the user can act on.
-      if (error instanceof MergeIntoDescendantError) {
-        // Direction matters in the copy: this means THIS page sits inside the
-        // other one, so the user has to move this page out — the reverse of
-        // what a naive reading suggests.
-        showError(`This page is inside “${truncate(name, 40)}” — move it out before merging.`)
-        return
-      }
-      if (error instanceof AliasMergeBlockedError) {
-        showError(
-          `Can’t merge: “${truncate(error.alias, 40)}” is also used by a page this wouldn’t absorb. `
-          + 'Resolve that name first.',
-        )
-        return
-      }
-      showError(`Couldn’t merge “${truncate(name, 40)}”.`)
+      await mergeAliasCollision(repo, {intoId: block.id, rivalIds, alias: name, workspaceId})
     } finally {
       setMerging(false)
     }

@@ -342,6 +342,90 @@ const changedPropertyNames = (
  *  them across two calls — see `materializePropertiesForChangedRow`. */
 export type UndecodableCellPolicy = 'reject' | 'skip'
 
+export interface MaterializeOptions {
+  /** See {@link UndecodableCellPolicy}. Default `'reject'`. */
+  undecodable?: UndecodableCellPolicy
+  /** Bring a name's TOMBSTONED field row back instead of minting a
+   *  replacement, when the owner has exactly one and no live one (#787).
+   *
+   *  Opt-in, and only the revival path opts in. NOT because owner liveness
+   *  tells a tombstone's cause apart — it does not, and an earlier version of
+   *  this comment claimed otherwise. An owner returning from a tombstone can
+   *  carry a field-row tombstone OLDER than its own delete (a peer's deletion
+   *  arrived, this device's cell has not caught up — the stale-cell state
+   *  `propertyCellBackfill` reads as history), and nothing local separates that
+   *  from a row the owner's own subtree delete took down.
+   *
+   *  What makes reviving safe for THIS caller is narrower and checkable: the
+   *  revival already re-materializes the whole restored bag, so for a name with
+   *  a stale cell key it MINTS a replacement field row today. Reviving changes
+   *  which row id carries that, not whether the property comes back — measured
+   *  both ways. The cell backfill has no such contract, and reviving there
+   *  would resurrect what the user reaped, so it stays out.
+   *
+   *  The resurrection itself is real and predates this option; it is the
+   *  revival contract's own problem, tracked separately. */
+  reviveTombstoned?: boolean
+}
+
+/** Restore the tombstoned field row backing `fieldId`, together with its value
+ *  children — so a revived property keeps its row identity instead of being
+ *  replaced by a fresh mint. Returns whether anything came back.
+ *
+ *  One level down and no further: the field row and its value. Everything
+ *  BELOW that stays tombstoned — a comment thread under the value (ordinary
+ *  user content, like any other descendant of a restored block) and, under §9
+ *  flat recognition, the value's own nested field rows if it carries properties
+ *  of its own. What all of it must stop being is STRANDED: minting left it
+ *  under a tombstoned value child nothing would ever revive, so no path could
+ *  reach it again. Reviving the two rows above it restores the chain, which is
+ *  the difference between "still deleted" and "gone".
+ *
+ *  ONE ambiguity rule, applied at both levels: revive only what is unambiguous.
+ *  Several tombstones for one definition (an unset/re-set cycle before the
+ *  owner was deleted), or several tombstoned values under one field row (a
+ *  divergent conflict peer the user resolved by deleting it), are
+ *  indistinguishable at revival time from rows the owner's own delete took
+ *  down. Picking among them would need a rule that is deterministic across
+ *  replicas AND right about which was live last; ordering gives the first, not
+ *  the second, and guessing wrong resurrects a row the user deleted on purpose.
+ *  So the ambiguous case revives nothing and the caller's loop mints from the
+ *  cell — content converges either way, only identity is lost, and the
+ *  tombstones stay reachable under a live parent instead of resurrected. */
+const reviveTombstonedFieldRow = async (
+  tx: Tx,
+  fieldId: string,
+  tombstones: readonly BlockData[],
+): Promise<boolean> => {
+  const matching = tombstones.filter(t => getPropertyFieldTargetId(t) === fieldId)
+  if (matching.length !== 1) return false
+  const fieldRow = matching[0]!
+  // Bit-filtered per §9: a marked child is the field row's OWN machinery, never
+  // one of its values.
+  const isValue = (child: BlockData): boolean => child.isFieldForm !== true
+
+  // Refuse BEFORE restoring anything, not after. Sync-apply skips the
+  // parent-liveness trigger, so a LIVE value can sit under a tombstoned field
+  // row — an arrival that crossed sync while this row was dead, which is the
+  // authoritative side post-flip. Restoring the field row hands that value to
+  // the caller's cell→child convergence, which overwrites its content with the
+  // local cell's: measured, the arrived text is destroyed. Declining to revive
+  // leaves it untouched under its tombstone and the caller mints, which is
+  // exactly what happened before revival existed.
+  //
+  // This is also the ambiguity rule's live half — nothing live may hold the
+  // slot — but placement is what makes it a refusal rather than a repair.
+  const liveValues = (await tx.childrenOf(fieldRow.id, undefined)).filter(isValue)
+  if (liveValues.length > 0) return false
+
+  await tx.restore(fieldRow.id)
+  // The tombstone half: exactly one offers to fill the slot. Several are
+  // indistinguishable — see the one ambiguity rule above.
+  const values = (await tx.deletedChildrenOf(fieldRow.id)).filter(isValue)
+  if (values.length === 1) await tx.restore(values[0]!.id)
+  return true
+}
+
 /** Find-or-create/update/delete the field+value children for `names` on
  *  `row` from its cell values. Exported for slice C's one-time backfill,
  *  which points the same convergence at whole workspaces. */
@@ -350,12 +434,16 @@ export const materializePropertyChildrenForExistingRow = async (
   row: BlockData,
   lookups: MaterializeLookups,
   names: readonly string[] = Object.keys(row.properties),
-  undecodable: UndecodableCellPolicy = 'reject',
+  opts: MaterializeOptions = {},
 ): Promise<void> => {
+  const undecodable = opts.undecodable ?? 'reject'
   if (row.deleted) return
   if (names.length === 0) return
 
-  const children = await tx.childrenOf(row.id, undefined)
+  let children = await tx.childrenOf(row.id, undefined)
+  // Read once, on first need — most rows have no tombstoned field rows at all,
+  // and the ones that do are asked about several names.
+  let tombstones: BlockData[] | undefined
 
   for (const name of names) {
     const schema = lookups.resolveNameSchema(name)
@@ -413,8 +501,21 @@ export const materializePropertyChildrenForExistingRow = async (
       )
     }
 
+    // Revive AFTER the decode gate, never before it: a name the gate skipped
+    // must be left exactly as the revival found it, and bringing its rows back
+    // is not that — it would hand a stale child to a cell the skip declined to
+    // touch, and post-flip the child is the side that wins.
+    let fieldRows = matchingChildren
+    if (opts.reviveTombstoned && fieldRows.length === 0) {
+      tombstones ??= await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id)
+      if (await reviveTombstonedFieldRow(tx, schema.fieldId, tombstones)) {
+        children = await tx.childrenOf(row.id, undefined)
+        fieldRows = fieldRowsForSchema(children, schema.fieldId)
+      }
+    }
+
     const content = encodedPropertyValueToChildContent(schema, encoded)
-    const [primary, ...duplicates] = matchingChildren
+    const [primary, ...duplicates] = fieldRows
     if (primary) {
       const fieldContent = propertyFieldContent(schema.fieldId)
       if (primary.content !== fieldContent) {
@@ -527,8 +628,12 @@ const materializePropertiesForChangedRow = async (
   // written name's rejection, and that is not a thing to leave load-bearing.
   const written = new Set(changed)
   const untouched = Object.keys(row.after.properties).filter(name => !written.has(name))
-  await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changed)
-  await materializePropertyChildrenForExistingRow(tx, row.after, lookups, untouched, 'skip')
+  await materializePropertyChildrenForExistingRow(
+    tx, row.after, lookups, changed, {reviveTombstoned: true},
+  )
+  await materializePropertyChildrenForExistingRow(
+    tx, row.after, lookups, untouched, {undecodable: 'skip', reviveTombstoned: true},
+  )
 }
 
 /** Move every child of `fromId` under `toId`, appended at the end. */

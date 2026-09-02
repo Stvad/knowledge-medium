@@ -15,7 +15,7 @@
  *  missing — the picker UX in Phases C / E still works, the map just
  *  doesn't render. */
 
-import { useMemo, useState, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import {
   APIProvider,
   AdvancedMarker,
@@ -23,19 +23,23 @@ import {
   Map,
   Pin,
   useAdvancedMarkerRef,
+  useMap,
 } from '@vis.gl/react-google-maps'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import { useBlockOpener } from '@/utils/navigation.js'
 import { resolveApiKey } from './googlePlacesClient'
+import { applyBounds, boundsKey, pinsBounds } from './mapViewport'
 import { PLACES_UNDER_BLOCK_QUERY, type MapPin } from './query'
 
 export interface MapViewProps {
   rootBlockId: string
   /** Override the default sizing — pass e.g. `h-full w-full` for fill. */
   className?: string
-  /** Initial map zoom. Defaults to 11 (city-level) which suits the
-   *  global Locations map; per-Place mini-maps should pass ~15. */
+  /** Zoom for the cases with no box to fit — no pins at all, or every
+   *  pin at one coordinate (a Place's own mini-map). Anything with
+   *  extent is framed by its bounding box instead. Defaults to 11
+   *  (city-level); per-Place mini-maps should pass ~15. */
   defaultZoom?: number
 }
 
@@ -46,18 +50,40 @@ const DEFAULT_ZOOM = 11
 // custom styling. See https://developers.google.com/maps/documentation/get-map-id
 const MAP_ID = 'DEMO_MAP_ID'
 
-const center = (pins: readonly MapPin[]): {lat: number; lng: number} => {
-  if (pins.length === 0) return DEFAULT_CENTER
-  let sumLat = 0
-  let sumLng = 0
-  for (const p of pins) {
-    sumLat += p.lat
-    sumLng += p.lng
-  }
-  return {lat: sumLat / pins.length, lng: sumLng / pins.length}
-}
-
 const pinKey = (pin: MapPin): string => `${pin.blockId}-${pin.placeId}`
+
+/** Frames every pin.
+ *
+ *  `<Map>`'s `defaultCenter` / `defaultZoom` are read once, when the map
+ *  is created — and the pins arrive from an async query a tick later, so
+ *  a map left to those props sits on DEFAULT_CENTER forever with the
+ *  pins off screen. Driving the camera imperatively is the only way to
+ *  react to pins that land after mount.
+ *
+ *  Refits only when the box itself moves: `pins` gets a fresh array
+ *  identity on every re-resolve of the query, and refitting on those
+ *  would yank the map back from wherever the user just panned. */
+export function FitPinsToViewport({
+  pins,
+  pointZoom,
+}: {
+  pins: readonly MapPin[]
+  pointZoom: number
+}) {
+  const map = useMap()
+  const bounds = useMemo(() => pinsBounds(pins), [pins])
+  const fitted = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!map || !bounds) return
+    const key = `${boundsKey(bounds)}@${pointZoom}`
+    if (fitted.current === key) return
+    fitted.current = key
+    applyBounds(map, bounds, pointZoom)
+  }, [map, bounds, pointZoom])
+
+  return null
+}
 
 function MapMarker({
   pin,
@@ -116,17 +142,18 @@ function MapBody({rootBlockId, className, defaultZoom}: MapViewProps) {
     repo.query[PLACES_UNDER_BLOCK_QUERY]({rootBlockId}),
     {selector: data => (data ?? EMPTY_PINS) as readonly MapPin[]},
   )
-  const initialCenter = useMemo(() => center(pins), [pins])
   const [openPinId, setOpenPinId] = useState<string | null>(null)
+  const zoom = defaultZoom ?? DEFAULT_ZOOM
 
   return (
     <div className={className ?? 'h-96 w-full overflow-hidden rounded-md border'}>
       <Map
-        defaultCenter={initialCenter}
-        defaultZoom={defaultZoom ?? DEFAULT_ZOOM}
+        defaultCenter={DEFAULT_CENTER}
+        defaultZoom={zoom}
         mapId={MAP_ID}
         gestureHandling="cooperative"
       >
+        <FitPinsToViewport pins={pins} pointZoom={zoom}/>
         {pins.map(pin => {
           const key = pinKey(pin)
           return (
