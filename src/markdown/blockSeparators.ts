@@ -47,7 +47,13 @@ const spanOf = (node: Child | undefined): {start: number, end: number} | undefin
 }
 
 /** Whether the source had a blank line between these two nodes. Nodes with no
- *  span anywhere beneath them are wholly synthesized and report none. */
+ *  span anywhere beneath them are wholly synthesized and report none.
+ *
+ *  A node the serializer MOVED reports a span from before its new neighbour
+ *  (a footnote definition written above its reference is emitted below it),
+ *  so there is no authored boundary here to read and the break goes. Accepted
+ *  rather than guessed at: the question is ill-posed, and the cost is one
+ *  blank line above a footnote list. */
 const blankLineBetween = (before: Child | undefined, after: Child | undefined) => {
   const from = spanOf(before)
   const to = spanOf(after)
