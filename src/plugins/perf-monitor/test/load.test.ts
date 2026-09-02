@@ -212,7 +212,7 @@ describe('loadRecords', () => {
     expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 5 })).toBe(true)
     expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 'x' })).toBe(false)
     expect(isUsableStartupRecord({ timeOriginMs: 1, firstContentPaintMs: NaN })).toBe(false)
-    // Every field the trend table renders, not just the ones a past bug named.
+    // Every field the trend table renders, not a chosen few.
     expect(isUsableStartupRecord({ timeOriginMs: 1, interactiveMs: NaN })).toBe(false)
     expect(isUsableStartupRecord({ timeOriginMs: NaN })).toBe(false)
   })

@@ -55,6 +55,35 @@ const reanalyze = () => screen.getByRole('button', { name: /re-analyze/i })
 
 beforeEach(() => { STUB.activeWorkspaceId = 'ws-A' })
 
+const WS = 'ws-A'
+const USER: User = { id: 'user-1', name: 'Alice' }
+
+// ONE database for the file, reset between tests. Three groups here need a real
+// repo, and opening a database per group multiplies the setup cost that makes
+// these suites the long tail of the gate.
+let sharedDb: TestDb
+let repo: Repo
+
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+
+/** A repo on the shared database, seeded with both recorders' schemas. */
+const freshRepo = async (): Promise<void> => {
+  await resetTestDb(sharedDb.db)
+  repo = createTestRepo({
+    db: sharedDb.db,
+    user: USER,
+    extensions: [
+      definitionSeedsFacet.of(interactionRecordProp, { source: 'test' }),
+      typeSeedsFacet.of(interactionRecordType, { source: 'test' }),
+      definitionSeedsFacet.of(startupRecordProp, { source: 'test' }),
+      typeSeedsFacet.of(startupRecordType, { source: 'test' }),
+    ],
+  }).repo
+  repo.setActiveWorkspaceId(WS)
+  mocks.repo = repo
+}
+
 describe('PerfTrendDialog', () => {
   it('offers re-analysis for the workspace it is pinned to', async () => {
     render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId="ws-A" />)
@@ -80,39 +109,13 @@ describe('PerfTrendDialog', () => {
 /**
  * The tables against a REAL repo and real written records.
  *
- * These exist because the surface they cover was broken and green: the reader
- * takes a property NAME and derives the JSON path itself, and this dialog was
- * handing it an already-derived PATH — so both tables silently rendered their
- * empty state while the analysis, which passed the name, read the same history
- * fine. Nothing caught it, because the only repo this file had was a stub whose
- * `db.getAll` returned `[]`: every assertion about the tables was an assertion
- * about a mock. A test that never sees a row cannot tell an empty series from
- * an unreadable one.
+ * A stubbed reader makes every assertion here an assertion about the stub: a
+ * test that never sees a row cannot tell an empty series from an unreadable
+ * one, so it holds just as well when the dialog is addressing a property that
+ * nothing writes. The rows must come from the production writers.
  */
 describe('PerfTrendDialog tables', () => {
-  const WS = 'ws-A'
-  const USER: User = { id: 'user-1', name: 'Alice' }
-  let sharedDb: TestDb
-  let repo: Repo
-
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
-
-  beforeEach(async () => {
-    await resetTestDb(sharedDb.db)
-    repo = createTestRepo({
-      db: sharedDb.db,
-      user: USER,
-      extensions: [
-        definitionSeedsFacet.of(interactionRecordProp, { source: 'test' }),
-        typeSeedsFacet.of(interactionRecordType, { source: 'test' }),
-        definitionSeedsFacet.of(startupRecordProp, { source: 'test' }),
-        typeSeedsFacet.of(startupRecordType, { source: 'test' }),
-      ],
-    }).repo
-    repo.setActiveWorkspaceId(WS)
-    mocks.repo = repo
-  })
+  beforeEach(freshRepo)
 
   // Written with the production writers, not hand-built rows: a fixture shaped
   // by hand agrees with whatever the reader expects by construction, which is
@@ -154,28 +157,7 @@ describe('PerfTrendDialog tables', () => {
  * simply returned the same rows looks like.
  */
 describe('a superseded refresh', () => {
-  const WS = 'ws-A'
-  const USER: User = { id: 'user-1', name: 'Alice' }
-  let sharedDb: TestDb
-  let repo: Repo
-
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
-  beforeEach(async () => {
-    await resetTestDb(sharedDb.db)
-    repo = createTestRepo({
-      db: sharedDb.db,
-      user: USER,
-      extensions: [
-        definitionSeedsFacet.of(interactionRecordProp, { source: 'test' }),
-        typeSeedsFacet.of(interactionRecordType, { source: 'test' }),
-        definitionSeedsFacet.of(startupRecordProp, { source: 'test' }),
-        typeSeedsFacet.of(startupRecordType, { source: 'test' }),
-      ],
-    }).repo
-    repo.setActiveWorkspaceId(WS)
-    mocks.repo = repo
-  })
+  beforeEach(freshRepo)
 
   it('reads no history once the dialog it belonged to is gone', async () => {
     await writeInteractionSample(repo, WS)
@@ -219,28 +201,7 @@ describe('a superseded refresh', () => {
  * from the data's owner makes that unrepresentable rather than cleared.
  */
 describe('rows after a Repo swap', () => {
-  const WS = 'ws-A'
-  const USER: User = { id: 'user-1', name: 'Alice' }
-  let sharedDb: TestDb
-  let repo: Repo
-
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
-  beforeEach(async () => {
-    await resetTestDb(sharedDb.db)
-    repo = createTestRepo({
-      db: sharedDb.db,
-      user: USER,
-      extensions: [
-        definitionSeedsFacet.of(interactionRecordProp, { source: 'test' }),
-        typeSeedsFacet.of(interactionRecordType, { source: 'test' }),
-        definitionSeedsFacet.of(startupRecordProp, { source: 'test' }),
-        typeSeedsFacet.of(startupRecordType, { source: 'test' }),
-      ],
-    }).repo
-    repo.setActiveWorkspaceId(WS)
-    mocks.repo = repo
-  })
+  beforeEach(freshRepo)
 
   it('stops showing them when the new Repo cannot read', async () => {
     await writeInteractionSample(repo, WS)

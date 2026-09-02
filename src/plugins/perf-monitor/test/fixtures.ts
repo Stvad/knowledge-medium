@@ -1,9 +1,8 @@
 import type { PerfAnalysis } from '../analyze'
 import type { Regression } from '../series'
 
-/** A fully-judged, unregressed analysis. Shared by the verdict and chip tests,
- *  which were maintaining byte-identical copies — and every field added to
- *  `PerfAnalysis` costs an edit per copy. */
+/** A fully-judged, unregressed analysis. Shared by the verdict and chip tests:
+ *  every field added to `PerfAnalysis` costs an edit per copy of this shape. */
 export const analysisFixture = (over: Partial<PerfAnalysis> = {}): PerfAnalysis => ({
   workspaceId: 'ws-1',
   analyzedAt: 1000,

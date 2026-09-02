@@ -68,14 +68,30 @@ export const isClientIdPersistent = (): boolean => {
   return cachedIsPersistent
 }
 
+/** OS family from a user agent, for when `navigator.platform` is empty.
+ *
+ *  A FAMILY, never the agent string itself: a label must be stable for the life
+ *  of an installation. Version numbers live in the user agent, so a prefix of
+ *  it changes on every OS or browser upgrade — and since a series is selected
+ *  by exact label, that both orphans the existing baseline and puts the old
+ *  rows beyond retention's reach, where they accumulate with nothing able to
+ *  prune them. */
+const platformFamily = (userAgent: string): string =>
+  /android/i.test(userAgent) ? 'Android'
+    : /iphone|ipad|ipod/i.test(userAgent) ? 'iOS'
+      : /mac os|macintosh/i.test(userAgent) ? 'macOS'
+        : /windows/i.test(userAgent) ? 'Windows'
+          : /linux|x11/i.test(userAgent) ? 'Linux'
+            : 'unknown'
+
 /** Coarse device/surface label used to GROUP per-device telemetry — e.g.
  *  `installed:MacIntel`. Deliberately coarse: it is a grouping key for
  *  comparing a series against itself, not a fingerprint, so a bounded set of
- *  values is a feature. The `navigator.platform` fallback to a userAgent prefix
- *  exists only because the former is deprecated and may be empty. */
+ *  values is a feature — and a STABLE one, since the label selects the series.
+ *  `navigator.platform` is deprecated and may be empty, hence the family
+ *  fallback. */
 export const getDeviceLabel = (): string => {
   const surface = isInstalledAppDisplayMode() ? 'installed' : 'browser'
   if (typeof navigator === 'undefined') return `${surface}:unknown`
-  const platform = navigator.platform || navigator.userAgent.slice(0, 40)
-  return `${surface}:${platform}`
+  return `${surface}:${navigator.platform || platformFamily(navigator.userAgent)}`
 }

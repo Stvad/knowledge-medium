@@ -19,6 +19,14 @@
  * it is a check on a state the intervening reads can have outlived. Both write
  * paths live here so neither can get that order wrong by hand; a caller
  * supplies WHAT to check, never WHEN.
+ *
+ * What that promises, exactly: the write was authorised when it was ISSUED.
+ * Not at commit — `tx.setProperty` awaits its own reads and SQL, and the commit
+ * follows, so ambient state can still move underneath. No placement fixes that,
+ * because every check has more asynchronous work after it; a check after the
+ * write would narrow the window by one SQL round trip and leave the commit.
+ * ACCEPTED: the payload then describes a span one transaction stale, and the
+ * next sample's own epoch check opens a replacement rather than compounding it.
  */
 import { ChangeScope, type BlockData, type TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'

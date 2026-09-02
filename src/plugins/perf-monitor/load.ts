@@ -40,9 +40,8 @@ const isTimingSample = (v: unknown): boolean =>
 
 /**
  * A validator must cover EVERY field a reader dereferences — the comparison and
- * the trend table both — not just the ones a past bug named. These records are
- * an opaque, deliberately hand-inspectable blob, so any field can arrive with
- * the wrong type, and the consequence is never a bad number: it is a throw
+ * the trend table both. These records are an opaque, deliberately
+ * hand-inspectable blob, so any field can arrive with the wrong type, and the consequence is never a bad number: it is a throw
  * inside the analysis (dead for the rest of the session) or inside the dialog
  * render, rather than skipping one unreadable row. Adding a field to either
  * reader means adding it here — INCLUDING inside the nested query samples, since

@@ -269,6 +269,11 @@ describe('collectStartupMetricsEffect', () => {
     // never have entered the write at all, which a sleep could only ever
     // suggest. `seen` counts record transactions.
     expect(seen).toBe(1)
+    // Measured standalone at ~110ms, so the default would cover even the ~6x
+    // the gate's contention adds. The budget is raised for the INNER waits:
+    // this drives fake timers through a retry, and a `vi.waitFor` that could
+    // outlive its enclosing test can never report which assertion never
+    // settled — "timed out in 5000ms" with no clue why.
   }, 20_000)
 
   it('retries a write that rejects', async () => {
@@ -299,6 +304,8 @@ describe('collectStartupMetricsEffect', () => {
     await vi.advanceTimersByTimeAsync(WRITE_RETRY_MS + 500)
     vi.useRealTimers()
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
+    // ~110ms standalone; raised for the same reason as above — the inner waits
+    // must stay strictly below the enclosing budget to be able to report.
   }, 20_000)
 
   it('marks interactive after first paint and persists exactly one record', async () => {
@@ -410,6 +417,9 @@ describe('collectStartupMetricsEffect', () => {
 
     // The invariant the whole test is for, restated against the graph.
     expect(await countRecords()).toBe(1)
+    // ~55ms standalone. Raised because the two `vi.waitFor` budgets above are
+    // 5s each, which is the default test timeout — an inner wait that cannot
+    // expire before its test reports "timed out" and names nothing.
   }, 20_000)
 
   it('debounces interactive off long-task events when the Long Tasks API is present', () => {
