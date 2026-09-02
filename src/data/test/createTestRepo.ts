@@ -38,6 +38,9 @@
  * sharing one db in the same test will therefore mint COLLIDING block ids and
  * tx-seqs. A two-device/convergence test must give at least one Repo distinct
  * generators, e.g. `newId: uuidv4` (see globalState.test.ts / mutators.test.ts).
+ * Tx ids are the exception: `Repo` mints those as uuids independently of
+ * `newId` (#866), so no arrangement of Repos can collide on the
+ * `command_events.tx_id` primary key.
  */
 
 import type { User } from '@/data/api/user.js'

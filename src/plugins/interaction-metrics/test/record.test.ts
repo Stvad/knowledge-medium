@@ -174,7 +174,24 @@ describe('buildInteractionRecord', () => {
     for (let i = 0; i < 200; i++) queries[`q${i}`] = timing({ totalMs: i })
     const record = buildInteractionRecord(metricsFixture({ queries } as Partial<ReturnType<Repo['metrics']>>), META)
     expect(Object.keys(record.queries)).toHaveLength(64)
-    expect(record.queries.q199).toBeDefined()
+  })
+
+  // Past the bound, WHICH names survive must not depend on what is being
+  // measured. Selecting the top N by cost means a query that was cheap is
+  // absent from the baseline, so the session where it turns expensive compares
+  // against no history at all — a regression reported as a new surface. Two
+  // sessions measuring the same names must therefore store the same names,
+  // whatever their timings did in between.
+  it('stores the same query names whatever the timings did', () => {
+    const names = Array.from({ length: 200 }, (_, i) => `q${i}`)
+    const recordFor = (cost: (i: number) => number): string[] => {
+      const queries: Record<string, ReturnType<typeof timing>> = {}
+      names.forEach((n, i) => { queries[n] = timing({ totalMs: cost(i) }) })
+      return Object.keys(
+        buildInteractionRecord(metricsFixture({ queries } as Partial<ReturnType<Repo['metrics']>>), META).queries,
+      ).sort()
+    }
+    expect(recordFor((i) => i)).toEqual(recordFor((i) => 200 - i))
   })
 })
 

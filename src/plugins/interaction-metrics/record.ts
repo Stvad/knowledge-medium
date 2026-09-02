@@ -30,12 +30,9 @@ import {
 } from './sessionContext.js'
 
 /** Safety valve on the stored query set, NOT a policy about which queries
- *  matter. Every measured query is kept, because ranking by cost and truncating
- *  hides precisely the transition worth catching: a query that was cheap has no
- *  stored baseline, so when it becomes expensive the comparison sees a name it
- *  has never met and treats it as a newly mounted surface rather than a
- *  regression. A real session measures ~13 queries in ~3KB, so this bound only
- *  exists so a pathological future cannot grow the record without limit. */
+ *  matter — `interactionComparable` says why the selector must not be cost. A
+ *  real session measures ~13 queries in ~3KB, so this bound only exists so a
+ *  pathological future cannot grow the record without limit. */
 const MAX_QUERIES = 64
 
 /** One timing distribution as stored. A subset of `TimingSnapshot` — the fields
@@ -129,7 +126,16 @@ export interface InteractionRecordData extends InteractionComparable {
 
 /** The whole record rides one identity-codec property (an engine-controlled
  *  blob) so the shape can evolve without per-field schema churn — same call as
- *  `startupRecord`. */
+ *  `startupRecord`.
+ *
+ *  Deliberately ONE cell, against the record-grain rule's usual direction. The
+ *  addressable record here is the session sample, and it IS a block: typed,
+ *  queryable, auditable. What the cell holds is that one measurement's fixed
+ *  field vector — nobody links to, undoes, or hand-edits the p95 of a single
+ *  query in a single session, which is the rule's own test. Exploding it would
+ *  mint ~15 child blocks per sample against a retention bound of thousands per
+ *  device, all of them in the user's tree, to make individually addressable
+ *  something no surface addresses. */
 export const interactionRecordProp = seedProperty<InteractionRecordData | undefined>({
   seedKey: 'system:interaction-metrics/property/interaction-record',
   revision: 1,
@@ -212,8 +218,14 @@ export const interactionComparable = (
   metrics: ReturnType<Repo['metrics']>,
 ): InteractionComparable => {
   const queries: Record<string, TimingSample> = {}
+  // Ordered by NAME, not by cost. Truncating a cost-ranked list drops exactly
+  // the queries this exists to catch: one that was cheap has no stored
+  // baseline, so when it becomes expensive the comparison meets a name it has
+  // never seen and reads it as a newly mounted surface rather than a
+  // regression. A stable selector keeps the retained set the same session over
+  // session, which is what makes the history comparable at all.
   for (const [name, timing] of Object.entries(metrics.queries)
-    .sort(([, a], [, b]) => b.totalMs - a.totalMs)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .slice(0, MAX_QUERIES)) {
     queries[name] = toTimingSample(timing)
   }
@@ -427,7 +439,6 @@ export const writeInteractionSample = async (
         // if they belong to one workspace, and a switch during the awaits above
         // invalidates them. The shared path cannot know that rule.
         assertEligible: (r, ws) => assertStillAttributable(r, ws, metrics.epoch),
-        content: new Date(startedAt).toISOString(),
         setProperty: async (tx, id) => {
           await tx.setProperty(id, interactionRecordProp, data, { skipMetadata: true })
         },

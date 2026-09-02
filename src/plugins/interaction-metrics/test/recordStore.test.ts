@@ -60,7 +60,6 @@ const spec = (retain: number): ClientRecordSpec => ({
   description: 'test metrics record',
   retain,
   recordName: interactionRecordProp.name,
-  content: 'record',
   setProperty: async (tx, id) => {
     await tx.setProperty(id, interactionRecordProp, DATA, { skipMetadata: true })
   },
@@ -356,13 +355,36 @@ describe('appendClientRecord eligibility', () => {
 })
 
 /**
- * Retention deletes the record's SUBTREE.
+ * A record must not surface in the block-ref picker.
  *
- * Writing the record property materializes field/value rows beneath the block
- * where properties are blocks, and a bare `tx.delete` tombstones only the
- * parent — `src/data/subtreeDelete.ts` says so outright. Those live rows would
- * then accumulate under a tombstone on every pass, invisible and collected by
- * nothing.
+ * `core.recentBlocks` backs the empty `((` completion's twelve results: live
+ * non-empty rows, newest `user_updated_at` first — and a `systemMint` create
+ * stamps that with `now`, so any content at all puts every session's telemetry
+ * row at the top of the list a person sees when they reach for a block.
+ */
+describe('what a record shows the user', () => {
+  it('does not appear among recent blocks', async () => {
+    const { blockId } = await append(1)
+
+    const recent = await repo.query.recentBlocks({ workspaceId: WS, limit: 12 }).load()
+
+    // The record was written and is live — otherwise this passes for the wrong
+    // reason, and would keep passing with the rule deleted.
+    expect(await liveIds()).toContain(blockId)
+    expect(recent.map((b) => b.id)).not.toContain(blockId)
+  })
+})
+
+/**
+ * What retention may and may not take with the record.
+ *
+ * Two rules pulling opposite ways. Writing the record property materializes
+ * field/value rows beneath the block where properties are blocks, and a bare
+ * `tx.delete` tombstones only the parent, leaving those live under a tombstone
+ * forever — so the prune walks the SUBTREE. But these records sit in the user's
+ * tree, so a person can put a block under one, and this pass runs at Automation
+ * scope where no undo reaches. The record is therefore skipped outright once it
+ * has a child that is not property machinery.
  */
 describe('retention deletion', () => {
   const liveDescendantsOf = async (id: string): Promise<string[]> =>
@@ -370,23 +392,35 @@ describe('retention deletion', () => {
       'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [id],
     )).map((r) => r.id)
 
-  it('takes what lives under a pruned record, not just its row', async () => {
-    // The record that retention will evict, with a live child beneath it.
+  it('prunes a record whose only descendants are its own machinery', async () => {
     const { blockId: doomed } = await append(1)
-    await repo.tx(async (tx) => {
-      await tx.create({
-        id: 'nested', workspaceId: WS, parentId: doomed, orderKey: 'a1',
-        content: 'machinery', properties: {},
-      }, { systemMint: true })
-    }, { scope: ChangeScope.Automation, description: 'seed nested row' })
-    expect(await liveDescendantsOf(doomed)).toEqual(['nested'])
-
     // Two more appends push `doomed` past a retain of 1.
     await append(1)
     await append(1)
 
     expect(await liveIds()).not.toContain(doomed)
     expect(await liveDescendantsOf(doomed)).toEqual([])
+  })
+
+  // The blocks a record materializes for its own property are recognized as
+  // machinery and do not count; only a hand-placed block does. That half is
+  // unpinned here — a record property write materializes no field rows until
+  // properties are blocks, so this environment produces none to distinguish.
+  it('leaves a record alone once someone has put a block under it', async () => {
+    const { blockId: annotated } = await append(1)
+    await repo.tx(async (tx) => {
+      await tx.create({
+        id: 'a-note', workspaceId: WS, parentId: annotated, orderKey: 'a1',
+        content: 'why was this session slow?', properties: {},
+      }, { systemMint: true })
+    }, { scope: ChangeScope.Automation, description: 'seed a hand-written note' })
+
+    // Two more appends push `annotated` past a retain of 1.
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).toContain(annotated)
+    expect(await liveDescendantsOf(annotated)).toEqual(['a-note'])
   })
 })
 
