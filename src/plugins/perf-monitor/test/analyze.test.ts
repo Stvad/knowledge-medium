@@ -158,6 +158,27 @@ describe('runPerfAnalysis', () => {
     expect(getPerfAnalysisFor(WS)).toBeNull()
   })
 
+  // A run still in flight when the monitor is switched off is describing a
+  // world nobody is watching any more; teardown bumps the generation so it
+  // cannot publish afterwards.
+  it('does not publish a run that outlived the effect', async () => {
+    resetPerfAnalysisStore()
+    await pastSession()
+    const stop = await perfAnalysisEffect.start({ repo, workspaceId: WS } as Parameters<
+      typeof perfAnalysisEffect.start
+    >[0])
+    // The precondition, asserted rather than assumed.
+    const published = await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(WS)).toBe(published)
+
+    resetPerfAnalysisStore()
+    const pending = runPerfAnalysisNow(repo, WS)
+    stop?.()
+    await pending
+
+    expect(getPerfAnalysisFor(WS)).toBeNull()
+  })
+
   // A reset retires the counters the verdict rests on. Nothing else moves —
   // same Repo, same workspace, and the effect has not restarted — so a value
   // comparison sees an unchanged world while the analysis describes a span that

@@ -158,3 +158,51 @@ describe('a workspace change', () => {
     expect(getPerfAnalysisFor('ws-1')).toBeNull()
   })
 })
+
+/**
+ * Switching the monitor OFF is not a pause.
+ *
+ * The counters its verdicts describe keep moving while the effect is gone, and
+ * the always-on observer can make them unattributable in the meantime — so a
+ * verdict cached before the toggle went off is not a verdict on re-enable, and
+ * a run still in flight when it went off is describing a world nobody is
+ * watching any more.
+ */
+describe('the monitor being switched off', () => {
+  const repoStub = () => ({
+    activeWorkspaceId: 'ws-1',
+    isReadOnly: false,
+    metrics: () => ({ epoch: 0, epochWorkspaceId: null }),
+  })
+  const start = async (repo: object) =>
+    perfAnalysisEffect.start({ repo, workspaceId: 'ws-1' } as Parameters<
+      typeof perfAnalysisEffect.start
+    >[0])
+
+  it('drops the verdict it had cached', async () => {
+    const repo = repoStub()
+    const stop = await start(repo)
+    publishPerfAnalysis(analysis({ seq: 1 }))
+    expect(getPerfAnalysisFor('ws-1')).not.toBeNull()
+
+    stop?.()
+
+    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+  })
+
+  // Why the clear belongs at TEARDOWN rather than at the next start: ownership
+  // survives, so re-enabling in the same workspace still owns the store and the
+  // start-time clear is skipped — which would present a verdict from before
+  // whatever happened while the monitor was off.
+  it('shows nothing cached from before it was switched off', async () => {
+    const repo = repoStub()
+    const stop = await start(repo)
+    stop?.()
+
+    publishPerfAnalysis(analysis({ seq: 1 }))
+    const reStop = await start(repo)
+    reStop?.()
+
+    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+  })
+})

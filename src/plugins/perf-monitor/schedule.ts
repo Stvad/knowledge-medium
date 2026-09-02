@@ -108,7 +108,24 @@ export const perfAnalysisEffect: AppEffect = {
     // analysis for that one state was a second constructor for every field of
     // `PerfAnalysis`, kept in step by hand, to show the same words one idle
     // delay sooner.
-    return job.start(async () => { await runPerfAnalysisNow(repo, workspaceId) })
+    const stopJob = job.start(async () => { await runPerfAnalysisNow(repo, workspaceId) })
+    return () => {
+      // Teardown is not a pause. This effect goes away when the monitor's own
+      // toggle is switched off, and the counters its verdicts describe keep
+      // moving while it is gone — the always-on observer can make them
+      // unattributable in the meantime, so what is cached stops being true and
+      // nothing here would notice.
+      //
+      // Two clauses, each load-bearing: the generation stops a run still in
+      // flight from publishing afterwards, and the snapshots go now because
+      // re-enabling in the same workspace still OWNS the store, so the
+      // start-time clear would be skipped and the pre-teardown verdict shown.
+      // Ownership itself is deliberately left alone — dropping it here changes
+      // nothing once the snapshots are gone.
+      contextGeneration++
+      clearPerfAnalyses()
+      stopJob()
+    }
   },
 }
 
