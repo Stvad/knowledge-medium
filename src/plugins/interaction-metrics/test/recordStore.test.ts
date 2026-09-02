@@ -64,7 +64,7 @@ const spec = (retain: number): ClientRecordSpec => ({
   },
 })
 
-const append = (retain: number) => appendClientRecord(repo, repo.tx.bind(repo), spec(retain))
+const append = (retain: number) => appendClientRecord(repo, spec(retain))
 
 const liveIds = async (): Promise<string[]> =>
   (await sharedDb.db.getAll<{ id: string }>(
@@ -216,7 +216,7 @@ describe('appendClientRecord retention', () => {
       return realTx(fn, opts)
     })
     for (let i = 0; i < 3; i++) await append(3)
-    await appendClientRecord(repo, repo.tx.bind(repo), {
+    await appendClientRecord(repo, {
       ...spec(1),
       onCommitted: () => order.push('claimed'),
     })

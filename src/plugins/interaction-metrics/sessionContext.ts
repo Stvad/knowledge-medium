@@ -30,28 +30,8 @@ export interface MetricsSessionContext {
   /** Are the live counters attributable to this one workspace? False once the
    *  page session has been in more than one. */
   attributable: boolean
-  /** What the recorders themselves cost, to be discounted from any reading of
-   *  the live counters. */
-  own: OwnActivity
   /** The record block this page session owns in `workspaceId`, if any. */
   recordId: string | null
-}
-
-/**
- * The recorders' own contribution to the page-global counters.
- *
- * BOTH sides, because the fan-out metric is a ratio of one to the other and
- * correcting only the denominator is worse than correcting neither: it moves
- * the ratio UP, which is the direction that invents regressions. A record
- * create changes live-set membership, which fires `kernel.content` and
- * `typedBlocks.live` — so any mounted workspace-wide handle (Recents, an open
- * search, a typed-block view) really is invalidated by our own bookkeeping.
- */
-export interface OwnActivity {
-  /** Transactions the recorders issued. */
-  writes: number
-  /** `handleStore` counter deltas measured across those transactions. */
-  fanout: Readonly<Record<string, number>>
 }
 
 /** Minimal read surface, so this module needs no Repo import (and stays cheap
@@ -74,20 +54,10 @@ export interface SessionRepoFacts {
 interface SessionFacts {
   seenWorkspace: string | null
   unattributable: boolean
-  ownWrites: number
-  ownFanout: Record<string, number>
-  /** Highest `writeTransaction.calls` OBSERVED — only ever assigned from a
-   *  reading of the live counter, never advanced by a delta. A drop below it
-   *  means the counters were zeroed under us (`repo.resetMetrics()` is a
-   *  supported hook), which the own-write count is a subtrahend of.
-   *
-   *  Advancing it by a delta instead would detect slightly more resets, and puts
-   *  it above the true counter whenever a reading lands between one of our
-   *  transactions committing and it being credited — inventing a reset, which
-   *  clears the correction and forks a second record block into the graph.
-   *  Missing a reset costs one stale comparison; inventing one writes to the
-   *  user's data. */
-  writeWatermark: number
+  /** `repo.metrics().epoch` this session's record was opened under. A reset
+   *  zeroes the counters the record describes, so the old row covers a span
+   *  that no longer exists and a new one is due. */
+  epoch: number
   pageRecord: { blockId: string; workspaceId: string; startedAt: number } | null
 }
 
@@ -96,7 +66,7 @@ const facts = new WeakMap<object, SessionFacts>()
 const factsFor = (repo: object): SessionFacts => {
   let f = facts.get(repo)
   if (!f) {
-    f = { seenWorkspace: null, unattributable: false, ownWrites: 0, ownFanout: {}, writeWatermark: 0, pageRecord: null }
+    f = { seenWorkspace: null, unattributable: false, epoch: 0, pageRecord: null }
     facts.set(repo, f)
   }
   return f
@@ -139,34 +109,14 @@ export const observeWorkspaceEffectContribution = appEffectsFacet.of(observeWork
   source: 'interaction-metrics',
 })
 
-/** Re-base from an observed counter total — see `writeWatermark`. Returns
- *  whether that reading showed the counters had been zeroed under us, which
- *  starts a new accounting epoch AND a new record, since the old row describes
- *  a span the counters no longer cover. */
-export const noteCounterTotal = (repo: object, totalWrites: number): boolean => {
+/** Note the metrics epoch this reading came from. A reset zeroes every counter
+ *  the current record describes, so that row now covers a span the figures no
+ *  longer cover and the next sample must open a replacement. */
+const noteEpoch = (repo: object, epoch: number): void => {
   const f = factsFor(repo)
-  const reset = totalWrites < f.writeWatermark
-  if (reset) {
-    f.ownWrites = 0
-    // `resetMetrics()` zeroes the handle-store counters in the same call, so
-    // the fan-out subtrahend belongs to the old epoch exactly as the write one
-    // does. Left behind it would be subtracted from counters that never
-    // contained it.
-    f.ownFanout = {}
-    f.pageRecord = null
-  }
-  f.writeWatermark = totalWrites
-  return reset
-}
-
-/** Credit the recorders' own activity. Deliberately does NOT touch
- *  `writeWatermark` — see its declaration. */
-const noteOwnActivity = (repo: object, writes: number, fanout: Record<string, number>): void => {
-  const f = factsFor(repo)
-  // Fan-out is credited whatever `writes` is: the `ensure` helpers write through
-  // `repo.tx` directly, so a body can invalidate without issuing a counted one.
-  for (const [k, v] of Object.entries(fanout)) f.ownFanout[k] = (f.ownFanout[k] ?? 0) + v
-  f.ownWrites += writes
+  if (f.epoch === epoch) return
+  f.epoch = epoch
+  f.pageRecord = null
 }
 
 /** Remember the record block this page session owns. */
@@ -208,9 +158,6 @@ export const metricsSessionContext = (
     // the counters anyway — the permissive direction on a rule whose whole job
     // is to refuse.
     attributable: !f.unattributable && f.seenWorkspace === workspaceId,
-    // Copied, not aliased: the live map keeps accumulating while a consumer
-    // holds this reading across its awaits.
-    own: { writes: f.ownWrites, fanout: { ...f.ownFanout } },
     recordId: f.pageRecord?.workspaceId === workspaceId ? f.pageRecord.blockId : null,
   }
 }
@@ -219,13 +166,12 @@ export const metricsSessionContext = (
  * One reading of the live counters, together with the session facts that
  * qualify them.
  *
- * The rebase and the snapshot must come from the SAME reading. `resetMetrics()`
- * is a supported hook, and a consumer that snapshots without re-basing
- * subtracts a previous epoch's own-writes from post-reset counters — inflating
- * the fan-out ratio and excluding a record block that no longer describes the
- * live span. The recorder does this on every sample; the monitor's manual
- * "re-analyze" is a second entry point into the same snapshot, which is exactly
- * why it is taken here rather than at each call site.
+ * The epoch and the snapshot must come from the SAME reading. `resetMetrics()`
+ * is a supported hook, and a consumer that reads the figures without noticing
+ * the epoch moved keeps updating a record describing a span the counters no
+ * longer cover. The recorder does this on every sample; the monitor's manual
+ * "re-analyze" is a second entry point into the same snapshot, which is why it
+ * is taken here rather than at each call site.
  */
 export const readLiveSession = (
   repo: Repo,
@@ -235,7 +181,7 @@ export const readLiveSession = (
   // both plugin toggles and is the one that actually guarantees this. Idempotent.
   observeWorkspace(repo, workspaceId)
   const metrics = repo.metrics()
-  noteCounterTotal(repo, metrics.db.writeTransaction?.calls ?? 0)
+  noteEpoch(repo, metrics.epoch)
   return { metrics, session: metricsSessionContext(repo, workspaceId) }
 }
 
@@ -292,59 +238,6 @@ export const awaitRecordingAllowed = async (
     return false
   } finally {
     clearTimeout(timer)
-  }
-}
-
-/** Run `body`, counting the transactions the recorder issues through the
- *  `recordTx` it is handed.
- *
- *  Counted per transaction WE issue, not as a delta on the global counter
- *  across our awaits: a user write landing in that window would be attributed
- *  to us and subtracted from `writes`, shrinking the fan-out denominator and
- *  inventing regressions. Transactions the `ensure`-style helpers commit on
- *  first use are deliberately NOT counted — they cannot be told apart from a
- *  concurrent user write, and under-counting only shrinks the reported ratio,
- *  which suppresses a finding rather than fabricating one.
- *
- *  Shared by BOTH recorders: they feed one lifetime counter, so a correction
- *  applied to only one of them is worse than none. */
-export const countingOwnWrites = async <T>(
-  repo: Repo,
-  body: (recordTx: Repo['tx']) => Promise<T>,
-): Promise<T> => {
-  let issued = 0
-  const recordTx = (async (fn, opts) => {
-    issued++
-    return repo.tx(fn, opts)
-  }) as Repo['tx']
-  // Fan-out is measured across the WHOLE body, not per counted transaction: the
-  // `ensure`-style helpers commit their own transactions on first use and fire
-  // the same workspace-wide channels, and leaving them out would inflate the
-  // numerator on precisely the session with the least other traffic. Reading the
-  // handle-store counters directly rather than through `repo.metrics()`, which
-  // additionally sorts every query's 256-sample reservoir to build percentiles.
-  //
-  // KNOWN GAP: two overlapping bodies (the two recorders share one Repo) credit
-  // the intersection twice, and `ownFanout` only ever grows, so one overlap
-  // biases the rest of the session. It errs toward suppressing a finding.
-  const before = repo.handleStore.metrics.snapshot()
-  try {
-    return await body(recordTx)
-  } finally {
-    // Re-base the watermark from an OBSERVED total now that our own writes have
-    // landed. Taking a reading at both ends of our own work is what lets the
-    // watermark detect a reset without ever being advanced by a delta — see its
-    // declaration for why a delta is not an option. One reservoir's snapshot,
-    // not `repo.metrics()`, which additionally sorts every query's.
-    const reset = noteCounterTotal(repo, repo.dbMetrics.writeTransaction.snapshot().calls)
-    const after = repo.handleStore.metrics.snapshot()
-    const fanout: Record<string, number> = {}
-    for (const [k, v] of Object.entries(after)) fanout[k] = v - (before[k] ?? 0)
-    // A reset inside the body leaves our own delta spanning two epochs, so
-    // crediting it would re-poison the accounting the line above just cleared.
-    // Credited to the Repo the writes actually happened in, which a stale
-    // callback finishing after a sign-out still names correctly.
-    if (!reset) noteOwnActivity(repo, issued, fanout)
   }
 }
 

@@ -22,14 +22,12 @@ import {
   assertStillAttributable,
   awaitRecordingAllowed,
   clearPageRecord,
-  countingOwnWrites,
   NoLongerEligible,
   metricsSessionContext,
   observeWorkspace,
   pageRecordStartedAt,
   readLiveSession,
   setPageRecord,
-  type OwnActivity,
 } from './sessionContext.js'
 
 /** Safety valve on the stored query set, NOT a policy about which queries
@@ -196,9 +194,6 @@ export const queryNameFromHandleKey = (key: string): string =>
  *  can never diverge in what "the same measurement" means. */
 export const interactionComparable = (
   metrics: ReturnType<Repo['metrics']>,
-  /** What the recorder itself cost, subtracted from BOTH sides of the ratio —
-   *  see {@link OwnActivity} for why one side alone is worse than neither. */
-  own: OwnActivity,
 ): InteractionComparable => {
   const queries: Record<string, TimingSample> = {}
   for (const [name, timing] of Object.entries(metrics.queries)
@@ -206,14 +201,14 @@ export const interactionComparable = (
     .slice(0, MAX_QUERIES)) {
     queries[name] = toTimingSample(timing)
   }
-  const fanout: Record<string, number> = {}
-  for (const [name, value] of Object.entries(metrics.handleStore)) {
-    fanout[name] = Math.max(0, value - (own.fanout[name] ?? 0))
-  }
   return {
-    writes: Math.max(0, (metrics.db.writeTransaction?.calls ?? 0) - own.writes),
+    // `excludingTelemetry`, not the page totals: the Repo counts the recorders'
+    // own transactions on the other side of that line, in the same synchronous
+    // block as the invalidation walk they cause. A correction applied out here
+    // instead cannot be exact — the window would span this function's awaits.
+    writes: metrics.excludingTelemetry.writes,
     queries,
-    fanout,
+    fanout: { ...metrics.excludingTelemetry.handleStore },
   }
 }
 
@@ -228,7 +223,6 @@ export const buildInteractionRecord = (
     clientId: string
     deviceLabel: string
     blockCount: number
-    own: OwnActivity
   },
 ): InteractionRecordData => {
   const db: Record<string, TimingSample> = {}
@@ -245,7 +239,7 @@ export const buildInteractionRecord = (
     deviceLabel: meta.deviceLabel,
     sessionMs: meta.recordedAt - meta.startedAt,
     blockCount: meta.blockCount,
-    ...interactionComparable(metrics, meta.own),
+    ...interactionComparable(metrics),
     db,
     handles: {
       count: inventory.handleCount,
@@ -370,13 +364,12 @@ export const writeInteractionSample = async (
     // imports or syncs a lot of blocks would otherwise report the final
     // timings against the opening graph size.
     blockCount: await countLiveBlocks(repo, workspaceId),
-    own: current.own,
   })
 
   try {
-    return await countingOwnWrites(repo, async (recordTx) => {
+    {
       if (existing) {
-        await recordTx(async (tx) => {
+        await repo.tx(async (tx) => {
           assertStillAttributable(repo, workspaceId)
           // Placement re-taken INSIDE the transaction, not just before it: the
           // check above is separated from this write by the block count, and a
@@ -392,11 +385,11 @@ export const writeInteractionSample = async (
           // picker orders by exactly that — so a hidden ISO-timestamp block would
           // hold the top of the (( completion list on any five-minute pause.
           await tx.setProperty(existing.blockId, interactionRecordProp, data, { skipMetadata: true })
-        }, { scope: ChangeScope.Automation, description: 'interaction metrics record' })
+        }, { scope: ChangeScope.Automation, telemetry: true, description: 'interaction metrics record' })
         return existing.blockId
       }
 
-      const { blockId } = await appendClientRecord(repo, recordTx, {
+      const { blockId } = await appendClientRecord(repo, {
         workspaceId,
         containerType: interactionMetricsUIStateType,
         recordType: interactionRecordType,
@@ -417,7 +410,7 @@ export const writeInteractionSample = async (
         onCommitted: (id) => setPageRecord(repo, workspaceId, id, startedAt),
       })
       return blockId
-    })
+    }
   } catch (err) {
     if (err instanceof NoLongerEligible) return null
     throw err

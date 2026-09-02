@@ -106,7 +106,7 @@ export const runPerfAnalysis = async (
   // discard a genuine past session in exactly the case where no current record
   // exists.
   const history = interaction.filter((r) => r.id !== session.recordId).map((r) => r.record)
-  const current = interactionComparable(metrics, session.own)
+  const current = interactionComparable(metrics)
 
   // Judged, not counted. A record with no writes, or a startup record missing
   // its paint marks, is a row that carries no usable sample — so readiness has

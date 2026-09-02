@@ -19,7 +19,6 @@ import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import {
   awaitRecordingAllowed,
-  countingOwnWrites,
   NoLongerEligible,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { appendClientRecord } from '@/plugins/interaction-metrics/recordStore.js'
@@ -150,7 +149,7 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
   // rules bind both recorders.
   if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
   try {
-    return await countingOwnWrites(repo, async (recordTx) => {
+    {
       const clientId = getClientId()
       const data = buildStartupRecord(getStartupTimeline(), {
         recordedAt: Date.now(),
@@ -159,7 +158,7 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
         clientId,
         deviceLabel: getDeviceLabel(),
       })
-      return (await appendClientRecord(repo, recordTx, {
+      return (await appendClientRecord(repo, {
         workspaceId,
         containerType: startupMetricsUIStateType,
         recordType: startupRecordType,
@@ -173,7 +172,7 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
           await tx.setProperty(blockId, startupRecordProp, data, { skipMetadata: true })
         },
       })).blockId
-    })
+    }
   } catch (err) {
     if (err instanceof NoLongerEligible) return null
     throw err

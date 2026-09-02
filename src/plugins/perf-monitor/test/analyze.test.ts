@@ -17,7 +17,7 @@ import {
   writeInteractionSample,
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
-import { metricsSessionContext, resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
+import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis } from '../analyze'
 
 const WS = 'ws-1'
@@ -101,35 +101,6 @@ describe('runPerfAnalysis', () => {
 
     // The reset ended the span that record describes, so it is history now.
     expect(after.baseline.interaction).toBe(before.baseline.interaction + 1)
-  })
-
-  // The watermark is only ever ASSIGNED from a reading, never advanced by a
-  // delta. Advancing it by our own writes made it exceed the true counter
-  // whenever an analysis landed between one of our transactions committing and
-  // it being credited — reporting a reset that never happened, which clears the
-  // fan-out correction and makes the recorder fork a second record block into
-  // the user's graph.
-  it('does not invent a reset when an analysis interleaves with a sample', async () => {
-    const first = await writeInteractionSample(repo, WS)
-
-    // An analysis reading the counters mid-body: after the record transaction
-    // has committed, before `countingOwnWrites` credits it.
-    const realTx = repo.tx.bind(repo)
-    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
-      const out = await realTx(fn, opts)
-      if (opts?.description === 'interaction metrics record') {
-        await runPerfAnalysis(repo, WS, 1)
-      }
-      return out
-    })
-    await writeInteractionSample(repo, WS)
-    vi.restoreAllMocks()
-
-    const own = metricsSessionContext(repo, WS).own
-    expect(own.writes).toBeGreaterThan(0)
-    expect(own.fanout).not.toEqual({})
-    // Still the same record: a phantom reset would have cleared `pageRecord`.
-    expect(await writeInteractionSample(repo, WS)).toBe(first)
   })
 
   // repo.metrics() is page-global. The recorder stops sampling once a session

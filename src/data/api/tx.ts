@@ -458,6 +458,19 @@ export interface RepoTxOptions {
    *  `tx_context` / `row_events`. Minted by `repo.undoGroup` and
    *  injected by its facade — callers don't set this by hand. */
   groupId?: string
+  /** This transaction is the app MEASURING ITSELF, not doing the user's work.
+   *
+   *  Kept out of `repo.metrics().excludingTelemetry`, so a feature that reports
+   *  performance figures does not report its own bookkeeping as load. Set it on
+   *  every transaction such a feature issues, including its cleanup passes;
+   *  anything left unflagged is counted as the user's work, which is the
+   *  direction that under-reports a problem rather than inventing one.
+   *
+   *  Orthogonal to `scope`: telemetry writes are still gated, still synced,
+   *  still non-undoable or not on their own terms. This flag only decides which
+   *  side of the metrics they land on. */
+  telemetry?: boolean
+
   /** Skip recording an undo entry for this tx, without changing its scope.
    *
    *  For writes the program makes on the user's behalf while they are doing

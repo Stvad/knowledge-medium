@@ -19,7 +19,7 @@ import {
   queryNameFromHandleKey,
   writeInteractionSample,
 } from '../record'
-import { metricsSessionContext, observeWorkspace, resetMetricsSession } from '../sessionContext'
+import { observeWorkspace, resetMetricsSession } from '../sessionContext'
 import { INTERACTION_RETAIN } from '../record'
 
 const WS = 'ws-1'
@@ -52,6 +52,10 @@ const timing = (over: Partial<{calls: number; p50Ms: number; p95Ms: number; tota
 
 const metricsFixture = (over: Partial<ReturnType<Repo['metrics']>> = {}): ReturnType<Repo['metrics']> => ({
   handleStore: { invalidations: 10, handlesWalked: 200, loaderRuns: 12 },
+  // The user's share: fewer invalidations than the page total, because the
+  // recorder's own creates are counted on the other side of the line.
+  excludingTelemetry: { writes: 6, handleStore: { invalidations: 4, loaderRuns: 12 } },
+  epoch: 0,
   handleStoreInventory: {
     handleCount: 54, totalDeps: 900, maxDeps: 240, p50Deps: 3, p95Deps: 120, topHeavy: [],
   },
@@ -70,7 +74,6 @@ const metricsFixture = (over: Partial<ReturnType<Repo['metrics']>> = {}): Return
 const META = {
   recordedAt: 5_000, startedAt: 1_000, appVersion: '2026.08.24', appSha: 'abc1234',
   clientId: 'client-9', deviceLabel: 'installed:MacIntel', blockCount: 327_902,
-  own: { writes: 0, fanout: {} },
 }
 
 describe('queryNameFromHandleKey', () => {
@@ -112,8 +115,8 @@ describe('buildInteractionRecord', () => {
       sessionMs: 4_000,
       blockCount: 327_902,
       appSha: 'abc1234',
-      writes: 7,
-      fanout: { invalidations: 10, handlesWalked: 200, loaderRuns: 12 },
+      writes: 6,
+      fanout: { invalidations: 4, loaderRuns: 12 },
       handles: { count: 54, maxDeps: 240, p95Deps: 120 },
     })
   })
@@ -121,22 +124,16 @@ describe('buildInteractionRecord', () => {
   // Tx descriptions are interpolated with user content at ~30 call sites
   // (`append tag [[<name>]]`, `rename property <name>`), so the record must not
   // carry them at all -- there is no safe subset to keep.
-  // A monitor must not measure its own bookkeeping -- on BOTH sides of the
-  // ratio. Correcting only the denominator moves the ratio UP on exactly the
-  // quiet sessions where our own writes dominate, which invents regressions;
-  // and a record create is a live-set membership change, so it really does
-  // invalidate every mounted workspace-wide handle.
-  it('discounts the recorder\'s own transactions and their fan-out', () => {
-    const metrics = metricsFixture({ db: { writeTransaction: timing({ calls: 10 }) } } as Partial<ReturnType<Repo['metrics']>>)
-    expect(buildInteractionRecord(metrics, META).writes).toBe(10)
-    const corrected = buildInteractionRecord(
-      metrics,
-      { ...META, own: { writes: 4, fanout: { invalidations: 6 } } },
-    )
-    expect(corrected.writes).toBe(6)
-    expect(corrected.fanout.invalidations).toBe(4)
-    // Only the counters we actually caused; the rest of the map is untouched.
-    expect(corrected.fanout.loaderRuns).toBe(12)
+  // A monitor must not report its own bookkeeping as load. The recorder does
+  // not subtract anything: the Repo counts its transactions on the other side
+  // of the telemetry line, in the same synchronous block as the invalidation
+  // walk they cause, and the record reads that pair.
+  it('reports the counters that exclude the recorder\'s own work', () => {
+    const record = buildInteractionRecord(metricsFixture(), META)
+    expect(record.writes).toBe(6)
+    expect(record.fanout).toEqual({ invalidations: 4, loaderRuns: 12 })
+    // Not the page totals, which include our own writes.
+    expect(record.fanout.invalidations).not.toBe(10)
   })
 
   it('stores no transaction descriptions', () => {
@@ -337,25 +334,33 @@ describe('writeInteractionSample', () => {
     expect(stored.peekProperty(interactionRecordProp)!.writes).toBeGreaterThanOrEqual(0)
   })
 
-  // The fan-out correction only earns its place if the premise holds: a record
-  // create is a live-set membership change, so it fires `kernel.content` and
-  // invalidates every mounted workspace-wide handle. This is the test that says
-  // so — if it ever stops being true, the correction is dead weight.
-  it('discounts the invalidations its own writes cause on a mounted query', async () => {
+  // The premise the whole telemetry flag rests on: a record create is a
+  // live-set membership change, so it fires `kernel.content` and really does
+  // invalidate a mounted workspace-wide handle. If that stops being true the
+  // flag is dead weight, and this is the test that says so.
+  it('keeps its own invalidations out of the sample it writes', async () => {
     const handle = repo.query.recentBlocks({ workspaceId: WS })
     handle.subscribe(() => {})
     await handle.load()
 
-    const before = repo.handleStore.metrics.loaderInvalidations
-    const first = (await writeInteractionSample(repo, WS))!
-    const caused = repo.handleStore.metrics.loaderInvalidations - before
-    expect(caused).toBeGreaterThan(0)
-    expect(metricsSessionContext(repo, WS).own.fanout.loaderInvalidations).toBe(caused)
-
-    // The next sample snapshots counters that now carry `caused`, and reports
-    // the rate the USER's writes produced — unchanged by our bookkeeping.
+    // First sample: proves the premise. It really does invalidate the mounted
+    // handle — which is why its transactions must not be counted as load.
+    const totalBefore = repo.handleStore.metrics.loaderInvalidations
     await writeInteractionSample(repo, WS)
-    expect((await stored(first))!.fanout.loaderInvalidations).toBe(before)
+    expect(repo.handleStore.metrics.loaderInvalidations).toBeGreaterThan(totalBefore)
+
+    // A later sample updates in place, and every transaction it issues is
+    // flagged — so it moves the page totals and adds NOTHING to the figures a
+    // reader compares. (The first sample is not zero on the user's side: the
+    // shared ui-state helpers mint the container through the ordinary write
+    // path, once per client group. Counting those as the user's work makes the
+    // denominator bigger, which suppresses a finding rather than inventing one.)
+    const before = repo.metrics()
+    await writeInteractionSample(repo, WS)
+    const after = repo.metrics()
+
+    expect(after.excludingTelemetry.writes).toBe(before.excludingTelemetry.writes)
+    expect(after.excludingTelemetry.handleStore).toEqual(before.excludingTelemetry.handleStore)
   })
 
   // The placement check runs before the block count, so a sync-applied or hand
@@ -449,24 +454,15 @@ describe('writeInteractionSample', () => {
     expect(repurposed?.properties_json).toBe('{}')
   })
 
-  // A reset landing INSIDE a write body leaves our own before/after delta
-  // spanning two epochs — the `after` counters are post-zeroing, so the delta is
-  // negative, and subtracting a negative inflates the corrected fan-out. That is
-  // the direction that invents regressions.
-  it('credits nothing when a reset lands inside its own write', async () => {
-    await writeInteractionSample(repo, WS)
-    const realTx = repo.tx.bind(repo)
-    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
-      const out = await realTx(fn, opts)
-      if (opts?.description === 'interaction metrics record') repo.resetMetrics()
-      return out
-    })
-    await writeInteractionSample(repo, WS)
-    vi.restoreAllMocks()
-
-    const own = metricsSessionContext(repo, WS).own
-    expect(own.writes).toBe(0)
-    expect(own.fanout).toEqual({})
+  // `resetMetrics()` zeroes the counters the current record describes, so that
+  // row covers a span the figures no longer cover. Detected by comparing the
+  // epoch the Repo stamps, not by watching a counter step backwards — which is
+  // undetectable once other writes have carried it back up, and which mis-fires
+  // the other way into forking a second record block into the graph.
+  it('opens a new record when the metrics epoch moves', async () => {
+    const first = await writeInteractionSample(repo, WS)
+    repo.resetMetrics()
+    expect(await writeInteractionSample(repo, WS)).not.toBe(first)
   })
 
   // blockCount is the dominant confound for every timing in the record, so a

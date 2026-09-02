@@ -670,6 +670,21 @@ export class Repo {
    *  execute / writeTransaction). Populated by the metrics-wrapping
    *  proxy installed around `this.db` at construction. */
   readonly dbMetrics = new DbMetrics()
+  /** Committed transactions NOT flagged `telemetry`, and the handle fan-out
+   *  they caused. Counted HERE rather than reconstructed by a consumer from
+   *  before/after snapshots: a consumer's window spans its own awaits, so it
+   *  cannot tell its own work from anyone else's, while this pair is written in
+   *  the same synchronous block as the events it counts.
+   *
+   *  Rolled-back transactions are not counted, on either side — they invalidate
+   *  nothing, so counting the write alone would deflate the ratio a reader
+   *  builds from the pair. */
+  private nonTelemetryWrites = 0
+  private readonly nonTelemetryFanout: Record<string, number> = {}
+  /** Bumped by `resetMetrics()`. A consumer holding figures from before a reset
+   *  can compare epochs instead of inferring the reset from a counter going
+   *  backwards, which is undetectable once other writes have carried it back up. */
+  private metricsEpoch = 0
   /** Per-query-name resolve timings. The dispatcher records each
    *  `loader(ctx)` invocation here keyed by the query's full name. */
   readonly queryMetrics = new QueryMetrics()
@@ -1241,6 +1256,19 @@ export class Repo {
    *      without needing a Playwright + profiler harness. */
   metrics(): Readonly<{
     handleStore: Readonly<Record<string, number>>
+    /** The same counters, restricted to committed transactions this Repo ran
+     *  that were NOT flagged `telemetry` — the user's work, with the app's
+     *  self-measurement left out. `writes` is those transactions; `handleStore`
+     *  is the fan-out they caused, measured around each one's own invalidation
+     *  walk. A feature reporting performance figures should read THIS rather
+     *  than subtracting its own activity from the totals above. */
+    excludingTelemetry: Readonly<{
+      writes: number
+      handleStore: Readonly<Record<string, number>>
+    }>
+    /** Increments on every `resetMetrics()`. Compare it rather than watching a
+     *  counter for a backwards step. */
+    epoch: number
     /** Live-state aggregates over the registered handle set: handle
      *  count, dep-count percentiles, and the top-3 keys by dep count.
      *  Pairs with `handleStore` counters — counters describe events
@@ -1275,6 +1303,11 @@ export class Repo {
   }> {
     return Object.freeze({
       handleStore: this.handleStore.metrics.snapshot(),
+      excludingTelemetry: Object.freeze({
+        writes: this.nonTelemetryWrites,
+        handleStore: Object.freeze({...this.nonTelemetryFanout}),
+      }),
+      epoch: this.metricsEpoch,
       handleStoreInventory: this.handleStore.snapshotInventory(),
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
@@ -1290,6 +1323,9 @@ export class Repo {
    *  benchmark iteration, a UI interaction in a soak test, or a
    *  cold-start "open page → metrics" investigation). */
   resetMetrics(): void {
+    this.metricsEpoch++
+    this.nonTelemetryWrites = 0
+    for (const k of Object.keys(this.nonTelemetryFanout)) delete this.nonTelemetryFanout[k]
     this.handleStore.metrics.reset()
     this.cache.metrics.reset()
     this.queryMetrics.reset()
@@ -1929,10 +1965,21 @@ export class Repo {
     // each handle's runLoader is async, but `invalidate` only sets
     // pendingReinvalidate / kicks off a microtask, so the caller's tx
     // resolve isn't blocked on handle re-resolution.
+    if (!opts.telemetry) this.nonTelemetryWrites++
     if (result.snapshots.size > 0) {
+      // The fan-out delta is taken across THIS call and nothing else. The walk
+      // is synchronous, so no other transaction and no sync drain can land
+      // inside it — which is the whole reason the count lives here.
+      const before = opts.telemetry ? null : this.handleStore.metrics.snapshot()
       this.handleStore.invalidate(
         snapshotsToChangeNotification(result.snapshots, this.invalidationRules),
       )
+      if (before !== null) {
+        const after = this.handleStore.metrics.snapshot()
+        for (const [k, v] of Object.entries(after)) {
+          this.nonTelemetryFanout[k] = (this.nonTelemetryFanout[k] ?? 0) + (v - (before[k] ?? 0))
+        }
+      }
     }
     // Step 9 of the §10 pipeline — start field-watch + explicit
     // post-commit processors. Failures are caught + logged inside the

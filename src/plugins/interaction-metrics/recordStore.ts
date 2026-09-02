@@ -102,7 +102,6 @@ export const ensureClientGroup = async (
  */
 export const appendClientRecord = async (
   repo: Repo,
-  recordTx: Repo['tx'],
   spec: ClientRecordSpec,
 ): Promise<{ blockId: string; groupId: string }> => {
   const groupId = await ensureClientGroup(repo, spec.workspaceId, spec.containerType)
@@ -112,7 +111,7 @@ export const appendClientRecord = async (
     'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id LIMIT 1',
     [groupId],
   )
-  await recordTx(async (tx) => {
+  await repo.tx(async (tx) => {
     ;(spec.assertEligible ?? assertStillWritable)(repo, spec.workspaceId)
     await tx.create(
       {
@@ -127,7 +126,7 @@ export const appendClientRecord = async (
     )
     await repo.addTypeInTx(tx, blockId, spec.recordType.id, {})
     await spec.setProperty(tx, blockId)
-  }, { scope: ChangeScope.Automation, description: spec.description })
+  }, { scope: ChangeScope.Automation, telemetry: true, description: spec.description })
   spec.onCommitted?.(blockId)
   // Best-effort, and deliberately AFTER the record is committed and reported.
   // Routing a retention failure through the caller's failure path retries a
@@ -135,7 +134,7 @@ export const appendClientRecord = async (
   // for one boot, and the interaction recorder forgets the row it owns and
   // opens a second. The next append re-attempts the prune.
   try {
-    await pruneGroup(repo, recordTx, spec, groupId, blockId)
+    await pruneGroup(repo, spec, groupId, blockId)
   } catch (err) {
     // Losing eligibility mid-pass is the expected refusal, not a fault; the next
     // append re-attempts. Anything else means the bound is not being enforced,
@@ -169,7 +168,6 @@ const retentionDescription = (spec: ClientRecordSpec): string => `${spec.descrip
  *  content to `tx.delete`. */
 const pruneGroup = async (
   repo: Repo,
-  recordTx: Repo['tx'],
   spec: ClientRecordSpec,
   groupId: string,
   keepId: string,
@@ -184,7 +182,7 @@ const pruneGroup = async (
      `${jsonPathForProperty(spec.recordName)}.recordedAt`, spec.retain],
   )
   if (stale.length === 0) return
-  await recordTx(async (tx) => {
+  await repo.tx(async (tx) => {
     // Deletes are the one thing here that cannot be taken back — `Automation` is
     // non-undoable — and this transaction is reached several awaits after the
     // create's own gate, across a `getAll` over the whole group. Re-take it.
@@ -213,5 +211,5 @@ const pruneGroup = async (
       // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
       await tx.delete(row.id)
     }
-  }, { scope: ChangeScope.Automation, description: retentionDescription(spec) })
+  }, { scope: ChangeScope.Automation, telemetry: true, description: retentionDescription(spec) })
 }
