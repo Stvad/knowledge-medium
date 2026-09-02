@@ -111,7 +111,20 @@ export interface InteractionRecordData extends InteractionComparable {
   /** Live blocks in the workspace. The dominant confound for every timing
    *  below — without it a trend reads graph growth as a regression. */
   blockCount: number
-  /** Per-DB-method timings (`getAll`, `execute`, `writeTransaction`, …). */
+  /** Per-DB-method timings (`getAll`, `execute`, `writeTransaction`, …).
+   *
+   *  PAGE TOTALS, like `queries` and unlike `writes` and `fanout`: the
+   *  `telemetry` flag keeps a transaction out of the write and fan-out counters,
+   *  but `DbMetrics` times every call, so a session that took a previous sample
+   *  has that sample's lookups, count, retention query and transaction in here.
+   *  ACCEPTED, on two grounds. Nothing COMPARES these — `series.ts` derives
+   *  regressions from `query:*`, `fanout:*` and `startup:*` only, so recorder
+   *  calls in here cannot produce a verdict, false or otherwise; this is
+   *  recorded for someone reading a session by hand. And every session pays the
+   *  same handful of calls, so what they add sits on both sides of any
+   *  comparison later made rather than skewing one. Judge a movement here
+   *  accordingly on a quiet session, where they are a large share of a small
+   *  denominator. */
   db: Record<string, TimingSample>
   handles: {
     count: number

@@ -24,21 +24,26 @@ export const memoize = <F extends (...args: never[]) => unknown>(
  * reload. Callers of an `ensure` are written to be retried; callers of a cached
  * rejection are not.
  *
+ * What is memoized is the GUARDED promise, not the raw one wrapped per call.
+ * Wrapping on the way out would hand every caller a fresh thenable for the same
+ * key, and these ensures are passed straight to React `use()` — which requires
+ * the same promise across renders and re-suspends forever on a new one.
+ *
  * The resolver is REQUIRED here, unlike above: evicting needs the key.
  */
 export const memoizeAsync = <F extends (...args: never[]) => Promise<unknown>>(
   fn: F,
   resolver: (...args: Parameters<F>) => unknown,
 ): F => {
-  const memoized = lodashMemoize(fn, resolver)
-  return ((...args: Parameters<F>) => {
-    const pending = memoized(...args) as ReturnType<F>
-    return pending.catch((err: unknown) => {
+  const memoized = lodashMemoize(((...args: Parameters<F>) => {
+    const key = resolver(...args)
+    return (fn(...args) as Promise<unknown>).catch((err: unknown) => {
       // Unconditional: an entry a retry has already replaced could be evicted
       // here too, and the only cost is running an idempotent `ensure` twice.
       // Checking identity first would be a guard nothing can pin.
-      memoized.cache.delete(resolver(...args))
+      memoized.cache.delete(key)
       throw err
     })
-  }) as F
+  }) as F, resolver)
+  return memoized as F
 }

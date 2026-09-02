@@ -21,6 +21,16 @@ describe('memoizeAsync', () => {
     expect(fn).toHaveBeenCalledTimes(1)
   })
 
+  // These ensures are passed straight to React `use()`, which requires the same
+  // promise across renders — a fresh wrapper per call re-suspends forever. What
+  // is cached has to be the promise callers actually receive.
+  it('returns the same promise object for the same key', () => {
+    const memoized = memoizeAsync(async (key: string) => key, (key) => key)
+
+    expect(memoized('a')).toBe(memoized('a'))
+    expect(memoized('a')).not.toBe(memoized('b'))
+  })
+
   it('retries after a rejection instead of caching it', async () => {
     let attempt = 0
     const fn = vi.fn(async (key: string) => {
