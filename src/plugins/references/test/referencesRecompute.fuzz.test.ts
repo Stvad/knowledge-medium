@@ -763,18 +763,11 @@ describe('references pipeline sequences', () => {
     }
   })
 
-  // Deterministic pin for the restore-under-a-different-name bug the
-  // sweep found on nightly seed 1264869285 (issue #706). The rename
-  // ladder skips tombstones, so an alias released while the target was
-  // deleted rewrites nothing — correct while it stays deleted (its
-  // inbound edges are the retained release-reclaim residual). Restore it
-  // under a DIFFERENT name and the residual's premise ("restoring rebinds
-  // cleanly") is false: the referrer's `[[Inbox]]` is bound to a LIVE
-  // block that now claims only "ax", while a fresh seat owns "Inbox" —
-  // and it is STABLE, since the referrer only re-parses on its own row
-  // and the audit's content_link_recompute diffs alias SETS, never the
-  // bound id. `collectRestorePlans` invalidates the edge at the restore,
-  // which is the write that schedules the referrer's re-parse.
+  // A target restored under a different alias must not keep its old
+  // inbound bindings. The rename ladder cannot cover this — it diffs LIVE
+  // rows, and while the target was a tombstone its inbound edges were the
+  // retained residual, correct to leave alone — so `collectRestorePlans`
+  // invalidates them at the restore instead.
   it('a restore under a different alias rebinds referrers to the real claimant', async () => {
     await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
@@ -804,10 +797,8 @@ describe('references pipeline sequences', () => {
       await repo.mutate.restore({id: seat0})
       await flush()
 
-      // The restored block owns "ax" now, so it must not still hold the
-      // "Inbox" binding: the re-parse rebinds to whoever owns that name —
-      // here the next seat slot, minted because slot 0 is taken by a live
-      // row claiming something else.
+      // The re-parse rebinds to whoever owns "Inbox" now — the next seat
+      // slot, since slot 0 is held by a live row claiming something else.
       const claimant = await sharedDb.db.getOptional<{block_id: string}>(
         'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, 'Inbox'])
       expect(claimant?.block_id, 'a live block claims Inbox again').not.toBe(seat0)
@@ -829,16 +820,12 @@ describe('references pipeline sequences', () => {
     }
   })
 
-  // A restore that comes back under the SAME name must not TOUCH its
-  // referrers — the retained residual rebinding cleanly is the whole
-  // reason the delete path leaves them alone. Asserted on the referrer's
-  // `updated_at`, not on the binding: a `collectRestorePlans` that
-  // ignored the claimed set drops the edge and `parseReferences` puts
-  // back an identical one, so the binding assertion alone stays green
-  // with that filter deleted (measured) while every page restore silently
-  // rewrites and re-parses every backlink source. `skipMetadata` still
-  // ratchets `updated_at` (see renameProcessor's header), so it is a
-  // complete witness for the write.
+  // The mirror: a restore under the SAME name must not touch its
+  // referrers at all. Asserted on `updated_at` rather than on the
+  // binding, because dropping the edge and letting `parseReferences`
+  // rebuild an identical one leaves the binding assertion green
+  // (measured) — only the write itself witnesses the churn, and
+  // `skipMetadata` still ratchets `updated_at`, so it sees every write.
   it('a restore under the same alias leaves referrer bindings alone', async () => {
     await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
@@ -859,14 +846,12 @@ describe('references pipeline sequences', () => {
 
       await repo.mutate.delete({id: owner})
       await flush()
-      // An alias round-trip on the TOMBSTONE — the shape the
-      // counterexample reached (it renamed a deleted seat), and what pins
-      // WHERE the restore branch sits. Above the `row.after.deleted` skip
-      // it fires on this write instead: "ax" reads as unclaimed, the
-      // residual is dropped while the target is still a tombstone, the
-      // referrer's re-parse mints a seat for "ax", and the restore below
-      // then dies on the uniqueness trigger. Destroying the residual
-      // early is the delete-direction behaviour §11 group 2 / #383 defers.
+      // The alias round-trip on the TOMBSTONE pins WHERE the restore
+      // branch sits. Above the `row.after.deleted` skip it fires on this
+      // write instead, dropping the residual while the target is still
+      // deleted — the delete-direction behaviour §11 group 2 / #383
+      // defers — and the referrer's re-parse then mints a seat that makes
+      // the restore below fail the uniqueness trigger.
       await repo.mutate.setProperty({id: owner, schema: aliasesProp, value: ['bx']})
       await flush()
       await repo.mutate.setProperty({id: owner, schema: aliasesProp, value: ['ax']})
