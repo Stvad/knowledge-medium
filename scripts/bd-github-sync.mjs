@@ -17,8 +17,10 @@
  *    signal.
  * 3. A bead closed BEFORE its first sync stays closed locally but its issue is
  *    minted OPEN. So after syncing, closed beads whose issue is open get the
- *    issue closed via gh — NOT via a selective bd push, which applies the
- *    last_sync watermark and silently skips any bead updated before it
+ *    issue closed via gh — NOT via a selective bd push: bd PATCHes a linked
+ *    bead only when the local row is strictly newer than the issue's
+ *    updated_at, so anything that touched the issue after the close (a
+ *    comment, a label, a cross-reference) makes bd skip it for good
  *    (observed live: a day-old close never pushed). gh-closing is safe in
  *    exactly this direction because the bead is already closed: the states
  *    agree afterwards, so the next sync has nothing to revert.
@@ -30,9 +32,9 @@
  *    prefer-newer default (#647; measured live). Guarded twice: local state
  *    is pushed out BEFORE the pull (after close-adoption, so an un-adopted
  *    open bead cannot re-open its issue), and beads whose local row is still
- *    newer than their GitHub copy — the push watermark skips older edits —
- *    are snapshotted before the pull and restored + re-pushed if it reverted
- *    them. That push is SELECTIVE and the pull runs alone (see step 1.5):
+ *    newer than their GitHub copy — a failed push or a mid-run touch of the
+ *    issue can leave such a row unpushed — are snapshotted before the pull
+ *    and restored + re-pushed if it reverted them. That push is SELECTIVE and the pull runs alone (see step 1.5):
  *    bd 1.2.2 GETs every linked bead it is handed and PATCHes only the
  *    local-newer ones, so the listing already names the beads it could
  *    touch, and a converged run costs seconds rather than one GET per bead
@@ -787,7 +789,7 @@ export const buildDenyMessage = (mapped, unmapped) => {
     ...mapped.map(({ id, number }) => `  ${id} → #${number} (https://github.com/${REPO}/issues/${number})`),
     ...(unmapped.length
       ? [
-          `No GitHub issue found for: ${unmapped.join(', ')} — run \`pnpm bd:sync\` to mint one (it prints the km→#N mapping), or check \`bd show <id>\`. A real bead may have been skipped by the sync watermark (edit it to bump updated_at, then retry); if the sync cannot run here, find the issue via \`gh issue list --search\`.`,
+          `No GitHub issue found for: ${unmapped.join(', ')} — run \`pnpm bd:sync\` to mint one (it prints the km→#N mapping), or check \`bd show <id>\`. A real bead with no issue gets one on the next sync (every unlinked bead is pushed), so one that stays unlinked is failing to push — read the sync output; if the sync cannot run here, find the issue via \`gh issue list --search\`.`,
         ]
       : []),
     'Rewrite the references as #N and re-run with KM_ISSUE_REFS_OK=1 prefixed — these numbers come from the tracker, so the issue-reference check needs no separate confirmation.',
@@ -1069,9 +1071,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
     }
 
-    // 1.6 The push's watermark silently skips older local edits, so snapshot
-    // every bead whose local row is STILL newer than its GitHub copy — the
-    // pull may revert exactly those; step 2.5 restores any it does. Fresh
+    // 1.6 A push can leave a local-newer row unpushed (it failed, or bd's
+    // strictly-newer test against the issue's updated_at, re-read at push
+    // time, said no), so snapshot every bead whose local row is STILL newer
+    // than its GitHub copy — the pull may revert exactly those; step 2.5
+    // restores any it does. Fresh
     // list: the push just minted refs. Snapshot via a direct spawn, not
     // run(): `bd show` output is pretty-printed JSON, and a description line
     // starting with "Error" would trip run()'s bd check.
@@ -1115,8 +1119,8 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       .map(l => l.trim())
     report.push(...syncSummary)
 
-    // 2.5 Restore local rows the pull reverted anyway (#647 — the watermark
-    // kept them out of 1.5's push). The restore bumps updated_at, so the
+    // 2.5 Restore local rows the pull reverted anyway (#647 — 1.5's push
+    // left them unpushed). The restore bumps updated_at, so the
     // push-back below carries them out and the next pull leaves them alone.
     //
     // ACCEPTED residuals (reviewed 2026-08-20; each is a failure INSIDE this
@@ -1178,7 +1182,8 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     if (pushBack.length && !dryRun) pushBeads(pushBack, env)
 
     // 4. Carry bead closes out to issues still open (see header: via gh, not
-    // a selective bd push, whose watermark silently skips older closes).
+    // a selective bd push, which skips a close once the issue was touched
+    // after it).
     const closePushes = planClosePushes(postBeads, issueByNumber, maxKnownIssueNumber)
     for (const { id, number } of closePushes) {
       if (dryRun) {
