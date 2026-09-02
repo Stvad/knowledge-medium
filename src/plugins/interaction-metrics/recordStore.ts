@@ -52,8 +52,6 @@ export interface ClientRecordSpec {
   recordType: TypeContribution
   /** `repo.tx` description — for the tx log and for reading the diff later. */
   description: string
-  /** Row content — legible in the tree, and FTS-indexed, so keep it dull. */
-  content: string
   /** Re-taken as the first operation inside the create transaction. Defaults to
    *  `assertStillWritable`, which is all the shared shape can know; a recorder
    *  with a STRONGER rule must pass it, because the shared default cannot see
@@ -176,7 +174,13 @@ export const appendClientRecord = async (
         workspaceId: spec.workspaceId,
         parentId: groupId,
         orderKey: keyAtStart(first?.order_key ?? null),
-        content: spec.content,
+        // EMPTY, and not a recorder's choice to make. `core.recentBlocks`
+        // selects live non-empty rows ordered by `user_updated_at` — which a
+        // `systemMint` create still stamps with `now` — and that query backs
+        // the empty `((` completion's twelve results. Any content at all puts
+        // every session's telemetry row at the top of it. The timestamp a
+        // legible row would have shown is in the record property already.
+        content: '',
         properties: {},
       },
       { systemMint: true },
@@ -373,13 +377,18 @@ const pruneGroup = async (
       // which deletes from the same far end and whose deletes this loop no-ops
       // on; reaching the case needs a person hand-deleting newer rows mid-append.
       if ((record as { recordedAt?: unknown }).recordedAt !== row.stamp) continue
+      // Property machinery is ours; anything else under a record was put there
+      // by hand. Skipping is the right direction to fail: the bound is a bound,
+      // and exceeding it by the records a person has annotated costs disk,
+      // while the alternative tombstones their note under an Automation scope
+      // that no undo reaches.
+      const foreign = await tx.childrenOf(row.id, undefined, { hidePropertyChildren: true })
+      if (foreign.length > 0) continue
       // The SUBTREE, not the row. Writing the record property materializes
       // field/value rows beneath it where properties are blocks, and a bare
       // delete tombstones the parent while leaving those live — invisible
       // machinery accumulating under a tombstone on every retention pass, which
-      // nothing later collects. Takes anything nested under the record with it:
-      // these rows are ours, and stranding live descendants forever is the
-      // worse of the two errors.
+      // nothing later collects.
       // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
       await deleteSubtreeInTx(tx, row.id)
     }

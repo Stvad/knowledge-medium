@@ -117,12 +117,6 @@ describe('writeStartupRecord', () => {
       repoReadyMs: 50,
       clientId: getClientId(),
     })
-    // Content is the ISO timestamp so the entry is legible in the tree.
-    const contentRow = await sharedDb.db.getOptional<{ content: string }>(
-      'SELECT content FROM blocks WHERE id = ?',
-      [id],
-    )
-    expect(contentRow?.content).toBe(new Date(1700).toISOString())
   })
 
   it('groups records under a per-client block (child of the root, titled with the device label)', async () => {
