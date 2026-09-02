@@ -24,8 +24,10 @@ import {
   isUsableStartupRecord,
   loadRecords,
 } from './load.js'
+import { nextAnalysisSeq } from './store.js'
 import {
   anyJudged,
+  judgedBaselineCount,
   baselineWindow,
   fanoutRegression,
   median,
@@ -39,6 +41,9 @@ import {
 export interface PerfAnalysis {
   workspaceId: string
   analyzedAt: number
+  /** Run order, so two analyses that START in the same millisecond still have
+   *  one. `analyzedAt` answers WHEN, which is a different question. */
+  seq: number
   /** Worst first. Empty when nothing regressed. */
   regressions: Regression[]
   /** Per SERIES, because they fill up independently: every existing user has
@@ -54,9 +59,9 @@ export interface PerfAnalysis {
   /** Non-null when recording is structurally impossible in this environment,
    *  so "still building a baseline" would be a promise that can never be kept. */
   recordingBlockedBy: RecordingBlocker | null
-  /** Sessions of history each comparison actually had. Per series, because
-   *  they fill independently and one number reported for the other is how a
-   *  startup-only verdict came to claim "compared against 0 sessions". */
+  /** Sessions the judged comparisons actually rested on — not rows loaded. Per
+   *  series, because they fill independently and one number reported for the
+   *  other tells a reader about history the verdict never used. */
   baseline: { interaction: number; startup: number }
   /** Live graph size over the baseline's, when both are known. Not used to
    *  filter or normalize — see `runPerfAnalysis` — but reported alongside a
@@ -74,6 +79,7 @@ export const blockedPerfAnalysis = (
 ): PerfAnalysis => ({
   workspaceId,
   analyzedAt: now,
+  seq: nextAnalysisSeq(),
   regressions: [],
   ready: { interaction: false, startup: false },
   interactionComparable: false,
@@ -140,8 +146,12 @@ export const runPerfAnalysis = async (
   return {
     workspaceId,
     analyzedAt: now,
+    seq: nextAnalysisSeq(),
     recordingBlockedBy: session.blockedBy,
-    baseline: { interaction: history.length, startup: startup.length },
+    baseline: {
+      interaction: judgedBaselineCount(interactionResults),
+      startup: judgedBaselineCount(startupResults),
+    },
     regressions,
     // Derived from what the comparisons actually consume, not from the
     // baseline length alone: with history that is long enough to look

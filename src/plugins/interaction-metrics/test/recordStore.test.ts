@@ -20,6 +20,7 @@ import {
 } from '../record'
 import { keyAtStart } from '@/data/orderKey'
 import { appendClientRecord, clientGroupId, type ClientRecordSpec } from '../recordStore'
+import { NoLongerEligible } from '../sessionContext'
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
@@ -242,6 +243,26 @@ describe('appendClientRecord retention', () => {
     expect(live).toContain(ids[0])
     // And it really did prune, so this is not a vacuous pass.
     expect(live).toEqual([fresh, ids[0]])
+  })
+
+  // `ensureClientGroup` is memoized per Repo, so a group deleted during this
+  // page session still resolves. `tx.create` accepts a tombstoned parent, and
+  // the reader matches on the derived group id — so the record would be written
+  // somewhere nothing can ever read it, forever.
+  it('refuses to append under a group that was deleted this session', async () => {
+    const first = (await append(3)).blockId
+    const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
+    await repo.tx(async (tx) => { await tx.delete(groupId) },
+      { scope: ChangeScope.Automation, telemetry: true })
+
+    await expect(append(3)).rejects.toBeInstanceOf(NoLongerEligible)
+
+    // Only what was there before. A soft-deleted parent does not cascade, so
+    // the earlier record stays live under it — the point is that nothing NEW
+    // was added somewhere the reader can never look.
+    const children = await sharedDb.db.getAll<{ id: string }>(
+      'SELECT id FROM blocks WHERE parent_id = ?', [groupId])
+    expect(children.map((c) => c.id)).toEqual([first])
   })
 
   // The record is already committed when the pass runs. Routing its failure

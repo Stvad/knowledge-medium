@@ -18,6 +18,7 @@ import {
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
+import { getDeviceLabel } from '@/utils/clientId'
 import { clientGroupId } from '@/plugins/interaction-metrics/recordStore'
 import {
   HISTORY_LIMIT,
@@ -53,7 +54,8 @@ beforeEach(async () => {
 
 /** The fields `isUsableInteractionRecord` and the comparison dereference. */
 const RECORD = {
-  startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'c', deviceLabel: 'd',
+  startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'c',
+  deviceLabel: getDeviceLabel(),
   sessionMs: 1, blockCount: 1, writes: 1, queries: {}, fanout: {}, db: {},
   handles: { count: 0, totalDeps: 0, maxDeps: 0, p50Deps: 0, p95Deps: 0, topHeavy: [] },
 }
@@ -117,6 +119,28 @@ describe('loadRecords', () => {
     const records = await loadRecords<InteractionRecordData>(
       repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
     expect(records[0].id).toBe('long-lived')
+  })
+
+  // An installed PWA and an ordinary tab on one browser profile share
+  // `km:client-id`, so they share this group — but their timings differ for
+  // reasons the code did not cause. Comparing across them invents regressions.
+  it('reads only the records this device surface wrote', async () => {
+    const mine = (await writeInteractionSample(repo, WS))!
+    const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
+    await sharedDb.db.execute(
+      `INSERT INTO blocks
+         (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+          created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, 'z9', '', ?, 0, 1, 1, ?, ?)`,
+      ['other-surface', WS, groupId,
+       JSON.stringify({ [interactionRecordProp.name]: {
+         ...RECORD, recordedAt: 5_000_000, deviceLabel: 'installed:OtherSurface' } }),
+       USER.id, USER.id],
+    )
+
+    const records = await loadRecords<InteractionRecordData>(
+      repo, WS, interactionMetricsUIStateType.id, PATH, isUsableInteractionRecord)
+    expect(records.map((r) => r.id)).toEqual([mine])
   })
 
   // A row that parses but is missing what the comparison dereferences would

@@ -7,6 +7,7 @@ import type { Regression } from '../series'
 export const analysisFixture = (over: Partial<PerfAnalysis> = {}): PerfAnalysis => ({
   workspaceId: 'ws-1',
   analyzedAt: 1000,
+  seq: 1,
   regressions: [],
   ready: { interaction: true, startup: true },
   interactionComparable: true,

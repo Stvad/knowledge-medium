@@ -113,6 +113,14 @@ export const appendClientRecord = async (
   )
   await repo.tx(async (tx) => {
     ;(spec.assertEligible ?? assertStillWritable)(repo, spec.workspaceId)
+    // The group id comes from a MEMOIZED ensure, so a delete landing during
+    // this page session is invisible to it — and `tx.create` preflights only
+    // that the parent ROW exists, which a tombstone satisfies. The reader
+    // matches on the derived group id, so a record written under one is
+    // unreachable for good. Refusing costs this session's samples; the next
+    // page load re-runs the ensure, which restores the container.
+    const group = await tx.get(groupId)
+    if (!group || group.deleted) throw new NoLongerEligible()
     await tx.create(
       {
         id: blockId,

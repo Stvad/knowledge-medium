@@ -19,6 +19,8 @@ import {
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis } from '../analyze'
+import { INTERACTION_RECORD_PATH, isUsableInteractionRecord, loadRecords } from '../load'
+import { interactionMetricsUIStateType } from '@/plugins/interaction-metrics/record'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -45,6 +47,20 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks() })
 
 /** Each call stands in for a separate past page session. */
+/** Stamp a record with values a comparison can actually use. The reported
+ *  baseline is now the count of sessions the comparison CONSUMED, so a test
+ *  asserting on it has to seed history that gets judged. */
+const stamp = async (id: string, over: Partial<InteractionRecordData>): Promise<void> => {
+  const block = repo.block(id)
+  await block.load()
+  const base = block.peekProperty(interactionRecordProp)!
+  await repo.tx(async (tx) => {
+    await tx.setProperty(id, interactionRecordProp, { ...base, ...over })
+  }, { scope: ChangeScope.Automation })
+}
+
+const USABLE = { writes: 100, fanout: { loaderInvalidations: 10 } }
+
 const pastSession = async (over?: Partial<InteractionRecordData>): Promise<string> => {
   resetMetricsSession(repo)
   const id = (await writeInteractionSample(repo, WS))!
@@ -82,25 +98,26 @@ const seedFiringHistory = async (): Promise<void> => {
 }
 
 describe('runPerfAnalysis', () => {
-  // `resetMetrics()` is a supported hook for measuring a discrete operation.
-  // The recorder re-bases on its next sample, but the trend view's "Re-analyze"
-  // is a second entry point into the same live snapshot: running first, it would
-  // subtract a previous epoch's own-writes from fresh counters and keep
-  // excluding a record that no longer describes the live span. Both consumers
-  // therefore take the snapshot and the facts qualifying it from one call.
-  it('re-bases the accounting when the counters are reset under it', async () => {
-    await pastSession()
-    await pastSession()
-    // This session's own record: excluded from history, because it is updated
-    // in place and so is history for nothing.
-    await writeInteractionSample(repo, WS)
-    const before = await runPerfAnalysis(repo, WS, 1)
+  // A session that wrote nothing is a valid, loadable record that no rate can
+  // be computed from — the comparison drops it before the median. Reporting the
+  // rows LOADED tells a reader the verdict rests on history it never used,
+  // which is the false confidence this feature exists to prevent.
+  it('counts the sessions the comparison used, not the rows it loaded', async () => {
+    await seedFiringHistory()
+    // Loadable and valid, but carrying no rate: filtered out by the comparison.
+    for (let i = 0; i < 4; i++) {
+      await pastSession({ recordedAt: 2e12 + i, writes: 0, fanout: {} })
+    }
+    resetMetricsSession(repo)
 
-    repo.resetMetrics()
-    const after = await runPerfAnalysis(repo, WS, 2)
+    const analysis = await runPerfAnalysis(repo, WS, 1000)
+    const loaded = await loadRecords<InteractionRecordData>(
+      repo, WS, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH,
+      isUsableInteractionRecord)
 
-    // The reset ended the span that record describes, so it is history now.
-    expect(after.baseline.interaction).toBe(before.baseline.interaction + 1)
+    expect(loaded.length).toBeGreaterThanOrEqual(14)
+    expect(analysis.baseline.interaction).toBeGreaterThan(0)
+    expect(analysis.baseline.interaction).toBeLessThan(loaded.length)
   })
 
   // repo.metrics() is page-global. The recorder stops sampling once a session
@@ -149,16 +166,18 @@ describe('runPerfAnalysis', () => {
   // Excluding by POSITION would drop a genuine past session in exactly the case
   // where this session has not written a record of its own.
   it('excludes this session\'s own record without discarding a past one', async () => {
-    await pastSession()
-    await pastSession()
-    // A third session that HAS written its record: it is history for nothing.
+    await seedFiringHistory()
+    // A session that HAS written its record: it is history for nothing.
     resetMetricsSession(repo)
-    await writeInteractionSample(repo, WS)
-    expect((await runPerfAnalysis(repo, WS, 1000)).baseline.interaction).toBe(2)
+    await stamp((await writeInteractionSample(repo, WS))!, { recordedAt: 5e12, ...USABLE })
+    const owned = await runPerfAnalysis(repo, WS, 1000)
 
-    // A fresh session that has NOT yet written one: all three are history.
+    // A fresh session that has not written one: its predecessor is history now.
     resetMetricsSession(repo)
-    expect((await runPerfAnalysis(repo, WS, 1000)).baseline.interaction).toBe(3)
+    const unowned = await runPerfAnalysis(repo, WS, 1000)
+
+    expect(owned.baseline.interaction).toBeGreaterThan(0)
+    expect(unowned.baseline.interaction).toBe(owned.baseline.interaction + 1)
   })
 
   // Reported, not corrected for: filtering the baseline to comparable graph

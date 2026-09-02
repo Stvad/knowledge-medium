@@ -58,8 +58,13 @@ export const MIN_STARTUP_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW
  *  row that carries no usable sample is not history. */
 export type TrendResult =
   | { status: 'insufficient' }
-  | { status: 'steady' }
-  | { status: 'regressed'; regression: Regression }
+  /** `baselineCount` is the number of stored sessions this comparison actually
+   *  consumed, which is not the number of rows loaded: a session with no
+   *  writes, or one where this query ran too few times to measure, is filtered
+   *  out before the median. Reported so a reader is told what the verdict rests
+   *  on rather than how much history happens to be on disk. */
+  | { status: 'steady'; baselineCount: number }
+  | { status: 'regressed'; regression: Regression; baselineCount: number }
 
 const INSUFFICIENT: TrendResult = { status: 'insufficient' }
 
@@ -101,7 +106,7 @@ const trendRegression = (
   const current = median(recent.slice(0, RECENT_WINDOW))
   const base = median(baseline)
   // Judged, and too small to matter — a verdict, not a gap in the data.
-  if (current < spec.minAbsolute) return { status: 'steady' }
+  if (current < spec.minAbsolute) return { status: 'steady', baselineCount: baseline.length }
   // A zero baseline admits no ratio, and the two reasons you can arrive at one
   // are opposite statements. Still zero: judged, and genuinely unchanged.
   // Zero before and something now: the metric moved from nothing to a value
@@ -109,11 +114,12 @@ const trendRegression = (
   // the chip certify an arbitrarily large regression as healthy — the one
   // outcome this feature exists to prevent. It is not a regression we can rate
   // either, since there is no ratio, so it is honestly reported as unjudged.
-  if (base <= 0) return current === 0 ? { status: 'steady' } : INSUFFICIENT
+  if (base <= 0) return current === 0 ? { status: 'steady', baselineCount: baseline.length } : INSUFFICIENT
   const ratio = current / base
-  if (ratio < REGRESSION_RATIO) return { status: 'steady' }
+  if (ratio < REGRESSION_RATIO) return { status: 'steady', baselineCount: baseline.length }
   return {
     status: 'regressed',
+    baselineCount: baseline.length,
     regression: {
       metric: spec.metric,
       label: spec.label,
@@ -137,6 +143,17 @@ export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
  *  missing their paint marks, are rows that carry no usable sample. */
 export const anyJudged = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status !== 'insufficient')
+
+/** Sessions the THINNEST judged comparison rested on, or 0 if none was judged.
+ *
+ *  The smallest rather than the largest: this number tells a reader how much to
+ *  trust a clean verdict, and the whole feature exists to keep it from claiming
+ *  more confidence than it has. Understating sends someone to look; overstating
+ *  is the false all-clear. */
+export const judgedBaselineCount = (results: readonly TrendResult[]): number => {
+  const counts = results.flatMap((r) => (r.status === 'insufficient' ? [] : [r.baselineCount]))
+  return counts.length === 0 ? 0 : Math.min(...counts)
+}
 
 /** The regressions among these results, worst ratio first. The single place
  *  ordering is decided, so no caller has to re-sort and none can disagree. */

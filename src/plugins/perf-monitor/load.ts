@@ -15,7 +15,7 @@
  */
 import type { Repo } from '@/data/repo'
 import { pluginUIStateBlockId, stateChildBlockId } from '@/data/stateBlocks.js'
-import { getClientId } from '@/utils/clientId.js'
+import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 
 /** Each series' JSON path comes from the module that owns its property, so a
  *  rename cannot leave the reader addressing a name nothing writes. */
@@ -99,7 +99,7 @@ export const HISTORY_LIMIT = 40
  * started and its `recordedAt` reflects the sample. Sorting on the field the
  * comparison actually reads keeps those from disagreeing.
  */
-export const loadRecords = async <T extends { recordedAt: number }>(
+export const loadRecords = async <T extends { recordedAt: number; deviceLabel?: unknown }>(
   repo: Repo,
   workspaceId: string,
   typeId: string,
@@ -113,6 +113,21 @@ export const loadRecords = async <T extends { recordedAt: number }>(
    *  what the comparison and the trend table dereference. */
   isUsable: (record: T) => boolean,
 ): Promise<Array<{ id: string; record: T }>> => {
+  // One browser PROFILE can run the app as an installed PWA and as an ordinary
+  // tab. Both resolve the same `km:client-id` from shared storage, so both write
+  // to this group — while `getDeviceLabel()` deliberately distinguishes them,
+  // and their timings genuinely differ (service worker, precache). Comparing a
+  // recent window from one surface against a baseline from the other is a
+  // regression the code did not cause.
+  //
+  // Segmented on READ rather than by widening the group key: the key decides
+  // where every record already written lives, and changing it orphans the
+  // history this reader exists to use.
+  const label = getDeviceLabel()
+  const onThisSurface = (r: { deviceLabel?: unknown }): boolean =>
+    // Absent label: a record from a shape that predates the field. Admitted —
+    // dropping history on a shape question is the costlier error.
+    r.deviceLabel === undefined || r.deviceLabel === label
   const groupId = stateChildBlockId(
     pluginUIStateBlockId(workspaceId, repo.user.id, typeId),
     getClientId(),
@@ -152,7 +167,7 @@ export const loadRecords = async <T extends { recordedAt: number }>(
         // either series' validator. Absent makes every comparison NaN and
         // randomises the whole window; `Infinity` (which `1e400` parses to)
         // sorts to the front and pushes this boot out of the currency window.
-        if (Number.isFinite(record?.recordedAt) && isUsable(record)) {
+        if (Number.isFinite(record?.recordedAt) && onThisSurface(record) && isUsable(record)) {
           records.push({ id: row.id, record })
         }
       } catch {
