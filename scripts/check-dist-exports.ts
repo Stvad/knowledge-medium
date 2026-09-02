@@ -32,6 +32,26 @@ if (!fs.existsSync(distDir)) {
   process.exit(1)
 }
 
+/** Public names in a module's `export{…}` clauses.
+ *
+ *  Scoped to the clause on purpose. Scanning the whole file for the bare name
+ *  passes on any other occurrence of it — an object key, an error string, a
+ *  module specifier — and measurably did: 10 of the 116 cataloged names
+ *  survived deletion of their own export, two modules with their entire
+ *  cataloged surface undetectable. Rollup emits `export{local as Public}`
+ *  uniformly here; the bare `export{Public}` form is handled for safety. */
+const emittedExportNames = (text: string): Set<string> => {
+  const names = new Set<string>()
+  for (const [, clause] of text.matchAll(/\bexport\s*\{([^}]*)\}/g)) {
+    for (const spec of clause.split(',')) {
+      const name = spec.includes(' as ') ? spec.split(' as ').pop() : spec
+      const trimmed = name?.trim()
+      if (trimmed) names.add(trimmed)
+    }
+  }
+  return names
+}
+
 const missing: string[] = []
 const unresolved: string[] = []
 let checked = 0
@@ -43,12 +63,10 @@ for (const group of extensionApiCatalog) {
     unresolved.push(rel)
     continue
   }
-  const emitted = fs.readFileSync(file, 'utf8')
+  const exported = emittedExportNames(fs.readFileSync(file, 'utf8'))
   for (const name of group.exports) {
     checked++
-    // Minified output renames locals and re-exports as `export{a as Name}`, so
-    // the public name is still present verbatim; a dropped export is simply gone.
-    if (!new RegExp(`\\b${name}\\b`).test(emitted)) missing.push(`${rel} :: ${name}`)
+    if (!exported.has(name)) missing.push(`${rel} :: ${name}`)
   }
 }
 

@@ -22,23 +22,30 @@ import {globSync} from 'node:fs'
  *  export is a silent miss rather than a 404. Globbed rather than driven off
  *  `apiCatalog`: that catalog is a discovery surface, not a whitelist. */
 const allSrcEntries = (rootDir: string): Record<string, string> => {
-    const files = globSync('src/**/*.{ts,tsx}', {
+    const files = globSync('src/**/*.{ts,tsx,js}', {
         cwd: rootDir,
         exclude: [
-            '**/test/**', '**/*.test.*', '**/*.spec.*', '**/*.fuzz.*', '**/*.d.ts',
+            '**/test/**', '**/*.test.*', '**/*.d.ts',
             // Example sources are imported as TEXT (`?raw`) and already emitted
             // by that import. Adding them as entries compiles a second copy and
             // Rollup dedups the name to `<name>2.js` — pure duplication.
             '**/examples/**',
-            // Built by vite.sw.config.ts, a separate build with its own entries.
-            'src/sw/**',
+            // The service worker's own graph, built by vite.sw.config.ts. Scoped
+            // to those four roots, NOT all of src/sw: previewDatabases.ts is
+            // client-graph code (src/data/localDbStorage.ts imports it) and
+            // excluding the directory wholesale left it emitting 3 of its 5
+            // exports — the very bug this input list exists to prevent.
+            'src/sw/{sw,worker,ledger,preview}.ts',
         ],
     })
     return Object.fromEntries(files.map((file: string) => {
         // globSync yields platform separators; the entry KEY becomes the emitted
         // path, which the page importmap resolves as a URL, so it must be POSIX.
         const posix = file.split(path.sep).join('/')
-        return [posix.replace(/\.tsx?$/, ''), path.resolve(rootDir, file)]
+        // Strip .js too, not just .ts/.tsx: Rollup appends .js to the key, so
+        // leaving it on a plain-JS module emits `<name>.js.js` and the importmap
+        // path 404s — worse than the dropped export this list exists to prevent.
+        return [posix.replace(/\.(tsx?|js)$/, ''), path.resolve(rootDir, file)]
     }))
 }
 
