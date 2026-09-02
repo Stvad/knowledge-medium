@@ -444,14 +444,15 @@ const coReleasedAliases = (event: SameTxEvent): ReadonlySet<string> => {
  *  on — the restore repair's enumeration, mirroring
  *  `SELECT_BACKLINK_SOURCES_SQL` without the alias pin.
  *
- *  `br.alias <> br.target_id` drops raw `((id))` blockrefs: those store
- *  the id as the alias, so they name no claim and can never be stale
- *  under the rule below — the same no-churn reason the caller skips
- *  claimed aliases. Not separately pinned by a test, unlike that filter:
- *  deleting a block inlines its `((id))` referrers, so an inbound
- *  blockref edge surviving into its target's restore needs the source to
- *  have been tombstoned across the delete too. Dropping the conjunct
- *  costs a re-parse per blockref referrer, never a wrong binding. */
+ *  Deliberately does NOT try to exclude raw `((id))` blockrefs by
+ *  `br.alias <> br.target_id`. The projection stores no syntax, so that
+ *  test is a value coincidence, not a classification: a page aliased to
+ *  its own uuid and referenced as `[[uuid]]` has the identical shape, and
+ *  excluding it would leave exactly the stale binding this repair exists
+ *  to clear. Letting blockref edges through costs one re-parse each — the
+ *  re-parse re-derives them unchanged — and that is nearly always zero
+ *  work anyway, since deleting a block inlines its live `((id))`
+ *  referrers before any restore can see them. */
 const SELECT_INBOUND_ALIAS_EDGES_SQL = `
   SELECT DISTINCT br.alias AS alias, br.source_id AS sourceId
   FROM block_references br
@@ -459,7 +460,6 @@ const SELECT_INBOUND_ALIAS_EDGES_SQL = `
   WHERE br.workspace_id = ?
     AND br.target_id = ?
     AND br.source_field = ''
-    AND br.alias <> br.target_id
     AND source.deleted = 0
   ORDER BY source.order_key, source.id
 `
@@ -467,31 +467,21 @@ const SELECT_INBOUND_ALIAS_EDGES_SQL = `
 /** RESTORE repair: a block coming back live must not keep inbound
  *  `[[α]]` edges for aliases it no longer claims.
  *
- *  The ladder above is a diff on a LIVE row, and `apply` skips
- *  tombstones, so an alias released while the target was deleted never
- *  reaches it — deliberately: a tombstone claims nothing, its inbound
- *  edges are the release-reclaim residual the add-only contract retains
- *  ON PURPOSE so restoring the target rebinds cleanly, and rewriting
- *  live referrers' text off the back of a deleted page's rename is the
- *  call §11 group 2 / #383 defers.
+ *  The ladder above diffs LIVE rows and `apply` skips tombstones, so an
+ *  alias released while the target was deleted never reaches it — by
+ *  design: a tombstone claims nothing, and its inbound edges are the
+ *  release-reclaim residual the add-only contract retains so that
+ *  restoring the target rebinds cleanly. Restore it under a DIFFERENT
+ *  alias set and that premise fails, leaving a live source bound to a
+ *  live block that no longer answers to the name — which nothing else
+ *  heals, since the source re-parses only on its own row.
  *
- *  What that leaves is this: restore the target with a DIFFERENT alias
- *  set and the retain contract's premise ("restoring rebinds cleanly")
- *  is false. `[[Inbox]]` on a live source is now bound to a live block
- *  named "ax" while some other live block owns "Inbox" — two live blocks
- *  disagreeing, the #20/#25 class, and STABLE: the source only re-parses
- *  on its own row, and the audit's `content_link_recompute` diffs alias
- *  SETS, never the bound id. Found by
- *  referencesRecompute.fuzz.test.ts' stable-wrong-binding sweep
- *  (nightly seed 1264869285).
- *
- *  Invalidation only — no content rewrite, so the deferred release-rewrite
- *  decision stays deferred and the author's text is never touched by
- *  someone else's restore. Dropping the edge IS the write that schedules
+ *  Invalidation only, never a content rewrite: rewriting live referrers'
+ *  text off a deleted page's rename is the call §11 group 2 / #383
+ *  defers, and dropping the edge IS the write that schedules
  *  `parseReferences` to rebind α exactly as the renderer resolves it
- *  (same reasoning as the handoff arm above). Convergent whichever way it
- *  lands: a live claimant wins the rebind, and with none the re-parse
- *  mints the deterministic seat every client would. */
+ *  (same reasoning as the handoff arm above). Aliases the row still
+ *  claims are skipped so a clean restore writes nothing. */
 const collectRestorePlans = async (
   ctx: SameTxCtx,
   after: BlockData,
