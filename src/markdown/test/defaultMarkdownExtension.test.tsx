@@ -72,6 +72,14 @@ describe('gfm markdown extension', () => {
     expect([...blockquote!.childNodes].map(node => node.nodeName)).toEqual(['P'])
   })
 
+  // Raw HTML reaches the tree as a `raw` node rather than an element, and the
+  // serializer pretty-prints around it exactly as it does around elements.
+  it('drops the separators around raw html in a quote', () => {
+    const {container} = renderMarkdown('> <div>x</div>')
+
+    expect(container.querySelector('blockquote')?.textContent).toBe('<div>x</div>')
+  })
+
   // The separator BETWEEN two quoted paragraphs is the blank line the author
   // wrote (preflight zeroes paragraph margins), exactly as at a block's top
   // level. Only the edges are the pretty-printer's.

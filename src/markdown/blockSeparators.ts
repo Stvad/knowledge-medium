@@ -14,8 +14,12 @@ const BLOCK_TAGS = new Set([
   'hr', 'li', 'ol', 'p', 'pre', 'table', 'ul',
 ])
 
+/** `raw` counts whatever HTML it holds: the question is not whether the
+ *  content is block-level but whether the serializer pretty-prints around it,
+ *  and it does around every raw child of a block container. */
 const isBlock = (node: Child | undefined) =>
-  node?.type === 'element' && BLOCK_TAGS.has(node.tagName)
+  node?.type === 'raw' ||
+  (node?.type === 'element' && BLOCK_TAGS.has(node.tagName))
 
 /** A line break the serializer inserted between block children.
  *
