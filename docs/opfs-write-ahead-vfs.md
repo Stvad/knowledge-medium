@@ -1,6 +1,6 @@
 # OPFSWriteAheadVFS on Chromium
 
-> **Status:** current — last verified against code 2026-08-31. Measurements taken that day on Chrome 148, `@powersync/web@1.38.4` / `@journeyapps/wa-sqlite@1.7.0`, against a 2 GB / 350k-block copy of a production database.
+> **Status:** current — last verified against code 2026-09-01. Measurements taken 2026-08-31 on Chrome 148, `@powersync/web@1.38.4` / `@journeyapps/wa-sqlite@1.7.0`, against a 2 GB / 350k-block copy of a production database.
 
 Chromium implements `createSyncAccessHandle({mode: 'readwrite-unsafe'})`, which lets
 several connections hold handles on one OPFS file at once. `OPFSWriteAheadVFS` is the
@@ -254,8 +254,57 @@ Note that a sidecar counts by EXISTENCE, not size. The VFS creates both on every
 and removes neither on close, so an interrupted open can leave zero-byte sidecars that
 pin a database to write-ahead just as firmly as full ones.
 
-## Known gap
+## Restoring a recovery backup
 
-The recovery zip (`getRawSqliteDbBackup`, used when the database won't open) now bundles
-the sidecars, but `importRawSqliteDb` restores a single `.db`. Restoring a zip captured
-with outstanding write-ahead frames therefore drops them. Tracked in [#849](https://github.com/Stvad/knowledge-medium/issues/849).
+The recovery zip (`getRawSqliteDbBackup`, used when the database won't open) bundles the
+sidecars, because the reset that follows deletes them. `importRawSqliteDb` therefore takes
+the whole fileset, not one `.db`: the archive as downloaded, or the `.db` selected together
+with the sidecars if the browser already expanded it (Safari does). The sidecars are
+written first and the `.db` last, so an interrupted restore leaves no database rather than
+one that opens, reports `integrity_check` ok, and is missing whatever the log held.
+
+Restoring a lone `.db` extracted from such an archive still drops those frames, and nothing
+can detect it — a bare `.db` is exactly what a checkpointed export produces. That is why
+the archive is the thing to hand back.
+
+### Backing up captures more than restoring accepts
+
+The two halves are deliberately asymmetric, so not every archive the app can produce is
+one it will take back. Capture is generous because the reset deletes whatever it did not
+save; restore is narrow because it must leave a database that boots.
+
+A restorable fileset is a real `.db` in rollback-journal mode, with siblings drawn from
+ONE group — the `-wa0`/`-wa1` pair, or `-journal`. Two shapes fall outside that:
+
+- **Sibling-only archives.** When the `.db` is 0 bytes but a journal has content, capture
+  bundles the journal alone. Expect nothing from it: a rollback journal holds before-images
+  of the pages one interrupted transaction was about to change, so without the database it
+  belongs to it is not a database at all and no `sqlite3` command will read it —
+  `.recover` answers `file is not a database (26)`. It is captured because the reset that
+  follows would otherwise delete the last bytes on the device, not because there is a
+  procedure. There is likewise no conversion that makes it importable, and there should not
+  be: writing a journal back with no database is the replay-onto-a-fresh-`.db` corruption
+  that `dbFileSiblings` exists to prevent.
+- **`-wal` / `-shm`.** Capture collects any sibling with bytes, these included. Neither VFS
+  here writes WAL mode, so they should never appear; if they do, the database they belong
+  to is one `OPFSWriteAheadVFS` cannot open at all (it throws on `SQLITE_OPEN_WAL`).
+  Converting it — `sqlite3 <file> 'PRAGMA journal_mode=delete'` — folds the WAL in and
+  leaves a plain `.db` that imports normally.
+
+Both refuse before anything is deleted, so a rejected archive costs a message rather than
+the database on the device.
+
+### If a restore is interrupted, run it again
+
+The files go in one at a time and OPFS cannot swap a set of them atomically, so killing the
+tab mid-restore can leave siblings with no `.db`. An orphaned `-wa0`/`-wa1` is harmless —
+the VFS truncates the pair when it opens a `.db` that is not there — but an orphaned
+`-journal` is not: the next boot creates a fresh database and SQLite rolls the stale
+journal into it, which usually surfaces as the corruption screen.
+
+This is accepted rather than guarded. Nothing unique is at stake — the restore had already
+deleted the old database on purpose, and the backup being restored is untouched on disk —
+so the answer is to reset and import it again. Detecting it would mean a durable marker
+that boot consults before opening SQLite, which puts a second source of truth next to "the
+sidecars are the record" and adds its own window: a marker left behind after a restore that
+did finish would wipe a good database.

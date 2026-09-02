@@ -24,11 +24,18 @@
 /** `OPFSWriteAheadVFS`'s write-ahead log — two files, alternated WAL2-style. */
 export const WRITE_AHEAD_SIDECAR_SUFFIXES = ['-wa0', '-wa1'] as const
 
+/** SQLite's rollback journal — the only journal mode this app's VFSes write. */
+export const SQLITE_ROLLBACK_JOURNAL_SUFFIX = '-journal'
+
 /**
  * SQLite's own crash-recovery files. These must be removed BEFORE the main
  * `.db`: left beside a fresh database of the same name, SQLite replays them.
+ *
+ * Wider than what this app produces, deliberately: deletion should clear
+ * anything SQLite could replay, whoever wrote it. Restoring is the opposite and
+ * uses a narrower whitelist — see `exportSqliteDb`.
  */
-export const SQLITE_JOURNAL_SUFFIXES = ['-journal', '-wal', '-shm'] as const
+export const SQLITE_JOURNAL_SUFFIXES = [SQLITE_ROLLBACK_JOURNAL_SUFFIX, '-wal', '-shm'] as const
 
 /** Everything derived from the main `.db` name, for inventory and backup. */
 export const DB_FILE_SIBLING_SUFFIXES = [
