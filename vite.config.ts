@@ -9,7 +9,25 @@ import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
 import {resolveAppVersion} from './scripts/app-version'
+import fg from 'fast-glob'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
+
+
+/** Every internal module as a Rollup input, so an extension can import ANY of
+ *  them and get its full export surface.
+ *
+ *  `preserveEntrySignatures` protects ENTRY points only. A non-entry module
+ *  keeps just the exports something imports across a module boundary — and
+ *  because `preserveModules` still emits the file at its own path, a dropped
+ *  export is a silent miss rather than a 404. Globbed rather than driven off
+ *  `apiCatalog`: that catalog is a discovery surface, not a whitelist. */
+const allSrcEntries = (rootDir: string): Record<string, string> => {
+    const files = fg.sync(['src/**/*.{ts,tsx}'], {
+        cwd: rootDir,
+        ignore: ['**/test/**', '**/*.test.*', '**/*.spec.*', '**/*.fuzz.*', '**/*.d.ts'],
+    })
+    return Object.fromEntries(files.map(f => [f.replace(/\.tsx?$/, ''), path.resolve(rootDir, f)]))
+}
 
 type RollupLogLike = {
     code?: string
@@ -156,6 +174,10 @@ export default defineConfig(({command}) => {
                 },
                 // Mark react and react-dom subpaths as external to rely on the import map.
                 external: isReactImportExternal,
+                input: {
+                    index: path.resolve(__dirname, 'index.html'),
+                    ...allSrcEntries(__dirname),
+                },
                 // input: '/src/main.tsx',
                 // input: {
                 //     index: path.resolve(__dirname, 'index.html'),
