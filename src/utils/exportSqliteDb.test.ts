@@ -366,8 +366,10 @@ describe('importRawSqliteDb', () => {
     const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(120).fill(0x41)])
     const waBytes = new Uint8Array(80).fill(0x42)
     const archive = streamedZip([['x.db', dbBytes], ['x.db-wa0', waBytes]])
-    const secondPayloadAt = archive.indexOf(0x42)
-    archive.fill(0, secondPayloadAt - 30 - 'x.db-wa0'.length, secondPayloadAt + waBytes.length)
+    const secondLocalHeaderAt = indexOfBytes(archive, LOCAL_FILE_SIGNATURE_BYTES, 1)
+    const directoryAt = indexOfBytes(archive, new Uint8Array([0x50, 0x4b, 0x01, 0x02]))
+    expect(secondLocalHeaderAt).toBeGreaterThan(0)
+    archive.fill(0, secondLocalHeaderAt, directoryAt)
     const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
 
     await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 9), 'backup.zip')], writeAheadSupported))
@@ -421,8 +423,10 @@ describe('importRawSqliteDb', () => {
     // missing member.
     const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(400).fill(0x41)])
     const archive = streamedZip([['x.db', dbBytes]])
-    const payloadAt = archive.indexOf(0x41)
-    expect(payloadAt).toBeGreaterThan(0)
+    // Past the SQLite magic, which cannot occur in a zip header — unlike a bare
+    // 0x41, which the clock-derived timestamp field supplies about 1% of runs.
+    const payloadAt = indexOfBytes(archive, SQLITE_HEADER_BYTES) + SQLITE_HEADER_BYTES.length
+    expect(archive[payloadAt]).toBe(0x41)
     archive[payloadAt] = 0x42
     const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
 
@@ -738,6 +742,24 @@ const fakeRepo = () => ({user: {id: 'user-1'}, db: {close: vi.fn(async () => {})
  * than reaching for the real probe worker.
  */
 const writeAheadSupported = {probeWriteAheadSupport: async () => true}
+
+/**
+ * Where `needle` first occurs in `haystack`, searching from `from`.
+ *
+ * Tests must locate archive structure by SEQUENCE, never by a single byte: the
+ * local header's DOS timestamp is derived from the clock, so a one-byte search
+ * lands in it about 1% of the time and silently targets the wrong offset. That
+ * shipped as a 1-in-100 CI flake.
+ */
+const indexOfBytes = (haystack: Uint8Array, needle: Uint8Array, from = 0): number => {
+  outer: for (let at = from; at <= haystack.length - needle.length; at++) {
+    for (let i = 0; i < needle.length; i++) if (haystack[at + i] !== needle[i]) continue outer
+    return at
+  }
+  return -1
+}
+
+const LOCAL_FILE_SIGNATURE_BYTES = new Uint8Array([0x50, 0x4b, 0x03, 0x04])
 
 /**
  * An archive built the way `streamStoredZipToOpfs` builds one — streaming `Zip`
