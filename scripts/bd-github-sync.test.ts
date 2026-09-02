@@ -878,6 +878,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     shows?: (object[] | string)[]
     failCloseId?: string
     failFullSync?: boolean
+    failPushCall?: number
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -910,9 +911,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `    m=$(cat "${repo}/show-count" 2>/dev/null || echo 0)`,
         `    m=$((m+1)); echo $m > "${repo}/show-count"`,
         `    if [ -f "${repo}/show-$m.json" ]; then cat "${repo}/show-$m.json"; else cat "${repo}/show-last.json"; fi;;`,
-        ...(opts.failFullSync
-          ? ['  github) case "$*" in *--push-only*) echo "Pushed 1 issues";; *) echo "Error: pull exploded";; esac;;']
-          : ['  github) echo "Pushed 0 issues";;']),
+        '  github)',
+        '    case "$*" in *--push-only*)',
+        `      k=$(cat "${repo}/push-count" 2>/dev/null || echo 0); k=$((k+1)); echo $k > "${repo}/push-count"`,
+        `      if [ "$k" = "${opts.failPushCall ?? 0}" ]; then echo "Error: push exploded"; else echo "Pushed 0 issues"; fi;;`,
+        `    *) echo "${opts.failFullSync ? 'Error: pull exploded' : 'Pushed 0 issues'}";;`,
+        '    esac;;',
         ...(opts.failCloseId
           ? [`  close) if [ "$2" = "${opts.failCloseId}" ]; then echo "Error: cannot close"; else echo ok; fi;;`]
           : []),
@@ -1291,6 +1295,20 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(pushes).toHaveLength(2)
     const ids = pushes.flatMap(l => l.slice('bd github sync --push-only --issues '.length).split(','))
     expect(ids).toEqual(rows.map(r => r.id))
+  })
+
+  // A failed push may still have minted issues — an earlier chunk, or bd
+  // aborting midway — and by the next run the beads carry their refs, so the
+  // mapping must be printed from a listing taken before the failure propagates.
+  it('prints the mappings an earlier chunk minted when a later chunk fails', () => {
+    const rows = Array.from({ length: 250 }, (_, i) => syncRow({ id: `km-b${i}`, external_ref: null }))
+    const minted = rows.map((r, i) => (i < 200 ? { ...r, external_ref: ref(100 + i) } : r))
+    const { run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], lists: [rows, minted], failPushCall: 2 })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('bd-github-sync: failed')
+    expect(r.stdout).toContain('minted: km-b0 → #100')
+    expect(r.stdout).toContain('minted: km-b199 → #299')
   })
 
   it('stays silent under --quiet when a converged run changed nothing', () => {

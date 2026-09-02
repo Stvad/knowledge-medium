@@ -1010,6 +1010,13 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     const { issueByNumber, maxKnownIssueNumber } = fetchIssues()
     const preBeads = listAllBeads()
     const report = []
+    // The km→#N mapping for every issue this run's push minted. Printed
+    // IMMEDIATELY, not via the end-of-run report: any later step failing
+    // would swallow the report, and by the next run the bead already carries
+    // its ref, so the mapping would never be printed at all.
+    const printMinted = post => {
+      for (const { id, number } of planMintedRefs(preBeads, post)) console.log(`bd-github-sync: minted: ${id} → #${number}`)
+    }
 
     // 1. Adopt GitHub-side closes BEFORE pushing (see header). A failed close
     // leaves an open bead that the push would use to re-open the issue, so
@@ -1045,7 +1052,18 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     if (dryRun) {
       report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
     } else if (pushSet.length) {
-      const pushOut = pushBeads(pushSet, env)
+      let pushOut
+      try {
+        pushOut = pushBeads(pushSet, env)
+      } catch (e) {
+        // A failed push may still have minted issues (an earlier chunk, or bd
+        // aborting midway) — print their mapping from a fresh listing before
+        // the failure propagates; the listing's own failure yields to it.
+        try {
+          printMinted(listAllBeads())
+        } catch {}
+        throw e
+      }
       // Zero-count lines stay out of the report: they would flip `changed`
       // below and un-quiet every converged SessionEnd run.
       report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
@@ -1058,13 +1076,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // run(): `bd show` output is pretty-printed JSON, and a description line
     // starting with "Error" would trip run()'s bd check.
     const freshBeads = dryRun ? adoptedBeads : listAllBeads()
-    // Print the km→#N mapping for every issue the pre-pull push just minted —
-    // IMMEDIATELY, not via the end-of-run report: any later step failing
-    // (snapshot abort, the pull itself) would swallow the report, and by the
-    // next run the bead already carries its ref, so the mapping would never
-    // be printed at all.
-    for (const { id, number } of planMintedRefs(preBeads, freshBeads))
-      console.log(`bd-github-sync: minted: ${id} → #${number}`)
+    printMinted(freshBeads)
     const suspects = [
       ...new Map(
         [
