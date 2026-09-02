@@ -9,6 +9,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks'
 import { getClientId, resetClientIdCache } from '@/utils/clientId'
+import { observeWorkspace } from '@/plugins/interaction-metrics/sessionContext'
 import { jsonPathForProperty } from '@/data/internals/typedBlockQuery'
 import type { User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
@@ -356,6 +357,17 @@ describe('collectStartupMetricsEffect', () => {
     markStartup('firstContentPaint')
     expect(startEffect(WS)).toBeTypeOf('function')
     expect(startEffect('ws-2')).toBeUndefined()
+  })
+
+  // This plugin is independently disableable, so a page can boot in one
+  // workspace with recording off, move to another, and be switched on there.
+  // The origin is claimed by the always-on observe effect rather than by this
+  // one, so being enabled later cannot make the workspace it was enabled in the
+  // boot's origin — which would file the first workspace's load as the second's.
+  it('declines when the page booted somewhere this effect never ran', () => {
+    markStartup('firstContentPaint')
+    observeWorkspace(repo, 'ws-booted-in')
+    expect(startEffect(WS)).toBeUndefined()
   })
 
   // The Repo as well as the workspace. A local sign-out swaps it without a

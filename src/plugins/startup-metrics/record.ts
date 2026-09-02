@@ -19,6 +19,8 @@ import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import {
   awaitRecordingAllowed,
   NoLongerEligible,
+  pageOrigin,
+  resetPageOrigin,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { appendClientRecord } from '@/plugins/interaction-metrics/recordStore.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
@@ -200,26 +202,11 @@ let recorded = false
  *  false — so checking it alone lets both instances write, and two records for
  *  one boot then take two of the three slots in the recent window. */
 let recording = false
-/** Where this boot happened — the Repo AND the workspace. The timeline is
- *  page-global and measures loading THAT graph, so no other series may receive
- *  it. Without the pin, a change before the first write lands disposes that
- *  instance and the replacement passes the `recorded` guard (still false) and
- *  files the old timings as the new context's, skewing a baseline with another
- *  graph's load.
- *
- *  The REPO as well as the workspace: a local sign-out swaps it without a
- *  reload, and the next user opening the same shared workspace would otherwise
- *  satisfy a workspace-only pin and receive the previous user's boot.
- *
- *  Declining is the safe direction — one boot unrecorded, against a permanently
- *  skewed series. */
-let bootContext: { repo: object; workspaceId: string } | null = null
-
 /** Test helper — re-arm the once-per-session guard. */
 export const resetStartupMetricsRecorded = (): void => {
   recorded = false
   recording = false
-  bootContext = null
+  resetPageOrigin()
 }
 
 /**
@@ -238,8 +225,19 @@ export const collectStartupMetricsEffect: AppEffect = {
   id: 'startup-metrics.collect',
   start: ({ repo, workspaceId }) => {
     if (!workspaceId || recorded) return
-    bootContext ??= { repo, workspaceId }
-    if (bootContext.repo !== repo || bootContext.workspaceId !== workspaceId) return
+    // The timeline is page-global and measures loading THAT graph, so only the
+    // context the page started in may receive it. Both halves matter: a
+    // workspace switch before the write lands would otherwise file these
+    // timings as the new workspace's, and a local sign-out swaps the Repo
+    // without a reload, so the next user opening the same shared workspace
+    // would receive the previous user's boot.
+    //
+    // Read from `pageOrigin`, never claimed here: this effect is behind a
+    // toggle, so claiming would make the workspace it was ENABLED in the
+    // origin. Declining is the safe direction — one boot unrecorded, against a
+    // permanently skewed series.
+    const origin = pageOrigin(repo, workspaceId)
+    if (origin.repo !== repo || origin.workspaceId !== workspaceId) return
     let done = false
     // Distinct from `done`, which the record path sets on ITS way through:
     // this tracks teardown, so a callback already queued can tell the two apart.

@@ -65,7 +65,24 @@ export interface InteractionComparable {
   writes: number
   /** Per-query resolve timings for every query this session measured, keyed by
    *  query NAME (`repo.metrics().queries` is already name-keyed, not
-   *  handle-keyed). Bounded only by `MAX_QUERIES`. */
+   *  handle-keyed). Bounded only by `MAX_QUERIES`.
+   *
+   *  PAGE TOTALS, unlike `writes` and `fanout` beside them: these INCLUDE the
+   *  loader reruns caused by the recorder's own writes. The `telemetry` flag
+   *  covers a transaction and its synchronous fan-out counters, but a loader
+   *  rerun happens in a later microtask and is timed unconditionally, with no
+   *  provenance saying which transaction invalidated it.
+   *
+   *  ACCEPTED, with its shape stated because it is not uniform: against a busy
+   *  session's thousands of resolutions, a couple of telemetry transactions per
+   *  five minutes are noise. On a nearly IDLE session — which is when this
+   *  recorder samples — they can be a large share of all query activity, so the
+   *  p95 partly describes the app reacting to its own bookkeeping. Read a
+   *  low-`writes` session's query timings with that in mind.
+   *
+   *  Excluding them needs the invalidating transaction's provenance carried to
+   *  the asynchronous loader run it causes — HandleStore to dispatcher, in the
+   *  hottest path in the app. Its own change, not a line here. */
   queries: Record<string, TimingSample>
   /** `handleStore` fan-out counters, restricted to what a transaction's own
    *  invalidation walk can attribute -- invalidations, handlesWalked/Matched,

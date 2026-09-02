@@ -106,6 +106,24 @@ const factsForSpan = (repo: MetricsSpanSource): SessionFacts => {
   return f
 }
 
+/** Where this PAGE first activated — the Repo and workspace a boot happened in.
+ *
+ *  Module-scoped, and neither per-Repo nor per-span: it answers "where did this
+ *  page start", which no metrics reset changes. Claimed by whoever asks first,
+ *  and the always-on observe effect asks on EVERY activation — so it is set
+ *  even while a recorder's own plugin is switched off. A recorder claiming it
+ *  itself would instead record wherever it was ENABLED, and file page-global
+ *  boot timings collected in another workspace under that one. */
+let origin: { repo: object; workspaceId: string } | null = null
+
+export const pageOrigin = (
+  repo: object,
+  workspaceId: string,
+): { repo: object; workspaceId: string } => (origin ??= { repo, workspaceId })
+
+/** Test helper — forget where this "page" started. */
+export const resetPageOrigin = (): void => { origin = null }
+
 /**
  * Note that `workspaceId` is now active in this page session.
  *
@@ -117,6 +135,7 @@ const factsForSpan = (repo: MetricsSpanSource): SessionFacts => {
  * Idempotent, so all of them calling is correct rather than merely harmless.
  */
 export const observeWorkspace = (repo: MetricsSpanSource, workspaceId: string): void => {
+  pageOrigin(repo, workspaceId)
   const f = factsForSpan(repo)
   if (f.seenWorkspace === null) f.seenWorkspace = workspaceId
   else if (f.seenWorkspace !== workspaceId) f.unattributable = true
@@ -208,9 +227,11 @@ export const readLiveSession = (
   return { metrics: repo.metrics(), session: metricsSessionContext(repo, workspaceId) }
 }
 
-/** Test helper — forget one Repo's session facts. */
+/** Test helper — forget one Repo's session facts, and where the "page"
+ *  started: a test simulating a second page session means both. */
 export const resetMetricsSession = (repo: object): void => {
   facts.delete(repo)
+  resetPageOrigin()
 }
 
 /** How long to wait for the membership row before giving up on this attempt.
@@ -272,10 +293,9 @@ export const awaitRecordingAllowed = async (
  * page-global counters. Each is separately replaceable while the work is in
  * flight: a local sign-out swaps the Repo without a reload, a switch changes
  * the workspace, `resetMetrics()` starts a new span. An artifact outliving any
- * of them describes a world that no longer exists, and the three had been
- * guarded one at a time, in three different ad-hoc ways, each time a review
- * found the next one.
+ * of them describes a world that no longer exists.
  *
+ * All three together, so a consumer cannot guard one and miss the others.
  * Captured where the work starts and compared where its result is used.
  */
 export interface MetricsContext {

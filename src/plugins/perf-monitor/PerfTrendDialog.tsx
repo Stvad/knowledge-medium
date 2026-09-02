@@ -109,12 +109,10 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     }
   }, [repo, ws])
 
-  // ONE guard for both load paths. The mount effect had its own `live` flag
-  // while the manual refresh passed `() => true`, so a refresh in flight when
-  // the Repo was swapped — `loadSeries` is keyed on it — resolved afterwards and
-  // wrote the previous user's rows into the open dialog. Claiming a token
-  // invalidates every earlier one, and the effect re-running on a Repo or
-  // workspace change claims one too.
+  // ONE guard for both load paths: the newest claim invalidates every earlier
+  // one. A load whose dialog has moved on — unmounted, or re-keyed by a Repo or
+  // workspace change — would otherwise resolve afterwards and write the
+  // previous user's rows into the open dialog.
   const loadToken = useRef(0)
   const claimLoad = useCallback((): (() => boolean) => {
     const token = ++loadToken.current

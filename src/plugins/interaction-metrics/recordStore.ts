@@ -353,8 +353,7 @@ const pruneGroup = async (
       // this surface's label and the absent legacy one; a row relabelled in the
       // window between belongs to a different series by the same rule the query
       // used, and deleting it would evict a row this device's reader never
-      // counted. "Re-take EVERY clause" is the rule this loop states, and this
-      // was the clause it did not.
+      // counted.
       const label = (record as { deviceLabel?: unknown }).deviceLabel
       if (label != null && label !== getDeviceLabel()) continue
       // Unchanged since it was selected. This does NOT re-establish RANK, which

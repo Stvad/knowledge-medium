@@ -31,7 +31,7 @@ export type JsonPath = string & { readonly [jsonPathBrand]: 'json-path' }
  *  types invite: double-encoding. A path passed where a name belongs derives
  *  `$."$.\"foo\""`, which addresses a property nothing writes — so the query
  *  is valid, returns no rows, and the feature reads as empty rather than
- *  broken. That shipped once here. */
+ *  broken. */
 export type PropertyName = string & { readonly [jsonPathBrand]?: never }
 
 export const jsonPathForProperty = (name: PropertyName): JsonPath =>

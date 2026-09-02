@@ -192,10 +192,10 @@ describe('a superseded refresh', () => {
     // The dialog goes away — the same invalidation a Repo swap performs.
     cleanup()
     // Counted at CALL time. `repo.metrics().db.getAll.calls` increments in a
-    // `finally` after the round trip, so watching it means waiting for a
-    // duration — which is what an earlier version of this test did, and it
-    // could not fail: under load the continuation outlives any window chosen
-    // here. A spy increments the instant the read is issued.
+    // `finally` AFTER the round trip, so it cannot prove a call did not happen —
+    // watching it means waiting out a duration, and under load the continuation
+    // outlives any window chosen here. A spy increments the instant the read is
+    // issued, which is the event this asserts the absence of.
     const reads = vi.spyOn(repo.db, 'getAll')
     release()
 
