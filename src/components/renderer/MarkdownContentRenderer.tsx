@@ -63,17 +63,19 @@ export function MarkdownContentRenderer({
   const inline = blockContext.isReference === true
   const Container = containerElement ?? (inline ? 'span' : 'div')
   const baseClassName = containerClassName ?? (inline ? '' : DEFAULT_CONTAINER_CLASS)
-  // Marks rendered markdown so element styling (list markers and their
-  // gutter) can be scoped to it. Preflight strips both from every `ul`/`ol`,
-  // which is right for the app's own chrome — menus, pickers, the recents
-  // tree are all `<li>`s that must stay unmarked — and wrong only here.
-  //
-  // Not on an inline surface, where a bullet and a 2em gutter would land in
-  // the middle of the surrounding sentence or eat a breadcrumb's width. The
-  // span container IS that contract (a `div` can't sit in inline flow), so it
-  // covers the reference path and a caller that asks for one outright.
-  const className = [Container === 'span' ? '' : 'markdown-content', baseClassName, titleClass]
-    .filter(Boolean).join(' ')
+  // Marks rendered markdown, and says which kind of surface it is: the list
+  // styling keyed on these classes is off by default and turned on per
+  // surface, so an inline one must ANNOUNCE itself rather than merely omit
+  // the marker — a reference's span sits inside a block surface, and a
+  // descendant selector would still match through that outer ancestor. The
+  // span container IS the inline contract (a `div` can't sit in inline flow),
+  // so it covers the reference path and a caller that asks for one outright.
+  const className = [
+    'markdown-content',
+    Container === 'span' ? 'markdown-content-inline' : '',
+    baseClassName,
+    titleClass,
+  ].filter(Boolean).join(' ')
 
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
   // Pass the reactive `renderData` as `data` so the (React-Compiler-memoized)

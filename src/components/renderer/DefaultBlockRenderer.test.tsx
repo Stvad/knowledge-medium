@@ -723,25 +723,23 @@ describe('title typography', () => {
     expect(titleElement()).toBeNull()
   })
 
-  // List markers and their gutter are restored by CSS scoped to a class the
-  // text renderer puts on its container, so which surfaces carry it IS the
-  // styling decision — there is no other switch.
-  it('marks a block surface for markdown element styling', async () => {
+  // List styling is off by default and turned on per surface, so what the
+  // renderer marks IS the styling decision. An inline surface has to announce
+  // itself rather than merely omit the block marker: it sits inside a block
+  // surface, so anything ancestor-matched would still reach it.
+  it('marks a block surface as block', async () => {
     renderBlock('root')
 
     await screen.findByText('Page title')
     expect(document.querySelector('.markdown-content')).not.toBeNull()
+    expect(document.querySelector('.markdown-content-inline')).toBeNull()
   })
 
-  // An inline surface would get a bullet and a 2em gutter dropped into the
-  // middle of the surrounding sentence, or eating a breadcrumb's width. The
-  // positive above proves the class can appear at all, so this absence is the
-  // span deciding it rather than the content never having rendered.
-  it('leaves an inline text surface unmarked', async () => {
+  it('marks an inline text surface as inline', async () => {
     renderBlock('root', InlineTextRenderer)
 
     await screen.findByText('Page title')
-    expect(document.querySelector('.markdown-content')).toBeNull()
+    expect(document.querySelector('.markdown-content-inline')).not.toBeNull()
   })
 
   it('still reaches a surface that composes the text renderer', async () => {

@@ -256,41 +256,63 @@
   /* Preflight strips the marker and gutter off every `ul`/`ol`, which is what
      the app's own chrome wants — menus, pickers and the recents tree are all
      unmarked `<li>`s — but leaves a list typed into a block rendering as bare
-     unindented lines. Restore both, for lists that are BOTH markdown's own
-     (`.markdown-list`, stamped by the renderer, so an embedded block's chrome
-     list inside the same container is not swept up) and on a block surface
-     (`.markdown-content`, absent on the inline ones, where a gutter would land
-     mid-sentence).
+     unindented lines. Restoring them takes two facts, and both belong to the
+     renderer that owns the list: the list came from markdown (`markdown-list`,
+     stamped by the `ul`/`ol` overrides, so an embedded block's chrome list is
+     never swept up), and that renderer draws a block surface rather than an
+     inline one (where a bullet and gutter would land mid-sentence).
 
-     `em` so the gutter scales with the surrounding text (a title block renders
-     at 1.5rem). An `outside` marker is drawn in that gutter and the content
-     container clips its overflow, so a marker wider than the gutter loses its
-     leading digits rather than merely crowding: 2em covers up to `100.`, and a
-     start beyond that (`1000.`, which markdown does allow) is accepted as
-     clipped. The alternatives cost more than the case is worth — an `inside`
-     marker breaks wrapped-line alignment for every list, and no CSS length can
-     be derived from a marker's width. */
-  .markdown-content .markdown-list {
-    padding-left: 2em;
+     The second travels as INHERITED CUSTOM PROPERTIES, not a descendant
+     selector: inheritance resolves to the nearest container, descendant
+     matching accepts any ancestor. A reference renders inline inside a block
+     surface — and its content can hold an embed that is a block surface again
+     — so `.markdown-content .markdown-list` matched through the outer
+     ancestor and put bullets back inside the sentence. Source order cannot fix
+     that either; only nearest-wins can. */
+  .markdown-content {
+    /* `em` so the gutter scales with the surrounding text (a title block
+       renders at 1.5rem). An `outside` marker is drawn in that gutter and the
+       content container clips its overflow, so a marker wider than it loses
+       its leading digits rather than merely crowding: 2em covers up to `100.`,
+       and a start beyond that (`1000.`, which markdown does allow) is accepted
+       as clipped. The alternatives cost more than the case is worth — an
+       `inside` marker breaks wrapped-line alignment for every list, and no CSS
+       length can be derived from a marker's width. */
+    --markdown-list-gutter: 2em;
+    --markdown-list-bullet: disc;
+    --markdown-list-number: decimal;
+    /* Subordinate to the outline's own bullets: these mark structure INSIDE
+       one block, and shouldn't read as loudly as the rows they sit in. */
+    --markdown-list-marker-color: hsl(var(--muted-foreground));
   }
 
-  .markdown-content ul.markdown-list {
-    list-style-type: disc;
+  .markdown-content-inline {
+    --markdown-list-gutter: 0;
+    --markdown-list-bullet: none;
+    --markdown-list-number: none;
   }
 
-  .markdown-content ol.markdown-list {
-    list-style-type: decimal;
+  /* Unset outside any markdown surface — an export rendered without a
+     container keeps preflight's bare list. */
+  .markdown-list {
+    padding-left: var(--markdown-list-gutter, 0);
   }
 
-  /* Subordinate to the outline's own bullets: these mark structure INSIDE one
-     block, and shouldn't read as loudly as the rows they sit in. */
-  .markdown-content .markdown-list > li::marker {
-    color: hsl(var(--muted-foreground));
+  ul.markdown-list {
+    list-style-type: var(--markdown-list-bullet, none);
+  }
+
+  ol.markdown-list {
+    list-style-type: var(--markdown-list-number, none);
+  }
+
+  .markdown-list > li::marker {
+    color: var(--markdown-list-marker-color, inherit);
   }
 
   /* A GFM task item carries its own marker — the checkbox. It keeps the
      gutter, so its checkbox lines up with the text of any plain sibling. */
-  .markdown-content .markdown-list > .task-list-item {
+  .markdown-list > .task-list-item {
     list-style-type: none;
   }
 
