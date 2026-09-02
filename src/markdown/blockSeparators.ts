@@ -14,12 +14,23 @@ const BLOCK_TAGS = new Set([
   'hr', 'li', 'ol', 'p', 'pre', 'table', 'ul',
 ])
 
-/** `raw` counts whatever HTML it holds: the question is not whether the
- *  content is block-level but whether the serializer pretty-prints around it,
- *  and it does around every raw child of a block container. */
+const RAW_TAG = /^\s*<\/?([a-z][a-z0-9-]*)/i
+
+/** Raw HTML never became an element, so its own tag is the only thing that
+ *  says whether the serializer pretty-printed around it. Unparseable or
+ *  unlisted counts as inline, the safe side: a stray blank line beside raw
+ *  inline HTML in a quote is cosmetic, and deleting a newline between it and
+ *  a plugin's split text is not. */
+const isBlockRaw = (value: string) => {
+  const tag = RAW_TAG.exec(value)?.[1]?.toLowerCase()
+
+  return tag !== undefined && BLOCK_TAGS.has(tag)
+}
+
 const isBlock = (node: Child | undefined) =>
-  node?.type === 'raw' ||
-  (node?.type === 'element' && BLOCK_TAGS.has(node.tagName))
+  node?.type === 'raw'
+    ? isBlockRaw(node.value)
+    : node?.type === 'element' && BLOCK_TAGS.has(node.tagName)
 
 /** A line break the serializer inserted between block children.
  *

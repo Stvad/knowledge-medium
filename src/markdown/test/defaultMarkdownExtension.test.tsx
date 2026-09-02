@@ -72,12 +72,18 @@ describe('gfm markdown extension', () => {
     expect([...blockquote!.childNodes].map(node => node.nodeName)).toEqual(['P'])
   })
 
-  // Raw HTML reaches the tree as a `raw` node rather than an element, and the
-  // serializer pretty-prints around it exactly as it does around elements.
-  it('drops the separators around raw html in a quote', () => {
+  // Raw HTML never became an element, so its own tag is what says whether the
+  // serializer pretty-printed around it — block either side, inline neither.
+  it('drops the separators around raw BLOCK html in a quote', () => {
     const {container} = renderMarkdown('> <div>x</div>')
 
     expect(container.querySelector('blockquote')?.textContent).toBe('<div>x</div>')
+  })
+
+  it('keeps an authored newline between split text and raw INLINE html', () => {
+    const {container} = renderMarkdown('0:30\n<span>x</span>', [remarkTimestamps])
+
+    expect(container.textContent).toBe('0:30\n<span>x</span>')
   })
 
   // The separator BETWEEN two quoted paragraphs is the blank line the author
