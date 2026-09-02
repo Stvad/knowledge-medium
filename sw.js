@@ -62,6 +62,10 @@
 	/**
 	* SQLite's own crash-recovery files. These must be removed BEFORE the main
 	* `.db`: left beside a fresh database of the same name, SQLite replays them.
+	*
+	* Wider than what this app produces, deliberately: deletion should clear
+	* anything SQLite could replay, whoever wrote it. Restoring is the opposite and
+	* uses a narrower whitelist — see `exportSqliteDb`.
 	*/
 	var SQLITE_JOURNAL_SUFFIXES = [
 		"-journal",
@@ -523,7 +527,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "ca235bef7a47",
+		buildId: "7db505b3213a",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
