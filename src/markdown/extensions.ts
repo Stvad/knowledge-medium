@@ -26,10 +26,10 @@ export interface MarkdownRenderContext {
 
 export interface MarkdownRenderConfig {
   remarkPlugins: PluggableList
-  /** Applied to the hast tree after remark, before components render — the
-   *  layer where element identity (`tagName`) is still readable, unlike in a
-   *  `components` override, whose children have already been mapped through
-   *  whatever other extensions replaced them with. */
+  /** Applied to the hast tree after remark, before it is mapped to React — so
+   *  a transformation over the whole tree lives in one plugin instead of one
+   *  `components` override per element type, and can add or remove nodes
+   *  rather than only render the ones it is handed. */
   rehypePlugins: PluggableList
   components: Components
 }
