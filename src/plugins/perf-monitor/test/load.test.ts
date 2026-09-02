@@ -24,6 +24,7 @@ import {
   HISTORY_LIMIT,
   INTERACTION_SERIES,
   MAX_PAGES,
+  isUsableInteractionRecord,
   isUsableStartupRecord,
   loadRecords,
 } from '../load'
@@ -150,6 +151,36 @@ describe('loadRecords', () => {
     expect(records).toEqual([])
   })
 
+  // The page condition is checked BEFORE each page, so a page that ends one
+  // short of the limit runs another and the result can exceed HISTORY_LIMIT.
+  // Over-long history biases the baseline toward older, smaller-graph sessions,
+  // which reads as a regression that never happened.
+  it('truncates history that a second page overran', async () => {
+    const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
+    const row = async (id: string, orderKey: string, props: object): Promise<void> => {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+            created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
+        [id, WS, groupId, orderKey, JSON.stringify(props), USER.id, USER.id],
+      )
+    }
+    // One unusable row inside page 0, so that page yields 39 and a second runs.
+    await row('bad', 'a0000', { [interactionRecordProp.name]: { ...RECORD, recordedAt: 9e9 } })
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, ?, 'not-a-number') WHERE id = ?`,
+      [`${PATH}.writes`, 'bad'],
+    )
+    for (let i = 0; i < HISTORY_LIMIT + 2; i++) {
+      await row(`ok-${i}`, `a${String(i + 1).padStart(4, '0')}`,
+        { [interactionRecordProp.name]: { ...RECORD, recordedAt: 9e9 - i } })
+    }
+
+    const records = await loadRecords(repo, WS, INTERACTION_SERIES)
+    expect(records).toHaveLength(HISTORY_LIMIT)
+  })
+
   // Marks stay optional, but a PRESENT one has to be finite: the comparison
   // subtracts them, and NaN takes neither the steady nor the regressed branch,
   // so one hand-edited row could publish a NaN comparison to the chip.
@@ -158,6 +189,29 @@ describe('loadRecords', () => {
     expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 5 })).toBe(true)
     expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 'x' })).toBe(false)
     expect(isUsableStartupRecord({ timeOriginMs: 1, firstContentPaintMs: NaN })).toBe(false)
+    // Every field the trend table renders, not just the ones a past bug named.
+    expect(isUsableStartupRecord({ timeOriginMs: 1, interactiveMs: NaN })).toBe(false)
+    expect(isUsableStartupRecord({ timeOriginMs: NaN })).toBe(false)
+  })
+
+  // These are the clauses whose absence is silent-but-visible: the record is a
+  // hand-inspectable blob, so a wrong type does not produce a wrong number, it
+  // produces a NaN verdict on the chip or a throw inside the dialog's render.
+  it('rejects the field types that would reach a reader as NaN or a throw', () => {
+    const ok = {
+      recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {},
+    }
+    expect(isUsableInteractionRecord(ok)).toBe(true)
+    // `appSha` is rendered with `.slice(0, 8)` — a number throws mid-`.map` and
+    // takes the whole dialog down, not one row.
+    expect(isUsableInteractionRecord({ ...ok, appSha: 12345678 })).toBe(false)
+    expect(isUsableStartupRecord({ timeOriginMs: 1, appSha: 12345678 })).toBe(false)
+    // A fanout VALUE, not just the map: it is consumed as a number, and a
+    // string yields NaN, which takes neither the steady nor the regressed
+    // branch — the chip then reads "NaN× higher than baseline".
+    expect(isUsableInteractionRecord({ ...ok, fanout: { loaderInvalidations: 'oops' } })).toBe(false)
+    // ...and a query sample inside the nested map, which a shallow check misses.
+    expect(isUsableInteractionRecord({ ...ok, queries: { q: null } })).toBe(false)
   })
 
   // Validation happens after the JSON parse, so a limit applied to ROWS lets

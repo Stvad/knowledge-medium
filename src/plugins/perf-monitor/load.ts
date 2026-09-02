@@ -82,7 +82,7 @@ export const isUsableStartupRecord = (r: {
   appSha?: unknown
 }): boolean =>
   isAbsentOrString(r.appSha) &&
-  typeof r.timeOriginMs === 'number' &&
+  Number.isFinite(r.timeOriginMs) &&
   isAbsentOrFinite(r.repoReadyMs) &&
   isAbsentOrFinite(r.firstContentPaintMs) &&
   isAbsentOrFinite(r.interactiveMs)
@@ -159,6 +159,7 @@ export const loadRecords = async <T extends { recordedAt: number }>(
   // baseline while the group visibly holds hundreds of good records. Bounded by
   // MAX_PAGES so a group full of unreadable rows cannot turn into a full scan.
   const records: Array<{ id: string; record: T }> = []
+  const seen = new Set<string>()
   for (let page = 0; page < MAX_PAGES && records.length < HISTORY_LIMIT; page++) {
     // Built from `clientSeriesQuery` — the one definition of this client's
     // records — so the reader and the retention pass cannot disagree about
@@ -166,13 +167,18 @@ export const loadRecords = async <T extends { recordedAt: number }>(
     // diverged twice, and each time retention was free to evict a row this
     // reader counted as current.
     const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS payload', {
-      groupId, recordName, deviceLabel: getDeviceLabel(), tail: 'LIMIT ? OFFSET ?',
+      groupId, recordName, deviceLabel: getDeviceLabel(),
+      selectParams: [recordPath],
+      tail: 'LIMIT ? OFFSET ?', tailParams: [HISTORY_LIMIT, page * HISTORY_LIMIT],
     })
-    const rows = await repo.db.getAll<{ id: string; payload: string | null }>(
-      q.sql, [recordPath, ...q.params, HISTORY_LIMIT, page * HISTORY_LIMIT],
-    )
+    const rows = await repo.db.getAll<{ id: string; payload: string | null }>(q.sql, q.params)
     for (const row of rows) {
       if (!row.payload) continue
+      // Paging is by OFFSET, so a record PREPENDED between two page reads shifts
+      // the window and the row at the old page boundary is read twice — and the
+      // recorder appends from a different idle job than this one. A duplicate
+      // would count one past session twice in the median.
+      if (seen.has(row.id)) continue
       try {
         const record = JSON.parse(row.payload) as T
         // `recordedAt` drives the sort, so it is checked here rather than in
@@ -180,6 +186,7 @@ export const loadRecords = async <T extends { recordedAt: number }>(
         // randomises the whole window; `Infinity` (which `1e400` parses to)
         // sorts to the front and pushes this boot out of the currency window.
         if (Number.isFinite(record?.recordedAt) && isUsable(record)) {
+          seen.add(row.id)
           records.push({ id: row.id, record })
         }
       } catch {
@@ -194,10 +201,11 @@ export const loadRecords = async <T extends { recordedAt: number }>(
   // return nearly twice it. Over-long history biases the baseline toward older,
   // smaller-graph sessions, which reads as a regression.
   //
-  // Re-sorted rather than trusted: the query orders on a value SQLite reads
-  // untyped, so a hand-edited string timestamp sorts by JSON type rather than
-  // numerically. The rows are already the right ones by then — this only fixes
-  // their order.
+  // Re-sorted because the result is CONCATENATED from up to `MAX_PAGES` reads
+  // that are not one snapshot: an append landing between two of them shifts the
+  // window, so page 1 can carry a row newer than the tail of page 0. Not, as an
+  // earlier note here claimed, to repair a hand-edited string timestamp — the
+  // `Number.isFinite` check above drops those before they reach this line.
   return records
     .sort((a, b) => b.record.recordedAt - a.record.recordedAt)
     .slice(0, HISTORY_LIMIT)

@@ -520,7 +520,7 @@ describe('repo.instanceId', () => {
 describe('repo.metrics() / resetMetrics()', () => {
   it('exposes all subsections; all start empty / at zero', () => {
     const m = env.repo.metrics()
-    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'epoch', 'epochWorkspaceId', 'excludingTelemetry', 'handleStore', 'handleStoreInventory', 'queries', 'reprojection', 'slowestTx', 'txLog'])
+    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'epoch', 'epochStartedAt', 'epochWorkspaceId', 'excludingTelemetry', 'handleStore', 'handleStoreInventory', 'queries', 'reprojection', 'slowestTx', 'txLog'])
     expect(Object.isFrozen(m)).toBe(true)
     expect(m.epoch).toBe(0)
     expect(m.epochWorkspaceId).toBeNull()

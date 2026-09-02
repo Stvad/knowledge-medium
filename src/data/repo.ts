@@ -676,7 +676,8 @@ export class Repo {
    *  cannot tell its own work from anyone else's, while this pair is written in
    *  the same synchronous block as the events it counts.
    *
-   *  Rolled-back transactions are not counted, on either side — they invalidate
+   *  A transaction that CHANGED NO ROW is counted on neither side — rolled
+   *  back, or committed empty as an idempotent ensure does. It invalidates
    *  nothing, so counting the write alone would deflate the ratio a reader
    *  builds from the pair. */
   private nonTelemetryWrites = 0
@@ -693,6 +694,11 @@ export class Repo {
    *  it looks. Without this the reader can only start the new span empty, which
    *  reads as "attributable to the first workspace observed after the reset". */
   private metricsEpochWorkspaceId: string | null = null
+  /** Wall clock when the current counter span began. Starts at the page's time
+   *  origin, so before any reset it is page-load time. A consumer reporting a
+   *  duration alongside these counters needs the span's start, not the page's:
+   *  after a reset the two differ by everything that happened before it. */
+  private metricsEpochStartedAt = Date.now() - performance.now()
   /** Per-query-name resolve timings. The dispatcher records each
    *  `loader(ctx)` invocation here keyed by the query's full name. */
   readonly queryMetrics = new QueryMetrics()
@@ -1265,11 +1271,17 @@ export class Repo {
   metrics(): Readonly<{
     handleStore: Readonly<Record<string, number>>
     /** The same counters, restricted to committed transactions this Repo ran
-     *  that were NOT flagged `telemetry` — the user's work, with the app's
-     *  self-measurement left out. `writes` is those transactions; `handleStore`
-     *  is the fan-out they caused, measured around each one's own invalidation
-     *  walk. A feature reporting performance figures should read THIS rather
-     *  than subtracting its own activity from the totals above. */
+     *  that CHANGED a row and were NOT flagged `telemetry` — the user's work,
+     *  with the app's self-measurement left out. `writes` is those
+     *  transactions; `handleStore` is the fan-out they caused, measured around
+     *  each one's own invalidation walk. A feature reporting performance
+     *  figures should read THIS rather than subtracting its own activity from
+     *  the totals above.
+     *
+     *  `handleStore` here holds only the counters that walk can ATTRIBUTE —
+     *  those bumped inside the synchronous invalidation pass. Counters bumped
+     *  later, from a loader's settle path, are absent rather than zero; see the
+     *  delta loop in `_runAndDispatch`. */
     excludingTelemetry: Readonly<{
       writes: number
       handleStore: Readonly<Record<string, number>>
@@ -1280,6 +1292,9 @@ export class Repo {
     /** Workspace active when this span of the counters began. `null` before any
      *  workspace has been activated. */
     epochWorkspaceId: string | null
+    /** Wall clock when this span began — the page's time origin until the first
+     *  `resetMetrics()`. */
+    epochStartedAt: number
     /** Live-state aggregates over the registered handle set: handle
      *  count, dep-count percentiles, and the top-3 keys by dep count.
      *  Pairs with `handleStore` counters — counters describe events
@@ -1320,6 +1335,7 @@ export class Repo {
       }),
       epoch: this.metricsEpoch,
       epochWorkspaceId: this.metricsEpochWorkspaceId,
+      epochStartedAt: this.metricsEpochStartedAt,
       handleStoreInventory: this.handleStore.snapshotInventory(),
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
@@ -1337,6 +1353,7 @@ export class Repo {
   resetMetrics(): void {
     this.metricsEpoch++
     this.metricsEpochWorkspaceId = this.client.activeWorkspaceId
+    this.metricsEpochStartedAt = Date.now()
     this.nonTelemetryWrites = 0
     for (const k of Object.keys(this.nonTelemetryFanout)) delete this.nonTelemetryFanout[k]
     this.handleStore.metrics.reset()
@@ -1978,8 +1995,12 @@ export class Repo {
     // each handle's runLoader is async, but `invalidate` only sets
     // pendingReinvalidate / kicks off a microtask, so the caller's tx
     // resolve isn't blocked on handle re-resolution.
-    if (!opts.telemetry) this.nonTelemetryWrites++
     if (result.snapshots.size > 0) {
+      // Counted on both sides or neither. A transaction that changed no row
+      // invalidates nothing, so counting the write alone would deflate the
+      // ratio a reader builds from the pair — and idempotent ensures commit
+      // empty routinely.
+      if (!opts.telemetry) this.nonTelemetryWrites++
       // The fan-out delta is taken across THIS call and nothing else. The walk
       // is synchronous, so no other transaction and no sync drain can land
       // inside it — which is the whole reason the count lives here.
@@ -1990,7 +2011,19 @@ export class Repo {
       if (before !== null) {
         const after = this.handleStore.metrics.snapshot()
         for (const [k, v] of Object.entries(after)) {
-          this.nonTelemetryFanout[k] = (this.nonTelemetryFanout[k] ?? 0) + (v - (before[k] ?? 0))
+          const delta = v - (before[k] ?? 0)
+          // A zero delta does NOT create the key. Only counters bumped inside
+          // the synchronous walk can ever move here; the settle-path ones
+          // (`notifiesFired`, `notifiesSkippedByDiff`, `reloadsAfterSettle`,
+          // and the `loaderRuns` of post-settle reloads) are bumped from a
+          // `.then` / microtask after this window closes, and no per-tx token
+          // reaches them. Writing them as 0 would report "no reloads" for a
+          // counter that is simply never measured — and this map is persisted
+          // and compared against later sessions, where a 0-vs-0 comparison
+          // reads as a clean verdict rather than as missing data. Absent says
+          // what is true.
+          if (delta === 0 && !(k in this.nonTelemetryFanout)) continue
+          this.nonTelemetryFanout[k] = (this.nonTelemetryFanout[k] ?? 0) + delta
         }
       }
     }

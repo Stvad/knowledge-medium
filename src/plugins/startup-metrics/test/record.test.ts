@@ -344,17 +344,33 @@ describe('collectStartupMetricsEffect', () => {
   // Boot happens once and the marks are boot-relative, so a restart — a plugin
   // toggle, a workspace switch — must not log a second startup.
   //
-  // Asserted on the CAUSE: the restart arms nothing, so it returns no disposer.
-  // A count cannot pin this — it is already 1, so both a bare assertion and a
-  // `waitFor` on it pass on the first tick while the duplicate write is still
-  // several idle hops and awaits away.
+  // Asserted on the CAUSE: once the write has settled, the restart arms
+  // nothing, so it returns no disposer. A count cannot pin this — it is already
+  // 1, so both a bare assertion and a `waitFor` on it pass on the first tick
+  // while the duplicate write is still several idle hops and awaits away.
+  //
+  // But the ROW is not that precondition either. `appendClientRecord` resolves
+  // only after its retention pass, and the flag the restart consults is set on
+  // that resolution — so between "one row exists" and "a restart is refused"
+  // there is a whole extra query, and under gate load (one worker per core)
+  // that gap is wide enough to lose. A restart INSIDE it legitimately arms; the
+  // recorder's own `recording` guard is what stops it writing, and the effect's
+  // comment says so. Retry until the write has settled, disposing whatever an
+  // attempt arms so no attempt can leave a live instance behind.
   it('records at most once per session even if the effect restarts', async () => {
     markStartup('firstContentPaint')
     expect(startEffect(WS)).toBeTypeOf('function')
-    await vi.waitFor(async () => expect(await countRecords()).toBe(1))
+    await vi.waitFor(async () => expect(await countRecords()).toBe(1), { timeout: 5_000 })
 
-    expect(startEffect(WS)).toBeUndefined()
-  })
+    await vi.waitFor(() => {
+      const stop = startEffect(WS)
+      stop?.()
+      expect(stop).toBeUndefined()
+    }, { timeout: 5_000 })
+
+    // The invariant the whole test is for, restated against the graph.
+    expect(await countRecords()).toBe(1)
+  }, 20_000)
 
   it('debounces interactive off long-task events when the Long Tasks API is present', () => {
     vi.useFakeTimers()

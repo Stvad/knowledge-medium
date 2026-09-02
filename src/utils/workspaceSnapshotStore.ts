@@ -19,7 +19,15 @@ export interface WorkspaceSnapshotStore<T> {
    *  workspace publishes again — or null. */
   getFor: (workspaceId: string | null | undefined) => T | null
   subscribe: (listener: () => void) => () => void
-  /** Test helper — clear published snapshots and listeners. */
+  /** Drop every snapshot and tell subscribers to re-read — for when the
+   *  snapshots describe a world that no longer exists (a Repo swap) but the
+   *  subscribers are the same components and must keep receiving updates.
+   *  Distinct from `reset` because detaching a `useSyncExternalStore` listener
+   *  is PERMANENT: it re-subscribes only when the `subscribe` identity changes,
+   *  and these are module-stable. */
+  clearSnapshots: () => void
+  /** Test helper — also drops the listeners, which no production caller may do.
+   *  For `afterEach`, so one test's subscribers cannot outlive it. */
   reset: () => void
 }
 
@@ -36,6 +44,10 @@ export const createWorkspaceSnapshotStore = <T extends { workspaceId: string }>(
     getFor: (workspaceId) =>
       (workspaceId != null ? byWorkspace.get(workspaceId) : undefined) ?? null,
     subscribe: (listener) => listeners.add(listener),
+    clearSnapshots: () => {
+      byWorkspace.clear()
+      listeners.notify()
+    },
     reset: () => {
       byWorkspace.clear()
       listeners.clear()

@@ -31,4 +31,7 @@ export const publishPerfAnalysis = (analysis: PerfAnalysis): void => {
 }
 export const getPerfAnalysisFor = store.getFor
 export const subscribePerfAnalysis = store.subscribe
+/** The verdicts belong to a Repo; a swap invalidates them but not the chip
+ *  subscribed to them. */
+export const clearPerfAnalyses = store.clearSnapshots
 export const resetPerfAnalysisStore = store.reset

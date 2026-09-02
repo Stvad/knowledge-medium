@@ -468,7 +468,12 @@ export interface RepoTxOptions {
    *
    *  Orthogonal to `scope`: telemetry writes are still gated, still synced,
    *  still non-undoable or not on their own terms. This flag only decides which
-   *  side of the metrics they land on. */
+   *  side of the metrics they land on.
+   *
+   *  Covers THIS transaction, not the cascade it may schedule: a post-commit
+   *  processor opens its own tx with opts it constructs, and nothing propagates
+   *  the flag into it. A feature whose writes trigger writing processors would
+   *  see those counted as the user's work. */
   telemetry?: boolean
 
   /** Skip recording an undo entry for this tx, without changing its scope.

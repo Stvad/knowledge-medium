@@ -178,9 +178,14 @@ export const appendClientRecord = async (
  * They build their query from here instead, so a change to the rule reaches
  * both or neither.
  *
- * Three clauses, and each is load-bearing:
- *  - carries a record: these groups are inspectable and may hold a block a
- *    person created, which is user content and neither ours to read nor delete;
+ * Three clauses:
+ *  - carries a record — DEFENCE IN DEPTH, and deliberately kept. These groups
+ *    are inspectable and may hold a block a person created, which is user
+ *    content and neither ours to read nor delete. It cannot be what SAVES such
+ *    a block from retention, though: a foreign row has no `recordedAt`, and
+ *    SQLite sorts NULL last under `DESC`, so it is always past the OFFSET and
+ *    always caught by the per-row re-take instead. What this clause does buy is
+ *    keeping junk out of the reader's page window;
  *  - written from THIS surface: one browser profile resolves the same client id
  *    as an installed PWA and as an ordinary tab, and their timings differ for
  *    reasons the code did not cause. An unlabelled record predates the field and
@@ -199,7 +204,17 @@ export const clientSeriesQuery = (
     /** Kept out of the candidate set BEFORE any offset — retention bounds the
      *  records that came before the one it just wrote, not including it. */
     excludeId?: string
+    /** Placeholders in `select`, and in `tail`. Passed in rather than spliced
+     *  around a returned middle: both callers put a `?` in their select and
+     *  another in their tail, and a caller assembling the list itself has to
+     *  know how many placeholders the WHERE clause contributed — which changes
+     *  with `excludeId`. Getting it wrong binds silently, and the worst case is
+     *  quiet: a JSON path landing where the offset belongs makes
+     *  `LIMIT -1 OFFSET '$."…"'` evaluate as `OFFSET 0`, so retention deletes
+     *  the entire series. */
+    selectParams?: unknown[]
     tail: string
+    tailParams?: unknown[]
   },
 ): { sql: string; params: unknown[] } => {
   const record = jsonPathForProperty(opts.recordName)
@@ -214,9 +229,11 @@ export const clientSeriesQuery = (
            ORDER BY json_extract(properties_json, ?) DESC, order_key, id
            ${opts.tail}`,
     params: [
+      ...(opts.selectParams ?? []),
       opts.groupId,
       ...(opts.excludeId === undefined ? [] : [opts.excludeId]),
       record, label, label, opts.deviceLabel, `${record}.recordedAt`,
+      ...(opts.tailParams ?? []),
     ],
   }
 }
@@ -239,14 +256,13 @@ const pruneGroup = async (
   groupId: string,
   keepId: string,
 ): Promise<void> => {
-  const stampPath = `${jsonPathForProperty(spec.recordName)}.recordedAt`
   const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS stamp', {
     groupId, recordName: spec.recordName, deviceLabel: getDeviceLabel(),
-    excludeId: keepId, tail: 'LIMIT -1 OFFSET ?',
+    excludeId: keepId,
+    selectParams: [`${jsonPathForProperty(spec.recordName)}.recordedAt`],
+    tail: 'LIMIT -1 OFFSET ?', tailParams: [spec.retain],
   })
-  const stale = await repo.db.getAll<{ id: string; stamp: number | null }>(
-    q.sql, [stampPath, ...q.params, spec.retain],
-  )
+  const stale = await repo.db.getAll<{ id: string; stamp: number | null }>(q.sql, q.params)
   if (stale.length === 0) return
   await repo.tx(async (tx) => {
     // Deletes are the one thing here that cannot be taken back — `Automation` is
@@ -270,7 +286,10 @@ const pruneGroup = async (
       // reports as absent and a strict check would read as still ours.
       // `!now` and `now.deleted` are defence in depth and unpinnable through
       // this path — a hard delete cannot happen here and `tx.delete` no-ops on a
-      // tombstone. The parent and property clauses below are load-bearing.
+      // tombstone. The parent and property clauses below are load-bearing: the
+      // property one is the ONLY thing standing between a hand-created sibling
+      // and a delete, since NULL-last ordering puts every such row past the
+      // OFFSET rather than inside the retained prefix.
       const now = await tx.get(row.id)
       if (!now || now.deleted || now.parentId !== groupId) continue
       const record = now.properties[spec.recordName]

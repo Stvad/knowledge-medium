@@ -9,7 +9,7 @@
  * block as the invalidation walk it counts, so nothing else can land in it. A
  * consumer's own before/after window necessarily spans its awaits.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -81,6 +81,40 @@ describe('metrics().excludingTelemetry', () => {
     expect(repo.metrics().excludingTelemetry.writes).toBe(before)
   })
 
+  // Idempotent ensures commit empty routinely (`stateBlocks.ts` returns early
+  // when the row is already right). Each one would add 1 to the denominator and
+  // 0 to the numerator of a resolves-per-write ratio, so a release that adds a
+  // hot ensure would look like a fan-out improvement.
+  it('does not count a committed transaction that changed no row', async () => {
+    const before = repo.metrics().excludingTelemetry
+    await repo.tx(async () => { /* commits, writes nothing */ },
+      { scope: ChangeScope.Automation, description: 'empty' })
+    const after = repo.metrics().excludingTelemetry
+    expect(after.writes).toBe(before.writes)
+    expect(after.handleStore).toEqual(before.handleStore)
+  })
+
+  // The delta window is the synchronous invalidation walk, so counters bumped
+  // from a loader's settle path can never move inside it. Reporting them as 0
+  // would be a measurement that never happened claiming a clean result — and
+  // this map is persisted and compared against later sessions.
+  it('omits settle-path counters rather than storing them as zero', async () => {
+    const handle = repo.query.recentBlocks({ workspaceId: WS })
+    handle.subscribe(() => {})
+    await handle.load()
+    await write(false)
+
+    const fanout = repo.metrics().excludingTelemetry.handleStore
+    // The walk's own counters are there...
+    expect(fanout.invalidations).toBeGreaterThan(0)
+    expect(fanout.handlesWalked).toBeGreaterThan(0)
+    // ...and the ones it cannot attribute are absent, not 0.
+    expect('notifiesFired' in fanout).toBe(false)
+    expect('reloadsAfterSettle' in fanout).toBe(false)
+    // The TOTALS do carry them, so this is a scoping decision, not a lost count.
+    await vi.waitFor(() => expect(repo.metrics().handleStore.notifiesFired).toBeGreaterThan(0))
+  })
+
   // A consumer holding figures from before a reset needs to know they are from
   // a span the counters no longer cover. Inferring it from a counter going
   // backwards fails once other writes have carried it back up.
@@ -95,5 +129,9 @@ describe('metrics().excludingTelemetry', () => {
     expect(after.epoch).toBe(before.epoch + 1)
     expect(after.excludingTelemetry.writes).toBe(0)
     expect(after.excludingTelemetry.handleStore).toEqual({})
+    // The span's origin moves with it: a consumer reporting a duration beside
+    // these counters must not describe a window containing work they dropped.
+    expect(after.epochWorkspaceId).toBe(WS)
+    expect(after.epochStartedAt).toBeGreaterThanOrEqual(before.epochStartedAt)
   })
 })

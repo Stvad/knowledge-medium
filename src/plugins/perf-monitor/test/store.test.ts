@@ -6,7 +6,8 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { analysisFixture as analysis } from './fixtures'
-import { getPerfAnalysisFor, nextAnalysisSeq, publishPerfAnalysis, resetPerfAnalysisStore } from '../store'
+import { clearPerfAnalyses, getPerfAnalysisFor, nextAnalysisSeq, publishPerfAnalysis, resetPerfAnalysisStore, subscribePerfAnalysis } from '../store'
+import { perfAnalysisEffect } from '../schedule'
 
 afterEach(() => { resetPerfAnalysisStore() })
 
@@ -50,5 +51,72 @@ describe('publishPerfAnalysis', () => {
     publishPerfAnalysis(analysis({ seq: 2, analyzedAt: 2000 }))
     publishPerfAnalysis(analysis({ workspaceId: 'ws-2', seq: 1, analyzedAt: 1000 }))
     expect(getPerfAnalysisFor('ws-2')?.analyzedAt).toBe(1000)
+  })
+})
+
+/**
+ * A Repo swap invalidates the VERDICTS, not the components reading them.
+ *
+ * The chip and the trend dialog subscribe through `useSyncExternalStore`, which
+ * re-subscribes only when the `subscribe` identity changes — and this one is
+ * module-stable. So a listener dropped here is dropped for the life of the
+ * page: no remount, no notification, ever again. The store therefore has two
+ * clears, and only the test one may touch listeners.
+ */
+describe('a Repo swap', () => {
+  // The effect arms an idle job; left running it would fire against these stubs
+  // after the test that made them has finished.
+  const stops: Array<() => void> = []
+  afterEach(() => { while (stops.length) stops.pop()?.() })
+
+  const repoStub = () => ({
+    activeWorkspaceId: 'ws-1',
+    isReadOnly: false,
+    metrics: () => ({ epoch: 0, epochWorkspaceId: null }),
+  })
+  const startFor = async (repo: object) => {
+    const stop = await perfAnalysisEffect.start({ repo, workspaceId: 'ws-1' } as Parameters<
+      typeof perfAnalysisEffect.start
+    >[0])
+    if (stop) stops.push(stop)
+  }
+
+  it('drops the stale verdicts', async () => {
+    await startFor(repoStub())
+    publishPerfAnalysis(analysis({ seq: 1 }))
+    expect(getPerfAnalysisFor('ws-1')).not.toBeNull()
+
+    await startFor(repoStub())
+
+    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+  })
+
+  it('keeps the subscribers, and tells them to re-read', async () => {
+    await startFor(repoStub())
+
+    let notified = 0
+    subscribePerfAnalysis(() => { notified++ })
+
+    // The swap itself is a change the subscriber has to hear about: what it was
+    // showing is gone.
+    await startFor(repoStub())
+    expect(notified).toBe(1)
+
+    // ...and it is still attached for everything after.
+    publishPerfAnalysis(analysis({ seq: 5 }))
+    expect(notified).toBe(2)
+  })
+
+  // Guards the distinction itself: if `clearSnapshots` ever grows a
+  // `listeners.clear()`, the test above still passes on its first assertion.
+  it('is not what the test-only reset does', () => {
+    let notified = 0
+    subscribePerfAnalysis(() => { notified++ })
+    clearPerfAnalyses()
+    expect(notified).toBe(1)
+
+    resetPerfAnalysisStore()
+    publishPerfAnalysis(analysis({ seq: 9 }))
+    expect(notified).toBe(1)
   })
 })

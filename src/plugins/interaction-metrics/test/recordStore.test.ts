@@ -309,7 +309,7 @@ describe('appendClientRecord retention', () => {
       if (opts?.description?.endsWith('retention')) throw new Error('prune failed')
       return realTx(fn, opts)
     })
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const { blockId } = await append(1)
 

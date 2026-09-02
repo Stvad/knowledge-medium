@@ -5,6 +5,7 @@
  * active now, not the pinned one.
  */
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PerfTrendDialog } from '../PerfTrendDialog.tsx'
 import { Repo } from '@/data/repo'
@@ -68,6 +69,9 @@ describe('PerfTrendDialog', () => {
 
     await waitFor(() => expect(reanalyze()).toBeDisabled())
     expect(screen.getByText(/switched workspace/i)).toBeInTheDocument()
+    // Clicked, not merely observed: asserting `not.toHaveBeenCalled()` without
+    // a click passes under every implementation, including one with no guard.
+    await userEvent.click(reanalyze())
     expect(mocks.runNow).not.toHaveBeenCalled()
   })
 })
@@ -118,14 +122,14 @@ describe('PerfTrendDialog tables', () => {
 
     render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
 
-    // Wait for the LOADED state on each table rather than for the absence of
-    // the empty-state text: absence is also what a pending load looks like.
-    await waitFor(() => {
-      expect(screen.queryByText(/no interaction records/i)).toBeNull()
-      expect(screen.queryByText(/no startup records/i)).toBeNull()
-    })
-    expect(screen.queryByText(/loading/i)).toBeNull()
-    expect(screen.getAllByRole('table')).toHaveLength(2)
+    // Wait on the POSITIVE — both tables present — and only then assert the
+    // empty states are gone. Waiting on their absence instead settles on the
+    // first tick, because a table that is still LOADING shows neither its rows
+    // nor its empty state; the assertions then run against a pending load and
+    // the test is a coin flip. (Measured at this exact mistake: ~1 run in 8.)
+    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
+    expect(screen.queryByText(/no interaction records/i)).toBeNull()
+    expect(screen.queryByText(/no startup records/i)).toBeNull()
   })
 
   // The empty state has to be reachable too, or the assertion above proves only

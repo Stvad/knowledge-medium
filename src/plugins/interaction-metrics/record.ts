@@ -57,20 +57,24 @@ export interface TimingSample {
  *  history WITHOUT first being written and read back — which would otherwise
  *  make the monitor's verdict depend on the recorder having sampled first. */
 export interface InteractionComparable {
-  /** `db.writeTransaction.calls`: writes this session. The denominator that
-   *  turns a raw resolve count into resolves-per-write, which is the signal
-   *  that catches an over-broad invalidation dep (a query re-resolving on every
-   *  write instead of on writes that concern it). Latency metrics are blind to
-   *  that class -- each resolve looks perfectly normal. */
+  /** `metrics().excludingTelemetry.writes`: row-changing, non-telemetry
+   *  transactions this span. The denominator that turns a raw resolve count
+   *  into resolves-per-write, which is the signal that catches an over-broad
+   *  invalidation dep (a query re-resolving on every write instead of on writes
+   *  that concern it). Latency metrics are blind to that class -- each resolve
+   *  looks perfectly normal. */
   writes: number
   /** Per-query resolve timings for every query this session measured, keyed by
    *  query NAME (`repo.metrics().queries` is already name-keyed, not
    *  handle-keyed). Bounded only by `MAX_QUERIES`. */
   queries: Record<string, TimingSample>
-  /** `handleStore` fan-out counters -- invalidations, handlesWalked/Matched,
-   *  loaderRuns, midLoadInvalidations, reloadsAfterSettle. A flat number map,
-   *  stored whole: it is bounded, and which counter matters depends on the
-   *  regression being chased. */
+  /** `handleStore` fan-out counters, restricted to what a transaction's own
+   *  invalidation walk can attribute -- invalidations, handlesWalked/Matched,
+   *  loaderInvalidations, midLoadInvalidations. A flat number map, stored
+   *  whole: it is bounded, and which counter matters depends on the regression
+   *  being chased. Settle-path counters (`notifiesFired`, `reloadsAfterSettle`)
+   *  are ABSENT, not zero -- they are bumped after the walk, outside any
+   *  window a tx can claim. Read a missing key as "not measured". */
   fanout: Record<string, number>
 }
 
@@ -351,7 +355,11 @@ export const writeInteractionSample = async (
       : null
   if (!existing) clearPageRecord(repo)
 
-  const startedAt = existing?.startedAt ?? Date.now() - performance.now()
+  // The SPAN's start, not the page's. `sessionMs` is derived from this and the
+  // counters it sits beside cover one span, so after a `resetMetrics()` the
+  // page's time origin would describe a window containing work the figures no
+  // longer count — inflating the very denominator a reader is told to floor on.
+  const startedAt = existing?.startedAt ?? metrics.epochStartedAt
   const data = buildInteractionRecord(metrics, {
     recordedAt: Date.now(),
     startedAt,
