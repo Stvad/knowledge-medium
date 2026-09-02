@@ -1,0 +1,2 @@
+import{createContext as e,useContext as t}from"react";import"react/compiler-runtime";import"react/jsx-runtime";var n=e(!1);function r(){return t(n)}export{r as useIsBackgroundSubtree};
+//# sourceMappingURL=backgroundSubtree.js.map
