@@ -78,8 +78,9 @@ interface Harness {
 const setup = async (types: readonly TypeSeedDeclaration[] = []): Promise<Harness> => {
   // Match the Repo production defaults (uuid ids + a per-Repo monotonic
   // tx-seq) rather than the harness's deterministic counters: several tests
-  // build a SECOND Repo over the SAME shared db, and shared-deterministic
-  // newId/newTxSeq would collide on command_events.tx_id.
+  // build a SECOND Repo over the SAME shared db, where both counters restart
+  // and collide — on the `blocks` primary key, and on the tx-seq that groups
+  // a tx's rows for upload.
   let txSeq = Date.now()
   const { repo } = createTestRepo({
     db: sharedDb.db,
