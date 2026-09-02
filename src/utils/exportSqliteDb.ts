@@ -946,17 +946,14 @@ const readOpfsFileIfExists = async (
  * we never hold the whole archive in memory. On any failure the partial temp
  * file is removed before the error propagates.
  *
- * Members are stored rather than deflated to keep this CPU-light, NOT because
- * compression would be futile — a production database measured 3.7x (2.02 GB
- * to 546 MB, deflate-6, 2026-09-02). The saving is real and would cut both the
- * OPFS temp and the download by ~73%. It is declined because deflate in JS runs
- * at tens of MB/s and this path executes when the database will NOT open, so a
- * multi-gigabyte backup would block for a minute at the moment the user most
- * needs their bytes. `CompressionStream` would be fast enough, but does not fit
- * fflate's writer.
+ * Stored for CPU, NOT because compressing a SQLite file would be futile — it
+ * compresses well. Deflate in JS runs at tens of MB/s and this path executes
+ * when the database will not open, so a multi-gigabyte backup would block at
+ * the moment the user most needs their bytes. `CompressionStream` is fast
+ * enough but does not fit fflate's writer.
  *
- * Stored is also what makes the archive's 32-bit fields bind on the TOTAL size
- * rather than per member — see #867, where that ceiling is the open question.
+ * Storing also makes the archive's 32-bit size fields bind on the TOTAL rather
+ * than on the largest member (#867).
  */
 const streamStoredZipToOpfs = async (
   root: FileSystemDirectoryHandle,
