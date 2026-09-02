@@ -79,8 +79,6 @@ export const startupRecordProp = seedProperty<StartupRecordData | undefined>({
   changeScope: ChangeScope.Automation,
 })
 
-/** JSON path addressing the record property — stated beside the name it
- *  addresses, so a rename cannot leave a reader pointing at nothing. */
 /** ~439 bytes each, so a far longer horizon costs little: about 1.3 years of
  *  boots for ~880KB per client group. */
 export const STARTUP_RETAIN = 2000

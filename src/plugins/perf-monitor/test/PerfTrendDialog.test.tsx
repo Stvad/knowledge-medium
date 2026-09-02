@@ -4,7 +4,7 @@
  * reads AMBIENT state — `repo.isReadOnly` describes whichever workspace is
  * active now, not the pinned one.
  */
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PerfTrendDialog } from '../PerfTrendDialog.tsx'
@@ -141,4 +141,71 @@ describe('PerfTrendDialog tables', () => {
       expect(screen.getByText(/no interaction records/i)).toBeInTheDocument()
     })
   })
+})
+
+/**
+ * A refresh the dialog has moved past must not publish its history.
+ *
+ * The manual path used to hard-code its load as alive, so a refresh in flight
+ * when the Repo was swapped resolved afterwards and wrote the previous user's
+ * rows into the open dialog. Asserted on the CAUSE — the reads never run — via
+ * the query count, because "the table did not change" is also what a load that
+ * simply returned the same rows looks like.
+ */
+describe('a superseded refresh', () => {
+  const WS = 'ws-A'
+  const USER: User = { id: 'user-1', name: 'Alice' }
+  let sharedDb: TestDb
+  let repo: Repo
+
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: USER,
+      extensions: [
+        definitionSeedsFacet.of(interactionRecordProp, { source: 'test' }),
+        typeSeedsFacet.of(interactionRecordType, { source: 'test' }),
+        definitionSeedsFacet.of(startupRecordProp, { source: 'test' }),
+        typeSeedsFacet.of(startupRecordType, { source: 'test' }),
+      ],
+    }).repo
+    repo.setActiveWorkspaceId(WS)
+    mocks.repo = repo
+  })
+
+  it('reads no history once the dialog it belonged to is gone', async () => {
+    await writeInteractionSample(repo, WS)
+    await writeStartupRecord(repo, WS)
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
+
+    // Hold the analysis open so the refresh is mid-flight when we supersede it.
+    let release = (): void => {}
+    mocks.runNow.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { release = () => resolve() }))
+    await userEvent.click(screen.getByRole('button', { name: /re-analyze/i }))
+
+    // The dialog goes away — the same invalidation a Repo swap performs.
+    cleanup()
+    const readsBefore = countQueries()
+    release()
+
+    // A real settle, not a microtask flush: the reads this must NOT issue are
+    // DB round trips, so draining the microtask queue proves nothing — the
+    // first version of this test passed with the bug reintroduced for exactly
+    // that reason. Proving an absence has no positive event to wait on, so the
+    // window is bounded instead, and sized by mutation: with the guard removed
+    // the reads land well inside it.
+    await new Promise((r) => setTimeout(r, 250))
+
+    expect(countQueries()).toBe(readsBefore)
+  }, 20_000)
+
+  /** Reads issued through the repo so far. */
+  function countQueries(): number {
+    return repo.metrics().db.getAll.calls
+  }
 })

@@ -47,7 +47,6 @@ beforeEach(async () => {
 })
 afterEach(() => { vi.restoreAllMocks() })
 
-/** Each call stands in for a separate past page session. */
 /** Stamp a record with values a comparison can actually use. The reported
  *  baseline is now the count of sessions the comparison CONSUMED, so a test
  *  asserting on it has to seed history that gets judged. */
@@ -62,6 +61,7 @@ const stamp = async (id: string, over: Partial<InteractionRecordData>): Promise<
 
 const USABLE = { writes: 100, fanout: { loaderInvalidations: 10 } }
 
+/** Each call stands in for a separate past page session. */
 const pastSession = async (over?: Partial<InteractionRecordData>): Promise<string> => {
   resetMetricsSession(repo)
   const id = (await writeInteractionSample(repo, WS))!

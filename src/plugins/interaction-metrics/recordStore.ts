@@ -318,6 +318,14 @@ const pruneGroup = async (
       if (!now || now.deleted || now.parentId !== groupId) continue
       const record = now.properties[spec.recordName]
       if (record == null) continue
+      // The device-surface clause, re-taken like the rest. The selection admits
+      // this surface's label and the absent legacy one; a row relabelled in the
+      // window between belongs to a different series by the same rule the query
+      // used, and deleting it would evict a row this device's reader never
+      // counted. "Re-take EVERY clause" is the rule this loop states, and this
+      // was the clause it did not.
+      const label = (record as { deviceLabel?: unknown }).deviceLabel
+      if (label != null && label !== getDeviceLabel()) continue
       // Unchanged since it was selected. This does NOT re-establish RANK, which
       // is what put the row past the bound: `Tx` exposes `get`/`peek` by id and
       // no queries, so the series cannot be re-ranked from in here. ACCEPTED —

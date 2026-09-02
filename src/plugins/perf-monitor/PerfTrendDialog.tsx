@@ -6,7 +6,7 @@
  * now"; an investigation asks "when did this change, and what shipped around
  * then" — and only the series answers the second.
  */
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Activity, RefreshCw, TrendingUp } from 'lucide-react'
 import {
   Dialog,
@@ -93,12 +93,25 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     }
   }, [repo, ws])
 
+  // ONE guard for both load paths. The mount effect had its own `live` flag
+  // while the manual refresh passed `() => true`, so a refresh in flight when
+  // the Repo was swapped — `loadSeries` is keyed on it — resolved afterwards and
+  // wrote the previous user's rows into the open dialog. Claiming a token
+  // invalidates every earlier one, and the effect re-running on a Repo or
+  // workspace change claims one too.
+  const loadToken = useRef(0)
+  const claimLoad = useCallback((): (() => boolean) => {
+    const token = ++loadToken.current
+    return () => loadToken.current === token
+  }, [])
+
   useEffect(() => {
-    let live = true
+    const alive = claimLoad()
     // Async IIFE: the state lands on resolve, not during the effect.
-    void (async () => { await loadSeries(() => live) })()
-    return () => { live = false }
-  }, [loadSeries])
+    void (async () => { await loadSeries(alive) })()
+    // Invalidates an in-flight load without needing to reach into it.
+    return () => { loadToken.current++ }
+  }, [loadSeries, claimLoad])
 
   // The dialog is pinned to the workspace it opened on, but a fresh analysis
   // reads AMBIENT state — `repo.isReadOnly` describes whichever workspace is
@@ -111,10 +124,15 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     // Unpinned defence in depth behind the button's `disabled` — a click cannot
     // reach here while `stale`. It covers the gap between render and click.
     if (stale) return
+    // Claimed BEFORE the analysis, not just before the read: the analysis is the
+    // longer await of the two, and a refresh the dialog has moved past must not
+    // publish its history either.
+    const alive = claimLoad()
     setRefreshing(true)
     try {
       await runPerfAnalysisNow(repo, ws)
-      await loadSeries(() => true)
+      if (!alive()) return
+      await loadSeries(alive)
     } catch (e) {
       showError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {

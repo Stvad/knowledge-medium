@@ -149,9 +149,6 @@ export const interactionRecordType = seedType({
  *  this is purely how far back an investigation can reach. */
 export const INTERACTION_RETAIN = 400
 
-/** JSON path addressing the record property. The name carries a colon (the
- *  namespace separator), which must be QUOTED inside a path expression. */
-
 /** Parent ui-state container; each session adds one child under its client's group. */
 export const interactionMetricsUIStateType = seedType({
   seedKey: 'system:interaction-metrics/type/interaction-metrics',
@@ -259,9 +256,8 @@ export const buildInteractionRecord = (
 
 // ──── per-session write ────
 
-/** Session-scoped facts (identity, attributability, own writes, the record this
- *  session owns) live in `./sessionContext`; this module asks rather than
- *  deciding. See that module for why. */
+// Session-scoped facts (identity, attributability, the record this session
+// owns) live in `./sessionContext`; this module asks rather than deciding.
 
 /** Live blocks in a workspace. Shared with the monitor, which pairs it with a
  *  LIVE `repo.metrics()` snapshot and so needs the same measurement, not the

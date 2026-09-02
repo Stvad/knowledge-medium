@@ -133,16 +133,6 @@ export const STARTUP_SERIES: RecordSeries<StartupRecordData> = {
   isUsable: isUsableStartupRecord,
 }
 
-/** This client's records for one recorder, newest first, each with the id of
- *  the block holding it — so a caller can identify a specific record (e.g. the
- *  one the current session owns) rather than relying on its position.
- *
- * `recordedAt` orders the result rather than `order_key`: the rows are written
- * newest-first, but an interaction record is UPDATED in place through its
- * session, so its position in the sibling order reflects when the session
- * started and its `recordedAt` reflects the sample. Sorting on the field the
- * comparison actually reads keeps those from disagreeing.
- */
 /** This client's group for one series. Derived, never `ensure`d — a reader must
  *  not mint the subtree as a side effect of finding out it is empty. */
 const seriesGroupId = (repo: Repo, workspaceId: string, typeId: string): string =>
@@ -171,6 +161,16 @@ export const countRecords = async (
   return rows[0]?.n ?? 0
 }
 
+/** This client's records for one recorder, newest first, each with the id of
+ *  the block holding it — so a caller can identify a specific record (e.g. the
+ *  one the current session owns) rather than relying on its position.
+ *
+ * `recordedAt` orders the result rather than `order_key`: the rows are written
+ * newest-first, but an interaction record is UPDATED in place through its
+ * session, so its position in the sibling order reflects when the session
+ * started and its `recordedAt` reflects the sample. Sorting on the field the
+ * comparison actually reads keeps those from disagreeing.
+ */
 export const loadRecords = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,

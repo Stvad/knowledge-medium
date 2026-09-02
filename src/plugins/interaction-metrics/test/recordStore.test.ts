@@ -389,3 +389,34 @@ describe('retention deletion', () => {
     expect(await liveDescendantsOf(doomed)).toEqual([])
   })
 })
+
+/**
+ * The device-surface clause, re-taken like every other clause the selection
+ * used. One browser profile resolves the same client id as an installed PWA and
+ * as an ordinary tab, so the label is what separates their series — and a row
+ * relabelled between the selection and the write lock belongs to a different
+ * one by the same rule the query applied.
+ */
+describe('retention and the device surface', () => {
+  it('leaves a record relabelled after it was selected', async () => {
+    for (let i = 0; i < 3; i++) await append(1)
+    // The oldest SURVIVING row — earlier appends already pruned the rest, and
+    // this is the one the next pass will select.
+    const live = await liveIds()
+    const doomed = live[live.length - 1]
+
+    duringRetention(async () => {
+      const block = repo.block(doomed)
+      await block.load()
+      const record = block.peekProperty(interactionRecordProp)!
+      await repo.tx(async (tx) => {
+        await tx.setProperty(doomed, interactionRecordProp,
+          { ...record, deviceLabel: 'some other surface' })
+      }, { scope: ChangeScope.Automation, description: 'relabel' })
+    })
+
+    await append(1)
+
+    expect(await liveIds()).toContain(doomed)
+  })
+})
