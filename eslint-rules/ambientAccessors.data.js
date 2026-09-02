@@ -71,7 +71,11 @@ export const manualEntries = [
       'navigator.platform is read directly outside the shared platform module. Use isMacPlatform() from @/utils/platform.js (or add a new accessor there) so every Mac/platform check agrees — see the DI-lens audit (PR #357).',
     allowIn: [
       'src/utils/platform.ts',
-      'src/plugins/startup-metrics/record.ts',
+      // The telemetry device LABEL is a deliberate second reader: it is a
+      // coarse grouping key for comparing a metrics series against itself, not
+      // a capability check, so routing it through isMacPlatform() would answer
+      // a different question.
+      'src/utils/clientId.ts',
     ],
   },
   {

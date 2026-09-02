@@ -374,6 +374,22 @@ const LAYOUT_SESSIONS_PATH_PART = 'layout-sessions'
 const uiStateBlockId = (workspaceId: string, userId: string): string =>
   stateChildBlockId(userPageBlockId(workspaceId, userId), UI_STATE_PATH_PART)
 
+/** Deterministic id of a plugin's ui-state ROOT block — the same uuidv5 chain
+ *  `getPluginUIStateBlock` resolves to (user page → ui-state → `type.id`),
+ *  derived without loading or CREATING anything.
+ *
+ *  That distinction is the point. `getPluginUIStateBlock` is an `ensure`: a
+ *  reader that used it to find a plugin's stored rows would mint the subtree as
+ *  a side effect of discovering it is empty. This lets a read path ask for the
+ *  container's children and get nothing back when there are none — which is
+ *  also what keeps such a read cheap, since the alternative is scanning every
+ *  block in the workspace for the property. */
+export const pluginUIStateBlockId = (
+  workspaceId: string,
+  userId: string,
+  typeId: string,
+): string => stateChildBlockId(uiStateBlockId(workspaceId, userId), typeId)
+
 /** Deterministic id of the layout-sessions CONTAINER block — the parent
  *  every per-device / per-perspective layout-session block lives under
  *  (user page → ui-state → layout-sessions; `getLayoutSessionBlock`
