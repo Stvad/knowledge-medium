@@ -196,6 +196,21 @@ describe('writeStartupRecord', () => {
     expect(ordered.map(c => c.id)).toEqual([third, second, first])
   })
 
+  // The flag itself is set once, by the shared record owner; what this pins is
+  // that the startup path still goes through it rather than opening its own
+  // transaction. Measured across the SECOND write: the first also mints this
+  // client's containers, which are deliberately counted as ordinary work.
+  it('leaves the non-telemetry counters alone', async () => {
+    await writeStartupRecord(repo, WS)
+    const before = repo.metrics().excludingTelemetry
+
+    await writeStartupRecord(repo, WS)
+
+    const after = repo.metrics().excludingTelemetry
+    expect(after.writes).toBe(before.writes)
+    expect(after.handleStore).toEqual(before.handleStore)
+  })
+
   it('writes nothing in a read-only workspace', async () => {
     // Automation scope is admitted locally and refused by the server's RLS,
     // landing in the rejection quarantine the status chip surfaces.
