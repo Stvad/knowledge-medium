@@ -188,6 +188,16 @@ describe('gfm markdown extension', () => {
     expect([...container.childNodes].map(node => node.nodeName)).toEqual(['P', 'UL'])
   })
 
+  // mdast-to-hast wraps footnote definitions in a `<section>` it generates, so
+  // that element has no span of its own — but the author did write a blank
+  // line before it, and its contents carry the lines proving it.
+  it('keeps the separator before a generated footnotes section', () => {
+    const {container} = renderMarkdown('text[^1]\n\n[^1]: note')
+
+    expect([...container.childNodes].map(node => node.nodeName))
+      .toEqual(['P', '#text', 'SECTION'])
+  })
+
   // Authored whitespace has a source position; the pretty-printer's does not.
   // That is the whole distinction — the two are spelled identically, so a
   // content-based rule eats the space between two inline elements.

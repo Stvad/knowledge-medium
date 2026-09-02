@@ -30,11 +30,30 @@ const isSerializerBreak = (node: Child, before: Child | undefined, after: Child 
   node.value.trim() === '' && node.value.includes('\n') &&
   (isBlock(before) || isBlock(after))
 
-/** Whether the source had a blank line between these two nodes. A node with
- *  no position was synthesized and reports none. */
-const blankLineBetween = (before: Child | undefined, after: Child | undefined) =>
-  before?.position !== undefined && after?.position !== undefined &&
-  after.position.start.line - before.position.end.line > 1
+/** The source lines a node covers — its own span, or its descendants' when
+ *  the node itself was generated around authored content (mdast-to-hast wraps
+ *  footnote definitions in a `<section>` of its own making). */
+const spanOf = (node: Child | undefined): {start: number, end: number} | undefined => {
+  if (!node) return undefined
+  if (node.position) return {start: node.position.start.line, end: node.position.end.line}
+
+  const spans = 'children' in node
+    ? node.children.map(spanOf).filter(span => span !== undefined)
+    : []
+
+  return spans.length === 0
+    ? undefined
+    : {start: Math.min(...spans.map(s => s.start)), end: Math.max(...spans.map(s => s.end))}
+}
+
+/** Whether the source had a blank line between these two nodes. Nodes with no
+ *  span anywhere beneath them are wholly synthesized and report none. */
+const blankLineBetween = (before: Child | undefined, after: Child | undefined) => {
+  const from = spanOf(before)
+  const to = spanOf(after)
+
+  return from !== undefined && to !== undefined && to.start - from.end > 1
+}
 
 const keptChildren = <T extends Child>(children: T[]): T[] =>
   children.filter((child, index) => {
