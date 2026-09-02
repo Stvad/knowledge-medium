@@ -685,6 +685,14 @@ export class Repo {
    *  can compare epochs instead of inferring the reset from a counter going
    *  backwards, which is undetectable once other writes have carried it back up. */
   private metricsEpoch = 0
+  /** Workspace active when the current counter span began — at construction, or
+   *  at the last `resetMetrics()`. The counters are page-global while the
+   *  features reading them attribute a span to ONE workspace, and a reset can
+   *  land in any of them: work done between the reset and the reader noticing it
+   *  belongs to whatever was active then, not to whatever is active by the time
+   *  it looks. Without this the reader can only start the new span empty, which
+   *  reads as "attributable to the first workspace observed after the reset". */
+  private metricsEpochWorkspaceId: string | null = null
   /** Per-query-name resolve timings. The dispatcher records each
    *  `loader(ctx)` invocation here keyed by the query's full name. */
   readonly queryMetrics = new QueryMetrics()
@@ -1269,6 +1277,9 @@ export class Repo {
     /** Increments on every `resetMetrics()`. Compare it rather than watching a
      *  counter for a backwards step. */
     epoch: number
+    /** Workspace active when this span of the counters began. `null` before any
+     *  workspace has been activated. */
+    epochWorkspaceId: string | null
     /** Live-state aggregates over the registered handle set: handle
      *  count, dep-count percentiles, and the top-3 keys by dep count.
      *  Pairs with `handleStore` counters — counters describe events
@@ -1308,6 +1319,7 @@ export class Repo {
         handleStore: Object.freeze({...this.nonTelemetryFanout}),
       }),
       epoch: this.metricsEpoch,
+      epochWorkspaceId: this.metricsEpochWorkspaceId,
       handleStoreInventory: this.handleStore.snapshotInventory(),
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
@@ -1324,6 +1336,7 @@ export class Repo {
    *  cold-start "open page → metrics" investigation). */
   resetMetrics(): void {
     this.metricsEpoch++
+    this.metricsEpochWorkspaceId = this.client.activeWorkspaceId
     this.nonTelemetryWrites = 0
     for (const k of Object.keys(this.nonTelemetryFanout)) delete this.nonTelemetryFanout[k]
     this.handleStore.metrics.reset()

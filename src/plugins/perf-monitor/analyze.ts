@@ -6,24 +6,12 @@ import type { Repo } from '@/data/repo'
 import {
   countLiveBlocks,
   interactionComparable,
-  interactionMetricsUIStateType,
-  interactionRecordProp,
-  type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record.js'
 import {
   readLiveSession,
   type RecordingBlocker,
 } from '@/plugins/interaction-metrics/sessionContext.js'
-import {
-  startupMetricsUIStateType,
-  startupRecordProp,
-  type StartupRecordData,
-} from '@/plugins/startup-metrics/record.js'
-import {
-  isUsableInteractionRecord,
-  isUsableStartupRecord,
-  loadRecords,
-} from './load.js'
+import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords } from './load.js'
 import { nextAnalysisSeq } from './store.js'
 import {
   anyJudged,
@@ -97,12 +85,8 @@ export const runPerfAnalysis = async (
   // first", so taking it at return time would give the run that finishes first
   // the lower value — which is the ordering this exists to prevent.
   const seq = nextAnalysisSeq()
-  const interaction = await loadRecords<InteractionRecordData>(
-    repo, workspaceId, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord,
-  )
-  const startup = await loadRecords<StartupRecordData>(
-    repo, workspaceId, startupMetricsUIStateType.id, startupRecordProp.name, isUsableStartupRecord,
-  )
+  const interaction = await loadRecords(repo, workspaceId, INTERACTION_SERIES)
+  const startup = await loadRecords(repo, workspaceId, STARTUP_SERIES)
 
   // The live counters are page-global. A page session that has seen a second
   // workspace carries both workspaces' work, so comparing that snapshot against

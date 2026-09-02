@@ -226,6 +226,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   nonTelemetryWrites: 'metrics counter (writers run with real-repo this via overrides)',
   nonTelemetryFanout: 'shared object (mutated in place, never reassigned outside the constructor)',
   metricsEpoch: 'metrics counter (bumped only by resetMetrics)',
+  metricsEpochWorkspaceId: 'metrics field (stamped only by resetMetrics, which the facade delegates)',
   slowestTx: 'metrics field (writers run with real-repo this via overrides)',
   syncObserver: 'data field (writes go through the delegated observer pair)',
   syncObserverDeps: 'data field',

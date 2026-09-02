@@ -11,20 +11,19 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import type { User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import {
+  INTERACTION_RECORD_PATH,
   interactionMetricsUIStateType,
   interactionRecordProp,
   interactionRecordType,
   writeInteractionSample,
-  type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { getDeviceLabel } from '@/utils/clientId'
 import { clientGroupId } from '@/plugins/interaction-metrics/recordStore'
 import {
   HISTORY_LIMIT,
-  INTERACTION_RECORD_PATH,
+  INTERACTION_SERIES,
   MAX_PAGES,
-  isUsableInteractionRecord,
   isUsableStartupRecord,
   loadRecords,
 } from '../load'
@@ -69,8 +68,7 @@ describe('loadRecords', () => {
   // becomes "building a baseline" forever.
   it('finds what the recorder wrote', async () => {
     await writeInteractionSample(repo, WS)
-    const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord)
+    const records = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(records).toHaveLength(1)
     expect(records[0].record.clientId).toBeTruthy()
     expect(records[0].id).toBeTruthy()
@@ -81,9 +79,7 @@ describe('loadRecords', () => {
   // every workspace, including ones where the recorders are switched off.
   it('creates nothing when there is no history', async () => {
     const before = await blockCount()
-    const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord,
-    )
+    const records = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(records).toEqual([])
     expect(await blockCount()).toBe(before)
   })
@@ -116,8 +112,7 @@ describe('loadRecords', () => {
       await insert(`later-${i}`, `a${String(i).padStart(4, '0')}`, 1_000_000 + i)
     }
 
-    const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord)
+    const records = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(records[0].id).toBe('long-lived')
   })
 
@@ -138,8 +133,7 @@ describe('loadRecords', () => {
        USER.id, USER.id],
     )
 
-    const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord)
+    const records = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(records.map((r) => r.id)).toEqual([mine])
   })
 
@@ -152,9 +146,7 @@ describe('loadRecords', () => {
       `UPDATE blocks SET properties_json = json_set(properties_json, ?, json('{"bad":null}')) WHERE id = ?`,
       [`${PATH}.queries`, blockId],
     )
-    const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord,
-    )
+    const records = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(records).toEqual([])
   })
 
@@ -189,9 +181,7 @@ describe('loadRecords', () => {
          USER.id, USER.id],
       )
     }
-    const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord,
-    )
+    const records = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(records.map((r) => r.id)).toEqual([blockId])
   })
 
@@ -199,8 +189,7 @@ describe('loadRecords', () => {
     await writeInteractionSample(repo, WS)
     resetMetricsSession(repo) // simulate a second page session
     await writeInteractionSample(repo, WS)
-    const records = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name, isUsableInteractionRecord)
+    const records = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(records).toHaveLength(2)
     expect(records[0].record.recordedAt).toBeGreaterThanOrEqual(records[1].record.recordedAt)
   })

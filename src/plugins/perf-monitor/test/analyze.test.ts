@@ -21,8 +21,7 @@ import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContex
 import { runPerfAnalysis } from '../analyze'
 import { runPerfAnalysisNow } from '../schedule'
 import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
-import { isUsableInteractionRecord, loadRecords } from '../load'
-import { interactionMetricsUIStateType } from '@/plugins/interaction-metrics/record'
+import { INTERACTION_SERIES, loadRecords } from '../load'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -113,9 +112,7 @@ describe('runPerfAnalysis', () => {
     resetMetricsSession(repo)
 
     const analysis = await runPerfAnalysis(repo, WS, 1000)
-    const loaded = await loadRecords<InteractionRecordData>(
-      repo, WS, interactionMetricsUIStateType.id, interactionRecordProp.name,
-      isUsableInteractionRecord)
+    const loaded = await loadRecords(repo, WS, INTERACTION_SERIES)
 
     expect(loaded.length).toBeGreaterThanOrEqual(14)
     expect(analysis.baseline.interaction).toBeGreaterThan(0)

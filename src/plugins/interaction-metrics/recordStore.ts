@@ -76,19 +76,14 @@ export const clientGroupId = (
 
 /** This client's group under `containerType`, creating it if absent.
  *
- *  ACCEPTED, and not what an earlier note here claimed: these creates go
- *  through the shared ui-state helpers, which are not flagged `telemetry`, so
- *  they land in `excludingTelemetry` as the user's work — on BOTH sides. The
- *  extra writes enlarge the denominator and their fan-out enlarges the
- *  numerator, so the skew is not one-directional and cannot be waved through as
- *  "suppresses only".
- *
- *  Accepted anyway because of its size: two transactions, on the first append
- *  for a client group and never again, against counters that accumulate for the
- *  whole page session. Threading a flag through those helpers is the worse
- *  trade — both public entry points are MEMOIZED on a key that would not
- *  include it, so the argument would silently bind to whichever caller arrived
- *  first. */
+ *  These creates are NOT flagged `telemetry`: they go through the shared
+ *  ui-state helpers, so they count as the user's work in `excludingTelemetry`,
+ *  on both sides of the ratio a reader builds from it. ACCEPTED for its size —
+ *  two transactions, on the first append for a client group and never again,
+ *  against counters that accumulate for the whole page session. Threading a
+ *  flag through the helpers is the worse trade: both entry points are MEMOIZED
+ *  on a key that would not include it, so the argument would bind to whichever
+ *  caller arrived first. */
 export const ensureClientGroup = async (
   repo: Repo,
   workspaceId: string,
@@ -280,11 +275,14 @@ const pruneGroup = async (
       if (!now || now.deleted || now.parentId !== groupId) continue
       const record = now.properties[spec.recordName]
       if (record == null) continue
-      // Unchanged since it was selected. Its RANK is what put it past the
-      // bound, and rank is a property of the whole series — not something a
-      // single row can be re-ranked against from in here. A stamp that moved
-      // means another tab wrote to this row after the selection, which is
-      // exactly the case where it may no longer be the oldest.
+      // Unchanged since it was selected. This does NOT re-establish RANK, which
+      // is what put the row past the bound: `Tx` exposes `get`/`peek` by id and
+      // no queries, so the series cannot be re-ranked from in here. ACCEPTED —
+      // a concurrent deletion of NEWER rows moves this one back inside the
+      // bound and we would still drop it, costing a few samples of local
+      // history. The only automated writer is another tab's retention pass,
+      // which deletes from the same far end and whose deletes this loop no-ops
+      // on; reaching the case needs a person hand-deleting newer rows mid-append.
       if ((record as { recordedAt?: unknown }).recordedAt !== row.stamp) continue
       // eslint-disable-next-line no-restricted-syntax -- programmatic delete: telemetry retention
       await tx.delete(row.id)

@@ -151,6 +151,40 @@ describe('interactionMetricsEffect', () => {
     expect(metricsSessionContext(repo, WS).attributable).toBe(false)
   })
 
+  // `resetMetrics()` is a supported hook for measuring a discrete operation.
+  // The counters it zeroes are the ONLY thing the multi-workspace refusal is
+  // about, so a latch surviving the reset refuses every later sample for the
+  // life of the page — the hook could never start a new measurement.
+  // The reset happens in the SECOND workspace, so keeping the latched facts and
+  // seeding them from the span's own starting workspace disagree here — which
+  // is what makes this pin the seeding rather than just the unlatching.
+  it('re-opens attribution in the workspace a reset happened in', () => {
+    observeWorkspace(repo, WS)
+    observeWorkspace(repo, 'ws-2')
+    repo.setActiveWorkspaceId('ws-2')
+    expect(metricsSessionContext(repo, 'ws-2').attributable).toBe(false)
+
+    repo.resetMetrics()
+
+    expect(metricsSessionContext(repo, 'ws-2').attributable).toBe(true)
+  })
+
+  // ...but the new span still starts where the reset did. Rebasing onto
+  // whichever workspace is observed FIRST after a reset would claim the work
+  // done between the two as that workspace's, which is the permissive direction
+  // on a rule whose whole job is to refuse.
+  it('does not launder work done in the workspace the reset happened in', () => {
+    observeWorkspace(repo, WS)
+    repo.setActiveWorkspaceId(WS)
+    repo.resetMetrics()
+
+    // The page moves on before anything reads the counters.
+    repo.setActiveWorkspaceId('ws-2')
+    observeWorkspace(repo, 'ws-2')
+
+    expect(metricsSessionContext(repo, 'ws-2').attributable).toBe(false)
+  })
+
   it('stops sampling once the effect is torn down', async () => {
     const samples = countSampleWrites()
     const stop = await interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<

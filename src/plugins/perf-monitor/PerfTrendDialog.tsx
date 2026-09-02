@@ -19,21 +19,9 @@ import { Button } from '@/components/ui/button.js'
 import { useRepo } from '@/context/repo.js'
 import { showError } from '@/utils/toast.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
-import {
-  interactionMetricsUIStateType,
-  type InteractionRecordData,
-} from '@/plugins/interaction-metrics/record.js'
-import {
-  startupMetricsUIStateType,
-  type StartupRecordData,
-} from '@/plugins/startup-metrics/record.js'
-import {
-  INTERACTION_RECORD_PATH,
-  STARTUP_RECORD_PATH,
-  isUsableInteractionRecord,
-  isUsableStartupRecord,
-  loadRecords,
-} from './load.js'
+import type { InteractionRecordData } from '@/plugins/interaction-metrics/record.js'
+import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
+import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords } from './load.js'
 import { bootstrapGapMs, invalidationsPerWrite } from './series.js'
 import { summarize } from './verdict.js'
 import { runPerfAnalysisNow } from './schedule.js'
@@ -94,8 +82,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     if (!ws) return
     try {
       const [s, i] = await Promise.all([
-        loadRecords<StartupRecordData>(repo, ws, startupMetricsUIStateType.id, STARTUP_RECORD_PATH, isUsableStartupRecord),
-        loadRecords<InteractionRecordData>(repo, ws, interactionMetricsUIStateType.id, INTERACTION_RECORD_PATH, isUsableInteractionRecord),
+        loadRecords(repo, ws, STARTUP_SERIES),
+        loadRecords(repo, ws, INTERACTION_SERIES),
       ])
       if (!alive()) return
       setStartup(s.map((r) => r.record))

@@ -9,9 +9,9 @@
  * forgotten, and the rules bind a recorder and a reader that are separately
  * togglable.
  *
- * Everything here is page-session scoped, because `repo.metrics()` is: its
- * counters are monotonic from Repo construction and are not segmented by
- * workspace.
+ * Scope follows `repo.metrics()`: one page session, one Repo, and one SPAN of
+ * the counters — they are monotonic from the last `resetMetrics()` and are not
+ * segmented by workspace, so a reset invalidates every claim made about them.
  */
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
@@ -34,9 +34,15 @@ export interface MetricsSessionContext {
   recordId: string | null
 }
 
+/** The identity of the counter span a reading came from. Everything here is a
+ *  claim ABOUT a span, so every entry point takes this much of a Repo. */
+export interface MetricsSpanSource {
+  metrics: () => { epoch: number; epochWorkspaceId: string | null }
+}
+
 /** Minimal read surface, so this module needs no Repo import (and stays cheap
  *  to call from a test). */
-export interface SessionRepoFacts {
+export interface SessionRepoFacts extends MetricsSpanSource {
   isReadOnly: boolean
 }
 
@@ -54,9 +60,9 @@ export interface SessionRepoFacts {
 interface SessionFacts {
   seenWorkspace: string | null
   unattributable: boolean
-  /** `repo.metrics().epoch` this session's record was opened under. A reset
-   *  zeroes the counters the record describes, so the old row covers a span
-   *  that no longer exists and a new one is due. */
+  /** The `repo.metrics().epoch` these facts describe. A reset zeroes the
+   *  counters, so everything here — the record opened against them and the
+   *  attribution claimed for them — describes a span that no longer exists. */
   epoch: number
   pageRecord: { blockId: string; workspaceId: string; startedAt: number } | null
 }
@@ -73,6 +79,34 @@ const factsFor = (repo: object): SessionFacts => {
 }
 
 /**
+ * `repo`'s facts for the CURRENT counter span, rebased if there has been a
+ * reset since they were last touched.
+ *
+ * Attribution is a claim about a span, so it belongs to the span rather than to
+ * the page session: `resetMetrics()` starts a new one, and neither the record
+ * opened against the old counters nor the workspaces observed under them says
+ * anything about the new one.
+ *
+ * Seeded from the span's OWN starting workspace, not left empty. A reset can
+ * land in any workspace, and the work between it and the first observation
+ * afterwards belongs to whatever was active then — starting empty would let a
+ * session that reset in one workspace and switched to another claim the
+ * second's attribution while carrying the first's work, which is the permissive
+ * direction on a rule whose whole job is to refuse.
+ */
+const factsForSpan = (repo: MetricsSpanSource): SessionFacts => {
+  const f = factsFor(repo)
+  const { epoch, epochWorkspaceId } = repo.metrics()
+  if (f.epoch !== epoch) {
+    f.epoch = epoch
+    f.seenWorkspace = epochWorkspaceId
+    f.unattributable = false
+    f.pageRecord = null
+  }
+  return f
+}
+
+/**
  * Note that `workspaceId` is now active in this page session.
  *
  * Called when a workspace becomes ACTIVE, not when a sample is written: a
@@ -82,8 +116,8 @@ const factsFor = (repo: object): SessionFacts => {
  * are independent toggles, so neither can be relied on to be the one watching.
  * Idempotent, so all of them calling is correct rather than merely harmless.
  */
-export const observeWorkspace = (repo: object, workspaceId: string): void => {
-  const f = factsFor(repo)
+export const observeWorkspace = (repo: MetricsSpanSource, workspaceId: string): void => {
+  const f = factsForSpan(repo)
   if (f.seenWorkspace === null) f.seenWorkspace = workspaceId
   else if (f.seenWorkspace !== workspaceId) f.unattributable = true
 }
@@ -109,16 +143,6 @@ export const observeWorkspaceEffectContribution = appEffectsFacet.of(observeWork
   source: 'interaction-metrics',
 })
 
-/** Note the metrics epoch this reading came from. A reset zeroes every counter
- *  the current record describes, so that row now covers a span the figures no
- *  longer cover and the next sample must open a replacement. */
-const noteEpoch = (repo: object, epoch: number): void => {
-  const f = factsFor(repo)
-  if (f.epoch === epoch) return
-  f.epoch = epoch
-  f.pageRecord = null
-}
-
 /** Remember the record block this page session owns. */
 export const setPageRecord = (
   repo: object, workspaceId: string, blockId: string, startedAt: number,
@@ -137,7 +161,7 @@ export const metricsSessionContext = (
   repo: SessionRepoFacts,
   workspaceId: string,
 ): MetricsSessionContext => {
-  const f = factsFor(repo)
+  const f = factsForSpan(repo)
   // Order matters only for which blocker is REPORTED; both are disqualifying.
   //
   // Without a persistent client id, per-client history is written where the
@@ -166,12 +190,11 @@ export const metricsSessionContext = (
  * One reading of the live counters, together with the session facts that
  * qualify them.
  *
- * The epoch and the snapshot must come from the SAME reading. `resetMetrics()`
- * is a supported hook, and a consumer that reads the figures without noticing
- * the epoch moved keeps updating a record describing a span the counters no
- * longer cover. The recorder does this on every sample; the monitor's manual
- * "re-analyze" is a second entry point into the same snapshot, which is why it
- * is taken here rather than at each call site.
+ * `resetMetrics()` is a supported hook, and a consumer that reads the figures
+ * without noticing the span moved keeps updating a record describing counters
+ * that no longer exist. The recorder does this on every sample; the monitor's
+ * manual "re-analyze" is a second entry point into the same snapshot, which is
+ * why the span is adopted here rather than at each call site.
  */
 export const readLiveSession = (
   repo: Repo,
@@ -179,10 +202,10 @@ export const readLiveSession = (
 ): { metrics: ReturnType<Repo['metrics']>; session: MetricsSessionContext } => {
   // Belt and braces over `observeWorkspaceEffect`, which is registered outside
   // both plugin toggles and is the one that actually guarantees this. Idempotent.
+  // It also adopts the current span, which is why the reading below is taken
+  // after it rather than before.
   observeWorkspace(repo, workspaceId)
-  const metrics = repo.metrics()
-  noteEpoch(repo, metrics.epoch)
-  return { metrics, session: metricsSessionContext(repo, workspaceId) }
+  return { metrics: repo.metrics(), session: metricsSessionContext(repo, workspaceId) }
 }
 
 /** Test helper — forget one Repo's session facts. */

@@ -18,11 +18,16 @@ import { pluginUIStateBlockId, stateChildBlockId } from '@/data/stateBlocks.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { clientSeriesQuery } from '@/plugins/interaction-metrics/recordStore.js'
-
-/** Each series' JSON path comes from the module that owns its property, so a
- *  rename cannot leave the reader addressing a name nothing writes. */
-export { INTERACTION_RECORD_PATH } from '@/plugins/interaction-metrics/record.js'
-export { STARTUP_RECORD_PATH } from '@/plugins/startup-metrics/record.js'
+import {
+  interactionMetricsUIStateType,
+  interactionRecordProp,
+  type InteractionRecordData,
+} from '@/plugins/interaction-metrics/record.js'
+import {
+  startupMetricsUIStateType,
+  startupRecordProp,
+  type StartupRecordData,
+} from '@/plugins/startup-metrics/record.js'
 
 // `Number.isFinite`, not `typeof === 'number'`: JSON has no Infinity literal but
 // `1e400` parses as one, and these blobs are hand-editable. A non-finite p95
@@ -91,6 +96,42 @@ export const MAX_PAGES = 3
  *  tracks the current build rather than averaging over months of them. */
 export const HISTORY_LIMIT = 40
 
+/**
+ * Everything it takes to read one recorder's series — named ONCE, here.
+ *
+ * The container type, the property name and the validator only ever travel
+ * together, and a caller that spells them out is a caller that can spell one of
+ * them wrong: passing a JSON path where the name belongs silently addresses a
+ * property nothing writes, and the series then reads as empty rather than as
+ * broken. Callers name the SERIES; nobody outside this module says which
+ * property it lives in.
+ */
+export interface RecordSeries<T extends { recordedAt: number }> {
+  /** Type of the hidden container this recorder's per-client groups live under. */
+  typeId: string
+  /** Name of the record property — never the JSON path, which is derived below
+   *  from the same helper the writer uses, so reader and writer cannot address
+   *  different keys. */
+  recordName: string
+  /** Whether a parsed row carries the fields this series is READ for. The
+   *  record is an opaque blob that is deliberately hand-inspectable, so a
+   *  hand-edited or future-shaped row can parse cleanly and still be missing
+   *  what the comparison and the trend table dereference. */
+  isUsable: (record: T) => boolean
+}
+
+export const INTERACTION_SERIES: RecordSeries<InteractionRecordData> = {
+  typeId: interactionMetricsUIStateType.id,
+  recordName: interactionRecordProp.name,
+  isUsable: isUsableInteractionRecord,
+}
+
+export const STARTUP_SERIES: RecordSeries<StartupRecordData> = {
+  typeId: startupMetricsUIStateType.id,
+  recordName: startupRecordProp.name,
+  isUsable: isUsableStartupRecord,
+}
+
 /** This client's records for one recorder, newest first, each with the id of
  *  the block holding it — so a caller can identify a specific record (e.g. the
  *  one the current session owns) rather than relying on its position.
@@ -101,19 +142,10 @@ export const HISTORY_LIMIT = 40
  * started and its `recordedAt` reflects the sample. Sorting on the field the
  * comparison actually reads keeps those from disagreeing.
  */
-export const loadRecords = async <T extends { recordedAt: number; deviceLabel?: unknown }>(
+export const loadRecords = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
-  typeId: string,
-  /** Name of the record property. The JSON path is derived here, from the same
-   *  helper the writer uses, so reader and writer cannot address different
-   *  keys — property names may carry colons, which must be quoted in a path. */
-  recordName: string,
-  /** Whether a parsed row carries the fields this series is READ for. The
-   *  record is an opaque blob that is deliberately hand-inspectable, so a
-   *  hand-edited or future-shaped row can parse cleanly and still be missing
-   *  what the comparison and the trend table dereference. */
-  isUsable: (record: T) => boolean,
+  { typeId, recordName, isUsable }: RecordSeries<T>,
 ): Promise<Array<{ id: string; record: T }>> => {
   const recordPath = jsonPathForProperty(recordName)
   const groupId = stateChildBlockId(
