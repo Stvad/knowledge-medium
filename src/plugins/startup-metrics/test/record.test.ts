@@ -344,6 +344,20 @@ describe('collectStartupMetricsEffect', () => {
   // Boot happens once and the marks are boot-relative, so a restart — a plugin
   // toggle, a workspace switch — must not log a second startup.
   //
+  // The timeline is page-global — it measures loading THIS workspace's graph —
+  // so a switch before the first write lands must not let the replacement
+  // instance file these timings as the new workspace's history. It would pass
+  // the once-per-session guard, which is still false at that moment.
+  //
+  // Asserted on the cause: the replacement arms nothing, so it returns no
+  // disposer. Declining is the safe direction — one boot unrecorded, against a
+  // baseline permanently skewed by another graph's load.
+  it('declines to record this boot into a workspace it did not happen in', () => {
+    markStartup('firstContentPaint')
+    expect(startEffect(WS)).toBeTypeOf('function')
+    expect(startEffect('ws-2')).toBeUndefined()
+  })
+
   // Asserted on the CAUSE: once the write has settled, the restart arms
   // nothing, so it returns no disposer. A count cannot pin this — it is already
   // 1, so both a bare assertion and a `waitFor` on it pass on the first tick

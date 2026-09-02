@@ -57,6 +57,12 @@ export interface PerfAnalysis {
    *  series, because they fill independently and one number reported for the
    *  other tells a reader about history the verdict never used. */
   baseline: { interaction: number; startup: number }
+  /** Usable records ON DISK for each series. Distinct from `baseline`, which is
+   *  what the judged comparisons rested on and is 0 whenever nothing was
+   *  judged — so a "sessions recorded so far" note built from `baseline` reports
+   *  a constant zero in exactly the state that note is written for, and
+   *  contradicts the history the trend dialog is showing. */
+  recorded: { interaction: number; startup: number }
   /** Live graph size over the baseline's, when both are known. Not used to
    *  filter or normalize — see `runPerfAnalysis` — but reported alongside a
    *  regression so a reader can tell code from data growth. */
@@ -80,6 +86,7 @@ export const blockedPerfAnalysis = (
   interactionComparable: false,
   recordingBlockedBy: blockedBy,
   baseline: { interaction: 0, startup: 0 },
+  recorded: { interaction: 0, startup: 0 },
   graphGrowth: null,
 })
 
@@ -144,6 +151,7 @@ export const runPerfAnalysis = async (
     analyzedAt: now,
     seq,
     recordingBlockedBy: session.blockedBy,
+    recorded: { interaction: interaction.length, startup: startup.length },
     baseline: {
       interaction: judgedBaselineCount(interactionResults),
       startup: judgedBaselineCount(startupResults),

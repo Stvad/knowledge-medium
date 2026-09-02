@@ -140,3 +140,21 @@ describe('an unjudged startup series', () => {
     expect(notes).not.toContain('still building')
   })
 })
+
+/**
+ * The pending note counts records ON DISK. Built from `baseline` it would be a
+ * constant zero — nothing was judged in this branch, which is what `baseline`
+ * measures — while the trend dialog beside it shows the history it was
+ * supposedly counted from.
+ */
+describe('the pending-session count', () => {
+  it('reports what is recorded, not what was judged', () => {
+    const verdict = summarize(analysis({
+      ready: { interaction: false, startup: false },
+      baseline: { interaction: 0, startup: 0 },
+      recorded: { interaction: 5, startup: 40 },
+    }))
+    expect(verdict.kind).toBe('pending')
+    expect(verdict.notes.join(' ')).toContain('5 interaction and 40 startup sessions recorded so far')
+  })
+})

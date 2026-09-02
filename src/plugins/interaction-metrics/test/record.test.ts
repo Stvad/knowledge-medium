@@ -259,6 +259,24 @@ describe('writeInteractionSample', () => {
     })
   }
 
+  /** Flip state INSIDE the transaction, after each in-transaction read yields.
+   *  That is the window an eligibility check placed before those reads cannot
+   *  see: the reads are awaits, so anything synchronous can land between the
+   *  check and the write it was supposed to authorise. */
+  const lapseAfterTxRead = (lapse: () => void): void => {
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) =>
+      realTx(async (tx) => {
+        const realGet = tx.get.bind(tx)
+        tx.get = async (id: string) => {
+          const row = await realGet(id)
+          if (opts?.description === 'interaction metrics record') lapse()
+          return row
+        }
+        return fn(tx)
+      }, opts))
+  }
+
   // The pre-checks run before several awaits — including a membership wait of
   // up to ten seconds — so eligibility can lapse before the write. Both of
   // these were unpinned, which is how a refactor silently weakened one.
@@ -272,6 +290,26 @@ describe('writeInteractionSample', () => {
     lapseBeforeWrite(() => repo.setReadOnly(true))
     expect(await writeInteractionSample(repo, WS)).toBeNull()
     expect(await childIds(await groupId())).toEqual([])
+  })
+
+  // The transaction's own reads are awaits, so a check placed before them is a
+  // check on a state that can have moved by the time anything is written. These
+  // pin the ORDER, not the presence, of the in-transaction checks: with the
+  // check first, the reset lands after it and the stale payload is written.
+  it('refuses a reset that lands after the create path reads', async () => {
+    lapseAfterTxRead(() => repo.resetMetrics())
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+    expect(await childIds(await groupId())).toEqual([])
+  })
+
+  it('refuses a reset that lands after the update path reads', async () => {
+    const first = await writeInteractionSample(repo, WS)
+    expect(first).toBeTruthy()
+
+    lapseAfterTxRead(() => repo.resetMetrics())
+    expect(await writeInteractionSample(repo, WS)).toBeNull()
+    // The record this session already owns is untouched, not half-rewritten.
+    expect(await childIds(await groupId())).toEqual([first])
   })
 
   // A reset starts a new counter span. The attribution check ADOPTS it, so

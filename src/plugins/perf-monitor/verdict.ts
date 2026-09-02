@@ -123,9 +123,15 @@ export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
     return {
       kind: 'pending',
       headline: 'Building a baseline',
-      // A bare count does not say WHICH series is missing, or that one of them
-      // can never fill this session; the pending notes carry both.
-      notes: [`${analysis.baseline.interaction} sessions recorded so far`, ...notes],
+      // From `recorded`, NOT `baseline`: nothing was judged in this branch, so
+      // `baseline` is 0 for both series by construction — the note would report
+      // a constant zero while the trend dialog shows the history it was counted
+      // from. Both series named, because they fill independently and one number
+      // is the other series' count misreported as this one's.
+      notes: [
+        `${analysis.recorded.interaction} interaction and ${analysis.recorded.startup} startup sessions recorded so far`,
+        ...notes,
+      ],
       regressions: [],
     }
   }

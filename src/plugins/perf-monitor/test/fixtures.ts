@@ -14,6 +14,7 @@ export const analysisFixture = (over: Partial<PerfAnalysis> = {}): PerfAnalysis 
   interactionComparable: true,
   recordingBlockedBy: null,
   baseline: { interaction: 12, startup: 12 },
+  recorded: { interaction: 12, startup: 12 },
   graphGrowth: null,
   ...over,
 })

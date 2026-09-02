@@ -380,16 +380,18 @@ export const writeInteractionSample = async (
     {
       if (existing) {
         await repo.tx(async (tx) => {
-          assertStillAttributable(repo, workspaceId, metrics.epoch)
           // Placement re-taken INSIDE the transaction, not just before it: the
-          // check above is separated from this write by the block count, and a
+          // pre-check is separated from this write by the block count, and a
           // sync-applied or hand edit landing in that window leaves us writing
           // this session into a row the reader can no longer find. Refusing
           // costs one sample — the next one finds the row unusable and opens a
           // replacement — while writing costs the session.
-          if (!isUsableRow(await tx.get(existing.blockId), repo, workspaceId)) {
-            throw new NoLongerEligible()
-          }
+          const row = await tx.get(existing.blockId)
+          // Both checks AFTER the read, so no `await` separates them from the
+          // write below. Ordered the other way they are checks on a state the
+          // read can have outlived.
+          if (!isUsableRow(row, repo, workspaceId)) throw new NoLongerEligible()
+          assertStillAttributable(repo, workspaceId, metrics.epoch)
           // `skipMetadata`: a metrics sample is bookkeeping, not user intent.
           // Without it every resample stamps `user_updated_at`, and the block-ref
           // picker orders by exactly that — so a hidden ISO-timestamp block would

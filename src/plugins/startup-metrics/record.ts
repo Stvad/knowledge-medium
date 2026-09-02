@@ -202,9 +202,22 @@ let recorded = false
  *  false — so checking it alone lets both instances write, and two records for
  *  one boot then take two of the three slots in the recent window. */
 let recording = false
+/** The workspace this boot happened in. The timeline is page-global — it
+ *  measures loading THAT workspace's graph — so a later workspace's series must
+ *  not receive it. Without this pin, a switch before the first write lands
+ *  disposes that instance and the replacement passes the `recorded` guard
+ *  (still false) and files the old workspace's boot timings as the new one's,
+ *  contaminating a baseline with another graph's load. Declining is the safe
+ *  direction: the cost is one boot unrecorded, against a permanently skewed
+ *  series. */
+let bootWorkspaceId: string | null = null
 
 /** Test helper — re-arm the once-per-session guard. */
-export const resetStartupMetricsRecorded = (): void => { recorded = false; recording = false }
+export const resetStartupMetricsRecorded = (): void => {
+  recorded = false
+  recording = false
+  bootWorkspaceId = null
+}
 
 /**
  * On first workspace open, detect time-to-interactivity and persist one record.
@@ -222,6 +235,8 @@ export const collectStartupMetricsEffect: AppEffect = {
   id: 'startup-metrics.collect',
   start: ({ repo, workspaceId }) => {
     if (!workspaceId || recorded) return
+    bootWorkspaceId ??= workspaceId
+    if (bootWorkspaceId !== workspaceId) return
     let done = false
     // Distinct from `done`, which the record path sets on ITS way through:
     // this tracks teardown, so a callback already queued can tell the two apart.

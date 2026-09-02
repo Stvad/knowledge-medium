@@ -131,7 +131,6 @@ export const appendClientRecord = async (
     [groupId],
   )
   await repo.tx(async (tx) => {
-    assertEligible(repo, spec.workspaceId)
     // The group id comes from a MEMOIZED ensure, so a delete landing during
     // this page session is invisible to it — and `tx.create` preflights only
     // that the parent ROW exists, which a tombstone satisfies. The reader
@@ -158,6 +157,13 @@ export const appendClientRecord = async (
       { systemMint: true },
     )
     await repo.addTypeInTx(tx, blockId, spec.recordType.id, {})
+    // LAST, and deliberately not also first: everything above is provisional,
+    // because a throw anywhere in this callback rolls the whole transaction
+    // back. What matters is that no `await` separates this check from the write
+    // carrying the payload — an eligibility check with an await after it is a
+    // check on a state that can have moved by the time anything is written, and
+    // adding a second one earlier narrows that window rather than closing it.
+    assertEligible(repo, spec.workspaceId)
     await spec.setProperty(tx, blockId)
   }, { scope: ChangeScope.Automation, telemetry: true, description: spec.description })
   spec.onCommitted?.(blockId)
