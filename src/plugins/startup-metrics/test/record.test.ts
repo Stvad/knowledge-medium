@@ -186,6 +186,21 @@ describe('writeStartupRecord', () => {
     )
     expect(ordered.map(c => c.id)).toEqual([third, second, first])
   })
+
+  // This recorder is the app measuring itself, so its writes must stay out of
+  // the counters a performance reporter reads — otherwise the report includes
+  // its own bookkeeping. Measured across the SECOND write: the first also mints
+  // this client's containers, which are deliberately counted as ordinary work.
+  it('leaves the non-telemetry counters alone', async () => {
+    await writeStartupRecord(repo, WS)
+    const before = repo.metrics().excludingTelemetry
+
+    await writeStartupRecord(repo, WS)
+
+    const after = repo.metrics().excludingTelemetry
+    expect(after.writes).toBe(before.writes)
+    expect(after.handleStore).toEqual(before.handleStore)
+  })
 })
 
 describe('collectStartupMetricsEffect', () => {
