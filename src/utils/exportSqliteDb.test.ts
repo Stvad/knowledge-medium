@@ -375,25 +375,25 @@ describe('importRawSqliteDb', () => {
     expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
   })
 
-  it('refuses an archive whose member was cut short by a signature in its own bytes', async () => {
-    // The framing this app actually writes: fflate's STREAMING `Zip` always sets
-    // the data-descriptor flag and leaves the local header sizes at zero, so
-    // `Unzip` cannot know where a member ends and scans the payload for the next
-    // zip signature. A `.db` containing PK\x07\x08 therefore ends there. Silent
-    // without this guard — a short `.db` still carries the SQLite magic, and a
-    // short log simply reads as end-of-log. On a multi-GB database the sequence
-    // is likelier to occur than not.
-    //
-    // `zipSync` does NOT reproduce it: it writes the sizes. That is exactly why
-    // the tests around this one missed it, so build with the real writer.
+  it('restores a member whose own bytes contain a zip signature', async () => {
+    // The framing this app writes: fflate's streaming `Zip` sets the
+    // data-descriptor flag and leaves the local header sizes at zero, so a
+    // reader that scans the payload for the next signature stops early — a
+    // database containing PK\x07\x08 ends there, and a sidecar containing
+    // PK\x01\x02 does too. Reading by ADDRESS from the central directory makes
+    // the sequence a non-event. On a multi-GB database it is likelier to occur
+    // than not, so this is the common case, not an edge one.
     const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(600).fill(0x41)])
     dbBytes.set([0x50, 0x4b, 0x07, 0x08], 300)
-    const archive = streamedZip([['x.db', dbBytes]])
-    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+    const waBytes = new Uint8Array(400).fill(0x42)
+    waBytes.set([0x50, 0x4b, 0x01, 0x02], 200)
+    const archive = streamedZip([['x.db', dbBytes], ['x.db-wa0', waBytes]])
+    const opfs = installFakeOpfs()
 
-    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 64), 'recovery.zip')], writeAheadSupported))
-      .rejects.toThrow(/should hold 616 bytes but 300 could be read/)
-    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
+    await importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 64), 'recovery.zip')], writeAheadSupported)
+
+    expect(opfs.bytes('kmp-v6-user-1.db')).toEqual(dbBytes)
+    expect(opfs.bytes('kmp-v6-user-1.db-wa0')).toEqual(waBytes)
   })
 
   it('finds the real end-of-directory record past a decoy in the archive comment', async () => {
@@ -481,6 +481,38 @@ describe('importRawSqliteDb', () => {
     opfs.setFreeBytes(500)
     await importRawSqliteDb(fakeRepo(), [fileWithStream([incoming], 'big.db')], writeAheadSupported)
     expect(opfs.bytes('kmp-v6-user-1.db')).toEqual(incoming)
+  })
+
+  it('refuses an archive on its names alone, before extracting anything', async () => {
+    // The directory lists every member, so the fileset can be judged up front.
+    // Extracting first turns a deterministic refusal into a multi-gigabyte copy
+    // that can exhaust the quota before the useful error ever appears.
+    const big = new Uint8Array(4000).fill(0x41)
+    const archive = streamedZip([
+      ['x.db', concatChunks([SQLITE_HEADER_BYTES, big])],
+      ['x.db-journal', big],
+      ['x.db-wa0', big],
+    ])
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 64), 'recovery.zip')], writeAheadSupported))
+      .rejects.toThrow(/cannot be restored together/)
+    // Nothing was staged: the only write recorded is none at all.
+    expect(opfs.writes).toEqual([])
+    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
+  })
+
+  it('refuses an unsupported write-ahead archive before extracting anything', async () => {
+    const big = new Uint8Array(4000).fill(0x42)
+    const archive = streamedZip([
+      ['x.db', concatChunks([SQLITE_HEADER_BYTES, big])],
+      ['x.db-wa0', big],
+    ])
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 64), 'recovery.zip')],
+      {probeWriteAheadSupport: async () => false})).rejects.toThrow(/Chromium-based browser/)
+    expect(opfs.writes).toEqual([])
   })
 
   it('refuses an archive too large for its own directory to address', async () => {

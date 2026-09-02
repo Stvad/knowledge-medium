@@ -18,7 +18,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import { Unzip, UnzipInflate, Zip, ZipPassThrough } from 'fflate'
+import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/localDbStorage'
 import { supportsWriteAheadVfs } from '@/data/localDbVfs.js'
@@ -550,39 +550,59 @@ const stageSelection = async (
 }
 
 /**
- * Every member the directory declares came out whole and unaltered.
+ * Copy one member into OPFS staging, checked against the directory's own record
+ * of it as the bytes go past.
  *
- * The streaming reader is not a witness to any of this. It reports whatever the
- * local headers let it find, so a member can arrive short, a whole member can
- * go missing, and neither shows up as an error — both restore a convincing
- * subset, which is the failure this path exists to refuse.
+ * The size check is not redundant with slicing the range: a deflated member
+ * expands to whatever it expands to, and a stored one can still be short if the
+ * archive was cut inside it.
  */
-const assertArchiveFullyRead = (
-  declared: readonly ZipDirectoryEntry[],
-  read: ReadonlyArray<{ name: string; size: number; crc: number }>,
-): void => {
+const stageZipMember = async (
+  root: FileSystemDirectoryHandle,
+  archive: Blob,
+  entry: ZipDirectoryEntry,
+  stagingName: string,
+): Promise<void> => {
   const refuse = (detail: string): never => {
     throw new Error(
       `The selected archive is damaged — ${detail}. ` +
       'Re-download the backup, or extract it and select the files inside.',
     )
   }
-  if (read.length !== declared.length) {
-    refuse(`it lists ${declared.length} file(s) but ${read.length} could be read`)
+
+  const content = await readZipMember(archive, entry)
+  if (content.size !== entry.size) {
+    refuse(`"${entry.name}" should hold ${entry.size} bytes but ${content.size} could be read`)
   }
-  const byName = new Map(read.map(member => [member.name, member]))
-  for (const entry of declared) {
-    const member = byName.get(entry.name)
-    if (!member) refuse(`"${entry.name}" is listed but was not found in it`)
-    else if (member.size !== entry.size) {
-      refuse(`"${entry.name}" should hold ${entry.size} bytes but ${member.size} could be read`)
-    } else if ((member.crc ^ -1) >>> 0 !== entry.crc) {
-      refuse(`the contents of "${entry.name}" do not match its checksum`)
-    }
+
+  let crc = -1
+  let written = 0
+  const writable = await (await root.getFileHandle(stagingName, {create: true}))
+    .createWritable({keepExistingData: false})
+  await content.stream().pipeTo(new WritableStream<Uint8Array>({
+    write: async chunk => {
+      crc = crc32(chunk, crc)
+      written += chunk.length
+      await writable.write(chunk as unknown as FileSystemWriteChunkType)
+    },
+    close: () => writable.close(),
+    abort: reason => writable.abort?.(reason),
+  }))
+  if (written !== entry.size || ((crc ^ -1) >>> 0) !== entry.crc) {
+    refuse(`the contents of "${entry.name}" do not match its checksum`)
   }
 }
 
-/** Unpack a recovery archive into OPFS staging, one temp file per member. */
+/**
+ * Unpack a recovery archive into OPFS staging, one temp file per member.
+ *
+ * Everything that can refuse the archive runs BEFORE a byte is extracted. The
+ * directory carries every member's name, so the fileset can be classified,
+ * checked against the restorable groups and tested for browser support up
+ * front, and the database header comes from a 20-byte slice rather than a
+ * staged copy. On a multi-gigabyte backup that is the difference between a
+ * deterministic refusal and a long copy that can exhaust the quota first.
+ */
 const stageRecoveryArchive = async (
   root: FileSystemDirectoryHandle,
   dbFilename: string,
@@ -591,23 +611,21 @@ const stageRecoveryArchive = async (
   probe: () => Promise<boolean>,
 ): Promise<StagedImportFile[]> => {
   const declared = await zipCentralDirectory(archive)
-  const members = await extractZipToOpfs(root, archive, () => {
-    const stagingName = tempOpfsFilename(dbFilename, 'import-staging')
-    temps.push(stagingName)
-    return stagingName
-  })
-  assertArchiveFullyRead(declared, members)
-
-  const {main, siblings} = classifyDbFileSet(members.map(member => member.name))
-  const stagingByName = new Map(members.map(member => [member.name, member.stagingName]))
-  await assertRestorableDatabase(await opfsFile(root, stagingByName.get(main)!))
+  const {main, siblings} = classifyDbFileSet(declared.map(entry => entry.name))
   assertRestorableSet(siblings.map(({suffix}) => suffix))
   await assertWriteAheadRestorable(siblings.map(({suffix}) => suffix), probe)
 
-  return [
-    {suffix: '', stagingName: stagingByName.get(main)!},
-    ...siblings.map(({name, suffix}) => ({suffix, stagingName: stagingByName.get(name)!})),
-  ]
+  const byName = new Map(declared.map(entry => [entry.name, entry]))
+  await assertRestorableDatabase(await readZipMember(archive, byName.get(main)!))
+
+  const staged: StagedImportFile[] = []
+  for (const {name, suffix} of [{name: main, suffix: ''}, ...siblings]) {
+    const stagingName = tempOpfsFilename(dbFilename, 'import-staging')
+    temps.push(stagingName)
+    await stageZipMember(root, archive, byName.get(name)!, stagingName)
+    staged.push({suffix, stagingName})
+  }
+  return staged
 }
 
 /**
@@ -954,90 +972,61 @@ const streamStoredZipToOpfs = async (
   return tempHandle
 }
 
+const LOCAL_HEADER_SIZE = 30
+const ZIP_METHOD_STORED = 0
+const ZIP_METHOD_DEFLATE = 8
+
 /**
- * Unpack a zip into one OPFS temp file per member, returning the archive name
- * and temp name of each. Streamed for the same reason the writer is: the `.db`
- * member can be gigabytes, so members go archive -> disk with backpressure
- * rather than through memory.
+ * Copy one member's bytes out of the archive, by ADDRESS.
  *
- * `UnzipInflate` is registered although our own archives are STORED — an archive
- * that has been through an unzip/rezip round trip is deflated, and without a
- * registered decompressor fflate throws "ctr is not a constructor".
+ * Not by streaming search, which is what fflate's `Unzip` does and what made
+ * this wrong: `streamStoredZipToOpfs` writes through fflate's streaming `Zip`,
+ * which sets the data-descriptor flag and leaves the local header sizes at
+ * zero, so a reader that cannot see the directory has to scan the payload for
+ * the next zip signature — and a database whose own bytes contain `PK\x07\x08`
+ * ends there. The central directory records where every member starts and how
+ * long it is, so slicing the range is both correct and cheaper: for a stored
+ * member the copy is a Blob view, with no parsing in the middle at all.
  */
-const extractZipToOpfs = async (
-  root: FileSystemDirectoryHandle,
-  archive: File,
-  nextTempName: () => string,
-): Promise<Array<{ name: string; stagingName: string; size: number; crc: number }>> => {
-  const members: Array<{ name: string; stagingName: string; size: number; crc: number }> = []
-  const open = new Map<string, FileSystemWritableFileStream>()
-  let writeChain: Promise<void> = Promise.resolve()
-  let unzipError: unknown = null
-
-  const unzip = new Unzip()
-  unzip.register(UnzipInflate)
-  unzip.onfile = member => {
-    const stagingName = nextTempName()
-    // Seeded and finalised the CRC-32 way: ~0 in, complement out.
-    const entry = { name: member.name, stagingName, size: 0, crc: -1 }
-    members.push(entry)
-    writeChain = writeChain.then(async () => {
-      const handle = await root.getFileHandle(stagingName, { create: true })
-      open.set(member.name, await handle.createWritable({ keepExistingData: false }))
-    })
-    member.ondata = (err, chunk, final) => {
-      if (err) {
-        unzipError ??= err
-        return
-      }
-      // Copied because the write runs after `push` returns and the view is
-      // fflate's buffer to reuse. Defence in depth — no reuse observed, and no
-      // test fails without it.
-      const data = chunk.length ? chunk.slice() : null
-      writeChain = writeChain.then(async () => {
-        const writable = open.get(member.name)
-        if (!writable) return
-        if (data) {
-          await writable.write(data)
-          entry.size += data.length
-          entry.crc = crc32(data, entry.crc)
-        }
-        if (final) {
-          await writable.close()
-          open.delete(member.name)
-        }
-      })
-    }
-    member.start()
+const readZipMember = async (archive: Blob, entry: ZipDirectoryEntry): Promise<Blob> => {
+  // The local header repeats the name and carries its OWN extra field, which
+  // the directory's copy does not have to match — so the data offset can only
+  // be computed from this header.
+  const header = new DataView(
+    await archive.slice(entry.localHeaderOffset, entry.localHeaderOffset + LOCAL_HEADER_SIZE).arrayBuffer(),
+  )
+  if (header.byteLength < LOCAL_HEADER_SIZE || header.getUint32(0, true) !== LOCAL_FILE_SIGNATURE) {
+    throw new Error(
+      `The selected archive is damaged — the record for "${entry.name}" is missing. ` +
+      'Re-download the backup, or extract it and select the files inside.',
+    )
+  }
+  const dataAt = entry.localHeaderOffset + LOCAL_HEADER_SIZE
+    + header.getUint16(26, true) + header.getUint16(28, true)
+  const stored = archive.slice(dataAt, dataAt + entry.storedSize)
+  if (stored.size !== entry.storedSize) {
+    throw new Error(
+      `The selected archive is damaged — "${entry.name}" runs past the end of it. ` +
+      'Re-download the backup, or extract it and select the files inside.',
+    )
   }
 
-  try {
-    const reader = archive.stream().getReader()
-    for (;;) {
-      const { done, value } = await reader.read()
-      unzip.push(done ? new Uint8Array(0) : value, done)
-      // Backpressure: drain what this chunk produced before reading the next.
-      await writeChain
-      if (unzipError) throw unzipError
-      if (done) break
-    }
-  } catch (err) {
-    // Drain first: a throw from `unzip.push` itself can precede the queued task
-    // that puts a member's writable into `open`, and aborting a snapshot taken
-    // before that lands leaves a writable open on a staging file — which then
-    // resists the caller's cleanup, because a locked entry cannot be removed.
-    await writeChain.catch(() => {})
-    // The temps themselves are the caller's to remove — it registered every one
-    // as it was minted, so a throw here still leaves nothing behind.
-    await Promise.allSettled([...open.values()].map(w => w.abort?.()))
-    throw err
+  if (entry.method === ZIP_METHOD_STORED) return stored
+  if (entry.method !== ZIP_METHOD_DEFLATE) {
+    throw new Error(
+      `"${entry.name}" is compressed in a way this app cannot read. ` +
+      'Extract the archive and select the files inside instead.',
+    )
   }
-  return members
+  // Raw deflate — only ever from an archive that has been through an
+  // unzip/rezip round trip, since this app writes stored members.
+  return new Response(stored.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob()
 }
 
 /** The 4-byte little-endian signatures the zip directory records carry. */
 const EOCD_SIGNATURE = 0x06054b50
 const CENTRAL_FILE_SIGNATURE = 0x02014b50
+const LOCAL_FILE_SIGNATURE = 0x04034b50
 const ZIP64_EOCD_LOCATOR_SIGNATURE = 0x07064b50
 const EOCD_SIZE = 22
 const CENTRAL_FILE_HEADER_SIZE = 46
@@ -1049,6 +1038,10 @@ interface ZipDirectoryEntry {
   /** Authoritative length. The LOCAL header carries zero for a streamed entry. */
   size: number
   crc: number
+  /** 0 = stored, 8 = deflate. Everything this app writes is stored. */
+  method: number
+  storedSize: number
+  localHeaderOffset: number
 }
 
 /**
@@ -1135,10 +1128,20 @@ const parseCentralDirectory = (directory: DataView, count: number): ZipDirectory
         'Extract it and select the files inside instead.',
       )
     }
+    const localHeaderOffset = directory.getUint32(at + 42, true)
+    if (localHeaderOffset === ZIP64_SENTINEL_32) {
+      throw new Error(
+        'This archive uses the ZIP64 format, which this app cannot verify. ' +
+        'Extract it and select the files inside instead.',
+      )
+    }
     entries.push({
       name: names.decode(new Uint8Array(directory.buffer, directory.byteOffset + at + CENTRAL_FILE_HEADER_SIZE, nameLength)),
       size,
       crc: directory.getUint32(at + 16, true),
+      method: directory.getUint16(at + 10, true),
+      storedSize: directory.getUint32(at + 20, true),
+      localHeaderOffset,
     })
     at += CENTRAL_FILE_HEADER_SIZE + nameLength
       + directory.getUint16(at + 30, true) + directory.getUint16(at + 32, true)
