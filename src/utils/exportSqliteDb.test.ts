@@ -515,6 +515,46 @@ describe('importRawSqliteDb', () => {
     expect(opfs.writes).toEqual([])
   })
 
+  it('refuses an archive whose directory count was corrupted downward', async () => {
+    // The 16-bit total-entry count is the one field that can silently shorten
+    // the member list: drop it from 2 to 1 and the trailing sidecar's record is
+    // never read, while the offset validation still passes because the
+    // directory's position and length are unchanged. That restores a convincing
+    // database missing every frame the log held — this PR's own bug, by another
+    // route. So the directory is read to its END and the count reconciled after.
+    const dbBytes = concatChunks([SQLITE_HEADER_BYTES, new Uint8Array(120).fill(0x41)])
+    const archive = streamedZip([['x.db', dbBytes], ['x.db-wa0', new Uint8Array(80).fill(0x42)]])
+    const view = new DataView(archive.buffer, archive.byteOffset)
+    const eocdAt = archive.length - 22
+    expect(view.getUint16(eocdAt + 10, true)).toBe(2)
+    view.setUint16(eocdAt + 10, 1, true)              // "this archive holds one file"
+    const opfs = installFakeOpfs({'kmp-v6-user-1.db': new Uint8Array([9])})
+
+    await expect(importRawSqliteDb(fakeRepo(), [fileWithStream(sliceInto(archive, 64), 'recovery.zip')], writeAheadSupported))
+      .rejects.toThrow(/says 1 file\(s\) but holds 2/)
+    expect([...opfs.names()]).toEqual(['kmp-v6-user-1.db'])
+  })
+
+  it('restores a write-ahead backup when this device already runs that VFS', async () => {
+    // The probe answers a transient worker failure as "no" and caches it for
+    // the page — a contract written for deciding about a database that has not
+    // moved, where "no" is merely conservative. Applied to a backup that DOES
+    // carry sidecars it refuses a valid restore, so existing sidecars settle it
+    // first: they exist only because this browser opened one here.
+    const opfs = installFakeOpfs({
+      'kmp-v6-user-1.db': new Uint8Array([9]),
+      'kmp-v6-user-1.db-wa0': new Uint8Array([1]),
+    })
+    const inconclusive = {probeWriteAheadSupport: async () => false}
+
+    await importRawSqliteDb(fakeRepo(), [
+      fileWithStream([SQLITE_HEADER_BYTES], 'backup.db'),
+      fileWithStream([new Uint8Array([7])], 'backup.db-wa0'),
+    ], inconclusive)
+
+    expect([...opfs.bytes('kmp-v6-user-1.db-wa0')]).toEqual([7])
+  })
+
   it('refuses an archive too large for its own directory to address', async () => {
     // fflate's writer emits no ZIP64: past 4 GiB it wraps the directory offsets
     // modulo 2^32, so the archive is malformed at the source. Nothing in the

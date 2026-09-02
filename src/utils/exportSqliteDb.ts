@@ -475,16 +475,29 @@ const assertRestorableSet = (siblingSuffixes: readonly string[]): void => {
  * worker and can take seconds, and every other restore is unaffected by it.
  */
 const assertWriteAheadRestorable = async (
+  root: FileSystemDirectoryHandle,
+  dbFilename: string,
   siblingSuffixes: readonly string[],
   probe: () => Promise<boolean>,
 ): Promise<void> => {
   const wantsWriteAhead = siblingSuffixes.some(suffix =>
     (WRITE_AHEAD_SIDECAR_SUFFIXES as readonly string[]).includes(suffix))
-  if (!wantsWriteAhead || await probe()) return
+  if (!wantsWriteAhead) return
+
+  // Sidecars on this device settle it without asking: they only exist because
+  // this browser opened a write-ahead database here. Worth checking FIRST,
+  // because the probe answers a transient failure as "no" and caches it for the
+  // page — a contract written for deciding about a database that has not moved,
+  // where "no" is merely conservative. Here it would refuse a valid backup.
+  for (const suffix of WRITE_AHEAD_SIDECAR_SUFFIXES) {
+    if (await readOpfsFileIfExists(root, dbFilename + suffix)) return
+  }
+  if (await probe()) return
+
   throw new Error(
-    'This backup carries a write-ahead log, which only a Chromium-based browser can open. ' +
-    'Restore it there. Importing the database file on its own would work here, but every ' +
-    'transaction still held in the log would be lost without warning.',
+    'This backup carries a write-ahead log, and this browser could not confirm it can open one ' +
+    '— only Chromium-based browsers can. Restore it there. Importing the database file on its ' +
+    'own would work here, but every transaction still held in the log would be lost without warning.',
   )
 }
 
@@ -492,11 +505,13 @@ const assertWriteAheadRestorable = async (
 const SQLITE_WAL_FORMAT_VERSION = 2
 const SQLITE_HEADER_PROBE_BYTES = 20
 
-const assertRestorableDatabase = async (blob: Blob): Promise<void> => {
-  if (blob.size < SQLITE_MAGIC.length) {
+const assertRestorableDatabase = async (blob: Blob): Promise<void> =>
+  assertRestorableDatabaseHead(new Uint8Array(await blob.slice(0, SQLITE_HEADER_PROBE_BYTES).arrayBuffer()))
+
+const assertRestorableDatabaseHead = (head: Uint8Array): void => {
+  if (head.length < SQLITE_MAGIC.length) {
     throw new Error('Selected file is too small to be a SQLite database.')
   }
-  const head = new Uint8Array(await blob.slice(0, SQLITE_HEADER_PROBE_BYTES).arrayBuffer())
   if (!SQLITE_MAGIC.every((byte, i) => head[i] === byte)) {
     throw new Error('Selected file is not a SQLite database (missing magic header).')
   }
@@ -520,13 +535,11 @@ const opfsFile = async (root: FileSystemDirectoryHandle, name: string): Promise<
 /** The selection, classified and header-checked, before OPFS is touched at all. */
 const validateSelection = async (
   files: readonly File[],
-  probe: () => Promise<boolean>,
 ): Promise<Array<{suffix: string; file: File}>> => {
   const {main, siblings} = classifyDbFileSet(files.map(file => file.name))
   const byName = new Map(files.map(file => [file.name, file]))
   await assertRestorableDatabase(byName.get(main)!)
   assertRestorableSet(siblings.map(({suffix}) => suffix))
-  await assertWriteAheadRestorable(siblings.map(({suffix}) => suffix), probe)
   return [
     {suffix: '', file: byName.get(main)!},
     ...siblings.map(({name, suffix}) => ({suffix, file: byName.get(name)!})),
@@ -575,7 +588,7 @@ const stageZipMember = async (
   let written = 0
   const writable = await (await root.getFileHandle(stagingName, {create: true}))
     .createWritable({keepExistingData: false})
-  await content.stream().pipeTo(new WritableStream<Uint8Array>({
+  await content.pipeTo(new WritableStream<Uint8Array>({
     write: async chunk => {
       crc = crc32(chunk, crc)
       written += chunk.length
@@ -612,10 +625,12 @@ const stageRecoveryArchive = async (
   const declared = await zipCentralDirectory(archive)
   const {main, siblings} = classifyDbFileSet(declared.map(entry => entry.name))
   assertRestorableSet(siblings.map(({suffix}) => suffix))
-  await assertWriteAheadRestorable(siblings.map(({suffix}) => suffix), probe)
+  await assertWriteAheadRestorable(root, dbFilename, siblings.map(({suffix}) => suffix), probe)
 
   const byName = new Map(declared.map(entry => [entry.name, entry]))
-  await assertRestorableDatabase(await readZipMember(archive, byName.get(main)!))
+  assertRestorableDatabaseHead(
+    await readStreamPrefix(await readZipMember(archive, byName.get(main)!), SQLITE_HEADER_PROBE_BYTES),
+  )
 
   const staged: StagedImportFile[] = []
   for (const {name, suffix} of [{name: main, suffix: ''}, ...siblings]) {
@@ -648,10 +663,16 @@ export async function importRawSqliteDb(
   const isArchive = files.length === 1 && await startsWithMagic(files[0], ZIP_MAGIC)
   // Classified and header-checked before OPFS is touched at all, so a
   // wrong-file pick costs nothing and leaves nothing behind.
-  const selection = isArchive ? null : await validateSelection(files, probeWriteAheadSupport)
+  const selection = isArchive ? null : await validateSelection(files)
 
   const dbFilename = dbFilenameForUser(repo.user.id)
   const root = await navigator.storage.getDirectory()
+
+  // Needs OPFS to read, so it cannot join the checks above — but it still only
+  // READS, and still runs before anything is staged or removed.
+  if (selection) {
+    await assertWriteAheadRestorable(root, dbFilename, selection.map(({suffix}) => suffix), probeWriteAheadSupport)
+  }
 
   // Everything lands in staging while the live database is still intact, so a
   // failure reading the selection leaves that database untouched.
@@ -987,7 +1008,7 @@ const ZIP_METHOD_DEFLATE = 8
  * long it is, so slicing the range is both correct and cheaper: for a stored
  * member the copy is a Blob view, with no parsing in the middle at all.
  */
-const readZipMember = async (archive: Blob, entry: ZipDirectoryEntry): Promise<Blob> => {
+const readZipMember = async (archive: Blob, entry: ZipDirectoryEntry): Promise<ReadableStream<Uint8Array>> => {
   // The local header repeats the name and carries its OWN extra field, which
   // the directory's copy does not have to match — so the data offset can only
   // be computed from this header.
@@ -1010,7 +1031,7 @@ const readZipMember = async (archive: Blob, entry: ZipDirectoryEntry): Promise<B
     )
   }
 
-  if (entry.method === ZIP_METHOD_STORED) return stored
+  if (entry.method === ZIP_METHOD_STORED) return stored.stream()
   if (entry.method !== ZIP_METHOD_DEFLATE) {
     throw new Error(
       `"${entry.name}" is compressed in a way this app cannot read. ` +
@@ -1018,8 +1039,41 @@ const readZipMember = async (archive: Blob, entry: ZipDirectoryEntry): Promise<B
     )
   }
   // Raw deflate — only ever from an archive that has been through an
-  // unzip/rezip round trip, since this app writes stored members.
-  return new Response(stored.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob()
+  // unzip/rezip round trip, since this app writes stored members. Piped, not
+  // buffered: a `Response(...).blob()` here would materialise a whole
+  // multi-gigabyte database in the renderer.
+  return stored.stream().pipeThrough(new DecompressionStream('deflate-raw'))
+}
+
+/**
+ * The first `byteCount` bytes of a stream, then cancel it. Cancelling is what
+ * keeps the header check cheap on a deflated member: decompression stops after
+ * the prefix instead of running the whole member to inspect 20 bytes.
+ */
+const readStreamPrefix = async (
+  stream: ReadableStream<Uint8Array>,
+  byteCount: number,
+): Promise<Uint8Array> => {
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (total < byteCount) {
+      const {done, value} = await reader.read()
+      if (done) break
+      chunks.push(value)
+      total += value.length
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+  }
+  const head = new Uint8Array(total)
+  let at = 0
+  for (const chunk of chunks) {
+    head.set(chunk, at)
+    at += chunk.length
+  }
+  return head.subarray(0, byteCount)
 }
 
 /** The 4-byte little-endian signatures the zip directory records carry. */
@@ -1110,11 +1164,21 @@ const zipCentralDirectory = async (archive: Blob): Promise<ZipDirectoryEntry[]> 
   )
 }
 
+/**
+ * Every record in the directory, read until the directory is CONSUMED rather
+ * than until the declared count is reached, and only then reconciled with it.
+ *
+ * Trusting the count is a silent-subset hazard in a 16-bit field: corrupt a 2
+ * down to a 1 and the loop stops after the `.db`, the trailing sidecar's record
+ * is never seen, and the import restores a convincing database missing every
+ * frame the log still held — with the offset validation above still satisfied,
+ * because the directory's position and length did not change.
+ */
 const parseCentralDirectory = (directory: DataView, count: number): ZipDirectoryEntry[] => {
   const entries: ZipDirectoryEntry[] = []
   const names = new TextDecoder()
   let at = 0
-  for (let i = 0; i < count; i++) {
+  while (at < directory.byteLength) {
     if (at + CENTRAL_FILE_HEADER_SIZE > directory.byteLength
       || directory.getUint32(at, true) !== CENTRAL_FILE_SIGNATURE) {
       throw new Error('The selected archive\'s file directory is damaged — re-download the backup.')
@@ -1144,6 +1208,12 @@ const parseCentralDirectory = (directory: DataView, count: number): ZipDirectory
     })
     at += CENTRAL_FILE_HEADER_SIZE + nameLength
       + directory.getUint16(at + 30, true) + directory.getUint16(at + 32, true)
+  }
+  if (entries.length !== count) {
+    throw new Error(
+      `The selected archive is damaged — its directory says ${count} file(s) but holds ` +
+      `${entries.length}. Re-download the backup, or extract it and select the files inside.`,
+    )
   }
   return entries
 }
