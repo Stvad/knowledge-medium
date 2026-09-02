@@ -943,9 +943,17 @@ const readOpfsFileIfExists = async (
  * Stream a STORED (uncompressed) zip of the given OPFS files into a new OPFS
  * temp file, returning its handle. Streamed (not `zipSync`) because the `.db`
  * can be gigabytes: each file is piped disk → zip → disk with backpressure, so
- * we never hold the whole archive in memory. Store mode keeps it CPU-light —
- * compressing an already-dense SQLite file buys almost nothing. On any failure
- * the partial temp file is removed before the error propagates.
+ * we never hold the whole archive in memory. On any failure the partial temp
+ * file is removed before the error propagates.
+ *
+ * Stored for CPU, NOT because compressing a SQLite file would be futile — it
+ * compresses well. Deflate in JS runs at tens of MB/s and this path executes
+ * when the database will not open, so a multi-gigabyte backup would block at
+ * the moment the user most needs their bytes. `CompressionStream` is fast
+ * enough but does not fit fflate's writer.
+ *
+ * Storing also makes the archive's 32-bit size fields bind on the TOTAL rather
+ * than on the largest member (#867).
  */
 const streamStoredZipToOpfs = async (
   root: FileSystemDirectoryHandle,
