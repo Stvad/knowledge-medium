@@ -53,10 +53,17 @@ export interface ClientRecordSpec {
   recordType: TypeContribution
   /** `repo.tx` description — for the tx log and for reading the diff later. */
   description: string
-  /** Re-taken as the first operation inside the create transaction. Defaults to
-   *  `assertStillWritable`, which is all the shared shape can know; a recorder
-   *  with a STRONGER rule must pass it, because the shared default cannot see
-   *  it. The interaction recorder's attributability rule is exactly that case. */
+  /** Called TWICE, and must stay cheap and side-effect-free: once before the
+   *  group ensure and the id mint, so an ineligible append refuses before the
+   *  expensive step, and again under THE ORDERING RULE above as the last
+   *  statement before the write. Neither is redundant — the early one is not
+   *  authorisation (everything before the write is provisional), and the late
+   *  one is not a refusal the caller can act on cheaply.
+   *
+   *  Defaults to `assertStillWritable`, which is all the shared shape can know;
+   *  a recorder with a STRONGER rule must pass it, because the shared default
+   *  cannot see it. The interaction recorder's attributability rule is exactly
+   *  that case. */
   assertEligible?: (repo: Repo, workspaceId: string) => void
   /** Records to keep in this client's group. Required, so a recorder cannot
    *  reach the graph without stating a bound. */

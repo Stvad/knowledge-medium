@@ -413,9 +413,9 @@ describe('collectStartupMetricsEffect', () => {
   // that resolution — so between "one row exists" and "a restart is refused"
   // there is a whole extra query, and under gate load (one worker per core)
   // that gap is wide enough to lose. A restart INSIDE it legitimately arms; the
-  // recorder's own `recording` guard is what stops it writing, and the effect's
-  // comment says so. Retry until the write has settled, disposing whatever an
-  // attempt arms so no attempt can leave a live instance behind.
+  // single owner of the boot write is what stops it writing a second row. Retry
+  // until the write has settled, disposing whatever an attempt arms so no
+  // attempt can leave a live instance behind.
   it('records at most once per session even if the effect restarts', async () => {
     markStartup('firstContentPaint')
     expect(startEffect(WS)).toBeTypeOf('function')
