@@ -89,7 +89,16 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
    *  the rows are. A refresh superseded by a sign-out would otherwise hold the
    *  replacement's button disabled until it settled — or forever, if it hung. */
   const [refreshingFor, setRefreshingFor] = useState<{ repo: object; workspaceId: string } | null>(null)
-  const ws = workspaceId ?? repo.activeWorkspaceId
+  // The active pin decides `stale`, and a workspace switch moves nothing else
+  // this dialog subscribes to — no publication, no role change. Without this
+  // seam the staleness re-render is incidental: it arrives only if some other
+  // signal happens to fire, so the dialog goes on offering a blocker (and a
+  // re-analyze button) for a workspace the user has already left.
+  const activePin = useSyncExternalStore(
+    useCallback((onChange: () => void) => repo.client.onActingAsChange(onChange), [repo]),
+    () => repo.activeWorkspaceId,
+  )
+  const ws = workspaceId ?? activePin
 
   /** The loaded series WITH the Repo, workspace and PUBLICATION they were read
    *  from. Kept together so what is rendered can be derived rather than
@@ -178,7 +187,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   )
   const refreshing = refreshingFor !== null
     && refreshingFor.repo === repo && refreshingFor.workspaceId === ws
-  const stale = !ws || ws !== repo.activeWorkspaceId
+  const stale = !ws || ws !== activePin
   // The monitor's own toggle can go off while this dialog stays mounted in the
   // shared DialogHost. Nothing could publish then, so the button would spin and
   // leave the panel saying "No analysis yet" — an advertised action with no

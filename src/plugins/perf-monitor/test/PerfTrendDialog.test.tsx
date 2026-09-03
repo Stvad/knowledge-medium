@@ -29,27 +29,29 @@ import {
 
 /** The stub the workspace-pinning tests use: they never read the series, and a
  *  real Repo would make them slow for nothing. `mocks.repo` is swapped for a
- *  real one by the rendering tests below. */
-const STUB = {
-  activeWorkspaceId: 'ws-A',
-  user: { id: 'user-1', name: 'Alice' },
-  isReadOnly: false,
-  onReadOnlyChange: () => () => {},
-  onMetricsReset: () => () => {},
-  db: { getAll: async () => [] as unknown[] },
-}
-
-const mocks = vi.hoisted(() => ({
-  repo: {
+ *  real one by the rendering tests below.
+ *
+ *  ONE definition, because the dialog subscribes to several Repo seams and a
+ *  stub missing any of them throws on render rather than failing the assertion
+ *  under test — three hand-maintained copies meant every new subscription broke
+ *  an unrelated test in a way that reads as unrelated. Lives inside `vi.hoisted`
+ *  so the mock factories can reach it. */
+const mocks = vi.hoisted(() => {
+  const repoStub = (over: Record<string, unknown> = {}) => ({
     activeWorkspaceId: 'ws-A',
     user: { id: 'user-1', name: 'Alice' },
     isReadOnly: false,
     onReadOnlyChange: () => () => {},
     onMetricsReset: () => () => {},
+    client: { onActingAsChange: () => () => {} },
+    // The epoch the published fixture carries, so a stub-backed dialog gets
+    // past the store's span check and renders a verdict at all.
+    metrics: () => ({ epoch: 0 }),
     db: { getAll: async () => [] as unknown[] },
-  } as unknown as Repo,
-  runNow: vi.fn(async () => {}),
-}))
+    ...over,
+  }) as unknown as Repo
+  return { repoStub, repo: repoStub(), runNow: vi.fn(async () => {}) }
+})
 
 vi.mock('@/context/repo.tsx', () => ({ useRepo: () => mocks.repo }))
 vi.mock('../schedule.ts', () => ({ runPerfAnalysisNow: mocks.runNow }))
@@ -57,12 +59,12 @@ vi.mock('@/utils/toast.js', () => ({ showError: vi.fn(), showProgress: vi.fn() }
 
 afterEach(() => {
   vi.clearAllMocks()
-  mocks.repo = STUB as unknown as Repo
+  mocks.repo = mocks.repoStub()
 })
 
 const reanalyze = () => screen.getByRole('button', { name: /re-analyze/i })
 
-beforeEach(() => { STUB.activeWorkspaceId = 'ws-A' })
+beforeEach(() => { mocks.repo = mocks.repoStub() })
 
 const WS = 'ws-A'
 const USER: User = { id: 'user-1', name: 'Alice' }
@@ -125,7 +127,7 @@ describe('PerfTrendDialog', () => {
   // workspace's blocker as the pinned one's: an editable workspace shown as
   // recording-disabled, or a read-only one shown as fine.
   it('refuses re-analysis once the active workspace has moved on', async () => {
-    STUB.activeWorkspaceId = 'ws-B'
+    mocks.repo = mocks.repoStub({ activeWorkspaceId: 'ws-B' })
     render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId="ws-A" />)
 
     await waitFor(() => expect(reanalyze()).toBeDisabled())
@@ -233,6 +235,36 @@ describe('the blocker on a dialog left behind', () => {
   beforeEach(freshRepo)
   afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
 
+  // The pin change ALONE, with nothing else moving. The real-Repo test below
+  // switches workspace on a live Repo, where the switch incidentally notifies
+  // other seams the dialog subscribes to — so it re-renders either way and
+  // stays green with the subscription deleted (verified: it did). Here the
+  // acting-as channel is the only signal in the room, which is exactly the
+  // production case of a user switching workspace with the dialog open.
+  it('drops the blocker when only the acting-as channel reports the switch', async () => {
+    const listeners = new Set<() => void>()
+    mocks.repo = mocks.repoStub({
+      activeWorkspaceId: WS,
+      isReadOnly: true,
+      client: {
+        onActingAsChange: (fn: () => void) => {
+          listeners.add(fn)
+          return () => listeners.delete(fn)
+        },
+      },
+    })
+    startMonitorRun(mocks.repo, WS)
+    publishPerfAnalysis(analysisFixture({ workspaceId: WS }))
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(screen.getByText(/read-only/i)).toBeInTheDocument())
+
+    // The switch, announced the only way the Repo announces it.
+    ;(mocks.repo as unknown as { activeWorkspaceId: string }).activeWorkspaceId = 'ws-elsewhere'
+    await act(async () => { for (const fn of listeners) fn() })
+
+    expect(screen.queryByText(/read-only/i)).toBeNull()
+  })
+
   it('says nothing about recording once the active workspace has moved on', async () => {
     startMonitorRun(repo, WS)
     publishPerfAnalysis(analysisFixture({ workspaceId: WS }))
@@ -329,14 +361,11 @@ describe('rows after a Repo swap', () => {
 
     // The swap, with a Repo whose reads FAIL — the case bare state cannot
     // recover from, because the catch path writes nothing.
-    mocks.repo = {
+    mocks.repo = mocks.repoStub({
       activeWorkspaceId: WS,
       user: USER,
-      isReadOnly: false,
-      onReadOnlyChange: () => () => {},
-      onMetricsReset: () => () => {},
       db: { getAll: async () => { throw new Error('gone') } },
-    } as unknown as Repo
+    })
     view.rerender(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
 
     await waitFor(() => expect(screen.queryAllByRole('table')).toHaveLength(0))
