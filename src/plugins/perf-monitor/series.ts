@@ -296,10 +296,13 @@ export const startupRegression = (
   series: readonly StartupRecordData[],
   currentTimeOriginMs: number,
 ): TrendResult => {
-  // Inside the recent WINDOW, not merely somewhere in the series. Presence
-  // alone only implies currency via the sort order, and a backwards clock
-  // correction between boots sinks this boot's record below older ones — the
-  // guard would still pass while the window described earlier page loads.
+  // Found ANYWHERE in the series, not just inside the newest few. This client's
+  // other tabs record their own boots for this workspace while this page stays
+  // open, so three of them pushed this boot's row out of a window-bounded
+  // lookup and the comparison reported no current sample with the row sitting
+  // right there. `timeOriginMs` is this boot's identity, so a match anywhere is
+  // unambiguous — the window was never what made the match trustworthy.
+  //
   // PRESENT AND USABLE, not merely present. A boot that stayed hidden until
   // after first paint records through the fallback, so its row exists with no
   // paint marks and `bootstrapGapMs` is null — the row is immutable, so no
@@ -309,10 +312,14 @@ export const startupRegression = (
   // Not "still building" in the absent case either: the series may be long, and
   // the startup recorder is independently togglable, so the usual cause of an
   // absent row is that it is switched off. Waiting fixes neither.
-  const current = series
-    .slice(0, RECENT_WINDOW)
-    .find((r) => r.timeOriginMs === currentTimeOriginMs)
+  const current = series.find((r) => r.timeOriginMs === currentTimeOriginMs)
   if (!current || bootstrapGapMs(current) === null) return NO_CURRENT_SAMPLE
+  // The comparison window stays FIXED at the newest boots, and deliberately
+  // need not contain this one. Rows above this boot are later boots of the same
+  // app on the same client — the freshest evidence there is about startup, and
+  // this metric is a property of the app, not of one page load. What this
+  // boot's row is asked for is only that a sample for it EXISTS, which is what
+  // stops the verdict being a replay from before this page loaded.
   const gaps = (rs: readonly StartupRecordData[]) =>
     rs.map(bootstrapGapMs).filter((v): v is number => v !== null)
   return trendRegression(

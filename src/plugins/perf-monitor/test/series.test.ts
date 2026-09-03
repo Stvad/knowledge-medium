@@ -224,6 +224,25 @@ describe('startupRegression', () => {
       .toEqual({ status: 'insufficient', reason: 'history' })
   })
 
+  // Other tabs on this same client record their own boots for this workspace
+  // while this page stays open. With a fixed recent window, three of them push
+  // this boot's row out of it and the comparison reports no current sample
+  // with the row sitting in the series.
+  it('finds this boot past the newest few records', () => {
+    const OTHER = 9_000
+    const otherTabs = [
+      boot(1000, 1320, OTHER), boot(1000, 1330, OTHER), boot(1000, 1340, OTHER),
+    ]
+    const series = [...otherTabs, boot(1000, 1350), ...held(10)]
+
+    const result = startupRegression(series, THIS_BOOT)
+
+    // Precondition: this boot really is outside the fixed window, so the test
+    // exercises the widening rather than passing on an unrelated arrangement.
+    expect(series.findIndex((r) => r.timeOriginMs === THIS_BOOT)).toBeGreaterThan(2)
+    expect(result).not.toEqual({ status: 'insufficient', reason: 'no-current-sample' })
+  })
+
   it('flags the step in the bootstrap gap once it persists', () => {
     const series = [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(8)]
     expect(reg(startupRegression(series, THIS_BOOT))).toMatchObject({
