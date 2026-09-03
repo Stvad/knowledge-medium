@@ -27,6 +27,22 @@ import {
   type TrendResult,
 } from './series.js'
 
+/** Why a series produced no verdict. Each resolves differently, which is the
+ *  whole reason they are not one value: only `history-short` is fixed by
+ *  waiting. */
+export type UnjudgedReason =
+  /** Page-global counters blended across workspaces; only a fresh page session
+   *  makes them attributable again. */
+  | 'blended-workspaces'
+  /** This session produced no usable measurement to compare against — waiting
+   *  supplies history, not a current sample. */
+  | 'no-current-sample'
+  /** Nothing recorded for this session, so the series is not growing at all.
+   *  Each recorder is togglable independently of this monitor. */
+  | 'not-recording'
+  /** Genuinely short of history, and still filling. The one that waiting fixes. */
+  | 'history-short'
+
 export interface PerfAnalysis {
   workspaceId: string
   /** The monitor run this was computed under, stamped at the publication
@@ -45,21 +61,14 @@ export interface PerfAnalysis {
    *  across the two turns that state into "no slowdowns, compared against 0
    *  sessions" — a clean verdict from a comparison that never ran, which is
    *  the failure this feature exists to remove. */
+  /** Derived from `unjudgedBecause`, never set beside it — the two cannot
+   *  disagree about whether a series was judged. */
   ready: { interaction: boolean; startup: boolean }
-  /** Startup went unjudged because THIS session contributed no record — the
-   *  recorder is independently togglable, so the usual cause is that it is off.
-   *  Distinct from "still building": no amount of waiting resolves it, and
-   *  saying otherwise sends the user to wait for something that will not come. */
-  startupAwaitingCurrentSample: boolean
-  /** The same question for interaction: this page session has recorded no
-   *  sample. Its recorder is togglable independently of the monitor too, and
-   *  while it is off the series cannot grow — so an insufficient baseline is
-   *  permanent, and "still building" is a remedy that will never arrive. */
-  interactionAwaitingCurrentSample: boolean
-  /** False when this page session's live counters cannot be attributed to one
-   *  workspace, so only startup was compared. Surfaced rather than silently
-   *  folded into a clean verdict. */
-  interactionComparable: boolean
+  /** WHY each series went unjudged, or null where it was judged. The verdict
+   *  layer renders these and must not re-derive them: three separate booleans
+   *  used to say this, each invented next to the message it fed, and each in
+   *  turn disagreed with what the comparison had actually concluded. */
+  unjudgedBecause: { interaction: UnjudgedReason | null; startup: UnjudgedReason | null }
   /** Sessions the judged comparisons actually rested on — not rows loaded. Per
    *  series, because they fill independently and one number reported for the
    *  other tells a reader about history the verdict never used. */
@@ -122,7 +131,22 @@ export const runPerfAnalysis = async (
 
   const interactionReady = anyJudged(interactionResults)
   const startupReady = anyJudged(startupResults)
-  const startupAwaitingCurrentSample = awaitingCurrentSample(startupResults)
+
+  // Read off the comparison RESULTS, not off adjacent state. `recordId` says
+  // whether this session claimed a row, which is a different question from
+  // whether the live snapshot holds anything comparable — a session can own a
+  // row and still measure nothing usable, and reporting that as "still
+  // building" points at history the comparison never lacked.
+  const interactionUnjudged: UnjudgedReason | null =
+    !session.attributable ? 'blended-workspaces'
+      : interactionReady ? null
+        : awaitingCurrentSample(interactionResults) ? 'no-current-sample'
+          : session.recordId === null ? 'not-recording'
+            : 'history-short'
+  const startupUnjudged: UnjudgedReason | null =
+    startupReady ? null
+      : awaitingCurrentSample(startupResults) ? 'no-current-sample'
+        : 'history-short'
 
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 
@@ -174,13 +198,8 @@ export const runPerfAnalysis = async (
     // sufficient but too short once the recent window is taken out, every
     // comparison necessarily returns null and the chip would report "no
     // slowdowns" for a comparison that never ran.
-    ready: { interaction: interactionReady, startup: startupReady },
-    startupAwaitingCurrentSample,
-    // Nothing claimed for this page session. Early in a session that is also
-    // true of a recorder about to take its first sample, which is why the note
-    // it drives hedges rather than asserting the toggle is off.
-    interactionAwaitingCurrentSample: session.recordId === null,
-    interactionComparable: session.attributable,
+    ready: { interaction: interactionUnjudged === null, startup: startupUnjudged === null },
+    unjudgedBecause: { interaction: interactionUnjudged, startup: startupUnjudged },
     graphGrowth,
   }
 }

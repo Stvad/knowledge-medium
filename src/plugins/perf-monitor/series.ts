@@ -232,9 +232,11 @@ export const fanoutRegression = (
 ): TrendResult => {
   const perWrite = invalidationsPerWrite
   const now = perWrite(current)
-  // A session that has not written has no rate to compare, which is a gap in
-  // the data rather than a clean result.
-  if (now === null) return INSUFFICIENT
+  // A session that has not written has no rate to compare. That is a missing
+  // CURRENT sample, not short history — waiting supplies more sessions, never
+  // this session's own rate — and the two are reported differently because they
+  // send a reader to do different things.
+  if (now === null) return NO_CURRENT_SAMPLE
   const rate = (rs: readonly InteractionComparable[]) =>
     rs.map(perWrite).filter((v): v is number => v !== null)
   return trendRegression(

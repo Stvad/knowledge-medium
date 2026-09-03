@@ -5,7 +5,7 @@
  * than each deciding for itself what an empty regression list means, which is
  * the difference between "judged and fine" and "nothing was judged".
  */
-import type { PerfAnalysis } from './analyze.js'
+import type { PerfAnalysis, UnjudgedReason } from './analyze.js'
 import type { RecordingBlocker } from '@/plugins/interaction-metrics/sessionContext.js'
 
 /** Nothing was judged at all. Derived rather than stored, so it cannot be set
@@ -44,30 +44,29 @@ const graphNote = (growth: number | null): string | null =>
     ? `graph ${Math.round((growth - 1) * 100)}% larger than recent history's median`
     : null
 
-/** Which series went unjudged, and why. The two reasons resolve differently —
- *  waiting fixes a series that is still filling; only a fresh page session
- *  fixes counters blended across workspaces — so they are not one message. */
-const pendingNotes = (analysis: PerfAnalysis): string[] => {
-  const notes: string[] = []
-  if (!analysis.interactionComparable) {
-    notes.push('interaction metrics not comparable this session (more than one workspace opened)')
-  } else if (!analysis.ready.interaction) {
-    // Same split as startup below, for the same reason: while its recorder is
-    // off the series cannot grow, so waiting never resolves an insufficient
-    // baseline and saying "still building" sends someone to wait for nothing.
-    notes.push(analysis.interactionAwaitingCurrentSample
-      ? 'no interaction record for this session (interaction recording may be off)'
-      : 'interaction history still building')
-  }
-  if (!analysis.ready.startup) {
-    // The two do not resolve the same way, so they are not one message: history
-    // fills by waiting, a missing current sample never does.
-    notes.push(analysis.startupAwaitingCurrentSample
-      ? 'no startup record for this session (startup recording may be off)'
-      : 'startup history still building')
-  }
-  return notes
+/** One message per unjudged reason. RENDERED here, decided in `runPerfAnalysis`
+ *  — a reason invented next to its message is how these came to disagree with
+ *  what the comparison concluded. */
+const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string> = {
+  'blended-workspaces': (s) =>
+    `${s} metrics not comparable this session (more than one workspace opened)`,
+  // Series-specific, because the same structural reason means different things:
+  // startup's current sample IS a record for this boot, while interaction's is
+  // the live counters, which exist but held nothing worth comparing.
+  'no-current-sample': (s) => s === 'startup'
+    ? 'no startup record for this session (startup recording may be off)'
+    : 'no usable interaction measurement this session',
+  'not-recording': (s) => `no ${s} record for this session (${s} recording may be off)`,
+  'history-short': (s) => `${s} history still building`,
 }
+
+/** Which series went unjudged, and why. They resolve differently — only
+ *  `history-short` is fixed by waiting — so they are not one message. */
+const pendingNotes = (analysis: PerfAnalysis): string[] =>
+  (['interaction', 'startup'] as const).flatMap((series) => {
+    const reason = analysis.unjudgedBecause[series]
+    return reason === null ? [] : [NOTE[reason](series)]
+  })
 
 /** How much history the comparison actually had.
  *
@@ -144,9 +143,7 @@ export const summarize = (analysis: PerfAnalysis, live: LiveFacts): PerfVerdict 
     // independently of this monitor — is not filling however much history is
     // already on disk, and the note below will be reporting a healthy count
     // under a headline that says to keep waiting.
-    const filling =
-      (analysis.interactionComparable && !analysis.interactionAwaitingCurrentSample)
-      || !analysis.startupAwaitingCurrentSample
+    const filling = Object.values(analysis.unjudgedBecause).includes('history-short')
     return {
       kind: 'pending',
       headline: filling ? 'Building a baseline' : 'Nothing recorded this session',

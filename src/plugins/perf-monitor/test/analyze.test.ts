@@ -262,12 +262,35 @@ describe('runPerfAnalysis', () => {
     expect(filled.ready.startup).toBe(false)
   })
 
+  // Owning a record for this session is not the same as having MEASURED
+  // anything in it. Derived from `recordId`, a session that claimed its row and
+  // then sat idle reported "history still building" — pointing at the one thing
+  // the comparison was not short of.
+  it('separates owning a record from having something to compare', async () => {
+    // Ample history, so "still building" would be plainly wrong...
+    await seedFiringHistory()
+    // ...and then the counters retired, so this session measured nothing the
+    // comparison can use. Telemetry writes do not restore them: they are
+    // excluded from `excludingTelemetry` by construction.
+    repo.resetMetrics()
+    resetMetricsSession(repo)
+    const recordId = await writeInteractionSample(repo, WS)
+    // The precondition, asserted rather than assumed: this session DOES own a
+    // record, so the reason below cannot be "nothing was recorded".
+    expect(recordId).toBeTruthy()
+
+    const analysis = await runPerfAnalysis(repo, WS, 1000)
+
+    expect(analysis.ready.interaction).toBe(false)
+    expect(analysis.unjudgedBecause.interaction).toBe('no-current-sample')
+  })
+
   it('reports a fan-out regression on an attributable session', async () => {
     await seedFiringHistory()
     resetMetricsSession(repo)
     await writeInteractionSample(repo, WS)
     const analysis = await runPerfAnalysis(repo, WS, 1000)
-    expect(analysis.interactionComparable).toBe(true)
+    expect(analysis.unjudgedBecause.interaction).not.toBe('blended-workspaces')
     expect(analysis.regressions.map((r) => r.metric)).toContain('fanout:invalidationsPerWrite')
   })
 
@@ -278,7 +301,7 @@ describe('runPerfAnalysis', () => {
     await writeInteractionSample(repo, OTHER_WS) // blends the counters
 
     const analysis = await runPerfAnalysis(repo, WS, 1000)
-    expect(analysis.interactionComparable).toBe(false)
+    expect(analysis.unjudgedBecause.interaction).toBe('blended-workspaces')
     expect(analysis.regressions.filter((r) => r.metric.startsWith('query:'))).toEqual([])
     expect(analysis.regressions.filter((r) => r.metric.startsWith('fanout:'))).toEqual([])
   })

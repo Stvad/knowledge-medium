@@ -35,7 +35,7 @@ describe('summarize', () => {
 
   // Waiting fixes one of these and not the other, so they are not one message.
   it('separates a series still filling from counters it can never compare', () => {
-    const blended = summarize(analysis({ interactionComparable: false }))
+    const blended = summarize(analysis({ unjudgedBecause: { interaction: 'blended-workspaces', startup: null } }))
     expect(blended.notes.join(' ')).toContain('more than one workspace')
     expect(blended.notes.join(' ')).not.toContain('interaction history still building')
   })
@@ -45,8 +45,7 @@ describe('summarize', () => {
   // "Still building" is then a remedy that never arrives.
   it('says an interaction series is not filling rather than still building', () => {
     const v = summarize(analysis({
-      ready: { interaction: false, startup: true },
-      interactionAwaitingCurrentSample: true,
+      unjudgedBecause: { interaction: 'not-recording', startup: null },
     }))
     expect(v.notes.join(' ')).toContain('interaction recording may be off')
     expect(v.notes.join(' ')).not.toContain('interaction history still building')
@@ -57,9 +56,7 @@ describe('summarize', () => {
   // not the problem, next to a note reporting a healthy count.
   it('does not call an unrecorded session a building baseline', () => {
     const v = summarize(analysis({
-      ready: { interaction: false, startup: false },
-      interactionAwaitingCurrentSample: true,
-      startupAwaitingCurrentSample: true,
+      unjudgedBecause: { interaction: 'not-recording', startup: 'no-current-sample' },
       recorded: { interaction: 40, startup: 40 },
     }))
     expect(v.kind).toBe('pending')
@@ -70,12 +67,24 @@ describe('summarize', () => {
   // ...and it still says so when a series really is just short of history.
   it('calls a genuinely short history a building baseline', () => {
     const v = summarize(analysis({
-      ready: { interaction: false, startup: false },
-      interactionAwaitingCurrentSample: false,
-      startupAwaitingCurrentSample: false,
+      unjudgedBecause: { interaction: 'history-short', startup: 'history-short' },
       recorded: { interaction: 2, startup: 2 },
     }))
     expect(v.headline).toBe('Building a baseline')
+  })
+
+  // Owning a record for this session says nothing about whether the session
+  // MEASURED anything: with no non-telemetry writes and every query below the
+  // call floor, the comparison has no current rate, and no amount of history
+  // supplies one. Deriving from record ownership called this "still building".
+  it('names a missing current measurement rather than short history', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'no-current-sample', startup: null },
+      recorded: { interaction: 40, startup: 40 },
+    }))
+    const notes = v.notes.join(' ')
+    expect(notes).toContain('no usable interaction measurement')
+    expect(notes).not.toContain('interaction history still building')
   })
 
   // "Still building" promises something that will never arrive when no recorder
@@ -116,8 +125,7 @@ describe('summarize', () => {
   // them can never fill this session.
   it('keeps the explanation when it says it is building a baseline', () => {
     const v = summarize(analysis({
-      interactionComparable: false,
-      ready: { interaction: false, startup: false },
+      unjudgedBecause: { interaction: 'blended-workspaces', startup: 'history-short' },
       baseline: { interaction: 20, startup: 0 },
     }))
     expect(v.headline).toBe('Building a baseline')
@@ -182,7 +190,7 @@ describe('an unjudged startup series', () => {
   })
 
   it('names the missing current sample instead, when waiting cannot help', () => {
-    const notes = startupUnjudged({ startupAwaitingCurrentSample: true }).notes.join(' ')
+    const notes = startupUnjudged({ unjudgedBecause: { interaction: null, startup: 'no-current-sample' } }).notes.join(' ')
     expect(notes).toContain('no startup record for this session')
     expect(notes).not.toContain('still building')
   })

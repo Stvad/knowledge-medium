@@ -8,6 +8,9 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PerfTrendDialog } from '../PerfTrendDialog.tsx'
+import { publishPerfAnalysis, resetPerfAnalysisStore } from '../store'
+import { resetMonitorRun, startMonitorRun } from '../monitorRun'
+import { analysisFixture } from './fixtures'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -220,3 +223,37 @@ describe('rows after a Repo swap', () => {
     await waitFor(() => expect(screen.queryAllByRole('table')).toHaveLength(0))
   })
 })
+
+/**
+ * Rows belong to the publication they were read for.
+ *
+ * The dialog stays open through the scheduled cadence. The interaction recorder
+ * rewrites its row as the session goes on and another tab can append, so a
+ * newly published verdict beside the rows loaded at open time is a verdict its
+ * own tables cannot explain.
+ */
+describe('rows after a new analysis publishes', () => {
+  beforeEach(freshRepo)
+  afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
+
+  it('re-reads the history a fresh verdict was computed against', async () => {
+    await writeInteractionSample(repo, WS)
+    await writeStartupRecord(repo, WS)
+    startMonitorRun(repo, WS)
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
+
+    // Only the SERIES reads count: `getAll` is called for plenty of other
+    // reasons, and asserting on it bare passes with the dependency removed.
+    const reads = vi.spyOn(repo.db, 'getAll')
+    const seriesReads = () => reads.mock.calls.filter(
+      ([sql]) => typeof sql === 'string' && sql.includes('properties_json')).length
+
+    publishPerfAnalysis(analysisFixture({ workspaceId: WS, seq: 99 }))
+
+    await waitFor(() => expect(seriesReads()).toBeGreaterThan(0))
+    // ...and the tables come back, rather than staying hidden on a mismatch.
+    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
+  })
+})
+

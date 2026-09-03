@@ -73,18 +73,28 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   const [refreshing, setRefreshing] = useState(false)
   const ws = workspaceId ?? repo.activeWorkspaceId
 
-  /** The loaded series WITH the Repo and workspace they were read from. Kept
-   *  together so what is rendered can be derived rather than cleared: a local
-   *  sign-out swaps the Repo, and rows held in bare state would go on showing
-   *  the previous user's history until the new read finished — or forever, if
-   *  it failed, since the catch path writes nothing. */
+  /** The loaded series WITH the Repo, workspace and PUBLICATION they were read
+   *  from. Kept together so what is rendered can be derived rather than
+   *  cleared: a local sign-out swaps the Repo, and rows held in bare state
+   *  would go on showing the previous user's history until the new read
+   *  finished — or forever, if it failed, since the catch path writes nothing.
+   *
+   *  The publication is in there for the same reason. The tables are what a
+   *  reader checks the verdict against, and the series moves underneath a dialog
+   *  that stays open: the interaction recorder rewrites its row on a cadence and
+   *  another tab can append. Rows from a different publication than the verdict
+   *  beside them cannot explain it, so they are not shown as if they could. */
   const [series, setSeries] = useState<{
     repo: object
     workspaceId: string
+    seq: number | null
     startup: StartupRecordData[]
     interaction: InteractionRecordData[]
   } | null>(null)
-  const shown = series && series.repo === repo && series.workspaceId === ws ? series : null
+  const seq = analysis?.seq ?? null
+  const shown = series && series.repo === repo && series.workspaceId === ws && series.seq === seq
+    ? series
+    : null
   const startup = shown?.startup ?? null
   const interaction = shown?.interaction ?? null
 
@@ -101,14 +111,14 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
       ])
       if (!alive()) return
       setSeries({
-        repo, workspaceId: ws,
+        repo, workspaceId: ws, seq,
         startup: s.map((r) => r.record),
         interaction: i.map((r) => r.record),
       })
     } catch (e) {
       if (alive()) showError(`Couldn't read performance history: ${e instanceof Error ? e.message : String(e)}`)
     }
-  }, [repo, ws])
+  }, [repo, ws, seq])
 
   // ONE guard for both load paths: the newest claim invalidates every earlier
   // one. A load whose dialog has moved on — unmounted, or re-keyed by a Repo or
