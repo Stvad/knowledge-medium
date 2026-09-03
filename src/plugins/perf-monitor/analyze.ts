@@ -1,6 +1,11 @@
 /**
- * One analysis pass: read this client's stored series, compare the live session
- * against it, publish the verdict.
+ * One analysis pass: read this client's stored series and compare the live
+ * session against it, returning the comparison.
+ *
+ * It does NOT publish. Whether a comparison may reach the store depends on the
+ * monitor run and the counter span it was computed under, which is
+ * `runPerfAnalysisNow`'s business — and this function is equally callable from
+ * a test with neither.
  */
 import type { Repo } from '@/data/repo'
 import {
@@ -8,7 +13,7 @@ import {
   interactionComparable,
 } from '@/plugins/interaction-metrics/record.js'
 import {
-  readLiveSession,
+  peekLiveSession,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, countRecords, loadRecords } from './load.js'
 import { nextAnalysisSeq } from './store.js'
@@ -137,7 +142,12 @@ export const runPerfAnalysis = async (
   // one workspace's history manufactures regressions. The recorder stops
   // sampling in that state; this reader holds the same snapshot and needs the
   // same rule -- it does not inherit it by the recorder having one.
-  const { metrics, session } = readLiveSession(repo, workspaceId)
+  // PEEK, not read: observing is a claim about where this page has been, and
+  // this pass is still reading history when the user can move on and reset the
+  // counters — observing the workspace being analysed would then mark the fresh
+  // span unattributable and disable sampling for a workspace that never blended
+  // anything.
+  const { metrics, session } = peekLiveSession(repo, workspaceId)
 
   // Exclude THIS session's record by id, not by position: it is updated in
   // place, so it is history for nothing. Dropping the first row blindly would

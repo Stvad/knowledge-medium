@@ -17,7 +17,7 @@ import {
   writeInteractionSample,
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
-import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
+import { metricsSessionContext, observeWorkspace, resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis, unjudgedReason } from '../analyze'
 import { nextAnalysisDelayMs, perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
 import { resetMonitorRun, startMonitorRun } from '../monitorRun'
@@ -124,6 +124,10 @@ describe('runPerfAnalysis', () => {
       await pastSession({ recordedAt: 2e12 + i, writes: 0, fanout: {} })
     }
     resetMetricsSession(repo)
+    // Explicit: the analysis PEEKS at the session and no longer observes on the
+    // reader's behalf, so what makes this workspace attributable is the
+    // always-on observer — here, this call.
+    observeWorkspace(repo, WS)
 
     const analysis = await runPerfAnalysis(repo, WS, 1000)
     const loaded = await loadRecords(repo, WS, INTERACTION_SERIES)
@@ -214,6 +218,27 @@ describe('runPerfAnalysis', () => {
     // would try to serialize.
     expect(analysis.workspaceId).toBe(WS)
     expect(getPerfAnalysisFor(repo, WS)).toBeNull()
+  })
+
+  // Observing is a claim about where this page has been. An analysis for one
+  // workspace is still reading history when the user can move to another and
+  // reset the counters — observing on the reader's behalf then marks the fresh
+  // span unattributable, and interaction sampling for a workspace that never
+  // blended anything stays off until the next reset.
+  it('does not claim the workspace it is analysing', async () => {
+    await pastSession()
+    resetMetricsSession(repo)
+    // The user has moved on, and the counters were reset for the new workspace.
+    repo.setActiveWorkspaceId(OTHER_WS)
+    repo.resetMetrics()
+    observeWorkspace(repo, OTHER_WS)
+
+    // An analysis for the workspace they LEFT, resolving late.
+    await runPerfAnalysis(repo, WS, 1000)
+
+    // The new workspace is still comparable: nothing claimed to have seen the
+    // old one inside this span.
+    expect(metricsSessionContext(repo, OTHER_WS).attributable).toBe(true)
   })
 
   // A scheduled pass waits on the startup recorder before it runs, and a
@@ -336,11 +361,15 @@ describe('runPerfAnalysis', () => {
     await seedFiringHistory()
     // A session that HAS written its record: it is history for nothing.
     resetMetricsSession(repo)
+    observeWorkspace(repo, WS)
     await stamp((await writeInteractionSample(repo, WS))!, { recordedAt: 5e12, ...USABLE })
     const owned = await runPerfAnalysis(repo, WS, 1000)
 
     // A fresh session that has not written one: its predecessor is history now.
+    // Observed explicitly, as the always-on effect does — the analysis peeks and
+    // no longer claims the workspace on the reader's behalf.
     resetMetricsSession(repo)
+    observeWorkspace(repo, WS)
     const unowned = await runPerfAnalysis(repo, WS, 1000)
 
     expect(owned.baseline.interaction).toBeGreaterThan(0)
