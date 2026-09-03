@@ -138,7 +138,7 @@ const ids = (rows: readonly {id: string}[]) => rows.map(row => row.id)
 
 describe('repo.queryBlocks', () => {
   it('rejects calls that omit workspaceId at the type level', () => {
-    // PR #47 follow-up: TypedBlockQuery.workspaceId is required so
+    // TypedBlockQuery.workspaceId is required so
     // background flows / import runs can't silently fall back to
     // activeWorkspaceId. The `@ts-expect-error` lines below FAIL the
     // build if the field becomes optional again.

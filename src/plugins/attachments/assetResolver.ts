@@ -115,8 +115,8 @@ const resolversByUser = new Map<string, AssetResolver>()
 
 /**
  * A resolver bound to ONE user for the lifetime of a background pass, instead of
- * the ambient active account. Fixes a review finding (PR #424 P2): the down-lane
- * pass reads `repo.user.id` ONCE at its boundary (see assetDownLane.ts) for its
+ * the ambient active account. The down-lane pass reads `repo.user.id` ONCE at
+ * its boundary (see assetDownLane.ts) for its
  * lock name and its one-shot OPFS presence enumeration, but used to hand that
  * work to {@link getAssetResolver}'s singleton, whose `getUserId` — and its §6
  * materializability/CEK/K_id lookups — re-read the AMBIENT active user on every

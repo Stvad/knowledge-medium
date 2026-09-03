@@ -214,10 +214,6 @@ const resolveSpecifier = (source, importerSrcRelative, sourceRoot) => {
   return absolute === undefined ? undefined : srcRelativePath(absolute, sourceRoot)
 }
 
-/** The static string a node contributes, or undefined. A no-substitution
- *  template literal — `` import(`@/plugins/todo/index.js`) `` — is every bit as
- *  static as a quoted string and resolves to exactly one module, so it counts;
- *  only a template with interpolations is genuinely dynamic and drops out. */
 /** Strip the wrappers that carry no runtime meaning, so an assertion can't hide
  *  a specifier from the resolver: `'@/plugins/x' as string`, `… as const`,
  *  `…!`. esbuild erases all of these and the build imports the plugin as if
@@ -264,6 +260,10 @@ const unwrap = (node) => {
   return current
 }
 
+/** The static string a node contributes, or undefined. A no-substitution
+ *  template literal — `` import(`@/plugins/todo/index.js`) `` — is every bit as
+ *  static as a quoted string and resolves to exactly one module, so it counts;
+ *  only a template with interpolations is genuinely dynamic and drops out. */
 const staticString = (node) => {
   const el = unwrap(node)
   if (el?.type === 'Literal') return typeof el.value === 'string' ? el.value : undefined
@@ -287,11 +287,6 @@ const staticString = (node) => {
   return undefined
 }
 
-/** The static string specifiers a node contributes — one, or an array of them
- *  (`import.meta.glob([...])` takes either). Array holes (`['a', , 'b']`) and
- *  non-static elements drop out. Negated glob patterns (`!…`) are KEPT — a
- *  caller that only wants dependencies can skip them, but `checkGlob` has to
- *  see them, since an exclusion can be what makes a broad pattern safe. */
 /** The glob Vite compiles an INTERPOLATED specifier into — each `${…}` becomes
  *  a single-segment wildcard. `` import(`@/plugins/${id}/index.js`) `` is not
  *  unknowable: vite:dynamic-import-vars rewrites it into a static map of every
@@ -311,6 +306,11 @@ const templateGlob = (node) => {
   )
 }
 
+/** The static string specifiers a node contributes — one, or an array of them
+ *  (`import.meta.glob([...])` takes either). Array holes (`['a', , 'b']`) and
+ *  non-static elements drop out. Negated glob patterns (`!…`) are KEPT — a
+ *  caller that only wants dependencies can skip them, but `checkGlob` has to
+ *  see them, since an exclusion can be what makes a broad pattern safe. */
 const specifierLiterals = (node) => {
   const el = unwrap(node)
   // `import.meta.glob([...])` takes an array, and a conditional names TWO real
@@ -372,20 +372,6 @@ const segmentCanMatch = (segment, literal) =>
     // literals and is correctly left alone.
     candidate === literal || GLOB_METACHARACTER.test(candidate))
 
-/** Whether a glob PATTERN — already absolute — can match anything inside the
- *  plugin layer. Asked as one question in one coordinate space, instead of the
- *  per-shape branches that kept letting the broadest patterns through.
- *
- *  Three cases, and only three:
- *    1. the static head is already at or inside the plugin root — then it only
- *       has to get two segments deep (see `reachesPluginContents`);
- *    2. the static head is somewhere else entirely (a sibling, another tree) —
- *       a glob cannot climb sideways, so it never reaches;
- *    3. the static head is ABOVE the plugin root — the globby remainder has to
- *       span the gap, so match it segment by segment against the path down,
- *       and then clear the same two-segment bar with whatever is LEFT.
- *  A leading `**` spans any depth, and a brace group that survives the segment
- *  split unbalanced can't be reasoned about at all; both flag conservatively. */
 /** Whether a glob's remaining segments can walk DOWN a concrete path — used to
  *  ask whether a pattern rooted above the plugin layer can reach into it.
  *
@@ -419,6 +405,20 @@ const descendTo = (patternSegments, gapSegments) => {
 const reachesPluginContents = (already, restSegments) =>
   restSegments.includes('**') || already + restSegments.length >= 2
 
+/** Whether a glob PATTERN — already absolute — can match anything inside the
+ *  plugin layer. Asked as one question in one coordinate space, instead of the
+ *  per-shape branches that kept letting the broadest patterns through.
+ *
+ *  Three cases, and only three:
+ *    1. the static head is already at or inside the plugin root — then it only
+ *       has to get two segments deep (see `reachesPluginContents`);
+ *    2. the static head is somewhere else entirely (a sibling, another tree) —
+ *       a glob cannot climb sideways, so it never reaches;
+ *    3. the static head is ABOVE the plugin root — the globby remainder has to
+ *       span the gap, so match it segment by segment against the path down,
+ *       and then clear the same two-segment bar with whatever is LEFT.
+ *  A leading `**` spans any depth, and a brace group that survives the segment
+ *  split unbalanced can't be reasoned about at all; both flag conservatively. */
 const globReachesPluginRoot = (absolutePattern, pluginsRoot) => {
   if (absolutePattern === undefined) return false
   const {head, rest} = staticHead(absolutePattern)

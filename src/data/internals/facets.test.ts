@@ -261,7 +261,7 @@ describe('valuePresetCoresFacet', () => {
 })
 
 describe('facet variance — typed plugin contributions register without widening', () => {
-  // Reviewer P2: prior to AnyQuery / AnyPropertyEditorOverride / AnyPropertySchema,
+  // Prior to AnyQuery / AnyPropertyEditorOverride / AnyPropertySchema,
   // typed plugin contributions failed to register because the facet's
   // contribution type (`Query<unknown, unknown>` / `PropertyEditorOverride<unknown>`
   // / `PropertySchema<unknown>`) is contravariant in the parameter and so a typed

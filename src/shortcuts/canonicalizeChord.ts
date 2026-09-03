@@ -125,7 +125,7 @@ interface ParsedPress {
  *  Splitting on every `+` and dropping empty tokens would silently eat the
  *  key and leave the bare modifier — and since direct overrides are
  *  INSTALLED through `normalizeChordSequence`, a user's `+` override would
- *  come back rebound to Shift alone (found by Codex review on PR #427).
+ *  come back rebound to Shift alone.
  *  Using tinykeys' own regex also keeps the odd corners (a `(regex)` key
  *  containing `+`) tokenized identically on both sides rather than
  *  differently-wrong.

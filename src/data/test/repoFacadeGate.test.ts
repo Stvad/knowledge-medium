@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * Structural gate for the `repo.undoGroup` facade contract (PR #308
- * follow-up; docs/undo-grouping.md).
+ * Structural gate for the `repo.undoGroup` facade contract
+ * (docs/undo-grouping.md).
  *
  * The facade built by `groupedFacade` delegates everything it does not
  * explicitly override to the real Repo via the prototype chain — which

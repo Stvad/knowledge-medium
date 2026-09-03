@@ -77,7 +77,7 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read('s')!.references).toEqual([])
   })
 
-  // Regression (PR #386 review): `core.deriveReferenceTarget` runs earlier
+  // Regression: `core.deriveReferenceTarget` runs earlier
   // in the same-tx processor pass and stamps `referenceTargetId` from the
   // PRE-inline content. Without recomputing it here, a whole-block
   // `((deletedId))` row would keep `referenceTargetId: deletedId` even
@@ -275,7 +275,8 @@ describe('references.inlineDeletedBlockReferences', () => {
 })
 
 /**
- * #404 item 4 / PR #288 §9: a ref-typed property VALUE is `((targetId))`.
+ * #404 item 4 / docs/properties-as-blocks-migration.html §9: a ref-typed
+ * property VALUE is `((targetId))`.
  * Inlining it would rewrite the value into prose, clear its derived column,
  * and silently drop the property key at the next projection — irreversibly,
  * since the id is gone. Cell-era semantics were the opposite: a deleted

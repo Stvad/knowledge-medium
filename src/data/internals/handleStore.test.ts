@@ -1756,7 +1756,7 @@ describe('Invalidations on subscriber-less handles defer re-resolve', () => {
 })
 
 describe('Dynamic deps declared after SQL — change-during-load queue', () => {
-  // Reviewer P2: row-returning handles (`repo.children`, `repo.subtree`,
+  // Row-returning handles (`repo.children`, `repo.subtree`,
   // etc.) only know which row deps to declare AFTER the SQL returns. A
   // commit that lands between SQL read and per-row `ctx.depend(...)`
   // doesn't match the upfront `parent-edge` dep, so without a queue it

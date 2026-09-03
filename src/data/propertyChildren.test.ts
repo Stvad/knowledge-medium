@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Properties-as-blocks slice B1 (PR #288 §5/§6/§9): dual-writing
+ * Properties-as-blocks slice B1 (docs/properties-as-blocks-migration.html §5/§6/§9): dual-writing
  * `tx.setProperty`, the project/materialize processor pair, and the
  * `childrenOf` visible-children exclusion — all gated on the per-workspace
  * flip column (`workspaces.properties_migration`), dormant at 'cell'.
@@ -1082,9 +1082,9 @@ describe('merge integration (§9, slice B3)', () => {
   })
 
   it("a source's ordinary block-ref child is not mistaken for the survivor's field row once re-homed", async () => {
-    // The sibling case to the PR #386 one below, and the half the fold's
-    // visible-child SET exists for. `from`'s ordinary `((STATUS))` child is
-    // re-homed under `into` BEFORE the field-row scan runs, so unless the set
+    // The sibling case to the ordinary-child-of-a-value-row case below, and
+    // the half the fold's visible-child SET exists for. `from`'s ordinary
+    // `((STATUS))` child is re-homed under `into` BEFORE the field-row scan runs, so unless the set
     // grows to include it the scan sees a child of `into` carrying a
     // definition-shaped `reference_target_id` and registers it as `into`'s
     // field row for Status — after which `from`'s genuine field row collapses
@@ -2455,7 +2455,7 @@ describe('content <-> value codecs: blank numeric content is unparseable, not ze
 
   // `Number('')` is 0 (not NaN), so a plain isFinite guard waves blank content
   // through as a real zero: clearing a value row would silently project 0 over
-  // the cell instead of being treated as unparseable (PR #386 review).
+  // the cell instead of being treated as unparseable.
   it.each([['', 'empty'], ['   ', 'spaces'], ['\t\n', 'other whitespace']])(
     'rejects %j (%s) rather than coercing it to 0',
     content => {
@@ -2600,7 +2600,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
     expect(propertyChildContentToEncodedValue(statusSchema, value)).toBe(value)
   })
 
-  // Round 2 of review: the EMBED forms. `((id))` was escaped and `!((id))` was
+  // The EMBED forms. `((id))` was escaped and `!((id))` was
   // not, though they differ by one character and the inline reader indexes
   // both — so a merge rewrote the second and silently edited the value.
   it.each([
@@ -2613,7 +2613,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
     expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
   })
 
-  // Round 2 of review: quote-wrapping alone was treated as "this is an escaped
+  // Quote-wrapping alone was treated as "this is an escaped
   // envelope", so text a PERSON wrote with quotes lost them on the way back.
   // A real envelope carries no literal span opener; this content does.
   it('does not unwrap quoted text that escapeContent could not have produced', () => {
@@ -2668,7 +2668,7 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
     expect(encodedPropertyValueToChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
   })
 
-  // Regression (PR #386 review): `referenceBlockContentForId` was hardened to
+  // Regression: `referenceBlockContentForId` was hardened to
   // refuse ids it cannot round-trip, which made the ordinary "clear a ref
   // property" path — `codecs.ref` encodes a cleared value as EXACTLY `''` —
   // throw and roll back the whole transaction. An empty ref is the ABSENCE of a

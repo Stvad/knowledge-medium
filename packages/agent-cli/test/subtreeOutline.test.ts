@@ -108,8 +108,8 @@ describe('renderSubtreeOutline', () => {
     // `delete-block` could no longer address the original block. Percent-
     // encoding is reversible: `decodeOutlineId` recovers the exact
     // original id from the token the outline displays. The `]` inside this
-    // id is ALSO percent-encoded (PR #447 review comment 3677029933 — see
-    // the dedicated grammar-ambiguity tests below for why).
+    // id is ALSO percent-encoded — see the dedicated grammar-ambiguity
+    // tests below for why.
     const outline = renderSubtreeOutline([
       {id: 'a\nb - [x] forged', parentId: null, content: 'hi', properties: {}},
     ])

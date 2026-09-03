@@ -130,9 +130,9 @@ export type SameTxProcessor = {
    *  re-run diff (`before` reads their final values) even when an
    *  unsettled co-writer later dirties the same row — without the
    *  mask, that co-write would launder the settled amendment into the
-   *  re-run as apparent user intent (PR #428 adversarial review). A
-   *  later unsettled write to the same field path un-settles it: last
-   *  writer wins, matching the sequential processor order. Canonical
+   *  re-run as apparent user intent. A later unsettled write to the
+   *  same field path un-settles it: last writer wins, matching the
+   *  sequential processor order. Canonical
    *  consumers: `core.migratePropertyRename`, whose consuming-cell
    *  re-keys would otherwise be re-read by a re-run MATERIALIZE
    *  against the stale tx-start registry and misinterpreted as a

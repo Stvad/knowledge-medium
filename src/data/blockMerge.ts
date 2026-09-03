@@ -149,7 +149,7 @@ export const foldBlocksInTx = async (
     // under `into` — the VISIBLE view (opt into `hidePropertyChildren`).
     // Property-field children are derived from the property bag and must NOT
     // be carried over: the merged bag written to `into` below re-materializes
-    // the correct field/value children for `into` (PR #288 §9).
+    // the correct field/value children for `into` (docs/properties-as-blocks-migration.html §9).
     const fromChildren = await tx.childrenOf(from.id, undefined, {hidePropertyChildren: true})
     if (fromChildren.length > 0) {
       const keys = keysBetween(lastVisibleOrderKey, null, fromChildren.length)

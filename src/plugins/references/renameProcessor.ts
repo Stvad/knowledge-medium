@@ -30,9 +30,8 @@
  * timestamp heuristic ("was this seat minted by MY window?") that no
  * available signal can actually answer: `skipMetadata` still ratchets
  * `updated_at`, so a re-derived span and a user-typed one are
- * indistinguishable. Six review rounds each found a new leak in that
- * heuristic. Running inside the user's transaction deletes the gap, and
- * with it all of that machinery — the claimant check becomes the plain
+ * indistinguishable. Running inside the user's transaction deletes the gap,
+ * and with it all of that machinery — the claimant check becomes the plain
  * question "does anything still claim α?", asked once, atomically.
  *
  * Costs, accepted deliberately (Vlad, #461):
@@ -120,8 +119,8 @@ export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
  *  extension is also the plugin's `systemToggle` boundary, so a bare
  *  contribution outside it keeps running when the user disables
  *  References — rewriting spans and invalidating edges with
- *  `parseReferences` gone and nothing left to rebuild them (Codex on
- *  PR #444). A precedence orders it without moving it.
+ *  `parseReferences` gone and nothing left to rebuild them. A precedence
+ *  orders it without moving it.
  *
  *  Room deliberately left below: a processor that must run after
  *  `alias.sync` but BEFORE this one can take any value in 1..9. */
@@ -142,8 +141,9 @@ export const RENAME_BACKLINKS_PRECEDENCE = 10
  *  Read through `ctx.db` (the active transaction's read surface), so the
  *  trigger-maintained projection already reflects anything this tx has
  *  staged. Rides `idx_block_references_ws_alias` (`localSchema.ts`).
- *  Ordered for determinism, like the sibling same-tx processors. */
-/** Edge-keyed leg of the enumeration. Complete only for rows whose
+ *  Ordered for determinism, like the sibling same-tx processors.
+ *
+ *  Edge-keyed leg of the enumeration. Complete only for rows whose
  *  post-commit parse has DRAINED — see `parseFence.ts` for the rows it
  *  misses and the content-keyed leg that covers them. */
 const SELECT_BACKLINK_SOURCES_SQL = `
@@ -175,8 +175,8 @@ const SELECT_BACKLINK_SOURCES_SQL = `
  *  ALIAS to compare, because that is the parser that produced the
  *  `block_references.alias` this enumeration is keyed on.
  *
- *  Content alone is NOT enough, and asking only it was a bug (Codex on
- *  PR #484). §9 recognition also needs a non-null parent — a workspace-root
+ *  Content alone is NOT enough, and asking only it was a bug.
+ *  §9 recognition also needs a non-null parent — a workspace-root
  *  `::` row has no owner to be a field OF, so its marker is just text — and
  *  a target that resolves to a definition. Not the workspace flip: the
  *  backfill mints field rows before it (see below).
@@ -192,7 +192,7 @@ const SELECT_BACKLINK_SOURCES_SQL = `
  *  ordinary content.
  *
  *  Using `exact.alias` for the comparison was wrong, and not merely
- *  conservatively so (Codex on PR #484). The whole-block parser TRIMS its
+ *  conservatively so. The whole-block parser TRIMS its
  *  alias while the inline one does not, so a `::[[ α ]]` row whose alias is
  *  stored with padding — `tx.setProperty(aliasesProp, ['Old '])` is an
  *  existing, tested case — matched the edge but failed this equality, fell
@@ -421,7 +421,7 @@ const collectTargetPlans = async (
  *  When both then release it, each sees zero post-tx claimants and each
  *  would run the content leg over the SAME textual referrers, which is the
  *  one case that leg's "this target owned every span" premise does not
- *  cover (Codex on PR #484).
+ *  cover.
  *
  *  Computed once per event from the same before/after pairs the loop
  *  walks, so it costs nothing and cannot disagree with what the loop
@@ -545,7 +545,7 @@ export const applyRefRewrites = (
  *  every occurrence of one alias into a SINGLE entry, so there is no way
  *  to say "the pinned span points here, the embed points there" in the
  *  stored list; only a re-parse can. Drop the entry and let it own the
- *  rebind (PR #444 round 7, P2).
+ *  rebind.
  *
  *  Exported for a DIRECT unit test. Asserting it through the processor
  *  cannot work: the write is what schedules `parseReferences`, which
@@ -633,7 +633,7 @@ const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
     // create path does.
     //
     // Gated on a content rewrite, and that is sufficient — checked, because
-    // it looks like a hole (Codex on PR #444). The no-content-change paths
+    // it looks like a hole. The no-content-change paths
     // (handoff, co-claim, unrenderable replacement) still WRITE, because
     // they drop the stale edge; that write dirties the row, and the kernel's
     // derivation re-run visits dirty rows without filtering on watched

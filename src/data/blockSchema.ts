@@ -73,7 +73,7 @@ export const BLOCK_STORAGE_COLUMNS = [
  *  resolved target when the row's whole content is exactly one reference
  *  span (`((id))` / `[[alias]]` / `[label](((uuid)))`, marked or not) — for
  *  property field rows this is the
- *  schema's fieldId. Kept local by owner decision (PR #288 §8/§11): a synced
+ *  schema's fieldId. Kept local by owner decision (docs/properties-as-blocks-migration.html §8/§11): a synced
  *  plaintext copy would leak reference-edge metadata that e2ee workspaces
  *  encrypt, and no server-side consumer exists.
  *

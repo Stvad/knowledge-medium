@@ -5,7 +5,7 @@
  * `WeakRef` whose only referent was an inline closure, so the first GC after
  * the observing job collected it: `Node[reportMutation]` spliced the listener
  * out and the observer never fired again. It presents as a DOM test timing out
- * on a stale value, not as a dead observer (PR #635). `^20.x` admits it coming
+ * on a stale value, not as a dead observer. `^20.x` admits it coming
  * back; a strongly-held callback cannot be collected, so this only reddens if
  * it does.
  */

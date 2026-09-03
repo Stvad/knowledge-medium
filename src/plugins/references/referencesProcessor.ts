@@ -164,8 +164,7 @@ interface SourcePlan {
    *  portion covers writers that touch ONLY the references column — the
    *  ref-backfill reprojection on schema load, raw bridge writes: their
    *  entries would otherwise be silently dropped by a plan built from the
-   *  pre-write row, with no watched-field change left to re-derive them
-   *  (Codex review on PR #371). */
+   *  pre-write row, with no watched-field change left to re-derive them. */
   basis: string
   /** Resolved-or-to-be-created refs the source's `references` column
    *  should end up with. The id may name a non-yet-existing target if
@@ -357,11 +356,6 @@ const buildSourcePlan = async (
   }
 }
 
-/** Write phase: apply one source's plan inside the active tx. Returns
- *  the list of alias-target ids this tx actually inserted (for
- *  cleanup-eligibility filtering — only `ensureAliasTarget`'s
- *  `inserted: true` results count; date results never feed cleanup per
- *  §7.6). */
 /** Make the resolved date target CLAIM each long-form literal spelling
  *  that bound to it (e.g. "January 5th, 2026" alongside the ISO
  *  "2026-01-05"), so the binding gets the same
@@ -384,7 +378,7 @@ const buildSourcePlan = async (
  *  `tx.aliasLookup` recheck, so within this tx the literal is known
  *  unclaimed — the uniqueness trigger backstops same-device racers.
  *
- *  Documented residuals (adversarial review, PR #384):
+ *  Documented residuals:
  *  - The claim outlives the referencing edit: undo of the source (or a
  *    later removal of the ISO alias from a user-page target) leaves the
  *    auto-claimed literal in place — orphan cleanup exempts dates
@@ -442,12 +436,16 @@ const claimLiteralDateAliases = async (
     // (ABORT) backs out only this statement (tx stays open) and
     // setProperty records bookkeeping only after a successful execute,
     // so skipping is clean: the claim degrades to the pre-claim
-    // first-writer behavior for this target only (adversarial review
-    // on PR #384).
+    // first-writer behavior for this target only.
     if (parseAliasCollisionError(err) === null) throw err
   }
 }
 
+/** Write phase: apply one source's plan inside the active tx. Returns
+ *  the list of alias-target ids this tx actually inserted (for
+ *  cleanup-eligibility filtering — only `ensureAliasTarget`'s
+ *  `inserted: true` results count; date results never feed cleanup per
+ *  §7.6). */
 const applySourcePlan = async (
   tx: Tx,
   ctx: ProcessorCtx,
@@ -485,8 +483,7 @@ const applySourcePlan = async (
   // long-form, e.g. "May 20th, 2026") can be claimed mid-plan too —
   // ensureDailyNoteTarget's internal lookup-first only rechecks the ISO,
   // so a long-form claimant would otherwise be missed and the entry left
-  // bound to the daily seat where a fresh parse would bind the claimant
-  // (Codex review on PR #371).
+  // bound to the daily seat where a fresh parse would bind the claimant.
   const seatAliasesByIso = new Map<string, string[]>()
   for (const {iso, alias} of plan.datesToEnsure) {
     const claimant = await tx.aliasLookup(alias, plan.workspaceId)
@@ -567,7 +564,7 @@ export const parseReferencesProcessor = definePostCommitProcessor({
   // (isRetainableAbsentRef) keeps entries the parse can't re-derive.
   // No self-loop: this processor's own references write re-fires one
   // read phase that comes out idempotent (planNeedsWrite false) and
-  // stops. (Codex review on PR #371.)
+  // stops.
   watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties', 'references', 'deleted'] },
   apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
     // Read phase — outside any tx; bare-connection reads, no writer
@@ -672,7 +669,8 @@ const isGeneratedSeatFieldRow = (
 
 /** Soft-delete orphaned seats in one tx (shared by the mint-time cleanup
  *  above and the reference-drop reaper below). A seat's OWN generated
- *  properties (alias / types) materialize as hidden field rows (PR #288 §9) —
+ *  properties (alias / types) materialize as hidden field rows
+ *  (docs/properties-as-blocks-migration.html §9) —
  *  delete those alongside the seat or they dangle live under the tombstone.
  *  Only machinery-generated field rows go; user content under a seat is left
  *  alone.
@@ -696,8 +694,8 @@ const reapSeatsInTx = async (
       // seat since the read phase — nothing to reap then.
       const current = await tx.get(id)
       if (current === null || current.deleted) continue
-      // In-tx SHAPE re-check (PR #428 adversarial review): a queued
-      // user tx can ADOPT the seat between the read phase and this
+      // In-tx SHAPE re-check: a queued user tx can ADOPT the seat between
+      // the read phase and this
       // write lock — rename it (quick-find, title edit) or set a
       // property — and the children guard below can't see either. The
       // referrer probe genuinely can't run in-tx (`Tx` can't read
@@ -751,8 +749,8 @@ const reapSeatsInTx = async (
         ? children.filter(child => !isGeneratedSeatFieldRow(child, generatedFieldIds))
         : children
       if (blockingChildren.length > 0) continue
-      // Deep guard (PR #428 adversarial review, both rounds): the
-      // direct-children gate can't see user content nested INSIDE a
+      // Deep guard: the direct-children gate can't see user content
+      // nested INSIDE a
       // generated field row's subtree — §9 keeps value children
       // visible, so "a comment thread under a property value child is
       // arbitrarily deep user content" (subtreeDelete.ts) is reachable
@@ -841,7 +839,7 @@ const liveReferenceTargetIds = (row: BlockData | null): ReadonlySet<string> =>
  *     one, none beyond the seat's own generated field rows
  *     (`isGeneratedSeatFieldRow` — the `::` bit AND the generated id).
  *     Anything else would strand live under the tombstone, since the delete
- *     sweep takes only what that predicate matches; Codex review on PR #428.
+ *     sweep takes only what that predicate matches.
  *     The un-flipped half is a deliberate data-loss guard, not dormancy —
  *     see `reapSeatsInTx`.
  *  A wrongly-skipped seat is the safe miss (it just keeps squatting
@@ -858,9 +856,9 @@ const liveReferenceTargetIds = (row: BlockData | null): ReadonlySet<string> =>
  *  the seat-slot probe restores on the next parse of that alias —
  *  convergent, never data loss.
  *
- *  Second documented residual (cross-device; PR #428 adversarial
- *  review): the reap is a LOCAL decision against this device's
- *  committed state. A peer that nested user content under the seat
+ *  Second documented residual (cross-device): the reap is a LOCAL
+ *  decision against this device's committed state. A peer that nested
+ *  user content under the seat
  *  while offline syncs those children in AFTER the tombstone — sync
  *  arrival bypasses the `parent_deleted` trigger — leaving them live
  *  under a deleted parent, and the stranded subtree breaks the
