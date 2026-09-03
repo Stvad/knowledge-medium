@@ -1349,7 +1349,17 @@ export class Repo {
   /** Zero every counter and reservoir in `repo.metrics()`. Use to
    *  mark a baseline before measuring a discrete operation (e.g. a
    *  benchmark iteration, a UI interaction in a soak test, or a
-   *  cold-start "open page → metrics" investigation). */
+   *  cold-start "open page → metrics" investigation).
+   *
+   *  Operations ALREADY IN FLIGHT settle into the new span: a query, DB call or
+   *  transaction that began before this returns records its full pre-reset
+   *  duration into the reservoir this just cleared. ACCEPTED rather than
+   *  guarded. Discarding them means capturing the epoch at the start of every
+   *  asynchronous metric and comparing it at each recording site — five sites
+   *  in this file alone, each one a thing every future metric has to remember —
+   *  to serve one caller, the devtools console hook, in a session where someone
+   *  is deliberately measuring. Take a baseline when the page is quiet, and
+   *  read `epochStartedAt` to know how far back the span reaches. */
   resetMetrics(): void {
     this.metricsEpoch++
     this.metricsEpochWorkspaceId = this.client.activeWorkspaceId
