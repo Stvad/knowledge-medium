@@ -12,7 +12,9 @@ import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 const EXCLUDE_PATH = /^(docs|\.claude|tmp|node_modules|dist)\//
-const TEST_FILE = /\.test\.|\.spec\.|\.d\.ts$/
+// Every module extension the toolchain accepts (mirrors the lint config's widest glob).
+const SOURCE_GLOBS = ['*.ts', '*.tsx', '*.mts', '*.cts', '*.js', '*.jsx', '*.mjs', '*.cjs']
+const TEST_FILE = /\.test\.|\.spec\.|\.d\.[cm]?ts$/
 
 // 'comment' | 'code' | 'blank' per line.
 export const classifyLines = text => {
@@ -96,7 +98,7 @@ const printTotal = (prefix, comment, code, fileCount) => {
 }
 
 const runDefault = () => {
-  const files = execFileSync('git', ['ls-files', '*.ts', '*.tsx', '*.mjs', '*.js'], {
+  const files = execFileSync('git', ['ls-files', ...SOURCE_GLOBS], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   })
@@ -155,13 +157,12 @@ const runAdded = range => {
       '--inter-hunk-context=0',
       range,
       '--',
-      '*.ts',
-      '*.tsx',
-      '*.mjs',
-      '*.js',
+      ...SOURCE_GLOBS,
       ':!*.test.*',
       ':!*.spec.*',
       ':!*.d.ts',
+      ':!*.d.mts',
+      ':!*.d.cts',
       ':!docs/*',
       ':!.claude/*',
     ],

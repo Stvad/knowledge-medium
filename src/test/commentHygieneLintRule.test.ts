@@ -28,6 +28,8 @@ describe('comment-hygiene ESLint rules', () => {
       // Standalone JSDoc declarations stack legitimately.
       { code: `/** @typedef {string} Id */\n/** @callback Cb */\n/** the doc */\nexport const x = 1` },
       { code: `/** @import { T } from './t' */\n/** @overload\n * @param {string} a */\n/** @overload\n * @param {number} a */\nfunction f(a) { return a }` },
+      { code: `/** @packageDocumentation The api. */\n/** the doc */\nexport const x = 1` },
+      { code: `export const x = 1\n/** @license MIT */\n` },
     ],
     invalid: [
       {
@@ -64,6 +66,7 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `/** Name hygiene: docs/properties-as-blocks-migration.html §7. */\nconst x = 1` },
       { code: `// three rounds of the loop, then settle\nconst x = 1` },
       { code: `// round 2 of the handshake re-sends the nonce\nconst x = 1` },
+      { code: `// each review round increments the SRS review count\nconst x = 1` },
       // The escape hatch: the directive itself is never scanned, and it suppresses the line below.
       { code: `// eslint-disable-next-line rule-to-test/no-review-provenance -- the PR is the only spec\n// see PR #12 for the shape\nconst x = 1` },
     ],

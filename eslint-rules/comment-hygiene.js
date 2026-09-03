@@ -19,8 +19,10 @@
  */
 
 const isJsDoc = c => c.type === 'Block' && c.value.startsWith('*') && !c.value.startsWith('**')
-// TypeScript's standalone JSDoc declarations — read with no node below them.
-const isStandaloneDeclaration = c => /@(typedef|callback|overload|import)\b/.test(c.value)
+// Blocks that stand on their own, with no node below: TypeScript's declaration
+// tags, file/package headers, and legal notices.
+const SELF_STANDING_TAG = /@(typedef|callback|overload|import|file|fileoverview|module|packageDocumentation|license|preserve|copyright)\b/
+const isSelfStanding = c => SELF_STANDING_TAG.test(c.value)
 const isDirective = c => /^\s*(eslint-|@ts-|prettier-|biome-)/.test(c.value)
 
 const noInvisibleJsdoc = {
@@ -40,7 +42,7 @@ const noInvisibleJsdoc = {
     return {
       Program() {
         for (const c of src.getAllComments()) {
-          if (!isJsDoc(c) || isStandaloneDeclaration(c)) continue
+          if (!isJsDoc(c) || isSelfStanding(c)) continue
           let next = src.getTokenAfter(c, {includeComments: true})
           let shadowed = false
           while (next && (next.type === 'Line' || next.type === 'Block')) {
@@ -63,9 +65,11 @@ const noInvisibleJsdoc = {
   },
 }
 
-// A bare "round N" is a domain word (a handshake, a game); only a round of review is provenance.
+// Every alternative carries an identifier — a number, an id, a sha, or the reviewer's
+// name. A bare phrase ("round 2", "review round", "this review") is domain vocabulary
+// in this repo (handshakes, SRS reviews) and is never matched.
 const PROVENANCE =
-  /\bPR ?#\d+|\breview comment \d{6,}\b|\breview rounds?\b|\brounds? \d+, P[0-4]\b|\bcommit [0-9a-f]{7,}\b|\bCodex (review|on (PR )?#\d)|\breviewer P[0-4]\b/i
+  /\bPR ?#\d+|\breview comment \d{6,}\b|\breview rounds? \d+\b|\brounds? \d+, P[0-4]\b|\bcommit [0-9a-f]{7,}\b|\bCodex (review|on (PR )?#\d)|\breviewer P[0-4]\b/i
 
 const noReviewProvenance = {
   meta: {
