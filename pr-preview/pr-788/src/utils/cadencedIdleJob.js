@@ -1,0 +1,2 @@
+import{scheduleDeepIdle as e}from"./scheduleIdle.js";import{PendingIdleJobs as t}from"../data/internals/idleMarkerJobs.js";var n=({firstDelayMs:n,repeatDelayMs:r,label:i})=>{let a=new t(t=>e(t,{minDelayMs:0}));return{drain:()=>a.drain(),start:e=>{let t=!1,o,s=n=>{o=setTimeout(()=>{a.schedule(async()=>{if(!t){try{await e()}catch(e){console.warn(`[${i}] run failed`,e)}t||s(r)}})},n)};return s(n),()=>{t=!0,o&&clearTimeout(o)}}}};export{n as cadencedIdleJob};
+//# sourceMappingURL=cadencedIdleJob.js.map
