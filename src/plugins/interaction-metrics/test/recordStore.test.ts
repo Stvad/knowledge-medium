@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { getDeviceLabel, resetClientIdCache } from '@/utils/clientId'
+import { deviceSurface, getDeviceLabel, resetClientIdCache } from '@/utils/clientId'
 import { pluginUIStateBlockId } from '@/data/stateBlocks'
 import { ChangeScope, type User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
@@ -432,6 +432,27 @@ describe('retention deletion', () => {
  * one by the same rule the query applied.
  */
 describe('retention and the device surface', () => {
+  // The descriptive half of the label CHANGES: `navigator.platform` is
+  // deprecated and a browser upgrade can start returning empty, so every record
+  // written before it carries a different platform string. Matching the whole
+  // label would make all of them invisible to retention — permanently, and on a
+  // series that was unbounded before this pass existed.
+  it('prunes a record whose label predates a platform-string change', async () => {
+    const { blockId: legacy } = await append(1)
+    const block = repo.block(legacy)
+    await block.load()
+    const record = block.peekProperty(interactionRecordProp)!
+    await repo.tx(async (tx) => {
+      await tx.setProperty(legacy, interactionRecordProp,
+        { ...record, deviceLabel: `${deviceSurface()}:SomeRetiredPlatformString` })
+    }, { scope: ChangeScope.Automation, description: 'relabel as pre-upgrade' })
+
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).not.toContain(legacy)
+  })
+
   it('leaves a record relabelled after it was selected', async () => {
     for (let i = 0; i < 3; i++) await append(1)
     // The oldest SURVIVING row — earlier appends already pruned the rest, and
