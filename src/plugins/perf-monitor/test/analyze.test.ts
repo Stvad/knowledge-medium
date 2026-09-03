@@ -18,7 +18,8 @@ import {
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
 import { metricsSessionContext, observeWorkspace, resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
-import { runPerfAnalysis, unjudgedReason } from '../analyze'
+import { awaitingSample, runPerfAnalysis, unjudgedReason } from '../analyze'
+import type { TrendResult } from '../series'
 import { nextAnalysisDelayMs, perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
 import { resetMonitorRun, startMonitorRun } from '../monitorRun'
 import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
@@ -457,40 +458,76 @@ describe('unjudgedReason', () => {
  * as that schedule changes — the reader comes back sooner while the answer
  * might still change.
  */
+// The race this monitor loses on a normal boot: it and the interaction
+// recorder arm on the same idle delay, so an analysis can run before the first
+// record exists. From here that is indistinguishable from a recorder switched
+// off — and treating it as final both tells the user the wrong thing and stops
+// the scheduler looking.
+describe('awaitingSample', () => {
+  const judged = { status: 'ok', baselineCount: 5 } as unknown as TrendResult
+  const shortHistory = { status: 'insufficient', reason: 'history' } as TrendResult
+  const noSample = { status: 'insufficient', reason: 'no-current-sample' } as TrendResult
+
+  it('counts a recorder that may simply not have written yet', () => {
+    expect(awaitingSample([shortHistory], 'not-recording')).toBe(true)
+    // ...and the scheduler therefore comes back sooner than the cadence.
+    expect(nextAnalysisDelayMs({ interaction: true, startup: false }, 0))
+      .toBeLessThan(nextAnalysisDelayMs({ interaction: false, startup: false }, 0))
+  })
+
+  it('counts a series with no current sample', () => {
+    expect(awaitingSample([noSample], 'no-current-sample')).toBe(true)
+  })
+
+  // Waiting cannot supply history, so a series short of it is not awaiting a
+  // SAMPLE — it is waiting for sessions to accumulate, which the ordinary
+  // cadence covers.
+  it('does not count thin history', () => {
+    expect(awaitingSample([shortHistory], 'history-short')).toBe(false)
+  })
+
+  // Even with a verdict in hand: a partly judged series still has an unrated
+  // live counter in it, which is exactly where a finding could be hiding.
+  it('counts an unrated counter beside a judged one', () => {
+    expect(awaitingSample([judged, noSample], 'partly-judged')).toBe(true)
+  })
+})
+
 describe('nextAnalysisDelayMs', () => {
-  const young = 1_000
-  const old = 30 * 60_000
   const none = { interaction: false, startup: false }
   const startupWaiting = { interaction: false, startup: true }
   const interactionWaiting = { interaction: true, startup: false }
 
-  it('comes back soon while a boot record may still arrive', () => {
-    expect(nextAnalysisDelayMs(startupWaiting, young))
-      .toBeLessThan(nextAnalysisDelayMs(none, young))
+  it('comes back soon while a sample may still arrive', () => {
+    expect(nextAnalysisDelayMs(startupWaiting, 0))
+      .toBeLessThan(nextAnalysisDelayMs(none, 0))
+    expect(nextAnalysisDelayMs(interactionWaiting, 0))
+      .toBeLessThan(nextAnalysisDelayMs(none, 0))
   })
 
-  // A boot record is written for this boot or it is not; past the window it is
-  // not, and re-asking every minute for the rest of the session is pure cost.
-  it('stops re-asking about a boot record once the page is no longer young', () => {
-    expect(nextAnalysisDelayMs(startupWaiting, old)).toBe(nextAnalysisDelayMs(none, old))
+  // Neither series gets a deadline. A startup recorder enabled in an old page
+  // still writes this boot's record, and an interaction recorder that has not
+  // written yet is indistinguishable from one switched off — so the fast
+  // recheck is bounded by what another look is WORTH, not by a claim that the
+  // sample is never coming.
+  it('backs off while a sample stays missing', () => {
+    const delays = [0, 1, 2, 3].map((w) => nextAnalysisDelayMs(startupWaiting, w))
+    expect(delays).toEqual([...delays].sort((a, b) => a - b))
+    expect(new Set(delays).size).toBeGreaterThan(1)
   })
 
-  // Interaction counters are LIVE. A session that had written nothing when the
-  // pass ran becomes judgeable the moment someone edits — page age proves
-  // nothing about it, so the bound is cost rather than time.
-  it('keeps re-checking live counters however old the page is', () => {
-    expect(nextAnalysisDelayMs(interactionWaiting, old))
-      .toBeLessThan(nextAnalysisDelayMs(none, old))
-  })
-
-  // ...but more slowly than the boot record, which has a deadline.
-  it('re-checks live counters more slowly than a boot record', () => {
-    expect(nextAnalysisDelayMs(interactionWaiting, young))
-      .toBeGreaterThan(nextAnalysisDelayMs(startupWaiting, young))
+  // ...and settles at the ordinary cadence rather than growing without bound,
+  // so a recorder that really is off costs a handful of extra passes and then
+  // nothing.
+  it('never waits longer than the ordinary cadence', () => {
+    for (const waits of [5, 10, 40]) {
+      expect(nextAnalysisDelayMs(interactionWaiting, waits))
+        .toBe(nextAnalysisDelayMs(none, waits))
+    }
   })
 
   it('uses the ordinary cadence when nothing is awaited', () => {
-    expect(nextAnalysisDelayMs(none, young)).toBe(nextAnalysisDelayMs(none, old))
+    expect(nextAnalysisDelayMs(none, 0)).toBe(nextAnalysisDelayMs(none, 9))
   })
 })
 

@@ -17,39 +17,39 @@ import { currentMonitorRun, endMonitorRun, hasMonitorRunFor, startMonitorRun } f
 const REANALYZE_MS = 10 * 60_000
 
 /** How soon to look again when the last verdict was waiting on a sample that
- *  may still be on its way, and how long that stays plausible.
+ *  may still be on its way.
  *
- *  A boot record is written on the recorder's own idle schedule and can retry,
- *  so an analysis early in a page session can genuinely precede it. Rather than
- *  sequence the two — which couples this plugin to the internals of another,
- *  and has to stay correct across that writer's whole retry schedule — the
- *  reader simply comes back sooner while the answer might change, and any
- *  transient cause resolves within the minute rather than the cadence.
- *
- *  Bounded by the page's own age, not a counter: past the window, a missing
- *  sample is not late, it is absent, and re-asking every minute for the rest of
- *  the session would be pure cost. */
+ *  A record is written on its recorder's own idle schedule and can retry, so an
+ *  analysis can genuinely precede it. Rather than sequence the two — which
+ *  couples this plugin to the internals of another, and has to stay correct
+ *  across that writer's whole retry schedule — the reader simply comes back
+ *  sooner while the answer might change. */
 const RECHECK_MS = 60_000
-const RECHECK_WINDOW_MS = 10 * 60_000
-/** Slower, because the thing being waited for has no deadline — see below. */
-const LIVE_RECHECK_MS = 3 * 60_000
 
 /** Pure, and exported for it: this decides how quickly a wrong-looking verdict
  *  corrects itself, which is the whole behaviour a shorter cadence buys.
  *
- *  The two series are bounded differently BECAUSE their missing samples are
- *  different things. A startup record is written for this boot or it is not,
- *  and past the window it is not — page age is proof there. Interaction
- *  counters are live: a session that had written nothing when the pass ran
- *  becomes judgeable the moment someone edits, whenever that is, so page age
- *  proves nothing about them and the bound has to be cost instead. */
+ *  BACKOFF, not a deadline. This used to bound the fast recheck two different
+ *  ways — a page-age window for the startup series, a slower fixed interval for
+ *  the interaction one — and both encoded a claim the reader cannot actually
+ *  make: that a missing sample is now permanently missing. Neither held. A
+ *  startup recorder switched on in an hour-old page still writes this boot's
+ *  record, well past any page-age window; an interaction recorder that has not
+ *  written YET is indistinguishable from one that is switched off, and calling
+ *  it off is a guess that shows the user the wrong thing.
+ *
+ *  Backing off answers a question that can be answered — how much is another
+ *  look worth — instead of one that cannot. A sample that arrives late is still
+ *  picked up; a recorder that is genuinely off costs a handful of extra passes
+ *  and then settles at the ordinary cadence, which is what it would have cost
+ *  anyway. `waits` is the number of CONSECUTIVE preceding analyses that came
+ *  back still waiting, so the first recheck is prompt. */
 export const nextAnalysisDelayMs = (
   awaiting: { interaction: boolean; startup: boolean },
-  pageAgeMs: number,
+  waits: number,
 ): number => {
-  if (awaiting.startup && pageAgeMs < RECHECK_WINDOW_MS) return RECHECK_MS
-  if (awaiting.interaction) return LIVE_RECHECK_MS
-  return REANALYZE_MS
+  if (!awaiting.interaction && !awaiting.startup) return REANALYZE_MS
+  return Math.min(RECHECK_MS * 2 ** Math.max(0, waits), REANALYZE_MS)
 }
 
 const job = cadencedIdleJob({
@@ -115,6 +115,11 @@ export const perfAnalysisEffect: AppEffect = {
     // analysis for that one state was a second constructor for every field of
     // `PerfAnalysis`, kept in step by hand, to show the same words one idle
     // delay sooner.
+    // Consecutive waits, for the backoff. Loop-local, and advanced only by a
+    // pass whose result was ACCEPTED — a refused one describes a span that is
+    // gone, and letting it count would back off over a verdict that never
+    // applied.
+    let waits = 0
     const stopJob = job.start(
       async () => {
         const { analysis, accepted } = await runPerfAnalysisNow(repo, workspaceId)
@@ -123,7 +128,10 @@ export const perfAnalysisEffect: AppEffect = {
         // instead of adopting its answer — the state that made it stale (a
         // reset, a workspace switch) is exactly when a fresh verdict matters.
         if (!accepted) return RECHECK_MS
-        return nextAnalysisDelayMs(analysis.awaitingLiveSample, performance.now())
+        const { interaction, startup } = analysis.awaitingLiveSample
+        const delay = nextAnalysisDelayMs(analysis.awaitingLiveSample, waits)
+        waits = interaction || startup ? waits + 1 : 0
+        return delay
       },
       // A pass that threw produced no verdict at all. Retrying on the full
       // cadence would leave the monitor silent for ten minutes over a

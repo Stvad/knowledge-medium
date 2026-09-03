@@ -84,11 +84,8 @@ export interface PerfAnalysis {
   /** Derived from `unjudgedBecause`, never set beside it — the two cannot
    *  disagree about whether a series was judged. */
   ready: { interaction: boolean; startup: boolean }
-  /** Is a series waiting on a sample from THIS session, whatever else it
-   *  managed to judge? A different question from `unjudgedBecause`, which names
-   *  the ONE thing to tell a reader — a partly judged series still has a live
-   *  counter in it, and the scheduler has to know that even though the note
-   *  does not mention it. */
+  /** Per `awaitingSample` — what the scheduler reads to decide whether another
+   *  look can change the answer. */
   awaitingLiveSample: { interaction: boolean; startup: boolean }
   /** WHY each series' comparison is incomplete, or null where it was complete.
    *  The verdict layer renders these and must not re-derive them: a reason
@@ -140,6 +137,26 @@ export const unjudgedReason = (
       : awaitingCurrentSample(results) ? 'no-current-sample'
         : session.notRecording ? 'not-recording'
           : 'history-short'
+
+/** Is a series waiting on a sample from THIS session, whatever else it managed
+ *  to judge? A different question from the reason, which names the ONE thing to
+ *  tell a reader — and the scheduler needs the answer even where the note does
+ *  not mention it.
+ *
+ *  `not-recording` counts. On a normal boot this monitor and the interaction
+ *  recorder arm on the same idle delay, so an analysis can win that race and
+ *  see no record — indistinguishable from here from a recorder that is switched
+ *  OFF. Reporting the guess as final both shows the user the wrong thing and
+ *  stops the scheduler looking; treating it as awaited costs a recorder that
+ *  really is off a handful of backed-off passes.
+ *
+ *  Startup never produces that reason (its `notRecording` is never passed — an
+ *  absent or unusable boot row is already `no-current-sample`), so the clause is
+ *  inert there rather than a case the two series disagree about. */
+export const awaitingSample = (
+  results: readonly TrendResult[],
+  reason: UnjudgedReason | null,
+): boolean => awaitingCurrentSample(results) || reason === 'not-recording'
 
 export const runPerfAnalysis = async (
   repo: Repo,
@@ -250,8 +267,8 @@ export const runPerfAnalysis = async (
     ready: { interaction: interactionReady, startup: startupReady },
     unjudgedBecause: { interaction: interactionUnjudged, startup: startupUnjudged },
     awaitingLiveSample: {
-      interaction: awaitingCurrentSample(interactionResults),
-      startup: awaitingCurrentSample(startupResults),
+      interaction: awaitingSample(interactionResults, interactionUnjudged),
+      startup: awaitingSample(startupResults, startupUnjudged),
     },
     graphGrowth,
   }
