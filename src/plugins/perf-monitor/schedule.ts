@@ -4,7 +4,8 @@
  */
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
-import { SETTLE_FALLBACK_MS } from '@/plugins/startup-metrics/record.js'
+import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
+import { WRITE_ATTEMPTS, WRITE_RETRY_MS, whenBootRecordSettled } from '@/plugins/startup-metrics/record.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysis } from './analyze.js'
@@ -16,19 +17,23 @@ import { currentMonitorRun, endMonitorRun, startMonitorRun } from './monitorRun.
  *  that a regression developing mid-session is still noticed. */
 const REANALYZE_MS = 10 * 60_000
 
-/** The first analysis waits out the startup recorder's own settle fallback
- *  before it looks.
+/** How long to wait on the startup recorder before analyzing anyway.
  *
- *  Both are idle-scheduled at the same 60s floor, so they otherwise come due
- *  together — and the collector only BEGINS its asynchronous write there, while
- *  this pass is already loading the startup series. A boot whose record has not
- *  committed yet reads as "no startup record for this session", which is the
- *  message for a recorder that is off: permanent-sounding, and held for the
- *  whole ten-minute cadence over a row that landed a moment later. */
-const FIRST_DELAY_MS = SETTLE_FALLBACK_MS + 15_000
+ *  A cap, not a schedule: the wait ends the moment that recorder settles, and
+ *  this only bounds the case where it never runs at all — its toggle is off, or
+ *  the page booted elsewhere — where nothing would ever settle. Sized to its
+ *  full retry schedule, since a fresh device can legitimately decline while it
+ *  waits for its membership row and retry twice.
+ *
+ *  A fixed cushion was the previous answer and could not work: the two are
+ *  idle-scheduled at the same floor, so any constant is a bet on how long the
+ *  writer takes, and a boot whose record has not landed yet reads as "no
+ *  startup record for this session" — the message for a recorder that is off,
+ *  held for the whole cadence over a row that arrives moments later. */
+const BOOT_RECORD_WAIT_MS = WRITE_ATTEMPTS * WRITE_RETRY_MS
 
 const job = cadencedIdleJob({
-  firstDelayMs: FIRST_DELAY_MS,
+  firstDelayMs: LAZY_DEEP_IDLE.minDelayMs,
   repeatDelayMs: REANALYZE_MS,
   label: 'perf-monitor',
 })
@@ -79,7 +84,13 @@ export const perfAnalysisEffect: AppEffect = {
     // analysis for that one state was a second constructor for every field of
     // `PerfAnalysis`, kept in step by hand, to show the same words one idle
     // delay sooner.
-    const stopJob = job.start(async () => { await runPerfAnalysisNow(repo, workspaceId) })
+    const stopJob = job.start(async () => {
+      // Resolved already on every pass after the first, so this is a microtask
+      // rather than a wait — it exists for the boot, where sampling the startup
+      // series before its record lands misreports a recorder that is working.
+      await whenBootRecordSettled(BOOT_RECORD_WAIT_MS)
+      await runPerfAnalysisNow(repo, workspaceId)
+    })
     return () => {
       // Teardown is not a pause. This effect goes away when the monitor's own
       // toggle is switched off, and the counters its verdicts describe keep

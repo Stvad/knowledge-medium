@@ -137,7 +137,7 @@ describe('PerfTrendDialog tables', () => {
     // empty states are gone. Waiting on their absence instead settles on the
     // first tick, because a table that is still LOADING shows neither its rows
     // nor its empty state; the assertions then run against a pending load and
-    // the test is a coin flip. (Measured at this exact mistake: ~1 run in 8.)
+    // the test is a coin flip.
     await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
     expect(screen.queryByText(/no interaction records/i)).toBeNull()
     expect(screen.queryByText(/no startup records/i)).toBeNull()
