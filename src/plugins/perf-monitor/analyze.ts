@@ -106,7 +106,9 @@ export const runPerfAnalysis = async (
   // Allocated BEFORE the first await, else the run finishing first would win the lower seq.
   const seq = nextAnalysisSeq()
   const interaction = await loadRecords(repo, workspaceId, INTERACTION_SERIES)
-  // This boot's row comes back separately from the window so this session can't land in its own baseline.
+  // The window comes back WITHOUT this boot's own row, so this session can't
+  // land in its own baseline — the same rule the interaction side applies by
+  // id below, which is the only identity a live-counter session has.
   const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
     repo, workspaceId, STARTUP_SERIES,
     { field: 'timeOriginMs', value: performance.timeOrigin },

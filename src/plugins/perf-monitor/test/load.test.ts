@@ -294,6 +294,44 @@ describe('loadRecords', () => {
     expect(window.some((r) => mine(r.record))).toBe(false)
   })
 
+  // The row can be INSIDE the window as well as past it. Other tabs of this
+  // same client keep writing while the page is open, so this session's row
+  // SINKS through the window rather than leaving it in one step — and while it
+  // is still in there, `startupRegression` reads it as baseline: the session
+  // being judged topping up and skewing the history it is judged against.
+  it('drops this session own row from the window it is judged against', async () => {
+    const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
+    const total = 8
+    for (let i = 0; i < total; i++) {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+            created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
+        [`rec-${i}`, WS, groupId, `a${i}`,
+         JSON.stringify({ [interactionRecordProp.name]: { ...ourRecord(), recordedAt: 9e9 - i } }),
+         USER.id, USER.id],
+      )
+    }
+    // Newer rows above it, older below — the position a scan-bound fix cannot
+    // reach, and the one a caller assuming "newest, so index 0" gets wrong.
+    const mineAt = 9e9 - 3
+    const mine = (r: { recordedAt: number }) => r.recordedAt === mineAt
+
+    // Precondition: an unfiltered scan really does return it, so this is not
+    // passing on the past-the-cap arrangement the test above already covers.
+    expect((await loadRecords(repo, WS, INTERACTION_SERIES)).some((r) => mine(r.record))).toBe(true)
+
+    const { window, current } = await loadSeriesWithCurrent(
+      repo, WS, INTERACTION_SERIES, { field: 'recordedAt', value: mineAt })
+
+    expect(current).not.toBeNull()
+    expect(mine(current!)).toBe(true)
+    expect(window.some((r) => mine(r.record))).toBe(false)
+    // Every OTHER row survives — the filter addresses one row, not a slice.
+    expect(window).toHaveLength(total - 1)
+  })
+
   // Marks stay optional, but a PRESENT one has to be finite: the comparison
   // subtracts them, and NaN takes neither the steady nor the regressed branch,
   // so one hand-edited row could publish a NaN comparison to the chip.

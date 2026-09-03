@@ -22,10 +22,13 @@ import {
   writeInteractionSample,
 } from '@/plugins/interaction-metrics/record'
 import {
+  startupMetricsUIStateType,
   startupRecordProp,
   startupRecordType,
   writeStartupRecord,
 } from '@/plugins/startup-metrics/record'
+import { clientGroupId } from '@/plugins/interaction-metrics/recordStore'
+import { getClientId, getDeviceLabel } from '@/utils/clientId'
 
 /** The stub the workspace-pinning tests use: they never read the series, and a
  *  real Repo would make them slow for nothing. `mocks.repo` is swapped for a
@@ -176,6 +179,39 @@ describe('PerfTrendDialog tables', () => {
     expect(screen.queryByText(/no startup records/i)).toBeNull()
   })
 
+  // `recordedAt` is stamped when the deferred, RETRYING write lands; the series
+  // is ranked by boot time. Stamping rows with write time lists them in one
+  // order and timestamps them in the other, naming an earlier session as the
+  // later one. Written raw because the production writer cannot produce the
+  // divergence — it stamps both within a millisecond — which is also the shape
+  // a row applied by sync arrives in.
+  it('timestamps startup rows by boot time, not by when the row landed', async () => {
+    const booted = Date.parse('2026-03-04T09:15:00Z')
+    const landed = Date.parse('2026-11-22T20:45:00Z')
+    await sharedDb.db.execute(
+      `INSERT INTO blocks
+         (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+          created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, 'a0', '', ?, 0, 1, 1, ?, ?)`,
+      ['boot-0', WS, clientGroupId(repo, WS, startupMetricsUIStateType),
+       JSON.stringify({ [startupRecordProp.name]: {
+         timeOriginMs: booted, recordedAt: landed, appVersion: 'v', appSha: 'sha',
+         clientId: getClientId(), deviceLabel: getDeviceLabel(),
+         repoReadyMs: 100, firstContentPaintMs: 400,
+       } }),
+       USER.id, USER.id],
+    )
+    const when = (epochMs: number): string =>
+      new Date(epochMs).toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      })
+
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+
+    await waitFor(() => expect(screen.getByText(when(booted))).toBeInTheDocument())
+    expect(screen.queryByText(when(landed))).toBeNull()
+  })
+
   // The empty state has to be reachable too, or the assertion above proves only
   // that something rendered.
   it('says so when the device has no history', async () => {
@@ -184,6 +220,68 @@ describe('PerfTrendDialog tables', () => {
       expect(screen.getByText(/no startup records/i)).toBeInTheDocument()
       expect(screen.getByText(/no interaction records/i)).toBeInTheDocument()
     })
+  })
+})
+
+/**
+ * Only the NEWEST series load may write.
+ *
+ * A publication does not change the world this dialog is looking at, so a load
+ * started for the previous one stays "alive" by that measure while a newer load
+ * for the newer publication runs alongside it.
+ */
+describe('overlapping series loads', () => {
+  beforeEach(freshRepo)
+  afterEach(() => { resetMonitorRun() })
+
+  let gate: { mockRestore: () => void } | null = null
+  // The published analysis outlives the test: this one publishes a HIGHER `seq`
+  // than the shared fixture's, and the store refuses anything older — so a
+  // later test's verdict would silently never appear.
+  afterEach(() => { gate?.mockRestore(); gate = null; resetPerfAnalysisStore(); resetMonitorRun() })
+
+  it('refuses a load a newer one has already overtaken', async () => {
+    await writeInteractionSample(repo, WS)
+    await writeStartupRecord(repo, WS)
+    startMonitorRun(repo, WS)
+
+    // Spied on the RAW database, not `repo.db`: that is a timing proxy whose
+    // own `getAll` re-reads the property it was reached through, so a spy there
+    // calling the original recurses until the stack goes.
+    //
+    // Held at the series reads only — `AS payload` is what `loadRecords` asks
+    // for — so an unrelated read during render cannot be mistaken for one.
+    const read = sharedDb.db.getAll
+    let held: Array<() => void> = []
+    gate = vi.spyOn(sharedDb.db, 'getAll').mockImplementation(async (sql: string, params?: unknown[]) => {
+      const rows = await read.call(sharedDb.db, sql, params)
+      if (sql.includes('AS payload')) await new Promise<void>((r) => held.push(r))
+      return rows
+    })
+    const bothReads = async () => {
+      await waitFor(() => expect(held).toHaveLength(2))
+      const releases = held
+      held = []
+      return releases
+    }
+
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    const older = await bothReads()
+
+    // A second publication, and the load it triggers.
+    act(() => { publishPerfAnalysis(analysisFixture({ workspaceId: WS, seq: 2 })) })
+    const newer = await bothReads()
+
+    await act(async () => { newer.forEach((release) => release()) })
+    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
+
+    // The overtaken load lands last. Tagged with the superseded publication, so
+    // letting it write sends both tables back to "Loading…" until something
+    // else publishes.
+    await act(async () => { older.forEach((release) => release()) })
+
+    expect(screen.getAllByRole('table')).toHaveLength(2)
+    expect(screen.queryByText('Loading…')).toBeNull()
   })
 })
 

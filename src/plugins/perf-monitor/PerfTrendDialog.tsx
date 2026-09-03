@@ -21,7 +21,7 @@ import { showError } from '@/utils/toast.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { InteractionRecordData } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
-import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords } from './load.js'
+import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords, rowTime } from './load.js'
 import { bootstrapGapMs, invalidationsPerWrite, round2 } from './series.js'
 import { summarize } from './verdict.js'
 import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
@@ -145,6 +145,9 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
    *  these rows were read FOR, not that the analysis read the same bytes: this
    *  is a second query. ACCEPTED — one round trip against a cadence of minutes.
    */
+  /** Which load may write. `context` cannot answer this: it is deliberately
+   *  blind to the publication, so that a refresh survives the one it causes. */
+  const loadGen = useRef(0)
   const [series, setSeries] = useState<{
     context: object
     seq: number | null
@@ -164,12 +167,17 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
    *  display. `alive` guards against a resolve after unmount. */
   const loadSeries = useCallback(async (alive: () => boolean): Promise<void> => {
     if (!ws) return
+    const gen = ++loadGen.current
     try {
       const [s, i] = await Promise.all([
         loadRecords(repo, ws, STARTUP_SERIES),
         loadRecords(repo, ws, INTERACTION_SERIES),
       ])
-      if (!alive()) return
+      // Newest load wins. Successive publications share ONE context — a
+      // publication is not a world change — so `alive` alone lets a slower
+      // older load land rows tagged with a `seq` that `shown` then rejects,
+      // leaving both tables on "Loading…" until something else publishes.
+      if (!alive() || loadGen.current !== gen) return
       setSeries({
         context, seq,
         startup: s.map((r) => r.record),
@@ -324,8 +332,10 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                 </thead>
                 <tbody>
                   {startup.slice(0, ROWS).map((r, i) => (
-                    <tr key={`${r.recordedAt}-${i}`}>
-                      <Td>{when(r.recordedAt)}</Td>
+                    <tr key={`${rowTime(STARTUP_SERIES, r)}-${i}`}>
+                      {/* Boot time — `recordedAt` is stamped whenever the
+                          deferred write happens to land. */}
+                      <Td>{when(rowTime(STARTUP_SERIES, r))}</Td>
                       <Td><code className="text-muted-foreground">{r.appSha?.slice(0, 8) || '—'}</code></Td>
                       <Td>{ms(r.repoReadyMs)}</Td>
                       <Td>{ms(bootstrapGapMs(r))}</Td>
@@ -361,8 +371,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                   {interaction.slice(0, ROWS).map((r, i) => {
                     const worst = slowestQuery(r)
                     return (
-                      <tr key={`${r.recordedAt}-${i}`}>
-                        <Td>{when(r.recordedAt)}</Td>
+                      <tr key={`${rowTime(INTERACTION_SERIES, r)}-${i}`}>
+                        <Td>{when(rowTime(INTERACTION_SERIES, r))}</Td>
                         <Td><code className="text-muted-foreground">{r.appSha?.slice(0, 8) || '—'}</code></Td>
                         <Td>{r.blockCount.toLocaleString()}</Td>
                         <Td>{r.writes}</Td>

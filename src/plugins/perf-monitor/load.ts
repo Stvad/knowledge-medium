@@ -98,8 +98,10 @@ export interface RecordSeries<T extends { recordedAt: number }> {
    *  hand-inspectable blob can parse cleanly and still miss them. */
   isUsable: (record: T) => boolean
   /** What "newest" MEANS, when it isn't write time — applied in SQL before
-   *  the cap, so a late-persisted older boot can't displace a newer one. */
-  orderField?: string
+   *  the cap, so a late-persisted older boot can't displace a newer one, and
+   *  read back by `rowTime` so a table can't order rows by one field and
+   *  stamp them with another. */
+  orderField?: keyof T & string
 }
 
 export const INTERACTION_SERIES: RecordSeries<InteractionRecordData> = {
@@ -114,6 +116,18 @@ export const STARTUP_SERIES: RecordSeries<StartupRecordData> = {
   isUsable: isUsableStartupRecord,
   // Boot time, not write time — see `orderField`.
   orderField: 'timeOriginMs',
+}
+
+/** When a row HAPPENED — the field the series is ORDERED by, so anything
+ *  displaying a timestamp beside a rank can't contradict it. Falls back to
+ *  write time, which is what the ordering falls back to. */
+export const rowTime = <T extends { recordedAt: number }>(
+  series: Pick<RecordSeries<T>, 'orderField'>,
+  record: T,
+): number => {
+  const field = series.orderField
+  const value = field === undefined ? undefined : record[field]
+  return typeof value === 'number' ? value : record.recordedAt
 }
 
 /** Derived, never `ensure`d — a read must not mint the subtree by looking. */
@@ -196,24 +210,32 @@ const scanSeries = async <T extends { recordedAt: number }>(
 export const loadRecords = scanSeries
 
 /**
- * `window` plus THIS session's own record — not one merged list: folding
- * `current` into `window` would skew the averaged baseline, letting four
- * genuine samples pass for the five a verdict requires.
+ * The baseline window with THIS session's own row REMOVED, plus that row. A
+ * session must not contribute to the history it is judged against: it both
+ * inflates the count — letting four genuine samples pass for the five a
+ * verdict requires — and pulls the median toward itself.
+ *
+ * Filtered here rather than left to the caller's slicing: other tabs writing
+ * newer rows sink this one THROUGH the window, so it is neither reliably at
+ * the front nor reliably past the cap.
  *
  * `current` is a POINT LOOKUP by identity, not a wider scan: no candidate
- * limit can hide it, however far other tabs still writing may have pushed it.
+ * limit can hide it, however far those other tabs may have pushed it.
  */
 export const loadSeriesWithCurrent = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
   series: RecordSeries<T>,
-  identity: { field: string; value: unknown },
+  identity: { field: keyof T & string; value: unknown },
 ): Promise<{ window: Array<{ id: string; record: T }>; current: T | null }> => {
-  const [window, current] = await Promise.all([
+  const [scanned, current] = await Promise.all([
     scanSeries(repo, workspaceId, series),
     findRecord(repo, workspaceId, series, identity),
   ])
-  return { window, current }
+  return {
+    window: scanned.filter(({ record }) => record[identity.field] !== identity.value),
+    current,
+  }
 }
 
 /** The one record whose `field` holds `value`, or null. */
@@ -221,7 +243,7 @@ const findRecord = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
   { typeId, recordName, isUsable, orderField }: RecordSeries<T>,
-  identity: { field: string; value: unknown },
+  identity: { field: keyof T & string; value: unknown },
 ): Promise<T | null> => {
   const q = clientSeriesQuery('json_extract(properties_json, ?) AS payload', {
     groupId: seriesGroupId(repo, workspaceId, typeId),
