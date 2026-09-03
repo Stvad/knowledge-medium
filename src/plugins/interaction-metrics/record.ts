@@ -17,7 +17,7 @@ import {
   NoLongerEligible,
   metricsSessionContext,
   observeWorkspace,
-  pageRecordStartedAt,
+  pageRecordFor,
   readLiveSession,
   setPageRecord,
 } from './sessionContext.js'
@@ -293,13 +293,12 @@ export const writeInteractionSample = async (
   // Snapshot BEFORE this sample's own setup work, so it doesn't report the
   // transactions that create its own record block. Re-taken HERE, not reused
   // from the check above: another recorder can commit in the await between them.
-  const { metrics, session: current } = readLiveSession(repo, workspaceId)
+  const { metrics } = readLiveSession(repo, workspaceId)
   // The record can be deleted elsewhere (another device, or a user browsing
   // the tree); writing to a tombstone doesn't restore it, so without this check the session updates a row nothing reads.
+  const stored = pageRecordFor(repo, workspaceId)
   const existing =
-    current.recordId && (await isUsableRecord(repo, current.recordId, workspaceId))
-      ? { blockId: current.recordId, startedAt: pageRecordStartedAt(repo, workspaceId)! }
-      : null
+    stored && (await isUsableRecord(repo, stored.blockId, workspaceId)) ? stored : null
   if (!existing) clearPageRecord(repo)
 
   // The SPAN's start, not the page's: after a `resetMetrics()` the page's

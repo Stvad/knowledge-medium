@@ -141,18 +141,18 @@ export const setPageRecord = (
 /** Forget it — the block was deleted underneath us, so a replacement is due. */
 export const clearPageRecord = (repo: object): void => { factsFor(repo).pageRecord = null }
 
-/** Start of the page session that owns `workspaceId`'s record, if any. */
-/** This page's interaction record for `workspaceId`, or null before the
- *  recorder has committed one. Cheap — no counter snapshot — so a reader can
- *  ask again rather than carry an answer across an await. */
-export const pageRecordId = (repo: MetricsSpanSource, workspaceId: string): string | null => {
+/** This page's record for `workspaceId` — the block holding it and the start of
+ *  the session that owns it — or null before the recorder has committed one.
+ *  Both fields together: taking one from here and the other from a session
+ *  snapshot can hand back a pair that never coexisted. Cheap (no counter
+ *  snapshot), so a reader can ask again rather than carry an answer across an
+ *  await. */
+export const pageRecordFor = (
+  repo: MetricsSpanSource,
+  workspaceId: string,
+): { blockId: string; startedAt: number } | null => {
   const r = factsForSpan(repo).pageRecord
-  return r?.workspaceId === workspaceId ? r.blockId : null
-}
-
-export const pageRecordStartedAt = (repo: object, workspaceId: string): number | null => {
-  const r = factsFor(repo).pageRecord
-  return r?.workspaceId === workspaceId ? r.startedAt : null
+  return r?.workspaceId === workspaceId ? r : null
 }
 
 /** Why recording is impossible here, or null; order matters only for which

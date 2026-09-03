@@ -6,7 +6,7 @@ import {
   interactionComparable,
 } from '@/plugins/interaction-metrics/record.js'
 import {
-  pageRecordId,
+  pageRecordFor,
   peekLiveSession,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, countRecords, loadRecords, loadSeriesWithCurrent } from './load.js'
@@ -131,7 +131,7 @@ export const runPerfAnalysis = async (
   // beforehand is still null when the row it names comes back.
   const interaction = await loadRecords(
     repo, workspaceId, INTERACTION_SERIES,
-    ({ id }) => id === pageRecordId(repo, workspaceId))
+    ({ id }) => id === pageRecordFor(repo, workspaceId)?.blockId)
   const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
     repo, workspaceId, STARTUP_SERIES,
     { field: 'timeOriginMs', value: performance.timeOrigin },

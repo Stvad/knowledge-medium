@@ -19,7 +19,7 @@ import {
   queryNameFromHandleKey,
   writeInteractionSample,
 } from '../record'
-import { observeWorkspace, pageRecordStartedAt, resetMetricsSession, setPageRecord } from '../sessionContext'
+import { observeWorkspace, pageRecordFor, resetMetricsSession, setPageRecord } from '../sessionContext'
 import { INTERACTION_RETAIN } from '../record'
 
 const WS = 'ws-1'
@@ -567,7 +567,7 @@ describe('claiming a committed record', () => {
 
     setPageRecord(repoStub, WS, 'block-1', 5_000, 1)
 
-    expect(pageRecordStartedAt(repoStub, WS)).toBe(5_000)
+    expect(pageRecordFor(repoStub, WS)?.startedAt).toBe(5_000)
   })
 
   it('declines a record whose span was retired before it committed', () => {
@@ -575,14 +575,14 @@ describe('claiming a committed record', () => {
     resetMetricsSession(repoStub)
     // The precondition, asserted rather than assumed: this claim WOULD land.
     setPageRecord(repoStub, WS, 'block-1', 5_000, 1)
-    expect(pageRecordStartedAt(repoStub, WS)).toBe(5_000)
+    expect(pageRecordFor(repoStub, WS)?.startedAt).toBe(5_000)
     resetMetricsSession(repoStub)
 
     // `resetMetrics()` between the sample's epoch check and its commit.
     repoStub.epoch = 2
     setPageRecord(repoStub, WS, 'block-1', 5_000, 1)
 
-    expect(pageRecordStartedAt(repoStub, WS)).toBeNull()
+    expect(pageRecordFor(repoStub, WS)).toBeNull()
   })
 })
 
