@@ -40,8 +40,15 @@ export type UnjudgedReason =
   /** Page-global counters blended across workspaces; only a fresh page session
    *  makes them attributable again. */
   | 'blended-workspaces'
-  /** This session produced no usable measurement to compare against — waiting
-   *  supplies history, not a current sample. */
+  /** This session produced no usable measurement to compare against.
+   *
+   *  Whether waiting helps depends on the SERIES, which is why the scheduler
+   *  asks `awaitingLiveSample` rather than reading this. A startup record is
+   *  immutable: written for this boot with its paint marks or not, and one
+   *  present without them never becomes usable. Interaction counters are live,
+   *  so a session measuring nothing comparable now becomes judgeable the moment
+   *  someone edits — the same reason `nextAnalysisDelayMs` keeps rechecking it
+   *  on a cost bound rather than a deadline. */
   | 'no-current-sample'
   /** Nothing recorded for this session, so the series is not growing at all.
    *  Each recorder is togglable independently of this monitor. */
@@ -70,11 +77,10 @@ export interface PerfAnalysis {
   seq: number
   /** Worst first. Empty when nothing regressed. */
   regressions: Regression[]
-  /** Per SERIES, because they fill up independently: every existing user has
-   *  months of startup records and zero interaction records, and one `&&`
-   *  across the two turns that state into "no slowdowns, compared against 0
-   *  sessions" — a clean verdict from a comparison that never ran, which is
-   *  the failure this feature exists to remove. */
+  /** Per SERIES, because they fill independently. One `&&` across the two
+   *  reports a series with no history as clean on the strength of the other —
+   *  "no slowdowns, compared against 0 sessions", a verdict from a comparison
+   *  that never ran, which is the failure this feature exists to remove. */
   /** Derived from `unjudgedBecause`, never set beside it — the two cannot
    *  disagree about whether a series was judged. */
   ready: { interaction: boolean; startup: boolean }

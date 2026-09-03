@@ -46,7 +46,7 @@ const mocks = vi.hoisted(() => {
     client: { onActingAsChange: () => () => {} },
     // The epoch the published fixture carries, so a stub-backed dialog gets
     // past the store's span check and renders a verdict at all.
-    metrics: () => ({ epoch: 0 }),
+    metricsSpan: () => ({ epoch: 0 }),
     db: { getAll: async () => [] as unknown[] },
     ...over,
   }) as unknown as Repo

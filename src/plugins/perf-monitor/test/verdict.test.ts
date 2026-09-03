@@ -25,8 +25,8 @@ describe('summarize', () => {
     expect(v.headline).toBe('No slowdowns vs baseline')
   })
 
-  // The day-one state for every existing user: startup history, no interaction
-  // history. An empty regression list here is not a clean bill of health.
+  // One series judged, the other not. An empty regression list here is not a
+  // clean bill of health — nothing asked the unjudged series anything.
   it('does not call a partial comparison clean', () => {
     const v = summarize(analysis({ ready: { interaction: false, startup: true } }))
     expect(v.kind).toBe('pending')

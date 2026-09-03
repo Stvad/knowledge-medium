@@ -559,7 +559,7 @@ describe('writeInteractionSample', () => {
  * that row in place — fresh counters against an inflated session duration.
  */
 describe('claiming a committed record', () => {
-  const spanRepo = (epoch: number) => ({ metrics: () => ({ epoch, epochWorkspaceId: WS }) })
+  const spanRepo = (epoch: number) => ({ metricsSpan: () => ({ epoch, epochWorkspaceId: WS }) })
 
   it('claims a record written under the current span', () => {
     const repoStub = spanRepo(1)
@@ -571,7 +571,7 @@ describe('claiming a committed record', () => {
   })
 
   it('declines a record whose span was retired before it committed', () => {
-    const repoStub = { epoch: 1, metrics() { return { epoch: this.epoch, epochWorkspaceId: WS } } }
+    const repoStub = { epoch: 1, metricsSpan() { return { epoch: this.epoch, epochWorkspaceId: WS } } }
     resetMetricsSession(repoStub)
     // The precondition, asserted rather than assumed: this claim WOULD land.
     setPageRecord(repoStub, WS, 'block-1', 5_000, 1)

@@ -1348,6 +1348,23 @@ export class Repo {
     })
   }
 
+  /** The current counter span's identity, WITHOUT building a metrics snapshot.
+   *
+   *  `metrics()` walks and sorts every registered handle, copies and sorts each
+   *  timing reservoir and clones the transaction log — affordable for a
+   *  measurement, not for a consumer that only wants to know whether the span
+   *  it is holding is still the current one. That check runs from
+   *  `useSyncExternalStore` getters, so it happens on ordinary renders; on a
+   *  large session the snapshot cost lands on the interactive path, and a
+   *  performance monitor doing that would inflate what it reports.
+   *
+   *  The two fields are exactly what identifies a span. Keep this in step with
+   *  the same-named fields in `metrics()`; they read the same state, and
+   *  neither is derived from the other. */
+  metricsSpan(): { epoch: number; epochWorkspaceId: string | null } {
+    return { epoch: this.metricsEpoch, epochWorkspaceId: this.metricsEpochWorkspaceId }
+  }
+
   /** Zero every counter and reservoir in `repo.metrics()`. Use to
    *  mark a baseline before measuring a discrete operation (e.g. a
    *  benchmark iteration, a UI interaction in a soak test, or a

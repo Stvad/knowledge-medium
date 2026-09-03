@@ -35,9 +35,12 @@ export interface MetricsSessionContext {
 }
 
 /** The identity of the counter span a reading came from. Everything here is a
- *  claim ABOUT a span, so every entry point takes this much of a Repo. */
+ *  claim ABOUT a span, so every entry point takes this much of a Repo.
+ *
+ *  `metricsSpan()`, not `metrics()`: identifying a span must not cost a full
+ *  snapshot, because these checks run from render-path getters. */
 export interface MetricsSpanSource {
-  metrics: () => { epoch: number; epochWorkspaceId: string | null }
+  metricsSpan: () => { epoch: number; epochWorkspaceId: string | null }
 }
 
 /** Minimal read surface, so this module needs no Repo import (and stays cheap
@@ -96,7 +99,7 @@ const factsFor = (repo: object): SessionFacts => {
  */
 const factsForSpan = (repo: MetricsSpanSource): SessionFacts => {
   const f = factsFor(repo)
-  const { epoch, epochWorkspaceId } = repo.metrics()
+  const { epoch, epochWorkspaceId } = repo.metricsSpan()
   if (f.epoch !== epoch) {
     f.epoch = epoch
     f.seenWorkspace = epochWorkspaceId

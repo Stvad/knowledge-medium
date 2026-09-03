@@ -72,7 +72,7 @@ describe('createPerfMonitorDiagnosticSource', () => {
     return {
       activeWorkspaceId: 'ws-1',
       isReadOnly: false,
-      metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }),
+      metricsSpan: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }),
       onReadOnlyChange: (l: () => void) => { listeners.add(l); return () => listeners.delete(l) },
       onMetricsReset: () => () => {},
       setReadOnly(value: boolean) {
@@ -108,7 +108,7 @@ describe('createPerfMonitorDiagnosticSource', () => {
     const repo = {
       activeWorkspaceId: 'ws-1',
       isReadOnly: false,
-      metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }),
+      metricsSpan: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }),
       onReadOnlyChange: () => () => {},
       onMetricsReset: (l: () => void) => { resets.add(l); return () => resets.delete(l) },
     }
