@@ -52,16 +52,10 @@ const graphNote = (growth: number | null): string | null =>
 const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string> = {
   'blended-workspaces': (s) =>
     `${s} metrics not comparable this session (more than one workspace opened)`,
-  // Series-specific, because the same structural reason means different things:
-  // startup's current sample IS a record for this boot, while interaction's is
-  // the live counters, which exist but held nothing worth comparing.
-  //
-  // Neither asserts ABSENCE. Startup reaches this reason two ways — no row for
-  // this boot, or a row written through the hidden-until-after-paint fallback,
-  // which carries no paint marks and so no measurement. The trend table loads
-  // and shows that second row, so a note claiming no record exists (and
-  // guessing that recording is off) contradicts what the reader can see one
-  // panel away. "No usable measurement" is true of both.
+  // Series-specific, and neither asserts ABSENCE: startup reaches this reason
+  // both with no row for this boot and with a fallback row carrying no paint
+  // marks, and the trend table SHOWS that second row. A note claiming no record
+  // exists would contradict the panel beside it.
   'no-current-sample': (s) => s === 'startup'
     ? 'no usable startup measurement for this session'
     : 'no usable interaction measurement this session',
@@ -93,14 +87,10 @@ const comparedAgainst = (analysis: PerfAnalysis): string => {
   return `compared against ${n} recent ${interaction ? 'interaction' : 'startup'} sessions`
 }
 
-/** Facts read at RENDER time rather than stored on the analysis.
- *
- *  Whether recording is possible turns on `repo.isReadOnly`, which a
- *  server-pushed role change flips without touching the Repo, the workspace,
- *  the counter span or the monitor run — so nothing the analysis captured would
- *  be stale-looking, and a verdict from before a demotion would keep claiming
- *  recording works for the rest of the cadence. A live fact has to be read
- *  live. */
+/** Read at RENDER time, not stored on the analysis: a server-pushed role change
+ *  flips `repo.isReadOnly` without touching the Repo, workspace, counter span
+ *  or run, so a captured verdict would look fresh while claiming recording
+ *  works for the rest of the cadence. */
 export interface LiveFacts {
   blockedBy: RecordingBlocker | null
 }
@@ -147,12 +137,10 @@ export const summarize = (analysis: PerfAnalysis, live: LiveFacts): PerfVerdict 
     }
   }
   if (nothingJudged(analysis)) {
-    // "Building a baseline" promises that waiting resolves this, which is only
-    // true while some series is short on HISTORY and still receiving samples. A
-    // series whose CURRENT sample never arrives — each recorder is togglable
-    // independently of this monitor — is not filling however much history is
-    // already on disk, and the note below will be reporting a healthy count
-    // under a headline that says to keep waiting.
+    // "Building a baseline" promises waiting resolves this, true only while a
+    // series is short on HISTORY. One missing its CURRENT sample is not filling
+    // however much is on disk, and the note would report a healthy count under
+    // a headline saying to keep waiting.
     const filling = Object.values(analysis.unjudgedBecause).includes('history-short')
     return {
       kind: 'pending',
