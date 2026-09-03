@@ -106,14 +106,21 @@ const ensureClientGroup = async (
 ): Promise<string> => {
   const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, containerType)
   const clientId = getClientId()
-  // NO title. A block's content is FTS-indexed and listed by every
-  // block-discovery surface — `((` completion searches it, and the empty query
-  // lists it by recency — so a titled container is this subtree's third leak
-  // into the picker after the record rows themselves. Keeping telemetry rows
-  // contentless removes the class instead of filtering it surface by surface,
-  // which is a list with no end. The device label is on every record inside the
-  // group, where anyone reading the series gets it anyway.
-  const group = await getPluginUIStateChild(root, clientId)
+  // EXPLICITLY empty, not omitted: `ensureStateChild` defaults a missing title
+  // to the namespace, which here is the client UUID — non-empty, and indexed
+  // exactly like the device label it replaced.
+  //
+  // A block's content is FTS-indexed and listed by every block-discovery
+  // surface, so a titled container is another leak into the picker beside the
+  // record rows. The device label is on every record inside the group, where
+  // anyone reading the series gets it anyway.
+  //
+  // Groups that ALREADY exist keep their old title — the ensure returns a live
+  // row without rewriting it — and are deliberately left alone rather than
+  // migrated: every plugin's ui-state root is titled the same way, so the
+  // remaining exposure is the whole state subtree in content search, which is
+  // one exclusion rather than a write per plugin per device.
+  const group = await getPluginUIStateChild(root, clientId, '')
   return group.id
 }
 

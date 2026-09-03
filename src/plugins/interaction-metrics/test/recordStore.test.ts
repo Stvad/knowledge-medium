@@ -363,6 +363,19 @@ describe('appendClientRecord eligibility', () => {
  * row at the top of the list a person sees when they reach for a block.
  */
 describe('what a record shows the user', () => {
+  // The container too, and asserted on its CONTENT: the previous attempt simply
+  // omitted the title argument, which `ensureStateChild` defaults to the
+  // namespace — so the group was created carrying the client UUID and stayed in
+  // every listing. A test that only checked the record row could not see that.
+  it('gives the client group no content to index', async () => {
+    const { groupId } = await append(1)
+
+    const row = await sharedDb.db.getOptional<{ content: string }>(
+      'SELECT content FROM blocks WHERE id = ?', [groupId])
+
+    expect(row?.content).toBe('')
+  })
+
   it('does not appear among recent blocks', async () => {
     const { blockId } = await append(1)
 
