@@ -28,7 +28,7 @@
  * ACCEPTED: the payload then describes a span one transaction stale, and the
  * next sample's own epoch check opens a replacement rather than compounding it.
  */
-import { ChangeScope, type BlockData, type Tx, type TypeContribution } from '@/data/api'
+import { ChangeScope, type BlockData, type TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import {
   getPluginUIStateBlock,
@@ -312,29 +312,6 @@ export const clientSeriesQuery = (
   }
 }
 
-/** Anything under `id` that this module did not put there.
- *
- *  Property machinery is recognised the way the tree view recognises it — the
- *  difference between all children and the display-visible ones — and recursed
- *  INTO, because a person can nest a note under a property's value block just
- *  as easily as under the record. Two queries per machinery node, on a path
- *  that runs only for a record about to be pruned.
- *
- *  The RECURSION is unpinned: a record materializes no field rows until
- *  properties are blocks, so no test here can produce a machinery node to
- *  descend through, and the direct-child case is what the suite reaches. It
- *  matters the day that flip lands, which is why it is written now. */
-const hasForeignDescendant = async (tx: Tx, id: string): Promise<boolean> => {
-  const all = await tx.childrenOf(id)
-  if (all.length === 0) return false
-  const visible = await tx.childrenOf(id, undefined, { hidePropertyChildren: true })
-  if (visible.length > 0) return true
-  for (const child of all) {
-    if (await hasForeignDescendant(tx, child.id)) return true
-  }
-  return false
-}
-
 /** Its own tx description, not the record's: these are separate transactions
  *  with separate failure modes, and a shared description makes them
  *  indistinguishable in the tx log — where attributing a write to a call site is
@@ -413,10 +390,15 @@ const pruneGroup = async (
       // while the alternative tombstones their note under an Automation scope
       // that no undo reaches.
       //
-      // The check walks the SAME tree the delete does. Testing only direct
-      // children left a note nested under the property's own value block
-      // invisible to the guard and inside the subtree walk below.
-      if (await hasForeignDescendant(tx, row.id)) continue
+      // ONE level, deliberately. Descending looks like the thorough choice and
+      // is the opposite: a field row's values are exactly its children with the
+      // form bit unset (`isFieldValueChild`), so every generated value row
+      // reads as foreign one level down, no record is ever prunable in a
+      // child-backed workspace, and both series grow without bound. That is a
+      // worse failure than the one descending would catch — a note tucked under
+      // a property's value row, which the app itself already treats as a value.
+      const foreign = await tx.childrenOf(row.id, undefined, { hidePropertyChildren: true })
+      if (foreign.length > 0) continue
       // The SUBTREE, not the row. Writing the record property materializes
       // field/value rows beneath it where properties are blocks, and a bare
       // delete tombstones the parent while leaving those live — invisible
