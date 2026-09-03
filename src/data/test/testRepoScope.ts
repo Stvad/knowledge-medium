@@ -29,8 +29,8 @@
  * WHAT IT DOES NOT REACH: work whose deferral timer has not fired yet. A drain
  * awaits what is pending, and neither job framework keeps the timer handle a
  * cancel would need, so an armed `delayMs` processor outlives this (#892). The
- * unpin above blunts it — a pass gated on the active workspace refuses when it
- * eventually fires — but the gap is real and tracked rather than papered over.
+ * unpin above blunts it: a pass gated on the active workspace refuses when it
+ * eventually fires.
  *
  * WEAK REFS, and the sweep. A fuzz property builds one Repo per iteration
  * (`kernelQueries.fuzz.test.ts` does it inside the property callback), and a
@@ -81,9 +81,9 @@ export const beginTestRepoScope = (): void => {
 
 /** Release every Repo built during the test and drain its deferred work.
  *
- *  Stopping the observer before unpinning is PRECAUTIONARY — swapping the two
- *  fails no test today. The order is deliberate anyway: unpinning drives
- *  projector work, and a Repo on its way out has no business reacting to it.
+ *  Stopping the observer before unpinning is precautionary, not load-bearing:
+ *  unpinning drives projector work, and a Repo on its way out has no business
+ *  reacting to it.
  *
  *  Deliberately unguarded, matching `Repo`'s own contract: `pinWorkspace(null)`
  *  returns before the block that throws, so the only way an unpin fails is a

@@ -4419,9 +4419,9 @@ export class Repo {
    *  writes to the db after the call that scheduled it returned, so one left
    *  out can still be running when its owner is gone — which in tests means
    *  writing into the next test's database (`testRepoScope.ts`, issue #813).
-   *  Only the seed-materialization family is known to have done that; the rest
-   *  are here so the class cannot recur family by family, and dropping them
-   *  fails no test today.
+   *  The list is deliberately complete rather than demand-driven: a family
+   *  earns its place by being ABLE to outlive its owner, so do not expect
+   *  removing one to fail a test.
    *
    *  Producers first, then processors. Every family above can commit a
    *  `repo.tx`, and a tx dispatches post-commit processors — so draining all
