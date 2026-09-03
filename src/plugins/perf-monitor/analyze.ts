@@ -132,6 +132,13 @@ export const runPerfAnalysis = async (
   const interaction = await loadRecords(
     repo, workspaceId, INTERACTION_SERIES,
     { excluded: ({ id }) => id === pageRecordFor(repo, workspaceId)?.blockId })
+  // `timeOriginMs` is this boot's identity as well as its rank, and browsers
+  // reduce timer precision — so two loads close enough together share a value,
+  // and neither the point lookup nor the bound can tell them apart. ACCEPTED:
+  // those are simultaneous loads on one device measuring the same conditions,
+  // and the only fix is a per-boot id the record does not carry. A same-value
+  // boot staying OUT of the window is right regardless: it is concurrent with
+  // this one, not prior to it.
   const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
     repo, workspaceId, STARTUP_SERIES,
     { field: 'timeOriginMs', value: performance.timeOrigin },
