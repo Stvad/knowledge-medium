@@ -10,7 +10,7 @@ import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysis } from './analyze.js'
 import { clearPerfAnalyses, publishPerfAnalysis } from './store.js'
-import { currentMonitorRun, endMonitorRun, startMonitorRun } from './monitorRun.js'
+import { currentMonitorRun, endMonitorRun, hasMonitorRunFor, startMonitorRun } from './monitorRun.js'
 
 /** Wall clock between analyses. Long: the series it reads only gains a point
  *  per session, and re-deriving the same verdict is pure cost. Short enough
@@ -52,7 +52,13 @@ export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
   //    the workspace and the run are all unchanged.
   //
   // The caller still gets the result; only the store is spared it.
-  const run = currentMonitorRun()
+  //
+  // The run has to be the one for THESE arguments, not merely whichever is in
+  // force. A scheduled pass waits on the startup recorder before it gets here,
+  // and a teardown-and-restart inside that wait installs a different run — so a
+  // sign-out that keeps the workspace id would stamp the previous user's
+  // analysis with the new user's run, and their reader would show it.
+  const run = hasMonitorRunFor(repo, workspaceId) ? currentMonitorRun() : null
   const ctx = metricsContext(repo, workspaceId)
   const analysis = { ...await runPerfAnalysis(repo, workspaceId, Date.now()), run }
   if (contextHolds(ctx, repo)) publishPerfAnalysis(analysis)

@@ -20,7 +20,7 @@ import {
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis, unjudgedReason } from '../analyze'
 import { perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
-import { resetMonitorRun } from '../monitorRun'
+import { resetMonitorRun, startMonitorRun } from '../monitorRun'
 import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
 import { INTERACTION_SERIES, loadRecords } from '../load'
 
@@ -213,6 +213,30 @@ describe('runPerfAnalysis', () => {
     // on a field: the analysis carries its run, whose `repo` a failure message
     // would try to serialize.
     expect(analysis.workspaceId).toBe(WS)
+    expect(getPerfAnalysisFor(repo, WS)).toBeNull()
+  })
+
+  // A scheduled pass waits on the startup recorder before it runs, and a
+  // teardown-and-restart inside that wait installs a DIFFERENT run. Stamping
+  // the analysis with whatever run is in force would hand the new one an
+  // analysis computed for the old — and a sign-out that keeps the workspace id
+  // makes those look identical from everywhere but the Repo.
+  it('does not stamp an analysis with a run that is not for its own context', async () => {
+    resetPerfAnalysisStore()
+    await pastSession()
+    const stop = await startEffect()
+    // Awaited into a binding first: `expect(read()).toBe(await write())`
+    // evaluates the read BEFORE the await, so it would see the store as it was.
+    const published = await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(repo, WS)).toBe(published)
+
+    resetPerfAnalysisStore()
+    stop?.()
+    // A run for a DIFFERENT Repo, on the same workspace id.
+    startMonitorRun({}, WS)
+    const analysis = await runPerfAnalysisNow(repo, WS)
+
+    expect(analysis.run).toBeNull()
     expect(getPerfAnalysisFor(repo, WS)).toBeNull()
   })
 
