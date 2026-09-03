@@ -64,8 +64,8 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
   'partly-judged': (s) => `some ${s} metrics could not be judged this session`,
 }
 
-/** Which series went unjudged, and why. They resolve differently — only
- *  `history-short` is fixed by waiting — so they are not one message. */
+/** Which series went unjudged, and why — one message per series, since the
+ *  reasons resolve differently and a reader acts on which one it is. */
 const pendingNotes = (analysis: PerfAnalysis): string[] =>
   (['interaction', 'startup'] as const).flatMap((series) => {
     const reason = analysis.unjudgedBecause[series]

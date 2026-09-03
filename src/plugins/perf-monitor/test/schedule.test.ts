@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
+import type { AppEffectContext } from '@/extensions/core'
 import type { PerfComparison } from '../analyze'
 import { analysisFixture } from './fixtures'
 
@@ -54,7 +55,11 @@ const verdict = (seq: number, awaiting: boolean): PerfComparison =>
 
 let stop: (() => void) | undefined
 const startEffect = (): (() => Promise<number | void>) => {
-  stop = perfAnalysisEffect.start({ repo, workspaceId: WS }) ?? undefined
+  // Only `repo` and `workspaceId` are read here, and this effect's cleanup is
+  // synchronous — the facet signature allows a promise.
+  stop = perfAnalysisEffect.start(
+    { repo, workspaceId: WS } as unknown as AppEffectContext,
+  ) as (() => void) | undefined
   if (run === null) throw new Error('the effect started no loop')
   return run
 }
