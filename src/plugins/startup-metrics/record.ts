@@ -245,11 +245,22 @@ export const collectStartupMetricsEffect: AppEffect = {
     const runCleanups = () => { for (const c of cleanups.splice(0)) c() }
 
     const record = () => {
-      // `recorded` here is not reachable through a single instance — the
-      // start gate already refuses — but two instances can be live at once
-      // (a restart before the first write lands), and the second's timers
-      // outlive the first's success.
-      if (done || recorded || recording) return
+      if (done) return
+      // Two instances can be live at once — a restart before the first write
+      // lands — and the two ways that ends are not the same.
+      //
+      // Already on disk: this instance has nothing left to do, and staying
+      // armed leaks its long-task listener for the life of the page, re-arming
+      // `acceptInteractive` against a mark nothing will read again.
+      //
+      // NOT covered by a test: reaching it needs a superseded instance whose
+      // quiet window elapses after another instance's held write succeeds —
+      // the fake PerformanceObserver path crossed with an in-flight write.
+      if (recorded) { done = true; runCleanups(); return }
+      // Merely in flight: stay armed. That write can still decline every
+      // attempt, and this instance's next quiet window is then the only thing
+      // that will try again.
+      if (recording) return
       done = true
       runCleanups()
       attemptWrite(0)

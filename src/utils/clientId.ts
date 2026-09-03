@@ -91,7 +91,18 @@ const platformFamily = (userAgent: string): string =>
  *  `navigator.platform` is deprecated and may be empty, hence the family
  *  fallback. */
 export const getDeviceLabel = (): string => {
-  const surface = isInstalledAppDisplayMode() ? 'installed' : 'browser'
-  if (typeof navigator === 'undefined') return `${surface}:unknown`
-  return `${surface}:${navigator.platform || platformFamily(navigator.userAgent)}`
+  if (typeof navigator === 'undefined') return `${deviceSurface()}:unknown`
+  return `${deviceSurface()}:${navigator.platform || platformFamily(navigator.userAgent)}`
 }
+
+/** The half of `getDeviceLabel` that SELECTS a series.
+ *
+ *  One browser profile resolves the same client id installed as a PWA and as an
+ *  ordinary tab, and their timings are not comparable — that is the whole job
+ *  the label does, and this is the part of it that does the job. The platform
+ *  half is descriptive: it distinguishes two browsers in a tree for a human
+ *  reading it, and it CHANGES — `navigator.platform` is deprecated and may
+ *  start returning empty on a browser upgrade, at which point a query matching
+ *  the whole label stops recognising every record written before it. */
+export const deviceSurface = (): 'installed' | 'browser' =>
+  isInstalledAppDisplayMode() ? 'installed' : 'browser'

@@ -38,7 +38,7 @@ import {
 } from '@/data/stateBlocks.js'
 import { jsonPathForProperty, type PropertyName } from '@/data/internals/typedBlockQuery.js'
 import { keyAtStart } from '@/data/orderKey.js'
-import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
+import { deviceSurface, getClientId } from '@/utils/clientId.js'
 import { v4 as uuidv4 } from 'uuid'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
 import { assertStillWritable, NoLongerEligible } from './sessionContext.js'
@@ -106,14 +106,14 @@ const ensureClientGroup = async (
 ): Promise<string> => {
   const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, containerType)
   const clientId = getClientId()
-  const group = await getPluginUIStateChild(
-    root,
-    clientId,
-    // Titled with the device label so two browsers sharing a platform string
-    // stay distinguishable in the tree; KEYED on the opaque client id so every
-    // device converges on its own group after sync.
-    `${getDeviceLabel()} · ${clientId.slice(0, 8)}`,
-  )
+  // NO title. A block's content is FTS-indexed and listed by every
+  // block-discovery surface — `((` completion searches it, and the empty query
+  // lists it by recency — so a titled container is this subtree's third leak
+  // into the picker after the record rows themselves. Keeping telemetry rows
+  // contentless removes the class instead of filtering it surface by surface,
+  // which is a list with no end. The device label is on every record inside the
+  // group, where anyone reading the series gets it anyway.
+  const group = await getPluginUIStateChild(root, clientId)
   return group.id
 }
 
@@ -267,7 +267,7 @@ export const clientSeriesQuery = (
   opts: {
     groupId: string
     recordName: PropertyName
-    deviceLabel: string
+    deviceSurface: string
     /** Kept out of the candidate set BEFORE any offset — retention bounds the
      *  records that came before the one it just wrote, not including it. */
     excludeId?: string
@@ -292,14 +292,14 @@ export const clientSeriesQuery = (
              ${opts.excludeId === undefined ? '' : 'AND id != ?'}
              AND json_extract(properties_json, ?) IS NOT NULL
              AND (json_extract(properties_json, ?) IS NULL
-                  OR json_extract(properties_json, ?) = ?)
+                  OR json_extract(properties_json, ?) LIKE ?)
            ORDER BY json_extract(properties_json, ?) DESC, order_key, id
            ${opts.tail}`,
     params: [
       ...(opts.selectParams ?? []),
       opts.groupId,
       ...(opts.excludeId === undefined ? [] : [opts.excludeId]),
-      record, label, label, opts.deviceLabel, `${record}.recordedAt`,
+      record, label, label, `${opts.deviceSurface}:%`, `${record}.recordedAt`,
       ...(opts.tailParams ?? []),
     ],
   }
@@ -324,7 +324,7 @@ const pruneGroup = async (
   keepId: string,
 ): Promise<void> => {
   const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS stamp', {
-    groupId, recordName: spec.recordName, deviceLabel: getDeviceLabel(),
+    groupId, recordName: spec.recordName, deviceSurface: deviceSurface(),
     excludeId: keepId,
     selectParams: [`${jsonPathForProperty(spec.recordName)}.recordedAt`],
     tail: 'LIMIT -1 OFFSET ?', tailParams: [spec.retain],
@@ -367,7 +367,7 @@ const pruneGroup = async (
       // used, and deleting it would evict a row this device's reader never
       // counted.
       const label = (record as { deviceLabel?: unknown }).deviceLabel
-      if (label != null && label !== getDeviceLabel()) continue
+      if (label != null && !String(label).startsWith(`${deviceSurface()}:`)) continue
       // Unchanged since it was selected. This does NOT re-establish RANK, which
       // is what put the row past the bound: `Tx` exposes `get`/`peek` by id and
       // no queries, so the series cannot be re-ranked from in here. ACCEPTED —
