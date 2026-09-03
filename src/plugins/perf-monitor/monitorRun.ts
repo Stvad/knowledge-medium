@@ -49,14 +49,25 @@ export const endMonitorRun = (run: MonitorRun): void => {
 
 export const currentMonitorRun = (): MonitorRun | null => current
 
-/** Is the monitor running right now, for this Repo and workspace? A surface
- *  that offers to produce a verdict has to ask: with no run in force nothing
- *  can publish, so the work would be done and discarded. */
-export const hasMonitorRunFor = (repo: object, workspaceId: string): boolean =>
+/** The run in force for this Repo and workspace, or null. A surface that offers
+ *  to produce a verdict has to ask: with no run nothing can publish, so the work
+ *  would be done and discarded. */
+export const monitorRunFor = (repo: object, workspaceId: string): MonitorRun | null =>
   current !== null && current.repo === repo && current.workspaceId === workspaceId
+    ? current
+    : null
+
+export const hasMonitorRunFor = (repo: object, workspaceId: string): boolean =>
+  monitorRunFor(repo, workspaceId) !== null
 
 export const isCurrentRun = (run: MonitorRun | null | undefined): boolean =>
   run != null && run === current
+
+/** Current AND belonging to this reader's Repo. The pair is asked together
+ *  everywhere it is asked at all: a sign-out that keeps the workspace id leaves
+ *  a discarded Repo's analysis matching on every other coordinate. */
+export const isCurrentRunOf = (run: MonitorRun | null | undefined, repo: object): boolean =>
+  isCurrentRun(run) && run!.repo === repo
 
 /** Test helper — no production caller may end a run it did not start. */
 export const resetMonitorRun = (): void => { current = null; listeners.notify() }

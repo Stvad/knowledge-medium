@@ -3,12 +3,8 @@
  *
  * Both recorders keep one block per session under
  * `user page → ui-state → <plugin type> → <client id>`, so a client's whole
- * history is the children of ONE block whose id is derivable. That matters for
- * cost: the obvious query — scan `blocks` for rows whose `properties_json`
- * carries the record property — is a `json_extract` over every block in the
- * workspace (hundreds of thousands of them), which is not something a monitor
- * gets to do, at idle or otherwise. Reading one parent's children is an index
- * hit whose cost is the number of sessions.
+ * history is the children of ONE block whose id is derivable — reading them is
+ * an index hit, not a `json_extract` scan over every block in the workspace.
  *
  * The id is derived, never `ensure`d: a reader must not mint the subtree as a
  * side effect of finding out it is empty.
@@ -29,17 +25,12 @@ import {
   type StartupRecordData,
 } from '@/plugins/startup-metrics/record.js'
 
-// `Number.isFinite`, not `typeof === 'number'`: JSON has no Infinity literal but
-// `1e400` parses as one, and these blobs are hand-editable. A non-finite p95
-// reaching the recent window publishes an `Infinity×` regression; reaching the
-// baseline suppresses a real one.
+// `Number.isFinite`, not `typeof === 'number'`: these blobs are hand-editable,
+// and a non-finite p95 skews the comparison silently (an `Infinity×`
+// regression, or a suppressed real one).
 //
-// NON-NEGATIVE as well, and for a reason finiteness does not cover. Every
-// number in these records is a count or a duration, so a negative one is
-// corrupt by construction — and the way it fails is silent: the comparison's
-// magnitude floor is a `<` test, so a negative median lands under it and is
-// reported STEADY. Corrupt rows would then contribute to a clean bill of
-// health, which is the failure this whole feature exists to remove. The same
+// NON-NEGATIVE too: a negative value is corrupt by construction, and the
+// comparison's `<` floor reports it STEADY rather than catching it — the same
 // rule covers the reversed startup marks below.
 const isCount = (v: unknown): boolean => Number.isFinite(v) && (v as number) >= 0
 const isAbsentOrCount = (v: unknown): boolean => v === undefined || isCount(v)
@@ -49,14 +40,10 @@ const isTimingSample = (v: unknown): boolean =>
   isCount((v as { calls?: unknown }).calls) &&
   isCount((v as { p95Ms?: unknown }).p95Ms)
 
-/**
- * A validator must cover EVERY field a reader dereferences — the comparison and
- * the trend table both. These records are an opaque, deliberately
- * hand-inspectable blob, so any field can arrive with the wrong type, and the consequence is never a bad number: it is a throw
- * inside the analysis (dead for the rest of the session) or inside the dialog
- * render, rather than skipping one unreadable row. Adding a field to either
- * reader means adding it here — INCLUDING inside the nested query samples, since
- * a `queries` map of nulls passes a shallow check and throws later. */
+/** A validator must cover EVERY field a reader dereferences (comparison and
+ *  trend table both) — a missing check throws inside the analysis or the
+ *  dialog render rather than skipping one bad row. Add a field to either
+ *  reader here too, INCLUDING inside the nested `queries` samples. */
 export const isUsableInteractionRecord = (r: {
   queries?: unknown
   fanout?: unknown
@@ -69,26 +56,21 @@ export const isUsableInteractionRecord = (r: {
   typeof r.queries === 'object' && r.queries !== null &&
   Object.values(r.queries as Record<string, unknown>).every(isTimingSample) &&
   typeof r.fanout === 'object' && r.fanout !== null &&
-  // Counter VALUES too, not just the map: they are consumed as numbers, so a
-  // string yields NaN (which takes neither branch) and a negative one yields a
-  // negative rate (which takes the steady branch, silently).
+  // Counter VALUES too: a string yields NaN (neither branch), a negative one
+  // yields a silently-steady rate.
   Object.values(r.fanout as Record<string, unknown>).every(isAbsentOrCount)
 
 /** The trend table calls `.slice` on it, so a number or object throws during
  *  render and takes the whole dialog with it. */
 const isAbsentOrString = (v: unknown): boolean => v === undefined || typeof v === 'string'
 
-/** Marks stay OPTIONAL — a phase the session never reached is absent by design
- *  — but a mark that is PRESENT has to be a finite number. The comparison
- *  subtracts them, and a NaN takes neither the steady nor the regressed branch,
- *  so a single hand-edited row could publish `NaN× slower than baseline`.
+/** Marks stay OPTIONAL (a phase the session never reached is absent by
+ *  design), but a PRESENT mark must be finite — a NaN takes neither the
+ *  steady nor regressed branch and could publish `NaN× slower than baseline`.
  *
- *  ORDERED, too, when both marks of the compared pair are present. Paint cannot
- *  precede repo-ready, and a row saying it does yields a negative bootstrap gap
- *  — which is not merely a nonsense number in the dialog: a negative median
- *  falls under the comparison's absolute floor and is reported STEADY, so
- *  reversed rows contribute to a clean bill of health. Finiteness alone does not
- *  catch that, because both values are perfectly finite. */
+ *  ORDERED too, when both marks of a compared pair are present: paint cannot
+ *  precede repo-ready, and a reversed pair yields a negative gap that the
+ *  comparison's floor reports STEADY rather than catching. */
 export const isUsableStartupRecord = (r: {
   timeOriginMs?: unknown
   repoReadyMs?: unknown
@@ -101,59 +83,41 @@ export const isUsableStartupRecord = (r: {
   isAbsentOrCount(r.repoReadyMs) &&
   isAbsentOrCount(r.firstContentPaintMs) &&
   isAbsentOrCount(r.interactiveMs) &&
-  // Only the pair the comparison SUBTRACTS. `interactiveMs` is stored for
-  // someone reading a session by hand and no metric is derived from it, so a
-  // rule about its ordering would be weight with no consumer.
+  // Only the pair the comparison SUBTRACTS — `interactiveMs` is for hand
+  // reading only, so ordering it would be weight with no consumer.
   (typeof r.repoReadyMs !== 'number' || typeof r.firstContentPaintMs !== 'number' ||
     r.firstContentPaintMs >= r.repoReadyMs)
 
-/** Sessions of history retained per comparison. Enough for the median to be
- *  stable across session heterogeneity, small enough that the baseline still
- *  tracks the current build rather than averaging over months of them. */
+/** Sessions of history retained per comparison — enough for a stable median,
+ *  small enough that the baseline still tracks the current build. */
 export const HISTORY_LIMIT = 40
 
-/** Rows to consider before giving up on finding usable ones. Three times the
- *  window, so a group whose recent rows are unreadable still yields a full
- *  baseline, while a group full of them cannot turn this into a table scan. */
+/** Rows to consider before giving up on usable ones — three times the window,
+ *  so unreadable recent rows don't starve the baseline without this becoming a
+ *  table scan. */
 export const CANDIDATE_LIMIT = HISTORY_LIMIT * 3
 
 /**
  * Everything it takes to read one recorder's series — named ONCE, here.
  *
- * The container type, the property name and the validator only ever travel
- * together, and a caller that spells them out is a caller that can spell one of
- * them wrong: passing a JSON path where the name belongs silently addresses a
- * property nothing writes, and the series then reads as empty rather than as
- * broken. Callers name the SERIES; nobody outside this module says which
- * property it lives in.
+ * Type, property name and validator only ever travel together; a caller that
+ * spells them out separately can spell one wrong and silently read an empty
+ * series instead of a broken one. Callers name the SERIES, never the property.
  */
 export interface RecordSeries<T extends { recordedAt: number }> {
   /** Type of the hidden container this recorder's per-client groups live under. */
   typeId: string
-  /** Name of the record property — never the JSON path. `PropertyName` is what
-   *  makes that a compile error rather than a comment: an already-derived path
-   *  is not assignable to it. The path is derived below from the same helper
-   *  the writer uses, so reader and writer cannot address different keys. */
+  /** Name of the record property — never the JSON path. `PropertyName` makes
+   *  that a compile error: an already-derived path isn't assignable to it. */
   recordName: PropertyName
-  /** Whether a parsed row carries the fields this series is READ for. The
-   *  record is an opaque blob that is deliberately hand-inspectable, so a
-   *  hand-edited or future-shaped row can parse cleanly and still be missing
-   *  what the comparison and the trend table dereference. */
+  /** Whether a parsed row carries the fields this series is READ for — these
+   *  records are hand-inspectable blobs that can parse cleanly and still miss
+   *  them. */
   isUsable: (record: T) => boolean
-  /** What "newest" MEANS for this series, when it is not the write time.
-   *
-   *  The SQL orders by `recordedAt`, which is when the row was persisted —
-   *  correct for retention, whose job is to prune what arrived earliest, and
-   *  correct for the interaction series, which is updated in place so its stamp
-   *  IS its sample time. A startup record is written once, on a deferred and
-   *  RETRYING schedule, so a slow boot can be persisted after a later fast one;
-   *  ordering the comparison that way puts an older boot in the recent window
-   *  and a newer one in the baseline, which can manufacture or hide a trend and
-   *  attributes it to the wrong build chronology. Sorted after loading, so the
-   *  pruner and the reader keep the one definition of the series and differ
-   *  only in what they call recent — which is safe because retention keeps
-   *  thousands and the reader reads tens. */
-  recencyOf?: (record: T) => number
+  /** What "newest" MEANS for this series, when it isn't write time — see
+   *  `clientSeriesQuery`'s `orderField`. Applied in the SQL, before the cap:
+   *  sorting after would let a late-persisted older boot displace a newer one. */
+  orderField?: string
 }
 
 export const INTERACTION_SERIES: RecordSeries<InteractionRecordData> = {
@@ -166,22 +130,19 @@ export const STARTUP_SERIES: RecordSeries<StartupRecordData> = {
   typeId: startupMetricsUIStateType.id,
   recordName: startupRecordProp.name,
   isUsable: isUsableStartupRecord,
-  // Boot time, not write time — see `recencyOf`.
-  recencyOf: (r) => r.timeOriginMs,
+  // Boot time, not write time — see `orderField`.
+  orderField: 'timeOriginMs',
 }
 
-/** This client's group for one series. Derived, never `ensure`d — a reader must
- *  not mint the subtree as a side effect of finding out it is empty. */
+/** This client's group for one series — derived, never `ensure`d, so a read
+ *  cannot mint the subtree as a side effect of finding it empty. */
 const seriesGroupId = (repo: Repo, workspaceId: string, typeId: string): string =>
   stateChildBlockId(pluginUIStateBlockId(workspaceId, repo.user.id, typeId), getClientId())
 
 /**
- * How many records this client has ON DISK for one series.
- *
- * Not `loadRecords(...).length`: that is capped at the comparison window, so a
- * count taken from it silently reports the cap — "40 sessions recorded so far"
- * for a client with four hundred. The two answer different questions, and the
- * only caller of this one is a progress note that means the disk.
+ * How many records this client has ON DISK for one series — NOT
+ * `loadRecords(...).length`, which is capped at the comparison window and
+ * would silently report the cap ("40 recorded" for a client with 400).
  */
 export const countRecords = async (
   repo: Repo,
@@ -198,21 +159,18 @@ export const countRecords = async (
   return rows[0]?.n ?? 0
 }
 
-/** This client's records for one recorder, newest first, each with the id of
- *  the block holding it — so a caller can identify a specific record (e.g. the
- *  one the current session owns) rather than relying on its position.
+/** Records carry the id of the block holding them, so a caller can identify a
+ *  specific record rather than relying on position.
  *
- * `recordedAt` orders the result rather than `order_key`: the rows are written
- * newest-first, but an interaction record is UPDATED in place through its
- * session, so its position in the sibling order reflects when the session
- * started and its `recordedAt` reflects the sample. Sorting on the field the
- * comparison actually reads keeps those from disagreeing.
- */
-/** Parse one row's payload, or null if it is unreadable or unusable.
+ *  Sorted by `recordedAt`, not `order_key`: an interaction record is UPDATED
+ *  in place through its session, so sibling order reflects when the session
+ *  STARTED while `recordedAt` reflects the sample — sorting on the field the
+ *  comparison reads keeps the two from disagreeing. */
+/** Parse one row's payload, or null if unreadable or unusable.
  *
- *  `recordedAt` is checked here rather than in either validator because it
- *  orders the series: absent makes every comparison NaN and randomises the
- *  window; `Infinity` (which `1e400` parses to) sorts to the front. */
+ *  `recordedAt` is checked here, not in either validator, because it orders
+ *  the series: absent makes comparisons NaN; `Infinity` (from `1e400`) sorts
+ *  first. */
 const parseRecord = <T extends { recordedAt: number }>(
   payload: string | null,
   isUsable: (record: T) => boolean,
@@ -231,47 +189,36 @@ const parseRecord = <T extends { recordedAt: number }>(
 const scanSeries = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
-  { typeId, recordName, isUsable, recencyOf }: RecordSeries<T>,
+  { typeId, recordName, isUsable, orderField }: RecordSeries<T>,
 ): Promise<Array<{ id: string; record: T }>> => {
   const recordPath = jsonPathForProperty(recordName)
   const groupId = seriesGroupId(repo, workspaceId, typeId)
-  // ONE query, not a page walk. The candidate window is bounded and small, so
-  // paging bought nothing and cost consistency: `OFFSET` over an order that
-  // other tabs are mutating — a record is UPDATED in place, moving its
-  // `recordedAt` — can read a row twice or skip it entirely, and the recorder
-  // writes from a different idle job than this reader. A single read is one
-  // snapshot, so neither can happen and the rows arrive already ordered.
+  // ONE query, not a page walk: `OFFSET` over an order other tabs keep
+  // mutating (a record is UPDATED in place, moving its `recordedAt`) can read
+  // a row twice or skip it — a single read is one snapshot, so neither can
+  // happen.
   //
-  // The limit is on ROWS while the window is on USABLE records, because
-  // validation happens after the JSON parse: malformed or future-shaped rows at
-  // the front would otherwise push valid history out of reach, and the monitor
-  // would report an insufficient baseline while the group visibly holds
-  // hundreds of good records.
+  // The limit is on ROWS, the window on USABLE records: validation happens
+  // after the JSON parse, so unreadable rows at the front must not push valid
+  // history out of reach.
   //
-  // Built from `clientSeriesQuery` — the one definition of this client's
-  // records — so the reader and the retention pass cannot disagree about which
-  // rows are in the series or which of them is newest.
+  // Built from `clientSeriesQuery` so the reader and the retention pass can't
+  // disagree about which rows are in the series or which is newest.
   const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS payload', {
-    groupId, recordName, deviceSurface: deviceSurface(), clientId: getClientId(),
+    groupId, recordName, orderField, deviceSurface: deviceSurface(), clientId: getClientId(),
     selectParams: [recordPath],
     tail: 'LIMIT ?', tailParams: [CANDIDATE_LIMIT],
   })
   const rows = await repo.db.getAll<{ id: string; payload: string | null }>(q.sql, q.params)
   const window: Array<{ id: string; record: T }> = []
   for (const row of rows) {
-    // Stopping at the window rather than truncating afterwards. Over-long
-    // history biases the baseline toward older, smaller-graph sessions, which
-    // reads as a regression that never happened.
+    // Stop at the window rather than truncate after: over-long history biases
+    // the baseline toward older, smaller-graph sessions — a false regression.
     if (window.length >= HISTORY_LIMIT) break
     const record = parseRecord<T>(row.payload, isUsable)
     if (record !== null) window.push({ id: row.id, record })
   }
-  // Re-sorted, not re-queried: the SQL order decides which rows are CANDIDATES
-  // (and agrees with the pruner about that), while this decides which of them
-  // the comparison calls recent.
-  return recencyOf === undefined
-    ? window
-    : [...window].sort((a, b) => recencyOf(b.record) - recencyOf(a.record))
+  return window
 }
 
 /** This client's records for one recorder, newest first — the bounded window a
@@ -280,22 +227,16 @@ const scanSeries = async <T extends { recordedAt: number }>(
 export const loadRecords = scanSeries
 
 /**
- * The window, plus THIS session's own record — two answers, deliberately not
- * one list.
+ * The window, plus THIS session's own record — two answers, not one list.
  *
- * `window` is the bounded history a comparison averages. `current` only says
- * that a sample for this session exists. Merging them puts the session into its
- * own baseline: everything past the recent window is history, so a current row
- * folded in both skews the average and can make four genuine samples look like
+ * `window` is the bounded history a comparison averages; `current` only says a
+ * sample for this session exists. Merging them would fold the session into its
+ * own baseline, skewing the average and letting four genuine samples pass for
  * the five a verdict requires.
  *
- * The current row is a POINT LOOKUP, not a longer scan. It is addressed by its
- * own identity, so no candidate limit can hide it — which three successive
- * widenings of the window (the recent slice, then the history cap, then the
- * candidate cap) each failed to guarantee, because this client's other tabs go
- * on writing newer rows for as long as the page stays open and retention keeps
- * thousands. One extra bounded query on an idle path buys an answer that does
- * not depend on how far back the row happens to be.
+ * `current` is a POINT LOOKUP by identity, not a wider scan: no candidate
+ * limit can hide it, however far back other tabs still writing may have
+ * pushed the row.
  */
 export const loadSeriesWithCurrent = async <T extends { recordedAt: number }>(
   repo: Repo,
@@ -314,12 +255,12 @@ export const loadSeriesWithCurrent = async <T extends { recordedAt: number }>(
 const findRecord = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
-  { typeId, recordName, isUsable }: RecordSeries<T>,
+  { typeId, recordName, isUsable, orderField }: RecordSeries<T>,
   identity: { field: string; value: unknown },
 ): Promise<T | null> => {
   const q = clientSeriesQuery('json_extract(properties_json, ?) AS payload', {
     groupId: seriesGroupId(repo, workspaceId, typeId),
-    recordName, deviceSurface: deviceSurface(), clientId: getClientId(),
+    recordName, orderField, deviceSurface: deviceSurface(), clientId: getClientId(),
     selectParams: [jsonPathForProperty(recordName)],
     matchField: identity,
     tail: 'LIMIT 1',

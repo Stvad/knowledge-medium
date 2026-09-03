@@ -156,7 +156,11 @@ export const summarize = (analysis: PerfAnalysis, live: LiveFacts): PerfVerdict 
     const filling = Object.values(analysis.unjudgedBecause).includes('history-short')
     return {
       kind: 'pending',
-      headline: filling ? 'Building a baseline' : 'Nothing recorded this session',
+      // Not "nothing recorded": this boot can HAVE a row and still be unjudged
+      // — one written through the hidden-until-after-paint fallback carries no
+      // marks — and the note beside it reports a positive record count while
+      // the table shows the row.
+      headline: filling ? 'Building a baseline' : 'Nothing to compare this session',
       // From `recorded`, NOT `baseline`: nothing was judged in this branch, so
       // `baseline` is 0 for both series by construction — the note would report
       // a constant zero while the trend dialog shows the history it was counted

@@ -1,7 +1,4 @@
-/**
- * Cadenced scheduling for the performance analysis, on the same terms as the
- * recorder: genuine idle only, never near boot.
- */
+/** Cadenced scheduling for the performance analysis: genuine idle only, never near boot. */
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
@@ -11,36 +8,16 @@ import { runPerfAnalysis, type PerfComparison } from './analyze.js'
 import { clearPerfAnalyses, publishPerfAnalysis } from './store.js'
 import { currentMonitorRun, endMonitorRun, hasMonitorRunFor, startMonitorRun } from './monitorRun.js'
 
-/** Wall clock between analyses. Long: the series it reads only gains a point
- *  per session, and re-deriving the same verdict is pure cost. Short enough
- *  that a regression developing mid-session is still noticed. */
+/** Wall clock between analyses — long enough that re-deriving the same verdict is pure cost, short enough to still catch a mid-session regression. */
 const REANALYZE_MS = 10 * 60_000
 
-/** How soon to look again when the last verdict was waiting on a sample that
- *  may still be on its way.
- *
- *  A record is written on its recorder's own idle schedule and can retry, so an
- *  analysis can genuinely precede it. Rather than sequence the two — which
- *  couples this plugin to the internals of another, and has to stay correct
- *  across that writer's whole retry schedule — the reader simply comes back
- *  sooner while the answer might change. */
+/** Retry interval when the last verdict awaited a sample that might still arrive —
+ *  recorders retry on their own schedule, so this checks back sooner rather than sequencing against them. */
 const RECHECK_MS = 60_000
 
-/** Pure, and exported for it: this decides how quickly a wrong-looking verdict
- *  corrects itself, which is the whole behaviour a shorter cadence buys.
- *
- *  BACKOFF, not a deadline. Any deadline encodes a claim the reader cannot
- *  make — that a missing sample is now permanently missing — and neither series
- *  supports one: a startup recorder switched on in an hour-old page still
- *  writes this boot's record, and an interaction recorder that has not written
- *  YET is indistinguishable from one switched off.
- *
- *  Backing off answers the question that CAN be answered — how much is another
- *  look worth — so a late sample is still picked up and a recorder that is
- *  genuinely off costs a handful of extra passes before settling at the
- *  ordinary cadence, which is what it would have cost anyway. `waits` is the
- *  number of CONSECUTIVE preceding analyses that came back still waiting, so
- *  the first recheck is prompt. */
+/** Pure, and exported for it: sets how fast a wrong-looking verdict self-corrects.
+ *  BACKOFF, not a deadline — neither series can tell "permanently missing" from "not
+ *  yet written", so no deadline is safe; `waits` counts CONSECUTIVE preceding waits, so the first recheck is prompt. */
 export const nextAnalysisDelayMs = (
   awaiting: { interaction: boolean; startup: boolean },
   waits: number,
@@ -55,63 +32,29 @@ const job = cadencedIdleJob({
   label: 'perf-monitor',
 })
 
-/** Run now, publish, return. Used by the effect and by the trend view's manual
- *  refresh. Throws on failure so a caller can surface it. */
+/** Runs now, publishes, returns — used by the effect and the trend view's manual refresh; throws on failure so the caller can surface it. */
 export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
-  // Both captured BEFORE the awaits. The analysis draws on AMBIENT state — the
-  // live counters are page-global — and its history reads plus `countLiveBlocks`
-  // are long enough for the world to move under it.
-  //
-  // TWO things, and neither implies the other:
-  //
-  //  - the RUN this belongs to, stamped onto the analysis so the store can
-  //    refuse it at publication AND at every later read. Captured rather than
-  //    read back at the end, or a refresh issued after teardown would adopt
-  //    whatever run started next.
-  //  - the counter SPAN, which no run change accompanies: a `resetMetrics()`
-  //    mid-analysis retires the counters the verdict rests on while the Repo,
-  //    the workspace and the run are all unchanged.
-  //
-  // The caller still gets the result; only the store is spared it.
-  //
-  // The run has to be the one for THESE arguments, not merely whichever is in
-  // force: a teardown-and-restart while this pass is reading history installs a
-  // different one, and a sign-out that keeps the workspace id would otherwise
-  // stamp the previous user's analysis with the new user's run.
+  // `run` and the counter span are captured BEFORE the awaits — ambient global state
+  // can move under the read. `run` is stamped on the analysis (not read back at the end)
+  // so a teardown/restart or sign-out mid-read can't stamp the wrong run; the span carries no such marker, so the store checks it separately.
   const run = hasMonitorRunFor(repo, workspaceId) ? currentMonitorRun() : null
   const ctx = metricsContext(repo, workspaceId)
   const analysis = { ...await runPerfAnalysis(repo, workspaceId, Date.now()), run }
-  // ACCEPTED means the store holds it, which is the only claim a caller can
-  // act on. Four things can refuse it — the context moving under this pass, a
-  // run that ended, a run that was never ours, a newer analysis already
-  // published — and the scheduler must not set its cadence from any of them.
-  // Three of those live in the store, so the store reports its own answer
-  // rather than the two halves being re-derived here and drifting.
+  // ACCEPTED = the store holds it, the only claim a caller can act on — the store reports
+  // its own answer (stale context / ended or foreign run / superseded) rather than this re-deriving it and drifting.
   const accepted = contextHolds(ctx, repo) && publishPerfAnalysis(analysis)
   return { analysis, accepted }
 }
 
-/** The running loop's re-arm, while one is running.
- *
- *  A verdict produced OUTSIDE the loop answers the same question the loop's own
- *  pass does, so the loop must not go on waiting out a delay it chose before
- *  that verdict existed. Origin is decided by WHICH FUNCTION the caller
- *  reached for — the loop calls `runPerfAnalysisNow`, everyone else calls
- *  `refreshPerfAnalysis` — rather than compared after the fact.
- *
- *  It cannot be a value compared after the fact: `publishPerfAnalysis` notifies
- *  synchronously from inside the pass, so a loop-owned publication reaches any
- *  subscriber BEFORE the loop could record it as its own — every scheduled pass
- *  then reads as external, and re-arming on one leaves a second live chain. */
+/** The running loop's re-arm hook, set while the loop is active, so an outside verdict (a manual refresh) resets a delay chosen before it existed.
+ *  Origin is decided by WHICH FUNCTION the caller reached for (loop → `runPerfAnalysisNow`, everyone else → `refreshPerfAnalysis`), not by comparing
+ *  values after the fact: `publishPerfAnalysis` notifies synchronously, so by the time of comparison even the loop's own pass would read as external. */
 let rearmRunningLoop: ((analysis: PerfComparison) => void) | null = null
 
-/** Run an analysis on someone's behalf — the trend view's refresh — and let the
- *  scheduled loop know, so a verdict a person asked for sets the cadence the
- *  same way one the loop produced does. */
+/** Runs an analysis on someone's behalf so the scheduled loop's cadence follows it too. */
 export const refreshPerfAnalysis = async (repo: Repo, workspaceId: string) => {
   const result = await runPerfAnalysisNow(repo, workspaceId)
-  // Only an ACCEPTED verdict: a refused one describes a span or a run that is
-  // gone, and it must not set the cadence here any more than it may in the loop.
+  // Only an ACCEPTED verdict sets the cadence — a refused one describes a span or run that's gone.
   if (result.accepted) rearmRunningLoop?.(result.analysis)
   return result
 }
@@ -120,35 +63,16 @@ export const perfAnalysisEffect: AppEffect = {
   id: 'perf-monitor.analyze',
   start: ({ repo, workspaceId }) => {
     if (!workspaceId) return
-    // A fresh run: every verdict from the previous one is already unreadable by
-    // identity. This drops them and tells subscribers to re-read — NOT the
-    // store's `reset`, which also drops the LISTENERS, and a
-    // `useSyncExternalStore` subscriber never comes back from that: it
-    // re-subscribes only when the `subscribe` identity changes, and this one is
-    // module-stable.
+    // Fresh run: previous verdicts are already unreadable by identity, so this clears them and tells subscribers to re-read — NOT the store's
+    // `reset`, which also drops the LISTENERS; a `useSyncExternalStore` subscriber never comes back from that since `subscribe` is module-stable.
     const run = startMonitorRun(repo, workspaceId)
     clearPerfAnalyses()
     observeWorkspace(repo, workspaceId)
-    // No special case for an environment that can never record. The ordinary
-    // pass reaches the same verdict there: without a durable client id the
-    // RECORDERS refuse to write at all (`no-persistent-client`), so both series
-    // are empty, nothing is judged, and `recordingBlockedBy` carries the
-    // reason — and it costs two index-hit queries that return nothing.
-    //
-    // The eligibility rule is what empties them, NOT the id moving: within a
-    // page session `getClientId()` caches one fallback id, so the reader is
-    // looking in a consistent place. There is nothing there to find. A hand-built
-    // analysis for that one state was a second constructor for every field of
-    // `PerfAnalysis`, kept in step by hand, to show the same words one idle
-    // delay sooner.
-    // Consecutive waits, for the backoff. Loop-local, and advanced only by a
-    // pass whose result was ACCEPTED — a refused one describes a span that is
-    // gone, and letting it count would back off over a verdict that never
-    // applied.
+    // No special case for an environment that can't record — recorders refuse to write without a durable client id, so the ordinary pass already
+    // reaches the same verdict (both series empty, `recordingBlockedBy` carries the reason) at the cost of two queries that return nothing.
+    // Consecutive waits, for the backoff — advanced only on an ACCEPTED pass, since a refused one describes a span that's gone.
     let waits = 0
-    /** The cadence for a verdict, and the bookkeeping that goes with it —
-     *  applied identically whether the loop ran it or a refresh did, so the two
-     *  cannot disagree about how soon to look again. */
+    /** The cadence for a verdict, applied identically whether the loop ran it or a refresh did, so the two can't disagree. */
     const cadenceFor = (analysis: PerfComparison): number => {
       const { interaction, startup } = analysis.awaitingLiveSample
       const delay = nextAnalysisDelayMs(analysis.awaitingLiveSample, waits)
@@ -158,41 +82,23 @@ export const perfAnalysisEffect: AppEffect = {
     const loop = job.start(
       async () => {
         const { analysis, accepted } = await runPerfAnalysisNow(repo, workspaceId)
-        // A refused result describes a span that no longer exists, so it says
-        // nothing about what the CURRENT one is waiting for. Come back soon
-        // instead of adopting its answer — the state that made it stale (a
-        // reset, a workspace switch) is exactly when a fresh verdict matters.
+        // A refused result describes a gone span, so it says nothing about what the CURRENT one awaits — come back soon instead of adopting it.
         if (!accepted) return RECHECK_MS
+        // ACCEPTED: a manual refresh may have already re-armed while this pass was in flight, so this delay yields to that (seconds-older) verdict.
         return cadenceFor(analysis)
       },
-      // A pass that threw produced no verdict at all. Retrying on the full
-      // cadence would leave the monitor silent for ten minutes over a
-      // transient DB failure, which is the state it is least useful in.
+      // A throw produced no verdict — retry soon rather than on the full cadence, or a transient DB failure silences the monitor for ten minutes.
       { onFailureDelayMs: RECHECK_MS },
     )
     rearmRunningLoop = (analysis) => { loop.rearmIn(cadenceFor(analysis)) }
-    // A reset retires the counters every verdict rests on and opens a fresh
-    // span, which the readers already show as "no verdict". Nothing about that
-    // reaches the loop, so a pass that had settled on the ordinary cadence
-    // would leave the chip empty for the rest of it while a new span
-    // accumulates. Come back promptly instead, on a backoff starting over:
-    // this is a new situation, not a continuation of what we were waiting for.
+    // A reset opens a fresh span the loop never hears about — left on the ordinary cadence it'd leave the chip empty, so back off afresh instead.
     const stopWatchingReset = repo.onMetricsReset(() => {
       waits = 0
       loop.rearmIn(RECHECK_MS)
     })
     return () => {
-      // Teardown is not a pause. This effect goes away when the monitor's own
-      // toggle is switched off, and the counters its verdicts describe keep
-      // moving while it is gone — the always-on observer can make them
-      // unattributable in the meantime, so what is cached stops being true and
-      // nothing here would notice.
-      //
-      // Ending the run is what makes that true: an analysis still in flight
-      // cannot publish afterwards, a refresh issued while the monitor is off
-      // cannot either, and nothing can read what was published before. The
-      // clear is housekeeping on top — it frees the snapshots and tells
-      // subscribers to re-read.
+      // Teardown is not a pause: counters keep moving while the effect is off, so a cached verdict silently goes stale. Ending the run (not just
+      // stopping the loop) is what prevents that from mattering — nothing in flight or issued while off can publish, and nothing can read past it.
       endMonitorRun(run)
       stopWatchingReset()
       rearmRunningLoop = null

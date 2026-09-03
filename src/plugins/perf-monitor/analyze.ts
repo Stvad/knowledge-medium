@@ -1,11 +1,8 @@
 /**
- * One analysis pass: read this client's stored series and compare the live
- * session against it, returning the comparison.
- *
- * It does NOT publish. Whether a comparison may reach the store depends on the
- * monitor run and the counter span it was computed under, which is
- * `runPerfAnalysisNow`'s business — and this function is equally callable from
- * a test with neither.
+ * One analysis pass: reads this client's stored series and compares the live
+ * session against them. Does NOT publish — that's `runPerfAnalysisNow`'s job,
+ * which is also why this function is equally callable from a test with no
+ * monitor run in force.
  */
 import type { Repo } from '@/data/repo'
 import {
@@ -33,101 +30,82 @@ import {
   type TrendResult,
 } from './series.js'
 
-/** Why a series produced no verdict. Each resolves differently, which is the
- *  whole reason they are not one value: only `history-short` is fixed by
- *  waiting. */
+/** Why a series produced no verdict, kept distinct because each resolves
+ *  differently — only `history-short` is fixed by waiting. */
 export type UnjudgedReason =
-  /** Page-global counters blended across workspaces; only a fresh page session
-   *  makes them attributable again. */
+  /** Page-global counters blended across workspaces; only a fresh page
+   *  session makes them attributable again. */
   | 'blended-workspaces'
-  /** This session produced no usable measurement to compare against.
-   *
-   *  Whether waiting helps depends on the SERIES, which is why the scheduler
-   *  asks `awaitingLiveSample` rather than reading this. A startup record is
-   *  immutable: written for this boot with its paint marks or not, and one
-   *  present without them never becomes usable. Interaction counters are live,
-   *  so a session measuring nothing comparable now becomes judgeable the moment
-   *  someone edits — the same reason `nextAnalysisDelayMs` keeps rechecking it
-   *  on a cost bound rather than a deadline. */
+  /** No usable measurement from this session yet. Whether waiting helps
+   *  depends on the SERIES (see `awaitingLiveSample`): a startup record is
+   *  immutable once written, but interaction counters are live and become
+   *  judgeable the moment someone edits. */
   | 'no-current-sample'
-  /** Nothing recorded for this session, so the series is not growing at all.
+  /** Nothing recorded for this session, so the series isn't growing at all.
    *  Each recorder is togglable independently of this monitor. */
   | 'not-recording'
   /** Genuinely short of history, and still filling. The one that waiting fixes. */
   | 'history-short'
-  /** Some of the series WAS judged and some of it could not be. The verdict
-   *  that follows is incomplete rather than clean: the metric that went
-   *  unjudged is exactly where a finding could have been hiding. */
+  /** Partly judged: incomplete rather than clean — the unjudged metric is
+   *  exactly where a finding could have been hiding. */
   | 'partly-judged'
 
 export interface PerfAnalysis {
   workspaceId: string
-  /** `metrics().epoch` this was computed under. A `resetMetrics()` retires the
-   *  counters a verdict rests on while the Repo, the workspace and the run all
-   *  stay put — so nothing else here can tell that the figures are gone. */
+  /** `metrics().epoch` this was computed under — needed because
+   *  `resetMetrics()` retires the underlying counters without anything else
+   *  here changing. */
   epoch: number
-  /** The monitor run this was computed under, stamped at the publication
-   *  boundary. Null when nothing was running — a refresh from a dialog still
-   *  mounted after the monitor was switched off — and such an analysis is
-   *  returned to its caller but never reaches the store. */
+  /** Monitor run this was computed under, stamped at publication. Null means
+   *  nothing was running (e.g. a dialog left mounted after the monitor was
+   *  switched off); such an analysis returns to its caller but never reaches
+   *  the store. */
   run: MonitorRun | null
   analyzedAt: number
   /** Run order, so two analyses that START in the same millisecond still have
-   *  one. `analyzedAt` answers WHEN, which is a different question. */
+   *  one; `analyzedAt` answers WHEN, a different question. */
   seq: number
   /** Worst first. Empty when nothing regressed. */
   regressions: Regression[]
-  /** Per SERIES, because they fill independently. One `&&` across the two
-   *  reports a series with no history as clean on the strength of the other —
-   *  "no slowdowns, compared against 0 sessions", a verdict from a comparison
-   *  that never ran, which is the failure this feature exists to remove. */
-  /** Derived from `unjudgedBecause`, never set beside it — the two cannot
-   *  disagree about whether a series was judged. */
+  /** Per series — an `&&` across both would report a series with no history
+   *  as clean on the strength of the other. Derived from `unjudgedBecause`,
+   *  never set independently, so the two cannot disagree. */
   ready: { interaction: boolean; startup: boolean }
-  /** Per `awaitingSample` — what the scheduler reads to decide whether another
-   *  look can change the answer. */
+  /** Per `awaitingSample` — what the scheduler reads to decide whether
+   *  another look can change the answer. */
   awaitingLiveSample: { interaction: boolean; startup: boolean }
-  /** WHY each series' comparison is incomplete, or null where it was complete.
-   *  The verdict layer renders these and must not re-derive them: a reason
-   *  invented beside the message it feeds can disagree with what the comparison
-   *  concluded. */
+  /** Why each series' comparison is incomplete, or null if complete. Rendered
+   *  by the verdict layer rather than re-derived there, so the reason can
+   *  never disagree with what the comparison concluded. */
   unjudgedBecause: { interaction: UnjudgedReason | null; startup: UnjudgedReason | null }
-  /** Sessions the judged comparisons actually rested on — not rows loaded. Per
-   *  series, because they fill independently and one number reported for the
-   *  other tells a reader about history the verdict never used. */
+  /** Sessions the judged comparisons actually rested on, not rows loaded —
+   *  per series, since one shared number would misreport history the other
+   *  verdict never used. */
   baseline: { interaction: number; startup: number }
-  /** Records ON DISK for each series, counted only when nothing was judged —
-   *  the one state whose note reports them; `{0, 0}` otherwise, and no reader
-   *  should take it for a count.
-   *
-   *  Distinct from `baseline` (what the judged comparisons rested on, 0 by
-   *  construction whenever nothing was judged) AND from the loaded series
-   *  length, which is capped at the comparison window and would report the cap
-   *  for a client with hundreds of sessions. */
+  /** Records ON DISK per series, counted only when nothing was judged
+   *  (`{0, 0}` otherwise — never read it as a count). Distinct from
+   *  `baseline` (what was judged) and from the loaded series length, which is
+   *  capped at the comparison window. */
   recorded: { interaction: number; startup: number }
   /** Live graph size over the baseline's, when both are known. Not used to
-   *  filter or normalize — see `runPerfAnalysis` — but reported alongside a
-   *  regression so a reader can tell code from data growth. */
+   *  filter or normalize (see `runPerfAnalysis`) — reported so a reader can
+   *  tell code growth from data growth. */
   graphGrowth: number | null
 }
 
-/** Everything a verdict is, EXCEPT which monitor run it belongs to. That is
- *  stamped at the publication boundary, by the caller that knows whether one is
- *  in force — this function is equally callable from a test with none. */
+/** Everything a verdict is, except which monitor run it belongs to — that's
+ *  stamped at the publication boundary, by the caller that knows whether one
+ *  is in force. */
 export type PerfComparison = Omit<PerfAnalysis, 'run'>
 
-/** Why a series' comparison is incomplete, read off the RESULTS.
- *
- *  Ordered, and the order is the point. Blended counters disqualify the series
- *  before anything is asked of the comparison. A series with something judged
- *  is not thereby clean — one steady query alongside an unrateable fan-out jump
- *  would otherwise publish "no slowdowns" while dropping the result that could
- *  not be rated. Only past both of those does "why was nothing judged" arise,
- *  and there a missing current sample outranks short history because waiting
- *  fixes exactly one of them.
- *
- *  `blended` and `notRecording` are facts about the SESSION that the results
- *  cannot carry; everything else comes from the comparison itself. */
+/** Why a series' comparison is incomplete, read off the RESULTS. Order
+ *  matters: blended counters disqualify a series before anything is asked of
+ *  the comparison; something judged isn't thereby clean (a steady query
+ *  beside an unratable fan-out would otherwise publish "no slowdowns" and
+ *  drop the unratable result); only past both does a missing current sample
+ *  outrank short history, since waiting fixes only the former.
+ *  `blended`/`notRecording` are SESSION facts the results can't carry —
+ *  everything else comes from the comparison itself. */
 export const unjudgedReason = (
   results: readonly TrendResult[],
   session: { blended?: boolean; notRecording?: boolean },
@@ -138,21 +116,15 @@ export const unjudgedReason = (
         : session.notRecording ? 'not-recording'
           : 'history-short'
 
-/** Is a series waiting on a sample from THIS session, whatever else it managed
- *  to judge? A different question from the reason, which names the ONE thing to
- *  tell a reader — and the scheduler needs the answer even where the note does
- *  not mention it.
- *
- *  `not-recording` counts. On a normal boot this monitor and the interaction
- *  recorder arm on the same idle delay, so an analysis can win that race and
- *  see no record — indistinguishable from here from a recorder that is switched
- *  OFF. Reporting the guess as final both shows the user the wrong thing and
- *  stops the scheduler looking; treating it as awaited costs a recorder that
- *  really is off a handful of backed-off passes.
- *
- *  Startup never produces that reason (its `notRecording` is never passed — an
- *  absent or unusable boot row is already `no-current-sample`), so the clause is
- *  inert there rather than a case the two series disagree about. */
+/** Is a series waiting on a sample from THIS session, whatever else it
+ *  managed to judge? The scheduler needs this even where `reason` doesn't
+ *  mention it. `not-recording` counts: on a normal boot this monitor can win
+ *  the race against the interaction recorder arming and see no record —
+ *  indistinguishable here from a recorder that's genuinely OFF. Treating it
+ *  as awaited only costs an off recorder a handful of backed-off passes;
+ *  treating it as final would show the user the wrong thing and stop the
+ *  scheduler looking. Startup never hits this reason (an absent/unusable boot
+ *  row is already `no-current-sample`), so the clause is simply inert there. */
 export const awaitingSample = (
   results: readonly TrendResult[],
   reason: UnjudgedReason | null,
@@ -163,41 +135,36 @@ export const runPerfAnalysis = async (
   workspaceId: string,
   now: number,
 ): Promise<PerfComparison> => {
-  // Allocated BEFORE the first await. The number answers "which run started
-  // first", so taking it at return time would give the run that finishes first
-  // the lower value — which is the ordering this exists to prevent.
+  // Allocated BEFORE the first await — taking it at return time would give
+  // the run that finishes first the lower value, inverting the ordering.
   const seq = nextAnalysisSeq()
   const interaction = await loadRecords(repo, workspaceId, INTERACTION_SERIES)
-  // This boot's row comes back SEPARATELY from the window, found however far
-  // back the cap buried it. Locating it is a loading concern; the comparison is
-  // handed the two apart so this session cannot land in its own baseline.
+  // This boot's row comes back separately from the window, found however far
+  // back the cap buried it, so this session can't land in its own baseline.
   const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
     repo, workspaceId, STARTUP_SERIES,
     { field: 'timeOriginMs', value: performance.timeOrigin },
   )
 
-  // The live counters are page-global. A page session that has seen a second
-  // workspace carries both workspaces' work, so comparing that snapshot against
-  // one workspace's history manufactures regressions. The recorder stops
-  // sampling in that state; this reader holds the same snapshot and needs the
-  // same rule -- it does not inherit it by the recorder having one.
-  // PEEK, not read: observing is a claim about where this page has been, and
-  // this pass is still reading history when the user can move on and reset the
-  // counters — observing the workspace being analysed would then mark the fresh
-  // span unattributable and disable sampling for a workspace that never blended
-  // anything.
+  // Live counters are page-global: a session that touched a second workspace
+  // carries both workspaces' work, so comparing that snapshot against one
+  // workspace's history manufactures regressions. The recorder stops sampling
+  // in that state; this reader needs the same rule without inheriting it.
+  // PEEK, not read: this pass reads history while the user can still move on
+  // and reset the counters. Observing the workspace being analysed would mark
+  // that fresh span unattributable and disable sampling for a workspace that
+  // never actually blended anything.
   const { metrics, session } = peekLiveSession(repo, workspaceId)
 
-  // Exclude THIS session's record by id, not by position: it is updated in
-  // place, so it is history for nothing. Dropping the first row blindly would
-  // discard a genuine past session in exactly the case where no current record
-  // exists.
+  // Exclude THIS session's record by id, not position — it's updated in
+  // place so carries no history. Dropping the first row blindly would discard
+  // a genuine past session whenever no current record exists.
   const history = interaction.filter((r) => r.id !== session.recordId).map((r) => r.record)
   const current = interactionComparable(metrics)
 
-  // Judged, not counted. A record with no writes, or a startup record missing
-  // its paint marks, is a row that carries no usable sample — so readiness has
-  // to come from whether a comparison actually produced a verdict.
+  // Judged, not counted: a record with no writes, or a startup record missing
+  // its paint marks, carries no usable sample — readiness has to come from
+  // whether a comparison actually produced a verdict.
   const interactionResults: TrendResult[] = session.attributable
     ? [...queryRegressions(current, history), fanoutRegression(current, history)]
     : []
@@ -208,11 +175,10 @@ export const runPerfAnalysis = async (
   const interactionReady = anyJudged(interactionResults)
   const startupReady = anyJudged(startupResults)
 
-  // Read off the comparison RESULTS, not off adjacent state. `recordId` says
-  // whether this session claimed a row, which is a different question from
-  // whether the live snapshot holds anything comparable — a session can own a
-  // row and still measure nothing usable, and reporting that as "still
-  // building" points at history the comparison never lacked.
+  // Read off the comparison RESULTS, not adjacent state: `recordId` says
+  // whether this session claimed a row, a different question from whether
+  // the live snapshot holds anything comparable — a session can own a row and
+  // still measure nothing usable.
   const interactionUnjudged = unjudgedReason(interactionResults, {
     blended: !session.attributable,
     notRecording: session.recordId === null,
@@ -221,9 +187,8 @@ export const runPerfAnalysis = async (
 
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 
-  // Two extra counts, and only in the state that reports them: with anything
-  // judged the verdict names what it rested on instead, and these would be two
-  // queries per analysis for a string nobody renders.
+  // Two extra counts, and only in the state that reports them — with
+  // anything judged the verdict names what it rested on instead.
   const recorded = interactionReady || startupReady
     ? { interaction: 0, startup: 0 }
     : {
@@ -231,26 +196,17 @@ export const runPerfAnalysis = async (
         startup: await countRecords(repo, workspaceId, STARTUP_SERIES),
       }
 
-  // Graph size is the dominant confound for every timing here, and it is
-  // REPORTED rather than corrected for. Filtering the baseline to comparable
-  // graph sizes would quietly disable the monitor on a steadily growing graph
-  // -- the normal case -- and normalizing assumes a per-query cost model that
-  // does not exist. A query that got twice as slow because its input doubled is
-  // also a real slowdown the user feels; what they need is to be able to tell
-  // which kind it is.
+  // Graph size is REPORTED, not corrected for: filtering the baseline to
+  // comparable sizes would disable the monitor on a normal steadily-growing
+  // graph, and there's no per-query cost model to normalize against instead.
   //
-  // Measured over the WHOLE baseline window, not over the sessions supporting
-  // any one regression — a query measurable in only some of them, or the
-  // fan-out's "had writes" filter, leaves each metric resting on its own
-  // subset. So this is not per-metric aligned, and the note says what it does
-  // measure rather than implying it is that metric's own baseline. Aligning it
-  // would mean carrying each result's supporting sessions through
-  // `TrendResult`, which is a lot of machinery for a hint whose job is only to
-  // prompt "was that code or data?".
+  // Measured over the WHOLE baseline window, not the sessions supporting any
+  // one regression, so it's not per-metric aligned — aligning it would mean
+  // threading each result's supporting sessions through `TrendResult` for a
+  // hint whose only job is "was that code or data?".
   const baseCount = median(baselineWindow(history).map((r) => r.blockCount).filter((n) => n > 0))
-  // Counted live, not read off the newest record: the timings on the current
-  // side of every comparison are live too, so the graph size paired with them
-  // has to be the one they actually ran against.
+  // Counted live, not off the newest record: the current side of every
+  // comparison is live too, so the paired graph size must match what it ran against.
   const liveCount = await countLiveBlocks(repo, workspaceId)
   const graphGrowth = baseCount > 0 && liveCount > 0 ? liveCount / baseCount : null
 
@@ -265,10 +221,9 @@ export const runPerfAnalysis = async (
       startup: judgedBaselineCount(startupResults),
     },
     regressions,
-    // Derived from what the comparisons actually consume, not from the
-    // baseline length alone: with history long enough to look sufficient but
-    // too short once the recent window is taken out, every comparison comes
-    // back `insufficient` and the chip would report "no slowdowns" for a
+    // Derived from what the comparisons actually consumed, not baseline
+    // length alone — history that looks sufficient but is too short once the
+    // recent window is excluded would otherwise report "no slowdowns" for a
     // comparison that never ran.
     ready: { interaction: interactionReady, startup: startupReady },
     unjudgedBecause: { interaction: interactionUnjudged, startup: startupUnjudged },

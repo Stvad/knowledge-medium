@@ -1,78 +1,41 @@
 /**
- * The comparison: is this session slower than this device's recent history?
- *
- * Everything here is pure. The judgements it encodes:
- *
- * COMPARE A DEVICE AGAINST ITSELF. Absolute thresholds do not survive a fleet —
- * a phone and a desktop disagree by more than any regression does, and so do
- * two graphs. The baseline is this client's own trailing median.
- *
- * A TREND, NOT A SESSION, on BOTH sides. A regression can arrive gradually, so
- * a threshold against a fixed number never fires on it; and read as a single
- * session the current side fires on every anomalous one. Both sides are
- * therefore medians over a window, which costs a detection lag in sessions.
- *
- * MEDIAN, NOT MEAN. Sessions are heterogeneous — a cold start, a big sync, an
- * open panel mounting fifty handles. The mean tracks the outliers; the median
- * tracks the typical session, which is what a human means by "it got slower".
+ * Is this session slower than this device's recent history? Pure. Three
+ * judgements: COMPARE A DEVICE AGAINST ITSELF (thresholds don't survive a
+ * fleet); A TREND ON BOTH SIDES (a fixed number misses gradual regressions,
+ * a single session fires on every anomaly); MEDIAN NOT MEAN (sessions are
+ * heterogeneous; the median tracks the typical one).
  */
 import type { InteractionComparable } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 
-/** Sessions of history required before any comparison is reported. Below this
- *  the median is not a baseline, it is one arbitrary session with extra steps. */
+/** Sessions of history required before any comparison is reported — below this the median is one arbitrary session with extra steps. */
 export const MIN_BASELINE_SESSIONS = 5
 
-/** How much worse than baseline counts as a regression. Deliberately coarse:
- *  this alarm is for slowdowns large enough that a person notices, and a
- *  tighter ratio buys false positives from session heterogeneity rather than
- *  earlier warning. */
+/** How much worse than baseline counts as a regression — deliberately coarse, since tighter buys false positives from session noise, not earlier warning. */
 const REGRESSION_RATIO = 2
 
-/** Below this, a query's p95 is not worth alarming on however much it grew —
- *  a 0.4ms query tripling is noise, not a regression a human can feel. */
+/** Below this, a p95 isn't worth alarming on however much it grew — noise, not a regression a human can feel. */
 const MIN_ABSOLUTE_MS = 5
 
-/** Sessions smoothed into the "current" reading. Small on purpose: this is the
- *  detection LAG, in sessions, for a regression that just landed. Three is
- *  enough to outvote a single anomalous boot and still notice within a day. */
+/** Sessions smoothed into the "current" reading — the detection LAG for a just-landed regression, small enough to still notice within a day. */
 const RECENT_WINDOW = 3
 
 /** Resolves needed before a query's p95 is treated as a measurement. */
 const MIN_CALLS = 20
 
-/** Sessions of stored history the interaction comparison needs before it can
- *  return anything: the baseline, plus the entries consumed smoothing the
- *  current reading. Exported so the "still building a baseline" state is
- *  derived from what the comparison requires rather than re-guessed. */
+/** Sessions of history the interaction comparison needs before it returns anything: baseline plus what current-window smoothing consumes. */
 export const MIN_INTERACTION_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW - 1
 
-/** Same, for startup — where the current side is drawn entirely from stored
- *  records, so a full window is consumed rather than a window less one. */
+/** Same, for startup — its current side is drawn entirely from stored records, so a full window is consumed rather than a window less one. */
 export const MIN_STARTUP_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW
 
-/** The outcome of one comparison. `insufficient` is deliberately distinct from
- *  `steady`: "nothing was judged" and "everything was judged and is fine" are
- *  the same empty regression list but opposite statements, and collapsing them
- *  is how a monitor reports a clean bill of health for a comparison that never
- *  ran. Readiness is derived from these rather than from row counts, because a
- *  row that carries no usable sample is not history. */
+/** `insufficient` stays distinct from `steady` — collapsing "nothing judged"
+ *  into "fine" would report a clean bill of health for a run that never happened. */
 export type TrendResult =
-  /** `reason` separates the two ways a comparison can fail to run, because a
-   *  caller acts on them differently. 'history' fills by waiting: more sessions
-   *  are what it needs. 'no-current-sample' says THIS session has nothing to
-   *  compare, which is missing NOW and not necessarily forever — the
-   *  interaction counters are live and become judgeable the moment someone
-   *  edits, and a boot record can still be written by a recorder enabled late.
-   *  Whether waiting helps is the SERIES' business, not this type's; the
-   *  scheduler reads `awaitingLiveSample` and rechecks on a backoff rather than
-   *  treating either as final. */
+  /** `reason` separates two failure modes callers act on differently:
+   *  'history' fills by waiting; 'no-current-sample' may resolve without more history (live counters, a late-enabled recorder). */
   | { status: 'insufficient'; reason: 'history' | 'no-current-sample' }
-  /** `baselineCount` is the number of stored sessions this comparison actually
-   *  consumed, which is not the number of rows loaded: a session with no
-   *  writes, or one where this query ran too few times to measure, is filtered
-   *  out before the median. Reported so a reader is told what the verdict rests
-   *  on rather than how much history happens to be on disk. */
+  /** `baselineCount` is sessions actually consumed, not rows loaded — rows with no usable sample are filtered out before the median. */
   | { status: 'steady'; baselineCount: number }
   | { status: 'regressed'; regression: Regression; baselineCount: number }
 
@@ -99,38 +62,25 @@ export const median = (values: readonly number[]): number => {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
 }
 
-/** Two decimals. Shared with the trend table so a rate charted there and the
- *  same rate in a headline cannot round differently. */
+/** Two decimals — shared with the trend table so a chart and a headline can't round the same rate differently. */
 export const round2 = (n: number): number => Math.round(n * 100) / 100
 
-/** Median of the recent window vs median of the baseline. Always a result,
- *  never an absence: `insufficient` when either side is too thin, `steady` when
- *  the move is within tolerance, `regressed` otherwise. The one place the
- *  thresholds are applied, so every metric is judged on the same terms — and
- *  the reason a caller can tell "judged and fine" from "not judged", which a
- *  nullable return collapses. */
+/** Median of recent window vs baseline — insufficient / steady / regressed,
+ *  never a bare absence. The one place thresholds are applied. */
 const trendRegression = (
   spec: { metric: string; label: string; unit: 'ms' | 'ratio'; minAbsolute: number },
   recent: readonly number[],
   baseline: readonly number[],
 ): TrendResult => {
-  // The recent side needs a FULL window, not merely a non-empty one: a caller
-  // that could only measure this metric in the live session would otherwise
-  // hand over a single sample, and the smoothing guarantee -- that one session
-  // cannot swing a verdict -- would be silently void exactly when the history
-  // is thinnest.
+  // The recent side needs a FULL window, not merely non-empty — otherwise
+  // the smoothing guarantee (one session can't swing a verdict) goes void exactly when history is thinnest.
   if (recent.length < RECENT_WINDOW || baseline.length < MIN_BASELINE_SESSIONS) return INSUFFICIENT
   const current = median(recent.slice(0, RECENT_WINDOW))
   const base = median(baseline)
   // Judged, and too small to matter — a verdict, not a gap in the data.
   if (current < spec.minAbsolute) return { status: 'steady', baselineCount: baseline.length }
-  // A zero baseline admits no ratio, and the two reasons you can arrive at one
-  // are opposite statements. Still zero: judged, and genuinely unchanged.
-  // Zero before and something now: the metric moved from nothing to a value
-  // that already cleared the floor above, and calling that `steady` would let
-  // the chip certify an arbitrarily large regression as healthy — the one
-  // outcome this feature exists to prevent. It is not a regression we can rate
-  // either, since there is no ratio, so it is honestly reported as unjudged.
+  // A zero baseline is ambiguous: still-zero is genuinely unchanged (steady);
+  // zero-to-something has no ratio and would falsely certify a regression as healthy, so it's reported insufficient instead.
   if (base <= 0) return current === 0 ? { status: 'steady', baselineCount: baseline.length } : INSUFFICIENT
   const ratio = current / base
   if (ratio < REGRESSION_RATIO) return { status: 'steady', baselineCount: baseline.length }
@@ -148,49 +98,29 @@ const trendRegression = (
   }
 }
 
-/** The entries a comparison uses as its BASELINE, given a history newest-first.
- *  The leading ones are consumed smoothing the current reading, so anything
- *  describing the baseline — including the graph size it was measured at — has
- *  to be derived from the same slice or it contextualises a different window. */
+/** Entries used as BASELINE from a newest-first history. The leading entries
+ *  are consumed smoothing "current", so describing the baseline must derive from this same slice. */
 export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
   history.slice(RECENT_WINDOW - 1)
 
-/** A series is READY when at least one of its metrics could actually be judged.
- *  Row count alone is not readiness: records with no writes, or startup records
- *  missing their paint marks, are rows that carry no usable sample. */
+/** A series is READY when at least one metric could be judged — row count alone isn't readiness; some rows carry no usable sample. */
 export const anyJudged = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status !== 'insufficient')
 
-/** Some metric in this series could not be judged. A verdict resting on the
- *  rest is INCOMPLETE, not clean — the unjudged one is exactly where a finding
- *  could have been hiding. */
+/** Some metric could not be judged. A verdict resting on the rest is INCOMPLETE, not clean — the unjudged one is where a finding could hide. */
 export const partlyJudged = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status !== 'insufficient') &&
   results.some((r) => r.status === 'insufficient')
 
-/** Nothing was judged, and at least one metric is short of a sample from THIS
- *  session rather than of history.
- *
- *  Missing NOW, which is not the same as unobtainable: a startup record for
- *  this boot either arrives or does not, but interaction counters are live and
- *  a zero-write session gains a usable fan-out sample the moment someone edits.
- *  What follows from that is a scheduling decision, and it belongs to the
- *  caller — see `nextAnalysisDelayMs`.
- *
- *  `some`, not `every`: a mixed set — one metric short of its own history,
- *  another short of a current sample — is still one where a live counter can
- *  make a verdict possible, and reporting it as merely short of history parks
- *  it behind the long cadence. */
+/** Nothing was judged, and at least one metric is short of a sample from
+ *  THIS session, not history — missing NOW, not necessarily forever. `some`,
+ *  not `every`: a mixed set still has one metric a live counter could unblock. */
 export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean =>
   results.length > 0 &&
   results.some((r) => r.status === 'insufficient' && r.reason === 'no-current-sample')
 
-/** Sessions the THINNEST judged comparison rested on, or 0 if none was judged.
- *
- *  The smallest rather than the largest: this number tells a reader how much to
- *  trust a clean verdict, and the whole feature exists to keep it from claiming
- *  more confidence than it has. Understating sends someone to look; overstating
- *  is the false all-clear. */
+/** Sessions the THINNEST judged comparison rested on, or 0 if none was
+ *  judged — smallest, not largest, so a clean verdict isn't overstated. */
 export const judgedBaselineCount = (results: readonly TrendResult[]): number => {
   const counts = results.flatMap((r) => (r.status === 'insufficient' ? [] : [r.baselineCount]))
   return counts.length === 0 ? 0 : Math.min(...counts)
@@ -204,12 +134,7 @@ export const regressionsIn = (results: readonly TrendResult[]): Regression[] =>
     .sort((a, b) => b.ratio - a.ratio)
 
 /** Per-query p95 regressions, worst ratio first. A query absent from the
- *  baseline is skipped rather than treated as infinitely regressed: a newly
- *  mounted surface is not a regression, and reporting it as one is how an
- *  alarm trains its reader to ignore it.
- *
- *  `recentPast` is the sessions between the live one and the baseline; they
- *  smooth the current reading (see the module docblock). */
+ *  baseline is skipped, not infinitely regressed. `recentPast` smooths the current reading. */
 export const queryRegressions = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
@@ -218,11 +143,8 @@ export const queryRegressions = (
   const baselineSessions = baselineWindow(history)
   const out: TrendResult[] = []
   for (const [name, sample] of Object.entries(current.queries)) {
-    // Only the data-sufficiency filter here. The magnitude floor is applied by
-    // `trendRegression` AFTER the recent median, because applying it to the
-    // live sample alone lets one fast session drop a query whose recent window
-    // is sustainably regressed — the same single-session swing the smoothing
-    // exists to prevent, in the healthy direction.
+    // Only the data-sufficiency filter here — the magnitude floor is applied by
+    // `trendRegression` after the recent median, so one fast session can't drop a sustainably-regressed query.
     if (sample.calls < MIN_CALLS) continue
     const measured = (r: InteractionComparable): number | null => {
       const q = r.queries[name]
@@ -236,28 +158,14 @@ export const queryRegressions = (
       baseline,
     ))
   }
-  // Nothing judged is not the same as nothing to say. With every query too
-  // quiet to compare, returning an empty list leaves the fan-out result alone
-  // in the series — and a steady fan-out then reads as a clean bill for a
-  // latency dimension nobody looked at.
-  //
-  // ONE aggregate result rather than one per skipped query: a single quiet
-  // query among a dozen judged ones is not a partial verdict, and saying so
-  // every session would make "partial" the normal state and mean nothing.
+  // Nothing judged isn't nothing to say: an empty list would leave fan-out
+  // alone in the series, reading as a clean bill nobody actually checked. One aggregate result, not one per skipped query.
   return out.length === 0 ? [NO_CURRENT_SAMPLE] : out
 }
 
-/** Handle invalidations per write.
- *
- *  This is the metric that catches the class of bug latency metrics cannot see:
- *  a query wired to an over-broad invalidation dep re-resolves on writes that
- *  do not concern it. Every individual resolve stays perfectly fast, so p95
- *  never moves — there are simply many times more of them.
- *
- *  `loaderInvalidations`, not `loaderRuns`: a cold `load()` from `subscribe()`
- *  bumps `loaderRuns` too, so that counter charges ordinary mounting and
- *  navigation to write fan-out — and a session that browses more than it writes
- *  then reads as regressed. */
+/** Handle invalidations per write — catches a bug latency can't see: an
+ *  over-broad invalidation dep re-resolves on writes that don't concern it,
+ *  so p95 never moves. `loaderInvalidations`, not `loaderRuns`, which a cold `load()` also bumps. */
 export const invalidationsPerWrite = (r: InteractionComparable): number | null =>
   r.writes > 0 ? (r.fanout.loaderInvalidations ?? 0) / r.writes : null
 
@@ -267,12 +175,8 @@ export const fanoutRegression = (
 ): TrendResult => {
   const perWrite = invalidationsPerWrite
   const now = perWrite(current)
-  // A session that has not written has no rate to compare. That is a missing
-  // CURRENT sample rather than short history, and the two are reported
-  // differently because they send a reader to do different things: more stored
-  // sessions cannot supply this session's own rate, though an edit can — these
-  // counters are live, which is why the scheduler rechecks instead of treating
-  // the gap as settled.
+  // No writes means no rate to compare — a missing CURRENT sample, not short
+  // history: more stored sessions can't supply this session's rate, though a live edit can.
   if (now === null) return NO_CURRENT_SAMPLE
   const rate = (rs: readonly InteractionComparable[]) =>
     rs.map(perWrite).filter((v): v is number => v !== null)
@@ -283,50 +187,26 @@ export const fanoutRegression = (
   )
 }
 
-/** Repo-ready → first paint. Isolated from `interactiveMs` on purpose: TTI also
- *  moves with sync volume and idle-herd contention, so it is far noisier across
- *  sessions, while this gap is the bootstrap's own serialized work. */
+/** Repo-ready → first paint. Isolated from `interactiveMs`: TTI also moves with sync volume and idle-herd contention, so this gap is noisier. */
 export const bootstrapGapMs = (r: StartupRecordData): number | null =>
   r.firstContentPaintMs !== undefined && r.repoReadyMs !== undefined
     ? r.firstContentPaintMs - r.repoReadyMs
     : null
 
 /** `series` is this device's startup records, NEWEST FIRST — the shape
- *  `loadRecords` returns. Takes the whole series rather than a current/baseline
- *  split because both sides are windows over it.
- *
- *  `currentTimeOriginMs` is this page session's `performance.timeOrigin`. The
- *  newest stored records are NOT necessarily from this boot — the write can
- *  fail, the recorder can be disabled or read-only, and the analysis can simply
- *  run before it. Comparing without one would republish a verdict from earlier
- *  page loads as though it described this one. */
+ *  `loadRecords` returns. Takes the whole series since both sides are windows over it. */
 export const startupRegression = (
   series: readonly StartupRecordData[],
   current: StartupRecordData | null,
 ): TrendResult => {
-  // PRESENT AND USABLE, not merely present. A boot that stayed hidden until
-  // after first paint records through the fallback, so its row exists with no
-  // paint marks and `bootstrapGapMs` is null.
-  //
-  // Both ways of failing this report the same reason, and the scheduler treats
-  // it as awaited either way — correctly, because only ONE of them is settled.
-  // An incomplete row is immutable, so no wait improves it. An ABSENT one may
-  // still be written: the recorder is independently togglable and retries, so a
-  // recorder enabled after this pass ran still records this boot. Neither is a
-  // reason to say "still building", which promises history rather than a
-  // sample.
+  // PRESENT AND USABLE, not merely present — a boot hidden until first paint
+  // records via the fallback, leaving `bootstrapGapMs` null. An incomplete
+  // row is immutable; an absent one may still be written late — neither means "still building".
   if (!current || bootstrapGapMs(current) === null) return NO_CURRENT_SAMPLE
-  // `current` is a GATE, never a data point: it says a sample for this session
-  // exists, which is what stops the verdict being a replay from before this
-  // page loaded. It is deliberately not added to `series` — everything past the
-  // recent window is baseline, so a current row folded in would sit in the
-  // history it is compared against, and could turn four genuine samples into
-  // the five a verdict requires.
-  //
-  // The window itself stays FIXED at the newest boots and need not contain this
-  // one: rows above it are later boots of the same app on the same client, the
-  // freshest evidence there is about startup, which is a property of the app
-  // rather than of one page load.
+  // `current` is a GATE, not a data point — proves a sample for THIS session
+  // exists, so it's excluded from `series` to avoid inflating the baseline count.
+  // The window itself stays FIXED at the newest boots and need not contain
+  // `current`: later boots of the same app are still the freshest evidence about startup.
   const gaps = (rs: readonly StartupRecordData[]) =>
     rs.map(bootstrapGapMs).filter((v): v is number => v !== null)
   return trendRegression(

@@ -6,7 +6,7 @@
  * now"; an investigation asks "when did this change, and what shipped around
  * then" — and only the series answers the second.
  */
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Activity, RefreshCw, TrendingUp } from 'lucide-react'
 import {
   Dialog,
@@ -27,7 +27,7 @@ import { summarize } from './verdict.js'
 import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
 import { refreshPerfAnalysis } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
-import { currentMonitorRun, hasMonitorRunFor, subscribeMonitorRun, type MonitorRun } from './monitorRun.js'
+import { monitorRunFor, subscribeMonitorRun } from './monitorRun.js'
 
 /** Sessions shown per table. The stored series is longer (see `HISTORY_LIMIT`);
  *  this is what fits in a dialog without becoming a spreadsheet. */
@@ -85,11 +85,10 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     useCallback((onChange: () => void) => repo.onReadOnlyChange(onChange), [repo]),
     () => repo.isReadOnly,
   )
-  /** The refresh in flight WITH the context it belongs to, derived the same way
-   *  the rows are. A refresh superseded by a sign-out would otherwise hold the
+  /** The context a refresh is running for, or null. A refresh superseded by a
+   *  sign-out, a workspace change or a monitor toggle would otherwise hold the
    *  replacement's button disabled until it settled — or forever, if it hung. */
-  const [refreshingFor, setRefreshingFor] =
-    useState<{ repo: object; workspaceId: string; run: MonitorRun | null } | null>(null)
+  const [refreshingFor, setRefreshingFor] = useState<object | null>(null)
   // The active pin decides `stale`, and a workspace switch moves nothing else
   // this dialog subscribes to — no publication, no role change. Without this
   // seam the staleness re-render is incidental: it arrives only if some other
@@ -101,33 +100,59 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   )
   const ws = workspaceId ?? activePin
 
-  /** The loaded series WITH the Repo, workspace and PUBLICATION they were read
-   *  from. Kept together so what is rendered can be derived rather than
-   *  cleared: a local sign-out swaps the Repo, and rows held in bare state
-   *  would go on showing the previous user's history until the new read
-   *  finished — or forever, if it failed, since the catch path writes nothing.
+  /** The monitor run this dialog is looking at, or null. Subscribed, so a
+   *  teardown or restart re-renders — the analysis store cannot stand in for
+   *  that, since its snapshot is null on both sides of a teardown. */
+  const run = useSyncExternalStore(
+    subscribeMonitorRun,
+    () => (ws == null ? null : monitorRunFor(repo, ws)),
+  )
+
+  /** ONE identity for the world this dialog is looking at: the Repo, the
+   *  workspace, and the monitor run. Everything asynchronous here is tagged
+   *  with the context it was started in, and anything carrying a different one
+   *  is simply not shown.
    *
-   *  The publication is in there for the same reason. The tables are what a
-   *  reader checks the verdict against, and the series moves underneath a dialog
-   *  that stays open: the interaction recorder rewrites its row on a cadence and
-   *  another tab can append. Rows from a different publication than the verdict
-   *  beside them cannot explain it, so they are not shown as if they could.
+   *  This replaces three separate mechanisms that asked the same question and
+   *  could disagree — a load token, a refresh identity triple, and a
+   *  repo/workspace tag on the loaded rows. A refresh used to survive a monitor
+   *  toggle that the rows did not.
    *
-   *  What the tag proves is WHICH publication these rows were read for, not
-   *  that the analysis read the same bytes: this is a second query, and a row
-   *  rewritten between the two lands here newer than the verdict used.
-   *  ACCEPTED — that window is one round trip against a cadence of minutes, and
-   *  closing it means carrying the whole loaded series inside every published
-   *  analysis, which the store then holds per workspace for the session. */
+   *  Compared during RENDER, so a context change hides superseded results in
+   *  the same commit. A token bumped from an effect is one commit late, which
+   *  is exactly long enough to paint the previous workspace's history. */
+  const context = useMemo(() => ({ repo, ws, run }), [repo, ws, run])
+
+  /** The latest context, for async work deciding whether to write at all.
+   *  Display correctness does not depend on this — a superseded result is
+   *  tagged with its own context and never matches — so being one commit
+   *  behind only means a pointless `setState` or a toast for a refresh nobody
+   *  is waiting for. */
+  const latest = useRef(context)
+  useEffect(() => { latest.current = context }, [context])
+  const claimLoad = useCallback((): (() => boolean) => {
+    const started = latest.current
+    return () => latest.current === started
+  }, [])
+
+  /** The loaded series WITH the claim it was read under and the PUBLICATION it
+   *  was read for. Derived rather than cleared: a sign-out swaps the Repo, and
+   *  rows in bare state would go on showing the previous user's history until
+   *  the new read finished — or forever, if it failed.
+   *
+   *  `seq` because the tables are what a reader checks the verdict against and
+   *  the series moves underneath an open dialog. It proves which publication
+   *  these rows were read FOR, not that the analysis read the same bytes: this
+   *  is a second query. ACCEPTED — one round trip against a cadence of minutes.
+   */
   const [series, setSeries] = useState<{
-    repo: object
-    workspaceId: string
+    context: object
     seq: number | null
     startup: StartupRecordData[]
     interaction: InteractionRecordData[]
   } | null>(null)
   const seq = analysis?.seq ?? null
-  const shown = series && series.repo === repo && series.workspaceId === ws && series.seq === seq
+  const shown = series && series.context === context && series.seq === seq
     ? series
     : null
   const startup = shown?.startup ?? null
@@ -146,35 +171,19 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
       ])
       if (!alive()) return
       setSeries({
-        repo, workspaceId: ws, seq,
+        context, seq,
         startup: s.map((r) => r.record),
         interaction: i.map((r) => r.record),
       })
     } catch (e) {
       if (alive()) showError(`Couldn't read performance history: ${e instanceof Error ? e.message : String(e)}`)
     }
-  }, [repo, ws, seq])
-
-  // ONE guard for both load paths: the newest claim invalidates every earlier
-  // one. A load whose dialog has moved on — unmounted, or re-keyed by a Repo or
-  // workspace change — would otherwise resolve afterwards and write the
-  // previous user's rows into the open dialog.
-  const loadToken = useRef(0)
-  const claimLoad = useCallback((): (() => boolean) => {
-    const token = ++loadToken.current
-    return () => loadToken.current === token
-  }, [])
+  }, [repo, ws, seq, context])
 
   useEffect(() => {
     const alive = claimLoad()
     // Async IIFE: the state lands on resolve, not during the effect.
     void (async () => { await loadSeries(alive) })()
-    // Invalidates an in-flight load without needing to reach into it. Reading
-    // the ref in cleanup is the POINT here, not the hazard the rule describes:
-    // it guards against a ref to a DOM node having changed, and this one is a
-    // counter whose whole job is to be bumped on the way out.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: bump the load token on teardown
-    return () => { loadToken.current++ }
   }, [loadSeries, claimLoad])
 
   // The dialog is pinned to the workspace it opened on, but a fresh analysis
@@ -182,18 +191,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   // active now. Re-analyzing a pinned workspace from inside another would
   // report its blocker as the active one's: an editable workspace shown as
   // recording-disabled, or a read-only one shown as fine.
-  const runActive = useSyncExternalStore(
-    subscribeMonitorRun,
-    () => ws != null && hasMonitorRunFor(repo, ws),
-  )
-  // The RUN as well as the Repo and the workspace. This dialog outlives the
-  // monitor's toggle, so switching it off and on again leaves all three of the
-  // previous refresh's other coordinates matching — and its button would stay
-  // disabled under the replacement run until that refresh settled, or forever
-  // if it hung. The run is what a teardown actually changes.
-  const refreshing = refreshingFor !== null
-    && refreshingFor.repo === repo && refreshingFor.workspaceId === ws
-    && refreshingFor.run === currentMonitorRun()
+  const runActive = run !== null
+  const refreshing = refreshingFor === context
   const stale = !ws || ws !== activePin
   // The monitor's own toggle can go off while this dialog stays mounted in the
   // shared DialogHost. Nothing could publish then, so the button would spin and
@@ -206,17 +205,17 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   const monitorOff = !stale && !runActive
 
   const refresh = async () => {
-    // Unpinned defence in depth behind the button's `disabled` — a click cannot
-    // reach here while `stale`. It covers the gap between render and click.
-    if (stale || monitorOff) return
+    // Re-READ, not the render's snapshot: a click lands after a render, and the
+    // workspace or the monitor run can move in between — after which this whole
+    // pass (two history reads, a live block count, an analysis) runs for a
+    // context whose publication will then be refused. Refuse before the
+    // expensive step, not after it.
+    if (!ws || ws !== repo.activeWorkspaceId || monitorRunFor(repo, ws) === null) return
     // Claimed BEFORE the analysis, not just before the read: the analysis is the
     // longer await of the two, and a refresh the dialog has moved past must not
     // publish its history either.
     const alive = claimLoad()
-    // Identity, not just context: a refresh superseded by a swap must not clear
-    // state that the refresh which REPLACED it now owns — that would re-enable
-    // the button under a running analysis and let two overlap.
-    const mine = { repo, workspaceId: ws, run: currentMonitorRun() }
+    const mine = context
     setRefreshingFor(mine)
     try {
       await refreshPerfAnalysis(repo, ws)

@@ -93,6 +93,10 @@ export interface ClientRecordSpec {
   /** Records to keep in this client's group. Required, so a recorder cannot
    *  reach the graph without stating a bound. */
   retain: number
+  /** See `clientSeriesQuery`'s `orderField`. Retention ranks by the same field
+   *  the reader calls newest, or the two would disagree about which rows are
+   *  past the bound. */
+  orderField?: string
   /** Name of the record property — retention only ever considers rows CARRYING
    *  one, since these groups are inspectable and can hold a hand-created child
    *  that must never be reachable by a cleanup pass. The NAME rather than the
@@ -330,6 +334,14 @@ export const clientSeriesQuery = (
   opts: {
     groupId: string
     recordName: PropertyName
+    /** Which field within the record means "newest", defaulting to when the row
+     *  was persisted. A series whose write time can disagree with its sample
+     *  time names its own — a startup record is written once on a deferred,
+     *  RETRYING schedule, so a slow boot can be persisted after a later fast
+     *  one. This belongs to the QUERY so the reader and the pruner cannot
+     *  disagree about which rows are newest, which is the whole reason they
+     *  share this builder. */
+    orderField?: string
     deviceSurface: string
     /** Whose records these are. The group id is DERIVED from it, so the two only
      *  disagree for a row moved in by hand — which is not this client's to
@@ -380,7 +392,7 @@ export const clientSeriesQuery = (
       ...(opts.matchField === undefined
         ? []
         : [`${record}.${opts.matchField.field}`, opts.matchField.value]),
-      `${record}.recordedAt`,
+      `${record}.${opts.orderField ?? 'recordedAt'}`,
       ...(opts.tailParams ?? []),
     ],
   }
@@ -420,10 +432,15 @@ const pruneGroup = async (
   groupId: string,
   keepId: string,
 ): Promise<void> => {
+  // The stamp is the ORDER field, not `recordedAt` by assumption: it is what
+  // put a row past the bound, so it is what the re-check below must find
+  // unchanged.
+  const orderField = spec.orderField ?? 'recordedAt'
   const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS stamp', {
-    groupId, recordName: spec.recordName, deviceSurface: deviceSurface(), clientId: getClientId(),
+    groupId, recordName: spec.recordName, orderField,
+    deviceSurface: deviceSurface(), clientId: getClientId(),
     excludeId: keepId,
-    selectParams: [`${jsonPathForProperty(spec.recordName)}.recordedAt`],
+    selectParams: [`${jsonPathForProperty(spec.recordName)}.${orderField}`],
     tail: 'LIMIT -1 OFFSET ?', tailParams: [spec.retain],
   })
   const stale = await repo.db.getAll<{ id: string; stamp: number | null }>(q.sql, q.params)
@@ -487,7 +504,7 @@ const pruneGroup = async (
       // history. The only automated writer is another tab's retention pass,
       // which deletes from the same far end and whose deletes this loop no-ops
       // on; reaching the case needs a person hand-deleting newer rows mid-append.
-      if ((record as { recordedAt?: unknown }).recordedAt !== row.stamp) continue
+      if ((record as Record<string, unknown>)[orderField] !== row.stamp) continue
       // Hand edits to the record itself, which is inspectable by design and so
       // can be typed into or annotated with another property. Both are things
       // an Automation-scope delete would take with no undo behind it.
