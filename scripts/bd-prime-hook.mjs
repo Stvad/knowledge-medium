@@ -117,5 +117,7 @@ if (isMainModule(import.meta.url)) {
   } catch (e) {
     console.error(`[bd-prime-hook] ${e?.message ?? e}`)
   }
-  process.exit(0)
+  // Not process.exit(): the payload is up to 10K chars, and a write to a piped
+  // stdout is queued — exit() drops the tail, which here means silently losing
+  // memory keys off the end of the index (#881). Nothing holds the loop open.
 }

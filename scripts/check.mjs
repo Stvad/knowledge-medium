@@ -148,24 +148,32 @@ const abortFromSignal = signal => {
 process.once('SIGINT', () => abortFromSignal('SIGINT'))
 process.once('SIGTERM', () => abortFromSignal('SIGTERM'))
 
-const startedAt = performance.now()
-const installResult = await runTask(installTask)
-if (installResult.code !== 0) {
-  process.exit(installResult.code ?? 1)
+// Returns the exit code rather than calling process.exit: printResult has just
+// replayed a failed task's whole buffered output, a write to a piped stdout is
+// queued, and exit() drops the tail — which is how a CI failure arrives with
+// vitest's file list but not its error block, the one part anyone needed (#881).
+const main = async () => {
+  const startedAt = performance.now()
+  const installResult = await runTask(installTask)
+  if (installResult.code !== 0) return installResult.code ?? 1
+
+  const compileResult = await runTask(compileTask)
+  if (compileResult.code !== 0) return compileResult.code ?? 1
+
+  console.log(`[check] running ${parallelTasks.map(task => task.name).join(', ')} in parallel`)
+  const {firstFailure} = await runParallel(parallelTasks)
+  const duration = formatDuration(performance.now() - startedAt)
+
+  if (firstFailure) {
+    console.error(`[check] failed in ${duration}`)
+    return firstFailure.code ?? 1
+  }
+
+  console.log(`[check] passed in ${duration}`)
+  return 0
 }
 
-const compileResult = await runTask(compileTask)
-if (compileResult.code !== 0) {
-  process.exit(compileResult.code ?? 1)
-}
-
-console.log(`[check] running ${parallelTasks.map(task => task.name).join(', ')} in parallel`)
-const {firstFailure} = await runParallel(parallelTasks)
-const duration = formatDuration(performance.now() - startedAt)
-
-if (firstFailure) {
-  console.error(`[check] failed in ${duration}`)
-  process.exit(firstFailure.code ?? 1)
-}
-
-console.log(`[check] passed in ${duration}`)
+const code = await main()
+// abortFromSignal may already have set a code; a run canceled mid-flight
+// reports no failing task, so an unguarded assignment would call it a pass.
+if (!process.exitCode) process.exitCode = code

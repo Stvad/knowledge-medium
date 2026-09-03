@@ -503,5 +503,6 @@ if (isMainModule(import.meta.url)) {
     // never fail: the publish already happened; a broken verifier must not
     // surface as a hook error on every gh command
   }
-  process.exit(0)
+  // Not process.exit(): the echoed title tables are a queued write to a piped
+  // stdout, and exit() drops the tail (#881). Nothing holds the loop open.
 }

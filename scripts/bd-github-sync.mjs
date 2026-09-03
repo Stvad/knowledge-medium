@@ -1063,7 +1063,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         // the failure propagates; the listing's own failure yields to it.
         try {
           printMinted(listAllBeads())
-        } catch {}
+        } catch {
+          // Silence here would be a permanent loss, not a skipped nicety: any
+          // mapping this push minted is unrecoverable once the next run's
+          // listing shows the ref as pre-existing.
+          console.error('bd-github-sync: could not re-list beads — any km→#N mapping this push minted is unprinted')
+        }
         throw e
       }
       // Zero-count lines stay out of the report: they would flip `changed`
@@ -1453,7 +1458,11 @@ if (isMainModule(import.meta.url)) {
       runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') })
     } catch (e) {
       console.error(`bd-github-sync: failed — ${e.message ?? e}`)
-      process.exit(1)
+      // exitCode, never process.exit(): a write to a piped stdout is queued,
+      // and exit() drops the queue. This path has just printed the km→#N
+      // mappings a partial push minted, which nothing recovers once the beads
+      // carry their refs (#881).
+      process.exitCode = 1
     }
   }
 }
