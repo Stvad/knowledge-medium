@@ -35,6 +35,7 @@ const STUB = {
   user: { id: 'user-1', name: 'Alice' },
   isReadOnly: false,
   onReadOnlyChange: () => () => {},
+  onMetricsReset: () => () => {},
   db: { getAll: async () => [] as unknown[] },
 }
 
@@ -44,6 +45,7 @@ const mocks = vi.hoisted(() => ({
     user: { id: 'user-1', name: 'Alice' },
     isReadOnly: false,
     onReadOnlyChange: () => () => {},
+    onMetricsReset: () => () => {},
     db: { getAll: async () => [] as unknown[] },
   } as unknown as Repo,
   runNow: vi.fn(async () => {}),
@@ -244,6 +246,7 @@ describe('rows after a Repo swap', () => {
       user: USER,
       isReadOnly: false,
       onReadOnlyChange: () => () => {},
+      onMetricsReset: () => () => {},
       db: { getAll: async () => { throw new Error('gone') } },
     } as unknown as Repo
     view.rerender(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)

@@ -17,7 +17,7 @@ import {
   writeInteractionSample,
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
-import { getDeviceLabel } from '@/utils/clientId'
+import { getClientId, getDeviceLabel } from '@/utils/clientId'
 import { jsonPathForProperty } from '@/data/internals/typedBlockQuery'
 import { clientGroupId } from '@/plugins/interaction-metrics/recordStore'
 import {
@@ -54,12 +54,17 @@ beforeEach(async () => {
 })
 
 /** The fields `isUsableInteractionRecord` and the comparison dereference. */
+/** Spread at WRITE time via `mine()`: the client id is minted per test, and
+ *  the series query admits only this client's rows. */
 const RECORD = {
-  startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'c',
+  startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'set-per-test',
   deviceLabel: getDeviceLabel(),
   sessionMs: 1, blockCount: 1, writes: 1, queries: {}, fanout: {}, db: {},
   handles: { count: 0, totalDeps: 0, maxDeps: 0, p50Deps: 0, p95Deps: 0, topHeavy: [] },
 }
+
+/** `RECORD` for THIS test's client. */
+const ourRecord = () => ({ ...RECORD, clientId: getClientId() })
 
 const blockCount = async (): Promise<number> =>
   (await sharedDb.db.getAll<{ n: number }>('SELECT COUNT(*) AS n FROM blocks'))[0].n
@@ -101,7 +106,7 @@ describe('loadRecords', () => {
             created_at, updated_at, created_by, updated_by)
          VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
         [id, WS, groupId, orderKey,
-         JSON.stringify({ [interactionRecordProp.name]: { ...RECORD, recordedAt } }),
+         JSON.stringify({ [interactionRecordProp.name]: { ...ourRecord(), recordedAt } }),
          USER.id, USER.id],
       )
     }
@@ -131,7 +136,7 @@ describe('loadRecords', () => {
        VALUES (?, ?, ?, 'z9', '', ?, 0, 1, 1, ?, ?)`,
       ['other-surface', WS, groupId,
        JSON.stringify({ [interactionRecordProp.name]: {
-         ...RECORD, recordedAt: 5_000_000, deviceLabel: 'installed:OtherSurface' } }),
+         ...ourRecord(), recordedAt: 5_000_000, deviceLabel: 'installed:OtherSurface' } }),
        USER.id, USER.id],
     )
 
@@ -168,14 +173,14 @@ describe('loadRecords', () => {
       )
     }
     // One unusable row inside page 0, so that page yields 39 and a second runs.
-    await row('bad', 'a0000', { [interactionRecordProp.name]: { ...RECORD, recordedAt: 9e9 } })
+    await row('bad', 'a0000', { [interactionRecordProp.name]: { ...ourRecord(), recordedAt: 9e9 } })
     await sharedDb.db.execute(
       `UPDATE blocks SET properties_json = json_set(properties_json, ?, 'not-a-number') WHERE id = ?`,
       [`${PATH}.writes`, 'bad'],
     )
     for (let i = 0; i < HISTORY_LIMIT + 2; i++) {
       await row(`ok-${i}`, `a${String(i + 1).padStart(4, '0')}`,
-        { [interactionRecordProp.name]: { ...RECORD, recordedAt: 9e9 - i } })
+        { [interactionRecordProp.name]: { ...ourRecord(), recordedAt: 9e9 - i } })
     }
 
     const records = await loadRecords(repo, WS, INTERACTION_SERIES)
@@ -194,7 +199,7 @@ describe('loadRecords', () => {
             created_at, updated_at, created_by, updated_by)
          VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
         [`rec-${i}`, WS, groupId, `a${String(i).padStart(4, '0')}`,
-         JSON.stringify({ [interactionRecordProp.name]: { ...RECORD, recordedAt: 9e9 - i } }),
+         JSON.stringify({ [interactionRecordProp.name]: { ...ourRecord(), recordedAt: 9e9 - i } }),
          USER.id, USER.id],
       )
     }

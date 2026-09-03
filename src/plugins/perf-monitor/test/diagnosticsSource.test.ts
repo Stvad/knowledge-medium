@@ -74,6 +74,7 @@ describe('createPerfMonitorDiagnosticSource', () => {
       isReadOnly: false,
       metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }),
       onReadOnlyChange: (l: () => void) => { listeners.add(l); return () => listeners.delete(l) },
+      onMetricsReset: () => () => {},
       setReadOnly(value: boolean) {
         if (this.isReadOnly === value) return
         this.isReadOnly = value
@@ -96,6 +97,27 @@ describe('createPerfMonitorDiagnosticSource', () => {
     expect(notified).toBe(1)
     stop?.()
     repo.setReadOnly(false)
+    expect(notified).toBe(1)
+  })
+
+  // `resetMetrics()` retires the counters a verdict rests on and moves nothing
+  // else, so the read correctly refuses the verdict — but without a
+  // notification the already-rendered chip never asks again.
+  it('tells its subscribers when the counter span is retired', () => {
+    const resets = new Set<() => void>()
+    const repo = {
+      activeWorkspaceId: 'ws-1',
+      isReadOnly: false,
+      metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }),
+      onReadOnlyChange: () => () => {},
+      onMetricsReset: (l: () => void) => { resets.add(l); return () => resets.delete(l) },
+    }
+    const source = createPerfMonitorDiagnosticSource(repo)
+    let notified = 0
+    source.subscribe?.(() => { notified++ })
+
+    for (const l of resets) l()
+
     expect(notified).toBe(1)
   })
 

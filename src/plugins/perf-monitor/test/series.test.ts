@@ -279,3 +279,23 @@ describe('partlyJudged', () => {
   })
 })
 
+/**
+ * A latency dimension nobody could judge is not a clean one.
+ *
+ * Every query too quiet to compare leaves no query results at all — and a
+ * steady fan-out result alone would then publish "no slowdowns" for latency
+ * that was never evaluated.
+ */
+describe('queryRegressions with nothing judgeable', () => {
+  it('says so rather than returning nothing', () => {
+    const quiet = sample({ queries: { 'backlinks.forBlock': q(40, 3) } })
+    const results = queryRegressions(quiet, history(20, () => sample({
+      queries: { 'backlinks.forBlock': q(40) },
+    })))
+
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ status: 'insufficient' })
+    expect(partlyJudged([...results, { status: 'steady', baselineCount: 12 }])).toBe(true)
+  })
+})
+

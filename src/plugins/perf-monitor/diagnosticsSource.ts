@@ -40,7 +40,8 @@ export const mapAnalysisToSnapshot = (
 export const createPerfMonitorDiagnosticSource = (
   // `MetricsSpanSource` rather than `Pick<Repo, 'metrics'>`: the minimal shape
   // is what a caller has to satisfy, and a real Repo returns a superset of it.
-  repo: Pick<Repo, 'activeWorkspaceId' | 'isReadOnly' | 'onReadOnlyChange'> & MetricsSpanSource,
+  repo: Pick<Repo, 'activeWorkspaceId' | 'isReadOnly' | 'onReadOnlyChange' | 'onMetricsReset'>
+    & MetricsSpanSource,
 ): DiagnosticSourceContribution => {
   let cachedKey = ''
   let cachedSnapshot: DiagnosticSnapshot | null = null
@@ -53,7 +54,14 @@ export const createPerfMonitorDiagnosticSource = (
     // without this the chip keeps the pre-change message until something
     // unrelated re-renders it.
     subscribe: (listener) => {
-      const stops = [subscribePerfAnalysis(listener), repo.onReadOnlyChange(listener)]
+      // The metrics reset too: it retires the counters a verdict rests on and
+      // moves nothing else, so a reader with no other reason to re-read keeps
+      // showing a verdict about figures that are gone.
+      const stops = [
+        subscribePerfAnalysis(listener),
+        repo.onReadOnlyChange(listener),
+        repo.onMetricsReset(listener),
+      ]
       return () => { for (const stop of stops) stop() }
     },
     getSnapshot: () => {

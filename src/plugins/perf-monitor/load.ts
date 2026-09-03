@@ -154,7 +154,7 @@ export const countRecords = async (
   const q = clientSeriesQuery('COUNT(*) AS n', {
     groupId: seriesGroupId(repo, workspaceId, series.typeId),
     recordName: series.recordName,
-    deviceSurface: deviceSurface(),
+    deviceSurface: deviceSurface(), clientId: getClientId(),
     tail: '',
   })
   const rows = await repo.db.getAll<{ n: number }>(q.sql, q.params)
@@ -195,7 +195,7 @@ export const loadRecords = async <T extends { recordedAt: number }>(
   // records — so the reader and the retention pass cannot disagree about which
   // rows are in the series or which of them is newest.
   const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS payload', {
-    groupId, recordName, deviceSurface: deviceSurface(),
+    groupId, recordName, deviceSurface: deviceSurface(), clientId: getClientId(),
     selectParams: [recordPath],
     tail: 'LIMIT ?', tailParams: [CANDIDATE_LIMIT],
   })

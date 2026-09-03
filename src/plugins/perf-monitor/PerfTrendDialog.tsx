@@ -68,7 +68,13 @@ const Td = ({ children }: { children: React.ReactNode }) => (
 
 export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<void> & { workspaceId?: string }) {
   const repo = useRepo()
-  const analysis = useSyncExternalStore(subscribePerfAnalysis, () =>
+  // Both signals: a publication, and a `resetMetrics()` that retires the
+  // counters the current verdict rests on while moving nothing else.
+  const subscribeVerdict = useCallback((onChange: () => void) => {
+    const stops = [subscribePerfAnalysis(onChange), repo.onMetricsReset(onChange)]
+    return () => { for (const stop of stops) stop() }
+  }, [repo])
+  const analysis = useSyncExternalStore(subscribeVerdict, () =>
     getPerfAnalysisFor(repo, workspaceId ?? repo.activeWorkspaceId),
   )
   // The dialog reads the recording blocker LIVE, and a role change moves it

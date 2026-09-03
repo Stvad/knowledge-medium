@@ -218,7 +218,15 @@ export const queryRegressions = (
       baseline,
     ))
   }
-  return out
+  // Nothing judged is not the same as nothing to say. With every query too
+  // quiet to compare, returning an empty list leaves the fan-out result alone
+  // in the series — and a steady fan-out then reads as a clean bill for a
+  // latency dimension nobody looked at.
+  //
+  // ONE aggregate result rather than one per skipped query: a single quiet
+  // query among a dozen judged ones is not a partial verdict, and saying so
+  // every session would make "partial" the normal state and mean nothing.
+  return out.length === 0 ? [NO_CURRENT_SAMPLE] : out
 }
 
 /** Handle invalidations per write.
