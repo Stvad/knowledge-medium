@@ -57,6 +57,23 @@ export const userPageBlockId = (workspaceId: string, userId: string): string =>
 
 export { stateChildBlockId }
 
+/** Deterministic id of a plugin's prefs sub-block, derived without creating
+ *  anything. Same rationale as `userPageBlockId`: `getPluginPrefsBlock` is
+ *  get-OR-CREATE, so a caller that only wants to *read* a preference — a
+ *  post-commit processor deciding whether its feature is even switched on —
+ *  would otherwise materialize the user page and the whole Preferences
+ *  subtree as a side effect of asking. Pair with `repo.load`: a null result
+ *  means "never configured", i.e. use the schema defaults. */
+export const pluginPrefsBlockId = (
+  workspaceId: string,
+  userId: string,
+  typeId: string,
+): string =>
+  stateChildBlockId(
+    stateChildBlockId(userPageBlockId(workspaceId, userId), USER_PREFS_PATH_PART),
+    typeId,
+  )
+
 const snapshotIncludingType = (repo: Repo, type: TypeContribution): TypeRegistrySnapshot => {
   const snapshot = repo.snapshotTypeRegistries()
   if (snapshot.types.has(type.id)) return snapshot
