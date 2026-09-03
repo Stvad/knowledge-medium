@@ -163,11 +163,7 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
         description: 'startup metrics record',
         retain: STARTUP_RETAIN,
         recordName: startupRecordProp.name,
-        setProperty: async (tx, blockId) => {
-          // `skipMetadata`: bookkeeping, not user intent — stamping
-          // `user_updated_at` would float this hidden row into Recents.
-          await tx.setProperty(blockId, startupRecordProp, data, { skipMetadata: true })
-        },
+        record: { property: startupRecordProp, data },
       })).blockId
     }
   } catch (err) {

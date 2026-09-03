@@ -207,11 +207,13 @@ const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
         // per-device group labels, whatever a plugin files under the user's
         // state roots. With twelve results to offer, app bookkeeping crowds out
         // the blocks someone might actually want to reference. Same definition
-        // of "authored" the Recents view uses, so the two cannot drift.
-        : (await repo.query.recentActivity({
+        // of "authored" the Recents view uses — one shared resolver, so the
+        // two cannot drift — but without its ancestor chains, which this
+        // picker never shows and would re-query on every open.
+        : await repo.query.recentUserBlocks({
           workspaceId,
           limit: 12,
-        }).load()).map(entry => entry.block)
+        }).load()
       return blocks.map(block => ({id: block.id, content: block.content}))
     },
   })
