@@ -28,7 +28,7 @@
  * ACCEPTED: the payload then describes a span one transaction stale, and the
  * next sample's own epoch check opens a replacement rather than compounding it.
  */
-import { ChangeScope, type BlockData, type TypeContribution } from '@/data/api'
+import { ChangeScope, type BlockData, type PropertySchema, type TypeContribution } from '@/data/api'
 import { typesProp } from '@/data/properties.js'
 import type { Repo } from '@/data/repo'
 import {
@@ -43,6 +43,31 @@ import { deviceSurface, getClientId } from '@/utils/clientId.js'
 import { v4 as uuidv4 } from 'uuid'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
 import { assertStillWritable, NoLongerEligible } from './sessionContext.js'
+
+/** The property write that IS the record, stated rather than supplied as a
+ *  callback. Both recorders wrote the identical one-liner, which made
+ *  `skipMetadata` a flag three call sites had to remember; here the shared
+ *  path applies it, so a recorder cannot write a record without it.
+ *
+ *  `skipMetadata` keeps `user_updated_at` — the "a person edited this" signal —
+ *  unstamped for a machine write. DEFENCE IN DEPTH as of this writing, and
+ *  unpinned by any test: `content: ''` plus the ui-state location already keep
+ *  these rows out of every surface that orders by it. Kept because the field's
+ *  meaning is what makes those surfaces correct, and new ones that order by it
+ *  are added freely. */
+export interface RecordWrite {
+  property: PropertySchema<unknown>
+  data: unknown
+}
+
+/** Apply a record write. The ONE place `skipMetadata` is decided. */
+const writeRecord = async (
+  tx: Parameters<Parameters<Repo['tx']>[0]>[0],
+  blockId: string,
+  record: RecordWrite,
+): Promise<void> => {
+  await tx.setProperty(blockId, record.property, record.data, { skipMetadata: true })
+}
 
 export interface ClientRecordSpec {
   workspaceId: string
@@ -75,7 +100,7 @@ export interface ClientRecordSpec {
    *  deriving the path from the name here is what keeps them the same rule. */
   recordName: PropertyName
   /** Writes the record property. Runs inside the create transaction. */
-  setProperty: (tx: Parameters<Parameters<Repo['tx']>[0]>[0], blockId: string) => Promise<void>
+  record: RecordWrite
   /** Called as soon as the record is DURABLE, before the retention pass this
    *  call also runs. A caller that publishes ownership from the return value
    *  instead leaves a window in which the row is committed and readable but
@@ -185,12 +210,13 @@ export const appendClientRecord = async (
         workspaceId: spec.workspaceId,
         parentId: groupId,
         orderKey: keyAtStart(first?.order_key ?? null),
-        // EMPTY, and not a recorder's choice to make. `core.recentBlocks`
-        // selects live non-empty rows ordered by `user_updated_at` — which a
-        // `systemMint` create still stamps with `now` — and that query backs
-        // the empty `((` completion's twelve results. Any content at all puts
-        // every session's telemetry row at the top of it. The timestamp a
-        // legible row would have shown is in the record property already.
+        // EMPTY, and not a recorder's choice to make. These rows sit in the
+        // user's own tree, and "live, non-empty content" is how surfaces
+        // decide what a person might have written — find-replace's search
+        // selects on exactly that, `core.recentBlocks` likewise. Empty content
+        // is what keeps every session's telemetry row out of all of them at
+        // once. Whatever a legible row would have shown is in the record
+        // property already.
         content: '',
         properties: {},
       },
@@ -199,7 +225,7 @@ export const appendClientRecord = async (
     await repo.addTypeInTx(tx, blockId, spec.recordType.id, {})
     // LAST, per the ordering rule at the top of this module.
     assertEligible(repo, spec.workspaceId)
-    await spec.setProperty(tx, blockId)
+    await writeRecord(tx, blockId, spec.record)
   }, { scope: ChangeScope.Automation, telemetry: true, description: spec.description })
   spec.onCommitted?.(blockId)
   // Best-effort, and deliberately AFTER the record is committed and reported.
@@ -259,7 +285,7 @@ export const updateClientRecord = async (
     /** Is the row still one we may write to, given the in-transaction read?
      *  `tx.get` does not filter tombstones, so liveness is asked, not implied. */
     isStillOurs: (row: BlockData | null) => boolean
-    setProperty: (tx: Parameters<Parameters<Repo['tx']>[0]>[0], blockId: string) => Promise<void>
+    record: RecordWrite
   },
 ): Promise<void> => {
   await repo.tx(async (tx) => {
@@ -270,7 +296,7 @@ export const updateClientRecord = async (
     // update below a dead hierarchy writes where no reader will ever look.
     await assertContainersLive(tx, repo, spec.workspaceId, spec.containerType)
     spec.assertEligible(repo, spec.workspaceId)
-    await spec.setProperty(tx, spec.blockId)
+    await writeRecord(tx, spec.blockId, spec.record)
   }, { scope: ChangeScope.Automation, telemetry: true, description: spec.description })
 }
 

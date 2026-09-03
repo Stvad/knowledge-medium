@@ -60,13 +60,10 @@ const spec = (retain: number): ClientRecordSpec => ({
   description: 'test metrics record',
   retain,
   recordName: interactionRecordProp.name,
-  setProperty: async (tx, id) => {
-    // Resolved at write time: `resetClientIdCache` mints a new id per test, so
-    // a module-scope capture would be a different client's by the time it lands
-    // — and retention refuses to prune another client's records.
-    await tx.setProperty(id, interactionRecordProp, { ...DATA, clientId: getClientId() },
-      { skipMetadata: true })
-  },
+  // `getClientId()` is read HERE, per call: `resetClientIdCache` mints a new id
+  // per test, and retention refuses to prune another client's records — a
+  // module-scope capture would be the wrong client's by the time it lands.
+  record: { property: interactionRecordProp, data: { ...DATA, clientId: getClientId() } },
 })
 
 const append = (retain: number) => appendClientRecord(repo, spec(retain))
@@ -299,9 +296,7 @@ describe('appendClientRecord retention', () => {
       description: 'test metrics record',
       assertEligible: () => {},
       isStillOurs: (row) => row !== null && !row.deleted,
-      setProperty: async (tx, id) => {
-        await tx.setProperty(id, interactionRecordProp, DATA, { skipMetadata: true })
-      },
+      record: { property: interactionRecordProp, data: DATA },
     })).rejects.toBeInstanceOf(NoLongerEligible)
   })
 
@@ -385,12 +380,14 @@ describe('appendClientRecord eligibility', () => {
 })
 
 /**
- * A record must not surface in the block-ref picker.
+ * A record must not surface anywhere a person looks for their own blocks.
  *
- * `core.recentBlocks` backs the empty `((` completion's twelve results: live
- * non-empty rows, newest `user_updated_at` first — and a `systemMint` create
- * stamps that with `now`, so any content at all puts every session's telemetry
- * row at the top of the list a person sees when they reach for a block.
+ * `core.recentBlocks` is the stand-in for that whole class: live, non-empty
+ * rows — the test that these rows carry no content, asserted through a real
+ * query rather than by reading the column. The `((` picker itself no longer
+ * uses it (it reads user-authored recents, which exclude ui-state), but
+ * find-replace still selects any non-empty row in the workspace, and the next
+ * such surface will too.
  */
 describe('what a record shows the user', () => {
   // The container too, and asserted on its CONTENT: the previous attempt simply
@@ -470,10 +467,6 @@ describe('retention deletion', () => {
     expect(await liveDescendantsOf(doomed)).toEqual([])
   })
 
-  // The blocks a record materializes for its own property are recognized as
-  // machinery and do not count; only a hand-placed block does. That half is
-  // unpinned here — a record property write materializes no field rows until
-  // properties are blocks, so this environment produces none to distinguish.
   // A record is inspectable by design, so a person can type into it. An
   // Automation-scope delete takes that with no undo behind it.
   it('leaves a record alone once someone has typed into it', async () => {

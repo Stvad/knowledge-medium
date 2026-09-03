@@ -430,14 +430,7 @@ export const writeInteractionSample = async (
           description: 'interaction metrics record',
           assertEligible: (r, ws) => assertStillAttributable(r, ws, metrics.epoch),
           isStillOurs: (row) => isUsableRow(row, repo, workspaceId),
-          // `skipMetadata`: a metrics sample is bookkeeping, not user intent.
-          // Without it every resample stamps `user_updated_at`, and the
-          // block-ref picker orders by exactly that — so a hidden ISO-timestamp
-          // block would hold the top of the (( completion list on any
-          // five-minute pause.
-          setProperty: async (tx, id) => {
-            await tx.setProperty(id, interactionRecordProp, data, { skipMetadata: true })
-          },
+          record: { property: interactionRecordProp, data },
         })
         return existing.blockId
       }
@@ -453,9 +446,7 @@ export const writeInteractionSample = async (
         // if they belong to one workspace, and a switch during the awaits above
         // invalidates them. The shared path cannot know that rule.
         assertEligible: (r, ws) => assertStillAttributable(r, ws, metrics.epoch),
-        setProperty: async (tx, id) => {
-          await tx.setProperty(id, interactionRecordProp, data, { skipMetadata: true })
-        },
+        record: { property: interactionRecordProp, data },
         // Claimed at commit, not from the return value: the append also awaits
         // a retention pass, and an analysis in that window would find the row
         // readable but unclaimed and count this session twice.
