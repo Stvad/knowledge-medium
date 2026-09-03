@@ -21,7 +21,6 @@ import {
   NoLongerEligible,
   pageOrigin,
   resetPageOrigin,
-  ROLE_WAIT_MS,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { appendClientRecord } from '@/plugins/interaction-metrics/recordStore.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
@@ -190,11 +189,8 @@ export const SETTLE_FALLBACK_MS = 60_000
 
 /** Attempts at the write itself, and the gap between them. A decline is
  *  expected while a fresh device waits for its membership row to replicate. */
-export const WRITE_ATTEMPTS = 3
+const WRITE_ATTEMPTS = 3
 export const WRITE_RETRY_MS = 30_000
-/** Headroom per attempt for the idle scheduling and the transaction itself —
- *  neither is bounded by a constant, and both sit inside every attempt. */
-const WRITE_IDLE_SLACK_MS = 5_000
 
 // Once per page session: boot happens once, and the marks are boot-relative, so
 // a later workspace switch must not record a second "startup".
@@ -209,56 +205,9 @@ let recording = false
 export const resetStartupMetricsRecorded = (): void => {
   recorded = false
   recording = false
-  armBootRecordSettled()
   resetPageOrigin()
 }
 
-/** Resolves once this boot's record attempt is OVER — written, or out of
- *  retries, or torn down. A reader sampling the startup series before then sees
- *  a boot with no record and cannot tell that from a recorder switched off, so
- *  it reports a permanent-sounding state over a row that lands moments later.
- *
- *  Never rejects; resolves at most once per boot. */
-let bootSettled = false
-/** Collectors that are armed and could still write. The settle is page-global
- *  while collectors are per-effect, and a restart overlaps two of them — so a
- *  disposed one announcing "over" would speak for a replacement that still has
- *  a quiet window ahead of it. */
-let armedCollectors = 0
-let settleBootRecord: () => void = () => {}
-let bootRecordSettled: Promise<void>
-const armBootRecordSettled = (): void => {
-  bootSettled = false
-  armedCollectors = 0
-  bootRecordSettled = new Promise<void>((resolve) => {
-    settleBootRecord = () => { bootSettled = true; resolve() }
-  })
-}
-armBootRecordSettled()
-
-/** Worst-case wall clock for the whole boot-record attempt, once it starts:
- *  every attempt waits up to the membership timeout and is idle-scheduled, and
- *  each retry adds `WRITE_RETRY_MS` on top. Exported so a reader fencing on
- *  `whenBootRecordSettled` sizes its cap from the writer's own numbers instead
- *  of a constant that has to be revisited whenever these move. */
-export const MAX_BOOT_RECORD_MS =
-  WRITE_ATTEMPTS * (ROLE_WAIT_MS + WRITE_IDLE_SLACK_MS) + (WRITE_ATTEMPTS - 1) * WRITE_RETRY_MS
-
-/** Awaits the settle, giving up after `timeoutMs`.
- *
- *  The timeout is the answer for a recorder that never runs at all — its toggle
- *  is off, or the page booted somewhere else — where nothing would ever settle.
- *  Giving up MARKS it settled, so a caller on a cadence pays that wait once
- *  rather than every pass. */
-export const whenBootRecordSettled = (timeoutMs: number): Promise<void> => {
-  if (bootSettled) return Promise.resolve()
-  return Promise.race([
-    bootRecordSettled,
-    new Promise<void>((resolve) => {
-      setTimeout(() => { bootSettled = true; resolve() }, timeoutMs)
-    }),
-  ])
-}
 
 /**
  * On first workspace open, detect time-to-interactivity and persist one record.
@@ -275,9 +224,7 @@ export const whenBootRecordSettled = (timeoutMs: number): Promise<void> => {
 export const collectStartupMetricsEffect: AppEffect = {
   id: 'startup-metrics.collect',
   start: ({ repo, workspaceId }) => {
-    // Every path that declines to arm settles the boot signal: nothing here is
-    // going to write, so a reader fencing on it must not wait out its cap.
-    if (!workspaceId || recorded) { settleBootRecord(); return }
+    if (!workspaceId || recorded) return
     // The timeline is page-global and measures loading THAT graph, so only the
     // context the page started in may receive it. Both halves matter: a
     // workspace switch before the write lands would otherwise file these
@@ -290,23 +237,7 @@ export const collectStartupMetricsEffect: AppEffect = {
     // origin. Declining is the safe direction — one boot unrecorded, against a
     // permanently skewed series.
     const origin = pageOrigin(repo, workspaceId)
-    if (origin.repo !== repo || origin.workspaceId !== workspaceId) { settleBootRecord(); return }
-    armedCollectors++
-    /** This collector can no longer write — torn down, or out of attempts.
-     *  Idempotent, because both reach here. Settling is the LAST viable
-     *  collector's job: a replacement may still have a quiet window ahead of
-     *  it, and an in-flight write settles through its own completion.
-     *
-     *  The out-of-attempts path is UNPINNED: driving three failed attempts
-     *  through their idle deferrals and retry timers does not settle in this
-     *  harness, which is the same wall the other clauses in this file hit. */
-    let retired = false
-    const retire = (): void => {
-      if (retired) return
-      retired = true
-      armedCollectors--
-      if (armedCollectors === 0 && !recording) settleBootRecord()
-    }
+    if (origin.repo !== repo || origin.workspaceId !== workspaceId) return
     let done = false
     // Distinct from `done`, which the record path sets on ITS way through:
     // this tracks teardown, so a callback already queued can tell the two apart.
@@ -356,7 +287,7 @@ export const collectStartupMetricsEffect: AppEffect = {
         // so it passes with this line deleted. Reasoned, not measured.
         if (disposed || recorded || recording) return
         const retryLater = (): void => {
-          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) { retire(); return }
+          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) return
           const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
           cleanups.push(() => clearTimeout(retry))
         }
@@ -364,7 +295,7 @@ export const collectStartupMetricsEffect: AppEffect = {
         void writeStartupRecord(repo, workspaceId)
           .then((id) => {
             recording = false
-            if (id !== null) { recorded = true; settleBootRecord(); return }
+            if (id !== null) { recorded = true; return }
             retryLater()
           })
           // A rejection is as transient as a decline — a failed write is the
@@ -450,11 +381,6 @@ export const collectStartupMetricsEffect: AppEffect = {
     // still commit, so it settles through its own completion path — announcing
     // "over" here would send the reader to sample the series moments before the
     // row lands, which is the exact misreport this signal exists to prevent.
-    return () => {
-      done = true
-      disposed = true
-      runCleanups()
-      retire()
-    }
+    return () => { done = true; disposed = true; runCleanups() }
   },
 }
