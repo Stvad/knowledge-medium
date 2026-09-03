@@ -1,0 +1,2 @@
+var e=null,t=(t,n)=>e={repo:t,workspaceId:n},n=t=>{e===t&&(e=null)},r=()=>e,i=t=>t!=null&&t===e,a=()=>{e=null};export{r as currentMonitorRun,n as endMonitorRun,i as isCurrentRun,a as resetMonitorRun,t as startMonitorRun};
+//# sourceMappingURL=monitorRun.js.map
