@@ -1426,6 +1426,67 @@ const recentActivityResultSchema: Schema<RecentActivityEntry[]> = {
   parse: (input) => input as RecentActivityEntry[],
 }
 
+/** The rows + dep declaration both user-authored recents queries share, so
+ *  "what counts as authored" and "what wakes this" cannot drift between the
+ *  one that returns chains and the one that does not. */
+const resolveRecentUserBlocks = async (
+  workspaceId: string,
+  limit: number,
+  ctx: Parameters<Parameters<typeof defineQuery>[0]['resolve']>[1],
+): Promise<BlockData[]> => {
+  // Same dep policy as `recentBlocks` — `kernel.content` covers content
+  // edits and live-set membership, and we accept lightly stale recency
+  // ordering between content events rather than waking on every
+  // `updated_at` bump (which every UiState write causes).
+  //
+  // TYPE TAGS are the one filtering axis with no dep, accepted rather
+  // than missed: a block acquires a system type at the moment it is
+  // minted (a create, which fires this channel), and the one gesture
+  // that adds a type to a live block — `#type` — rewrites its content
+  // in the same breath. Tagging an already-listed row `panel` out of
+  // nowhere is not a flow that exists.
+  ctx.depend({
+    kind: 'plugin',
+    channel: KERNEL_CONTENT_CHANNEL,
+    key: kernelContentKey(workspaceId),
+  })
+  const rows = await ctx.db.getAll<BlockRow>(
+    SELECT_RECENT_USER_BLOCKS_SQL,
+    recentUserBlocksParams(await userStateRootIds(ctx, workspaceId), workspaceId, limit),
+  )
+  return ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+}
+
+const recentUserBlocksResultSchema: Schema<BlockData[]> = {
+  parse: (input) => input as BlockData[],
+}
+
+/** Recently edited USER-AUTHORED blocks, WITHOUT ancestor chains — for callers
+ *  that show a block and nothing about where it lives.
+ *
+ *  Separate from `core.recentActivity` rather than a flag on it: the chain
+ *  costs a second recursive query over every candidate's ancestry plus a
+ *  structure dep per ancestor, which an interactive path (the `((` picker)
+ *  pays on every open for something it never reads. The drift hazard that
+ *  makes `recentActivity` resolve both together does not apply here — it is
+ *  about a consumer needing rows and chains to correspond, and this one has
+ *  no chains to disagree with. */
+export const recentUserBlocksQuery = defineQuery<
+  {workspaceId: string; limit?: number},
+  BlockData[]
+>({
+  name: 'core.recentUserBlocks',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    limit: z.number().optional(),
+  }),
+  resultSchema: recentUserBlocksResultSchema,
+  resolve: async ({workspaceId, limit = 50}, ctx) => {
+    if (!workspaceId) return []
+    return resolveRecentUserBlocks(workspaceId, limit, ctx)
+  },
+})
+
 /** Recently edited USER-AUTHORED blocks, each with its ancestor chain —
  *  what an activity feed needs to fold an edited tree back into one entry
  *  and to name the page an edit happened on.
@@ -1452,30 +1513,10 @@ export const recentActivityQuery = defineQuery<
   resultSchema: recentActivityResultSchema,
   resolve: async ({workspaceId, limit = 50}, ctx) => {
     if (!workspaceId) return []
-    // Same dep policy as `recentBlocks` — `kernel.content` covers content
-    // edits and live-set membership, and we accept lightly stale recency
-    // ordering between content events rather than waking on every
-    // `updated_at` bump (which every UiState write causes).
-    //
-    // TYPE TAGS are the one filtering axis with no dep, accepted rather
-    // than missed: a block acquires a system type at the moment it is
-    // minted (a create, which fires this channel), and the one gesture
-    // that adds a type to a live block — `#type` — rewrites its content
-    // in the same breath. Tagging an already-listed row `panel` out of
-    // nowhere is not a flow that exists.
-    //
+    // Rows + dep policy are shared; the chains below are what this query adds.
     // Ancestors skip per-row deps: what a reader sees of an ancestor is
-    // its CONTENT (the entry's title), and a rename fires this channel.
-    ctx.depend({
-      kind: 'plugin',
-      channel: KERNEL_CONTENT_CHANNEL,
-      key: kernelContentKey(workspaceId),
-    })
-    const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_RECENT_USER_BLOCKS_SQL,
-      recentUserBlocksParams(await userStateRootIds(ctx, workspaceId), workspaceId, limit),
-    )
-    const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+    // its CONTENT (the entry's title), and a rename fires that channel.
+    const blocks = await resolveRecentUserBlocks(workspaceId, limit, ctx)
     if (blocks.length === 0) return []
 
     type ChainRow = BlockRow & {chain_start_id: string}
@@ -1886,6 +1927,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   typedBlockCountQuery,
   searchByContentQuery,
   recentBlocksQuery,
+  recentUserBlocksQuery,
   recentActivityQuery,
   firstChildByContentQuery,
   aliasesInWorkspaceQuery,
@@ -1917,6 +1959,7 @@ declare module '@/data/api' {
     'core.typedBlockCount': typeof typedBlockCountQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.recentBlocks': typeof recentBlocksQuery
+    'core.recentUserBlocks': typeof recentUserBlocksQuery
     'core.recentActivity': typeof recentActivityQuery
     'core.firstChildByContent': typeof firstChildByContentQuery
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery

@@ -564,6 +564,28 @@ describe('repo.query.recentActivity', () => {
       await create({id: 'plugin-prefs', parentId: PREFS_ID, content: 'Daily notes'})
     }
 
+    // The two queries share one resolver so "authored" cannot mean different
+    // things in the picker and the feed. Asserted against a seeded state
+    // subtree, so it is the real exclusion being compared and not two empty
+    // lists agreeing.
+    it('agrees with the chainless query on which blocks are authored', async () => {
+      await create({id: 'note', content: 'a real note'})
+      await create({id: 'note-2', parentId: 'note', content: 'a nested note'})
+      await seedUserState()
+
+      const withChains = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+      const chainless = await env.repo.query.recentUserBlocks({
+        workspaceId: WS, limit: 50,
+      }).load()
+
+      expect(chainless.map(b => b.id)).toEqual(withChains.map(b => b.id))
+      // Precondition: the state subtree really was excluded, so this is not
+      // two unfiltered lists matching.
+      expect(chainless.map(b => b.id)).toEqual(['note-2', 'note'])
+    })
+
     it('drops every descendant of a state root, at any depth', async () => {
       await create({id: 'note', content: 'a real note'})
       await seedUserState()
