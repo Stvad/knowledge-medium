@@ -107,6 +107,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   awaitPropertyDefinitionMigrations: 'drains a shared job object',
   awaitReferenceTargetDerive: 'drains a shared job object',
   awaitWorkspaceBackfills: 'drains a shared job object',
+  awaitDeferredWork: 'awaits the drainers above; assigns no Repo fields',
   drainSyncWorkspace: 'reads this.syncObserver through the chain; never assigns it',
   rematerializeWorkspace: 'reads this.syncObserver + two queries; assigns no Repo fields',
   workspaceUnappliedCount: 'read — one query; assigns no Repo fields',

@@ -4443,6 +4443,40 @@ export class Repo {
     await this.workspaceBackfillJobs.drain()
   }
 
+  /** Every deferred-work family at once — what a harness tearing a Repo down
+   *  needs, rather than the specific one a given test is waiting on.
+   *
+   *  A NEW family belongs in this list. Each of these schedules work that
+   *  writes to the db after the call that scheduled it returned, so one left
+   *  out can still be running when its owner is gone — which in tests means
+   *  writing into the next test's database (`testRepoScope.ts`, issue #813).
+   *  The list is deliberately complete rather than demand-driven: a family
+   *  earns its place by being ABLE to outlive its owner, so do not expect
+   *  removing one to fail a test.
+   *
+   *  Producers first, then processors. Every family above can commit a
+   *  `repo.tx`, and a tx dispatches post-commit processors — so draining all
+   *  seven together lets `awaitProcessors` observe an empty set and return
+   *  before a maintenance job's tx has queued anything. `awaitIdle` is itself a
+   *  fixed point over processors that schedule processors, which is what makes
+   *  one pass at the end enough.
+   *
+   *  NOT a fixed point across families, and NOT a cancel. Like its members it
+   *  does not advance timers: work whose deferral timer has not fired is not
+   *  pending yet, so an armed `delayMs` processor or idle callback survives
+   *  this (#892 — cancelling one needs a handle neither framework keeps). */
+  async awaitDeferredWork(): Promise<void> {
+    await Promise.all([
+      this.awaitSeedMaterialization(),
+      this.awaitReferenceTargetDerive(),
+      this.awaitPropertyDefinitionMigrations(),
+      this.awaitReconcileRescans(),
+      this.awaitReprojections(),
+      this.awaitWorkspaceBackfills(),
+    ])
+    await this.awaitProcessors()
+  }
+
   /** Test-only escape hatch retained for stage-level tests that wire
    *  specific processor sets without a FacetRuntime. */
   __setProcessorsForTesting(processors: ReadonlyArray<AnyPostCommitProcessor>): void {

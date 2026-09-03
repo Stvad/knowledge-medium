@@ -295,6 +295,9 @@ describe('Repo.workspaceViewGap', () => {
     expect(await repo.workspaceViewGap(WS)).toBeNull()
     ;(repo as unknown as {syncObserver: unknown}).syncObserver = {
       isRematerializingWorkspace: (id: string) => id === 'ws-elsewhere',
+      // Standing in for the observer means standing in for its teardown too:
+      // the per-test release (`testRepoScope`) stops every Repo's observer.
+      dispose: () => {},
     }
 
     expect(await repo.workspaceViewGap(WS)).toBeNull()
