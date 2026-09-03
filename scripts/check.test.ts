@@ -1,18 +1,57 @@
-import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { afterAll, describe, expect, it } from 'vitest'
+import { spawn } from 'node:child_process'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-// A source check because the behaviour is platform-split: on Linux a child's
-// queued pipe writes are dropped by `process.exit()`, on macOS they are not,
-// so a behavioural test would pass on every dev machine and pin nothing.
-// Measured in a node:26-slim container — the gate relaying a 4000-line failing
-// task delivered 4000 lines via `process.exitCode` and 2031 via `process.exit`.
-//
-// It regressed twice: the gate lost its error block (CI reported "1 failed"
-// with vitest's file list and no reason, four runs across three branches), and
-// a sweep of the sibling hook script left one of its three exits behind.
-describe('the check gate', () => {
-  it('leaves through process.exitCode, never process.exit — it has relayed a task\'s whole output by then', () => {
-    const calls = readFileSync('scripts/check.mjs', 'utf8').replace(/^\s*\/\/.*$/gm, '')
-    expect(calls).not.toMatch(/process\.exit\(/)
+// Far past what a pipe holds before the reader takes it: at 200 lines a gate
+// that exits on its own output still delivers all of them, and the test loses
+// its teeth without saying so.
+const RELAYED_LINES = 4000
+
+// A PATH-fronted `pnpm`, so the real gate runs its real control flow over a
+// task that fails: `run test` prints RELAYED_LINES lines and exits 1, every
+// other task exits 0. `process.exitCode` in the shim so the shim is not itself
+// the thing that truncates.
+const bin = mkdtempSync(join(tmpdir(), 'check-gate-'))
+writeFileSync(
+  join(bin, 'pnpm'),
+  `#!/usr/bin/env node
+if (process.argv.slice(2).join(' ') === 'run test') {
+  for (let i = 0; i < ${RELAYED_LINES}; i++) process.stdout.write(\`line \${i} \${'x'.repeat(60)}\\n\`)
+  process.exitCode = 1
+}
+`,
+)
+chmodSync(join(bin, 'pnpm'), 0o755)
+afterAll(() => rmSync(bin, { recursive: true, force: true }))
+
+const runGate = () =>
+  new Promise<{ status: number | null; relayed: number }>((resolve) => {
+    const child = spawn(process.execPath, ['scripts/check.mjs'], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let out = ''
+    // Deliberately slow: a writer's queued pipe writes only outlive it when the
+    // reader is behind, which in CI is just a loaded box. Draining eagerly
+    // hides the truncation this asserts against.
+    child.stdout.on('data', (d) => {
+      const until = Date.now() + 30
+      while (Date.now() < until) { /* burn the slice */ }
+      out += d
+    })
+    // Drained, not read: an unread pipe fills and would block the gate.
+    child.stderr.resume()
+    child.on('close', (status) =>
+      resolve({ status, relayed: out.split('\n').filter((l) => l.startsWith('line ')).length }),
+    )
   })
+
+describe('the check gate', () => {
+  it('reports a failing task with a non-zero status and its whole output', async () => {
+    const { status, relayed } = await runGate()
+    expect(status).not.toBe(0)
+    expect(relayed).toBe(RELAYED_LINES)
+  }, 30_000)
 })

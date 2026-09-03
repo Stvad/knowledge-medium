@@ -1231,7 +1231,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 // with PreToolUse reading the code. Safe because truncation is a size
 // question, not a stream one — measured on Linux node 26, one console.error
 // survives to ~1200 lines, and a deny message is two orders under that. The
-// sync path, which streamed 200 lines to stdout, is the one that converted.
+// sync path, which relays a whole run's mappings, is the one that converted.
 const allow = () => process.exit(0)
 
 // A path whose text this hook can actually read. A directory or an

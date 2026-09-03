@@ -149,11 +149,10 @@ process.once('SIGINT', () => abortFromSignal('SIGINT'))
 process.once('SIGTERM', () => abortFromSignal('SIGTERM'))
 
 // Returns the exit code rather than taking it: every failure path here has
-// just relayed a failing task's entire output, and `process.exit()` drops
-// whatever is still queued on a piped stdout. Measured on Linux node 26, a
-// child writing 4000 lines to a slow reader delivered 172; on macOS it
-// delivers all of them, so the gate loses its error block only in CI. Nothing
-// is still running when any of these returns, so the loop drains and ends.
+// just relayed a failing task's entire output, and `process.exit()` drops what
+// is still queued on a piped stdout once the writes outrun the reader, which a
+// failing task's output does comfortably. Nothing is still running when any of
+// these returns, so the loop drains and ends.
 const runGate = async () => {
   const startedAt = performance.now()
   const installResult = await runTask(installTask)
