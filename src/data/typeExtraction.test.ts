@@ -15,6 +15,7 @@ import {
   typesProp,
 } from '@/data/properties'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { BLOCK_TYPE_NAME_CONFLICT } from '@/data/internals/blockTypeTypeifyProcessor'
 import {
   GrammarShapedLabelError,
   LossyLabelError,
@@ -321,30 +322,86 @@ describe('block-type typeify processor', () => {
     await expect(tagBlockType(env, content)).rejects.toThrow(errorType)
   })
 
-  // An EXPLICIT label short-circuits `name`, so the checks above never see
-  // the content — which then stays exactly as it was. Grammar-shaped
-  // content is the dangerous residue: `core.deriveReferenceTarget` stamps
+  // A type's content, label and alias are one name. Content that is a
+  // SECOND name is refused, because nothing downstream can reconcile the
+  // two: aliasSync matches by old content, so the label-tracking alias is
+  // never replaced on rename. Refusing (rather than clobbering content, or
+  // accepting the drift) is the call recorded at the throw.
+  it('refuses a tag whose content and explicit label are different names', async () => {
+    env = await setup()
+    await expect(tagBlockType(env, 'notes about books', {
+      [blockTypeLabelProp.name]: 'Book',
+    })).rejects.toMatchObject({code: BLOCK_TYPE_NAME_CONFLICT})
+  })
+
+  // Atomic, and — the part a green suite hides — the refusal fires before
+  // ANY alias is claimed. Without it both names ended up claimed in this
+  // one tx: typeify claims the label, then aliasSync's additive drift heal
+  // appends the changed content.
+  it('claims neither name when the two disagree', async () => {
+    env = await setup()
+    const id = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+    await expect(env.repo.tx(async tx => {
+      await tx.update(id, {
+        content: 'notes about books',
+        properties: {[blockTypeLabelProp.name]: 'Book'},
+      })
+      await env.repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}, env.repo.snapshotTypeRegistries())
+    }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({code: BLOCK_TYPE_NAME_CONFLICT})
+
+    const row = await env.repo.load(id)
+    expect(getBlockTypes(row!)).not.toContain(BLOCK_TYPE_TYPE)
+    expect(row!.properties[aliasesProp.name] ?? []).toEqual([])
+    for (const alias of ['Book', 'notes about books']) {
+      expect(await env.repo.query.aliasLookup({workspaceId: WS, alias}).load()).toBeNull()
+    }
+  })
+
+  // Grammar-shaped content on a type block is what made the narrower
+  // "Block type content" check exist: `core.deriveReferenceTarget` stamps
   // the row as a field form, and on a child-backed page the finished type
-  // projects as property machinery instead of appearing in the outline.
-  // Only the grammar-shape check applies here; the content is not claimed
-  // as an alias when a label is supplied, so round-tripping is moot.
+  // then projects as property machinery instead of appearing in the
+  // outline. The name-conflict refusal covers it — and covers it more
+  // widely, since content now always ends up being the label.
   it('refuses when an explicit label hides grammar-shaped content', async () => {
     env = await setup()
     await expect(tagBlockType(env, '::((11111111-1111-4111-8111-111111111111))', {
       [blockTypeLabelProp.name]: 'Book',
-    })).rejects.toThrow(GrammarShapedLabelError)
+    })).rejects.toMatchObject({code: BLOCK_TYPE_NAME_CONFLICT})
   })
 
-  it('accepts an explicit label over ordinary prose content', async () => {
+  // The label is hygiene-checked in its own right, and BEFORE the conflict
+  // check — for a doubly-bad tag the unwritable name is the more useful
+  // diagnosis, and it is the one the `#type` UI knows how to revert.
+  it('refuses an unwritable explicit label ahead of the content conflict', async () => {
     env = await setup()
-    const id = await tagBlockType(env, 'notes about books', {
-      [blockTypeLabelProp.name]: 'Book',
-    })
-    const row = await env.repo.load(id)
-    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
-    // Content is left alone — only the adopted-name path rewrites it.
-    expect(row!.content).toBe('notes about books')
+    await expect(tagBlockType(env, 'notes about books', {
+      [blockTypeLabelProp.name]: 'Book]]Club',
+    })).rejects.toThrow(LossyLabelError)
   })
+
+  // Blank (or whitespace-only) content has no second name in it, so the
+  // label is adopted into content instead of refused — lossless, and it
+  // restores the content == label == alias parity a later rename needs.
+  it.each([['blank', ''], ['whitespace-only', '   ']])(
+    'adopts an explicit label into %s content, so a rename replaces the alias',
+    async (_l, content) => {
+      env = await setup()
+      const id = await tagBlockType(env, content, {[blockTypeLabelProp.name]: 'Book'})
+      let row = await env.repo.load(id)
+      expect(row!.content).toBe('Book')
+      expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+
+      // The rename shape `writeBlockTypeLabel` writes. Without the adoption
+      // above, aliasSync appends and strands 'Book'.
+      await env.repo.tx(async tx => {
+        await tx.setProperty(id, blockTypeLabelProp, 'Novel')
+        await tx.update(id, {content: 'Novel'})
+      }, {scope: ChangeScope.BlockDefault})
+      row = await env.repo.load(id)
+      expect(row!.properties[aliasesProp.name]).toEqual(['Novel'])
+      expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
+    })
 
   // The refusal is atomic: the tag doesn't half-apply. Same-tx, so the
   // PAGE_TYPE / label writes above the assert roll back with it.
