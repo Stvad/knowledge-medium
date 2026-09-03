@@ -195,11 +195,6 @@ export const WRITE_RETRY_MS = 30_000
 // Once per page session: boot happens once, and the marks are boot-relative, so
 // a later workspace switch must not record a second "startup".
 let recorded = false
-/** A write is in flight. Distinct from `recorded`, which is only true once one
- *  has LANDED: a plugin toggle can restart this effect while the previous
- *  instance's write is still running, and at that moment `recorded` is still
- *  false — so checking it alone lets both instances write, and two records for
- *  one boot then take two of the three slots in the recent window. */
 /** Test helper — re-arm the once-per-session guard. */
 export const resetStartupMetricsRecorded = (): void => {
   recorded = false
