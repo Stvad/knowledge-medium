@@ -70,6 +70,14 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   const analysis = useSyncExternalStore(subscribePerfAnalysis, () =>
     getPerfAnalysisFor(workspaceId ?? repo.activeWorkspaceId),
   )
+  // The dialog reads the recording blocker LIVE, and a role change moves it
+  // with nothing else moving — no analysis is published, so the store's
+  // subscription never fires. Same seam the status chip uses; without it this
+  // dialog shows the pre-change status until the next cadence.
+  const readOnly = useSyncExternalStore(
+    useCallback((onChange: () => void) => repo.onReadOnlyChange(onChange), [repo]),
+    () => repo.isReadOnly,
+  )
   const [refreshing, setRefreshing] = useState(false)
   const ws = workspaceId ?? repo.activeWorkspaceId
 
@@ -189,7 +197,12 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
             (() => {
               // The same verdict the status chip renders — neither surface
               // decides for itself what an empty regression list means.
-              const verdict = summarize(analysis, { blockedBy: recordingBlockedBy(repo) })
+              // From the subscribed value for tidiness; the SUBSCRIPTION above
+              // is what makes this recompute, and reading the flag off the Repo
+              // here would work just as well once a render is triggered.
+              const verdict = summarize(analysis, {
+                blockedBy: recordingBlockedBy({ isReadOnly: readOnly }),
+              })
               return (
                 <>
                   <p className={verdict.kind === 'clean' ? undefined : 'text-muted-foreground'}>

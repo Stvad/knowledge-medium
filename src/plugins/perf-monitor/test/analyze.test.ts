@@ -18,7 +18,7 @@ import {
   type InteractionRecordData,
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
-import { runPerfAnalysis } from '../analyze'
+import { runPerfAnalysis, unjudgedReason } from '../analyze'
 import { perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
 import { resetMonitorRun } from '../monitorRun'
 import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
@@ -352,3 +352,42 @@ describe('runPerfAnalysis', () => {
     expect(after.ready.startup || after.ready.interaction).toBe(true)
   })
 })
+
+/**
+ * The reason a comparison is incomplete, read off the results.
+ *
+ * A pure ladder, tested directly: it decides what the chip SAYS, and driving it
+ * through a real repo can only reach a few of its branches.
+ */
+describe('unjudgedReason', () => {
+  const judged = { status: 'steady', baselineCount: 12 } as const
+  const shortHistory = { status: 'insufficient', reason: 'history' } as const
+  const noSample = { status: 'insufficient', reason: 'no-current-sample' } as const
+
+  it('is null only when everything was judged', () => {
+    expect(unjudgedReason([judged, judged], {})).toBeNull()
+  })
+
+  // The false all-clear this exists to prevent: something judged is not
+  // everything judged, and the unjudged metric is where a finding could hide.
+  it('reports a partly judged series rather than calling it complete', () => {
+    expect(unjudgedReason([judged, shortHistory], {})).toBe('partly-judged')
+  })
+
+  it('puts blended counters ahead of anything the comparison concluded', () => {
+    expect(unjudgedReason([judged, judged], { blended: true })).toBe('blended-workspaces')
+  })
+
+  // Waiting fixes short history and never a missing current sample, so when
+  // nothing was judged the two must not collapse into one message.
+  it('separates a missing current sample from short history', () => {
+    expect(unjudgedReason([noSample], {})).toBe('no-current-sample')
+    expect(unjudgedReason([shortHistory], {})).toBe('history-short')
+  })
+
+  it('names a recorder that wrote nothing, but not over a missing sample', () => {
+    expect(unjudgedReason([shortHistory], { notRecording: true })).toBe('not-recording')
+    expect(unjudgedReason([noSample], { notRecording: true })).toBe('no-current-sample')
+  })
+})
+

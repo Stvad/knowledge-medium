@@ -15,6 +15,7 @@ import { nextAnalysisSeq } from './store.js'
 import type { MonitorRun } from './monitorRun.js'
 import {
   anyJudged,
+  partlyJudged,
   awaitingCurrentSample,
   judgedBaselineCount,
   baselineWindow,
@@ -42,6 +43,10 @@ export type UnjudgedReason =
   | 'not-recording'
   /** Genuinely short of history, and still filling. The one that waiting fixes. */
   | 'history-short'
+  /** Some of the series WAS judged and some of it could not be. The verdict
+   *  that follows is incomplete rather than clean: the metric that went
+   *  unjudged is exactly where a finding could have been hiding. */
+  | 'partly-judged'
 
 export interface PerfAnalysis {
   workspaceId: string
@@ -93,6 +98,28 @@ export interface PerfAnalysis {
  *  in force — this function is equally callable from a test with none. */
 export type PerfComparison = Omit<PerfAnalysis, 'run'>
 
+/** Why a series' comparison is incomplete, read off the RESULTS.
+ *
+ *  Ordered, and the order is the point. Blended counters disqualify the series
+ *  before anything is asked of the comparison. A series with something judged
+ *  is not thereby clean — one steady query alongside an unrateable fan-out jump
+ *  would otherwise publish "no slowdowns" while dropping the result that could
+ *  not be rated. Only past both of those does "why was nothing judged" arise,
+ *  and there a missing current sample outranks short history because waiting
+ *  fixes exactly one of them.
+ *
+ *  `blended` and `notRecording` are facts about the SESSION that the results
+ *  cannot carry; everything else comes from the comparison itself. */
+export const unjudgedReason = (
+  results: readonly TrendResult[],
+  session: { blended?: boolean; notRecording?: boolean },
+): UnjudgedReason | null =>
+  session.blended ? 'blended-workspaces'
+    : anyJudged(results) ? (partlyJudged(results) ? 'partly-judged' : null)
+      : awaitingCurrentSample(results) ? 'no-current-sample'
+        : session.notRecording ? 'not-recording'
+          : 'history-short'
+
 export const runPerfAnalysis = async (
   repo: Repo,
   workspaceId: string,
@@ -137,16 +164,11 @@ export const runPerfAnalysis = async (
   // whether the live snapshot holds anything comparable — a session can own a
   // row and still measure nothing usable, and reporting that as "still
   // building" points at history the comparison never lacked.
-  const interactionUnjudged: UnjudgedReason | null =
-    !session.attributable ? 'blended-workspaces'
-      : interactionReady ? null
-        : awaitingCurrentSample(interactionResults) ? 'no-current-sample'
-          : session.recordId === null ? 'not-recording'
-            : 'history-short'
-  const startupUnjudged: UnjudgedReason | null =
-    startupReady ? null
-      : awaitingCurrentSample(startupResults) ? 'no-current-sample'
-        : 'history-short'
+  const interactionUnjudged = unjudgedReason(interactionResults, {
+    blended: !session.attributable,
+    notRecording: session.recordId === null,
+  })
+  const startupUnjudged = unjudgedReason(startupResults, {})
 
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 
@@ -198,7 +220,7 @@ export const runPerfAnalysis = async (
     // sufficient but too short once the recent window is taken out, every
     // comparison necessarily returns null and the chip would report "no
     // slowdowns" for a comparison that never ran.
-    ready: { interaction: interactionUnjudged === null, startup: startupUnjudged === null },
+    ready: { interaction: interactionReady, startup: startupReady },
     unjudgedBecause: { interaction: interactionUnjudged, startup: startupUnjudged },
     graphGrowth,
   }

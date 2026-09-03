@@ -10,6 +10,7 @@ import {
   bootstrapGapMs,
   fanoutRegression,
   median,
+  partlyJudged,
   queryRegressions,
   startupRegression,
   MIN_BASELINE_SESSIONS,
@@ -255,3 +256,26 @@ describe('startupRegression', () => {
     expect(reg(startupRegression(series, THIS_BOOT))).toBeNull()
   })
 })
+
+/**
+ * A series with one judged metric and one unjudgeable one is INCOMPLETE.
+ *
+ * `anyJudged` answers "can a verdict be given at all"; it must not be read as
+ * "everything was checked", or a steady query beside an unrateable fan-out
+ * jump publishes a clean bill for a comparison that did not run.
+ */
+describe('partlyJudged', () => {
+  const judged = { status: 'steady', baselineCount: 12 } as const
+  const unjudged = { status: 'insufficient', reason: 'history' } as const
+
+  it('is true when some metrics were judged and some were not', () => {
+    expect(partlyJudged([judged, unjudged])).toBe(true)
+  })
+
+  it('is false when everything was judged, and when nothing was', () => {
+    expect(partlyJudged([judged, judged])).toBe(false)
+    expect(partlyJudged([unjudged, unjudged])).toBe(false)
+    expect(partlyJudged([])).toBe(false)
+  })
+})
+

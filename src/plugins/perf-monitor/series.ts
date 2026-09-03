@@ -152,6 +152,13 @@ export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
 export const anyJudged = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status !== 'insufficient')
 
+/** Some metric in this series could not be judged. A verdict resting on the
+ *  rest is INCOMPLETE, not clean — the unjudged one is exactly where a finding
+ *  could have been hiding. */
+export const partlyJudged = (results: readonly TrendResult[]): boolean =>
+  results.some((r) => r.status !== 'insufficient') &&
+  results.some((r) => r.status === 'insufficient')
+
 /** True when nothing was judged AND waiting would not change that. */
 export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean =>
   results.length > 0 &&

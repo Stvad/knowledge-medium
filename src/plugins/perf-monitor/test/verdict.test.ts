@@ -73,6 +73,20 @@ describe('summarize', () => {
     expect(v.headline).toBe('Building a baseline')
   })
 
+  // One judgeable metric alongside one that could not be rated is not a clean
+  // bill of health: the unjudged metric is exactly where a finding could have
+  // been hiding, and dropping it publishes "no slowdowns" over a comparison
+  // that did not happen.
+  it('does not call a partly judged series clean', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'partly-judged', startup: null },
+      regressions: [],
+    }))
+    expect(v.kind).toBe('pending')
+    expect(v.headline).not.toBe('No slowdowns vs baseline')
+    expect(v.notes.join(' ')).toContain('some interaction metrics could not be judged')
+  })
+
   // Owning a record for this session says nothing about whether the session
   // MEASURED anything: with no non-telemetry writes and every query below the
   // call floor, the comparison has no current rate, and no amount of history

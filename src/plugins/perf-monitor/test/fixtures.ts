@@ -27,9 +27,11 @@ export const analysisFixture = (over: Partial<PerfAnalysis> = {}): PerfAnalysis 
     run: currentMonitorRun(),
     ...over,
     unjudgedBecause,
+    // `partly-judged` is a READY series whose verdict is incomplete, so it is
+    // the one reason that does not imply unready.
     ready: {
-      interaction: unjudgedBecause.interaction === null,
-      startup: unjudgedBecause.startup === null,
+      interaction: unjudgedBecause.interaction === null || unjudgedBecause.interaction === 'partly-judged',
+      startup: unjudgedBecause.startup === null || unjudgedBecause.startup === 'partly-judged',
     },
   }
 }

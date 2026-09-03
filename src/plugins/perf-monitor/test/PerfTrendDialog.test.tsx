@@ -4,7 +4,7 @@
  * reads AMBIENT state — `repo.isReadOnly` describes whichever workspace is
  * active now, not the pinned one.
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PerfTrendDialog } from '../PerfTrendDialog.tsx'
@@ -33,6 +33,8 @@ import {
 const STUB = {
   activeWorkspaceId: 'ws-A',
   user: { id: 'user-1', name: 'Alice' },
+  isReadOnly: false,
+  onReadOnlyChange: () => () => {},
   db: { getAll: async () => [] as unknown[] },
 }
 
@@ -40,6 +42,8 @@ const mocks = vi.hoisted(() => ({
   repo: {
     activeWorkspaceId: 'ws-A',
     user: { id: 'user-1', name: 'Alice' },
+    isReadOnly: false,
+    onReadOnlyChange: () => () => {},
     db: { getAll: async () => [] as unknown[] },
   } as unknown as Repo,
   runNow: vi.fn(async () => {}),
@@ -216,6 +220,8 @@ describe('rows after a Repo swap', () => {
     mocks.repo = {
       activeWorkspaceId: WS,
       user: USER,
+      isReadOnly: false,
+      onReadOnlyChange: () => () => {},
       db: { getAll: async () => { throw new Error('gone') } },
     } as unknown as Repo
     view.rerender(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
@@ -254,6 +260,33 @@ describe('rows after a new analysis publishes', () => {
     await waitFor(() => expect(seriesReads()).toBeGreaterThan(0))
     // ...and the tables come back, rather than staying hidden on a mismatch.
     await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
+  })
+})
+
+/**
+ * The dialog follows a role change without a new analysis.
+ *
+ * It reads the recording blocker live, and `repo.isReadOnly` moves on a
+ * server-pushed role change with nothing else moving — no publication, so the
+ * analysis subscription never fires.
+ */
+describe('the dialog and a role change', () => {
+  beforeEach(freshRepo)
+
+  afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
+
+  it('re-renders the blocker when read-only flips underneath it', async () => {
+    // A verdict has to be on screen for the blocker to qualify anything.
+    startMonitorRun(repo, WS)
+    publishPerfAnalysis(analysisFixture({ workspaceId: WS }))
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(reanalyze()).toBeEnabled())
+    expect(screen.queryByText(/read-only/i)).toBeNull()
+
+    // The demotion, with nothing published behind it.
+    await act(async () => { repo.setReadOnly(true) })
+
+    await waitFor(() => expect(screen.getByText(/read-only/i)).toBeInTheDocument())
   })
 })
 
