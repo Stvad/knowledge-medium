@@ -456,9 +456,9 @@ describe('unjudgedReason', () => {
 describe('nextAnalysisDelayMs', () => {
   const young = 1_000
   const old = 30 * 60_000
-  const none = { interaction: null, startup: null } as const
-  const startupWaiting = { interaction: null, startup: 'no-current-sample' } as const
-  const interactionWaiting = { interaction: 'no-current-sample', startup: null } as const
+  const none = { interaction: false, startup: false }
+  const startupWaiting = { interaction: false, startup: true }
+  const interactionWaiting = { interaction: true, startup: false }
 
   it('comes back soon while a boot record may still arrive', () => {
     expect(nextAnalysisDelayMs(startupWaiting, young))

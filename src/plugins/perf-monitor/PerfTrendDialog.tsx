@@ -197,7 +197,11 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     // longer await of the two, and a refresh the dialog has moved past must not
     // publish its history either.
     const alive = claimLoad()
-    setRefreshingFor({ repo, workspaceId: ws })
+    // Identity, not just context: a refresh superseded by a swap must not clear
+    // state that the refresh which REPLACED it now owns — that would re-enable
+    // the button under a running analysis and let two overlap.
+    const mine = { repo, workspaceId: ws }
+    setRefreshingFor(mine)
     try {
       await runPerfAnalysisNow(repo, ws)
       if (!alive()) return
@@ -209,7 +213,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
       if (!alive()) return
       showError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
-      setRefreshingFor(null)
+      setRefreshingFor((current) => (current === mine ? null : current))
     }
   }
 
@@ -233,11 +237,14 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
             (() => {
               // The same verdict the status chip renders — neither surface
               // decides for itself what an empty regression list means.
-              // From the subscribed value for tidiness; the SUBSCRIPTION above
-              // is what makes this recompute, and reading the flag off the Repo
-              // here would work just as well once a render is triggered.
+              // Only while this dialog is still ON its workspace. `readOnly`
+              // follows whichever workspace is ACTIVE, and the verdict beside
+              // it describes the pinned one — so once those diverge the blocker
+              // would claim recording is disabled for a workspace that is fine,
+              // or stay silent about one that is not. Unknown is the honest
+              // answer, and the "switched workspace" line above says why.
               const verdict = summarize(analysis, {
-                blockedBy: recordingBlockedBy({ isReadOnly: readOnly }),
+                blockedBy: stale ? null : recordingBlockedBy({ isReadOnly: readOnly }),
               })
               return (
                 <>

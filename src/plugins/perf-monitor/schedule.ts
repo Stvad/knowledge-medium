@@ -7,7 +7,7 @@ import type { Repo } from '@/data/repo'
 import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
-import { runPerfAnalysis, type UnjudgedReason } from './analyze.js'
+import { runPerfAnalysis } from './analyze.js'
 import { clearPerfAnalyses, publishPerfAnalysis } from './store.js'
 import { currentMonitorRun, endMonitorRun, hasMonitorRunFor, startMonitorRun } from './monitorRun.js'
 
@@ -44,11 +44,11 @@ const LIVE_RECHECK_MS = 3 * 60_000
  *  becomes judgeable the moment someone edits, whenever that is, so page age
  *  proves nothing about them and the bound has to be cost instead. */
 export const nextAnalysisDelayMs = (
-  unjudged: { interaction: UnjudgedReason | null; startup: UnjudgedReason | null },
+  awaiting: { interaction: boolean; startup: boolean },
   pageAgeMs: number,
 ): number => {
-  if (unjudged.startup === 'no-current-sample' && pageAgeMs < RECHECK_WINDOW_MS) return RECHECK_MS
-  if (unjudged.interaction === 'no-current-sample') return LIVE_RECHECK_MS
+  if (awaiting.startup && pageAgeMs < RECHECK_WINDOW_MS) return RECHECK_MS
+  if (awaiting.interaction) return LIVE_RECHECK_MS
   return REANALYZE_MS
 }
 
@@ -113,11 +113,10 @@ export const perfAnalysisEffect: AppEffect = {
     // outlived a Repo swap or a metrics reset still settles, and writing its
     // result to module state would let it set the cadence for the run that
     // replaced it — postponing a corrective pass by the full interval.
-    let unjudged: { interaction: UnjudgedReason | null; startup: UnjudgedReason | null } =
-      { interaction: null, startup: null }
+    let awaiting = { interaction: false, startup: false }
     const stopJob = job.start(
-      async () => { unjudged = (await runPerfAnalysisNow(repo, workspaceId)).unjudgedBecause },
-      () => nextAnalysisDelayMs(unjudged, performance.now()),
+      async () => { awaiting = (await runPerfAnalysisNow(repo, workspaceId)).awaitingLiveSample },
+      () => nextAnalysisDelayMs(awaiting, performance.now()),
     )
     return () => {
       // Teardown is not a pause. This effect goes away when the monitor's own

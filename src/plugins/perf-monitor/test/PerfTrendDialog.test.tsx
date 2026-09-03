@@ -223,6 +223,33 @@ describe('a superseded refresh', () => {
 })
 
 /**
+ * The blocker describes the PINNED workspace, or nothing.
+ *
+ * `repo.isReadOnly` follows whichever workspace is active, and the verdict
+ * beside it describes the one this dialog opened on — so once those diverge the
+ * blocker would speak for the wrong workspace.
+ */
+describe('the blocker on a dialog left behind', () => {
+  beforeEach(freshRepo)
+  afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
+
+  it('says nothing about recording once the active workspace has moved on', async () => {
+    startMonitorRun(repo, WS)
+    publishPerfAnalysis(analysisFixture({ workspaceId: WS }))
+    repo.setReadOnly(true)
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    // On its own workspace, the blocker is reported.
+    await waitFor(() => expect(screen.getByText(/read-only/i)).toBeInTheDocument())
+
+    // Now the user is somewhere else, and this read-only flag is that
+    // workspace's, not the pinned one's.
+    await act(async () => { repo.setActiveWorkspaceId('ws-elsewhere') })
+
+    await waitFor(() => expect(screen.queryByText(/read-only/i)).toBeNull())
+  })
+})
+
+/**
  * A refresh does not hold the next context's button hostage.
  *
  * `claimLoad` invalidates the superseded work, but the spinner is shared state
@@ -232,6 +259,36 @@ describe('a superseded refresh', () => {
 describe('a refresh across a Repo swap', () => {
   beforeEach(freshRepo)
   afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
+
+  // A superseded refresh settling must not clear state that the refresh which
+  // REPLACED it now owns — that re-enables the button under a running analysis
+  // and lets two overlap.
+  it('does not let a superseded refresh clear the one that replaced it', async () => {
+    startMonitorRun(mocks.repo, WS)
+    let releaseFirst = (): void => {}
+    mocks.runNow.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFirst = () => resolve() }))
+    const view = render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(reanalyze()).toBeEnabled())
+    await userEvent.click(reanalyze())
+
+    // The swap, then a second refresh that the new Repo owns.
+    const replacement = createTestRepo({ db: sharedDb.db, user: USER }).repo
+    replacement.setActiveWorkspaceId(WS)
+    mocks.repo = replacement
+    startMonitorRun(replacement, WS)
+    view.rerender(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(reanalyze()).toBeEnabled())
+    mocks.runNow.mockImplementationOnce(() => new Promise<void>(() => {}))
+    await userEvent.click(reanalyze())
+    await waitFor(() => expect(reanalyze()).toBeDisabled())
+
+    // The FIRST refresh finally settles.
+    await act(async () => { releaseFirst() })
+
+    // ...and the second one is still running, so the button stays disabled.
+    expect(reanalyze()).toBeDisabled()
+  })
 
   it('re-enables the button for the Repo that replaced it', async () => {
     startMonitorRun(mocks.repo, WS)

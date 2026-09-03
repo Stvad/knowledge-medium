@@ -28,6 +28,11 @@ export const analysisFixture = (over: Partial<PerfAnalysis> = {}): PerfAnalysis 
     run: currentMonitorRun(),
     ...over,
     unjudgedBecause,
+    // Derived from the reason, so a fixture cannot state an inconsistent pair.
+    awaitingLiveSample: {
+      interaction: unjudgedBecause.interaction === 'no-current-sample',
+      startup: unjudgedBecause.startup === 'no-current-sample',
+    },
     // `partly-judged` is a READY series whose verdict is incomplete, so it is
     // the one reason that does not imply unready.
     ready: {

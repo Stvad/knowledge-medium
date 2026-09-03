@@ -78,6 +78,12 @@ export interface PerfAnalysis {
   /** Derived from `unjudgedBecause`, never set beside it — the two cannot
    *  disagree about whether a series was judged. */
   ready: { interaction: boolean; startup: boolean }
+  /** Is a series waiting on a sample from THIS session, whatever else it
+   *  managed to judge? A different question from `unjudgedBecause`, which names
+   *  the ONE thing to tell a reader — a partly judged series still has a live
+   *  counter in it, and the scheduler has to know that even though the note
+   *  does not mention it. */
+  awaitingLiveSample: { interaction: boolean; startup: boolean }
   /** WHY each series' comparison is incomplete, or null where it was complete.
    *  The verdict layer renders these and must not re-derive them: a reason
    *  invented beside the message it feeds can disagree with what the comparison
@@ -237,6 +243,10 @@ export const runPerfAnalysis = async (
     // comparison that never ran.
     ready: { interaction: interactionReady, startup: startupReady },
     unjudgedBecause: { interaction: interactionUnjudged, startup: startupUnjudged },
+    awaitingLiveSample: {
+      interaction: awaitingCurrentSample(interactionResults),
+      startup: awaitingCurrentSample(startupResults),
+    },
     graphGrowth,
   }
 }
