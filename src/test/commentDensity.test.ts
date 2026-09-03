@@ -31,13 +31,13 @@ describe('countLines', () => {
 
 describe('addedLineNumbers', () => {
   it('reads added ranges from hunk headers, including the one-line form', () => {
-    const diff = ['+++ b/a.ts', '@@ -1,2 +1,3 @@', '+x', '@@ -10 +11 @@', '+y', '+++ b/b.ts', '@@ -0,0 +1,2 @@', '+z', '+w'].join('\n')
-    expect(addedLineNumbers(diff)).toEqual(new Map([['a.ts', [1, 2, 3, 11]], ['b.ts', [1, 2]]]))
+    const diff = ['index 111..aaa 100644', '+++ b/a.ts', '@@ -1,2 +1,3 @@', '+x', '@@ -10 +11 @@', '+y', 'index 222..bbb 100644', '+++ b/b.ts', '@@ -0,0 +1,2 @@', '+z', '+w'].join('\n')
+    expect(addedLineNumbers(diff)).toEqual(new Map([['a.ts', { lines: [1, 2, 3, 11], blob: 'aaa' }], ['b.ts', { lines: [1, 2], blob: 'bbb' }]]))
   })
 
   it('does not attach a deleted file\'s hunk to the file before it', () => {
-    const diff = ['+++ b/a.ts', '@@ -0,0 +1 @@', '+x', '+++ /dev/null', '@@ -1,3 +0,0 @@', '-gone', '+++ b/c.ts', '@@ -0,0 +1 @@', '+y'].join('\n')
-    expect(addedLineNumbers(diff)).toEqual(new Map([['a.ts', [1]], ['c.ts', [1]]]))
+    const diff = ['index 0..a', '+++ b/a.ts', '@@ -0,0 +1 @@', '+x', 'index b..0', '+++ /dev/null', '@@ -1,3 +0,0 @@', '-gone', 'index 0..c', '+++ b/c.ts', '@@ -0,0 +1 @@', '+y'].join('\n')
+    expect(addedLineNumbers(diff)).toEqual(new Map([['a.ts', { lines: [1], blob: 'a' }], ['c.ts', { lines: [1], blob: 'c' }]]))
   })
 })
 
@@ -50,8 +50,8 @@ describe('countAddedLines', () => {
 
   it('classifies added lines against the postimage, so block state and ++ lines are right', () => {
     const diff = [
-      '+++ b/a.ts', '@@ -1,0 +2,1 @@', '+ * added inside the block', '@@ -3,0 +4,1 @@', '+++counter',
-      '+++ b/b.ts', '@@ -0,0 +1,2 @@', '+// note', '+const y = 2',
+      'index 1..2 100644', '+++ b/a.ts', '@@ -1,0 +2,1 @@', '+ * added inside the block', '@@ -3,0 +4,1 @@', '+++counter',
+      'index 3..4 100644', '+++ b/b.ts', '@@ -0,0 +1,2 @@', '+// note', '+const y = 2',
     ].join('\n')
     expect(countAddedLines(diff, read)).toEqual(new Map([
       ['a.ts', { comment: 1, code: 1 }],
@@ -60,7 +60,7 @@ describe('countAddedLines', () => {
   })
 
   it('skips files whose hunks add nothing', () => {
-    const diff = ['+++ b/b.ts', '@@ -1,1 +1,0 @@', '-// gone'].join('\n')
+    const diff = ['index 3..4 100644', '+++ b/b.ts', '@@ -1,1 +1,0 @@', '-// gone'].join('\n')
     expect(countAddedLines(diff, read)).toEqual(new Map())
   })
 })

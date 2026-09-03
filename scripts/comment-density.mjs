@@ -41,33 +41,40 @@ export const countLines = text => {
   return counts
 }
 
-// Added line numbers per file, from the hunk headers of a unified diff.
+// Per file: the added line numbers (from the hunk headers) and the postimage blob
+// hash (from the `index` line) of a unified diff.
 export const addedLineNumbers = diffText => {
   const result = new Map()
   let file = null
+  let blob = null
   for (const raw of diffText.split('\n')) {
+    const index = raw.match(/^index [0-9a-f]+\.\.([0-9a-f]+)/)
+    if (index) {
+      blob = index[1]
+      continue
+    }
     if (raw.startsWith('+++ ')) {
       const header = raw.match(/^\+\+\+ b\/(.*)$/)
       file = header ? header[1] : null
-      if (file) result.set(file, [])
+      if (file) result.set(file, { lines: [], blob })
       continue
     }
     const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
     if (hunk && file) {
       const start = Number(hunk[1])
       const count = hunk[2] === undefined ? 1 : Number(hunk[2])
-      for (let n = start; n < start + count; n++) result.get(file).push(n)
+      for (let n = start; n < start + count; n++) result.get(file).lines.push(n)
     }
   }
   return result
 }
 
-// readPostimage(file) returns the file's text on the diff's "+" side.
+// readPostimage(file, blob) returns the file's text on the diff's "+" side.
 export const countAddedLines = (diffText, readPostimage) => {
   const result = new Map()
-  for (const [file, lineNumbers] of addedLineNumbers(diffText)) {
+  for (const [file, { lines: lineNumbers, blob }] of addedLineNumbers(diffText)) {
     if (lineNumbers.length === 0) continue
-    const kinds = classifyLines(readPostimage(file))
+    const kinds = classifyLines(readPostimage(file, blob))
     const counts = { comment: 0, code: 0 }
     for (const n of lineNumbers) {
       const kind = kinds[n - 1]
@@ -136,11 +143,14 @@ const runDefault = () => {
   printTotal('WORKING TREE ', totalComment, totalCode, processed)
 }
 
-// The "+" side of `A..B` / `A...B` is B; a bare rev diffs against the working tree.
-const postimageReader = range => {
-  const rev = /\.\.\.?(.*)$/.exec(range)?.[1]
-  if (rev === undefined) return file => readFileSync(file, 'utf8')
-  return file => execFileSync('git', ['show', `${rev || 'HEAD'}:${file}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+// The postimage is whatever the diff was computed against: its blob when git has
+// the object, else the working tree (an unstaged file's hash names nothing stored).
+const readPostimage = (file, blob) => {
+  try {
+    return execFileSync('git', ['cat-file', '-p', blob], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
+  } catch {
+    return readFileSync(file, 'utf8')
+  }
 }
 
 const runAdded = range => {
@@ -151,6 +161,7 @@ const runAdded = range => {
       'diff',
       '--no-ext-diff',
       '--no-color',
+      '--full-index',
       '--src-prefix=a/',
       '--dst-prefix=b/',
       '--unified=0',
@@ -169,7 +180,7 @@ const runAdded = range => {
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   )
 
-  const perFile = countAddedLines(diff, postimageReader(range))
+  const perFile = countAddedLines(diff, readPostimage)
   const rows = [...perFile.entries()]
     .map(([file, { comment, code }]) => ({ file, comment, code }))
     .sort((a, b) => b.comment - a.comment)
