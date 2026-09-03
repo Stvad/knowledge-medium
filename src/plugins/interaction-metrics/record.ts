@@ -426,6 +426,7 @@ export const writeInteractionSample = async (
         await updateClientRecord(repo, {
           workspaceId,
           blockId: existing.blockId,
+          containerType: interactionMetricsUIStateType,
           description: 'interaction metrics record',
           assertEligible: (r, ws) => assertStillAttributable(r, ws, metrics.epoch),
           isStillOurs: (row) => isUsableRow(row, repo, workspaceId),

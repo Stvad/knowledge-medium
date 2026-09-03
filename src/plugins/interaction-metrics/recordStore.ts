@@ -170,11 +170,7 @@ export const appendClientRecord = async (
     // Both derived levels this module owns, not just the group: deleting the
     // plugin root leaves the memoized group live, and a record under a live
     // group whose own parent is a tombstone is just as unreachable.
-    const rootId = pluginUIStateBlockId(spec.workspaceId, repo.user.id, spec.containerType.id)
-    for (const id of [rootId, groupId]) {
-      const row = await tx.get(id)
-      if (!row || row.deleted) throw new NoLongerEligible()
-    }
+    await assertContainersLive(tx, repo, spec.workspaceId, spec.containerType)
     await tx.create(
       {
         id: blockId,
@@ -216,6 +212,26 @@ export const appendClientRecord = async (
   return { blockId, groupId }
 }
 
+/** Are this client's containers still live?
+ *
+ *  Both write paths ask, because a record under a tombstoned group or root is
+ *  unreachable for good: the reader matches on the DERIVED group id, so nothing
+ *  will ever look under a replacement. Sync can tombstone a container without
+ *  touching the record below it, which is why the record's own liveness does
+ *  not answer this. */
+const assertContainersLive = async (
+  tx: Parameters<Parameters<Repo['tx']>[0]>[0],
+  repo: Repo,
+  workspaceId: string,
+  containerType: TypeContribution,
+): Promise<void> => {
+  const rootId = pluginUIStateBlockId(workspaceId, repo.user.id, containerType.id)
+  for (const id of [rootId, clientGroupId(repo, workspaceId, containerType)]) {
+    const row = await tx.get(id)
+    if (!row || row.deleted) throw new NoLongerEligible()
+  }
+}
+
 /** Update the record this session already owns.
  *
  *  Here rather than at the call site so the ordering rule above governs both
@@ -227,6 +243,8 @@ export const updateClientRecord = async (
   spec: {
     workspaceId: string
     blockId: string
+    /** The container whose liveness this update depends on, same as an append. */
+    containerType: TypeContribution
     description: string
     /** Re-taken immediately before the write; a recorder's own rule. */
     assertEligible: (repo: Repo, workspaceId: string) => void
@@ -239,6 +257,10 @@ export const updateClientRecord = async (
   await repo.tx(async (tx) => {
     const row = await tx.get(spec.blockId)
     if (!spec.isStillOurs(row)) throw new NoLongerEligible()
+    // The row being live says nothing about its containers: sync can tombstone
+    // the group or the plugin root without touching the record under it, and an
+    // update below a dead hierarchy writes where no reader will ever look.
+    await assertContainersLive(tx, repo, spec.workspaceId, spec.containerType)
     spec.assertEligible(repo, spec.workspaceId)
     await spec.setProperty(tx, spec.blockId)
   }, { scope: ChangeScope.Automation, telemetry: true, description: spec.description })
