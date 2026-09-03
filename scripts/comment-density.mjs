@@ -41,6 +41,18 @@ export const countLines = text => {
   return counts
 }
 
+// Git C-quotes a path holding a quote, backslash or control character whatever
+// `core.quotePath` says.
+const unquotePath = quoted =>
+  quoted.replace(/\\(?:([0-7]{3})|(.))/g, (_, octal, ch) =>
+    octal ? String.fromCharCode(parseInt(octal, 8)) : ({ n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', a: '\x07' }[ch] ?? ch))
+
+export const headerPath = line => {
+  const quoted = line.match(/^\+\+\+ "b\/(.*)"$/)
+  if (quoted) return unquotePath(quoted[1])
+  return line.match(/^\+\+\+ b\/(.*)$/)?.[1] ?? null
+}
+
 // Per file: the added line numbers (from the hunk headers) and the postimage blob
 // hash (from the `index` line) of a unified diff.
 export const addedLineNumbers = diffText => {
@@ -54,8 +66,7 @@ export const addedLineNumbers = diffText => {
       continue
     }
     if (raw.startsWith('+++ ')) {
-      const header = raw.match(/^\+\+\+ b\/(.*)$/)
-      file = header ? header[1] : null
+      file = headerPath(raw)
       if (file) result.set(file, { lines: [], blob })
       continue
     }

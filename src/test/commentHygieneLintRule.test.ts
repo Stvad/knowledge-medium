@@ -66,6 +66,10 @@ describe('comment-hygiene ESLint rules', () => {
         code: `function empty() { /** dangling */ }`,
         errors: [{ messageId: 'nothing' }],
       },
+      {
+        code: `function empty() { /** dangling */ ; }`,
+        errors: [{ messageId: 'nothing' }],
+      },
     ],
   })
 
@@ -76,6 +80,8 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `// three rounds of the loop, then settle\nconst x = 1` },
       { code: `// round 2 of the handshake re-sends the nonce\nconst x = 1` },
       { code: `// each review round increments the SRS review count\nconst x = 1` },
+      // Where the reviewer's name is a product name, the path opts out of the name check only.
+      { code: `// Codex only exposes that network toggle for workspace-write\nconst x = 1`, options: [{ reviewers: [] }] },
       // The escape hatch: the directive itself is never scanned, and it suppresses the line below.
       { code: `// eslint-disable-next-line rule-to-test/no-review-provenance -- the PR is the only spec\n// see PR #12 for the shape\nconst x = 1` },
     ],
@@ -89,6 +95,7 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `// reviewer P2 asked for the guard\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// see pull request #123\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// re-arm on paste (Codex P1)\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
+      { code: `// the gap Codex flagged: paste bypassed the verb\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// review comment #3676752542 asked for this\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       // A directive for another rule is scanned like any comment.
       { code: `// @ts-expect-error fixed in PR #123\nconst x: number = 'a'`, errors: [{ messageId: 'provenance' }] },

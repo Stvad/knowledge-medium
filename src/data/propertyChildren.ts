@@ -284,7 +284,7 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     // `.trim() === ''`: a whitespace-only id is a MALFORMED reference (not a
     // clear), so it must reach `referenceBlockContentForId` — which throws on a
     // whitespace/parens id — rather than silently unsetting the property here,
-    // the same silent property-loss that guard exists to prevent (Codex #386).
+    // the same silent property-loss that guard exists to prevent.
     if (encoded === '') return ''
     return referenceBlockContentForId(encoded)
   }

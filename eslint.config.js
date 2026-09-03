@@ -136,7 +136,7 @@ export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
   // you opt in (eslint-config-flat-gitignore), so list ephemeral / agent
   // dirs explicitly. .claude/worktrees/ and .codex/worktrees/ in particular
-  // contain full repo copies (from Claude Code and Codex agent runs) that
+  // contain full repo copies from agent runs that
   // shouldn't be re-linted. docs/**/*.ts are design-sketch
   // files (typechecked via docs/tsconfig.json) — they intentionally have
   // unused stub params and let-vs-const looseness so the prose stays
@@ -155,6 +155,11 @@ export default tseslint.config(
       'comments/no-invisible-jsdoc': 'error',
       'comments/no-review-provenance': 'error',
     },
+  },
+  {
+    // These drive the agent product whose name the rule otherwise reads as a reviewer's.
+    files: ['packages/agent-dispatch/**', 'src/plugins/agent-dispatch-companion/**'],
+    rules: {'comments/no-review-provenance': ['error', {reviewers: []}]},
   },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],

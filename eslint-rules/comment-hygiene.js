@@ -57,7 +57,7 @@ const noInvisibleJsdoc = {
             context.report({loc: c.loc, messageId: 'shadowed'})
             continue
           }
-          if (!next || next.value === '}' || next.value === ')' || next.value === ']') {
+          if (!next || next.value === '}' || next.value === ')' || next.value === ']' || next.value === ';') {
             // `{/** … */}` in JSX is a comment inside an expression container, not a doc.
             const host = src.getNodeByRangeIndex(c.range[0])?.type
             if (host === 'JSXExpressionContainer' || host === 'JSXEmptyExpression') continue
@@ -69,11 +69,13 @@ const noInvisibleJsdoc = {
   },
 }
 
-// Every alternative carries an identifier — a number, an id, a sha, or the reviewer's
-// name. A bare phrase ("round 2", "review round", "this review") is domain vocabulary
-// in this repo (handshakes, SRS reviews) and is never matched.
+// Every alternative carries an identifier — a number, an id, a sha, or a reviewer's
+// name (the `reviewers` option; a path where that name is a product, not a reviewer,
+// passes `[]`). A bare phrase ("round 2", "review round") is domain vocabulary in
+// this repo (handshakes, SRS reviews) and is never matched.
 const PROVENANCE =
-  /\b(?:PR|pull request) ?#\d+|\breview comment #?\d{6,}\b|\breview rounds? \d+\b|\brounds? \d+, P[0-4]\b|\bcommit [0-9a-f]{7,}\b|\bCodex (review|on (PR )?#\d|P[0-4]\b)|\breviewer P[0-4]\b/i
+  /\b(?:PR|pull request) ?#\d+|\breview comment #?\d{6,}\b|\breview rounds? \d+\b|\brounds? \d+, P[0-4]\b|\bcommit [0-9a-f]{7,}\b|\breviewer P[0-4]\b/i
+const DEFAULT_REVIEWERS = ['Codex']
 
 const noReviewProvenance = {
   meta: {
@@ -83,15 +85,21 @@ const noReviewProvenance = {
       provenance:
         'Review provenance in a comment ("{{match}}"): the PR, the round and the reviewer belong on the PR thread; the comment keeps the rule. A `#N` issue pointer is fine, and a design citation is a docs/ path (`docs/properties-as-blocks-migration.html §7`, not `PR #288 §7`).',
     },
-    schema: [],
+    schema: [{
+      type: 'object',
+      properties: {reviewers: {type: 'array', items: {type: 'string'}}},
+      additionalProperties: false,
+    }],
   },
   create(context) {
     const src = context.sourceCode
+    const reviewers = context.options[0]?.reviewers ?? DEFAULT_REVIEWERS
+    const reviewerRe = reviewers.length ? new RegExp(`\\b(?:${reviewers.join('|')})\\b`) : null
     return {
       Program() {
         for (const c of src.getAllComments()) {
           if (suppressesThisRule(c)) continue
-          const match = PROVENANCE.exec(c.value)
+          const match = PROVENANCE.exec(c.value) ?? reviewerRe?.exec(c.value)
           if (match) context.report({loc: c.loc, messageId: 'provenance', data: {match: match[0]}})
         }
       },

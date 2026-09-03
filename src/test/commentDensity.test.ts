@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error no declaration file for the script module
-import { addedLineNumbers, classifyLines, countAddedLines, countLines } from '../../scripts/comment-density.mjs'
+import { addedLineNumbers, classifyLines, countAddedLines, countLines, headerPath } from '../../scripts/comment-density.mjs'
 
 describe('countLines', () => {
   it('counts // lines as comments', () => {
@@ -26,6 +26,15 @@ describe('countLines', () => {
 
   it('classifies per line', () => {
     expect(classifyLines('/**\n * doc\n */\n\nconst x = 1')).toEqual(['comment', 'comment', 'comment', 'blank', 'code'])
+  })
+})
+
+describe('headerPath', () => {
+  it('reads plain and C-quoted +++ headers, and rejects /dev/null', () => {
+    expect(headerPath('+++ b/src/a.ts')).toBe('src/a.ts')
+    expect(headerPath('+++ "b/odd\\tname \\"q\\".ts"')).toBe('odd\tname "q".ts')
+    expect(headerPath('+++ "b/caf\\303\\251.ts"')).toBe('caf\u00c3\u00a9.ts')
+    expect(headerPath('+++ /dev/null')).toBeNull()
   })
 })
 

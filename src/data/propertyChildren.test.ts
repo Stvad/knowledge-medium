@@ -550,7 +550,7 @@ describe('tx.setProperties (batch set + unset)', () => {
     // `NaN` is invalid for the number codec (encode throws). Because `count` is
     // ALSO unset in the same batch, the discarded set value must be skipped
     // rather than encoded — otherwise the whole batch throws instead of applying
-    // the explicit clear (Codex #386). unset wins.
+    // the explicit clear. unset wins.
     await repo.tx(tx => tx.setProperties('p', {
       set: [propertyValue(countSchema, Number.NaN)],
       unset: [countSchema],
@@ -2677,7 +2677,7 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
   it('renders an exactly-empty ref as empty content, but rejects a whitespace-only id', () => {
     expect(propertyValueToChildContent(refSchema, '')).toBe('')
     expect(encodedPropertyValueToChildContent(refSchema, '')).toBe('')
-    // A whitespace-only id is a MALFORMED reference, not a clear (Codex #386):
+    // A whitespace-only id is a MALFORMED reference, not a clear:
     // matching it as "empty" would silently unset the property; it must reach
     // `referenceBlockContentForId`, which throws on whitespace/parens ids.
     expect(() => propertyValueToChildContent(refSchema, '   ')).toThrow()
