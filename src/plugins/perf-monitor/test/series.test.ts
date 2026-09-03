@@ -10,6 +10,7 @@ import {
   bootstrapGapMs,
   fanoutRegression,
   median,
+  awaitingCurrentSample,
   partlyJudged,
   queryRegressions,
   startupRegression,
@@ -296,6 +297,27 @@ describe('queryRegressions with nothing judgeable', () => {
     expect(results).toHaveLength(1)
     expect(results[0]).toMatchObject({ status: 'insufficient' })
     expect(partlyJudged([...results, { status: 'steady', baselineCount: 12 }])).toBe(true)
+  })
+})
+
+/**
+ * A mixed set still has a live counter in it.
+ *
+ * One metric short of its own history beside another short of a current sample
+ * is not "short of history": the live one can make a verdict possible the
+ * moment someone edits, and calling it history parks the whole series behind
+ * the long cadence.
+ */
+describe('awaitingCurrentSample with mixed reasons', () => {
+  const shortHistory = { status: 'insufficient', reason: 'history' } as const
+  const noSample = { status: 'insufficient', reason: 'no-current-sample' } as const
+
+  it('reports a current sample missing among reasons that are not', () => {
+    expect(awaitingCurrentSample([shortHistory, noSample])).toBe(true)
+  })
+
+  it('is false when every reason is history', () => {
+    expect(awaitingCurrentSample([shortHistory, shortHistory])).toBe(false)
   })
 })
 

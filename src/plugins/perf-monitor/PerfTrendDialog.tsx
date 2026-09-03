@@ -85,7 +85,10 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     useCallback((onChange: () => void) => repo.onReadOnlyChange(onChange), [repo]),
     () => repo.isReadOnly,
   )
-  const [refreshing, setRefreshing] = useState(false)
+  /** The refresh in flight WITH the context it belongs to, derived the same way
+   *  the rows are. A refresh superseded by a sign-out would otherwise hold the
+   *  replacement's button disabled until it settled — or forever, if it hung. */
+  const [refreshingFor, setRefreshingFor] = useState<{ repo: object; workspaceId: string } | null>(null)
   const ws = workspaceId ?? repo.activeWorkspaceId
 
   /** The loaded series WITH the Repo, workspace and PUBLICATION they were read
@@ -173,6 +176,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     subscribeMonitorRun,
     () => ws != null && hasMonitorRunFor(repo, ws),
   )
+  const refreshing = refreshingFor !== null
+    && refreshingFor.repo === repo && refreshingFor.workspaceId === ws
   const stale = !ws || ws !== repo.activeWorkspaceId
   // The monitor's own toggle can go off while this dialog stays mounted in the
   // shared DialogHost. Nothing could publish then, so the button would spin and
@@ -192,7 +197,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     // longer await of the two, and a refresh the dialog has moved past must not
     // publish its history either.
     const alive = claimLoad()
-    setRefreshing(true)
+    setRefreshingFor({ repo, workspaceId: ws })
     try {
       await runPerfAnalysisNow(repo, ws)
       if (!alive()) return
@@ -204,7 +209,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
       if (!alive()) return
       showError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
-      setRefreshing(false)
+      setRefreshingFor(null)
     }
   }
 

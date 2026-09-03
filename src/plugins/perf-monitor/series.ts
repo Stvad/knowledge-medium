@@ -162,10 +162,22 @@ export const partlyJudged = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status !== 'insufficient') &&
   results.some((r) => r.status === 'insufficient')
 
-/** True when nothing was judged AND waiting would not change that. */
+/** Nothing was judged, and at least one metric is short of a sample from THIS
+ *  session rather than of history.
+ *
+ *  Missing NOW, which is not the same as unobtainable: a startup record for
+ *  this boot either arrives or does not, but interaction counters are live and
+ *  a zero-write session gains a usable fan-out sample the moment someone edits.
+ *  What follows from that is a scheduling decision, and it belongs to the
+ *  caller — see `nextAnalysisDelayMs`.
+ *
+ *  `some`, not `every`: a mixed set — one metric short of its own history,
+ *  another short of a current sample — is still one where a live counter can
+ *  make a verdict possible, and reporting it as merely short of history parks
+ *  it behind the long cadence. */
 export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean =>
   results.length > 0 &&
-  results.every((r) => r.status === 'insufficient' && r.reason === 'no-current-sample')
+  results.some((r) => r.status === 'insufficient' && r.reason === 'no-current-sample')
 
 /** Sessions the THINNEST judged comparison rested on, or 0 if none was judged.
  *
@@ -238,9 +250,8 @@ export const queryRegressions = (
  *
  *  `loaderInvalidations`, not `loaderRuns`: a cold `load()` from `subscribe()`
  *  bumps `loaderRuns` too, so that counter charges ordinary mounting and
- *  navigation to write fan-out. Measured on a real session, `loaderRuns` ran
- *  10× `loaderInvalidations` — a session that browsed more than it wrote would
- *  have read as regressed. */
+ *  navigation to write fan-out — and a session that browses more than it writes
+ *  then reads as regressed. */
 export const invalidationsPerWrite = (r: InteractionComparable): number | null =>
   r.writes > 0 ? (r.fanout.loaderInvalidations ?? 0) / r.writes : null
 

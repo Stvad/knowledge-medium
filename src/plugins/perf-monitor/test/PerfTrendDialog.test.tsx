@@ -223,6 +223,37 @@ describe('a superseded refresh', () => {
 })
 
 /**
+ * A refresh does not hold the next context's button hostage.
+ *
+ * `claimLoad` invalidates the superseded work, but the spinner is shared state
+ * — a slow or hung analysis would otherwise leave re-analyze disabled for the
+ * Repo that replaced it.
+ */
+describe('a refresh across a Repo swap', () => {
+  beforeEach(freshRepo)
+  afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
+
+  it('re-enables the button for the Repo that replaced it', async () => {
+    startMonitorRun(mocks.repo, WS)
+    // Never settles: the hung case this exists for.
+    mocks.runNow.mockImplementationOnce(() => new Promise<void>(() => {}))
+    const view = render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(reanalyze()).toBeEnabled())
+    await userEvent.click(reanalyze())
+    await waitFor(() => expect(reanalyze()).toBeDisabled())
+
+    // The swap, with a run for the new Repo.
+    const replacement = createTestRepo({ db: sharedDb.db, user: USER }).repo
+    replacement.setActiveWorkspaceId(WS)
+    mocks.repo = replacement
+    startMonitorRun(replacement, WS)
+    view.rerender(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+
+    await waitFor(() => expect(reanalyze()).toBeEnabled())
+  })
+})
+
+/**
  * Rows belong to the Repo they were read from.
  *
  * A local sign-out swaps the Repo without a reload. Held in bare state the
