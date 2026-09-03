@@ -199,7 +199,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   // Repo describes the wrong workspace — a blocker calling an editable
   // workspace recording-disabled, or a re-analysis publishing the active
   // workspace's state under the pinned one's name. Unknown is the honest
-  // answer, and everything below reads this rather than deciding again.
+  // answer, and every render-time consumer below reads this rather than
+  // deciding again. `refresh()` re-reads at click time on purpose.
   const stale = !ws || ws !== activePin
   // The monitor's own toggle can go off while this dialog stays mounted in the
   // shared DialogHost. Nothing could publish then, so the button would spin and
