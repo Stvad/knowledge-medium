@@ -164,8 +164,23 @@ export const observeWorkspaceEffectContribution = appEffectsFacet.of(observeWork
 
 /** Remember the record block this page session owns. */
 export const setPageRecord = (
-  repo: object, workspaceId: string, blockId: string, startedAt: number,
-): void => { factsFor(repo).pageRecord = { blockId, workspaceId, startedAt } }
+  repo: MetricsSpanSource,
+  workspaceId: string,
+  blockId: string,
+  startedAt: number,
+  /** `metrics().epoch` the sample being claimed was READ under. */
+  sampleEpoch: number,
+): void => {
+  // The row belongs to the span it was MEASURED in. A `resetMetrics()` landing
+  // between the transaction's epoch check and this callback rebases the facts,
+  // and claiming into the new span would hand it a row whose counters and
+  // `startedAt` describe the old one — the next sample then updates that row in
+  // place, mixing fresh counters into an inflated session duration. Declining
+  // costs the new span one sample, which it mints for itself.
+  const f = factsForSpan(repo)
+  if (f.epoch !== sampleEpoch) return
+  f.pageRecord = { blockId, workspaceId, startedAt }
+}
 
 /** Forget it — the block was deleted underneath us, so a replacement is due. */
 export const clearPageRecord = (repo: object): void => { factsFor(repo).pageRecord = null }

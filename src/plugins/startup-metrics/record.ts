@@ -273,7 +273,18 @@ export const collectStartupMetricsEffect: AppEffect = {
      *  startup series stays unjudged. */
     const attemptWrite = (attempt: number): void => {
       scheduleIdle(() => {
-        if (disposed) return
+        // Re-taken HERE, at the write, not at `record()` where the attempt was
+        // decided. A retry is a second entry point that does not pass through
+        // `record()`, so a replacement collector can have started — or
+        // finished — its own write while this one was waiting out
+        // `WRITE_RETRY_MS`, and both would append a record for the same boot.
+        // This is the only place a write is issued, which is what makes one
+        // check cover both paths.
+        //
+        // UNPINNED, and not for want of trying: a test that starts a second
+        // collector never gets the first one's retry to reach a write at all,
+        // so it passes with this line deleted. Reasoned, not measured.
+        if (disposed || recorded || recording) return
         const retryLater = (): void => {
           if (attempt + 1 >= WRITE_ATTEMPTS || disposed) return
           const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
