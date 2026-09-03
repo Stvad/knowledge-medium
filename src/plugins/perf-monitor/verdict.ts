@@ -55,8 +55,15 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
   // Series-specific, because the same structural reason means different things:
   // startup's current sample IS a record for this boot, while interaction's is
   // the live counters, which exist but held nothing worth comparing.
+  //
+  // Neither asserts ABSENCE. Startup reaches this reason two ways — no row for
+  // this boot, or a row written through the hidden-until-after-paint fallback,
+  // which carries no paint marks and so no measurement. The trend table loads
+  // and shows that second row, so a note claiming no record exists (and
+  // guessing that recording is off) contradicts what the reader can see one
+  // panel away. "No usable measurement" is true of both.
   'no-current-sample': (s) => s === 'startup'
-    ? 'no startup record for this session (startup recording may be off)'
+    ? 'no usable startup measurement for this session'
     : 'no usable interaction measurement this session',
   'not-recording': (s) => `no ${s} record for this session (${s} recording may be off)`,
   'history-short': (s) => `${s} history still building`,

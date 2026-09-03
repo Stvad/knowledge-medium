@@ -29,21 +29,18 @@ const RECHECK_MS = 60_000
 /** Pure, and exported for it: this decides how quickly a wrong-looking verdict
  *  corrects itself, which is the whole behaviour a shorter cadence buys.
  *
- *  BACKOFF, not a deadline. This used to bound the fast recheck two different
- *  ways — a page-age window for the startup series, a slower fixed interval for
- *  the interaction one — and both encoded a claim the reader cannot actually
- *  make: that a missing sample is now permanently missing. Neither held. A
- *  startup recorder switched on in an hour-old page still writes this boot's
- *  record, well past any page-age window; an interaction recorder that has not
- *  written YET is indistinguishable from one that is switched off, and calling
- *  it off is a guess that shows the user the wrong thing.
+ *  BACKOFF, not a deadline. Any deadline encodes a claim the reader cannot
+ *  make — that a missing sample is now permanently missing — and neither series
+ *  supports one: a startup recorder switched on in an hour-old page still
+ *  writes this boot's record, and an interaction recorder that has not written
+ *  YET is indistinguishable from one switched off.
  *
- *  Backing off answers a question that can be answered — how much is another
- *  look worth — instead of one that cannot. A sample that arrives late is still
- *  picked up; a recorder that is genuinely off costs a handful of extra passes
- *  and then settles at the ordinary cadence, which is what it would have cost
- *  anyway. `waits` is the number of CONSECUTIVE preceding analyses that came
- *  back still waiting, so the first recheck is prompt. */
+ *  Backing off answers the question that CAN be answered — how much is another
+ *  look worth — so a late sample is still picked up and a recorder that is
+ *  genuinely off costs a handful of extra passes before settling at the
+ *  ordinary cadence, which is what it would have cost anyway. `waits` is the
+ *  number of CONSECUTIVE preceding analyses that came back still waiting, so
+ *  the first recheck is prompt. */
 export const nextAnalysisDelayMs = (
   awaiting: { interaction: boolean; startup: boolean },
   waits: number,
@@ -102,12 +99,10 @@ export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
  *  reached for — the loop calls `runPerfAnalysisNow`, everyone else calls
  *  `refreshPerfAnalysis` — rather than compared after the fact.
  *
- *  That distinction used to be a seq check against a store subscription, and it
- *  could not work: `publishPerfAnalysis` notifies synchronously from inside the
- *  pass, so the loop's own publication reached the subscriber BEFORE the loop
- *  had recorded the seq as its own. Every scheduled pass then re-armed as
- *  though it were external — advancing the backoff twice and leaving two live
- *  timers, which is how overlapping analyses start. */
+ *  It cannot be a value compared after the fact: `publishPerfAnalysis` notifies
+ *  synchronously from inside the pass, so a loop-owned publication reaches any
+ *  subscriber BEFORE the loop could record it as its own — every scheduled pass
+ *  then reads as external, and re-arming on one leaves a second live chain. */
 let rearmRunningLoop: ((analysis: PerfComparison) => void) | null = null
 
 /** Run an analysis on someone's behalf — the trend view's refresh — and let the

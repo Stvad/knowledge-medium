@@ -283,8 +283,7 @@ export const collectStartupMetricsEffect: AppEffect = {
       done = true
       runCleanups()
       // One owner, so a second collector arriving here joins the write rather
-      // than starting one — the overlap this used to guard against per instance
-      // cannot arise.
+      // than starting one: two instances cannot produce two records.
       void writeBootRecord(repo, workspaceId)
     }
 

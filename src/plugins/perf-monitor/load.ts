@@ -33,10 +33,21 @@ import {
 // `1e400` parses as one, and these blobs are hand-editable. A non-finite p95
 // reaching the recent window publishes an `Infinity×` regression; reaching the
 // baseline suppresses a real one.
+//
+// NON-NEGATIVE as well, and for a reason finiteness does not cover. Every
+// number in these records is a count or a duration, so a negative one is
+// corrupt by construction — and the way it fails is silent: the comparison's
+// magnitude floor is a `<` test, so a negative median lands under it and is
+// reported STEADY. Corrupt rows would then contribute to a clean bill of
+// health, which is the failure this whole feature exists to remove. The same
+// rule covers the reversed startup marks below.
+const isCount = (v: unknown): boolean => Number.isFinite(v) && (v as number) >= 0
+const isAbsentOrCount = (v: unknown): boolean => v === undefined || isCount(v)
+
 const isTimingSample = (v: unknown): boolean =>
   typeof v === 'object' && v !== null &&
-  Number.isFinite((v as { calls?: unknown }).calls) &&
-  Number.isFinite((v as { p95Ms?: unknown }).p95Ms)
+  isCount((v as { calls?: unknown }).calls) &&
+  isCount((v as { p95Ms?: unknown }).p95Ms)
 
 /**
  * A validator must cover EVERY field a reader dereferences — the comparison and
@@ -54,17 +65,15 @@ export const isUsableInteractionRecord = (r: {
   appSha?: unknown
 }): boolean =>
   isAbsentOrString(r.appSha) &&
-  Number.isFinite(r.writes) && Number.isFinite(r.blockCount) &&
+  isCount(r.writes) && isCount(r.blockCount) &&
   typeof r.queries === 'object' && r.queries !== null &&
   Object.values(r.queries as Record<string, unknown>).every(isTimingSample) &&
   typeof r.fanout === 'object' && r.fanout !== null &&
-  // Counter VALUES too, not just the map: they are consumed as numbers, and a
-  // string yields NaN, which takes neither the steady nor the regressed branch.
-  Object.values(r.fanout as Record<string, unknown>).every(
-    (v) => v === undefined || Number.isFinite(v),
-  )
+  // Counter VALUES too, not just the map: they are consumed as numbers, so a
+  // string yields NaN (which takes neither branch) and a negative one yields a
+  // negative rate (which takes the steady branch, silently).
+  Object.values(r.fanout as Record<string, unknown>).every(isAbsentOrCount)
 
-const isAbsentOrFinite = (v: unknown): boolean => v === undefined || Number.isFinite(v)
 /** The trend table calls `.slice` on it, so a number or object throws during
  *  render and takes the whole dialog with it. */
 const isAbsentOrString = (v: unknown): boolean => v === undefined || typeof v === 'string'
@@ -89,9 +98,9 @@ export const isUsableStartupRecord = (r: {
 }): boolean =>
   isAbsentOrString(r.appSha) &&
   Number.isFinite(r.timeOriginMs) &&
-  isAbsentOrFinite(r.repoReadyMs) &&
-  isAbsentOrFinite(r.firstContentPaintMs) &&
-  isAbsentOrFinite(r.interactiveMs) &&
+  isAbsentOrCount(r.repoReadyMs) &&
+  isAbsentOrCount(r.firstContentPaintMs) &&
+  isAbsentOrCount(r.interactiveMs) &&
   // Only the pair the comparison SUBTRACTS. `interactiveMs` is stored for
   // someone reading a session by hand and no metric is derived from it, so a
   // rule about its ordering would be weight with no consumer.
@@ -183,10 +192,17 @@ export const countRecords = async (
  * started and its `recordedAt` reflects the sample. Sorting on the field the
  * comparison actually reads keeps those from disagreeing.
  */
+/**
+ * @param mustKeep recognises the row describing THIS session, which is kept
+ *   even past the history cap. The cap bounds the baseline; identifying the
+ *   current sample is a different question, and a caller that needs both cannot
+ *   ask the second one if the first hid the answer.
+ */
 export const loadRecords = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
   { typeId, recordName, isUsable }: RecordSeries<T>,
+  mustKeep?: (record: T) => boolean,
 ): Promise<Array<{ id: string; record: T }>> => {
   const recordPath = jsonPathForProperty(recordName)
   const groupId = seriesGroupId(repo, workspaceId, typeId)
@@ -213,11 +229,18 @@ export const loadRecords = async <T extends { recordedAt: number }>(
   })
   const rows = await repo.db.getAll<{ id: string; payload: string | null }>(q.sql, q.params)
   const records: Array<{ id: string; record: T }> = []
+  let keptCurrent = mustKeep === undefined
   for (const row of rows) {
     // Stopping at the window rather than truncating afterwards. Over-long
     // history biases the baseline toward older, smaller-graph sessions, which
     // reads as a regression that never happened.
-    if (records.length >= HISTORY_LIMIT) break
+    //
+    // ...except for the row identifying THIS session, which the window is not
+    // about. The cap bounds the BASELINE; a caller that also has to recognise
+    // its own sample cannot do so if the cap hid it, and this client's other
+    // tabs write newer rows while a long-lived page stays open. Keep scanning
+    // the candidates for it, and stop as soon as both are satisfied.
+    if (records.length >= HISTORY_LIMIT && keptCurrent) break
     if (!row.payload) continue
     try {
       const record = JSON.parse(row.payload) as T
@@ -226,7 +249,10 @@ export const loadRecords = async <T extends { recordedAt: number }>(
       // window; `Infinity` (which `1e400` parses to) sorts to the front and
       // pushes this boot out of the currency window.
       if (Number.isFinite(record?.recordedAt) && isUsable(record)) {
-        records.push({ id: row.id, record })
+        const isCurrent = mustKeep?.(record) ?? false
+        // Past the cap, only the current row still earns a place.
+        if (records.length < HISTORY_LIMIT || isCurrent) records.push({ id: row.id, record })
+        if (isCurrent) keptCurrent = true
       }
     } catch {
       // A record written by a future/older shape is skipped, not fatal: the

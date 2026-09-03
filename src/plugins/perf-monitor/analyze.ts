@@ -168,7 +168,12 @@ export const runPerfAnalysis = async (
   // the lower value — which is the ordering this exists to prevent.
   const seq = nextAnalysisSeq()
   const interaction = await loadRecords(repo, workspaceId, INTERACTION_SERIES)
-  const startup = await loadRecords(repo, workspaceId, STARTUP_SERIES)
+  // This boot's row is kept whatever the cap: other tabs on this client write
+  // newer boots while a long-lived page stays open, and enough of them would
+  // otherwise hide the row `startupRegression` looks for — reporting no current
+  // sample with it sitting on disk.
+  const startup = await loadRecords(repo, workspaceId, STARTUP_SERIES,
+    (r) => r.timeOriginMs === performance.timeOrigin)
 
   // The live counters are page-global. A page session that has seen a second
   // workspace carries both workspaces' work, so comparing that snapshot against

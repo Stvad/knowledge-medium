@@ -209,6 +209,38 @@ describe('loadRecords', () => {
     expect(await loadRecords(repo, WS, INTERACTION_SERIES)).toHaveLength(HISTORY_LIMIT)
   })
 
+  // The cap bounds the BASELINE, and identifying this session's own row is a
+  // different question. This client's other tabs write newer boots while a
+  // long-lived page stays open, so enough of them push its row past the cap —
+  // and the comparison then reports no current sample with the row on disk.
+  it('keeps the row a caller must recognise, past the window', async () => {
+    const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
+    const buried = HISTORY_LIMIT + 5
+    for (let i = 0; i <= buried; i++) {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+            created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
+        [`rec-${i}`, WS, groupId, `a${String(i).padStart(4, '0')}`,
+         JSON.stringify({ [interactionRecordProp.name]: { ...ourRecord(), recordedAt: 9e9 - i } }),
+         USER.id, USER.id],
+      )
+    }
+    const mine = (r: { recordedAt: number }) => r.recordedAt === 9e9 - buried
+
+    // Precondition: without the predicate this row really is out of reach, so
+    // the assertion below is about the widening and not the arrangement.
+    const capped = await loadRecords(repo, WS, INTERACTION_SERIES)
+    expect(capped.some((r) => mine(r.record))).toBe(false)
+
+    const kept = await loadRecords(repo, WS, INTERACTION_SERIES, mine)
+
+    expect(kept.some((r) => mine(r.record))).toBe(true)
+    // ...and it is kept ALONGSIDE a full window, not in place of part of it.
+    expect(kept).toHaveLength(HISTORY_LIMIT + 1)
+  })
+
   // Marks stay optional, but a PRESENT one has to be finite: the comparison
   // subtracts them, and NaN takes neither the steady nor the regressed branch,
   // so one hand-edited row could publish a NaN comparison to the chip.
@@ -220,6 +252,26 @@ describe('loadRecords', () => {
     // Every field the trend table renders, not a chosen few.
     expect(isUsableStartupRecord({ timeOriginMs: 1, interactiveMs: NaN })).toBe(false)
     expect(isUsableStartupRecord({ timeOriginMs: NaN })).toBe(false)
+  })
+
+  // Every number in these records is a count or a duration, so a negative one
+  // is corrupt — and it fails SILENTLY: the comparison's magnitude floor is a
+  // `<` test, so a negative median lands under it and is reported steady. A
+  // corrupt row would contribute to a clean bill of health.
+  it('rejects negative counts and durations', () => {
+    const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
+    expect(isUsableInteractionRecord(ok)).toBe(true)
+    expect(isUsableInteractionRecord({ ...ok, writes: -1 })).toBe(false)
+    expect(isUsableInteractionRecord({ ...ok, blockCount: -1 })).toBe(false)
+    // The path that actually produces a negative RATE: a positive denominator
+    // with a negative numerator.
+    expect(isUsableInteractionRecord({ ...ok, fanout: { loaderInvalidations: -5 } })).toBe(false)
+    expect(isUsableInteractionRecord({ ...ok, queries: { q: { calls: 20, p95Ms: -3 } } }))
+      .toBe(false)
+    // Zero is a measurement, not corruption.
+    expect(isUsableInteractionRecord({ ...ok, writes: 0, fanout: { loaderInvalidations: 0 } }))
+      .toBe(true)
+    expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: -1 })).toBe(false)
   })
 
   // Finiteness does not catch a REVERSED pair — both values are perfectly

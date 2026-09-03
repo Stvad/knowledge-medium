@@ -203,10 +203,16 @@ describe('an unjudged startup series', () => {
     expect(startupUnjudged({}).notes.join(' ')).toContain('startup history still building')
   })
 
-  it('names the missing current sample instead, when waiting cannot help', () => {
+  // Two states reach this reason — no row for this boot, and a row written
+  // through the hidden-until-after-paint fallback, which carries no paint marks.
+  // The trend table loads and shows the second, so the note must not claim the
+  // record is missing or guess that recording is off; it would contradict what
+  // the reader can see one panel away.
+  it('names the missing measurement without asserting the row is absent', () => {
     const notes = startupUnjudged({ unjudgedBecause: { interaction: null, startup: 'no-current-sample' } }).notes.join(' ')
-    expect(notes).toContain('no startup record for this session')
+    expect(notes).toContain('no usable startup measurement')
     expect(notes).not.toContain('still building')
+    expect(notes).not.toContain('recording may be off')
   })
 })
 
