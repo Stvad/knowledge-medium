@@ -192,13 +192,14 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     return () => { alive = false }
   }, [repo, ws, seq, context])
 
-  // The dialog is pinned to the workspace it opened on, but a fresh analysis
-  // reads AMBIENT state — `repo.isReadOnly` describes whichever workspace is
-  // active now. Re-analyzing a pinned workspace from inside another would
-  // report its blocker as the active one's: an editable workspace shown as
-  // recording-disabled, or a read-only one shown as fine.
   const runActive = run !== null
   const refreshing = refreshingFor === context
+  // `repo.isReadOnly` follows whichever workspace is ACTIVE; this dialog is
+  // pinned to the one it opened on. Once those diverge, anything read off the
+  // Repo describes the wrong workspace — a blocker calling an editable
+  // workspace recording-disabled, or a re-analysis publishing the active
+  // workspace's state under the pinned one's name. Unknown is the honest
+  // answer, and everything below reads this rather than deciding again.
   const stale = !ws || ws !== activePin
   // The monitor's own toggle can go off while this dialog stays mounted in the
   // shared DialogHost. Nothing could publish then, so the button would spin and
@@ -209,9 +210,6 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   // re-renders a reader whose snapshot changed, and with nothing published that
   // snapshot is null on both sides of a teardown.
   const monitorOff = !stale && !runActive
-  /** Live, and only while this dialog is still ON its workspace: `readOnly`
-   *  follows whichever workspace is ACTIVE, and everything here describes the
-   *  pinned one. Unknown is the honest answer once those diverge. */
   const blockedBy = stale ? null : recordingBlockedBy({ isReadOnly: readOnly })
 
   const refresh = async () => {
@@ -258,12 +256,6 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
             (() => {
               // The same verdict the status chip renders — neither surface
               // decides for itself what an empty regression list means.
-              // Only while this dialog is still ON its workspace. `readOnly`
-              // follows whichever workspace is ACTIVE, and the verdict beside
-              // it describes the pinned one — so once those diverge the blocker
-              // would claim recording is disabled for a workspace that is fine,
-              // or stay silent about one that is not. Unknown is the honest
-              // answer, and the "switched workspace" line above says why.
               const verdict = summarize(analysis, { blockedBy })
               return (
                 <>

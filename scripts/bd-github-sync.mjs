@@ -1454,11 +1454,10 @@ if (isMainModule(import.meta.url)) {
     } catch (e) {
       console.error(`bd-github-sync: failed — ${e.message ?? e}`)
       // `exitCode`, never `exit()`: a failed push may still have minted issues,
-      // and the km→#N mappings printed above ARE the product of this run. On a
-      // piped stdout Linux drops whatever is still queued when `exit()` is
-      // called — measured at ~98 of 200 lines under CI load, with the tail
-      // missing and stderr intact. Nothing holds the loop open here (spawnSync
-      // adds no handles), so the process still ends on its own.
+      // and the km→#N mappings printed above are this run's only record of
+      // them, but `exit()` drops whatever is still queued on a piped stdout.
+      // Nothing holds the loop open here (spawnSync adds no handles), so the
+      // process still ends promptly.
       process.exitCode = 1
     }
   }
