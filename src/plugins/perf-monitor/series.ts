@@ -24,8 +24,9 @@ import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 export const MIN_BASELINE_SESSIONS = 5
 
 /** How much worse than baseline counts as a regression. Deliberately coarse:
- *  this alarm exists to catch the 4x and the 140x, and a tighter ratio buys
- *  false positives from session heterogeneity rather than earlier warning. */
+ *  this alarm is for slowdowns large enough that a person notices, and a
+ *  tighter ratio buys false positives from session heterogeneity rather than
+ *  earlier warning. */
 const REGRESSION_RATIO = 2
 
 /** Below this, a query's p95 is not worth alarming on however much it grew —

@@ -72,7 +72,14 @@ const isAbsentOrString = (v: unknown): boolean => v === undefined || typeof v ==
 /** Marks stay OPTIONAL — a phase the session never reached is absent by design
  *  — but a mark that is PRESENT has to be a finite number. The comparison
  *  subtracts them, and a NaN takes neither the steady nor the regressed branch,
- *  so a single hand-edited row could publish `NaN× slower than baseline`. */
+ *  so a single hand-edited row could publish `NaN× slower than baseline`.
+ *
+ *  ORDERED, too, when both marks of the compared pair are present. Paint cannot
+ *  precede repo-ready, and a row saying it does yields a negative bootstrap gap
+ *  — which is not merely a nonsense number in the dialog: a negative median
+ *  falls under the comparison's absolute floor and is reported STEADY, so
+ *  reversed rows contribute to a clean bill of health. Finiteness alone does not
+ *  catch that, because both values are perfectly finite. */
 export const isUsableStartupRecord = (r: {
   timeOriginMs?: unknown
   repoReadyMs?: unknown
@@ -84,7 +91,12 @@ export const isUsableStartupRecord = (r: {
   Number.isFinite(r.timeOriginMs) &&
   isAbsentOrFinite(r.repoReadyMs) &&
   isAbsentOrFinite(r.firstContentPaintMs) &&
-  isAbsentOrFinite(r.interactiveMs)
+  isAbsentOrFinite(r.interactiveMs) &&
+  // Only the pair the comparison SUBTRACTS. `interactiveMs` is stored for
+  // someone reading a session by hand and no metric is derived from it, so a
+  // rule about its ordering would be weight with no consumer.
+  (typeof r.repoReadyMs !== 'number' || typeof r.firstContentPaintMs !== 'number' ||
+    r.firstContentPaintMs >= r.repoReadyMs)
 
 /** Sessions of history retained per comparison. Enough for the median to be
  *  stable across session heterogeneity, small enough that the baseline still

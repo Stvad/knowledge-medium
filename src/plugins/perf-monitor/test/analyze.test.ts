@@ -479,9 +479,10 @@ describe('awaitingSample', () => {
     expect(awaitingSample([noSample], 'no-current-sample')).toBe(true)
   })
 
-  // Waiting cannot supply history, so a series short of it is not awaiting a
-  // SAMPLE — it is waiting for sessions to accumulate, which the ordinary
-  // cadence covers.
+  // A series short of history is not awaiting a SAMPLE: what it needs is more
+  // completed sessions, which do accumulate — this client's later sessions, and
+  // another tab's — but on nobody's schedule. Coming back in a minute cannot
+  // produce one, so it takes the ordinary cadence rather than the fast recheck.
   it('does not count thin history', () => {
     expect(awaitingSample([shortHistory], 'history-short')).toBe(false)
   })

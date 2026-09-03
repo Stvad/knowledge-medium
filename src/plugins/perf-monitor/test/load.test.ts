@@ -222,6 +222,24 @@ describe('loadRecords', () => {
     expect(isUsableStartupRecord({ timeOriginMs: NaN })).toBe(false)
   })
 
+  // Finiteness does not catch a REVERSED pair — both values are perfectly
+  // finite — and the consequence is worse than a nonsense number in the dialog:
+  // the negative gap falls under the comparison's absolute floor, so it is
+  // reported STEADY and a corrupt row contributes to a clean bill of health.
+  it('rejects a startup record whose paint mark precedes repo-ready', () => {
+    expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 900, firstContentPaintMs: 400 }))
+      .toBe(false)
+    // The ordinary shape, and the degenerate-but-possible equal one.
+    expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 400, firstContentPaintMs: 900 }))
+      .toBe(true)
+    expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 400, firstContentPaintMs: 400 }))
+      .toBe(true)
+    // Only when BOTH are present: a mark the session never reached is absent by
+    // design, and one of the two alone is not an ordering claim.
+    expect(isUsableStartupRecord({ timeOriginMs: 1, firstContentPaintMs: 400 })).toBe(true)
+    expect(isUsableStartupRecord({ timeOriginMs: 1, repoReadyMs: 900 })).toBe(true)
+  })
+
   // These are the clauses whose absence is silent-but-visible: the record is a
   // hand-inspectable blob, so a wrong type does not produce a wrong number, it
   // produces a NaN verdict on the chip or a throw inside the dialog's render.
