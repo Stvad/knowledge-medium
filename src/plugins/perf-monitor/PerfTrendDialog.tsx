@@ -25,7 +25,7 @@ import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords, rowTime } from './load
 import { bootstrapGapMs, invalidationsPerWrite, round2 } from './series.js'
 import { summarize } from './verdict.js'
 import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
-import { refreshPerfAnalysis } from './schedule.js'
+import { runPerfAnalysisNow } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
 import { monitorRunFor, subscribeMonitorRun } from './monitorRun.js'
 
@@ -112,11 +112,6 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
    *  workspace, and the monitor run. Everything asynchronous here is tagged
    *  with the context it was started in, and anything carrying a different one
    *  is simply not shown.
-   *
-   *  This replaces three separate mechanisms that asked the same question and
-   *  could disagree — a load token, a refresh identity triple, and a
-   *  repo/workspace tag on the loaded rows. A refresh used to survive a monitor
-   *  toggle that the rows did not.
    *
    *  Compared during RENDER, so a context change hides superseded results in
    *  the same commit. A token bumped from an effect is one commit late, which
@@ -211,6 +206,10 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   // re-renders a reader whose snapshot changed, and with nothing published that
   // snapshot is null on both sides of a teardown.
   const monitorOff = !stale && !runActive
+  /** Live, and only while this dialog is still ON its workspace: `readOnly`
+   *  follows whichever workspace is ACTIVE, and everything here describes the
+   *  pinned one. Unknown is the honest answer once those diverge. */
+  const blockedBy = stale ? null : recordingBlockedBy({ isReadOnly: readOnly })
 
   const refresh = async () => {
     // Re-READ, not the render's snapshot: a click lands after a render, and the
@@ -226,7 +225,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     const mine = context
     setRefreshingFor(mine)
     try {
-      await refreshPerfAnalysis(repo, ws)
+      await runPerfAnalysisNow(repo, ws)
       if (!alive()) return
       await loadSeries(alive)
     } catch (e) {
@@ -266,9 +265,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
               // would claim recording is disabled for a workspace that is fine,
               // or stay silent about one that is not. Unknown is the honest
               // answer, and the "switched workspace" line above says why.
-              const verdict = summarize(analysis, {
-                blockedBy: stale ? null : recordingBlockedBy({ isReadOnly: readOnly }),
-              })
+              const verdict = summarize(analysis, { blockedBy })
               return (
                 <>
                   <p className={verdict.kind === 'clean' ? undefined : 'text-muted-foreground'}>
@@ -354,7 +351,11 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : interaction.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No interaction records yet — the first lands about a minute into a session.
+              {blockedBy === null
+                // Blocked, and the verdict above says so — promising a record a
+                // minute from now would contradict it.
+                ? 'No interaction records yet — the first lands about a minute into a session.'
+                : 'No interaction records on this device.'}
             </p>
           ) : (
             <div className="overflow-x-auto">

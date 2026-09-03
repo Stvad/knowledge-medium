@@ -57,7 +57,7 @@ const mocks = vi.hoisted(() => {
 })
 
 vi.mock('@/context/repo.tsx', () => ({ useRepo: () => mocks.repo }))
-vi.mock('../schedule.ts', () => ({ refreshPerfAnalysis: mocks.runNow }))
+vi.mock('../schedule.ts', () => ({ runPerfAnalysisNow: mocks.runNow }))
 vi.mock('@/utils/toast.js', () => ({ showError: vi.fn(), showProgress: vi.fn() }))
 
 afterEach(() => {
@@ -210,6 +210,19 @@ describe('PerfTrendDialog tables', () => {
 
     await waitFor(() => expect(screen.getByText(when(booted))).toBeInTheDocument())
     expect(screen.queryByText(when(landed))).toBeNull()
+  })
+
+  // The verdict beside this table says recording is disabled; a table promising
+  // the first record a minute from now contradicts it. Waits on the POSITIVE
+  // text first — an absence assertion on a table that is still LOADING settles
+  // on the first tick and holds however the branch is written.
+  it('does not promise a record a minute away while recording is blocked', async () => {
+    repo.setReadOnly(true)
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+
+    await waitFor(() =>
+      expect(screen.getByText(/no interaction records on this device/i)).toBeInTheDocument())
+    expect(screen.queryByText(/lands about a minute/i)).toBeNull()
   })
 
   // The empty state has to be reachable too, or the assertion above proves only

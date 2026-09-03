@@ -32,7 +32,11 @@ const job = cadencedIdleJob({
   label: 'perf-monitor',
 })
 
-/** Runs now, publishes, returns — used by the effect and the trend view's manual refresh; throws on failure so the caller can surface it. */
+/** Sets the running loop's cadence from an accepted verdict. Null while no loop is running. */
+let setCadence: ((analysis: PerfComparison) => void) | null = null
+
+/** Runs now, publishes, and — if the store took it — sets the running loop's cadence from it. The ONE entry point: the loop and the trend view's
+ *  manual refresh reach for the same function, so neither can set the cadence on terms the other doesn't. Throws on failure, for the caller to surface. */
 export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
   // `run` and the counter span are captured BEFORE the awaits — ambient global state
   // can move under the read. `run` is stamped on the analysis (not read back at the end)
@@ -43,20 +47,9 @@ export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
   // ACCEPTED = the store holds it, the only claim a caller can act on — the store reports
   // its own answer (stale context / ended or foreign run / superseded) rather than this re-deriving it and drifting.
   const accepted = contextHolds(ctx, repo) && publishPerfAnalysis(analysis)
-  return { analysis, accepted }
-}
-
-/** The running loop's re-arm hook, set while the loop is active, so an outside verdict (a manual refresh) resets a delay chosen before it existed.
- *  Origin is decided by WHICH FUNCTION the caller reached for (loop → `runPerfAnalysisNow`, everyone else → `refreshPerfAnalysis`), not by comparing
- *  values after the fact: `publishPerfAnalysis` notifies synchronously, so by the time of comparison even the loop's own pass would read as external. */
-let rearmRunningLoop: ((analysis: PerfComparison) => void) | null = null
-
-/** Runs an analysis on someone's behalf so the scheduled loop's cadence follows it too. */
-export const refreshPerfAnalysis = async (repo: Repo, workspaceId: string) => {
-  const result = await runPerfAnalysisNow(repo, workspaceId)
   // Only an ACCEPTED verdict sets the cadence — a refused one describes a span or run that's gone.
-  if (result.accepted) rearmRunningLoop?.(result.analysis)
-  return result
+  if (accepted) setCadence?.(analysis)
+  return { analysis, accepted }
 }
 
 export const perfAnalysisEffect: AppEffect = {
@@ -81,16 +74,17 @@ export const perfAnalysisEffect: AppEffect = {
     }
     const loop = job.start(
       async () => {
-        const { analysis, accepted } = await runPerfAnalysisNow(repo, workspaceId)
+        // The cadence is set by `runPerfAnalysisNow` itself, not by what this returns: a refresh that published while this pass was in flight has
+        // already re-armed, and the job discards a superseded pass's delay — which would drop the cadence of the verdict the store just accepted.
+        // Re-arming from inside the run still leaves ONE chain: it supersedes this pass, so the job arms no successor of its own.
+        const { accepted } = await runPerfAnalysisNow(repo, workspaceId)
         // A refused result describes a gone span, so it says nothing about what the CURRENT one awaits — come back soon instead of adopting it.
         if (!accepted) return RECHECK_MS
-        // ACCEPTED: a manual refresh may have already re-armed while this pass was in flight, so this delay yields to that (seconds-older) verdict.
-        return cadenceFor(analysis)
       },
       // A throw produced no verdict — retry soon rather than on the full cadence, or a transient DB failure silences the monitor for ten minutes.
       { onFailureDelayMs: RECHECK_MS },
     )
-    rearmRunningLoop = (analysis) => { loop.rearmIn(cadenceFor(analysis)) }
+    setCadence = (analysis) => { loop.rearmIn(cadenceFor(analysis)) }
     // A reset opens a fresh span the loop never hears about — left on the ordinary cadence it'd leave the chip empty, so back off afresh instead.
     const stopWatchingReset = repo.onMetricsReset(() => {
       waits = 0
@@ -101,7 +95,7 @@ export const perfAnalysisEffect: AppEffect = {
       // stopping the loop) is what prevents that from mattering — nothing in flight or issued while off can publish, and nothing can read past it.
       endMonitorRun(run)
       stopWatchingReset()
-      rearmRunningLoop = null
+      setCadence = null
       clearPerfAnalyses()
       loop.stop()
     }
