@@ -23,11 +23,11 @@ const RECENT_WINDOW = 3
 /** Resolves needed before a query's p95 is treated as a measurement. */
 const MIN_CALLS = 20
 
-/** Sessions of history the interaction comparison needs before it returns anything: baseline plus what current-window smoothing consumes. */
-export const MIN_INTERACTION_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW - 1
-
-/** Same, for startup — its current side is drawn entirely from stored records, so a full window is consumed rather than a window less one. */
-export const MIN_STARTUP_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW
+/** STORED sessions either comparison needs before it returns anything: the
+ *  baseline, plus what current-window smoothing consumes on top of this
+ *  session's own sample. One number, because both comparisons put this session
+ *  on the recent side and take the rest from history. */
+export const MIN_HISTORY_SESSIONS = MIN_BASELINE_SESSIONS + RECENT_WINDOW - 1
 
 /** `insufficient` stays distinct from `steady` — collapsing "nothing judged"
  *  into "fine" would report a clean bill of health for a run that never happened. */
@@ -205,25 +205,26 @@ export const bootstrapGapMs = (r: StartupRecordData): number | null =>
     ? r.firstContentPaintMs - r.repoReadyMs
     : null
 
-/** `series` is this device's startup records, NEWEST FIRST — the shape
- *  `loadRecords` returns. Takes the whole series since both sides are windows over it. */
+/** `series` is this device's PAST startup records, newest first — the window
+ *  `loadSeriesWithCurrent` returns, which already excludes this boot's own row. */
 export const startupRegression = (
   series: readonly StartupRecordData[],
   current: StartupRecordData | null,
 ): TrendResult => {
+  const now = current === null ? null : bootstrapGapMs(current)
   // PRESENT AND USABLE, not merely present — a boot hidden until first paint
   // records via the fallback, leaving `bootstrapGapMs` null. An incomplete
   // row is immutable; an absent one may still be written late — neither means "still building".
-  if (!current || bootstrapGapMs(current) === null) return NO_CURRENT_SAMPLE
-  // `current` is a GATE, not a data point — proves a sample for THIS session
-  // exists, so it's excluded from `series` to avoid inflating the baseline count.
-  // The window itself stays FIXED at the newest boots and need not contain
-  // `current`: later boots of the same app are still the freshest evidence about startup.
+  if (now === null) return NO_CURRENT_SAMPLE
+  // Same shape as the interaction comparison: THIS session on the recent side,
+  // and never in the baseline it is judged against. As a gate alone it would
+  // report on the boots BEFORE this one — a slowdown starting now stays
+  // invisible until enough later sessions have been recorded.
   const gaps = (rs: readonly StartupRecordData[]) =>
     rs.map(bootstrapGapMs).filter((v): v is number => v !== null)
   return trendRegression(
     { metric: 'startup:bootstrapGapMs', label: 'repo-ready to first paint', unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
-    gaps(series.slice(0, RECENT_WINDOW)),
-    gaps(series.slice(RECENT_WINDOW)),
+    [now, ...gaps(series.slice(0, RECENT_WINDOW - 1))],
+    gaps(baselineWindow(series)),
   )
 }

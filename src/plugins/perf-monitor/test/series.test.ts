@@ -15,8 +15,7 @@ import {
   queryRegressions,
   startupRegression,
   MIN_BASELINE_SESSIONS,
-  MIN_INTERACTION_HISTORY,
-  MIN_STARTUP_HISTORY,
+  MIN_HISTORY_SESSIONS,
   regressionsIn,
   type TrendResult,
 } from '../series'
@@ -143,8 +142,8 @@ describe('queryRegressions', () => {
   it('starts comparing at exactly the advertised history length', () => {
     const slow = () => sample({ queries: { 'backlinks.forBlock': q(80) } })
     const at = (n: number) => regs(queryRegressions(slow(), sinceRegressed(slow, sample, n - 1)))
-    expect(at(MIN_INTERACTION_HISTORY - 1)).toEqual([])
-    expect(at(MIN_INTERACTION_HISTORY)).toHaveLength(1)
+    expect(at(MIN_HISTORY_SESSIONS - 1)).toEqual([])
+    expect(at(MIN_HISTORY_SESSIONS)).toHaveLength(1)
   })
 
   it('orders the worst ratio first', () => {
@@ -208,17 +207,15 @@ describe('startupRegression', () => {
     expect(bootstrapGapMs({ recordedAt: 0 } as StartupRecordData)).toBeNull()
   })
 
-  const held = (n: number) => Array.from({ length: n }, (_, i) => boot(1000, 1320 + i * 10))
+  /** A boot with this bootstrap gap. */
+  const gap = (ms: number): StartupRecordData => boot(1000, 1000 + ms)
 
-  /** A history whose recent window is a step above its baseline, so a
-   *  comparison fires once there are enough samples. */
-  const stepped = (n: number) =>
-    [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(n - 3)]
+  const held = (n: number) => Array.from({ length: n }, (_, i) => gap(320 + i * 10))
 
-  /** What the loader hands the comparison: this boot's row, found wherever it
-   *  sits. Separate from the series on purpose — see `startupRegression`. */
-  const currentOf = (series: StartupRecordData[], timeOrigin = THIS_BOOT) =>
-    series.find((r) => r.timeOriginMs === timeOrigin) ?? null
+  /** Past boots whose newest are a step above the rest, so a comparison fires
+   *  once there are enough of them. `series` never contains THIS boot — the
+   *  loader hands that over separately. */
+  const stepped = (n: number) => [gap(5100), gap(4900), ...held(n - 2)]
 
   // A boot that stayed hidden until after first paint records through the
   // fallback: the row exists, carries this boot's `timeOriginMs`, and has no
@@ -227,42 +224,45 @@ describe('startupRegression', () => {
   // that cannot come.
   it('reports a current row with no usable gap as an absent sample', () => {
     const incomplete = { recordedAt: 0, timeOriginMs: THIS_BOOT } as StartupRecordData
-    const result = startupRegression([incomplete, ...held(11)], incomplete)
-    expect(result).toEqual({ status: 'insufficient', reason: 'no-current-sample' })
+    expect(startupRegression(held(11), incomplete))
+      .toEqual({ status: 'insufficient', reason: 'no-current-sample' })
   })
 
   // ...as distinct from a series that genuinely has too little history, which
   // waiting DOES fix.
   it('still reports thin history as thin history', () => {
-    expect(startupRegression([boot(1000, 1320)], currentOf([boot(1000, 1320)])))
+    expect(startupRegression([gap(320)], gap(330)))
       .toEqual({ status: 'insufficient', reason: 'history' })
   })
 
-  // `current` is a GATE, not a data point. Locating this boot is the loader's
-  // job now (it can sit past the history cap), so it arrives separately — and
-  // if it were folded back into the series it would land in the very history it
-  // is compared against, since everything past the recent window is baseline.
+  // This boot belongs on the RECENT side and nowhere near the baseline. Counted
+  // as baseline it would top up the very history it is judged against; used
+  // only as a gate it would report on the boots BEFORE it, which is the next
+  // test.
   it('does not let this boot top up its own baseline', () => {
-    const thin = stepped(MIN_STARTUP_HISTORY - 1)
-    // Precondition: this history is one sample short of a verdict.
-    expect(reg(startupRegression(thin, currentOf(thin)))).toBeNull()
+    // Two recent boots and one baseline short of a verdict.
+    const thin = stepped(MIN_HISTORY_SESSIONS - 1)
+    expect(reg(startupRegression(thin, gap(5000)))).toBeNull()
+    expect(startupRegression(thin, gap(5000)))
+      .toEqual({ status: 'insufficient', reason: 'history' })
+  })
 
-    // A current row the series does NOT contain — the shape the loader returns
-    // when the cap buried it. It must gate the comparison, not lengthen it.
-    const buried = boot(1000, 1400, THIS_BOOT)
-
-    expect(reg(startupRegression(thin, buried))).toBeNull()
+  // A slowdown that starts with THIS boot: two of the three most recent boots
+  // are slow, and one of them is the one being judged. Read as a gate alone the
+  // recent window is the three boots before this one — one slow, two clean —
+  // and the regression stays invisible until enough later sessions record it.
+  it('judges this boot, not only the ones before it', () => {
+    expect(reg(startupRegression([gap(6000), gap(330), ...held(8)], gap(6100))))
+      .toMatchObject({ metric: 'startup:bootstrapGapMs' })
   })
 
   it('flags the step in the bootstrap gap once it persists', () => {
-    const series = [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(8)]
-    expect(reg(startupRegression(series, currentOf(series)))).toMatchObject({
-      metric: 'startup:bootstrapGapMs', current: 5000,
-    })
+    expect(reg(startupRegression([gap(5100), gap(4900), ...held(8)], gap(5000))))
+      .toMatchObject({ metric: 'startup:bootstrapGapMs', current: 5000 })
   })
 
   it('stays quiet while the gap holds', () => {
-    expect(reg(startupRegression(held(11), currentOf(held(11))))).toBeNull()
+    expect(reg(startupRegression(held(11), gap(325)))).toBeNull()
   })
 
   // The newest stored records are not necessarily from THIS boot: the write can
@@ -270,19 +270,18 @@ describe('startupRegression', () => {
   // simply run before it. Comparing without one republishes an earlier page
   // load's verdict as though it described this one.
   it('will not judge startup without a record from this boot', () => {
-    const series = [boot(1000, 6000), boot(1000, 6100), boot(1000, 5900), ...held(8)]
-    expect(startupRegression(series, currentOf(series)).status).toBe('regressed')
-    expect(startupRegression(series, currentOf(series, THIS_BOOT + 1)).status).toBe('insufficient')
+    const series = [gap(5100), gap(4900), ...held(8)]
+    expect(startupRegression(series, gap(5000)).status).toBe('regressed')
+    expect(startupRegression(series, null).status).toBe('insufficient')
   })
 
   it('starts comparing at exactly the advertised history length', () => {
-    expect(reg(startupRegression(stepped(MIN_STARTUP_HISTORY - 1), currentOf(stepped(MIN_STARTUP_HISTORY - 1))))).toBeNull()
-    expect(reg(startupRegression(stepped(MIN_STARTUP_HISTORY), currentOf(stepped(MIN_STARTUP_HISTORY))))).not.toBeNull()
+    expect(reg(startupRegression(stepped(MIN_HISTORY_SESSIONS - 1), gap(5000)))).toBeNull()
+    expect(reg(startupRegression(stepped(MIN_HISTORY_SESSIONS), gap(5000)))).not.toBeNull()
   })
 
   it('does not fire on a single anomalous boot', () => {
-    const series = [boot(1000, 9000), ...held(10)]
-    expect(reg(startupRegression(series, currentOf(series)))).toBeNull()
+    expect(reg(startupRegression(held(10), gap(9000)))).toBeNull()
   })
 })
 
