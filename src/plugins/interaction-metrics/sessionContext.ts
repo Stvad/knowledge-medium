@@ -176,6 +176,29 @@ export const pageRecordStartedAt = (repo: object, workspaceId: string): number |
   return r?.workspaceId === workspaceId ? r.startedAt : null
 }
 
+/** Why recording is impossible here, or null.
+ *
+ *  Order matters only for which blocker is REPORTED; both are disqualifying.
+ *
+ *  Without a persistent client id, per-client history is written where the next
+ *  session will never look for it — unreadable groups accumulating in the graph
+ *  forever. In a read-only workspace the Automation scope admits the write
+ *  locally and the server's RLS then refuses the upload, parking it in the
+ *  rejection quarantine the status chip reports to the user.
+ *
+ *  Exported because it is a LIVE fact: `repo.isReadOnly` follows a
+ *  server-pushed role change without anything else moving, so a reader that
+ *  stored the answer would keep reporting the world as it was.
+ */
+export const recordingBlockedBy = (
+  repo: Pick<Repo, 'isReadOnly'>,
+): RecordingBlocker | null =>
+  !isClientIdPersistent()
+    ? 'no-persistent-client'
+    : repo.isReadOnly
+      ? 'read-only-workspace'
+      : null
+
 export const metricsSessionContext = (
   repo: SessionRepoFacts,
   workspaceId: string,
@@ -188,11 +211,7 @@ export const metricsSessionContext = (
   // graph forever. In a read-only workspace the Automation scope admits the
   // write locally and the server's RLS then refuses the upload, parking it in
   // the rejection quarantine the status chip reports to the user.
-  const blockedBy: RecordingBlocker | null = !isClientIdPersistent()
-    ? 'no-persistent-client'
-    : repo.isReadOnly
-      ? 'read-only-workspace'
-      : null
+  const blockedBy = recordingBlockedBy(repo)
   return {
     canRecord: blockedBy === null,
     blockedBy,
