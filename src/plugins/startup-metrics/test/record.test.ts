@@ -18,6 +18,7 @@ import {
   buildStartupRecord,
   collectStartupMetricsEffect,
   resetStartupMetricsRecorded,
+  whenBootRecordSettled,
   SETTLE_FALLBACK_MS,
   startupMetricsUIStateType,
   startupRecordProp,
@@ -327,6 +328,9 @@ describe('collectStartupMetricsEffect', () => {
     // idle-frame fallback (setTimeout(0)), marks interactive, and writes.
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
     expect(getStartupTimeline().marks.interactive).toBeDefined()
+    // A reader fences its first sample on this; a record that landed must not
+    // leave it waiting out the timeout.
+    await expect(whenBootRecordSettled(60_000)).resolves.toBeUndefined()
   })
 
   // Asserted on the RECORD, not on a count or an elapsed window. Counting cannot
@@ -460,3 +464,36 @@ describe('collectStartupMetricsEffect', () => {
     }
   })
 })
+
+/**
+ * The settle signal a reader fences its first sample on.
+ *
+ * Sampling the startup series before this boot's record attempt is over cannot
+ * tell "not written yet" from "recorder switched off", and reports the latter.
+ */
+describe('whenBootRecordSettled', () => {
+  it('waits while a record attempt is still outstanding', async () => {
+    let settled = false
+    void whenBootRecordSettled(60_000).then(() => { settled = true })
+    await Promise.resolve()
+
+    expect(settled).toBe(false)
+  })
+
+  // A recorder that never runs — toggle off, or the page booted elsewhere —
+  // settles nothing, so the wait has to end on its own.
+  it('gives up after the timeout when nothing ever settles', async () => {
+    vi.useFakeTimers()
+    try {
+      let settled = false
+      void whenBootRecordSettled(5_000).then(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(5_001)
+      expect(settled).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+    // ...and having given up once, a later caller does not wait again.
+    await expect(whenBootRecordSettled(60_000)).resolves.toBeUndefined()
+  })
+})
+

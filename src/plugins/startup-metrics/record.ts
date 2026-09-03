@@ -189,7 +189,7 @@ export const SETTLE_FALLBACK_MS = 60_000
 
 /** Attempts at the write itself, and the gap between them. A decline is
  *  expected while a fresh device waits for its membership row to replicate. */
-const WRITE_ATTEMPTS = 3
+export const WRITE_ATTEMPTS = 3
 export const WRITE_RETRY_MS = 30_000
 
 // Once per page session: boot happens once, and the marks are boot-relative, so
@@ -205,7 +205,41 @@ let recording = false
 export const resetStartupMetricsRecorded = (): void => {
   recorded = false
   recording = false
+  armBootRecordSettled()
   resetPageOrigin()
+}
+
+/** Resolves once this boot's record attempt is OVER — written, or out of
+ *  retries, or torn down. A reader sampling the startup series before then sees
+ *  a boot with no record and cannot tell that from a recorder switched off, so
+ *  it reports a permanent-sounding state over a row that lands moments later.
+ *
+ *  Never rejects; resolves at most once per boot. */
+let bootSettled = false
+let settleBootRecord: () => void = () => {}
+let bootRecordSettled: Promise<void>
+const armBootRecordSettled = (): void => {
+  bootSettled = false
+  bootRecordSettled = new Promise<void>((resolve) => {
+    settleBootRecord = () => { bootSettled = true; resolve() }
+  })
+}
+armBootRecordSettled()
+
+/** Awaits the settle, giving up after `timeoutMs`.
+ *
+ *  The timeout is the answer for a recorder that never runs at all — its toggle
+ *  is off, or the page booted somewhere else — where nothing would ever settle.
+ *  Giving up MARKS it settled, so a caller on a cadence pays that wait once
+ *  rather than every pass. */
+export const whenBootRecordSettled = (timeoutMs: number): Promise<void> => {
+  if (bootSettled) return Promise.resolve()
+  return Promise.race([
+    bootRecordSettled,
+    new Promise<void>((resolve) => {
+      setTimeout(() => { bootSettled = true; resolve() }, timeoutMs)
+    }),
+  ])
 }
 
 /**
@@ -286,7 +320,7 @@ export const collectStartupMetricsEffect: AppEffect = {
         // so it passes with this line deleted. Reasoned, not measured.
         if (disposed || recorded || recording) return
         const retryLater = (): void => {
-          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) return
+          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) { settleBootRecord(); return }
           const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
           cleanups.push(() => clearTimeout(retry))
         }
@@ -294,7 +328,7 @@ export const collectStartupMetricsEffect: AppEffect = {
         void writeStartupRecord(repo, workspaceId)
           .then((id) => {
             recording = false
-            if (id !== null) { recorded = true; return }
+            if (id !== null) { recorded = true; settleBootRecord(); return }
             retryLater()
           })
           // A rejection is as transient as a decline — a failed write is the
