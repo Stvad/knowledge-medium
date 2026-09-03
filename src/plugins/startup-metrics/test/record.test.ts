@@ -119,7 +119,7 @@ describe('writeStartupRecord', () => {
     })
   })
 
-  it('groups records under a per-client block (child of the root, titled with the device label)', async () => {
+  it('groups records under a per-client block with nothing to index', async () => {
     await writeStartupRecord(repo, WS)
     const { root, group } = await resolveGroup()
     // The group hangs off the per-user root, not the record directly.
@@ -128,9 +128,12 @@ describe('writeStartupRecord', () => {
       [group],
     )
     expect(groupRow?.parent_id).toBe(root)
-    // Title carries the short client-id suffix so peers on the same platform
-    // string stay distinguishable.
-    expect(groupRow?.content).toContain(getClientId().slice(0, 8))
+    // Identified by its derived id, never a title: content is FTS-indexed and
+    // listed by every block-discovery surface. Asserted as EXACTLY empty — the
+    // previous version checked that the content CONTAINED the client-id prefix,
+    // which a bare client-UUID title also satisfies, so it went on passing when
+    // the device label was replaced by the UUID and the row stayed indexed.
+    expect(groupRow?.content).toBe('')
   })
 
   it('two distinct clients land under two distinct group blocks', async () => {
