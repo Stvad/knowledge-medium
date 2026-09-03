@@ -53,6 +53,11 @@ describe('comment-hygiene ESLint rules', () => {
         errors: [{ messageId: 'nothing' }],
       },
       {
+        // A tag named in prose is not a self-standing block.
+        code: `/** Parses text containing \`@typedef\`. */\n/** doc */\nexport const x = 1`,
+        errors: [{ messageId: 'shadowed' }],
+      },
+      {
         // A brace pair alone is not the JSX exemption.
         code: `function empty() { /** dangling */ }`,
         errors: [{ messageId: 'nothing' }],
@@ -78,6 +83,10 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `// what schedules the re-parse (round 7, P2)\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// see commit 429fd4b2\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// reviewer P2 asked for the guard\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
+      { code: `// see pull request #123\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
+      { code: `// review comment #3676752542 asked for this\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
+      // A directive for another rule is scanned like any comment.
+      { code: `// @ts-expect-error fixed in PR #123\nconst x: number = 'a'`, errors: [{ messageId: 'provenance' }] },
     ],
   })
 })
