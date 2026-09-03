@@ -54,7 +54,7 @@ const mocks = vi.hoisted(() => {
 })
 
 vi.mock('@/context/repo.tsx', () => ({ useRepo: () => mocks.repo }))
-vi.mock('../schedule.ts', () => ({ runPerfAnalysisNow: mocks.runNow }))
+vi.mock('../schedule.ts', () => ({ refreshPerfAnalysis: mocks.runNow }))
 vi.mock('@/utils/toast.js', () => ({ showError: vi.fn(), showProgress: vi.fn() }))
 
 afterEach(() => {

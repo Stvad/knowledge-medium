@@ -155,6 +155,8 @@ describe('a Repo swap', () => {
     activeWorkspaceId: 'ws-1',
     isReadOnly: false,
     metricsSpan: () => ({ epoch: 0, epochWorkspaceId: null }),
+    // The loop re-arms on a reset, so starting the effect needs the seam.
+    onMetricsReset: () => () => {},
   })
   const startFor = async (repo: object, workspaceId = 'ws-1') => {
     const stop = await perfAnalysisEffect.start({ repo, workspaceId } as Parameters<
@@ -162,6 +164,28 @@ describe('a Repo swap', () => {
     >[0])
     if (stop) stops.push(stop)
   }
+
+  // The loop subscribes to the reset seam so a fresh counter span gets a prompt
+  // look instead of waiting out a cadence chosen for the span that is gone.
+  // What is worth pinning is the DISPOSAL: a listener outliving its loop fires
+  // `rearmIn` on a stopped one every reset for the life of the page, and each
+  // effect restart adds another.
+  it('lets go of the reset seam when the loop stops', async () => {
+    const listeners = new Set<() => void>()
+    const repo = {
+      ...repoStub(),
+      onMetricsReset: (l: () => void) => { listeners.add(l); return () => listeners.delete(l) },
+    }
+
+    await startFor(repo)
+    // Precondition: it really did subscribe, so the assertion below is about
+    // teardown rather than about a subscription that never happened.
+    expect(listeners.size).toBe(1)
+
+    stops.pop()?.()
+
+    expect(listeners.size).toBe(0)
+  })
 
   it('drops the stale verdicts', async () => {
     const first = repoStub()
@@ -221,6 +245,8 @@ describe('a workspace change', () => {
     activeWorkspaceId,
     isReadOnly: false,
     metricsSpan: () => ({ epoch: 0, epochWorkspaceId: null }),
+    // The loop re-arms on a reset, so starting the effect needs the seam.
+    onMetricsReset: () => () => {},
   })
   const startFor = async (repo: object, workspaceId: string) => {
     const stop = await perfAnalysisEffect.start({ repo, workspaceId } as Parameters<
@@ -257,6 +283,8 @@ describe('the monitor being switched off', () => {
     activeWorkspaceId: 'ws-1',
     isReadOnly: false,
     metricsSpan: () => ({ epoch: 0, epochWorkspaceId: null }),
+    // The loop re-arms on a reset, so starting the effect needs the seam.
+    onMetricsReset: () => () => {},
   })
   const start = async (repo: object) =>
     perfAnalysisEffect.start({ repo, workspaceId: 'ws-1' } as Parameters<

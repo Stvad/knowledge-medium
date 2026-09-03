@@ -7,8 +7,8 @@ import type { Repo } from '@/data/repo'
 import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
-import { runPerfAnalysis } from './analyze.js'
-import { clearPerfAnalyses, getPerfAnalysisFor, publishPerfAnalysis, subscribePerfAnalysis } from './store.js'
+import { runPerfAnalysis, type PerfComparison } from './analyze.js'
+import { clearPerfAnalyses, publishPerfAnalysis } from './store.js'
 import { currentMonitorRun, endMonitorRun, hasMonitorRunFor, startMonitorRun } from './monitorRun.js'
 
 /** Wall clock between analyses. Long: the series it reads only gains a point
@@ -94,6 +94,33 @@ export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
   return { analysis, accepted }
 }
 
+/** The running loop's re-arm, while one is running.
+ *
+ *  A verdict produced OUTSIDE the loop answers the same question the loop's own
+ *  pass does, so the loop must not go on waiting out a delay it chose before
+ *  that verdict existed. Origin is decided by WHICH FUNCTION the caller
+ *  reached for — the loop calls `runPerfAnalysisNow`, everyone else calls
+ *  `refreshPerfAnalysis` — rather than compared after the fact.
+ *
+ *  That distinction used to be a seq check against a store subscription, and it
+ *  could not work: `publishPerfAnalysis` notifies synchronously from inside the
+ *  pass, so the loop's own publication reached the subscriber BEFORE the loop
+ *  had recorded the seq as its own. Every scheduled pass then re-armed as
+ *  though it were external — advancing the backoff twice and leaving two live
+ *  timers, which is how overlapping analyses start. */
+let rearmRunningLoop: ((analysis: PerfComparison) => void) | null = null
+
+/** Run an analysis on someone's behalf — the trend view's refresh — and let the
+ *  scheduled loop know, so a verdict a person asked for sets the cadence the
+ *  same way one the loop produced does. */
+export const refreshPerfAnalysis = async (repo: Repo, workspaceId: string) => {
+  const result = await runPerfAnalysisNow(repo, workspaceId)
+  // Only an ACCEPTED verdict: a refused one describes a span or a run that is
+  // gone, and it must not set the cadence here any more than it may in the loop.
+  if (result.accepted) rearmRunningLoop?.(result.analysis)
+  return result
+}
+
 export const perfAnalysisEffect: AppEffect = {
   id: 'perf-monitor.analyze',
   start: ({ repo, workspaceId }) => {
@@ -124,17 +151,13 @@ export const perfAnalysisEffect: AppEffect = {
     // gone, and letting it count would back off over a verdict that never
     // applied.
     let waits = 0
-    /** The last analysis this loop produced, so a publication from elsewhere
-     *  can be told apart from its own. */
-    let ownSeq = -1
     /** The cadence for a verdict, and the bookkeeping that goes with it —
-     *  applied identically whether the loop ran it or the dialog's refresh did,
-     *  so the two cannot disagree about how soon to look again. */
-    const cadenceFor = (analysis: { seq: number; awaitingLiveSample: { interaction: boolean; startup: boolean } }): number => {
+     *  applied identically whether the loop ran it or a refresh did, so the two
+     *  cannot disagree about how soon to look again. */
+    const cadenceFor = (analysis: PerfComparison): number => {
       const { interaction, startup } = analysis.awaitingLiveSample
       const delay = nextAnalysisDelayMs(analysis.awaitingLiveSample, waits)
       waits = interaction || startup ? waits + 1 : 0
-      ownSeq = analysis.seq
       return delay
     }
     const loop = job.start(
@@ -152,18 +175,16 @@ export const perfAnalysisEffect: AppEffect = {
       // transient DB failure, which is the state it is least useful in.
       { onFailureDelayMs: RECHECK_MS },
     )
-    // The trend dialog's refresh runs OUTSIDE this loop, so a verdict it
-    // publishes leaves the loop sitting on a delay computed before that verdict
-    // existed — a manual refresh revealing a missing sample would then be
-    // followed by the full cadence, exactly when a prompt second look is what
-    // was asked for. Re-arm on the same terms the loop's own run uses.
-    const stopWatching = subscribePerfAnalysis(() => {
-      const analysis = getPerfAnalysisFor(repo, workspaceId)
-      // Only what this loop did not produce, and only what is still readable —
-      // `getPerfAnalysisFor` re-checks the run and the counter span, so a
-      // verdict the store would refuse cannot set the cadence here either.
-      if (analysis === null || analysis.seq === ownSeq) return
-      loop.rearmIn(cadenceFor(analysis))
+    rearmRunningLoop = (analysis) => { loop.rearmIn(cadenceFor(analysis)) }
+    // A reset retires the counters every verdict rests on and opens a fresh
+    // span, which the readers already show as "no verdict". Nothing about that
+    // reaches the loop, so a pass that had settled on the ordinary cadence
+    // would leave the chip empty for the rest of it while a new span
+    // accumulates. Come back promptly instead, on a backoff starting over:
+    // this is a new situation, not a continuation of what we were waiting for.
+    const stopWatchingReset = repo.onMetricsReset(() => {
+      waits = 0
+      loop.rearmIn(RECHECK_MS)
     })
     return () => {
       // Teardown is not a pause. This effect goes away when the monitor's own
@@ -178,7 +199,8 @@ export const perfAnalysisEffect: AppEffect = {
       // clear is housekeeping on top — it frees the snapshots and tells
       // subscribers to re-read.
       endMonitorRun(run)
-      stopWatching()
+      stopWatchingReset()
+      rearmRunningLoop = null
       clearPerfAnalyses()
       loop.stop()
     }

@@ -25,7 +25,7 @@ import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords } from './load.js'
 import { bootstrapGapMs, invalidationsPerWrite, round2 } from './series.js'
 import { summarize } from './verdict.js'
 import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
-import { runPerfAnalysisNow } from './schedule.js'
+import { refreshPerfAnalysis } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
 import { hasMonitorRunFor, subscribeMonitorRun } from './monitorRun.js'
 
@@ -212,7 +212,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     const mine = { repo, workspaceId: ws }
     setRefreshingFor(mine)
     try {
-      await runPerfAnalysisNow(repo, ws)
+      await refreshPerfAnalysis(repo, ws)
       if (!alive()) return
       await loadSeries(alive)
     } catch (e) {

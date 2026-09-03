@@ -57,10 +57,15 @@ export const MIN_STARTUP_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW
  *  ran. Readiness is derived from these rather than from row counts, because a
  *  row that carries no usable sample is not history. */
 export type TrendResult =
-  /** `reason` separates the two ways a comparison can fail to run, because they
-   *  resolve differently: 'history' fills by waiting, 'no-current-sample' never
-   *  does — there is nothing to compare THIS session against, and telling the
-   *  user to wait is a promise that cannot be kept. */
+  /** `reason` separates the two ways a comparison can fail to run, because a
+   *  caller acts on them differently. 'history' fills by waiting: more sessions
+   *  are what it needs. 'no-current-sample' says THIS session has nothing to
+   *  compare, which is missing NOW and not necessarily forever — the
+   *  interaction counters are live and become judgeable the moment someone
+   *  edits, and a boot record can still be written by a recorder enabled late.
+   *  Whether waiting helps is the SERIES' business, not this type's; the
+   *  scheduler reads `awaitingLiveSample` and rechecks on a backoff rather than
+   *  treating either as final. */
   | { status: 'insufficient'; reason: 'history' | 'no-current-sample' }
   /** `baselineCount` is the number of stored sessions this comparison actually
    *  consumed, which is not the number of rows loaded: a session with no

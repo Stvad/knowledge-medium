@@ -3,10 +3,10 @@
  * The loop's cadence contract: the pass that computed the answer is the only
  * thing that sets the next delay.
  *
- * Both cases here were live bugs in the shape this replaced, where the delay
- * came from a separate callback reading state the run had written. A run that
- * refused its own result, or threw, wrote nothing — and the delay was then
- * chosen from whatever the previous pass had left behind.
+ * The cases that need saying, because a run that decides nothing still has to
+ * leave the loop somewhere sensible: one that refuses its own result returns a
+ * delay like any other, and one that THROWS has no return value to give one, so
+ * `onFailureDelayMs` answers for it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cadencedIdleJob } from '../cadencedIdleJob'
