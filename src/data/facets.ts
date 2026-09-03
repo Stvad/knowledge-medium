@@ -1,11 +1,6 @@
 /**
  * Data-layer facets — the bridge between the kernel + plugin
  * contributions and the `Repo` lifecycle (spec §6, §8).
- *
- * Stage 1.4 ships `mutatorsFacet` only. The remaining facets
- * (`queriesFacet`, `propertyEditorOverridesFacet`,
- * `postCommitProcessorsFacet`) land in stages 1.5+ as the matching
- * machinery comes online.
  */
 
 import { defineFacet, keyedMapFacet } from '@/facets/facet'
@@ -104,22 +99,6 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
     (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))
   )
 
-/**
- * A workspace-scoped, one-shot data backfill that runs through `repo.tx` — the
- * synced-table counterpart to a `LocalSchemaContribution.backfill`.
- *
- * A LocalSchema backfill writes via a raw `db.execute`, which leaves
- * `tx_context.source = NULL`: fine for local derived-index tables, but a write
- * to a *synced* table (blocks/workspaces/workspace_members) never fires the
- * upload trigger and silently never syncs (the daily-note:date bug; guarded by
- * `syncedTableWriteGuard`). A `WorkspaceBackfill` instead writes through
- * `repo.tx`, so its rows carry `source = 'user'` and actually upload — the
- * server, and every other client, converge.
- *
- * Completion is once per GRAPH, recorded through `BackfillCompletionClaim` —
- * not once per device. Deferred off the workspace-open critical path; see
- * `Repo.scheduleWorkspaceBackfills`.
- */
 /** Decides which device runs a migration, and records that it finished — in
  *  SYNCED data, so a repair that uploads happens once per GRAPH.
  *
@@ -182,6 +161,22 @@ export interface BackfillCompletionClaim {
  *  invisible at the call site. */
 export type WorkspaceBackfillTrigger = 'workspace-open' | 'operator'
 
+/**
+ * A workspace-scoped, one-shot data backfill that runs through `repo.tx` — the
+ * synced-table counterpart to a `LocalSchemaContribution.backfill`.
+ *
+ * A LocalSchema backfill writes via a raw `db.execute`, which leaves
+ * `tx_context.source = NULL`: fine for local derived-index tables, but a write
+ * to a *synced* table (blocks/workspaces/workspace_members) never fires the
+ * upload trigger and silently never syncs — guarded by `syncedTableWriteGuard`.
+ * A `WorkspaceBackfill` instead writes through `repo.tx`, so its rows carry
+ * `source = 'user'` and actually upload — the server, and every other client,
+ * converge.
+ *
+ * Completion is once per GRAPH, recorded through `BackfillCompletionClaim` —
+ * not once per device. Deferred off the workspace-open critical path; see
+ * `Repo.scheduleWorkspaceBackfills`.
+ */
 export interface WorkspaceBackfill {
   /** Stable id; doubles as the per-workspace completion-marker suffix. Change
    *  it to force a re-run on every workspace. */
@@ -254,10 +249,6 @@ const isDefinitionBlockProjector = (value: unknown): value is AnyDefinitionBlock
  *  escape); call-site dispatch (`repo.mutate.X`, `tx.run(m, args)`)
  *  recovers precise types via the `MutatorRegistry` augmentation. */
 export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.name)
-
-/** Future facets — declared empty for now so plugin authors can
- *  reference them at compile time without runtime breakage when no
- *  contributions exist. Wired up in stages 1.5+. */
 
 export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
 
@@ -458,34 +449,14 @@ export interface SearchSourceArgs {
  *  so a stale index copy can't shadow live data just because it scored
  *  higher.
  *
- *  This paragraph is the SPEC, not a description of the implementation.
- *  Decide it over the duplicate GROUP as a whole, never pairwise — a
- *  pairwise fold of "newest, else higher score" is non-associative, so the
- *  winner would depend on source registration order:
- *   - duplicates carrying a FINITE `userUpdatedAt` outrank every
- *     duplicate that does not. Among them the newest wins, ties broken by
- *     higher score, then by group order.
- *   - only when NO duplicate in the group carries one does the highest
- *     score win.
- *  Finite, not merely `typeof 'number'` — `NaN` passes typeof and then
- *  loses every comparison including against itself, which restores the
- *  order-dependence, and `Infinity` would win unconditionally.
+ *  Which duplicate's `block` payload survives is decided by
+ *  `freshestCandidatePayload` (`src/utils/linkTargetAutocomplete.ts`) — see
+ *  its doc for the rule and why it must see the whole group.
  *
- *  `BlockData.userUpdatedAt` is a required number, so a candidate without
- *  one is a bug in the contributing source; the merge point warns and
- *  keeps its score (ranking is unaffected) but will not display its copy
- *  of the block over a well-formed one. Letting one such candidate push
- *  its whole group onto the score fallback instead would let a single
- *  malformed contribution surface another source's STALE copy over live
- *  data — the failure this rule exists to prevent.
  *  A source that throws is logged and dropped so it can't take
  *  down another source's results — UNLESS every contributed source
  *  throws, in which case the merge point rethrows the first error
- *  rather than resolving to an empty result. Core registers its FTS
- *  content search under id `'core.content'` (`coreContentSearchSource`,
- *  wired in `kernelDataExtension.ts`) — with no other contributions,
- *  the merge point degenerates to exactly that source, so search
- *  behaves identically to before this facet existed. */
+ *  rather than resolving to an empty result. */
 export interface SearchSourceContribution {
   readonly id: string
   search: (repo: Repo, args: SearchSourceArgs) => Promise<readonly SearchSourceCandidate[]>

@@ -1,6 +1,6 @@
 /**
- * Schema-change migration detection for properties-as-blocks (PR #288 §7/§9,
- * slice B2). Renames and codec changes are MIGRATIONS, not edits:
+ * Schema-change migration detection for properties-as-blocks. Renames and
+ * codec changes are MIGRATIONS, not edits:
  *
  *  - After a rename the cell is still keyed by the OLD name — the registry
  *    no longer knows that key, materialize skips unknown names, and every
@@ -19,8 +19,8 @@
  * identity), so every rename source — panel edit, outline edit of the
  * definition block, a synced-in rename from another device — funnels through
  * one seam. The multi-device rename RACE (a block edited offline across a
- * rename syncs up under a key no registry knows) is slice C's reconcile;
- * this one-shot pass can't reach it.
+ * rename syncs up under a key no registry knows) is out of this one-shot
+ * pass's reach.
  */
 
 import type { ResolvedPropertySchema } from '@/data/api'
@@ -48,7 +48,7 @@ export interface PropertyDefinitionChange {
  *  with no retry. Resolution is guaranteed to succeed at SCHEDULE time
  *  (`changes` comes from this workspace's own registry rebuild, which just
  *  primed its snapshot), so the plan is captured there instead. A change
- *  whose fieldId doesn't resolve then (shadowed / unavailable, §6) is
+ *  whose fieldId doesn't resolve then (shadowed / unavailable) is
  *  dropped — same skip the old run-time check performed, just moved earlier. */
 export interface PropertyDefinitionMigrationPlan {
   readonly change: PropertyDefinitionChange
@@ -87,10 +87,9 @@ export const changedPropertyDefinitions = (
 
 /** Definitions PRESENT in `next` with no previous entry — new schemas whose
  *  name may already appear as `[[name]]` rows that derived to NULL before
- *  the definition existed (PR #288 §9's arrival-order hole). A null
- *  `previous` (boot's first snapshot) is deliberately not "everything added"
- *  — the once-per-workspace catch-up pass covers boot, running after
- *  registry readiness. */
+ *  the definition existed. A null `previous` (boot's first snapshot) is
+ *  deliberately not "everything added" — the once-per-workspace catch-up
+ *  pass covers boot, running after registry readiness. */
 export const addedPropertyDefinitionNames = (
   previous: PropertyDefinitionRegistrySnapshot | null | undefined,
   next: PropertyDefinitionRegistrySnapshot | null | undefined,

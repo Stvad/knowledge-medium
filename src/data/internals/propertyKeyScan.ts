@@ -14,9 +14,7 @@
  * (`json_each`-expanding every property bag) plus one for the unreadable
  * count and one over the definition rows. A cap would make the list
  * INCOMPLETE, which is the failure both callers exist to prevent — a partial
- * list reads as "all clear". Measured at ~356k cells / ~55k blocks this is a
- * few hundred ms of native SQLite and more under wa-sqlite/OPFS, on an
- * explicit operator-run command.
+ * list reads as "all clear" — on an explicit operator-run command.
  */
 
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'

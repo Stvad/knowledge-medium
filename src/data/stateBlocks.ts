@@ -97,16 +97,12 @@ export const requireSchemaScope = <T>(
  *  the same row deterministically. Restores soft-deleted rows in the
  *  same scope.
  *
- *  Cold-start fast path: if the child is already live in cache or in
- *  SQL (the common case after the first launch), skip the
- *  writeTransaction entirely. The bootstrap path through this helper
- *  is called from at least four memoized parents (user-prefs,
- *  ui-state, panels, plus per-plugin children); a no-op tx still
- *  costs ~100 ms each because of trigger overhead, so amortizing
- *  those across cold start has been a measurable cost. The slow
- *  path is identical to before — `tx.get` re-checks under the lock
- *  to handle the (rare) tombstone case that `repo.load` filters out
- *  with its `deleted = 0` predicate. */
+ *  Cold-start fast path: skip the writeTransaction when the child is
+ *  already live in cache or in SQL — a no-op tx is not free (trigger
+ *  overhead), and this runs once per memoized state parent at boot.
+ *  The slow path's `tx.get` re-checks under the lock for the (rare)
+ *  tombstone case that `repo.load` filters out with its `deleted = 0`
+ *  predicate. */
 const ensureStateChild = async (
   repo: Repo,
   parent: Block,

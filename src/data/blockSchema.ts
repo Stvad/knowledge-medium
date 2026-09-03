@@ -9,19 +9,8 @@ export interface BlockRow {
   id: string
   workspace_id: string
   parent_id: string | null
-  /** LOCAL-only derived column (properties-as-blocks migration, slice A):
-   *  set when the row's whole content is exactly one reference token.
-   *  Exists on `blocks` only — never on `blocks_synced`, never uploaded,
-   *  never in a sync payload; every device derives it independently from
-   *  content (see `BLOCK_LOCAL_COLUMNS`). Optional because rows read from
-   *  `blocks_synced` (and pre-migration row_events snapshots) don't carry
-   *  it; `parseBlockRow` normalizes absence to `null`. */
+  // See BLOCK_LOCAL_COLUMNS below for both local-only columns.
   reference_target_id?: string | null
-  /** LOCAL-only derived bit (§7 grammar box): 1 when the row's whole trimmed
-   *  content is the `::`-marked field form, NULL otherwise — ordinary rows
-   *  are never stamped 0, so value-set predicates read
-   *  `is_field_form IS NOT 1`, never `= 0`. Same local-column treatment as
-   *  `reference_target_id`; `parseBlockRow` normalizes to boolean. */
   is_field_form?: number | null
   order_key: string
   content: string
@@ -29,8 +18,7 @@ export interface BlockRow {
   references_json: string
   created_at: number
   updated_at: number
-  // Nullable: old-client downloads / old sync-rules windows and pre-split
-  // rows arrive without it; `parseBlockRow` falls back to `updated_at`.
+  // See the `user_updated_at` entry in BLOCK_STORAGE_COLUMNS below.
   user_updated_at: number | null
   created_by: string
   updated_by: string
@@ -112,9 +100,6 @@ const formatSqlList = (items: readonly string[], indentSize: number) => {
   return items.map(item => `${indent}${item}`).join(',\n')
 }
 
-/** Full `blocks`-table column list (includes local-only columns). Every
- *  current consumer reads the live `blocks` table; a `blocks_synced` read
- *  must NOT use this (staging carries storage columns only). */
 export const SELECT_BLOCK_COLUMNS_SQL = BLOCKS_TABLE_COLUMN_NAMES.join(',\n  ')
 
 export const buildQualifiedBlockColumnsSql = (tableName: string) =>
@@ -215,14 +200,11 @@ export const CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL = `
 /** The tombstone complement of `idx_blocks_parent_order`, which is partial to
  *  `deleted = 0` — so `tx.deletedChildrenOf` had no index to reach and planned
  *  as `SCAN blocks` plus a temp B-tree sort, once per revived property, inside
- *  the write transaction. Measured with EXPLAIN QUERY PLAN; with this index the
- *  same query is `SEARCH ... USING COVERING INDEX`.
+ *  the write transaction.
  *
  *  Cheap despite sitting on the hot table: a partial index over `deleted = 1`
  *  holds only tombstones, and a row enters or leaves it only when `deleted`
- *  flips — edits to live rows never touch it. Same lesson as
- *  `idx_blocks_any_field_form`, which exists because the OTHER tombstone query
- *  here scanned the field rows of the whole database once per owner. */
+ *  flips — edits to live rows never touch it. */
 export const CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_parent_deleted
   ON blocks (parent_id, order_key, id)
@@ -235,17 +217,12 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   WHERE deleted = 0
 `
 
-/** Serves the properties cell → children backfill's candidate scan, which
- *  walks every property-carrying block of a workspace in id order.
- *
- *  `idx_blocks_workspace_active` cannot: it carries no `id`, so serving the
- *  cursor from it means reading the whole workspace and sorting into a temp
- *  B-tree — once per batch. Measured on a 1M-row workspace: 92s of scanning per
- *  sweep against 0.06s with this index.
- *
- *  A query only gets it by carrying the literal `properties_json <> '{}'`
- *  term: SQLite cannot prove `json_type(...) = 'object' AND EXISTS(json_each
- *  (...))` implies non-empty, so the predicate has to say so itself. */
+/** Serves the properties-cell backfill's candidate scan (every
+ *  property-carrying block of a workspace, in id order). `idx_blocks_workspace_
+ *  active` cannot: it carries no `id`, so the cursor sorts into a temp B-tree
+ *  once per batch. A query only gets this index by carrying the literal
+ *  `properties_json <> '{}'` term — SQLite cannot prove `json_type(...) =
+ *  'object' AND EXISTS(json_each(...))` implies non-empty. */
 export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_nonempty_properties
   ON blocks (workspace_id, id)
@@ -402,10 +379,7 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,
   workspaceId: row.workspace_id,
   parentId: row.parent_id,
-  // Local-only column: absent on `blocks_synced` rows and pre-migration
-  // row_events snapshots — normalize to null (optional-in, null-out).
   referenceTargetId: row.reference_target_id ?? null,
-  // Local-only bit: 1 or NULL on disk (never 0) — normalize to boolean.
   isFieldForm: row.is_field_form === 1,
   orderKey: row.order_key,
   content: row.content,
@@ -413,8 +387,6 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   references: safeJsonParse<BlockReference[]>(row.references_json, []),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
-  // Fallback absorbs old-rules downloads and pre-migration row_events
-  // snapshots that carry no user_updated_at.
   userUpdatedAt: row.user_updated_at ?? row.updated_at,
   createdBy: row.created_by,
   updatedBy: row.updated_by,
