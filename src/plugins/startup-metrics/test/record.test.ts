@@ -382,6 +382,29 @@ describe('collectStartupMetricsEffect', () => {
     expect(startEffect('ws-2')).toBeUndefined()
   })
 
+  // A reader fences its first sample on the settle. A collector that declines
+  // to arm is never going to write, so it has to say so — otherwise that reader
+  // waits out a cap measured for a writer that is actually working.
+  it('settles when the collector is torn down before it writes', async () => {
+    markStartup('firstContentPaint')
+    const stop = startEffect(WS)
+    expect(stop).toBeTypeOf('function')
+
+    stop?.()
+
+    await expect(whenBootRecordSettled(60_000)).resolves.toBeUndefined()
+  })
+
+  it('settles immediately when it declines to arm', async () => {
+    // NOTHING else armed: a collector that starts normally settles the signal
+    // by writing, which would hide whether the declining path settles at all.
+    expect(startEffect('')).toBeUndefined()
+
+    // Resolves without the timeout being reached — left outstanding, this hangs
+    // until the test times out rather than returning.
+    await expect(whenBootRecordSettled(60_000)).resolves.toBeUndefined()
+  })
+
   // This plugin is independently disableable, so a page can boot in one
   // workspace with recording off, move to another, and be switched on there.
   // The origin is claimed by the always-on observe effect rather than by this
