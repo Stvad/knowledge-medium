@@ -253,6 +253,59 @@
     padding-left: 0.65em;
   }
 
+  /* Preflight leaves every `ul`/`ol` unmarked, which is what the app's own
+     chrome wants and wrong for rendered content. Markers come back only where
+     BOTH hold: the list is markdown's own (`markdown-list`, stamped by the
+     `ul`/`ol` overrides) and its renderer draws a block surface.
+
+     The surface travels as INHERITED CUSTOM PROPERTIES so the nearest
+     renderer wins. A descendant selector cannot express that — an inline
+     reference sits inside a block surface, and can itself hold an embed that
+     is a block surface again. */
+  .markdown-content {
+    /* `em` so the gutter scales with the surrounding text. The container
+       clips its overflow and an `outside` marker is drawn in this gutter, so
+       a wider marker loses its leading digits: 2em fits `100.`, and a start
+       past that is accepted as clipped rather than paid for with an `inside`
+       marker, which would misalign every wrapped line. */
+    --markdown-list-gutter: 2em;
+    --markdown-list-bullet: disc;
+    --markdown-list-number: decimal;
+    /* Subordinate to the outline's own bullets: these mark structure INSIDE
+       one block, and shouldn't read as loudly as the rows they sit in. */
+    --markdown-list-marker-color: hsl(var(--muted-foreground));
+  }
+
+  .markdown-content-inline {
+    --markdown-list-gutter: 0;
+    --markdown-list-bullet: none;
+    --markdown-list-number: none;
+  }
+
+  /* Unset outside any markdown surface — an export rendered without a
+     container keeps preflight's bare list. */
+  .markdown-list {
+    padding-left: var(--markdown-list-gutter, 0);
+  }
+
+  ul.markdown-list {
+    list-style-type: var(--markdown-list-bullet, none);
+  }
+
+  ol.markdown-list {
+    list-style-type: var(--markdown-list-number, none);
+  }
+
+  .markdown-list > li::marker {
+    color: var(--markdown-list-marker-color, inherit);
+  }
+
+  /* A GFM task item carries its own marker — the checkbox. It keeps the
+     gutter, so its checkbox lines up with the text of any plain sibling. */
+  .markdown-list > .task-list-item {
+    list-style-type: none;
+  }
+
   a {
     @apply text-link underline;
     /* A long URL is a single unbreakable token; let it wrap to fit
