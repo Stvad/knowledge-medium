@@ -4,7 +4,7 @@
  */
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
-import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
+import { SETTLE_FALLBACK_MS } from '@/plugins/startup-metrics/record.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysis } from './analyze.js'
@@ -16,8 +16,19 @@ import { currentMonitorRun, endMonitorRun, startMonitorRun } from './monitorRun.
  *  that a regression developing mid-session is still noticed. */
 const REANALYZE_MS = 10 * 60_000
 
+/** The first analysis waits out the startup recorder's own settle fallback
+ *  before it looks.
+ *
+ *  Both are idle-scheduled at the same 60s floor, so they otherwise come due
+ *  together — and the collector only BEGINS its asynchronous write there, while
+ *  this pass is already loading the startup series. A boot whose record has not
+ *  committed yet reads as "no startup record for this session", which is the
+ *  message for a recorder that is off: permanent-sounding, and held for the
+ *  whole ten-minute cadence over a row that landed a moment later. */
+const FIRST_DELAY_MS = SETTLE_FALLBACK_MS + 15_000
+
 const job = cadencedIdleJob({
-  firstDelayMs: LAZY_DEEP_IDLE.minDelayMs,
+  firstDelayMs: FIRST_DELAY_MS,
   repeatDelayMs: REANALYZE_MS,
   label: 'perf-monitor',
 })

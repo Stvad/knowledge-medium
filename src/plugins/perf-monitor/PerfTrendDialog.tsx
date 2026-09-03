@@ -68,7 +68,7 @@ const Td = ({ children }: { children: React.ReactNode }) => (
 export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<void> & { workspaceId?: string }) {
   const repo = useRepo()
   const analysis = useSyncExternalStore(subscribePerfAnalysis, () =>
-    getPerfAnalysisFor(workspaceId ?? repo.activeWorkspaceId),
+    getPerfAnalysisFor(repo, workspaceId ?? repo.activeWorkspaceId),
   )
   // The dialog reads the recording blocker LIVE, and a role change moves it
   // with nothing else moving — no analysis is published, so the store's
@@ -91,7 +91,14 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
    *  reader checks the verdict against, and the series moves underneath a dialog
    *  that stays open: the interaction recorder rewrites its row on a cadence and
    *  another tab can append. Rows from a different publication than the verdict
-   *  beside them cannot explain it, so they are not shown as if they could. */
+   *  beside them cannot explain it, so they are not shown as if they could.
+   *
+   *  What the tag proves is WHICH publication these rows were read for, not
+   *  that the analysis read the same bytes: this is a second query, and a row
+   *  rewritten between the two lands here newer than the verdict used.
+   *  ACCEPTED — that window is one round trip against a cadence of minutes, and
+   *  closing it means carrying the whole loaded series inside every published
+   *  analysis, which the store then holds per workspace for the session. */
   const [series, setSeries] = useState<{
     repo: object
     workspaceId: string
@@ -171,6 +178,10 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
       if (!alive()) return
       await loadSeries(alive)
     } catch (e) {
+      // The same guard the success path uses. A refresh superseded by a
+      // sign-out or a workspace change would otherwise raise its failure over
+      // whatever is on screen now, describing an analysis nobody is waiting for.
+      if (!alive()) return
       showError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setRefreshing(false)

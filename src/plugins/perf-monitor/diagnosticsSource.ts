@@ -55,7 +55,7 @@ export const createPerfMonitorDiagnosticSource = (
       return () => { for (const stop of stops) stop() }
     },
     getSnapshot: () => {
-      const analysis = getPerfAnalysisFor(repo.activeWorkspaceId)
+      const analysis = getPerfAnalysisFor(repo, repo.activeWorkspaceId)
       // Read now, not taken off the analysis: a role change flips this without
       // republishing anything, and a stored answer would keep claiming
       // recording works until the next cadence.

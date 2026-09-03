@@ -142,12 +142,12 @@ describe('runPerfAnalysis', () => {
     await pastSession()
     const stop = await startEffect()
     const analysis = await runPerfAnalysisNow(repo, WS)
-    expect(getPerfAnalysisFor(WS)).toBe(analysis)
+    expect(getPerfAnalysisFor(repo, WS)).toBe(analysis)
 
     resetPerfAnalysisStore()
     repo.setActiveWorkspaceId(OTHER_WS)
     await runPerfAnalysisNow(repo, WS)
-    expect(getPerfAnalysisFor(WS)).toBeNull()
+    expect(getPerfAnalysisFor(repo, WS)).toBeNull()
     stop?.()
   })
 
@@ -168,7 +168,7 @@ describe('runPerfAnalysis', () => {
     first?.()
     second?.()
 
-    expect(getPerfAnalysisFor(WS)).toBeNull()
+    expect(getPerfAnalysisFor(repo, WS)).toBeNull()
   })
 
   // A run still in flight when the monitor is switched off is describing a
@@ -180,14 +180,14 @@ describe('runPerfAnalysis', () => {
     const stop = await startEffect()
     // The precondition, asserted rather than assumed.
     const published = await runPerfAnalysisNow(repo, WS)
-    expect(getPerfAnalysisFor(WS)).toBe(published)
+    expect(getPerfAnalysisFor(repo, WS)).toBe(published)
 
     resetPerfAnalysisStore()
     const pending = runPerfAnalysisNow(repo, WS)
     stop?.()
     await pending
 
-    expect(getPerfAnalysisFor(WS)).toBeNull()
+    expect(getPerfAnalysisFor(repo, WS)).toBeNull()
   })
 
   // The trend dialog is mounted in a shared DialogHost, so it survives the
@@ -203,7 +203,7 @@ describe('runPerfAnalysis', () => {
     // a binding first — `expect(read()).toBe(await write())` evaluates the read
     // before the await, so it would always see the store as it was BEFORE.
     const published = await runPerfAnalysisNow(repo, WS)
-    expect(getPerfAnalysisFor(WS)).toBe(published)
+    expect(getPerfAnalysisFor(repo, WS)).toBe(published)
 
     resetPerfAnalysisStore()
     stop?.()
@@ -213,7 +213,7 @@ describe('runPerfAnalysis', () => {
     // on a field: the analysis carries its run, whose `repo` a failure message
     // would try to serialize.
     expect(analysis.workspaceId).toBe(WS)
-    expect(getPerfAnalysisFor(WS)).toBeNull()
+    expect(getPerfAnalysisFor(repo, WS)).toBeNull()
   })
 
   // A reset retires the counters the verdict rests on. Nothing else moves —
@@ -228,7 +228,7 @@ describe('runPerfAnalysis', () => {
     // here. Without it a null below proves nothing — publication is gated on
     // several things, and the store is module state shared across these tests.
     const published = await runPerfAnalysisNow(repo, WS)
-    expect(getPerfAnalysisFor(WS)).toBe(published)
+    expect(getPerfAnalysisFor(repo, WS)).toBe(published)
 
     resetPerfAnalysisStore()
     // The context is captured synchronously on entry, so this lands inside.
@@ -236,7 +236,7 @@ describe('runPerfAnalysis', () => {
     repo.resetMetrics()
     await pending
 
-    expect(getPerfAnalysisFor(WS)).toBeNull()
+    expect(getPerfAnalysisFor(repo, WS)).toBeNull()
     stop?.()
   })
 

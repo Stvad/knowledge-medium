@@ -69,10 +69,10 @@ export interface PerfAnalysis {
   /** Derived from `unjudgedBecause`, never set beside it — the two cannot
    *  disagree about whether a series was judged. */
   ready: { interaction: boolean; startup: boolean }
-  /** WHY each series went unjudged, or null where it was judged. The verdict
-   *  layer renders these and must not re-derive them: three separate booleans
-   *  used to say this, each invented next to the message it fed, and each in
-   *  turn disagreed with what the comparison had actually concluded. */
+  /** WHY each series' comparison is incomplete, or null where it was complete.
+   *  The verdict layer renders these and must not re-derive them: a reason
+   *  invented beside the message it feeds can disagree with what the comparison
+   *  concluded. */
   unjudgedBecause: { interaction: UnjudgedReason | null; startup: UnjudgedReason | null }
   /** Sessions the judged comparisons actually rested on — not rows loaded. Per
    *  series, because they fill independently and one number reported for the

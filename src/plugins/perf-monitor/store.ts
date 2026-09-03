@@ -35,15 +35,26 @@ export const publishPerfAnalysis = (analysis: PerfAnalysis): void => {
   store.publish(analysis)
 }
 
-/** The verdict for `workspaceId`, or null when there is none THIS run.
+/** The verdict `repo` may show for `workspaceId`, or null.
  *
  *  Checked on the way out, not only on the way in: both readers take this
  *  synchronously during render, and the effect that clears the store on a Repo
  *  swap is a passive one that runs after. Between those two there is a commit
- *  that would otherwise paint the previous user's verdict. */
-export const getPerfAnalysisFor = (workspaceId: string | null | undefined): PerfAnalysis | null => {
+ *  that would otherwise paint the previous user's verdict.
+ *
+ *  Which is also why the READER's Repo decides, rather than the run alone. The
+ *  run is module state that the same passive reconciliation updates, so during
+ *  that intervening render it still names the Repo being replaced — and a
+ *  sign-out that keeps the workspace id would pass a check made only against
+ *  it. The caller's Repo is current at render by construction. */
+export const getPerfAnalysisFor = (
+  repo: object,
+  workspaceId: string | null | undefined,
+): PerfAnalysis | null => {
   const analysis = store.getFor(workspaceId)
-  return analysis !== null && isCurrentRun(analysis.run) ? analysis : null
+  return analysis !== null && analysis.run?.repo === repo && isCurrentRun(analysis.run)
+    ? analysis
+    : null
 }
 export const subscribePerfAnalysis = store.subscribe
 /** The verdicts belong to a Repo; a swap invalidates them but not the chip

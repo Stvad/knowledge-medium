@@ -15,7 +15,8 @@ afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
 describe('publishPerfAnalysis', () => {
   // These are about ORDERING, so they need a run the store will accept;
   // whether it refuses a foreign one is the next describe's subject.
-  beforeEach(() => { startMonitorRun({}, 'ws-1') })
+  const owner = {}
+  beforeEach(() => { startMonitorRun(owner, 'ws-1') })
 
   // Ordered on a sequence, not the wall clock: two runs starting in the same
   // millisecond share an `analyzedAt` and a strict `>` lets the older win.
@@ -25,19 +26,19 @@ describe('publishPerfAnalysis', () => {
     // say, and the chip would carry its verdict until the next scheduled pass.
     publishPerfAnalysis(analysis({ seq: 1, analyzedAt: 1000, baseline: { interaction: 1, startup: 1 } }))
 
-    expect(getPerfAnalysisFor('ws-1')?.analyzedAt).toBe(2000)
+    expect(getPerfAnalysisFor(owner, 'ws-1')?.analyzedAt).toBe(2000)
   })
 
   it('orders runs that share a millisecond', () => {
     publishPerfAnalysis(analysis({ seq: 2, analyzedAt: 1000, baseline: { interaction: 9, startup: 9 } }))
     publishPerfAnalysis(analysis({ seq: 1, analyzedAt: 1000, baseline: { interaction: 1, startup: 1 } }))
-    expect(getPerfAnalysisFor('ws-1')?.baseline.interaction).toBe(9)
+    expect(getPerfAnalysisFor(owner, 'ws-1')?.baseline.interaction).toBe(9)
   })
 
   it('publishes a newer run over an older one', () => {
     publishPerfAnalysis(analysis({ seq: 1, analyzedAt: 1000 }))
     publishPerfAnalysis(analysis({ seq: 2, analyzedAt: 2000 }))
-    expect(getPerfAnalysisFor('ws-1')?.analyzedAt).toBe(2000)
+    expect(getPerfAnalysisFor(owner, 'ws-1')?.analyzedAt).toBe(2000)
   })
 
   // The sequence is allocated when a run STARTS, not when it returns, so a run
@@ -55,7 +56,7 @@ describe('publishPerfAnalysis', () => {
   it('does not let one workspace\'s ordering block another', () => {
     publishPerfAnalysis(analysis({ seq: 2, analyzedAt: 2000 }))
     publishPerfAnalysis(analysis({ workspaceId: 'ws-2', seq: 1, analyzedAt: 1000 }))
-    expect(getPerfAnalysisFor('ws-2')?.analyzedAt).toBe(1000)
+    expect(getPerfAnalysisFor(owner, 'ws-2')?.analyzedAt).toBe(1000)
   })
 })
 
@@ -69,15 +70,29 @@ describe('publishPerfAnalysis', () => {
  */
 describe('reading across runs', () => {
   it('returns nothing for a verdict published under a previous run', () => {
-    startMonitorRun({}, 'ws-1')
+    const first = {}
+    startMonitorRun(first, 'ws-1')
     publishPerfAnalysis(analysis({ seq: 1 }))
-    expect(getPerfAnalysisFor('ws-1')).not.toBeNull()
+    expect(getPerfAnalysisFor(first, 'ws-1')).not.toBeNull()
 
-    // A new run, and deliberately no `clearPerfAnalyses()` — the stored
-    // snapshot is untouched and must still be unreadable.
+    // A new run for the SAME reader, and deliberately no `clearPerfAnalyses()`
+    // — the stored snapshot is untouched and must still be unreadable.
     startMonitorRun({}, 'ws-1')
 
-    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+    expect(getPerfAnalysisFor(first, 'ws-1')).toBeNull()
+  })
+
+  // The reader's own Repo, not the run alone: the run is module state a passive
+  // effect updates, so during the render before reconciliation it still names
+  // the Repo being replaced — and a sign-out that keeps the workspace id would
+  // pass a check made only against it.
+  it('returns nothing to a reader that is not the one the run belongs to', () => {
+    const owner = {}
+    startMonitorRun(owner, 'ws-1')
+    publishPerfAnalysis(analysis({ seq: 1 }))
+    expect(getPerfAnalysisFor(owner, 'ws-1')).not.toBeNull()
+
+    expect(getPerfAnalysisFor({}, 'ws-1')).toBeNull()
   })
 
   // The read check alone would make such a verdict invisible, but the store
@@ -96,12 +111,13 @@ describe('reading across runs', () => {
   })
 
   it('returns nothing once no run is in force at all', () => {
-    startMonitorRun({}, 'ws-1')
+    const owner = {}
+    startMonitorRun(owner, 'ws-1')
     publishPerfAnalysis(analysis({ seq: 1 }))
 
     resetMonitorRun()
 
-    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+    expect(getPerfAnalysisFor(owner, 'ws-1')).toBeNull()
   })
 })
 
@@ -133,13 +149,14 @@ describe('a Repo swap', () => {
   }
 
   it('drops the stale verdicts', async () => {
-    await startFor(repoStub())
+    const first = repoStub()
+    await startFor(first)
     publishPerfAnalysis(analysis({ seq: 1 }))
-    expect(getPerfAnalysisFor('ws-1')).not.toBeNull()
+    expect(getPerfAnalysisFor(first, 'ws-1')).not.toBeNull()
 
     await startFor(repoStub())
 
-    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+    expect(getPerfAnalysisFor(first, 'ws-1')).toBeNull()
   })
 
   it('keeps the subscribers, and tells them to re-read', async () => {
@@ -201,13 +218,13 @@ describe('a workspace change', () => {
     const repo = repoStub('ws-1')
     await startFor(repo, 'ws-1')
     publishPerfAnalysis(analysis({ seq: 1 }))
-    expect(getPerfAnalysisFor('ws-1')).not.toBeNull()
+    expect(getPerfAnalysisFor(repo, 'ws-1')).not.toBeNull()
 
     // Same Repo — only the workspace moved.
     repo.activeWorkspaceId = 'ws-2'
     await startFor(repo, 'ws-2')
 
-    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+    expect(getPerfAnalysisFor(repo, 'ws-1')).toBeNull()
   })
 })
 
@@ -235,11 +252,11 @@ describe('the monitor being switched off', () => {
     const repo = repoStub()
     const stop = await start(repo)
     publishPerfAnalysis(analysis({ seq: 1 }))
-    expect(getPerfAnalysisFor('ws-1')).not.toBeNull()
+    expect(getPerfAnalysisFor(repo, 'ws-1')).not.toBeNull()
 
     stop?.()
 
-    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+    expect(getPerfAnalysisFor(repo, 'ws-1')).toBeNull()
   })
 
   // Why the clear belongs at TEARDOWN rather than at the next start: ownership
@@ -255,6 +272,6 @@ describe('the monitor being switched off', () => {
     const reStop = await start(repo)
     reStop?.()
 
-    expect(getPerfAnalysisFor('ws-1')).toBeNull()
+    expect(getPerfAnalysisFor(repo, 'ws-1')).toBeNull()
   })
 })
