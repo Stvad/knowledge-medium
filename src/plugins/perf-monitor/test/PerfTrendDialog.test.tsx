@@ -213,19 +213,6 @@ describe('PerfTrendDialog tables', () => {
     expect(screen.queryByText(when(landed))).toBeNull()
   })
 
-  // The verdict beside this table says recording is disabled; a table promising
-  // the first record a minute from now contradicts it. Waits on the POSITIVE
-  // text first — an absence assertion on a table that is still LOADING settles
-  // on the first tick and holds however the branch is written.
-  it('does not promise a record a minute away while recording is blocked', async () => {
-    repo.setReadOnly(true)
-    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
-
-    await waitFor(() =>
-      expect(screen.getByText(/no interaction records on this device/i)).toBeInTheDocument())
-    expect(screen.queryByText(/lands about a minute/i)).toBeNull()
-  })
-
   // The empty state has to be reachable too, or the assertion above proves only
   // that something rendered.
   it('says so when the device has no history', async () => {
@@ -339,6 +326,21 @@ describe('a series read that has been replaced', () => {
 
     await waitFor(() => expect(showError).toHaveBeenCalledWith(
       expect.stringContaining("Couldn't read performance history")))
+  })
+
+  // The toast is transient and nothing reads again on its own, so a table left
+  // saying "Loading…" claims a read is still running long after it settled.
+  it('says the history is unreadable rather than loading forever', async () => {
+    const reads = failingReads()
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(reads.held()).toBe(2))
+
+    await act(async () => { for (const release of reads.take()) release() })
+
+    // Both tables, and no loader left behind.
+    await waitFor(() =>
+      expect(screen.getAllByText(/read this device.s history/i)).toHaveLength(2))
+    expect(screen.queryByText('Loading…')).toBeNull()
   })
 
   it('says nothing once a newer publication has replaced it', async () => {

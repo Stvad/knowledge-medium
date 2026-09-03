@@ -33,6 +33,10 @@ import { monitorRunFor, subscribeMonitorRun } from './monitorRun.js'
  *  this is what fits in a dialog without becoming a spreadsheet. */
 const ROWS = 15
 
+/** Shown in place of a table whose read failed — the toast that announced it
+ *  is gone by the time anyone looks, and Re-analyze is what reads again. */
+const UNREADABLE = 'Couldn\u2019t read this device\u2019s history \u2014 try Re-analyze.'
+
 const ms = (v: number | null | undefined): string =>
   v === null || v === undefined ? '—' : `${Math.round(v)}ms`
 
@@ -141,15 +145,18 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   const [series, setSeries] = useState<{
     context: object
     seq: number | null
-    startup: StartupRecordData[]
-    interaction: InteractionRecordData[]
+    /** Null once the read FAILED — distinct from no state at all, which is a
+     *  read still running. Without the distinction a failure reads as a load
+     *  that never finishes, and the tables sit on "Loading…" for good: the
+     *  toast goes away and nothing retries until something publishes. */
+    rows: { startup: StartupRecordData[]; interaction: InteractionRecordData[] } | null
   } | null>(null)
   const seq = analysis?.seq ?? null
   const shown = series && series.context === context && series.seq === seq
     ? series
     : null
-  const startup = shown?.startup ?? null
-  const interaction = shown?.interaction ?? null
+  const rows = shown?.rows ?? null
+  const unreadable = shown !== null && shown.rows === null
 
   /** The ONE place the series is read, keyed on everything a row is tagged
    *  with. React's own cleanup is then the whole ownership story: a new world
@@ -172,11 +179,13 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
         if (!alive) return
         setSeries({
           context, seq,
-          startup: s.map((r) => r.record),
-          interaction: i.map((r) => r.record),
+          rows: { startup: s.map((r) => r.record), interaction: i.map((r) => r.record) },
         })
       } catch (e) {
         if (!alive) return
+        // Recorded, not just announced: the toast is transient and the tables
+        // would otherwise claim to still be loading. Re-analyze reads again.
+        setSeries({ context, seq, rows: null })
         showError(`Couldn't read performance history: ${e instanceof Error ? e.message : String(e)}`)
       }
     })()
@@ -301,9 +310,11 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
 
         <section>
           <h3 className="text-sm font-medium mb-1">Startup</h3>
-          {startup === null ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : startup.length === 0 ? (
+          {rows === null ? (
+            <p className="text-sm text-muted-foreground">
+              {unreadable ? UNREADABLE : 'Loading…'}
+            </p>
+          ) : rows.startup.length === 0 ? (
             <p className="text-sm text-muted-foreground">No startup records on this device yet.</p>
           ) : (
             <div className="overflow-x-auto">
@@ -318,7 +329,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                   </tr>
                 </thead>
                 <tbody>
-                  {startup.slice(0, ROWS).map((r, i) => (
+                  {rows.startup.slice(0, ROWS).map((r, i) => (
                     <tr key={`${rowTime(STARTUP_SERIES, r)}-${i}`}>
                       {/* Boot time — `recordedAt` is stamped whenever the
                           deferred write happens to land. */}
@@ -337,17 +348,17 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
 
         <section>
           <h3 className="text-sm font-medium mb-1">Interaction</h3>
-          {interaction === null ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : interaction.length === 0 ? (
+          {rows === null ? (
             <p className="text-sm text-muted-foreground">
-              {/* The timing is only true while recording is possible. Blocked,
-                  the verdict above says so, and promising a record a minute
-                  from now contradicts it. */}
-              {blockedBy === null
-                ? 'No interaction records yet — the first lands about a minute into a session.'
-                : 'No interaction records on this device.'}
+              {unreadable ? UNREADABLE : 'Loading…'}
             </p>
+          ) : rows.interaction.length === 0 ? (
+            // No timing promised. Whether the first record is a minute away
+            // depends on the recorder running at all, which this surface cannot
+            // see: it is a separately togglable plugin, and `blockedBy` covers
+            // only the durable-client and read-only reasons. The verdict above
+            // says what it knows.
+            <p className="text-sm text-muted-foreground">No interaction records on this device yet.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="text-xs w-full">
@@ -360,7 +371,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                   </tr>
                 </thead>
                 <tbody>
-                  {interaction.slice(0, ROWS).map((r, i) => {
+                  {rows.interaction.slice(0, ROWS).map((r, i) => {
                     const worst = slowestQuery(r)
                     return (
                       <tr key={`${rowTime(INTERACTION_SERIES, r)}-${i}`}>
