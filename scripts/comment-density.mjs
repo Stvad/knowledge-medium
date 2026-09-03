@@ -44,10 +44,10 @@ export const addedLineNumbers = diffText => {
   const result = new Map()
   let file = null
   for (const raw of diffText.split('\n')) {
-    const header = raw.match(/^\+\+\+ b\/(.*)$/)
-    if (header) {
-      file = header[1]
-      result.set(file, [])
+    if (raw.startsWith('+++ ')) {
+      const header = raw.match(/^\+\+\+ b\/(.*)$/)
+      file = header ? header[1] : null
+      if (file) result.set(file, [])
       continue
     }
     const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
@@ -145,9 +145,11 @@ const runAdded = range => {
   const diff = execFileSync(
     'git',
     [
+      '-c', 'core.quotePath=false',
       'diff',
       '--no-ext-diff',
       '--unified=0',
+      '--inter-hunk-context=0',
       range,
       '--',
       '*.ts',

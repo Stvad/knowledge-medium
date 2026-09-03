@@ -17,6 +17,8 @@
  */
 
 const isJsDoc = c => c.type === 'Block' && c.value.startsWith('*') && !c.value.startsWith('**')
+// `@typedef` / `@callback` blocks are declarations in their own right; TS reads them with no node below.
+const isStandaloneDeclaration = c => /@(typedef|callback)\b/.test(c.value)
 const isDirective = c => /^\s*(eslint-|@ts-|prettier-|biome-)/.test(c.value)
 
 const noInvisibleJsdoc = {
@@ -36,7 +38,7 @@ const noInvisibleJsdoc = {
     return {
       Program() {
         for (const c of src.getAllComments()) {
-          if (!isJsDoc(c)) continue
+          if (!isJsDoc(c) || isStandaloneDeclaration(c)) continue
           let next = src.getTokenAfter(c, {includeComments: true})
           let shadowed = false
           while (next && (next.type === 'Line' || next.type === 'Block')) {

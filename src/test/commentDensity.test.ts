@@ -30,6 +30,11 @@ describe('addedLineNumbers', () => {
     const diff = ['+++ b/a.ts', '@@ -1,2 +1,3 @@', '+x', '@@ -10 +11 @@', '+y', '+++ b/b.ts', '@@ -0,0 +1,2 @@', '+z', '+w'].join('\n')
     expect(addedLineNumbers(diff)).toEqual(new Map([['a.ts', [1, 2, 3, 11]], ['b.ts', [1, 2]]]))
   })
+
+  it('does not attach a deleted file\'s hunk to the file before it', () => {
+    const diff = ['+++ b/a.ts', '@@ -0,0 +1 @@', '+x', '+++ /dev/null', '@@ -1,3 +0,0 @@', '-gone', '+++ b/c.ts', '@@ -0,0 +1 @@', '+y'].join('\n')
+    expect(addedLineNumbers(diff)).toEqual(new Map([['a.ts', [1]], ['c.ts', [1]]]))
+  })
 })
 
 describe('countAddedLines', () => {

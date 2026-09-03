@@ -25,6 +25,8 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `interface I {\n  /** a */\n  a: string\n}` },
       { code: `const f = (\n  /** the id */ id: string,\n) => id` },
       { code: `const el = <div>{/** jsx note */}</div>`, filename: 'x.tsx' },
+      // Standalone JSDoc declarations stack legitimately.
+      { code: `/** @typedef {string} Id */\n/** @callback Cb */\n/** the doc */\nexport const x = 1` },
     ],
     invalid: [
       {
