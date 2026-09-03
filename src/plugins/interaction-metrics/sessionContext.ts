@@ -142,6 +142,14 @@ export const setPageRecord = (
 export const clearPageRecord = (repo: object): void => { factsFor(repo).pageRecord = null }
 
 /** Start of the page session that owns `workspaceId`'s record, if any. */
+/** This page's interaction record for `workspaceId`, or null before the
+ *  recorder has committed one. Cheap — no counter snapshot — so a reader can
+ *  ask again rather than carry an answer across an await. */
+export const pageRecordId = (repo: MetricsSpanSource, workspaceId: string): string | null => {
+  const r = factsForSpan(repo).pageRecord
+  return r?.workspaceId === workspaceId ? r.blockId : null
+}
+
 export const pageRecordStartedAt = (repo: object, workspaceId: string): number | null => {
   const r = factsFor(repo).pageRecord
   return r?.workspaceId === workspaceId ? r.startedAt : null
@@ -254,15 +262,15 @@ export const awaitRecordingAllowed = async (
  *  new span) — so an artifact outliving any of them describes a world that
  *  no longer exists. Tracked together so a consumer cannot guard one and
  *  miss the others; captured where work starts, compared where it's used. */
-/** What a context is captured from and compared against — the span accessor
- *  plus the active workspace, and nothing else off the Repo. */
-export type MetricsContextSource = MetricsSpanSource & { activeWorkspaceId: string | null }
-
 export interface MetricsContext {
   readonly repo: object
   readonly workspaceId: string
   readonly epoch: number
 }
+
+/** What the pair above is captured from and compared against — nothing off the
+ *  Repo but the span accessor and the active workspace. */
+export type MetricsContextSource = MetricsSpanSource & { activeWorkspaceId: string | null }
 
 // `metricsSpan()`, not `metrics()`: only the epoch is wanted, and a full
 // snapshot walks and sorts every handle and copies the reservoirs and the

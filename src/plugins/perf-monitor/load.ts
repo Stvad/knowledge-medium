@@ -180,7 +180,9 @@ const scanSeries = async <T extends { recordedAt: number }>(
   workspaceId: string,
   { typeId, recordName, isUsable, orderField }: RecordSeries<T>,
   /** Rows this window is not FOR — applied before the cap counts them, so
-   *  excluding one shortens the scan rather than the window. */
+   *  excluding one shortens the scan rather than the window. Asked once per row
+   *  as the rows are PARSED, so a caller may read state that the query itself
+   *  was slow enough to have changed. */
   excluded: (row: { id: string; record: T }) => boolean = () => false,
 ): Promise<Array<{ id: string; record: T }>> => {
   const recordPath = jsonPathForProperty(recordName)

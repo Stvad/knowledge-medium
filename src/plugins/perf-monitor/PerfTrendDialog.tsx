@@ -118,12 +118,15 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
    *  is exactly long enough to paint the previous workspace's history. */
   const context = useMemo(() => ({ repo, ws, run }), [repo, ws, run])
 
-  /** The latest context, so a refresh can tell whether anyone is still waiting
-   *  on it. Display correctness does not depend on this — a superseded result
-   *  is tagged with its own context and never matches — so being one commit
-   *  behind only costs a toast nobody is waiting for. */
-  const latest = useRef(context)
-  useEffect(() => { latest.current = context }, [context])
+  /** The context anyone is still waiting on, or null once nobody is. The
+   *  refresh has no rows to tag, so this is the whole of its ownership: the
+   *  cleanup is what stops a rejection arriving after the dialog closed from
+   *  raising a global toast over whatever replaced it. */
+  const latest = useRef<object | null>(context)
+  useEffect(() => {
+    latest.current = context
+    return () => { latest.current = null }
+  }, [context])
 
   /** The loaded series WITH the world it was read in and the PUBLICATION it was
    *  read for. Derived rather than cleared: a sign-out swaps the Repo, and rows

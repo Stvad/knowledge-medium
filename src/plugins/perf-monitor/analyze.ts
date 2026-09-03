@@ -6,6 +6,7 @@ import {
   interactionComparable,
 } from '@/plugins/interaction-metrics/record.js'
 import {
+  pageRecordId,
   peekLiveSession,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, countRecords, loadRecords, loadSeriesWithCurrent } from './load.js'
@@ -124,8 +125,13 @@ export const runPerfAnalysis = async (
   // Interaction goes by block id (a live-counter session has no other identity,
   // and its record is updated in place, so position says nothing); startup by
   // boot time, which also addresses the row for `current`.
+  //
+  // Asked again per row rather than captured above: the recorder can commit
+  // this session's first record while this read is in flight, and an id taken
+  // beforehand is still null when the row it names comes back.
   const interaction = await loadRecords(
-    repo, workspaceId, INTERACTION_SERIES, ({ id }) => id === session.recordId)
+    repo, workspaceId, INTERACTION_SERIES,
+    ({ id }) => id === pageRecordId(repo, workspaceId))
   const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
     repo, workspaceId, STARTUP_SERIES,
     { field: 'timeOriginMs', value: performance.timeOrigin },

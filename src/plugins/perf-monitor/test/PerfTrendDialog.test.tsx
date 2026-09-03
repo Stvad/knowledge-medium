@@ -370,6 +370,48 @@ describe('a series read that has been replaced', () => {
 })
 
 /**
+ * A refresh nobody is waiting for says nothing either.
+ *
+ * It has no rows to tag, so the context ref is the whole of its ownership —
+ * and a ref updated in an effect answers "same world" but not "still here"
+ * unless the effect's cleanup clears it.
+ */
+describe('a refresh the dialog outlived', () => {
+  beforeEach(freshRepo)
+  afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
+
+  /** Clicks Re-analyze and hands back the failure the analysis has not raised
+   *  yet, so the test decides what has happened by the time it does. */
+  const refreshInFlight = async (): Promise<(reason: Error) => void> => {
+    startMonitorRun(repo, WS)
+    let fail: (reason: Error) => void = () => {}
+    mocks.runNow.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => { fail = reject }))
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(reanalyze()).toBeEnabled())
+    await userEvent.click(reanalyze())
+    await waitFor(() => expect(mocks.runNow).toHaveBeenCalled())
+    return fail
+  }
+
+  // The control for the absence below.
+  it('reports a failure while the dialog is still open', async () => {
+    const fail = await refreshInFlight()
+    await act(async () => { fail(new Error('the analysis blew up')) })
+    await waitFor(() =>
+      expect(showError).toHaveBeenCalledWith(expect.stringContaining('Analysis failed')))
+  })
+
+  it('raises no toast over whatever replaced it', async () => {
+    const fail = await refreshInFlight()
+    cleanup()
+    await act(async () => { fail(new Error('the analysis blew up')) })
+
+    expect(showError).not.toHaveBeenCalled()
+  })
+})
+
+/**
  * The blocker describes the PINNED workspace, or nothing.
  *
  * `repo.isReadOnly` follows whichever workspace is active, and the verdict

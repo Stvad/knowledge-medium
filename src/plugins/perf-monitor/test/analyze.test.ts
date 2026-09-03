@@ -360,6 +360,53 @@ describe('runPerfAnalysis', () => {
     expect(analysis.regressions.filter((r) => r.metric.startsWith('fanout:'))).toEqual([])
   })
 
+  // The recorder writes on its own schedule. Between the analysis reading who
+  // owns this session's record and the history query reaching the database, it
+  // can commit that record for the first time — and an id captured beforehand
+  // is still null when the row it names comes back, so this session lands in
+  // the history it is compared against while also supplying the live sample.
+  it('excludes a record the recorder commits while the history read is in flight', async () => {
+    await seedFiringHistory()
+    resetMetricsSession(repo)
+    observeWorkspace(repo, WS)
+    // Precondition: nothing owns a record for this session yet, so an id read
+    // before the query below is null.
+    expect(metricsSessionContext(repo, WS).recordId).toBeNull()
+    // The control: the same analysis with nothing committed mid-read. Asserting
+    // against it rather than a number keeps this test off the windowing math.
+    const control = await runPerfAnalysis(repo, WS, 1000)
+
+    // Spied on the RAW database — `repo.db` is a timing proxy whose own
+    // `getAll` re-reads the property it was reached through, so a spy there
+    // calling the original recurses until the stack goes.
+    let committed: string | null = null
+    const read = sharedDb.db.getAll
+    const spy = vi.spyOn(sharedDb.db, 'getAll').mockImplementation(
+      async (sql: string, params?: unknown[]) => {
+        // The commit lands before the history query reads, and after the
+        // analysis has already peeked at the session.
+        if (committed === null && sql.includes('AS payload')) {
+          committed = ''
+          committed = (await writeInteractionSample(repo, WS)) ?? ''
+        }
+        return read.call(sharedDb.db, sql, params)
+      })
+    let analysis
+    try {
+      analysis = await runPerfAnalysis(repo, WS, 1000)
+    } finally {
+      spy.mockRestore()
+    }
+
+    // Preconditions: the row really was written mid-read, and it really is in
+    // the series the query returns.
+    expect(committed).toBeTruthy()
+    expect((await loadRecords(repo, WS, INTERACTION_SERIES)).map((r) => r.id))
+      .toContain(committed)
+
+    expect(analysis.baseline.interaction).toBe(control.baseline.interaction)
+  })
+
   // Excluding by POSITION would drop a genuine past session in exactly the case
   // where this session has not written a record of its own.
   it('excludes this session\'s own record without discarding a past one', async () => {
