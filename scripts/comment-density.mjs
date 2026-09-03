@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// Counts comment vs code lines per file with a crude per-line classifier (no
-// string tokenizing) so the numbers stay comparable to prior audits. Default
-// mode scans the committed tree; --added <range> scans only diff-added lines.
+// Counts comment vs code lines with a crude per-line classifier (no string
+// tokenizing) so the numbers stay comparable to prior audits. Default mode
+// scans the WORKING TREE's tracked files (it measures progress mid-cleanup);
+// --added <range> counts only the lines a diff adds, classified against each
+// file's postimage so block-comment state survives hunk boundaries.
 // --no-ext-diff is mandatory: this repo routes `git diff` through difftastic,
 // and a subprocess without that flag reads an empty string.
 
@@ -12,54 +14,65 @@ import { pathToFileURL } from 'node:url'
 const EXCLUDE_PATH = /^(docs|\.claude|tmp|node_modules|dist)\//
 const TEST_FILE = /\.test\.|\.spec\.|\.d\.ts$/
 
-export const countLines = text => {
-  let comment = 0
-  let code = 0
+// 'comment' | 'code' | 'blank' per line.
+export const classifyLines = text => {
   let inBlock = false
-  for (const raw of text.split('\n')) {
+  return text.split('\n').map(raw => {
     const line = raw.trim()
-    if (line === '') continue
+    if (line === '') return 'blank'
     if (inBlock) {
-      comment++
       if (line.includes('*/')) inBlock = false
-      continue
+      return 'comment'
     }
-    if (line.startsWith('//')) {
-      comment++
-      continue
-    }
+    if (line.startsWith('//')) return 'comment'
     if (line.startsWith('/*')) {
-      comment++
       if (!line.includes('*/')) inBlock = true
-      continue
+      return 'comment'
     }
-    code++
-  }
-  return { comment, code }
+    return 'code'
+  })
 }
 
-export const countAddedLines = diffText => {
+export const countLines = text => {
+  const counts = { comment: 0, code: 0 }
+  for (const kind of classifyLines(text)) if (kind !== 'blank') counts[kind]++
+  return counts
+}
+
+// Added line numbers per file, from the hunk headers of a unified diff.
+export const addedLineNumbers = diffText => {
   const result = new Map()
   let file = null
-  let added = []
-  const flush = () => {
-    if (!file) return
-    const prev = result.get(file) ?? { comment: 0, code: 0 }
-    const counted = countLines(added.join('\n'))
-    result.set(file, { comment: prev.comment + counted.comment, code: prev.code + counted.code })
-    added = []
-  }
   for (const raw of diffText.split('\n')) {
     const header = raw.match(/^\+\+\+ b\/(.*)$/)
     if (header) {
-      flush()
       file = header[1]
+      result.set(file, [])
       continue
     }
-    if (raw.startsWith('+++')) continue
-    if (file && raw.startsWith('+')) added.push(raw.slice(1))
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
+    if (hunk && file) {
+      const start = Number(hunk[1])
+      const count = hunk[2] === undefined ? 1 : Number(hunk[2])
+      for (let n = start; n < start + count; n++) result.get(file).push(n)
+    }
   }
-  flush()
+  return result
+}
+
+// readPostimage(file) returns the file's text on the diff's "+" side.
+export const countAddedLines = (diffText, readPostimage) => {
+  const result = new Map()
+  for (const [file, lineNumbers] of addedLineNumbers(diffText)) {
+    if (lineNumbers.length === 0) continue
+    const kinds = classifyLines(readPostimage(file))
+    const counts = { comment: 0, code: 0 }
+    for (const n of lineNumbers) {
+      const kind = kinds[n - 1]
+      if (kind && kind !== 'blank') counts[kind]++
+    }
+    result.set(file, counts)
+  }
   return result
 }
 
@@ -118,7 +131,14 @@ const runDefault = () => {
   printTable('TOP 40 BY COMMENT LINES', byComment)
   printTable('TOP 40 BY RATIO (>= 25 comment lines)', byRatio)
   console.log()
-  printTotal('', totalComment, totalCode, processed)
+  printTotal('WORKING TREE ', totalComment, totalCode, processed)
+}
+
+// The "+" side of `A..B` / `A...B` is B; a bare rev diffs against the working tree.
+const postimageReader = range => {
+  const rev = /\.\.\.?(.*)$/.exec(range)?.[1]
+  if (rev === undefined) return file => readFileSync(file, 'utf8')
+  return file => execFileSync('git', ['show', `${rev || 'HEAD'}:${file}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
 }
 
 const runAdded = range => {
@@ -143,7 +163,7 @@ const runAdded = range => {
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   )
 
-  const perFile = countAddedLines(diff)
+  const perFile = countAddedLines(diff, postimageReader(range))
   const rows = [...perFile.entries()]
     .map(([file, { comment, code }]) => ({ file, comment, code }))
     .sort((a, b) => b.comment - a.comment)

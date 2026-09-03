@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error no declaration file for the script module
-import { countAddedLines, countLines } from '../../scripts/comment-density.mjs'
+import { addedLineNumbers, classifyLines, countAddedLines, countLines } from '../../scripts/comment-density.mjs'
 
 describe('countLines', () => {
   it('counts // lines as comments', () => {
@@ -20,35 +20,38 @@ describe('countLines', () => {
     expect(countLines('const x = 1\n\n\nconst y = 2')).toEqual({ comment: 0, code: 2 })
   })
 
-  it('counts plain lines as code', () => {
-    expect(countLines('const x = 1\nconst y = 2\nconst z = 3')).toEqual({ comment: 0, code: 3 })
+  it('classifies per line', () => {
+    expect(classifyLines('/**\n * doc\n */\n\nconst x = 1')).toEqual(['comment', 'comment', 'comment', 'blank', 'code'])
+  })
+})
+
+describe('addedLineNumbers', () => {
+  it('reads added ranges from hunk headers, including the one-line form', () => {
+    const diff = ['+++ b/a.ts', '@@ -1,2 +1,3 @@', '+x', '@@ -10 +11 @@', '+y', '+++ b/b.ts', '@@ -0,0 +1,2 @@', '+z', '+w'].join('\n')
+    expect(addedLineNumbers(diff)).toEqual(new Map([['a.ts', [1, 2, 3, 11]], ['b.ts', [1, 2]]]))
   })
 })
 
 describe('countAddedLines', () => {
-  it('classifies added lines per file, including a block comment spanning lines', () => {
-    const diff = [
-      'diff --git a/a.ts b/a.ts',
-      'index 111..222 100644',
-      '--- a/a.ts',
-      '+++ b/a.ts',
-      '@@ -1,0 +2,3 @@',
-      '+// a comment',
-      '+const x = 1',
-      '+const y = 2',
-      'diff --git a/b.ts b/b.ts',
-      'index 333..444 100644',
-      '--- a/b.ts',
-      '+++ b/b.ts',
-      '@@ -1,0 +2,4 @@',
-      '+/* start',
-      '+ * middle',
-      '+ */',
-      '+const z = 3',
-    ].join('\n')
+  const files: Record<string, string> = {
+    'a.ts': ['/* opened earlier', ' * added inside the block', ' */', '++counter', 'const x = 1'].join('\n'),
+    'b.ts': ['// note', 'const y = 2'].join('\n'),
+  }
+  const read = (file: string) => files[file]
 
-    const result = countAddedLines(diff)
-    expect(result.get('a.ts')).toEqual({ comment: 1, code: 2 })
-    expect(result.get('b.ts')).toEqual({ comment: 3, code: 1 })
+  it('classifies added lines against the postimage, so block state and ++ lines are right', () => {
+    const diff = [
+      '+++ b/a.ts', '@@ -1,0 +2,1 @@', '+ * added inside the block', '@@ -3,0 +4,1 @@', '+++counter',
+      '+++ b/b.ts', '@@ -0,0 +1,2 @@', '+// note', '+const y = 2',
+    ].join('\n')
+    expect(countAddedLines(diff, read)).toEqual(new Map([
+      ['a.ts', { comment: 1, code: 1 }],
+      ['b.ts', { comment: 1, code: 1 }],
+    ]))
+  })
+
+  it('skips files whose hunks add nothing', () => {
+    const diff = ['+++ b/b.ts', '@@ -1,1 +1,0 @@', '-// gone'].join('\n')
+    expect(countAddedLines(diff, read)).toEqual(new Map())
   })
 })

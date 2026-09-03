@@ -49,8 +49,8 @@ const noInvisibleJsdoc = {
           }
           if (!next || next.value === '}' || next.value === ')' || next.value === ']') {
             // `{/** … */}` in JSX is a comment inside an expression container, not a doc.
-            const prev = src.getTokenBefore(c)
-            if (next?.value === '}' && prev?.value === '{') continue
+            const host = src.getNodeByRangeIndex(c.range[0])?.type
+            if (host === 'JSXExpressionContainer' || host === 'JSXEmptyExpression') continue
             context.report({loc: c.loc, messageId: 'nothing'})
           }
         }
@@ -59,8 +59,9 @@ const noInvisibleJsdoc = {
   },
 }
 
+// A bare "round N" is a domain word (a handshake, a game); only a round of review is provenance.
 const PROVENANCE =
-  /\bPR ?#\d+|\breview comment \d{6,}\b|\breview rounds?\b|\brounds? \d\b|\bcommit [0-9a-f]{7,}\b|\bCodex (review|on (PR )?#\d)|\breviewer P[0-4]\b/i
+  /\bPR ?#\d+|\breview comment \d{6,}\b|\breview rounds?\b|\brounds? \d+, P[0-4]\b|\bcommit [0-9a-f]{7,}\b|\bCodex (review|on (PR )?#\d)|\breviewer P[0-4]\b/i
 
 const noReviewProvenance = {
   meta: {

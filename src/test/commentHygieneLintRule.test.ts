@@ -47,6 +47,11 @@ describe('comment-hygiene ESLint rules', () => {
         code: `export const x = 1\n/** trailing */\n`,
         errors: [{ messageId: 'nothing' }],
       },
+      {
+        // A brace pair alone is not the JSX exemption.
+        code: `function empty() { /** dangling */ }`,
+        errors: [{ messageId: 'nothing' }],
+      },
     ],
   })
 
@@ -55,6 +60,7 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `// filter inside the query, before the LIMIT (#404)\nconst x = 1` },
       { code: `/** Name hygiene: docs/properties-as-blocks-migration.html §7. */\nconst x = 1` },
       { code: `// three rounds of the loop, then settle\nconst x = 1` },
+      { code: `// round 2 of the handshake re-sends the nonce\nconst x = 1` },
       // The escape hatch: the directive itself is never scanned, and it suppresses the line below.
       { code: `// eslint-disable-next-line rule-to-test/no-review-provenance -- the PR is the only spec\n// see PR #12 for the shape\nconst x = 1` },
     ],
@@ -63,6 +69,7 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `// found by Codex review on PR #427\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `/** see PR #447 review comment 3676752542 */\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// a later merge rewrote it (#688 review round 2)\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
+      { code: `// what schedules the re-parse (round 7, P2)\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// see commit 429fd4b2\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// reviewer P2 asked for the guard\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
     ],
