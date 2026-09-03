@@ -1,2 +1,2 @@
-var e=null,t=(t,n)=>e={repo:t,workspaceId:n},n=t=>{e===t&&(e=null)},r=()=>e,i=t=>t!=null&&t===e,a=()=>{e=null};export{r as currentMonitorRun,n as endMonitorRun,i as isCurrentRun,a as resetMonitorRun,t as startMonitorRun};
+import{CallbackSet as e}from"../../utils/callbackSet.js";var t=null,n=new e(`perf-monitor.run`),r=e=>n.add(e),i=(e,r)=>(t={repo:e,workspaceId:r},n.notify(),t),a=e=>{t===e&&(t=null,n.notify())},o=()=>t,s=(e,n)=>t!==null&&t.repo===e&&t.workspaceId===n,c=e=>e!=null&&e===t,l=()=>{t=null,n.notify()};export{o as currentMonitorRun,a as endMonitorRun,s as hasMonitorRunFor,c as isCurrentRun,l as resetMonitorRun,i as startMonitorRun,r as subscribeMonitorRun};
 //# sourceMappingURL=monitorRun.js.map
