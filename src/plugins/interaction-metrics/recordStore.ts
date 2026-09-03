@@ -29,6 +29,7 @@
  * next sample's own epoch check opens a replacement rather than compounding it.
  */
 import { ChangeScope, type BlockData, type TypeContribution } from '@/data/api'
+import { typesProp } from '@/data/properties.js'
 import type { Repo } from '@/data/repo'
 import {
   getPluginUIStateBlock,
@@ -334,6 +335,22 @@ export const clientSeriesQuery = (
   }
 }
 
+/** Content this module wrote, as opposed to content a person typed.
+ *
+ *  Records are contentless now, but ones written before that carried exactly
+ *  their own ISO timestamp — and those must stay prunable, or an existing
+ *  device's series becomes unbounded the moment this guard exists. Anything
+ *  that is not a bare timestamp was typed by hand.
+ *
+ *  A person who types an exact ISO timestamp into a telemetry row loses it.
+ *  That is the direction to fail in: the other one leaves every pre-existing
+ *  record permanently unprunable. */
+const isRecorderTitle = (content: string): boolean => {
+  if (content === '') return true
+  const parsed = Date.parse(content)
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === content
+}
+
 /** Its own tx description, not the record's: these are separate transactions
  *  with separate failure modes, and a shared description makes them
  *  indistinguishable in the tx log — where attributing a write to a call site is
@@ -406,6 +423,13 @@ const pruneGroup = async (
       // which deletes from the same far end and whose deletes this loop no-ops
       // on; reaching the case needs a person hand-deleting newer rows mid-append.
       if ((record as { recordedAt?: unknown }).recordedAt !== row.stamp) continue
+      // Hand edits to the record itself, which is inspectable by design and so
+      // can be typed into or annotated with another property. Both are things
+      // an Automation-scope delete would take with no undo behind it.
+      if (!isRecorderTitle(now.content)) continue
+      // `types` is the type tag this module applies, not a hand edit.
+      const ours = new Set([spec.recordName, typesProp.name])
+      if (Object.keys(now.properties).some((key) => !ours.has(key))) continue
       // Property machinery is ours; anything else under a record was put there
       // by hand. Skipping is the right direction to fail: the bound is a bound,
       // and exceeding it by the records a person has annotated costs disk,
