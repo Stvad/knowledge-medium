@@ -15,7 +15,7 @@
  */
 import type { Repo } from '@/data/repo'
 import { pluginUIStateBlockId, stateChildBlockId } from '@/data/stateBlocks.js'
-import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
+import { deviceSurface, getClientId } from '@/utils/clientId.js'
 import { jsonPathForProperty, type PropertyName } from '@/data/internals/typedBlockQuery.js'
 import { clientSeriesQuery } from '@/plugins/interaction-metrics/recordStore.js'
 import {
@@ -154,7 +154,7 @@ export const countRecords = async (
   const q = clientSeriesQuery('COUNT(*) AS n', {
     groupId: seriesGroupId(repo, workspaceId, series.typeId),
     recordName: series.recordName,
-    deviceLabel: getDeviceLabel(),
+    deviceSurface: deviceSurface(),
     tail: '',
   })
   const rows = await repo.db.getAll<{ n: number }>(q.sql, q.params)
@@ -195,7 +195,7 @@ export const loadRecords = async <T extends { recordedAt: number }>(
   // records — so the reader and the retention pass cannot disagree about which
   // rows are in the series or which of them is newest.
   const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS payload', {
-    groupId, recordName, deviceLabel: getDeviceLabel(),
+    groupId, recordName, deviceSurface: deviceSurface(),
     selectParams: [recordPath],
     tail: 'LIMIT ?', tailParams: [CANDIDATE_LIMIT],
   })
