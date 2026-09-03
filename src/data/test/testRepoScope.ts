@@ -26,6 +26,12 @@
  *  - A file's own `afterEach` runs BEFORE this release, so a file that already
  *    disposes its Repo keeps working; the second release is a no-op.
  *
+ * WHAT IT DOES NOT REACH: work whose deferral timer has not fired yet. A drain
+ * awaits what is pending, and neither job framework keeps the timer handle a
+ * cancel would need, so an armed `delayMs` processor outlives this (#892). The
+ * unpin above blunts it — a pass gated on the active workspace refuses when it
+ * eventually fires — but the gap is real and tracked rather than papered over.
+ *
  * WEAK REFS, and the sweep. A fuzz property builds one Repo per iteration
  * (`kernelQueries.fuzz.test.ts` does it inside the property callback), and a
  * deep run is bounded by time rather than iteration count — so a strong set

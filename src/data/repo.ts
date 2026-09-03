@@ -4421,18 +4421,29 @@ export class Repo {
    *  writing into the next test's database (`testRepoScope.ts`, issue #813).
    *  Only the seed-materialization family is known to have done that; the rest
    *  are here so the class cannot recur family by family, and dropping them
-   *  fails no test today. Like its members, this does not advance timers: work
-   *  whose deferral timer has not fired is not pending yet and is not waited on. */
+   *  fails no test today.
+   *
+   *  Producers first, then processors. Every family above can commit a
+   *  `repo.tx`, and a tx dispatches post-commit processors — so draining all
+   *  seven together lets `awaitProcessors` observe an empty set and return
+   *  before a maintenance job's tx has queued anything. `awaitIdle` is itself a
+   *  fixed point over processors that schedule processors, which is what makes
+   *  one pass at the end enough.
+   *
+   *  NOT a fixed point across families, and NOT a cancel. Like its members it
+   *  does not advance timers: work whose deferral timer has not fired is not
+   *  pending yet, so an armed `delayMs` processor or idle callback survives
+   *  this (#892 — cancelling one needs a handle neither framework keeps). */
   async awaitDeferredWork(): Promise<void> {
     await Promise.all([
       this.awaitSeedMaterialization(),
       this.awaitReferenceTargetDerive(),
       this.awaitPropertyDefinitionMigrations(),
       this.awaitReconcileRescans(),
-      this.awaitProcessors(),
       this.awaitReprojections(),
       this.awaitWorkspaceBackfills(),
     ])
+    await this.awaitProcessors()
   }
 
   /** Test-only escape hatch retained for stage-level tests that wire
