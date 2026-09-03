@@ -149,10 +149,9 @@ export const pageRecordStartedAt = (repo: object, workspaceId: string): number |
 
 /** Why recording is impossible here, or null; order matters only for which
  *  blocker is REPORTED. No persistent client id: history is written where
- *  the next session never looks. Read-only workspace: Automation admits the
- *  write locally and RLS then refuses it into the rejection quarantine.
- *  Exported (not cached) since `repo.isReadOnly` is LIVE and follows a
- *  server-pushed role change. */
+ *  the next session never looks. Read-only workspace: Automation admits it
+ *  locally, RLS then refuses it into the rejection quarantine. Exported (not
+ *  cached) since `repo.isReadOnly` is LIVE, following a pushed role change. */
 export const recordingBlockedBy = (
   repo: Pick<Repo, 'isReadOnly'>,
 ): RecordingBlocker | null =>
@@ -193,11 +192,10 @@ export const readLiveSession = (
 }
 
 /** The same reading, WITHOUT registering an observation — for a consumer
- *  that is only looking. Observing is a claim about presence, and a stale
- *  analysis can be wrong to make: observing the workspace being analysed
- *  after the user moved on and reset would mark the fresh span
- *  unattributable. The span is still adopted (rebases to the current epoch);
- *  only the "seen" claim is skipped. */
+ *  that is only looking: observing the workspace under analysis after the
+ *  user moved on and reset would wrongly mark the fresh span unattributable.
+ *  The span is still adopted (rebases to the current epoch); only the
+ *  "seen" claim is skipped. */
 export const peekLiveSession = (
   repo: Repo,
   workspaceId: string,

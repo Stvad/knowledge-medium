@@ -1,16 +1,9 @@
 /**
- * Interaction-metrics persistence: fold a `repo.metrics()` snapshot into a
- * durable per-session record, stored as a block-per-session under a hidden
- * per-user ui-state subtree — block-per-session so two devices never write the
- * same row.
- *
- * The data layer already measures all of this on every run; what it does not do
- * is survive a reload, which is the whole of what this adds. The recorder takes
- * no measurement of its own: it snapshots counters that are maintained
- * regardless, so its only runtime cost is one snapshot and one small write per
- * sample, on genuine idle (see `./schedule`).
- *
- * `@/plugins/perf-monitor` is the half that reads the series.
+ * Interaction-metrics persistence: folds a `repo.metrics()` snapshot into a
+ * durable per-session record, one block per session under a hidden per-user
+ * ui-state subtree (so two devices never write the same row). Takes no
+ * measurement of its own, so cost is one snapshot + write per sample, on
+ * genuine idle (see `./schedule`). `@/plugins/perf-monitor` reads the series.
  */
 import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { Repo } from '@/data/repo'
@@ -29,18 +22,13 @@ import {
   setPageRecord,
 } from './sessionContext.js'
 
-/** Safety valve on the stored query set, NOT a policy about which queries
- *  matter — `interactionComparable` says why the selector must not be cost. A
- *  real session measures ~13 queries in ~3KB, so this bound only exists so a
- *  pathological future cannot grow the record without limit. */
+/** Safety valve, not policy — `interactionComparable` covers the selector
+ *  itself. Only guards unbounded future growth; real sessions are nowhere near it. */
 const MAX_QUERIES = 64
 
-/** One timing distribution as stored. A subset of `TimingSnapshot` — the fields
- *  a trend can act on. `p95Ms` is over the reservoir's last 256 samples, NOT the
- *  whole session, so on a long session it describes recent behaviour; `calls`
- *  and `totalMs` are lifetime. Comparing p95 across sessions is therefore
- *  comparing recent-window to recent-window, which is what we want, but it is
- *  not "the session's p95" and must not be described as one. */
+/** One timing distribution as stored (subset of `TimingSnapshot`). `p95Ms` is
+ *  over the reservoir's last 256 samples, not the whole session — comparable
+ *  window-to-window across sessions, but never "the session's p95" (`calls`/`totalMs` are lifetime). */
 export interface TimingSample {
   calls: number
   p50Ms: number
@@ -48,83 +36,47 @@ export interface TimingSample {
   totalMs: number
 }
 
-/** The subset of a sample a trend actually compares. Split out from the stored
- *  record so a live `repo.metrics()` snapshot can be compared against stored
- *  history WITHOUT first being written and read back — which would otherwise
- *  make the monitor's verdict depend on the recorder having sampled first. */
+/** The subset of a sample a trend actually compares — split out so a live
+ *  `repo.metrics()` snapshot can be compared to stored history without a write+readback round trip first. */
 export interface InteractionComparable {
-  /** `metrics().excludingTelemetry.writes`: row-changing, non-telemetry
-   *  transactions this span. The denominator that turns a raw resolve count
-   *  into resolves-per-write, which is the signal that catches an over-broad
-   *  invalidation dep (a query re-resolving on every write instead of on writes
-   *  that concern it). Latency metrics are blind to that class -- each resolve
-   *  looks perfectly normal. */
+  /** `metrics().excludingTelemetry.writes`: denominator for resolves-per-write
+   *  — the signal that catches an over-broad invalidation dep; latency metrics are blind to it. */
   writes: number
-  /** Per-query resolve timings for every query this session measured, keyed by
-   *  query NAME (`repo.metrics().queries` is already name-keyed, not
-   *  handle-keyed). Bounded only by `MAX_QUERIES`.
-   *
-   *  PAGE TOTALS, unlike `writes` and `fanout` beside them: these INCLUDE the
-   *  loader reruns caused by the recorder's own writes. The `telemetry` flag
-   *  covers a transaction and its synchronous fan-out counters, but a loader
-   *  rerun happens in a later microtask and is timed unconditionally, with no
-   *  provenance saying which transaction invalidated it.
-   *
-   *  ACCEPTED, with its shape stated because it is not uniform: against a busy
-   *  session's thousands of resolutions, a couple of telemetry transactions per
-   *  five minutes are noise. On a nearly IDLE session — which is when this
-   *  recorder samples — they can be a large share of all query activity, so the
-   *  p95 partly describes the app reacting to its own bookkeeping. Read a
-   *  low-`writes` session's query timings with that in mind.
-   *
-   *  Excluding them needs the invalidating transaction's provenance carried to
-   *  the asynchronous loader run it causes — HandleStore to dispatcher, in the
-   *  hottest path in the app. Its own change, not a line here. */
+  /** Per-query resolve timings, keyed by query NAME. Bounded by `MAX_QUERIES`.
+   *  PAGE TOTALS, unlike `writes`/`fanout` — includes loader reruns from the
+   *  recorder's own writes, since the `telemetry` flag only covers a
+   *  transaction's synchronous fan-out. ACCEPTED: noise on a busy session, but
+   *  can dominate the idle sessions this recorder actually samples — read a
+   *  low-`writes` session's p95 with that in mind. */
   queries: Record<string, TimingSample>
-  /** `handleStore` fan-out counters, restricted to what a transaction's own
-   *  invalidation walk can attribute -- invalidations, handlesWalked/Matched,
-   *  loaderInvalidations, midLoadInvalidations. A flat number map, stored
-   *  whole: it is bounded, and which counter matters depends on the regression
-   *  being chased. Settle-path counters (`notifiesFired`, `reloadsAfterSettle`)
-   *  are ABSENT, not zero -- they are bumped after the walk, outside any
-   *  window a tx can claim. Read a missing key as "not measured". */
+  /** `handleStore` fan-out counters attributable to a transaction's own
+   *  invalidation walk (flat map, bounded). Settle-path counters
+   *  (`notifiesFired`, `reloadsAfterSettle`) are ABSENT, not zero — bumped
+   *  after the walk, outside any window a tx can claim; read a missing key as "not measured". */
   fanout: Record<string, number>
 }
 
-/** One persisted interaction sample: the state of the data layer's own counters
- *  at a point in a page session. */
+/** One persisted interaction sample: the data layer's own counters at a point in a page session. */
 export interface InteractionRecordData extends InteractionComparable {
-  /** Wall-clock epoch ms of this (possibly re-)write. A session's record is
-   *  updated in place as the session goes on, so this advances. */
+  /** Wall-clock epoch ms of this (possibly re-)write — advances as the session's record is updated in place. */
   recordedAt: number
   /** Wall-clock epoch ms at which the page session began. */
   startedAt: number
   appVersion: string
   appSha: string
-  /** Stable per-installation id (see `@/utils/clientId`), so one device's
-   *  history is separable from the fleet's. */
+  /** Stable per-installation id (see `@/utils/clientId`) — separates one device's history from the fleet's. */
   clientId: string
   deviceLabel: string
-  /** Session wall-clock at sample time. A very short session's counters are
-   *  dominated by boot, so a reader should weight or floor on this. */
+  /** Session wall-clock at sample time — a very short session's counters are dominated by boot; weight or floor on this. */
   sessionMs: number
-  /** Live blocks in the workspace. The dominant confound for every timing
-   *  below — without it a trend reads graph growth as a regression. */
+  /** Live blocks in the workspace — the dominant confound for every timing below; without it a trend reads graph growth as a regression. */
   blockCount: number
   /** Per-DB-method timings (`getAll`, `execute`, `writeTransaction`, …).
-   *
-   *  PAGE TOTALS, like `queries` and unlike `writes` and `fanout`: the
-   *  `telemetry` flag keeps a transaction out of the write and fan-out counters,
-   *  but `DbMetrics` times every call, so a session that took a previous sample
-   *  has that sample's lookups, count, retention query and transaction in here.
-   *  ACCEPTED, on two grounds. Nothing COMPARES these — `series.ts` derives
-   *  regressions from `query:*`, `fanout:*` and `startup:*` only, so recorder
-   *  calls in here cannot produce a verdict, false or otherwise; this is
-   *  recorded for someone reading a session by hand. And every session pays the
-   *  same handful of calls, so what they add sits on both sides of any
-   *  comparison later made rather than skewing one. Judge a movement here
-   *  accordingly on a quiet session, where they are a large share of a small
-   *  denominator. */
+   *  PAGE TOTALS like `queries`: `DbMetrics` times every call, so a prior
+   *  sample's own lookups show up here too. ACCEPTED — `series.ts` never
+   *  compares these (only `query:*`/`fanout:*`/`startup:*`), and every
+   *  session pays the same handful of calls, so they wash out of later
+   *  comparisons; expect a large share on a quiet session. */
   db: Record<string, TimingSample>
   handles: {
     count: number
@@ -137,52 +89,37 @@ export interface InteractionRecordData extends InteractionComparable {
   }
 }
 
-/** The whole record rides one identity-codec property (an engine-controlled
- *  blob) so the shape can evolve without per-field schema churn — same call as
- *  `startupRecord`.
- *
- *  Deliberately ONE cell, against the record-grain rule's usual direction. The
- *  addressable record here is the session sample, and it IS a block: typed,
- *  queryable, auditable. What the cell holds is that one measurement's fixed
- *  field vector — nobody links to, undoes, or hand-edits the p95 of a single
- *  query in a single session, which is the rule's own test. Exploding it would
- *  mint ~15 child blocks per sample against a retention bound of thousands per
- *  device, all of them in the user's tree, to make individually addressable
- *  something no surface addresses. */
+/** One identity-codec property (engine-controlled blob), not per-field
+ *  schema — same call as `startupRecord`. Deliberately ONE cell, against the
+ *  record-grain rule's usual direction: the addressable unit is the session
+ *  sample itself; nobody links to, undoes, or hand-edits one query's p95
+ *  within it, which is the rule's own test. Exploding it would mint ~15
+ *  child blocks per sample for no surface that addresses them individually. */
 export const interactionRecordProp = seedProperty<InteractionRecordData | undefined>({
   seedKey: 'system:interaction-metrics/property/interaction-record',
   revision: 1,
-  // Namespaced: property names share one workspace-wide schema namespace, so a
-  // flat `interactionRecord` is a name an installed extension could plausibly
-  // claim -- and the winner of that race decides the codec and scope these
-  // records decode under. Free to fix now; after records persist under a name
-  // it orphans them.
+  // Namespaced: property names share one workspace-wide namespace, so a flat
+  // `interactionRecord` could collide with an extension's claim — free to fix now, but renaming after records persist orphans them.
   name: 'interaction-metrics:record',
   preset: 'optional-json',
   defaultValue: undefined,
-  // Automation scope, like `startupRecord`: synced and non-undoable, but NOT in
-  // the property-panel hidden set, so the record stays inspectable by hand.
+  // Automation scope, like `startupRecord`: synced, non-undoable, but not in the property-panel hidden set — stays inspectable by hand.
   changeScope: ChangeScope.Automation,
 })
 
-/** The record blocks themselves. Typing the rows -- not just their container --
- *  is what lets them be found by typed query, audited, and migrated, instead of
- *  being inferred from position in the tree plus the presence of a property. */
+/** The record blocks themselves — typing the rows, not just the container, lets them be found by typed query, audited, and migrated. */
 export const interactionRecordType = seedType({
   seedKey: 'system:interaction-metrics/type/interaction-record',
   revision: 1,
   id: 'interaction-metrics-record',
   label: 'Interaction metrics record',
   hideFromCompletion: true,
-  // The payload is part of the record's CONTRACT, not an ad hoc cell: declaring
-  // it means type-aware schema and property tooling sees a typed record with a
-  // field rather than a JSON blob it has no account of.
+  // The payload is part of the record's CONTRACT: declaring it means typed
+  // schema/property tooling sees a field, not an unaccounted JSON blob.
   properties: [interactionRecordProp],
 })
 
-/** ~4 page sessions/day on an active device at ~1.7KB each: about three months
- *  of history for ~680KB per client group. The reader never looks past 40, so
- *  this is purely how far back an investigation can reach. */
+/** ~4 sessions/day at ~1.7KB each: about three months of history per client group. The reader never looks past 40. */
 export const INTERACTION_RETAIN = 400
 
 /** Parent ui-state container; each session adds one child under its client's group. */
@@ -211,42 +148,31 @@ const toTimingSample = (t: {
 
 /**
  * Recover the query name from a HandleStore key
- * (`query:<name>@<registryEpoch>` plus `:<serialized args>` when the query
- * takes them; the serialization always starts with `[`).
- *
- * The args split is a PRIVACY boundary: args carry block ids and raw search
- * text, and this record is a synced block someone may paste into an issue. It
- * fails SAFE — a name containing `:[` truncates EARLIER, never later, and
- * neither cosmetic trim can lengthen the result. The epoch has to go for a
- * different reason: a registry swap bumps it, which would file the same query
- * under a new name mid-session and break the grouping a trend depends on.
+ * (`query:<name>@<registryEpoch>[:<serialized args>]`). PRIVACY boundary:
+ * args can carry block ids and raw search text, so stripping at `:[` fails
+ * safe (truncates early, never late). Epoch is stripped too — a registry
+ * swap would file the same query under a new name mid-session.
  */
 export const queryNameFromHandleKey = (key: string): string =>
   key.split(':[')[0].replace(/^query:/, '').replace(/@\d+$/, '')
 
-/** Pure: the comparable subset of a metrics snapshot. Shared by the stored
- *  record and by the monitor's live reading of the current session, so the two
- *  can never diverge in what "the same measurement" means. */
+/** Pure: the comparable subset of a metrics snapshot, shared by the stored
+ *  record and the monitor's live reading so the two can't diverge. */
 export const interactionComparable = (
   metrics: ReturnType<Repo['metrics']>,
 ): InteractionComparable => {
   const queries: Record<string, TimingSample> = {}
-  // Ordered by NAME, not by cost. Truncating a cost-ranked list drops exactly
-  // the queries this exists to catch: one that was cheap has no stored
-  // baseline, so when it becomes expensive the comparison meets a name it has
-  // never seen and reads it as a newly mounted surface rather than a
-  // regression. A stable selector keeps the retained set the same session over
-  // session, which is what makes the history comparable at all.
+  // Ordered by NAME, not cost: a cost-ranked truncation would drop exactly
+  // the queries this catches — one that was cheap and became expensive has
+  // no baseline, so a stable selector is what keeps history comparable.
   for (const [name, timing] of Object.entries(metrics.queries)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .slice(0, MAX_QUERIES)) {
     queries[name] = toTimingSample(timing)
   }
   return {
-    // `excludingTelemetry`, not the page totals: the Repo counts the recorders'
-    // own transactions on the other side of that line, in the same synchronous
-    // block as the invalidation walk they cause. A correction applied out here
-    // instead cannot be exact — the window would span this function's awaits.
+    // `excludingTelemetry`, not page totals: the Repo already excludes the
+    // recorder's own tx synchronously; a correction applied here can't be exact (the window spans this function's awaits).
     writes: metrics.excludingTelemetry.writes,
     queries,
     fanout: { ...metrics.excludingTelemetry.handleStore },
@@ -298,13 +224,10 @@ export const buildInteractionRecord = (
 
 // ──── per-session write ────
 
-// Session-scoped facts (identity, attributability, the record this session
-// owns) live in `./sessionContext`; this module asks rather than deciding.
+// Session-scoped facts (identity, attributability, the record owned) live in `./sessionContext`; this module asks rather than deciding.
 
-/** Live blocks in a workspace. Shared with the monitor, which pairs it with a
- *  LIVE `repo.metrics()` snapshot and so needs the same measurement, not the
- *  size recorded by some earlier session. ~15ms on a 327k-block graph:
- *  affordable for an idle-gated caller, not for a hot path. */
+/** Live blocks in a workspace. Shared with the monitor, which needs a LIVE
+ *  measurement, not one from an earlier session — ~15ms, affordable idle-gated but not on a hot path. */
 export const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<number> => {
   const row = await repo.db.getOptional<{ n: number }>(
     'SELECT COUNT(*) AS n FROM blocks WHERE workspace_id = ? AND deleted = 0',
@@ -313,24 +236,15 @@ export const countLiveBlocks = async (repo: Repo, workspaceId: string): Promise<
   return row?.n ?? 0
 }
 
-/** Still OURS to write to: live, under the group the reader matches on, and
- *  still carrying a record.
+/** Still OURS to write to: live, right parent, still carrying a record
+ *  (retention's own three checks). A stripped record means a user
+ *  repurposed the block — writing back would restore telemetry retention
+ *  won't clean up; wrong parent means invisible to `loadRecords`.
  *
- *  All three, and the same three retention asks. A row whose record was
- *  stripped is user content by that rule — so accepting it would let the next
- *  sample write telemetry back onto a block a person had just repurposed, with
- *  retention then refusing to clean up what the recorder had restored. Placement
- *  matters for a different reason: a record moved elsewhere is invisible to
- *  `loadRecords`, so updating it writes the session where nothing reads.
- *
- *  `== null` rather than `=== undefined`: clearing the property through its
- *  codec leaves the key present holding JSON null, which `json_extract` reports
- *  as absent — the same spelling retention had to handle.
- *
- *  ONE predicate over a row shape both sources produce. It is asked twice — to
- *  decide whether a replacement is due, and again inside the writing
- *  transaction, which several awaits later is the only place the answer is
- *  still true — and the two must not be able to drift. */
+ *  `== null`, not `=== undefined`: clearing the property via its codec
+ *  leaves JSON null in place, which `json_extract` reports as absent — same
+ *  spelling retention handles. ONE predicate, asked twice (pre-check, then
+ *  inside the writing tx) so the two answers cannot drift. */
 const isUsableRow = (
   row: { deleted?: boolean; parentId: string | null; properties: Record<string, unknown> } | null,
   repo: Repo,
@@ -340,9 +254,8 @@ const isUsableRow = (
   row.parentId === clientGroupId(repo, workspaceId, interactionMetricsUIStateType) &&
   row.properties[interactionRecordProp.name] != null
 
-/** The pre-check, before any transaction. Selects the fields the predicate
- *  reads rather than asking SQL the question — `tx.get` cannot filter, so
- *  letting the WHERE clause answer half of it is what made these two drift. */
+/** The pre-check, before any transaction. Selects raw fields for the shared
+ *  predicate rather than asking SQL directly — a WHERE clause answering half of it is how these two drift. */
 const isUsableRecord = async (
   repo: Repo,
   blockId: string,
@@ -362,14 +275,11 @@ const isUsableRecord = async (
 }
 
 /**
- * Sample `repo.metrics()` into this page session's record, creating the record
- * block on the first sample and UPDATING it in place afterwards. Returns the
- * record's block id, or null when this session is not one that may be sampled.
- *
- * Update-in-place rather than append-per-sample: the series a trend reads is
- * one point per session, and a mid-session sample is a strictly worse version
- * of the session's final one. Re-writing one small block costs a write; a
- * growing append log would cost the graph.
+ * Sample `repo.metrics()` into this page session's record: creates the block
+ * on first sample, updates it in place after. Returns the block id, or null
+ * when this session may not be sampled. Update-in-place, not append-per-
+ * sample — the series reads one point per session, and re-writing one block
+ * costs a write where a growing append log would cost the graph.
  */
 export const writeInteractionSample = async (
   repo: Repo,
@@ -380,25 +290,20 @@ export const writeInteractionSample = async (
   if (!context.attributable) return null
   if (!(await awaitRecordingAllowed(repo, workspaceId))) return null
 
-  // Snapshot BEFORE any of this sample's own setup work, so a first sample does
-  // not report the transactions that created its own record block. Taken again
-  // HERE rather than reused from the check above: the other recorder can commit
-  // during the await between them, which the snapshot would then include and a
-  // stale correction would fail to discount.
+  // Snapshot BEFORE this sample's own setup work, so it doesn't report the
+  // transactions that create its own record block. Re-taken HERE, not reused
+  // from the check above: another recorder can commit in the await between them.
   const { metrics, session: current } = readLiveSession(repo, workspaceId)
-  // The record can be deleted from another device, or by a user browsing the
-  // metrics tree. Writing a property to a tombstone does not restore it, so
-  // without this the session would keep updating a row no reader can see.
+  // The record can be deleted elsewhere (another device, or a user browsing
+  // the tree); writing to a tombstone doesn't restore it, so without this check the session updates a row nothing reads.
   const existing =
     current.recordId && (await isUsableRecord(repo, current.recordId, workspaceId))
       ? { blockId: current.recordId, startedAt: pageRecordStartedAt(repo, workspaceId)! }
       : null
   if (!existing) clearPageRecord(repo)
 
-  // The SPAN's start, not the page's. `sessionMs` is derived from this and the
-  // counters it sits beside cover one span, so after a `resetMetrics()` the
-  // page's time origin would describe a window containing work the figures no
-  // longer count — inflating the very denominator a reader is told to floor on.
+  // The SPAN's start, not the page's: after a `resetMetrics()` the page's
+  // time origin would inflate `sessionMs` with work the counters beside it no longer count.
   const startedAt = existing?.startedAt ?? metrics.epochStartedAt
   const data = buildInteractionRecord(metrics, {
     recordedAt: Date.now(),
@@ -407,22 +312,17 @@ export const writeInteractionSample = async (
     appSha: appVersion.sha,
     clientId: getClientId(),
     deviceLabel: getDeviceLabel(),
-    // Re-counted per sample rather than cached from session start: this is the
-    // dominant confound for every timing in the record, and a session that
-    // imports or syncs a lot of blocks would otherwise report the final
-    // timings against the opening graph size.
+    // Re-counted per sample, not cached from session start: the dominant
+    // confound for every timing here — a big import/sync would otherwise measure against the opening graph size.
     blockCount: await countLiveBlocks(repo, workspaceId),
   })
 
   try {
     {
       if (existing) {
-        // Placement re-taken INSIDE the transaction, not just before it: the
-        // pre-check is separated from this write by the block count, and a
-        // sync-applied or hand edit landing in that window leaves us writing
-        // this session into a row the reader can no longer find. Refusing costs
-        // one sample — the next one finds the row unusable and opens a
-        // replacement — while writing costs the session.
+        // Re-checked INSIDE the tx, not just before it: a sync or hand edit
+        // landing in the block-count await between would write into a row
+        // nothing reads. Refusing costs one sample; writing costs the session.
         await updateClientRecord(repo, {
           workspaceId,
           blockId: existing.blockId,
