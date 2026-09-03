@@ -186,28 +186,14 @@ const verbatimContentLosesValue = (content: string): boolean =>
  *  value — find-replace is the one caller. They bypass
  *  `encodedValueToContent`, so they cannot escape, and must refuse instead.
  *
- *  NARROWER than {@link verbatimContentLosesValue} on purpose, and the gap is
- *  the whole design: only a MARKED span destroys anything. It stamps
- *  `is_field_form`, `isFieldValueChild` drops the row from the value set, and
- *  the owner's key goes with it, silently (#688). An UNMARKED span keeps the
- *  bit clear, stays in the value set and decodes right back — the value
- *  survives; it has merely become a live reference.
+ *  NARROWER than {@link verbatimContentLosesValue} on purpose: only a MARKED
+ *  span destroys anything — it stamps `is_field_form`, `isFieldValueChild`
+ *  drops the row from the value set, and the owner's key goes with it,
+ *  silently (#688). An UNMARKED span stays in the value set and decodes
+ *  right back, so `Roadmap` → `[[Roadmap]]` must keep working.
  *
- *  So this refuses only real loss, and `Roadmap` → `[[Roadmap]]` across the
- *  workspace still edits a property value like it edits any other block.
- *  Refusing it would make property rows behave less like normal blocks for no
- *  data-safety gain, which is the tenet, not an exception to it.
- *
- *  The encoder is wider for the opposite reason: `setProperty(b, note,
- *  '[[Roadmap]]')` passes a STRING, so storing a live reference means a later
- *  rename edits the caller's data. Same characters, different intent, and each
- *  path knows which one it has.
- *
- *  The null SENTINEL is the third destroyer and belongs here for the same
- *  reason the marked span does: bare `null` content IS the unset value to a
- *  codec that accepts one, so a replace producing it clears the property with
- *  nothing reported. It is not in the narrowing argument above because it
- *  destroys rather than re-roles.
+ *  The null SENTINEL is the third destroyer: bare `null` content IS the
+ *  unset value to a codec that accepts one.
  *
  *  Scoped to the codecs that store content verbatim: everything else either
  *  emits machine-formatted text that cannot take these shapes, or (`ref`) is

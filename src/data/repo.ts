@@ -1,17 +1,7 @@
 /**
- * New `Repo` class for the data-layer redesign (spec §3, §8).
- *
- * Stage 1.4 scope: holds `db` + `cache` + `user` + the mutator registry
- * (kernel mutators registered at construction time). Exposes:
- *   - `repo.tx(fn, opts)` — primitive transactional session
- *   - `repo.mutate.X(args)` — typed-dispatch sugar (1-mutator tx wrapping)
- *   - `repo.run(name, args)` — runtime-validated dispatch (dynamic plugins)
- *   - `repo.setFacetRuntime(runtime)` — refresh mutator registry from a
- *     FacetRuntime. Minimal impl reads `mutatorsFacet` contributions.
- *
- * Stage 2 of Phase 1 (post-1.6) adds:
- *   - HandleStore + `repo.block(id)` / `repo.children(id)` / etc.
- *   - Layout B sync observer for sync-applied invalidation (design doc §9.2)
+ * `Repo`: the data-layer entry point. Owns `db` + `cache` + client context
+ * + the mutator/query/processor registries. Surface: `tx` / `mutate.X` /
+ * `run` / `query` / `block`, plus registry accessors and sync/undo control.
  */
 
 import { v4 as uuidv4 } from 'uuid'
@@ -1348,6 +1338,23 @@ export class Repo {
     })
   }
 
+  /** The current counter span's identity, WITHOUT building a metrics snapshot.
+   *
+   *  `metrics()` walks and sorts every registered handle, copies and sorts each
+   *  timing reservoir and clones the transaction log — affordable for a
+   *  measurement, not for a consumer that only wants to know whether the span
+   *  it is holding is still the current one. That check runs from
+   *  `useSyncExternalStore` getters, so it happens on ordinary renders; on a
+   *  large session the snapshot cost lands on the interactive path, and a
+   *  performance monitor doing that would inflate what it reports.
+   *
+   *  The two fields are exactly what identifies a span. Keep this in step with
+   *  the same-named fields in `metrics()`; they read the same state, and
+   *  neither is derived from the other. */
+  metricsSpan(): { epoch: number; epochWorkspaceId: string | null } {
+    return { epoch: this.metricsEpoch, epochWorkspaceId: this.metricsEpochWorkspaceId }
+  }
+
   /** Zero every counter and reservoir in `repo.metrics()`. Use to
    *  mark a baseline before measuring a discrete operation (e.g. a
    *  benchmark iteration, a UI interaction in a soak test, or a
@@ -1777,46 +1784,18 @@ export class Repo {
    *  Consecutive txs opened through the facade — directly via
    *  `grouped.tx`, or indirectly via `grouped.mutate.X` / `grouped.run`
    *  — MERGE into a single undo entry at record time, so the whole
-   *  composite reverts with one cmd-Z. Helpers that take a `Repo`
-   *  parameter join the group simply by being handed the facade.
+   *  composite reverts with one cmd-Z.
    *
-   *  Wrap-site convention: name the callback parameter `repo`,
-   *  shadowing the raw repo — that way an out-of-habit `repo.tx(...)`
-   *  inside the group cannot silently open a foreign tx and split it.
+   *  Wrap-site convention: name the callback parameter `repo`, shadowing
+   *  the raw repo — that way an out-of-habit `repo.tx(...)` inside the
+   *  group cannot silently open a foreign tx and split it.
    *
-   *  Semantics to be aware of:
-   *   - Merging is top-of-stack only: a foreign tx (one opened on the
-   *     plain repo, e.g. a background write) landing mid-group SPLITS
-   *     the group into two entries rather than folding across it.
-   *   - No atomicity: each tx still commits independently. If a later
-   *     tx throws, the committed prefix stays applied and remains
-   *     covered by the (single) group entry; the error propagates.
-   *   - Nested `undoGroup` on the facade joins the OUTER group — one
-   *     user-perceived action, one entry.
-   *   - The facade must not escape the callback: its token never
-   *     expires, so a leaked reference would stamp far-future txs into
-   *     a long-dead group (see the `block` override below for the one
-   *     leak path that existed).
-   *   - Grouping covers `tx` / `mutate` / `run` and the TypeTagger
-   *     convenience writes. Two write styles deliberately do NOT join:
-   *     Block-facade sugar (`grouped.block(id).setContent(...)` routes
-   *     through `block.repo` = the real repo — a group-bound Block
-   *     would be exactly the leak the `block` override closes) and
-   *     stateful service writes (`userSchemas` / `userTypes` /
-   *     `projectors` — constructed against the real repo; a
-   *     facade-hosted twin would clobber their shared contribution
-   *     buckets). Both land as foreign txs and split the group; use
-   *     `grouped.tx` / `grouped.mutate` inside a group instead.
-   *   - Everything not overridden delegates to the real repo via the
-   *     prototype chain and therefore runs with the facade as `this` —
-   *     safe for reads and shared-object mutation, NOT safe for three
-   *     hazard classes (shared-state minting, instance-field
-   *     assignment, construction-captured collaborators), which the
-   *     overrides in {@link groupedFacade} cover — each carries its
-   *     rationale at the override. The classification rubric and the
-   *     structural enforcement live in `repoFacadeGate.test.ts`, which
-   *     fails on any Repo member that is neither overridden nor
-   *     consciously allowlisted. */
+   *  Merging is top-of-stack only: a foreign tx landing mid-group SPLITS
+   *  the group. No atomicity: each tx still commits independently. The
+   *  facade must not escape the callback — its token never expires.
+   *
+   *  Why each facade override exists: at the override, and
+   *  docs/undo-grouping.md. */
   async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
     return fn(this.groupedFacade(this.newId()))
   }
@@ -3187,12 +3166,6 @@ export class Repo {
         `longer active. Its writes would land under the current session's access state.`,
       ), {kind: Repo.TRANSIENT})
     }
-    // The SAME predicate the pre-claim gate takes, not a cheaper stand-in for
-    // it: a pass runs for minutes, and a row that becomes unapplicable after
-    // the gate — an evicted key, a delivery that will not decode — is deferred
-    // with its queue entry consumed, so anything that only watches work in
-    // flight reads clear again for every batch that follows.
-    //
     // Re-sampled per transaction while the write lock is held, so a drain
     // cannot commit between this check and the write. Reading through
     // `this.db` rather than the tx handle is deliberate: the drain is excluded
@@ -3354,36 +3327,14 @@ export class Repo {
         )
         continue
       }
-      // BEFORE claiming, not only before writing. `tryClaim` itself WRITES —
-      // it ensures the Migrations page and creates the claim row — so on a
-      // disconnected or stale device the old order wrote a claim, hit the
-      // in-transaction sync assertion, and released it. Both writes then sat
-      // in the upload queue, and on reconnect the create could conflict with
-      // an unseen server completion while the following `deleted=1` patch
-      // tombstoned it, freeing later operators to repeat the migration.
-      // The SAME predicate the writes assert on, not just its caught-up half:
-      // a device can also be behind with rows staged and undrained, and that
-      // half reached `tryClaim` unchecked.
-      //
-      // What this closes is the STALE-DEVICE case — a device disconnected or
-      // catching up, whose claim create and release tombstone both sit in the
-      // upload queue and land later, out of order, against a completion it
-      // never saw. It does NOT make the claim atomic: rows can stage in the
-      // window between this check and `tryClaim`'s transaction, and a peer's
-      // claim that is staged-but-undrained is invisible to the in-tx re-read
-      // there. That residual is accepted, not overlooked — closing it means
-      // arbitration, which `graphBackfillClaim`'s header forbids by name and
-      // for a recorded reason (an earlier revision tried; the regress had no
-      // fixed point). Exactly-once here is a person running it in one place.
-      //
-      // Note the create+tombstone pair is ROUTINE, not exceptional: every
-      // mid-run abort releases the claim. Its being queued while stale is the
-      // problem, not its existence.
-      // A pass that claims and uploads from a graph half of which is still
-      // ciphertext on disk is the same stale-view write as one that claims
-      // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
-      // transaction — there is deliberately no cheaper approximation for the
-      // hot path, because that split is what let the two answers disagree.
+      // Gate BEFORE `tryClaim`, not just before the writes: `tryClaim`
+      // itself writes (ensures the Migrations page, creates the claim
+      // row), so a stale device would queue a claim and its release
+      // tombstone and land them out of order against a completion it
+      // never saw. This does not make the claim atomic — a peer's
+      // staged-but-undrained claim is invisible to the in-tx re-read.
+      // Accepted: closing it means arbitration, which
+      // `graphBackfillClaim`'s header refuses.
       const gap = await this.workspaceViewGap(workspaceId)
       if (gap !== null) {
         deferred = gap.reason

@@ -162,6 +162,11 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
         recordType: startupRecordType,
         description: 'startup metrics record',
         retain: STARTUP_RETAIN,
+        // Boot time, not write time: this record is written once on a deferred,
+        // RETRYING schedule, so a slow boot can be persisted after a later fast
+        // one. The reader ranks by the same field, which is what keeps the two
+        // agreeing about which rows are past the bound.
+        orderField: 'timeOriginMs',
         recordName: startupRecordProp.name,
         record: { property: startupRecordProp, data },
       })).blockId
@@ -283,8 +288,7 @@ export const collectStartupMetricsEffect: AppEffect = {
       done = true
       runCleanups()
       // One owner, so a second collector arriving here joins the write rather
-      // than starting one — the overlap this used to guard against per instance
-      // cannot arise.
+      // than starting one: two instances cannot produce two records.
       void writeBootRecord(repo, workspaceId)
     }
 

@@ -1,6 +1,5 @@
 /**
- * Production bootstrap for the new data layer (replaces
- * `src/data/repoInstance.ts`).
+ * Production bootstrap for the new data layer.
  *
  * Per-user PowerSync database — the database itself is the user
  * isolation boundary (no shared CRUD queue, no shared cache, no risk
@@ -19,14 +18,6 @@
  *     command_events, core side indexes, and triggers), then static
  *     data-plugin local schema contributions
  *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
- *
- * What this does NOT do (vs. legacy):
- *   - No `block_event_context` / `block_events` tables (replaced by
- *     `tx_context` + `row_events` from clientSchema.ts)
- *   - No legacy CRUD-routing triggers (replaced by the 5 audit/upload
- *     triggers in clientSchema.ts that key on `tx_context.source`)
- *   - No `UndoRedoManager` (undo lands in a future stage; engine
- *     doesn't depend on it)
  */
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'

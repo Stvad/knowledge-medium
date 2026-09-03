@@ -1453,10 +1453,12 @@ if (isMainModule(import.meta.url)) {
       runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') })
     } catch (e) {
       console.error(`bd-github-sync: failed — ${e.message ?? e}`)
-      // `exitCode`, not `exit()`: a failed push still printed the km→#N
-      // mappings an earlier chunk minted, and those ARE the product — the next
-      // run needs them. `process.exit()` drops whatever stdout is still queued
-      // when the reader is slow, which on Linux silently truncates the tail.
+      // `exitCode`, never `exit()`: a failed push may still have minted issues,
+      // and the km→#N mappings printed above ARE the product of this run. On a
+      // piped stdout Linux drops whatever is still queued when `exit()` is
+      // called — measured at ~98 of 200 lines under CI load, with the tail
+      // missing and stderr intact. Nothing holds the loop open here (spawnSync
+      // adds no handles), so the process still ends on its own.
       process.exitCode = 1
     }
   }
