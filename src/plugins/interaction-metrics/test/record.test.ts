@@ -19,7 +19,7 @@ import {
   queryNameFromHandleKey,
   writeInteractionSample,
 } from '../record'
-import { observeWorkspace, resetMetricsSession } from '../sessionContext'
+import { observeWorkspace, pageRecordStartedAt, resetMetricsSession, setPageRecord } from '../sessionContext'
 import { INTERACTION_RETAIN } from '../record'
 
 const WS = 'ws-1'
@@ -549,3 +549,40 @@ describe('writeInteractionSample', () => {
     expect((await stored(first!))!.blockCount).toBeGreaterThanOrEqual(before + 3)
   })
 })
+
+/**
+ * A committed record belongs to the span it was MEASURED in.
+ *
+ * `resetMetrics()` can land between the transaction's epoch check and the
+ * commit callback. Claiming into the new span would give it a row whose
+ * counters and `startedAt` describe the old one, and the next sample updates
+ * that row in place — fresh counters against an inflated session duration.
+ */
+describe('claiming a committed record', () => {
+  const spanRepo = (epoch: number) => ({ metrics: () => ({ epoch, epochWorkspaceId: WS }) })
+
+  it('claims a record written under the current span', () => {
+    const repoStub = spanRepo(1)
+    resetMetricsSession(repoStub)
+
+    setPageRecord(repoStub, WS, 'block-1', 5_000, 1)
+
+    expect(pageRecordStartedAt(repoStub, WS)).toBe(5_000)
+  })
+
+  it('declines a record whose span was retired before it committed', () => {
+    const repoStub = { epoch: 1, metrics() { return { epoch: this.epoch, epochWorkspaceId: WS } } }
+    resetMetricsSession(repoStub)
+    // The precondition, asserted rather than assumed: this claim WOULD land.
+    setPageRecord(repoStub, WS, 'block-1', 5_000, 1)
+    expect(pageRecordStartedAt(repoStub, WS)).toBe(5_000)
+    resetMetricsSession(repoStub)
+
+    // `resetMetrics()` between the sample's epoch check and its commit.
+    repoStub.epoch = 2
+    setPageRecord(repoStub, WS, 'block-1', 5_000, 1)
+
+    expect(pageRecordStartedAt(repoStub, WS)).toBeNull()
+  })
+})
+

@@ -458,7 +458,7 @@ export const writeInteractionSample = async (
         // Claimed at commit, not from the return value: the append also awaits
         // a retention pass, and an analysis in that window would find the row
         // readable but unclaimed and count this session twice.
-        onCommitted: (id) => setPageRecord(repo, workspaceId, id, startedAt),
+        onCommitted: (id) => setPageRecord(repo, workspaceId, id, startedAt, metrics.epoch),
       })
       return blockId
     }
