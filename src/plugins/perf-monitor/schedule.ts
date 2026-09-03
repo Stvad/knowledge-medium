@@ -5,7 +5,6 @@
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
-import { MAX_BOOT_RECORD_MS, whenBootRecordSettled } from '@/plugins/startup-metrics/record.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysis } from './analyze.js'
@@ -17,20 +16,36 @@ import { currentMonitorRun, endMonitorRun, hasMonitorRunFor, startMonitorRun } f
  *  that a regression developing mid-session is still noticed. */
 const REANALYZE_MS = 10 * 60_000
 
-/** How long to wait on the startup recorder before analyzing anyway.
+/** How soon to look again when the last verdict was waiting on a sample that
+ *  may still be on its way, and how long that stays plausible.
  *
- *  A cap, not a schedule: the wait ends the moment that recorder settles — on a
- *  record, on running out of retries, or on declining to arm at all. This only
- *  bounds the case where its plugin never starts, where nothing settles.
+ *  A boot record is written on the recorder's own idle schedule and can retry,
+ *  so an analysis early in a page session can genuinely precede it. Rather than
+ *  sequence the two — which couples this plugin to the internals of another,
+ *  and has to stay correct across that writer's whole retry schedule — the
+ *  reader simply comes back sooner while the answer might change, and any
+ *  transient cause resolves within the minute rather than the cadence.
  *
- *  Sized from the writer's own worst case rather than a number chosen here, so
- *  the cap cannot fall behind its retry schedule. Sampling the startup series
- *  early reads a working recorder as an absent one. */
-const BOOT_RECORD_WAIT_MS = MAX_BOOT_RECORD_MS
+ *  Bounded by the page's own age, not a counter: past the window, a missing
+ *  sample is not late, it is absent, and re-asking every minute for the rest of
+ *  the session would be pure cost. */
+const RECHECK_MS = 60_000
+const RECHECK_WINDOW_MS = 10 * 60_000
+
+/** Was the last verdict waiting on a sample rather than on history? Set by
+ *  every pass, read when the next one is armed. */
+let awaitingSample = false
+
+/** Pure, and exported for it: this decides how quickly a wrong-looking verdict
+ *  corrects itself, which is the whole behaviour the shorter cadence buys. */
+export const nextAnalysisDelayMs = (awaiting: boolean, pageAgeMs: number): number =>
+  awaiting && pageAgeMs < RECHECK_WINDOW_MS ? RECHECK_MS : REANALYZE_MS
+
+const nextDelayMs = (): number => nextAnalysisDelayMs(awaitingSample, performance.now())
 
 const job = cadencedIdleJob({
   firstDelayMs: LAZY_DEEP_IDLE.minDelayMs,
-  repeatDelayMs: REANALYZE_MS,
+  repeatDelayMs: nextDelayMs,
   label: 'perf-monitor',
 })
 
@@ -54,13 +69,13 @@ export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
   // The caller still gets the result; only the store is spared it.
   //
   // The run has to be the one for THESE arguments, not merely whichever is in
-  // force. A scheduled pass waits on the startup recorder before it gets here,
-  // and a teardown-and-restart inside that wait installs a different run — so a
-  // sign-out that keeps the workspace id would stamp the previous user's
-  // analysis with the new user's run, and their reader would show it.
+  // force: a teardown-and-restart while this pass is reading history installs a
+  // different one, and a sign-out that keeps the workspace id would otherwise
+  // stamp the previous user's analysis with the new user's run.
   const run = hasMonitorRunFor(repo, workspaceId) ? currentMonitorRun() : null
   const ctx = metricsContext(repo, workspaceId)
   const analysis = { ...await runPerfAnalysis(repo, workspaceId, Date.now()), run }
+  awaitingSample = Object.values(analysis.unjudgedBecause).includes('no-current-sample')
   if (contextHolds(ctx, repo)) publishPerfAnalysis(analysis)
   return analysis
 }
@@ -86,13 +101,7 @@ export const perfAnalysisEffect: AppEffect = {
     // analysis for that one state was a second constructor for every field of
     // `PerfAnalysis`, kept in step by hand, to show the same words one idle
     // delay sooner.
-    const stopJob = job.start(async () => {
-      // Resolved already on every pass after the first, so this is a microtask
-      // rather than a wait — it exists for the boot, where sampling the startup
-      // series before its record lands misreports a recorder that is working.
-      await whenBootRecordSettled(BOOT_RECORD_WAIT_MS)
-      await runPerfAnalysisNow(repo, workspaceId)
-    })
+    const stopJob = job.start(async () => { await runPerfAnalysisNow(repo, workspaceId) })
     return () => {
       // Teardown is not a pause. This effect goes away when the monitor's own
       // toggle is switched off, and the counters its verdicts describe keep

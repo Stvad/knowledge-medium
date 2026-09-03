@@ -19,7 +19,7 @@ import {
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { runPerfAnalysis, unjudgedReason } from '../analyze'
-import { perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
+import { nextAnalysisDelayMs, perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
 import { resetMonitorRun, startMonitorRun } from '../monitorRun'
 import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
 import { INTERACTION_SERIES, loadRecords } from '../load'
@@ -412,6 +412,34 @@ describe('unjudgedReason', () => {
   it('names a recorder that wrote nothing, but not over a missing sample', () => {
     expect(unjudgedReason([shortHistory], { notRecording: true })).toBe('not-recording')
     expect(unjudgedReason([noSample], { notRecording: true })).toBe('no-current-sample')
+  })
+})
+
+/**
+ * How soon the monitor looks again.
+ *
+ * A boot record is written on the recorder's own idle schedule and can retry,
+ * so an early analysis can genuinely precede it. Rather than sequence the two —
+ * which couples this plugin to another's retry schedule and has to stay correct
+ * as that schedule changes — the reader comes back sooner while the answer
+ * might still change.
+ */
+describe('nextAnalysisDelayMs', () => {
+  const young = 1_000
+  const old = 30 * 60_000
+
+  it('comes back soon while a current sample may still arrive', () => {
+    expect(nextAnalysisDelayMs(true, young)).toBeLessThan(nextAnalysisDelayMs(false, young))
+  })
+
+  // Past the window a missing sample is not late, it is absent, and re-asking
+  // every minute for the rest of the session is pure cost.
+  it('gives up on the short cadence once the page is no longer young', () => {
+    expect(nextAnalysisDelayMs(true, old)).toBe(nextAnalysisDelayMs(false, old))
+  })
+
+  it('uses the ordinary cadence when nothing is awaited', () => {
+    expect(nextAnalysisDelayMs(false, young)).toBe(nextAnalysisDelayMs(false, old))
   })
 })
 

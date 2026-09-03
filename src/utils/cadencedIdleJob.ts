@@ -23,12 +23,14 @@ export interface CadencedIdleJob {
 /**
  * @param firstDelayMs wall clock before the first run.
  * @param repeatDelayMs wall clock between runs, measured from the previous
- *   run SETTLING — so a slow run cannot stack overlapping ones.
+ *   run SETTLING — so a slow run cannot stack overlapping ones. A function is
+ *   asked after each run, so a job can come back sooner while its last result
+ *   was one that may resolve itself shortly.
  * @param label prefix for the warning logged when a run throws.
  */
 export const cadencedIdleJob = (
   { firstDelayMs, repeatDelayMs, label }:
-  { firstDelayMs: number; repeatDelayMs: number; label: string },
+  { firstDelayMs: number; repeatDelayMs: number | (() => number); label: string },
 ): CadencedIdleJob => {
   const jobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, { minDelayMs: 0 }))
   return {
@@ -45,7 +47,9 @@ export const cadencedIdleJob = (
             } catch (err) {
               console.warn(`[${label}] run failed`, err)
             }
-            if (!cancelled) armIn(repeatDelayMs)
+            if (!cancelled) {
+              armIn(typeof repeatDelayMs === 'function' ? repeatDelayMs() : repeatDelayMs)
+            }
           })
         }, delayMs)
       }
