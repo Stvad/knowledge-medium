@@ -50,6 +50,12 @@ export const rewriteSrcPath = <T>(path: T): T =>
  * RepoContext` when an extension's `useRepo()` reads from a fresh
  * `RepoContext` that `<RepoProvider>` never wrote to.
  *
+ * This unifies the URL, not the module instance across a hot update: editing
+ * an already-loaded module mid-session still splits it (a `?t=` specifier
+ * baked into the running dev server's module graph) until the dev server is
+ * restarted — see the `local-dev-loop` skill's "Kernel/extension module
+ * identity split" section for the mechanism and a detection snippet.
+ *
  * Prod doesn't have this problem because Rollup outputs `.js` for
  * everything — so this is dev-only plumbing to match prod's URL
  * convention.
