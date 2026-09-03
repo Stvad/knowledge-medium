@@ -241,11 +241,11 @@ describe('runPerfAnalysis', () => {
     expect(metricsSessionContext(repo, OTHER_WS).attributable).toBe(true)
   })
 
-  // A scheduled pass waits on the startup recorder before it runs, and a
-  // teardown-and-restart inside that wait installs a DIFFERENT run. Stamping
-  // the analysis with whatever run is in force would hand the new one an
-  // analysis computed for the old — and a sign-out that keeps the workspace id
-  // makes those look identical from everywhere but the Repo.
+  // A pass reads history across several awaits, and a teardown-and-restart in
+  // that window installs a DIFFERENT run. Stamping the analysis with whatever
+  // run is in force would hand the new one an analysis computed for the old —
+  // and a sign-out that keeps the workspace id makes those look identical from
+  // everywhere but the Repo.
   it('does not stamp an analysis with a run that is not for its own context', async () => {
     resetPerfAnalysisStore()
     await pastSession()
