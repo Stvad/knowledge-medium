@@ -1454,7 +1454,27 @@ const resolveRecentUserBlocks = async (
     SELECT_RECENT_USER_BLOCKS_SQL,
     recentUserBlocksParams(await userStateRootIds(ctx, workspaceId), workspaceId, limit),
   )
-  return ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+  const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+  // A parent change is what moves a row ACROSS this query's exclusion, and
+  // `kernel.content` does not carry it: reparented under a state root, a row
+  // should leave these results, and it would otherwise go on being offered in a
+  // picker as something to link to until an unrelated content edit.
+  //
+  // Per returned row, which is how the channel is keyed. NOT covered, and
+  // accepted: a move of some ANCESTOR of a returned row, and a row moving OUT
+  // of a state root into authored content. Both would need deps on blocks this
+  // query does not have — the ancestry it deliberately does not walk, and rows
+  // it by definition did not return — and `core.recentActivity` has the second
+  // gap for the same reason. Both settle on the next content event in the
+  // workspace, the channel these results already ride.
+  for (const block of blocks) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+      key: typedBlocksStructureKey(workspaceId, block.id),
+    })
+  }
+  return blocks
 }
 
 const recentUserBlocksResultSchema: Schema<BlockData[]> = {
@@ -1533,17 +1553,15 @@ export const recentActivityQuery = defineQuery<
       const ancestors = ctx.hydrateBlocks(
         asBlockRows(chainsByStart.get(block.id) ?? []), {declareRowDeps: false},
       )
-      // A parent change is the one edit that changes what this entry SAYS
-      // without touching any content: moved to another page, the entry
-      // keeps naming the old one; moved under a state root, it should
-      // have left the feed entirely. `kernel.content` doesn't carry it,
-      // so declare it per block — on the ancestors too, since a page
-      // moved out from under a row re-homes that row's entry without the
-      // row itself moving. Narrow on purpose: this channel is keyed per
-      // block and fires only on a `parent_id` change, so it costs a wake
-      // exactly when the answer changed, unlike a row dep (which every
-      // UiState property write would trip).
-      for (const shown of [block, ...ancestors]) {
+      // The ANCESTORS only: the rows themselves are declared by the shared
+      // resolver, which needs the same channel for the same reason. A page
+      // moved out from under a row re-homes that row's entry without the row
+      // itself moving, so what this entry SAYS changes with no content edit
+      // anywhere. Narrow on purpose: this channel is keyed per block and fires
+      // only on a `parent_id` change, so it costs a wake exactly when the
+      // answer changed, unlike a row dep (which every UiState property write
+      // would trip).
+      for (const shown of ancestors) {
         ctx.depend({
           kind: 'plugin',
           channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
