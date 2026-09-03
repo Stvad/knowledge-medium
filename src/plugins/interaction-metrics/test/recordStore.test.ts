@@ -435,6 +435,31 @@ describe('retention deletion', () => {
       'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [id],
     )).map((r) => r.id)
 
+  // The production shape this guard exists for. With properties as blocks every
+  // record has generated field children, and `hidePropertyChildren` is the only
+  // thing keeping them from reading as hand-placed content — without it
+  // retention silently stops, and both series grow without bound.
+  it('prunes a record that has property machinery beneath it', async () => {
+    await sharedDb.db.execute(
+      `UPDATE workspaces SET properties_migration = 'children' WHERE id = ?`, [WS])
+    if ((await sharedDb.db.getAll('SELECT id FROM workspaces WHERE id = ?', [WS])).length === 0) {
+      await sharedDb.db.execute(
+        `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+           encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'test ws', ?, 1, 1, 'none', NULL, 'children')`, [WS, USER.id])
+    }
+
+    const { blockId: doomed } = await append(1)
+    // The precondition, asserted rather than assumed: this record really does
+    // have machinery under it, or the test proves nothing about the guard.
+    expect(await liveDescendantsOf(doomed)).not.toEqual([])
+
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).not.toContain(doomed)
+  })
+
   it('prunes a record whose only descendants are its own machinery', async () => {
     const { blockId: doomed } = await append(1)
     // Two more appends push `doomed` past a retain of 1.
