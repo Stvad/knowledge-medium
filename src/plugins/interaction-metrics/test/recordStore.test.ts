@@ -20,7 +20,7 @@ import {
   type InteractionRecordData,
 } from '../record'
 import { keyAtStart } from '@/data/orderKey'
-import { appendClientRecord, clientGroupId, type ClientRecordSpec } from '../recordStore'
+import { appendClientRecord, clientGroupId, updateClientRecord, type ClientRecordSpec } from '../recordStore'
 import { NoLongerEligible } from '../sessionContext'
 
 const WS = 'ws-1'
@@ -274,6 +274,30 @@ describe('appendClientRecord retention', () => {
       { scope: ChangeScope.Automation, telemetry: true })
 
     await expect(append(3)).rejects.toBeInstanceOf(NoLongerEligible)
+  })
+
+  // The record row can outlive its containers: sync tombstones a group or a
+  // plugin root without touching the children under it. An update that only
+  // checks the record writes fresh telemetry below a dead hierarchy, which no
+  // reader will ever look under — the append path already refused this, and the
+  // two paths share one owner precisely so they cannot disagree.
+  it('refuses to update a record whose group was deleted', async () => {
+    const { blockId } = await append(3)
+    const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
+    await repo.tx(async (tx) => { await tx.delete(groupId) },
+      { scope: ChangeScope.Automation, telemetry: true })
+
+    await expect(updateClientRecord(repo, {
+      workspaceId: WS,
+      blockId,
+      containerType: interactionMetricsUIStateType,
+      description: 'test metrics record',
+      assertEligible: () => {},
+      isStillOurs: (row) => row !== null && !row.deleted,
+      setProperty: async (tx, id) => {
+        await tx.setProperty(id, interactionRecordProp, DATA, { skipMetadata: true })
+      },
+    })).rejects.toBeInstanceOf(NoLongerEligible)
   })
 
   // Rank is what put a row past the bound, and rank belongs to the whole

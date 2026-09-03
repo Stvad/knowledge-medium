@@ -423,6 +423,27 @@ describe('collectStartupMetricsEffect', () => {
     await vi.waitFor(() => expect(settled).toBe(true))
   }, 20_000)
 
+  // A restart overlaps two collectors. The one going away must not announce the
+  // attempt over on behalf of the one still armed, which has its own quiet
+  // window ahead of it.
+  it('does not settle while a replacement collector is still armed', async () => {
+    markStartup('firstContentPaint')
+    const first = startEffect(WS)
+    const second = startEffect(WS)
+    expect(second).toBeTypeOf('function')
+
+    first?.()
+
+    let settled = false
+    void whenBootRecordSettled(60_000).then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    // ...and the last one out does settle it.
+    second?.()
+    await vi.waitFor(() => expect(settled).toBe(true))
+  }, 20_000)
+
   it('settles immediately when it declines to arm', async () => {
     // NOTHING else armed: a collector that starts normally settles the signal
     // by writing, which would hide whether the declining path settles at all.

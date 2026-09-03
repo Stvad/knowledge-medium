@@ -220,10 +220,16 @@ export const resetStartupMetricsRecorded = (): void => {
  *
  *  Never rejects; resolves at most once per boot. */
 let bootSettled = false
+/** Collectors that are armed and could still write. The settle is page-global
+ *  while collectors are per-effect, and a restart overlaps two of them — so a
+ *  disposed one announcing "over" would speak for a replacement that still has
+ *  a quiet window ahead of it. */
+let armedCollectors = 0
 let settleBootRecord: () => void = () => {}
 let bootRecordSettled: Promise<void>
 const armBootRecordSettled = (): void => {
   bootSettled = false
+  armedCollectors = 0
   bootRecordSettled = new Promise<void>((resolve) => {
     settleBootRecord = () => { bootSettled = true; resolve() }
   })
@@ -285,6 +291,7 @@ export const collectStartupMetricsEffect: AppEffect = {
     // permanently skewed series.
     const origin = pageOrigin(repo, workspaceId)
     if (origin.repo !== repo || origin.workspaceId !== workspaceId) { settleBootRecord(); return }
+    armedCollectors++
     let done = false
     // Distinct from `done`, which the record path sets on ITS way through:
     // this tracks teardown, so a callback already queued can tell the two apart.
@@ -334,7 +341,12 @@ export const collectStartupMetricsEffect: AppEffect = {
         // so it passes with this line deleted. Reasoned, not measured.
         if (disposed || recorded || recording) return
         const retryLater = (): void => {
-          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) { settleBootRecord(); return }
+          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) {
+            // Same rule as teardown: a replacement may still be armed, and this
+            // collector running out of attempts does not speak for it.
+            if (armedCollectors === 0) settleBootRecord()
+            return
+          }
           const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
           cleanups.push(() => clearTimeout(retry))
         }
@@ -432,7 +444,11 @@ export const collectStartupMetricsEffect: AppEffect = {
       done = true
       disposed = true
       runCleanups()
-      if (!recording) settleBootRecord()
+      armedCollectors--
+      // Only when nothing else could still write: a replacement collector may
+      // be armed with a quiet window ahead of it, and an in-flight write is not
+      // cancelled by teardown and settles through its own completion path.
+      if (armedCollectors === 0 && !recording) settleBootRecord()
     }
   },
 }
