@@ -43,6 +43,8 @@ import {
 } from '@/shortcuts/types'
 import { createSharedBlockActions } from '@/shortcuts/blockActions'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { BULK_DELETE_CONFIRM_THRESHOLD } from '@/utils/deleteBlockThroughUi'
+import { __resetDialogsForTests, getDialogQueue } from '@/utils/dialogs'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
@@ -202,6 +204,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
+  __resetDialogsForTests()
   env = await setup()
 })
 
@@ -787,6 +790,49 @@ describe('default CodeMirror shortcuts', () => {
     // The selection survives too, so the user can narrow it and retry.
     expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
       .toEqual(['ordinary', 'protected'])
+    vi.unstubAllGlobals()
+  })
+
+  it('cut asks for confirmation BEFORE writing the clipboard', async () => {
+    // Same ordering rule as the guards, for the same reason plus one: a cut the
+    // user calls off must not have replaced whatever their clipboard held.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    const ids: string[] = []
+    for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
+      const id = `bulk-${i}`
+      await env.repo.mutate.createChild({parentId: 'root', id, content: id})
+      ids.push(id)
+    }
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ids,
+    })
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write}})
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    const cutting = action.handler({
+      uiStateBlock,
+      selectedBlocks: ids.map(id => env.repo.block(id)),
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() => expect(getDialogQueue()).toHaveLength(1))
+    expect(write).not.toHaveBeenCalled()
+    // Cancel. `null` is the dialog queue's cancel value.
+    getDialogQueue()[0].finalize(null)
+    await cutting
+
+    expect(write).not.toHaveBeenCalled()
+    for (const id of ids) expect(await isBlockDeleted(env.repo, id)).toBe(false)
+    // And the selection survives, so the user can narrow it and retry.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(ids)
     vi.unstubAllGlobals()
   })
 
