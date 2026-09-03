@@ -31,9 +31,11 @@
  *    rebuilt registry where the old name resolves to nothing, so no delete.)
  *    The rename test asserts field rows SURVIVE.
  *
- * Synced-in renames don't run this pass (sync-apply is not `repo.tx`); they are
- * caught on registry prime by `propertyDefinitionBaseline.ts` (#780).
- * Flip-gated: dormant in a 'cell' workspace.
+ * Synced-in renames don't run this pass (sync-apply is not `repo.tx`), and the
+ * durable baseline doesn't catch them either — it records codec types only.
+ * Their repair is the content-driven reconcile that compares a cell against its
+ * field rows, which is also the only thing that can see a block edited offline
+ * across a rename. Flip-gated: dormant in a 'cell' workspace.
  */
 
 import {

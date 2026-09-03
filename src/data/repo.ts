@@ -3955,7 +3955,10 @@ export class Repo {
   syncPropertyDefinitionBaseline(
     workspaceId: string,
     facts: PropertyDefinitionFactsByFieldId,
-    {detectChanges}: {readonly detectChanges: boolean},
+    {detectChanges, newlyResolvedCodecs}: {
+      readonly detectChanges: boolean
+      readonly newlyResolvedCodecs: ReadonlySet<string>
+    },
   ): void {
     // Defence in depth — the bridge only calls this with a built registry's own
     // workspaceId, which is never empty.
@@ -3973,7 +3976,8 @@ export class Repo {
     // Captured synchronously with the rebuild — see `capturedResolver` on
     // `schedulePropertyDefinitionMigrations`. Defence in depth: no test
     // distinguishes this from capturing inside the continuation.
-    const resolver = detectChanges ? this.propertySchemaResolverFor(workspaceId) : null
+    const diffing = detectChanges || newlyResolvedCodecs.size > 0
+    const resolver = diffing ? this.propertySchemaResolverFor(workspaceId) : null
     this.propertyDefinitionBaselineWork = this.propertyDefinitionBaselineWork
       .then(async () => {
         const previous = await observePropertyDefinitionCodecs(
@@ -3990,6 +3994,12 @@ export class Repo {
         // carries the real before-name.
         const changes: PropertyDefinitionChange[] = []
         for (const [fieldId, codecType] of codecTypes) {
+          // Off a prime, only the fieldIds whose codec BECAME resolvable on this
+          // rebuild: the in-memory diff needs a codec on both sides, so it reads
+          // undefined-to-defined as no change, and the durable baseline is the
+          // only thing that still knows what that codec used to be. Everything
+          // else on a non-prime build was already the in-memory diff's to see.
+          if (!detectChanges && !newlyResolvedCodecs.has(fieldId)) continue
           const knownType = previous.get(fieldId)
           if (knownType === undefined || knownType === codecType) continue
           const name = facts.get(fieldId)?.name
@@ -4504,6 +4514,10 @@ export class Repo {
    *  pending yet, so an armed `delayMs` processor or idle callback survives
    *  this (#892 — cancelling one needs a handle neither framework keeps). */
   async awaitDeferredWork(): Promise<void> {
+    // FIRST, and not in the group below: the baseline chain PRODUCES migration
+    // jobs, so draining it alongside them can enqueue one after that queue has
+    // already emptied — which on a shared test DB lands in the next test.
+    await this.awaitPropertyDefinitionBaselines()
     await Promise.all([
       this.awaitSeedMaterialization(),
       this.awaitReferenceTargetDerive(),

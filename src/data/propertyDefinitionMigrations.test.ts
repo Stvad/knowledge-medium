@@ -90,6 +90,27 @@ const publishDefinition = (
   )
 }
 
+/** The same definition with NO schema — the metadata-only shape
+ *  `userSchemasService` publishes while a preset plugin is still loading. */
+const publishDefinitionWithoutSchema = (repo: Repo, name: string): void => {
+  repo.setRuntimeContributions(
+    projectedPropertyDefinitionsFacet,
+    'test-status-definition',
+    [{
+      metadata: {
+        fieldId: FIELD_ID,
+        workspaceId: WS,
+        createdAt: 1,
+        name,
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        origin: 'user' as const,
+      },
+    }],
+    {workspaceId: WS},
+  )
+}
+
 const setup = (initial = statusString): Repo => {
   const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
   repo.setActiveWorkspaceId(WS)
@@ -741,6 +762,35 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     await repo.awaitPropertyDefinitionBaselines()
 
     expect(scheduled).not.toHaveBeenCalled()
+  }, 20_000)
+
+  it('re-checks the baseline when a codec becomes resolvable after the prime', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+
+    // The change lands while the workspace is inactive AND its preset is still
+    // loading, so the prime sees the definition metadata-only. Nothing can be
+    // diffed yet — a codec this device never observed is not drift.
+    repo.setActiveWorkspaceId(OTHER_WS)
+    await awaitRegistry(repo, OTHER_WS)
+    publishDefinitionWithoutSchema(repo, 'status')
+    repo.setActiveWorkspaceId(WS)
+    await awaitRegistry(repo, WS)
+    await repo.awaitPropertyDefinitionBaselines()
+    expect(await cell('p')).toEqual({status: ' 42 '})
+
+    // The preset finishes loading on a LATER rebuild. The in-memory diff reads
+    // that as no change (it needs a codec on both sides), so without the
+    // baseline re-check the drift would never be acted on this session — or any
+    // session, if the preset always loads after the prime.
+    publishDefinition(repo, statusNumber)
+
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({status: 42})
+    }, {timeout: 5000})
+    expect(await rowContent(valueRowId)).toBe('42')
   }, 20_000)
 
   it('records nothing when the batch throws, so the next prime retries', async () => {

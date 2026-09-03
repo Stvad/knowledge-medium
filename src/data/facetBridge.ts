@@ -135,7 +135,11 @@ export interface FacetBridgeTarget {
   syncPropertyDefinitionBaseline(
     workspaceId: string,
     facts: PropertyDefinitionFactsByFieldId,
-    options: {readonly detectChanges: boolean},
+    options: {
+      readonly detectChanges: boolean
+      /** fieldIds whose codec resolved for the first time on THIS rebuild. */
+      readonly newlyResolvedCodecs: ReadonlySet<string>
+    },
   ): void
 }
 
@@ -463,8 +467,23 @@ export class FacetBridge {
                 )
               }
             }
+            // A codec that only becomes resolvable on a LATER rebuild — a
+            // dynamic extension's preset finishing its load — is invisible to
+            // the in-memory diff above, which needs a codec on both sides to
+            // call it a change. Name those so the durable baseline, which does
+            // remember the old codec, is re-checked for them off a prime.
+            const newlyResolvedCodecs = new Set<string>()
+            if (previousFacts) {
+              for (const [fieldId, fact] of facts) {
+                if (fact.codecType !== undefined
+                  && previousFacts.get(fieldId)?.codecType === undefined) {
+                  newlyResolvedCodecs.add(fieldId)
+                }
+              }
+            }
             target.syncPropertyDefinitionBaseline(
-              propertyDefinitions.workspaceId, facts, {detectChanges: previousFacts === null},
+              propertyDefinitions.workspaceId, facts,
+              {detectChanges: previousFacts === null, newlyResolvedCodecs},
             )
           }
           // No property-SPECIFIC reference-target rederive here. Recognition
