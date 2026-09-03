@@ -66,8 +66,40 @@ describe('mapAnalysisToSnapshot', () => {
  * world as it was for the rest of the cadence.
  */
 describe('createPerfMonitorDiagnosticSource', () => {
+  /** A Repo stub whose `setReadOnly` notifies, like the real one. */
+  const stubRepo = () => {
+    const listeners = new Set<() => void>()
+    return {
+      activeWorkspaceId: 'ws-1',
+      isReadOnly: false,
+      onReadOnlyChange: (l: () => void) => { listeners.add(l); return () => listeners.delete(l) },
+      setReadOnly(value: boolean) {
+        if (this.isReadOnly === value) return
+        this.isReadOnly = value
+        for (const l of listeners) l()
+      },
+    }
+  }
+
+  // A cache key cannot make `useSyncExternalStore` call the getter; only a
+  // notification can. Without this the chip holds the pre-change message until
+  // something unrelated re-renders it — up to the ten-minute cadence.
+  it('tells its subscribers when the recording blocker changes', () => {
+    const repo = stubRepo()
+    const source = createPerfMonitorDiagnosticSource(repo)
+    let notified = 0
+    const stop = source.subscribe?.(() => { notified++ })
+
+    repo.setReadOnly(true)
+
+    expect(notified).toBe(1)
+    stop?.()
+    repo.setReadOnly(false)
+    expect(notified).toBe(1)
+  })
+
   it('re-reads the recording blocker rather than caching it with the verdict', () => {
-    const repo = { activeWorkspaceId: 'ws-1', isReadOnly: false }
+    const repo = stubRepo()
     const source = createPerfMonitorDiagnosticSource(repo)
     startMonitorRun(repo, 'ws-1')
     publishPerfAnalysis(analysis({ seq: 1, ready: { interaction: false, startup: false } }))
@@ -75,7 +107,7 @@ describe('createPerfMonitorDiagnosticSource', () => {
     expect(source.getSnapshot()?.detail ?? '').not.toContain('read-only')
 
     // The demotion, with no republication behind it.
-    repo.isReadOnly = true
+    repo.setReadOnly(true)
 
     expect(source.getSnapshot()?.detail ?? '').toContain('read-only')
   })

@@ -138,9 +138,18 @@ export const summarize = (analysis: PerfAnalysis, live: LiveFacts): PerfVerdict 
     }
   }
   if (nothingJudged(analysis)) {
+    // "Building a baseline" promises that waiting resolves this, which is only
+    // true while some series is short on HISTORY and still receiving samples. A
+    // series whose CURRENT sample never arrives — each recorder is togglable
+    // independently of this monitor — is not filling however much history is
+    // already on disk, and the note below will be reporting a healthy count
+    // under a headline that says to keep waiting.
+    const filling =
+      (analysis.interactionComparable && !analysis.interactionAwaitingCurrentSample)
+      || !analysis.startupAwaitingCurrentSample
     return {
       kind: 'pending',
-      headline: 'Building a baseline',
+      headline: filling ? 'Building a baseline' : 'Nothing recorded this session',
       // From `recorded`, NOT `baseline`: nothing was judged in this branch, so
       // `baseline` is 0 for both series by construction — the note would report
       // a constant zero while the trend dialog shows the history it was counted

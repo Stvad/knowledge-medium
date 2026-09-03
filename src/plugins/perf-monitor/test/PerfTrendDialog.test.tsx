@@ -150,11 +150,10 @@ describe('PerfTrendDialog tables', () => {
 /**
  * A refresh the dialog has moved past must not publish its history.
  *
- * The manual path used to hard-code its load as alive, so a refresh in flight
- * when the Repo was swapped resolved afterwards and wrote the previous user's
- * rows into the open dialog. Asserted on the CAUSE — the reads never run — via
- * the query count, because "the table did not change" is also what a load that
- * simply returned the same rows looks like.
+ * A refresh in flight when the Repo is swapped resolves afterwards, and must
+ * not write the previous user's rows into the open dialog. Asserted on the
+ * CAUSE — the reads never run — via the query count, because "the table did not
+ * change" is also what a load that simply returned the same rows looks like.
  */
 describe('a superseded refresh', () => {
   beforeEach(freshRepo)

@@ -52,6 +52,32 @@ describe('summarize', () => {
     expect(v.notes.join(' ')).not.toContain('interaction history still building')
   })
 
+  // Both series unjudged for want of their CURRENT sample, with plenty of
+  // history on disk. "Building a baseline" would point at the one thing that is
+  // not the problem, next to a note reporting a healthy count.
+  it('does not call an unrecorded session a building baseline', () => {
+    const v = summarize(analysis({
+      ready: { interaction: false, startup: false },
+      interactionAwaitingCurrentSample: true,
+      startupAwaitingCurrentSample: true,
+      recorded: { interaction: 40, startup: 40 },
+    }))
+    expect(v.kind).toBe('pending')
+    expect(v.headline).not.toBe('Building a baseline')
+    expect(v.notes.join(' ')).toContain('40 interaction and 40 startup sessions recorded')
+  })
+
+  // ...and it still says so when a series really is just short of history.
+  it('calls a genuinely short history a building baseline', () => {
+    const v = summarize(analysis({
+      ready: { interaction: false, startup: false },
+      interactionAwaitingCurrentSample: false,
+      startupAwaitingCurrentSample: false,
+      recorded: { interaction: 2, startup: 2 },
+    }))
+    expect(v.headline).toBe('Building a baseline')
+  })
+
   // "Still building" promises something that will never arrive when no recorder
   // can write in this environment at all.
   it('reports a blocked environment as disabled, not as still building', () => {

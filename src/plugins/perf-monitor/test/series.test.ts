@@ -135,9 +135,9 @@ describe('queryRegressions', () => {
     expect(found).toEqual([])
   })
 
-  // The exported minimum and what the comparison actually consumes must agree;
-  // they drifted once, and the visible symptom was the chip reporting "no
-  // slowdowns" for a comparison that could never have run.
+  // The exported minimum and what the comparison actually consumes must agree.
+  // Drift between them is invisible: the chip reports "no slowdowns" for a
+  // comparison that could never have run.
   it('starts comparing at exactly the advertised history length', () => {
     const slow = () => sample({ queries: { 'backlinks.forBlock': q(80) } })
     const at = (n: number) => regs(queryRegressions(slow(), sinceRegressed(slow, sample, n - 1)))

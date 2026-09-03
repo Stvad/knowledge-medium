@@ -38,14 +38,22 @@ export const mapAnalysisToSnapshot = (
 }
 
 export const createPerfMonitorDiagnosticSource = (
-  repo: Pick<Repo, 'activeWorkspaceId' | 'isReadOnly'>,
+  repo: Pick<Repo, 'activeWorkspaceId' | 'isReadOnly' | 'onReadOnlyChange'>,
 ): DiagnosticSourceContribution => {
   let cachedKey = ''
   let cachedSnapshot: DiagnosticSnapshot | null = null
   return {
     id: 'perf-monitor',
     label: 'Performance',
-    subscribe: subscribePerfAnalysis,
+    // BOTH, because the snapshot rests on both. A role change moves
+    // `isReadOnly` and publishes no analysis, and a cache key cannot make
+    // `useSyncExternalStore` call the getter — only a notification can — so
+    // without this the chip keeps the pre-change message until something
+    // unrelated re-renders it.
+    subscribe: (listener) => {
+      const stops = [subscribePerfAnalysis(listener), repo.onReadOnlyChange(listener)]
+      return () => { for (const stop of stops) stop() }
+    },
     getSnapshot: () => {
       const analysis = getPerfAnalysisFor(repo.activeWorkspaceId)
       // Read now, not taken off the analysis: a role change flips this without

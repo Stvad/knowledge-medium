@@ -3,14 +3,9 @@
  *
  * A verdict rests on page-global counters and on the Repo and workspace it was
  * computed in, and it means something only while the monitor that produced it
- * is still running in that same world. Three separate mechanisms used to say
- * that — an ownership claim, a generation counter, and a clear at start-up —
- * and every round of review found another gap between them: a manual refresh
- * issued after teardown captured the post-teardown generation and still owned
- * the store; re-enabling in the same workspace still owned it and so skipped
- * the clear.
+ * is still running in that same world.
  *
- * This is the one identity. Minted when the effect starts, dropped when it
+ * ONE identity says all of that. Minted when the effect starts, dropped when it
  * stops, and compared at BOTH ends — nothing publishes under a run that is over,
  * and nothing READS a verdict from one. The read half is what no publish-side
  * check could give: the store is read synchronously during render, while the
