@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 
 // Far past what a pipe holds before the reader takes it: at 200 lines a gate
 // that exits on its own output still delivers all of them, and the test loses
@@ -29,7 +29,7 @@ afterAll(() => rmSync(bin, { recursive: true, force: true }))
 const runGate = () =>
   new Promise<{ status: number | null; relayed: number }>((resolve) => {
     const child = spawn(process.execPath, ['scripts/check.mjs'], {
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` },
+      env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ''}` },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let out = ''
@@ -49,7 +49,12 @@ const runGate = () =>
   })
 
 describe('the check gate', () => {
-  it('reports a failing task with a non-zero status and its whole output', async () => {
+  // Skipped on Windows rather than supported there: the gate looks for
+  // `pnpm.cmd`, which needs a batch wrapper this repo has no CI or developer to
+  // run. Skipping is also the safe direction — a shim that fails to front the
+  // gate lets the real `pnpm run test` re-enter this file and spawn gates
+  // without bound.
+  it.skipIf(process.platform === 'win32')('reports a failing task with a non-zero status and its whole output', async () => {
     const { status, relayed } = await runGate()
     expect(status).not.toBe(0)
     expect(relayed).toBe(RELAYED_LINES)
