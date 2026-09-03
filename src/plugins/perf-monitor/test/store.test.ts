@@ -15,7 +15,7 @@ afterEach(() => { resetPerfAnalysisStore(); resetMonitorRun() })
 describe('publishPerfAnalysis', () => {
   // These are about ORDERING, so they need a run the store will accept;
   // whether it refuses a foreign one is the next describe's subject.
-  const owner = {}
+  const owner = { metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }) }
   beforeEach(() => { startMonitorRun(owner, 'ws-1') })
 
   // Ordered on a sequence, not the wall clock: two runs starting in the same
@@ -70,7 +70,7 @@ describe('publishPerfAnalysis', () => {
  */
 describe('reading across runs', () => {
   it('returns nothing for a verdict published under a previous run', () => {
-    const first = {}
+    const first = { metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }) }
     startMonitorRun(first, 'ws-1')
     publishPerfAnalysis(analysis({ seq: 1 }))
     expect(getPerfAnalysisFor(first, 'ws-1')).not.toBeNull()
@@ -87,12 +87,12 @@ describe('reading across runs', () => {
   // the Repo being replaced — and a sign-out that keeps the workspace id would
   // pass a check made only against it.
   it('returns nothing to a reader that is not the one the run belongs to', () => {
-    const owner = {}
+    const owner = { metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }) }
     startMonitorRun(owner, 'ws-1')
     publishPerfAnalysis(analysis({ seq: 1 }))
     expect(getPerfAnalysisFor(owner, 'ws-1')).not.toBeNull()
 
-    expect(getPerfAnalysisFor({}, 'ws-1')).toBeNull()
+    expect(getPerfAnalysisFor({ metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }) }, 'ws-1')).toBeNull()
   })
 
   // The read check alone would make such a verdict invisible, but the store
@@ -110,8 +110,23 @@ describe('reading across runs', () => {
     expect(notified).toBe(0)
   })
 
+  // `resetMetrics()` retires the counters a verdict rests on while the Repo,
+  // the workspace and the run are all unchanged — and it notifies nobody, so
+  // without a span check the chip carries a verdict about figures that no
+  // longer exist until the next scheduled pass.
+  it('returns nothing once the counter span it rested on was retired', () => {
+    const owner = { epoch: 0, metrics() { return { epoch: this.epoch, epochWorkspaceId: 'ws-1' } } }
+    startMonitorRun(owner, 'ws-1')
+    publishPerfAnalysis(analysis({ seq: 1, epoch: 0 }))
+    expect(getPerfAnalysisFor(owner, 'ws-1')).not.toBeNull()
+
+    owner.epoch = 1
+
+    expect(getPerfAnalysisFor(owner, 'ws-1')).toBeNull()
+  })
+
   it('returns nothing once no run is in force at all', () => {
-    const owner = {}
+    const owner = { metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }) }
     startMonitorRun(owner, 'ws-1')
     publishPerfAnalysis(analysis({ seq: 1 }))
 

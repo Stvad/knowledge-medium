@@ -456,19 +456,37 @@ describe('unjudgedReason', () => {
 describe('nextAnalysisDelayMs', () => {
   const young = 1_000
   const old = 30 * 60_000
+  const none = { interaction: null, startup: null } as const
+  const startupWaiting = { interaction: null, startup: 'no-current-sample' } as const
+  const interactionWaiting = { interaction: 'no-current-sample', startup: null } as const
 
-  it('comes back soon while a current sample may still arrive', () => {
-    expect(nextAnalysisDelayMs(true, young)).toBeLessThan(nextAnalysisDelayMs(false, young))
+  it('comes back soon while a boot record may still arrive', () => {
+    expect(nextAnalysisDelayMs(startupWaiting, young))
+      .toBeLessThan(nextAnalysisDelayMs(none, young))
   })
 
-  // Past the window a missing sample is not late, it is absent, and re-asking
-  // every minute for the rest of the session is pure cost.
-  it('gives up on the short cadence once the page is no longer young', () => {
-    expect(nextAnalysisDelayMs(true, old)).toBe(nextAnalysisDelayMs(false, old))
+  // A boot record is written for this boot or it is not; past the window it is
+  // not, and re-asking every minute for the rest of the session is pure cost.
+  it('stops re-asking about a boot record once the page is no longer young', () => {
+    expect(nextAnalysisDelayMs(startupWaiting, old)).toBe(nextAnalysisDelayMs(none, old))
+  })
+
+  // Interaction counters are LIVE. A session that had written nothing when the
+  // pass ran becomes judgeable the moment someone edits — page age proves
+  // nothing about it, so the bound is cost rather than time.
+  it('keeps re-checking live counters however old the page is', () => {
+    expect(nextAnalysisDelayMs(interactionWaiting, old))
+      .toBeLessThan(nextAnalysisDelayMs(none, old))
+  })
+
+  // ...but more slowly than the boot record, which has a deadline.
+  it('re-checks live counters more slowly than a boot record', () => {
+    expect(nextAnalysisDelayMs(interactionWaiting, young))
+      .toBeGreaterThan(nextAnalysisDelayMs(startupWaiting, young))
   })
 
   it('uses the ordinary cadence when nothing is awaited', () => {
-    expect(nextAnalysisDelayMs(false, young)).toBe(nextAnalysisDelayMs(false, old))
+    expect(nextAnalysisDelayMs(none, young)).toBe(nextAnalysisDelayMs(none, old))
   })
 })
 

@@ -72,6 +72,7 @@ describe('createPerfMonitorDiagnosticSource', () => {
     return {
       activeWorkspaceId: 'ws-1',
       isReadOnly: false,
+      metrics: () => ({ epoch: 0, epochWorkspaceId: 'ws-1' }),
       onReadOnlyChange: (l: () => void) => { listeners.add(l); return () => listeners.delete(l) },
       setReadOnly(value: boolean) {
         if (this.isReadOnly === value) return

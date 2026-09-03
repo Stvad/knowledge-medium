@@ -16,6 +16,7 @@ export const analysisFixture = (over: Partial<PerfAnalysis> = {}): PerfAnalysis 
   return {
     workspaceId: 'ws-1',
     analyzedAt: 1000,
+    epoch: 0,
     seq: 1,
     regressions: [],
     baseline: { interaction: 12, startup: 12 },

@@ -55,6 +55,10 @@ export type UnjudgedReason =
 
 export interface PerfAnalysis {
   workspaceId: string
+  /** `metrics().epoch` this was computed under. A `resetMetrics()` retires the
+   *  counters a verdict rests on while the Repo, the workspace and the run all
+   *  stay put — so nothing else here can tell that the figures are gone. */
+  epoch: number
   /** The monitor run this was computed under, stamped at the publication
    *  boundary. Null when nothing was running — a refresh from a dialog still
    *  mounted after the monitor was switched off — and such an analysis is
@@ -218,6 +222,7 @@ export const runPerfAnalysis = async (
   return {
     workspaceId,
     analyzedAt: now,
+    epoch: metrics.epoch,
     seq,
     recorded,
     baseline: {

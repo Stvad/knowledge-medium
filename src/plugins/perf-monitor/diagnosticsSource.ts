@@ -13,7 +13,7 @@ import type {
 } from '@/plugins/diagnostics/facet.js'
 import type { PerfAnalysis } from './analyze.js'
 import { formatRegression, summarize, type LiveFacts } from './verdict.js'
-import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
+import { recordingBlockedBy, type MetricsSpanSource } from '@/plugins/interaction-metrics/sessionContext.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis, VIEW_PERF_TREND_ACTION_ID } from './store.js'
 
 export const mapAnalysisToSnapshot = (
@@ -38,7 +38,9 @@ export const mapAnalysisToSnapshot = (
 }
 
 export const createPerfMonitorDiagnosticSource = (
-  repo: Pick<Repo, 'activeWorkspaceId' | 'isReadOnly' | 'onReadOnlyChange'>,
+  // `MetricsSpanSource` rather than `Pick<Repo, 'metrics'>`: the minimal shape
+  // is what a caller has to satisfy, and a real Repo returns a superset of it.
+  repo: Pick<Repo, 'activeWorkspaceId' | 'isReadOnly' | 'onReadOnlyChange'> & MetricsSpanSource,
 ): DiagnosticSourceContribution => {
   let cachedKey = ''
   let cachedSnapshot: DiagnosticSnapshot | null = null

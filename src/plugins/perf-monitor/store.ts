@@ -7,6 +7,7 @@
 import { createWorkspaceSnapshotStore } from '@/utils/workspaceSnapshotStore.js'
 import type { PerfAnalysis } from './analyze.js'
 import { isCurrentRun } from './monitorRun.js'
+import type { MetricsSpanSource } from '@/plugins/interaction-metrics/sessionContext.js'
 
 /** Id of the global action that opens the trend view for the last analysis. */
 export const VIEW_PERF_TREND_ACTION_ID = 'view_perf_trend'
@@ -48,13 +49,16 @@ export const publishPerfAnalysis = (analysis: PerfAnalysis): void => {
  *  sign-out that keeps the workspace id would pass a check made only against
  *  it. The caller's Repo is current at render by construction. */
 export const getPerfAnalysisFor = (
-  repo: object,
+  repo: MetricsSpanSource & object,
   workspaceId: string | null | undefined,
 ): PerfAnalysis | null => {
   const analysis = store.getFor(workspaceId)
-  return analysis !== null && analysis.run?.repo === repo && isCurrentRun(analysis.run)
-    ? analysis
-    : null
+  if (analysis === null || analysis.run?.repo !== repo || !isCurrentRun(analysis.run)) return null
+  // The SPAN too: `resetMetrics()` retires the counters a verdict rests on
+  // while the Repo, the workspace and the run are all unchanged, and it
+  // notifies nobody — so without this the chip carries a verdict about figures
+  // that no longer exist until the next scheduled pass.
+  return analysis.epoch === repo.metrics().epoch ? analysis : null
 }
 export const subscribePerfAnalysis = store.subscribe
 /** The verdicts belong to a Repo; a swap invalidates them but not the chip

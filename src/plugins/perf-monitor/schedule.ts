@@ -7,7 +7,7 @@ import type { Repo } from '@/data/repo'
 import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
-import { runPerfAnalysis } from './analyze.js'
+import { runPerfAnalysis, type UnjudgedReason } from './analyze.js'
 import { clearPerfAnalyses, publishPerfAnalysis } from './store.js'
 import { currentMonitorRun, endMonitorRun, hasMonitorRunFor, startMonitorRun } from './monitorRun.js'
 
@@ -31,21 +31,30 @@ const REANALYZE_MS = 10 * 60_000
  *  the session would be pure cost. */
 const RECHECK_MS = 60_000
 const RECHECK_WINDOW_MS = 10 * 60_000
-
-/** Was the last verdict waiting on a sample rather than on history? Set by
- *  every pass, read when the next one is armed. */
-let awaitingSample = false
+/** Slower, because the thing being waited for has no deadline — see below. */
+const LIVE_RECHECK_MS = 3 * 60_000
 
 /** Pure, and exported for it: this decides how quickly a wrong-looking verdict
- *  corrects itself, which is the whole behaviour the shorter cadence buys. */
-export const nextAnalysisDelayMs = (awaiting: boolean, pageAgeMs: number): number =>
-  awaiting && pageAgeMs < RECHECK_WINDOW_MS ? RECHECK_MS : REANALYZE_MS
-
-const nextDelayMs = (): number => nextAnalysisDelayMs(awaitingSample, performance.now())
+ *  corrects itself, which is the whole behaviour a shorter cadence buys.
+ *
+ *  The two series are bounded differently BECAUSE their missing samples are
+ *  different things. A startup record is written for this boot or it is not,
+ *  and past the window it is not — page age is proof there. Interaction
+ *  counters are live: a session that had written nothing when the pass ran
+ *  becomes judgeable the moment someone edits, whenever that is, so page age
+ *  proves nothing about them and the bound has to be cost instead. */
+export const nextAnalysisDelayMs = (
+  unjudged: { interaction: UnjudgedReason | null; startup: UnjudgedReason | null },
+  pageAgeMs: number,
+): number => {
+  if (unjudged.startup === 'no-current-sample' && pageAgeMs < RECHECK_WINDOW_MS) return RECHECK_MS
+  if (unjudged.interaction === 'no-current-sample') return LIVE_RECHECK_MS
+  return REANALYZE_MS
+}
 
 const job = cadencedIdleJob({
   firstDelayMs: LAZY_DEEP_IDLE.minDelayMs,
-  repeatDelayMs: nextDelayMs,
+  repeatDelayMs: REANALYZE_MS,
   label: 'perf-monitor',
 })
 
@@ -75,7 +84,6 @@ export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
   const run = hasMonitorRunFor(repo, workspaceId) ? currentMonitorRun() : null
   const ctx = metricsContext(repo, workspaceId)
   const analysis = { ...await runPerfAnalysis(repo, workspaceId, Date.now()), run }
-  awaitingSample = Object.values(analysis.unjudgedBecause).includes('no-current-sample')
   if (contextHolds(ctx, repo)) publishPerfAnalysis(analysis)
   return analysis
 }
@@ -101,7 +109,16 @@ export const perfAnalysisEffect: AppEffect = {
     // analysis for that one state was a second constructor for every field of
     // `PerfAnalysis`, kept in step by hand, to show the same words one idle
     // delay sooner.
-    const stopJob = job.start(async () => { await runPerfAnalysisNow(repo, workspaceId) })
+    // Cadence state belongs to THIS loop, not to the module. An analysis that
+    // outlived a Repo swap or a metrics reset still settles, and writing its
+    // result to module state would let it set the cadence for the run that
+    // replaced it — postponing a corrective pass by the full interval.
+    let unjudged: { interaction: UnjudgedReason | null; startup: UnjudgedReason | null } =
+      { interaction: null, startup: null }
+    const stopJob = job.start(
+      async () => { unjudged = (await runPerfAnalysisNow(repo, workspaceId)).unjudgedBecause },
+      () => nextAnalysisDelayMs(unjudged, performance.now()),
+    )
     return () => {
       // Teardown is not a pause. This effect goes away when the monitor's own
       // toggle is switched off, and the counters its verdicts describe keep
