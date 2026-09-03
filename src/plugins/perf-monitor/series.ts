@@ -302,32 +302,31 @@ export const bootstrapGapMs = (r: StartupRecordData): number | null =>
  *  page loads as though it described this one. */
 export const startupRegression = (
   series: readonly StartupRecordData[],
-  currentTimeOriginMs: number,
+  current: StartupRecordData | null,
 ): TrendResult => {
-  // Found ANYWHERE in the series, not just inside the newest few. This client's
-  // other tabs record their own boots for this workspace while this page stays
-  // open, so three of them pushed this boot's row out of a window-bounded
-  // lookup and the comparison reported no current sample with the row sitting
-  // right there. `timeOriginMs` is this boot's identity, so a match anywhere is
-  // unambiguous — the window was never what made the match trustworthy.
-  //
   // PRESENT AND USABLE, not merely present. A boot that stayed hidden until
   // after first paint records through the fallback, so its row exists with no
-  // paint marks and `bootstrapGapMs` is null — the row is immutable, so no
-  // amount of waiting gives it the sample the comparison needs. Reported as
-  // present-but-unusable it would read as "still building" forever.
+  // paint marks and `bootstrapGapMs` is null.
   //
-  // Not "still building" in the absent case either: the series may be long, and
-  // the startup recorder is independently togglable, so the usual cause of an
-  // absent row is that it is switched off. Waiting fixes neither.
-  const current = series.find((r) => r.timeOriginMs === currentTimeOriginMs)
+  // Both ways of failing this report the same reason, and the scheduler treats
+  // it as awaited either way — correctly, because only ONE of them is settled.
+  // An incomplete row is immutable, so no wait improves it. An ABSENT one may
+  // still be written: the recorder is independently togglable and retries, so a
+  // recorder enabled after this pass ran still records this boot. Neither is a
+  // reason to say "still building", which promises history rather than a
+  // sample.
   if (!current || bootstrapGapMs(current) === null) return NO_CURRENT_SAMPLE
-  // The comparison window stays FIXED at the newest boots, and deliberately
-  // need not contain this one. Rows above this boot are later boots of the same
-  // app on the same client — the freshest evidence there is about startup, and
-  // this metric is a property of the app, not of one page load. What this
-  // boot's row is asked for is only that a sample for it EXISTS, which is what
-  // stops the verdict being a replay from before this page loaded.
+  // `current` is a GATE, never a data point: it says a sample for this session
+  // exists, which is what stops the verdict being a replay from before this
+  // page loaded. It is deliberately not added to `series` — everything past the
+  // recent window is baseline, so a current row folded in would sit in the
+  // history it is compared against, and could turn four genuine samples into
+  // the five a verdict requires.
+  //
+  // The window itself stays FIXED at the newest boots and need not contain this
+  // one: rows above it are later boots of the same app on the same client, the
+  // freshest evidence there is about startup, which is a property of the app
+  // rather than of one page load.
   const gaps = (rs: readonly StartupRecordData[]) =>
     rs.map(bootstrapGapMs).filter((v): v is number => v !== null)
   return trendRegression(

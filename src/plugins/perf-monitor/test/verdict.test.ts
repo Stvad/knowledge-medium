@@ -33,7 +33,8 @@ describe('summarize', () => {
     expect(v.notes.join(' ')).toContain('interaction history still building')
   })
 
-  // Waiting fixes one of these and not the other, so they are not one message.
+  // Blended counters are settled for this page session; thin history is not.
+  // Different states, so not one message.
   it('separates a series still filling from counters it can never compare', () => {
     const blended = summarize(analysis({ unjudgedBecause: { interaction: 'blended-workspaces', startup: null } }))
     expect(blended.notes.join(' ')).toContain('more than one workspace')

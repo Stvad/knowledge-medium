@@ -193,17 +193,25 @@ export const countRecords = async (
  * comparison actually reads keeps those from disagreeing.
  */
 /**
- * @param mustKeep recognises the row describing THIS session, which is kept
- *   even past the history cap. The cap bounds the baseline; identifying the
- *   current sample is a different question, and a caller that needs both cannot
- *   ask the second one if the first hid the answer.
+ * TWO answers, deliberately not one list.
+ *
+ * `window` is the bounded history the comparison averages. `current` is the row
+ * describing THIS session, found however far back it sits — this client's other
+ * tabs write newer rows while a long-lived page stays open, so the cap can bury
+ * it. They are returned separately because merging them puts this session into
+ * its own baseline: the comparison treats everything past the recent window as
+ * history, so an appended current row both contaminates the average and can
+ * make four genuine samples look like the five a verdict requires.
+ *
+ * @param isCurrent recognises this session's row. Omitted, `current` is null
+ *   and the scan stops at the cap.
  */
-export const loadRecords = async <T extends { recordedAt: number }>(
+const scanSeries = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
   { typeId, recordName, isUsable }: RecordSeries<T>,
-  mustKeep?: (record: T) => boolean,
-): Promise<Array<{ id: string; record: T }>> => {
+  isCurrent?: (record: T) => boolean,
+): Promise<{ window: Array<{ id: string; record: T }>; current: T | null }> => {
   const recordPath = jsonPathForProperty(recordName)
   const groupId = seriesGroupId(repo, workspaceId, typeId)
   // ONE query, not a page walk. The candidate window is bounded and small, so
@@ -228,19 +236,19 @@ export const loadRecords = async <T extends { recordedAt: number }>(
     tail: 'LIMIT ?', tailParams: [CANDIDATE_LIMIT],
   })
   const rows = await repo.db.getAll<{ id: string; payload: string | null }>(q.sql, q.params)
-  const records: Array<{ id: string; record: T }> = []
-  let keptCurrent = mustKeep === undefined
+  const window: Array<{ id: string; record: T }> = []
+  let current: T | null = null
+  let seekingCurrent = isCurrent !== undefined
   for (const row of rows) {
     // Stopping at the window rather than truncating afterwards. Over-long
     // history biases the baseline toward older, smaller-graph sessions, which
     // reads as a regression that never happened.
     //
-    // ...except for the row identifying THIS session, which the window is not
-    // about. The cap bounds the BASELINE; a caller that also has to recognise
-    // its own sample cannot do so if the cap hid it, and this client's other
-    // tabs write newer rows while a long-lived page stays open. Keep scanning
-    // the candidates for it, and stop as soon as both are satisfied.
-    if (records.length >= HISTORY_LIMIT && keptCurrent) break
+    // Scanning PAST it only to find this session's own row, which is a
+    // different question and never joins the window — see the return type.
+    // This client's other tabs write newer rows while a long-lived page stays
+    // open, so enough of them would otherwise hide it.
+    if (window.length >= HISTORY_LIMIT && !seekingCurrent) break
     if (!row.payload) continue
     try {
       const record = JSON.parse(row.payload) as T
@@ -249,15 +257,29 @@ export const loadRecords = async <T extends { recordedAt: number }>(
       // window; `Infinity` (which `1e400` parses to) sorts to the front and
       // pushes this boot out of the currency window.
       if (Number.isFinite(record?.recordedAt) && isUsable(record)) {
-        const isCurrent = mustKeep?.(record) ?? false
-        // Past the cap, only the current row still earns a place.
-        if (records.length < HISTORY_LIMIT || isCurrent) records.push({ id: row.id, record })
-        if (isCurrent) keptCurrent = true
+        if (window.length < HISTORY_LIMIT) window.push({ id: row.id, record })
+        if (seekingCurrent && isCurrent!(record)) {
+          current = record
+          seekingCurrent = false
+        }
       }
     } catch {
       // A record written by a future/older shape is skipped, not fatal: the
       // series is a diagnostic, and one unreadable row must not blind it.
     }
   }
-  return records
+  return { window, current }
 }
+
+/** This client's records for one recorder, newest first — the bounded window a
+ *  comparison averages over. Callers that also need to recognise this session's
+ *  own row use `loadSeriesWithCurrent`, which keeps the two apart. */
+export const loadRecords = async <T extends { recordedAt: number }>(
+  repo: Repo,
+  workspaceId: string,
+  series: RecordSeries<T>,
+): Promise<Array<{ id: string; record: T }>> => (await scanSeries(repo, workspaceId, series)).window
+
+/** The window, plus this session's own row wherever it sits. One scan, two
+ *  answers — see `scanSeries` for why they must not become one list. */
+export const loadSeriesWithCurrent = scanSeries

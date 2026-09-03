@@ -436,8 +436,9 @@ describe('unjudgedReason', () => {
     expect(unjudgedReason([judged, judged], { blended: true })).toBe('blended-workspaces')
   })
 
-  // Waiting fixes short history and never a missing current sample, so when
-  // nothing was judged the two must not collapse into one message.
+  // The two send a reader to do different things — accumulate sessions, versus
+  // look at why this session measured nothing — so when nothing was judged they
+  // must not collapse into one message.
   it('separates a missing current sample from short history', () => {
     expect(unjudgedReason([noSample], {})).toBe('no-current-sample')
     expect(unjudgedReason([shortHistory], {})).toBe('history-short')

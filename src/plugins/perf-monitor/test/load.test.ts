@@ -28,6 +28,7 @@ import {
   isUsableInteractionRecord,
   isUsableStartupRecord,
   loadRecords,
+  loadSeriesWithCurrent,
 } from '../load'
 
 const WS = 'ws-1'
@@ -229,16 +230,20 @@ describe('loadRecords', () => {
     }
     const mine = (r: { recordedAt: number }) => r.recordedAt === 9e9 - buried
 
-    // Precondition: without the predicate this row really is out of reach, so
-    // the assertion below is about the widening and not the arrangement.
+    // Precondition: this row really is past the cap, so the assertion below is
+    // about the wider scan and not the arrangement.
     const capped = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(capped.some((r) => mine(r.record))).toBe(false)
 
-    const kept = await loadRecords(repo, WS, INTERACTION_SERIES, mine)
+    const { window, current } = await loadSeriesWithCurrent(repo, WS, INTERACTION_SERIES, mine)
 
-    expect(kept.some((r) => mine(r.record))).toBe(true)
-    // ...and it is kept ALONGSIDE a full window, not in place of part of it.
-    expect(kept).toHaveLength(HISTORY_LIMIT + 1)
+    expect(current).not.toBeNull()
+    expect(mine(current!)).toBe(true)
+    // SEPARATE, not appended: the window is exactly the bounded history a
+    // comparison averages, and folding this session's row into it would put it
+    // in the baseline it is judged against.
+    expect(window).toHaveLength(HISTORY_LIMIT)
+    expect(window.some((r) => mine(r.record))).toBe(false)
   })
 
   // Marks stay optional, but a PRESENT one has to be finite: the comparison

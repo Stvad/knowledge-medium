@@ -15,7 +15,7 @@ import {
 import {
   peekLiveSession,
 } from '@/plugins/interaction-metrics/sessionContext.js'
-import { INTERACTION_SERIES, STARTUP_SERIES, countRecords, loadRecords } from './load.js'
+import { INTERACTION_SERIES, STARTUP_SERIES, countRecords, loadRecords, loadSeriesWithCurrent } from './load.js'
 import { nextAnalysisSeq } from './store.js'
 import type { MonitorRun } from './monitorRun.js'
 import {
@@ -168,12 +168,13 @@ export const runPerfAnalysis = async (
   // the lower value — which is the ordering this exists to prevent.
   const seq = nextAnalysisSeq()
   const interaction = await loadRecords(repo, workspaceId, INTERACTION_SERIES)
-  // This boot's row is kept whatever the cap: other tabs on this client write
-  // newer boots while a long-lived page stays open, and enough of them would
-  // otherwise hide the row `startupRegression` looks for — reporting no current
-  // sample with it sitting on disk.
-  const startup = await loadRecords(repo, workspaceId, STARTUP_SERIES,
-    (r) => r.timeOriginMs === performance.timeOrigin)
+  // This boot's row comes back SEPARATELY from the window, found however far
+  // back the cap buried it. Locating it is a loading concern; the comparison is
+  // handed the two apart so this session cannot land in its own baseline.
+  const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
+    repo, workspaceId, STARTUP_SERIES,
+    (r) => r.timeOriginMs === performance.timeOrigin,
+  )
 
   // The live counters are page-global. A page session that has seen a second
   // workspace carries both workspaces' work, so comparing that snapshot against
@@ -201,7 +202,7 @@ export const runPerfAnalysis = async (
     ? [...queryRegressions(current, history), fanoutRegression(current, history)]
     : []
   const startupResults: TrendResult[] = [
-    startupRegression(startup.map((r) => r.record), performance.timeOrigin),
+    startupRegression(startup.map((r) => r.record), thisBoot),
   ]
 
   const interactionReady = anyJudged(interactionResults)
