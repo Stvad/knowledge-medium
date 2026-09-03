@@ -443,6 +443,49 @@ describe('retention deletion', () => {
   // machinery and do not count; only a hand-placed block does. That half is
   // unpinned here — a record property write materializes no field rows until
   // properties are blocks, so this environment produces none to distinguish.
+  // A record is inspectable by design, so a person can type into it. An
+  // Automation-scope delete takes that with no undo behind it.
+  it('leaves a record alone once someone has typed into it', async () => {
+    const { blockId: annotated } = await append(1)
+    await repo.tx(async (tx) => { await tx.update(annotated, { content: 'why was this slow?' }) },
+      { scope: ChangeScope.Automation, description: 'seed a hand edit' })
+
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).toContain(annotated)
+  })
+
+  // ...and the same for a property added by hand beside the record's own.
+  it('leaves a record alone once someone has added a property', async () => {
+    const { blockId: annotated } = await append(1)
+    await repo.tx(async (tx) => {
+      await tx.setProperty(annotated, interactionRecordProp, DATA, { skipMetadata: true })
+      const row = await tx.get(annotated)
+      await tx.update(annotated, { properties: { ...row!.properties, 'user:note': 'mine' } })
+    }, { scope: ChangeScope.Automation, description: 'seed a hand property' })
+
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).toContain(annotated)
+  })
+
+  // Records written before they became contentless carried their own ISO
+  // timestamp. Reading that as a hand edit would leave every pre-existing
+  // record permanently unprunable, which is the worse failure by far.
+  it('still prunes a record carrying only its own legacy timestamp', async () => {
+    const { blockId: legacy } = await append(1)
+    await repo.tx(async (tx) => {
+      await tx.update(legacy, { content: new Date(DATA.recordedAt).toISOString() })
+    }, { scope: ChangeScope.Automation, description: 'seed a legacy title' })
+
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).not.toContain(legacy)
+  })
+
   it('leaves a record alone once someone has put a block under it', async () => {
     const { blockId: annotated } = await append(1)
     await repo.tx(async (tx) => {
