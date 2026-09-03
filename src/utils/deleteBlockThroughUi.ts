@@ -23,6 +23,7 @@
  * discipline that's checked beats discipline that's remembered.
  */
 import type { Block } from '@/data/block.js'
+import type { Repo } from '@/data/repo.js'
 import { resolveDeletionRefusal } from '@/extensions/core.js'
 import { showInfo } from '@/utils/toast.js'
 
@@ -38,30 +39,40 @@ const REFUSAL_TOAST_ID = 'block-deletion-refused'
  *
  * Loads the block first: guards inspect types and workspace id, and an unloaded
  * block would answer "no types" and be waved through.
+ *
+ * `repo` overrides where the delete is dispatched — pass an `undoGroup` facade
+ * to fold the delete into a surrounding group. Defaults to each block's own
+ * repo.
  */
-export const deleteBlockThroughUi = async (block: Block): Promise<boolean> =>
-  deleteBlocksThroughUi([block])
+export const deleteBlockThroughUi = async (block: Block, repo?: Repo): Promise<boolean> =>
+  deleteBlocksThroughUi([block], repo)
 
 /** Batch form: refuses the WHOLE call if any block is protected, rather than
  *  half-deleting the set. One toast, and the user's selection is intact so they
  *  can narrow it and retry — a partial cut is not something they can undo by
  *  re-selecting.
  *
- *  All-or-nothing describes the GUARDS, not the writes. The deletes are N
+ *  All-or-nothing describes the GUARDS, not the writes. The deletes are still N
  *  independent transactions, so a tx-layer refusal on block K (a read-only
  *  workspace, a seeded definition somewhere in its subtree) still leaves
- *  1..K-1 tombstoned. Making that atomic is the same open item as
- *  `applyToAllBlocksInSelection`'s "one tx so undo collapses the batch" todo.
+ *  1..K-1 tombstoned. What a caller-supplied `repo` (an `undoGroup` facade)
+ *  buys is that the committed prefix is ONE undo entry, so the user can take it
+ *  back in one cmd-Z — grouping is not atomicity (docs/undo-grouping.md).
  *
  *  Both multi-block gestures get this. `cut_selected_blocks` passes its whole
  *  selection here directly; `multi_select.delete_block` fans out per block
  *  through `applyToAllBlocksInSelection`, so it runs the same check once over
  *  the selection as that helper's `preflight` before any block is touched.
  *  `Delete` and `d` on the same selection must not disagree. */
-export const deleteBlocksThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
+export const deleteBlocksThroughUi = async (
+  blocks: readonly Block[],
+  repo?: Repo,
+): Promise<boolean> => {
   if (!await ensureDeletableThroughUi(blocks)) return false
-  // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point
-  for (const block of blocks) await block.delete()
+  for (const block of blocks) {
+    // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point
+    await (repo ?? block.repo).mutate.delete({id: block.id})
+  }
   return true
 }
 
