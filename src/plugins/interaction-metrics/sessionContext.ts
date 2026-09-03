@@ -258,8 +258,25 @@ export const readLiveSession = (
   // It also adopts the current span, which is why the reading below is taken
   // after it rather than before.
   observeWorkspace(repo, workspaceId)
-  return { metrics: repo.metrics(), session: metricsSessionContext(repo, workspaceId) }
+  return peekLiveSession(repo, workspaceId)
 }
+
+/** The same reading, WITHOUT registering an observation.
+ *
+ *  For a consumer that is only looking. Observing is a claim about where this
+ *  page has been, and a reader making it can be wrong about the present: an
+ *  analysis for one workspace is still reading history when the user moves to
+ *  another and resets the counters, and observing the workspace it was
+ *  analysing marks the fresh span unattributable — disabling interaction
+ *  sampling for a workspace that never blended anything, until the next reset.
+ *
+ *  The span is still adopted, because `metricsSessionContext` rebases to the
+ *  current epoch; what is not done is asserting that this workspace was seen. */
+export const peekLiveSession = (
+  repo: Repo,
+  workspaceId: string,
+): { metrics: ReturnType<Repo['metrics']>; session: MetricsSessionContext } =>
+  ({ metrics: repo.metrics(), session: metricsSessionContext(repo, workspaceId) })
 
 /** Test helper — forget one Repo's session facts, and where the "page"
  *  started: a test simulating a second page session means both. */
