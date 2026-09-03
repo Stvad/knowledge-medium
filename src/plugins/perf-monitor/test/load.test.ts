@@ -17,10 +17,15 @@ import {
   writeInteractionSample,
 } from '@/plugins/interaction-metrics/record'
 import { resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
+import {
+  startupMetricsUIStateType,
+  startupRecordProp,
+} from '@/plugins/startup-metrics/record'
 import { getClientId, getDeviceLabel } from '@/utils/clientId'
 import { jsonPathForProperty } from '@/data/internals/typedBlockQuery'
 import { clientGroupId } from '@/plugins/interaction-metrics/recordStore'
 import {
+  STARTUP_SERIES,
   HISTORY_LIMIT,
   countRecords,
   INTERACTION_SERIES,
@@ -210,13 +215,54 @@ describe('loadRecords', () => {
     expect(await loadRecords(repo, WS, INTERACTION_SERIES)).toHaveLength(HISTORY_LIMIT)
   })
 
-  // The cap bounds the BASELINE, and identifying this session's own row is a
-  // different question. This client's other tabs write newer boots while a
-  // long-lived page stays open, so enough of them push its row past the cap —
-  // and the comparison then reports no current sample with the row on disk.
+  // A startup record is written once, on a deferred and RETRYING schedule, so a
+  // slow boot can be persisted AFTER a later fast one. Ordering the comparison
+  // by write time then puts an older boot in the recent window and a newer one
+  // in the baseline — manufacturing or hiding a trend, and attributing it to
+  // the wrong build chronology.
+  it('orders startup history by boot time, not by when the row landed', async () => {
+    const groupId = clientGroupId(repo, WS, startupMetricsUIStateType)
+    // Boot A is older but persisted LAST — the retry case.
+    const boots = [
+      { timeOriginMs: 2_000, recordedAt: 100 },
+      { timeOriginMs: 3_000, recordedAt: 200 },
+      { timeOriginMs: 1_000, recordedAt: 300 },
+    ]
+    for (const [i, b] of boots.entries()) {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+            created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
+        [`boot-${i}`, WS, groupId, `a${i}`,
+         JSON.stringify({ [startupRecordProp.name]: {
+           ...b, appVersion: 'v', appSha: 'sha', clientId: getClientId(),
+           deviceLabel: getDeviceLabel(), repoReadyMs: 100, firstContentPaintMs: 400,
+         } }),
+         USER.id, USER.id],
+      )
+    }
+
+    const loaded = await loadRecords(repo, WS, STARTUP_SERIES)
+
+    // Precondition: write order really does disagree with boot order, so this
+    // is not passing on an arrangement where the two happen to match.
+    expect(boots.map((b) => b.recordedAt)).not.toEqual(
+      [...boots].sort((a, b) => b.timeOriginMs - a.timeOriginMs).map((b) => b.recordedAt))
+    expect(loaded.map((r) => r.record.timeOriginMs)).toEqual([3_000, 2_000, 1_000])
+  })
+
+  // The cap bounds the BASELINE; addressing this session's own row is a
+  // different question, answered by identity rather than by scanning further.
+  // This client's other tabs write newer rows for as long as the page stays
+  // open, so no scan bound is enough — the comparison would report no current
+  // sample with the row sitting on disk.
   it('keeps the row a caller must recognise, past the window', async () => {
     const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
-    const buried = HISTORY_LIMIT + 5
+    // Past the CANDIDATE cap, not merely the history window: retention keeps
+    // thousands, and a long-lived page accumulates other tabs' rows above its
+    // own without limit. Any scan-based lookup fails here whatever its bound.
+    const buried = CANDIDATE_LIMIT + 5
     for (let i = 0; i <= buried; i++) {
       await sharedDb.db.execute(
         `INSERT INTO blocks
@@ -228,14 +274,16 @@ describe('loadRecords', () => {
          USER.id, USER.id],
       )
     }
-    const mine = (r: { recordedAt: number }) => r.recordedAt === 9e9 - buried
+    const buriedAt = 9e9 - buried
+    const mine = (r: { recordedAt: number }) => r.recordedAt === buriedAt
 
     // Precondition: this row really is past the cap, so the assertion below is
-    // about the wider scan and not the arrangement.
+    // about addressing it directly and not about the arrangement.
     const capped = await loadRecords(repo, WS, INTERACTION_SERIES)
     expect(capped.some((r) => mine(r.record))).toBe(false)
 
-    const { window, current } = await loadSeriesWithCurrent(repo, WS, INTERACTION_SERIES, mine)
+    const { window, current } = await loadSeriesWithCurrent(
+      repo, WS, INTERACTION_SERIES, { field: 'recordedAt', value: buriedAt })
 
     expect(current).not.toBeNull()
     expect(mine(current!)).toBe(true)

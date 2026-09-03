@@ -27,7 +27,7 @@ import { summarize } from './verdict.js'
 import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
 import { refreshPerfAnalysis } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
-import { hasMonitorRunFor, subscribeMonitorRun } from './monitorRun.js'
+import { currentMonitorRun, hasMonitorRunFor, subscribeMonitorRun, type MonitorRun } from './monitorRun.js'
 
 /** Sessions shown per table. The stored series is longer (see `HISTORY_LIMIT`);
  *  this is what fits in a dialog without becoming a spreadsheet. */
@@ -88,7 +88,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   /** The refresh in flight WITH the context it belongs to, derived the same way
    *  the rows are. A refresh superseded by a sign-out would otherwise hold the
    *  replacement's button disabled until it settled — or forever, if it hung. */
-  const [refreshingFor, setRefreshingFor] = useState<{ repo: object; workspaceId: string } | null>(null)
+  const [refreshingFor, setRefreshingFor] =
+    useState<{ repo: object; workspaceId: string; run: MonitorRun | null } | null>(null)
   // The active pin decides `stale`, and a workspace switch moves nothing else
   // this dialog subscribes to — no publication, no role change. Without this
   // seam the staleness re-render is incidental: it arrives only if some other
@@ -185,8 +186,14 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     subscribeMonitorRun,
     () => ws != null && hasMonitorRunFor(repo, ws),
   )
+  // The RUN as well as the Repo and the workspace. This dialog outlives the
+  // monitor's toggle, so switching it off and on again leaves all three of the
+  // previous refresh's other coordinates matching — and its button would stay
+  // disabled under the replacement run until that refresh settled, or forever
+  // if it hung. The run is what a teardown actually changes.
   const refreshing = refreshingFor !== null
     && refreshingFor.repo === repo && refreshingFor.workspaceId === ws
+    && refreshingFor.run === currentMonitorRun()
   const stale = !ws || ws !== activePin
   // The monitor's own toggle can go off while this dialog stays mounted in the
   // shared DialogHost. Nothing could publish then, so the button would spin and
@@ -209,7 +216,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     // Identity, not just context: a refresh superseded by a swap must not clear
     // state that the refresh which REPLACED it now owns — that would re-enable
     // the button under a running analysis and let two overlap.
-    const mine = { repo, workspaceId: ws }
+    const mine = { repo, workspaceId: ws, run: currentMonitorRun() }
     setRefreshingFor(mine)
     try {
       await refreshPerfAnalysis(repo, ws)

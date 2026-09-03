@@ -140,6 +140,20 @@ export interface RecordSeries<T extends { recordedAt: number }> {
    *  hand-edited or future-shaped row can parse cleanly and still be missing
    *  what the comparison and the trend table dereference. */
   isUsable: (record: T) => boolean
+  /** What "newest" MEANS for this series, when it is not the write time.
+   *
+   *  The SQL orders by `recordedAt`, which is when the row was persisted —
+   *  correct for retention, whose job is to prune what arrived earliest, and
+   *  correct for the interaction series, which is updated in place so its stamp
+   *  IS its sample time. A startup record is written once, on a deferred and
+   *  RETRYING schedule, so a slow boot can be persisted after a later fast one;
+   *  ordering the comparison that way puts an older boot in the recent window
+   *  and a newer one in the baseline, which can manufacture or hide a trend and
+   *  attributes it to the wrong build chronology. Sorted after loading, so the
+   *  pruner and the reader keep the one definition of the series and differ
+   *  only in what they call recent — which is safe because retention keeps
+   *  thousands and the reader reads tens. */
+  recencyOf?: (record: T) => number
 }
 
 export const INTERACTION_SERIES: RecordSeries<InteractionRecordData> = {
@@ -152,6 +166,8 @@ export const STARTUP_SERIES: RecordSeries<StartupRecordData> = {
   typeId: startupMetricsUIStateType.id,
   recordName: startupRecordProp.name,
   isUsable: isUsableStartupRecord,
+  // Boot time, not write time — see `recencyOf`.
+  recencyOf: (r) => r.timeOriginMs,
 }
 
 /** This client's group for one series. Derived, never `ensure`d — a reader must
@@ -192,26 +208,31 @@ export const countRecords = async (
  * started and its `recordedAt` reflects the sample. Sorting on the field the
  * comparison actually reads keeps those from disagreeing.
  */
-/**
- * TWO answers, deliberately not one list.
+/** Parse one row's payload, or null if it is unreadable or unusable.
  *
- * `window` is the bounded history the comparison averages. `current` is the row
- * describing THIS session, found however far back it sits — this client's other
- * tabs write newer rows while a long-lived page stays open, so the cap can bury
- * it. They are returned separately because merging them puts this session into
- * its own baseline: the comparison treats everything past the recent window as
- * history, so an appended current row both contaminates the average and can
- * make four genuine samples look like the five a verdict requires.
- *
- * @param isCurrent recognises this session's row. Omitted, `current` is null
- *   and the scan stops at the cap.
- */
+ *  `recordedAt` is checked here rather than in either validator because it
+ *  orders the series: absent makes every comparison NaN and randomises the
+ *  window; `Infinity` (which `1e400` parses to) sorts to the front. */
+const parseRecord = <T extends { recordedAt: number }>(
+  payload: string | null,
+  isUsable: (record: T) => boolean,
+): T | null => {
+  if (!payload) return null
+  try {
+    const record = JSON.parse(payload) as T
+    return Number.isFinite(record?.recordedAt) && isUsable(record) ? record : null
+  } catch {
+    // A record written by a future/older shape is skipped, not fatal: the
+    // series is a diagnostic, and one unreadable row must not blind it.
+    return null
+  }
+}
+
 const scanSeries = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
-  { typeId, recordName, isUsable }: RecordSeries<T>,
-  isCurrent?: (record: T) => boolean,
-): Promise<{ window: Array<{ id: string; record: T }>; current: T | null }> => {
+  { typeId, recordName, isUsable, recencyOf }: RecordSeries<T>,
+): Promise<Array<{ id: string; record: T }>> => {
   const recordPath = jsonPathForProperty(recordName)
   const groupId = seriesGroupId(repo, workspaceId, typeId)
   // ONE query, not a page walk. The candidate window is bounded and small, so
@@ -237,49 +258,72 @@ const scanSeries = async <T extends { recordedAt: number }>(
   })
   const rows = await repo.db.getAll<{ id: string; payload: string | null }>(q.sql, q.params)
   const window: Array<{ id: string; record: T }> = []
-  let current: T | null = null
-  let seekingCurrent = isCurrent !== undefined
   for (const row of rows) {
     // Stopping at the window rather than truncating afterwards. Over-long
     // history biases the baseline toward older, smaller-graph sessions, which
     // reads as a regression that never happened.
-    //
-    // Scanning PAST it only to find this session's own row, which is a
-    // different question and never joins the window — see the return type.
-    // This client's other tabs write newer rows while a long-lived page stays
-    // open, so enough of them would otherwise hide it.
-    if (window.length >= HISTORY_LIMIT && !seekingCurrent) break
-    if (!row.payload) continue
-    try {
-      const record = JSON.parse(row.payload) as T
-      // `recordedAt` orders the series, so it is checked here rather than in
-      // either validator. Absent makes every comparison NaN and randomises the
-      // window; `Infinity` (which `1e400` parses to) sorts to the front and
-      // pushes this boot out of the currency window.
-      if (Number.isFinite(record?.recordedAt) && isUsable(record)) {
-        if (window.length < HISTORY_LIMIT) window.push({ id: row.id, record })
-        if (seekingCurrent && isCurrent!(record)) {
-          current = record
-          seekingCurrent = false
-        }
-      }
-    } catch {
-      // A record written by a future/older shape is skipped, not fatal: the
-      // series is a diagnostic, and one unreadable row must not blind it.
-    }
+    if (window.length >= HISTORY_LIMIT) break
+    const record = parseRecord<T>(row.payload, isUsable)
+    if (record !== null) window.push({ id: row.id, record })
   }
-  return { window, current }
+  // Re-sorted, not re-queried: the SQL order decides which rows are CANDIDATES
+  // (and agrees with the pruner about that), while this decides which of them
+  // the comparison calls recent.
+  return recencyOf === undefined
+    ? window
+    : [...window].sort((a, b) => recencyOf(b.record) - recencyOf(a.record))
 }
 
 /** This client's records for one recorder, newest first — the bounded window a
- *  comparison averages over. Callers that also need to recognise this session's
- *  own row use `loadSeriesWithCurrent`, which keeps the two apart. */
-export const loadRecords = async <T extends { recordedAt: number }>(
+ *  comparison averages over. Callers that also need this session's own row use
+ *  `loadSeriesWithCurrent`, which keeps the two apart. */
+export const loadRecords = scanSeries
+
+/**
+ * The window, plus THIS session's own record — two answers, deliberately not
+ * one list.
+ *
+ * `window` is the bounded history a comparison averages. `current` only says
+ * that a sample for this session exists. Merging them puts the session into its
+ * own baseline: everything past the recent window is history, so a current row
+ * folded in both skews the average and can make four genuine samples look like
+ * the five a verdict requires.
+ *
+ * The current row is a POINT LOOKUP, not a longer scan. It is addressed by its
+ * own identity, so no candidate limit can hide it — which three successive
+ * widenings of the window (the recent slice, then the history cap, then the
+ * candidate cap) each failed to guarantee, because this client's other tabs go
+ * on writing newer rows for as long as the page stays open and retention keeps
+ * thousands. One extra bounded query on an idle path buys an answer that does
+ * not depend on how far back the row happens to be.
+ */
+export const loadSeriesWithCurrent = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
   series: RecordSeries<T>,
-): Promise<Array<{ id: string; record: T }>> => (await scanSeries(repo, workspaceId, series)).window
+  identity: { field: string; value: unknown },
+): Promise<{ window: Array<{ id: string; record: T }>; current: T | null }> => {
+  const [window, current] = await Promise.all([
+    scanSeries(repo, workspaceId, series),
+    findRecord(repo, workspaceId, series, identity),
+  ])
+  return { window, current }
+}
 
-/** The window, plus this session's own row wherever it sits. One scan, two
- *  answers — see `scanSeries` for why they must not become one list. */
-export const loadSeriesWithCurrent = scanSeries
+/** The one record whose `field` holds `value`, or null. */
+const findRecord = async <T extends { recordedAt: number }>(
+  repo: Repo,
+  workspaceId: string,
+  { typeId, recordName, isUsable }: RecordSeries<T>,
+  identity: { field: string; value: unknown },
+): Promise<T | null> => {
+  const q = clientSeriesQuery('json_extract(properties_json, ?) AS payload', {
+    groupId: seriesGroupId(repo, workspaceId, typeId),
+    recordName, deviceSurface: deviceSurface(), clientId: getClientId(),
+    selectParams: [jsonPathForProperty(recordName)],
+    matchField: identity,
+    tail: 'LIMIT 1',
+  })
+  const rows = await repo.db.getAll<{ payload: string | null }>(q.sql, q.params)
+  return parseRecord<T>(rows[0]?.payload ?? null, isUsable)
+}

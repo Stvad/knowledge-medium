@@ -347,6 +347,11 @@ export const clientSeriesQuery = (
      *  `LIMIT -1 OFFSET '$."…"'` evaluate as `OFFSET 0`, so retention deletes
      *  the entire series. */
     selectParams?: unknown[]
+    /** Restrict to rows whose record carries this value at this sub-path (e.g.
+     *  `timeOriginMs`). For addressing ONE record rather than a window of them:
+     *  a point lookup must not be bounded by whatever candidate limit a
+     *  windowed read happens to use. */
+    matchField?: { field: string; value: unknown }
     tail: string
     tailParams?: unknown[]
   },
@@ -363,6 +368,7 @@ export const clientSeriesQuery = (
                   OR json_extract(properties_json, ?) LIKE ?)
              AND (json_extract(properties_json, ?) IS NULL
                   OR json_extract(properties_json, ?) = ?)
+             ${opts.matchField === undefined ? '' : 'AND json_extract(properties_json, ?) = ?'}
            ORDER BY json_extract(properties_json, ?) DESC, order_key, id
            ${opts.tail}`,
     params: [
@@ -371,6 +377,9 @@ export const clientSeriesQuery = (
       ...(opts.excludeId === undefined ? [] : [opts.excludeId]),
       record, label, label, `${opts.deviceSurface}:%`,
       owner, owner, opts.clientId,
+      ...(opts.matchField === undefined
+        ? []
+        : [`${record}.${opts.matchField.field}`, opts.matchField.value]),
       `${record}.recordedAt`,
       ...(opts.tailParams ?? []),
     ],

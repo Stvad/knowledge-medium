@@ -173,7 +173,7 @@ export const runPerfAnalysis = async (
   // handed the two apart so this session cannot land in its own baseline.
   const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
     repo, workspaceId, STARTUP_SERIES,
-    (r) => r.timeOriginMs === performance.timeOrigin,
+    { field: 'timeOriginMs', value: performance.timeOrigin },
   )
 
   // The live counters are page-global. A page session that has seen a second
