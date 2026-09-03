@@ -419,6 +419,31 @@ describe('retention deletion', () => {
   // machinery and do not count; only a hand-placed block does. That half is
   // unpinned here — a record property write materializes no field rows until
   // properties are blocks, so this environment produces none to distinguish.
+  // The guard has to walk the same tree the delete does. NOTE what this does
+  // and does not reach: the intermediate row here is not recognised as property
+  // machinery (nothing materializes field rows until properties are blocks), so
+  // this pins the direct-child branch, not the recursion through machinery. The
+  // recursion is labelled unpinned at its declaration.
+  it('leaves a record alone when the note is nested deeper', async () => {
+    const { blockId: annotated } = await append(1)
+    await repo.tx(async (tx) => {
+      await tx.create({
+        id: 'machinery', workspaceId: WS, parentId: annotated, orderKey: 'a1',
+        content: '', properties: {}, isFieldForm: true,
+      }, { systemMint: true })
+      await tx.create({
+        id: 'deep-note', workspaceId: WS, parentId: 'machinery', orderKey: 'a1',
+        content: 'why was this one slow?', properties: {},
+      }, { systemMint: true })
+    }, { scope: ChangeScope.Automation, description: 'seed a nested note' })
+
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).toContain(annotated)
+    expect(await liveDescendantsOf('machinery')).toEqual(['deep-note'])
+  })
+
   it('leaves a record alone once someone has put a block under it', async () => {
     const { blockId: annotated } = await append(1)
     await repo.tx(async (tx) => {

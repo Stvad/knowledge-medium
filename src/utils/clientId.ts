@@ -56,13 +56,23 @@ export const getClientId = (): string => {
 /** Test helper — drop the in-process cache so the next call re-resolves. */
 export const resetClientIdCache = (): void => { cached = undefined; cachedIsPersistent = false }
 
-/** Whether `getClientId()` survives a reload.
+/** Whether the store ACCEPTED and KEPT the client id — necessary for surviving
+ *  a reload, and as close as a page can get to it.
  *
- *  False in blocked-storage environments (private mode, a browser with site
- *  data disabled), where the id falls back to a per-process value. Anything
- *  keyed on the client id across sessions MUST check this: with a fresh id each
- *  load, per-client history is written where the next session will never look
- *  for it — accumulating groups nothing can read, forever. */
+ *  False where storage is blocked or discards writes (site data disabled, a
+ *  quota-full or partitioned store), and the id falls back to a per-process
+ *  value. Anything keyed on the client id across sessions MUST check this: with
+ *  a fresh id each load, per-client history is written where the next session
+ *  will never look for it — accumulating groups nothing can read, forever.
+ *
+ *  It does NOT prove durability, and cannot. A private window's `localStorage`
+ *  is fully functional and discarded when the window closes, so every private
+ *  session mints a group whose records no later session can reach or prune.
+ *  ACCEPTED: the alternative is gating on `navigator.storage.persisted()`,
+ *  which is false for ordinary non-installed browsing and would turn recording
+ *  off for nearly everyone to bound a leak of a few rows per private session by
+ *  a signed-in user. Retention across groups is not the answer either — this
+ *  device cannot tell its own retired group from another device's live one. */
 export const isClientIdPersistent = (): boolean => {
   getClientId()
   return cachedIsPersistent
