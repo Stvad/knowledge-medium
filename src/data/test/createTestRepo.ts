@@ -5,25 +5,27 @@
  * runtime (plus any extra `extensions`), and the Layout B sync observer left
  * OFF by default.
  *
- * Leaving the observer off is the structural fix for the leak most call sites
- * paper over with `afterEach(() => repo.stopSyncObserver())`: the observer
- * holds a live `db.onChange` subscription on the SHARED db, so a per-test Repo
- * that starts it must dispose it or the subscription outlives the test. Unit
- * tests that don't drive sync don't need the observer at all.
+ * Leaving the observer off keeps unit tests that never drive sync off a live
+ * `db.onChange` subscription on the SHARED db.
  *
  * Pairs with the shared-db pattern (AGENTS.md): one `createTestDb()` in
  * `beforeAll`, `resetTestDb()` in `beforeEach`, a fresh `createTestRepo()` per
  * test for registry / cache / handle-store isolation. For sync-materialization
- * tests, pass `startSyncObserver: true` and stop it in your own cleanup.
+ * tests, pass `startSyncObserver: true`.
  *
- * Repos built here are registered against their db so `createTestDb`'s cleanup
- * releases them before closing it (see `releaseTestRepos`). A harness that
- * builds its Repo by hand must call `registerTestRepo` to get the same cover —
- * an unregistered pinned Repo is invisible to the release. Either way this
- * covers only the database going away underneath a parked pass; it does NOT
- * make a Repo safe to abandon mid-file. A file whose tests insert
- * `workspace_members` rows must release each test's Repo itself — see
- * `definitionSeeds.test.ts`.
+ * RELEASED WHEN ITS TEST ENDS — a Repo built here during a test is enrolled in
+ * that test's scope (`testRepoScope.ts`), which stops its observer and unpins
+ * its workspace once the test finishes, so nothing it scheduled can write into
+ * the next test's database (#813). The `afterEach(() => repo.stopSyncObserver())`
+ * many call sites carry still runs, and runs first; it is now belt-and-braces.
+ * A harness that stays on a hand-rolled `new Repo` wraps the construction —
+ * `trackTestRepo(new Repo({…}))` — for the same cover.
+ *
+ * The scope covers a Repo built INSIDE a test — which, at runtime, includes
+ * every one built in a `beforeEach` or in a helper those call. A Repo built in
+ * `beforeAll` or at module scope is deliberately left alone: it exists to be
+ * shared across the file, and releasing it after the first test would break
+ * that. Such a file releases its own Repo in `afterAll`, before the db closes.
  *
  * CAVEAT — last-write-wins observer tests: the default `now` is a deterministic
  * counter starting at 1.7e12, NOT `Date.now`. A sync-observer test whose
@@ -47,6 +49,9 @@
  * sharing one db in the same test will therefore mint COLLIDING block ids and
  * tx-seqs. A two-device/convergence test must give at least one Repo distinct
  * generators, e.g. `newId: uuidv4` (see globalState.test.ts / mutators.test.ts).
+ * Tx ids are the exception: `Repo` mints those as uuids independently of
+ * `newId` (#866), so no arrangement of Repos can collide on the
+ * `command_events.tx_id` primary key.
  */
 
 import type { User } from '@/data/api/user.js'
@@ -55,6 +60,7 @@ import type { BackfillCompletionClaim } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { Repo, type RepoOptions } from '@/data/repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 export interface CreateTestRepoOptions {
   /** The shared PowerSync db from `createTestDb()`. */
@@ -164,68 +170,6 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
   if (opts.extensions?.length) {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, ...opts.extensions]))
   }
-  registerTestRepo(opts.db, repo)
+  trackTestRepo(repo)
   return { repo, cache }
-}
-
-/** Every Repo built over a given test database, so `createTestDb`'s cleanup can
- *  release them before closing it.
- *
- *  `WeakRef`, not the Repo: a time-bounded deep fuzz run builds one Repo per
- *  property iteration, and holding them all would grow without bound. It also
- *  happens to select exactly the right ones — a Repo with a parked pass is kept
- *  alive by the subscription that pass holds on the db, and one that has been
- *  collected had nothing left to release. */
-const reposByDb = new WeakMap<CreateTestRepoOptions['db'], RepoRefs>()
-
-interface RepoRefs {
-  refs: Set<WeakRef<Repo>>
-  /** Size at which to drop cleared refs — see `registerTestRepo`. */
-  sweepAt: number
-}
-
-const SWEEP_FLOOR = 64
-
-/** Track a Repo built by hand (`new Repo(...)`) rather than by `createTestRepo`,
- *  so `releaseTestRepos` covers it too. A pinned Repo that never registers is
- *  invisible to the release, and its db closes under the pass it parked.
- *
- *  Collection clears a `WeakRef` but leaves its Set entry, so the set alone
- *  would still grow with the iteration count of a deep fuzz run. Sweep the
- *  cleared ones on a doubling watermark: amortized O(1) per registration. */
-export const registerTestRepo = (db: CreateTestRepoOptions['db'], repo: Repo): void => {
-  const entry = reposByDb.get(db) ?? {refs: new Set<WeakRef<Repo>>(), sweepAt: SWEEP_FLOOR}
-  if (entry.refs.size >= entry.sweepAt) {
-    for (const ref of entry.refs) if (ref.deref() === undefined) entry.refs.delete(ref)
-    entry.sweepAt = Math.max(SWEEP_FLOOR, entry.refs.size * 2)
-  }
-  entry.refs.add(new WeakRef(repo))
-  reposByDb.set(db, entry)
-}
-
-/** Unpin every Repo built over `db` and let its deferred work settle.
- *
- *  A pinned Repo is not idle: any `repo.tx` primes the property registry, which
- *  schedules a seed-materialization pass, which parks on a `workspace_members`
- *  row that most tests never insert — holding a subscription on a db that is
- *  about to close under it. Unpinning aborts that wait; a pass whose idle timer
- *  has not fired yet then refuses at the access gate without touching the db.
- *
- *  Deliberately unguarded. `pinWorkspace(null)` returns before the block that
- *  throws, so the only way an unpin fails is a projector disposer throwing
- *  during teardown — which nothing here does, and which would be a bug worth
- *  crashing this teardown loudly. Catching it per Repo instead buys a partial
- *  release on a run that is already red, and costs the two failure modes that
- *  come with continuing: a caught unpin leaves the Repo RE-PINNED (the setter
- *  rolls back and reschedules a pass), so draining it afterwards never
- *  settles. Letting the throw propagate here makes both unreachable. */
-export const releaseTestRepos = async (db: CreateTestRepoOptions['db']): Promise<void> => {
-  const entry = reposByDb.get(db)
-  if (!entry) return
-  const live = [...entry.refs]
-    .map(ref => ref.deref())
-    .filter((repo): repo is Repo => repo !== undefined)
-  entry.refs.clear()
-  for (const repo of live) repo.setActiveWorkspaceId(null)
-  await Promise.all(live.map(repo => repo.awaitSeedMaterialization()))
 }

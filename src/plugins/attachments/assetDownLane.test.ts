@@ -27,7 +27,6 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { registerTestRepo } from '@/data/test/createTestRepo'
 import {
   ASSETS_TYPE_CONTRIBUTION,
   MEDIA_PROPERTY_SCHEMAS,
@@ -36,6 +35,7 @@ import {
   mediaHashProp,
 } from './mediaBlock.js'
 import { collectReplicationRequests, runDownLaneReconcile } from './assetDownLane.js'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 const WS = 'ws-1'
 const USER = 'user-1'
@@ -45,9 +45,9 @@ let repo: Repo
 
 const buildRepo = (userId: string = USER): Repo => {
   // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
-  const r = new Repo({
+  const r = trackTestRepo(new Repo({
     db: sharedDb.db, cache: new BlockCache(), user: { id: userId }, blockIdPolicy: 'any',
-  })
+  }))
   r.setFacetRuntime(
     resolveFacetRuntimeSync([
       kernelDataExtension,
@@ -57,7 +57,6 @@ const buildRepo = (userId: string = USER): Repo => {
     ]),
   )
   r.setActiveWorkspaceId(WS)
-  registerTestRepo(sharedDb.db, r)
   return r
 }
 

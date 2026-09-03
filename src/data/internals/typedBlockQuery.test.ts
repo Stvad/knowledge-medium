@@ -9,7 +9,6 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { registerTestRepo } from '@/data/test/createTestRepo'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
 import {
@@ -23,6 +22,7 @@ import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
 import { compileTypedBlockQuery } from './typedBlockQuery'
 import type { ResolvedTypedBlockQuery } from '@/data/api'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -79,7 +79,7 @@ const setup = async (): Promise<Harness> => {
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
-  const repo = new Repo({
+  const repo = trackTestRepo(new Repo({
     db: h.db,
     cache,
     user: {id: 'user-1'},
@@ -87,7 +87,7 @@ const setup = async (): Promise<Harness> => {
     newId: () => `gen-${++idCursor}`,
     // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
     blockIdPolicy: 'any',
-  })
+  }))
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     ...queryProps.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
@@ -100,9 +100,6 @@ const setup = async (): Promise<Harness> => {
     }), {source: 'test'}),
   ]))
   repo.setActiveWorkspaceId(WS)
-  // Hand-rolled Repo (see the createTestRepo doc's last-write-wins caveat), so
-  // register it by hand for `cleanup`'s release.
-  registerTestRepo(h.db, repo)
   return {h, repo}
 }
 

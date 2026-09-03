@@ -9,7 +9,6 @@ import { kernelPageBlockId } from '@/data/kernelPage'
 import { hasBlockType } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { registerTestRepo } from '@/data/test/createTestRepo'
 import { isBlockRefId, parseBlockRefs } from '@/plugins/references/referenceParser'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey } from '@/sync/crypto/contentKey.js'
@@ -30,6 +29,7 @@ import {
 } from './mediaBlock.js'
 import { captureMedia, mediaBlockId } from './mediaCapture.js'
 import { InMemoryByteUploadStore } from './uploadStore.js'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 const WS = 'ws-1'
 const USER = 'user-1'
@@ -52,7 +52,7 @@ let env: Harness
 
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
-  const repo = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: { id: USER } })
+  const repo = trackTestRepo(new Repo({ db: sharedDb.db, cache: new BlockCache(), user: { id: USER } }))
   repo.setFacetRuntime(
     resolveFacetRuntimeSync([
       kernelDataExtension,
@@ -62,7 +62,6 @@ const setup = async (): Promise<Harness> => {
     ]),
   )
   repo.setActiveWorkspaceId(WS)
-  registerTestRepo(sharedDb.db, repo)
   // A normal block to embed the !((id)) under.
   let parentId = ''
   await repo.tx(

@@ -55,7 +55,7 @@ afterEach(() => {
 
 const fakeRepo = {
   activeWorkspaceId: undefined,
-  query: {recentBlocks: () => ({load: async () => []})},
+  query: {recentActivity: () => ({load: async () => []})},
   isReadOnly: false,
 } as unknown as Parameters<typeof referencesCodeMirrorExtensions>[0]['repo']
 

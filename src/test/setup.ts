@@ -1,3 +1,5 @@
+import { afterEach, beforeEach } from 'vitest'
+import { beginTestRepoScope, endTestRepoScope } from '@/data/test/testRepoScope'
 import { setDevAssertionsEnabled } from '@/data/internals/devAssertions'
 
 // jest-dom's matchers only matter where a DOM exists; loading it in the ~370
@@ -32,5 +34,16 @@ if (typeof document !== 'undefined') {
 // L2 data-integrity invariant assertions run in every test (they hard-throw on a
 // derived-data contract violation — see docs/data-integrity-defense.html L2).
 setDevAssertionsEnabled(true)
+
+// Per-test Repo lifetime (issue #813). A Repo built during a test keeps a
+// parked seed-materialization pass subscribed to the SHARED db after that test
+// ends, and a later test's `workspace_members` INSERT wakes it to write into a
+// database `resetTestDb` has since emptied. The hooks live here, not in the
+// Repo factory, so the release reaches a Repo built inside a helper without
+// that helper's calling test being knowable; `testRepoScope` documents why a
+// `beforeAll`-built Repo is deliberately left alone. No-ops for a file that
+// never builds one.
+beforeEach(beginTestRepoScope)
+afterEach(endTestRepoScope)
 
 // Add any global test setup here

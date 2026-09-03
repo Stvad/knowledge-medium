@@ -13,7 +13,6 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { registerTestRepo } from '@/data/test/createTestRepo'
 import {
   definitionSeedsFacet,
   projectedPropertyDefinitionsFacet,
@@ -23,6 +22,7 @@ import {
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import { addedTypes, getBlockTypes, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 let sharedDb: TestDb
 let h: TestDb
@@ -54,7 +54,7 @@ beforeEach(async () => {
   h = sharedDb
   let timeCursor = 1700_000_000_000
   let idCursor = 0
-  repo = new Repo({
+  repo = trackTestRepo(new Repo({
     db: h.db,
     cache: new BlockCache(),
     user: {id: 'user-1'},
@@ -64,8 +64,7 @@ beforeEach(async () => {
     blockIdPolicy: 'any',
     // Start empty so setFacetRuntime is the only registration path.
     installKernelRuntime: false,
-  })
-  registerTestRepo(h.db, repo)
+  }))
 })
 
 afterEach(() => { repo.stopSyncObserver() })

@@ -6,7 +6,6 @@ import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
 import { definitionSeedsFacet } from '@/data/facets'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { registerTestRepo } from '@/data/test/createTestRepo'
 import { getPluginPrefsBlock } from '@/data/stateBlocks'
 import {
   currentLoadTimeProp,
@@ -14,6 +13,7 @@ import {
   recordUpdateIndicatorLoadTime,
   updateIndicatorPrefsType,
 } from '../loadTimes'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -26,19 +26,18 @@ let env: Harness | undefined
 let txSeq = 0
 
 const makeRepo = (h: TestDb): Repo => {
-  const repo = new Repo({
+  const repo = trackTestRepo(new Repo({
     db: h.db,
     cache: new BlockCache(),
     user: USER,
     newTxSeq: () => ++txSeq,
-  })
+  }))
   repo.setRuntimeContributions(
     definitionSeedsFacet,
     'test:update-indicator-seeds',
     [previousLoadTimeProp, currentLoadTimeProp],
   )
   repo.setActiveWorkspaceId(WS)
-  registerTestRepo(h.db, repo)
   return repo
 }
 
