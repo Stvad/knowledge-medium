@@ -395,6 +395,34 @@ describe('collectStartupMetricsEffect', () => {
     await expect(whenBootRecordSettled(60_000)).resolves.toBeUndefined()
   })
 
+  // Teardown does not cancel a write already in flight, and that write can
+  // still commit — so announcing "over" would send a reader to sample the
+  // series moments before the row lands.
+  it('leaves the signal outstanding while a write is still in flight', async () => {
+    const realTx = repo.tx.bind(repo)
+    let release = (): void => {}
+    const held = new Promise<void>((r) => { release = r })
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description === 'startup metrics record') await held
+      return realTx(fn, opts)
+    })
+
+    markStartup('firstContentPaint')
+    const stop = startEffect(WS)
+    // Fence on the write having STARTED, not on a duration.
+    await vi.waitFor(() => expect(repo.tx).toHaveBeenCalled())
+
+    stop?.()
+    let settled = false
+    void whenBootRecordSettled(60_000).then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    // ...and the write's own completion is what settles it.
+    release()
+    await vi.waitFor(() => expect(settled).toBe(true))
+  }, 20_000)
+
   it('settles immediately when it declines to arm', async () => {
     // NOTHING else armed: a collector that starts normally settles the signal
     // by writing, which would hide whether the declining path settles at all.
