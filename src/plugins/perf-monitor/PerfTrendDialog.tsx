@@ -24,6 +24,7 @@ import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords } from './load.js'
 import { bootstrapGapMs, invalidationsPerWrite, round2 } from './series.js'
 import { summarize } from './verdict.js'
+import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysisNow } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
 
@@ -178,7 +179,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
             (() => {
               // The same verdict the status chip renders — neither surface
               // decides for itself what an empty regression list means.
-              const verdict = summarize(analysis)
+              const verdict = summarize(analysis, { blockedBy: recordingBlockedBy(repo) })
               return (
                 <>
                   <p className={verdict.kind === 'clean' ? undefined : 'text-muted-foreground'}>

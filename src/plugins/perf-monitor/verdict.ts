@@ -6,6 +6,7 @@
  * the difference between "judged and fine" and "nothing was judged".
  */
 import type { PerfAnalysis } from './analyze.js'
+import type { RecordingBlocker } from '@/plugins/interaction-metrics/sessionContext.js'
 
 /** Nothing was judged at all. Derived rather than stored, so it cannot be set
  *  inconsistently with `ready`. */
@@ -51,7 +52,12 @@ const pendingNotes = (analysis: PerfAnalysis): string[] => {
   if (!analysis.interactionComparable) {
     notes.push('interaction metrics not comparable this session (more than one workspace opened)')
   } else if (!analysis.ready.interaction) {
-    notes.push('interaction history still building')
+    // Same split as startup below, for the same reason: while its recorder is
+    // off the series cannot grow, so waiting never resolves an insufficient
+    // baseline and saying "still building" sends someone to wait for nothing.
+    notes.push(analysis.interactionAwaitingCurrentSample
+      ? 'no interaction record for this session (interaction recording may be off)'
+      : 'interaction history still building')
   }
   if (!analysis.ready.startup) {
     // The two do not resolve the same way, so they are not one message: history
@@ -78,11 +84,23 @@ const comparedAgainst = (analysis: PerfAnalysis): string => {
   return `compared against ${n} recent ${interaction ? 'interaction' : 'startup'} sessions`
 }
 
-export const summarize = (analysis: PerfAnalysis): PerfVerdict => {
+/** Facts read at RENDER time rather than stored on the analysis.
+ *
+ *  Whether recording is possible turns on `repo.isReadOnly`, which a
+ *  server-pushed role change flips without touching the Repo, the workspace,
+ *  the counter span or the monitor run — so nothing the analysis captured would
+ *  be stale-looking, and a verdict from before a demotion would keep claiming
+ *  recording works for the rest of the cadence. A live fact has to be read
+ *  live. */
+export interface LiveFacts {
+  blockedBy: RecordingBlocker | null
+}
+
+export const summarize = (analysis: PerfAnalysis, live: LiveFacts): PerfVerdict => {
   const blocked =
-    analysis.recordingBlockedBy === null
+    live.blockedBy === null
       ? null
-      : analysis.recordingBlockedBy === 'no-persistent-client'
+      : live.blockedBy === 'no-persistent-client'
         ? 'new samples are not being recorded: this browser keeps no durable client id'
         : 'new samples are not being recorded: this workspace is read-only'
 

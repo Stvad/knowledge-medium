@@ -5,7 +5,16 @@
  */
 import { describe, expect, it } from 'vitest'
 import { analysisFixture as analysis, regressionFixture as regression } from './fixtures'
-import { summarize } from '../verdict'
+import { summarize as summarizeWith } from '../verdict'
+
+/** Most of these are about the COMPARISON, not the environment, so the live
+ *  facts default to "recording is fine" and the two tests that care pass their
+ *  own. */
+const summarize = (
+  analysis: Parameters<typeof summarizeWith>[0],
+  live: Parameters<typeof summarizeWith>[1] = { blockedBy: null },
+) => summarizeWith(analysis, live)
+
 
 
 
@@ -31,13 +40,25 @@ describe('summarize', () => {
     expect(blended.notes.join(' ')).not.toContain('interaction history still building')
   })
 
+  // The interaction recorder is togglable independently of the monitor, so its
+  // series can be permanently short while everything else looks healthy.
+  // "Still building" is then a remedy that never arrives.
+  it('says an interaction series is not filling rather than still building', () => {
+    const v = summarize(analysis({
+      ready: { interaction: false, startup: true },
+      interactionAwaitingCurrentSample: true,
+    }))
+    expect(v.notes.join(' ')).toContain('interaction recording may be off')
+    expect(v.notes.join(' ')).not.toContain('interaction history still building')
+  })
+
   // "Still building" promises something that will never arrive when no recorder
   // can write in this environment at all.
   it('reports a blocked environment as disabled, not as still building', () => {
-    const v = summarize(analysis({
-      recordingBlockedBy: 'no-persistent-client',
-      ready: { interaction: false, startup: false },
-    }))
+    const v = summarize(
+      analysis({ ready: { interaction: false, startup: false } }),
+      { blockedBy: 'no-persistent-client' },
+    )
     expect(v.headline).toBe('Performance history disabled')
     expect(v.notes.join(' ')).toContain('durable client id')
   })
@@ -81,10 +102,10 @@ describe('summarize', () => {
   // already on disk or this session's own counters, so a real finding against
   // them must survive.
   it('still reports a regression when recording is disabled', () => {
-    const v = summarize(analysis({
-      recordingBlockedBy: 'read-only-workspace',
-      regressions: [regression({ ratio: 6 })],
-    }))
+    const v = summarize(
+      analysis({ regressions: [regression({ ratio: 6 })] }),
+      { blockedBy: 'read-only-workspace' },
+    )
     expect(v.kind).toBe('regressed')
     expect(v.regressions).toHaveLength(1)
     expect(v.notes.join(' ')).toContain('not being recorded')
@@ -93,7 +114,7 @@ describe('summarize', () => {
   // Read-only stops new samples; it does not invalidate a comparison that just
   // ran cleanly against history already on disk.
   it('keeps a clean verdict when only recording is blocked', () => {
-    const v = summarize(analysis({ recordingBlockedBy: 'read-only-workspace' }))
+    const v = summarize(analysis(), { blockedBy: 'read-only-workspace' })
     expect(v.kind).toBe('clean')
     expect(v.headline).toBe('No slowdowns vs baseline')
     expect(v.notes.join(' ')).toContain('not being recorded')

@@ -12,11 +12,15 @@ import type {
   DiagnosticSourceContribution,
 } from '@/plugins/diagnostics/facet.js'
 import type { PerfAnalysis } from './analyze.js'
-import { formatRegression, summarize } from './verdict.js'
+import { formatRegression, summarize, type LiveFacts } from './verdict.js'
+import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis, VIEW_PERF_TREND_ACTION_ID } from './store.js'
 
-export const mapAnalysisToSnapshot = (analysis: PerfAnalysis): DiagnosticSnapshot => {
-  const verdict = summarize(analysis)
+export const mapAnalysisToSnapshot = (
+  analysis: PerfAnalysis,
+  live: LiveFacts,
+): DiagnosticSnapshot => {
+  const verdict = summarize(analysis, live)
   const detail = [
     ...(verdict.regressions.slice(0, 3).map(formatRegression)),
     ...(verdict.regressions.length > 3 ? [`+${verdict.regressions.length - 3} more`] : []),
@@ -34,7 +38,7 @@ export const mapAnalysisToSnapshot = (analysis: PerfAnalysis): DiagnosticSnapsho
 }
 
 export const createPerfMonitorDiagnosticSource = (
-  repo: Pick<Repo, 'activeWorkspaceId'>,
+  repo: Pick<Repo, 'activeWorkspaceId' | 'isReadOnly'>,
 ): DiagnosticSourceContribution => {
   let cachedKey = ''
   let cachedSnapshot: DiagnosticSnapshot | null = null
@@ -44,17 +48,22 @@ export const createPerfMonitorDiagnosticSource = (
     subscribe: subscribePerfAnalysis,
     getSnapshot: () => {
       const analysis = getPerfAnalysisFor(repo.activeWorkspaceId)
+      // Read now, not taken off the analysis: a role change flips this without
+      // republishing anything, and a stored answer would keep claiming
+      // recording works until the next cadence.
+      const live: LiveFacts = { blockedBy: recordingBlockedBy(repo) }
       // Keyed on the publication, not on a summary of it: two analyses can
       // share a timestamp and a regression count while differing in readiness,
       // baselines or values, and the cache would then hand back the old
       // snapshot while the trend view showed the new analysis. `seq` is unique
-      // per run by construction.
+      // per run by construction. The live facts join the key for the same
+      // reason — they change with no new publication behind them.
       const key = analysis
-        ? `${analysis.workspaceId}:${analysis.seq}`
-        : `none:${repo.activeWorkspaceId ?? ''}`
+        ? `${analysis.workspaceId}:${analysis.seq}:${live.blockedBy ?? ''}`
+        : `none:${repo.activeWorkspaceId ?? ''}:${live.blockedBy ?? ''}`
       if (key !== cachedKey) {
         cachedKey = key
-        cachedSnapshot = analysis ? mapAnalysisToSnapshot(analysis) : null
+        cachedSnapshot = analysis ? mapAnalysisToSnapshot(analysis, live) : null
       }
       return cachedSnapshot
     },

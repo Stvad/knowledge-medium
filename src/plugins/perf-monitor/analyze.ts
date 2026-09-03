@@ -9,7 +9,6 @@ import {
 } from '@/plugins/interaction-metrics/record.js'
 import {
   readLiveSession,
-  type RecordingBlocker,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, countRecords, loadRecords } from './load.js'
 import { nextAnalysisSeq } from './store.js'
@@ -52,13 +51,15 @@ export interface PerfAnalysis {
    *  Distinct from "still building": no amount of waiting resolves it, and
    *  saying otherwise sends the user to wait for something that will not come. */
   startupAwaitingCurrentSample: boolean
+  /** The same question for interaction: this page session has recorded no
+   *  sample. Its recorder is togglable independently of the monitor too, and
+   *  while it is off the series cannot grow — so an insufficient baseline is
+   *  permanent, and "still building" is a remedy that will never arrive. */
+  interactionAwaitingCurrentSample: boolean
   /** False when this page session's live counters cannot be attributed to one
    *  workspace, so only startup was compared. Surfaced rather than silently
    *  folded into a clean verdict. */
   interactionComparable: boolean
-  /** Non-null when recording is structurally impossible in this environment,
-   *  so "still building a baseline" would be a promise that can never be kept. */
-  recordingBlockedBy: RecordingBlocker | null
   /** Sessions the judged comparisons actually rested on — not rows loaded. Per
    *  series, because they fill independently and one number reported for the
    *  other tells a reader about history the verdict never used. */
@@ -162,7 +163,6 @@ export const runPerfAnalysis = async (
     workspaceId,
     analyzedAt: now,
     seq,
-    recordingBlockedBy: session.blockedBy,
     recorded,
     baseline: {
       interaction: judgedBaselineCount(interactionResults),
@@ -176,6 +176,10 @@ export const runPerfAnalysis = async (
     // slowdowns" for a comparison that never ran.
     ready: { interaction: interactionReady, startup: startupReady },
     startupAwaitingCurrentSample,
+    // Nothing claimed for this page session. Early in a session that is also
+    // true of a recorder about to take its first sample, which is why the note
+    // it drives hedges rather than asserting the toggle is off.
+    interactionAwaitingCurrentSample: session.recordId === null,
     interactionComparable: session.attributable,
     graphGrowth,
   }
