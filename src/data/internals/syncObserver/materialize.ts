@@ -488,25 +488,14 @@ export const materializeStagingRows = async (
         applied.push(plaintext.id)
         const after = parseBlockRow(plaintext)
         if (devAssertionsEnabled()) {
-          // L2 dev/test-only assertion (off in prod — issue #404 item 2):
-          // this UPSERT trusts arrived `references_json` as already
-          // canonical and never re-normalizes it. That's safe only because
-          // every writer in this codebase runs `core.normalizeReferences`
-          // (a same-tx processor, `normalizeReferencesProcessor.ts`) before
-          // the row is ever uploaded — a cross-device invariant with no
-          // local enforcement here, since sync-applied rows bypass
-          // `repo.tx` entirely and never pass through that processor.
-          // Deliberately NOT fixed by normalizing on every arrival: that
-          // would cost a JSON round-trip on every synced row (~320k in the
-          // existing dataset) to guard a risk that has never materialized.
-          // This assertion exists to catch the day that stops being true —
-          // a future writer that skips normalization, a hand-crafted sync
-          // fixture, or a non-app writer hitting the same tables directly
-          // (see issue #404 item 1) — in CI/dev, before a non-canonical row
-          // silently breaks the set-equality consumers that assume
-          // `references_json` is already sorted+deduped (the `json_each`
-          // backlinks index, `BACKLINKS_FOR_BLOCK_QUERY`, Map-keyed
-          // invalidation).
+          // Arrived `references_json` is trusted canonical: every writer
+          // runs `core.normalizeReferences` before upload, and sync-applied
+          // rows bypass `repo.tx`, so nothing re-checks it here. Deliberately
+          // NOT fixed by normalizing every arrival — a JSON round-trip per
+          // synced row to guard a risk that has never occurred. Dev-only, so
+          // a writer that stops normalizing fails in CI before it breaks the
+          // set-equality consumers (`json_each` backlinks index, Map-keyed
+          // invalidation). #404 item 2.
           const canonical = normalizeReferences(after.references)
           if (JSON.stringify(canonical) !== JSON.stringify(after.references)) {
             throw new Error(
@@ -560,27 +549,12 @@ export const materializeStagingRows = async (
       const beforeRow = removedBeforeById.get(id)
       if (beforeRow) snapshots.set(id, { before: parseBlockRow(beforeRow), after: null })
     }
-    // #404 item 6 — DOCUMENTED ASSUMPTION, deliberately not fixed here (Vlad,
-    // 2026-07-20). If a hard-deleted `id` was a property field/value child in a
-    // flipped workspace, its owner's projected cell keeps the now-orphaned key:
-    // the sync path doesn't run PROJECT, and there is no authoring device to
-    // upload a corrected cell (see below). We do NOT reproject the parent on
-    // arrival, because that would mean writing `properties_json` — a SYNCED
-    // column — from the arrival path, a categorically different move than the
-    // local-only derivations this path is allowed to make (see
-    // `arrivalProcessors.ts`).
-    //
-    // Why it's safe to leave: this is unreachable in normal operation. A user
-    // delete is a SOFT delete (`deleted = 1`, an UPDATE), which arrives as an
-    // upsert, not a `removed` — and the deleting device already ran PROJECT and
-    // uploaded the corrected cell, so peers converge. A `removed` here is a
-    // physical row disappearance: a stream-exit (scope-granular — it takes the
-    // parent too, so there's nothing local to reproject) or an OUT-OF-BAND hard
-    // delete of an individual block (manual server SQL / admin op / a future
-    // block-level GC — none exist as a normal path). Only that last case strands
-    // a cell. Recovery when it does: the parent's next content edit re-triggers
-    // PROJECT locally, or a manual reproject. If a routine individual-block
-    // hard-delete is ever introduced server-side, revisit this.
+    // A hard-deleted property field/value child leaves its owner's projected
+    // cell holding an orphaned key. Not repaired here: reprojecting would
+    // write `properties_json`, a SYNCED column, from the arrival path — see
+    // `arrivalProcessors.ts`. Accepted: a user delete is a soft delete and
+    // arrives as an upsert, so only an out-of-band hard delete reaches this
+    // branch. #404 item 6.
 
     // The decision and its record commit together — that is the whole reason
     // this is a column on the staging row rather than something a reader

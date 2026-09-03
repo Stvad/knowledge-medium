@@ -5,19 +5,10 @@ import type { BlockData, Tx } from '@/data/api'
  * the raw `tx.childrenOf`, whose default returns EVERY child — the
  * structural everything-view (PR #288/#386).
  *
- * WHAT "visible" MEANS IS TIER-BASED, and only half of that is built.
- * The settled display model (§10, doc rev 2026-07-19) is two tiers shown
- * IN PLACE: a NON-hidden property renders at its true outline position as
- * a name/value row and behaves as an ordinary child — it belongs in this
- * list; only HIDDEN-tier rows are filtered, and they rejoin the list for a
- * block that has revealed them. As shipped (slices A/B) this excludes EVERY
- * recognized field row instead, because no tier information is consulted
- * yet. That over-filters for real — the backfill mints these rows before the
- * flip — and is an ACCEPTED interim (Vlad, 2026-08-20: "hiding everything
- * before we have a coherent opt-in story is fine"), superseded by the
- * tier-aware predicate that lands with slice D.
- * So read an exclusion here as "machinery, for now", NOT as "property
- * rows are machinery": the end state is that most of them are content.
+ * Today this filters EVERY recognized property row, not only hidden-tier
+ * ones — an accepted interim until the tier-aware predicate lands. Read an
+ * exclusion here as "machinery, for now", not as "property rows are
+ * machinery".
  *
  * Reach for this in outline / movement / display code: §10's movement rule
  * is that every gesture resolves its anchors against the sibling list the

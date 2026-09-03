@@ -40,12 +40,10 @@ import { materializePropertyChildrenForExistingRow } from './propertyChildrenPro
 
 export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
 
-/** Rows a writing transaction aims to insert. THE transaction-size knob:
- *  batching by BLOCKS let a heavy-property block multiply the real size, and
- *  at the measured ~6.5 keys per block a 100-block batch held the single
- *  SQLite writer for ~430ms — with every user write and the sync drain queued
- *  behind it, for the length of the run. The spike bisected the same budget
- *  down to 190 and this pass inherits the number. */
+/** Rows a writing transaction aims to insert. THE transaction-size knob,
+ *  counted in ROWS not blocks — a heavy-property block would multiply a
+ *  block-counted batch and hold the single SQLite writer with every user
+ *  write and the sync drain queued behind it. */
 export const TARGET_INSERT_ROWS = 190
 
 /** A registered key costs a field row and its value row. Over-counts a key

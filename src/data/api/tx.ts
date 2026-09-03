@@ -130,20 +130,13 @@ export interface Tx {
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void>
 
   /** Stamp the LOCAL derived columns — `reference_target_id` and
-   *  `is_field_form`, and ONLY those — without advancing `updated_at`. This
-   *  is the write mode for `core.deriveReferenceTarget`'s same-tx amendment:
-   *  both columns are per-device reflections of `content` (never in
-   *  `BLOCK_UPLOAD_COLUMNS`, never uploaded), so re-deriving them is not a
-   *  synced edit and must not mint an upload PATCH. Because the UPDATE
-   *  touches no upload column and leaves `updated_at` untouched,
-   *  `blocks_upload_update`'s diff predicate stays false and nothing is
-   *  enqueued — whereas `update(..., {skipMetadata})` still bumps
-   *  `updated_at` (an upload column) and ships a redundant PATCH (PR #288
-   *  §5, Decision A). Same-tab reactivity still fires (the write records a
-   *  `referenceTargetId`/`isFieldForm`-changed snapshot); cross-tab rides
-   *  the accompanying content edit's row_event. No-op when both columns
-   *  already match. Not for content-bundled retargets — those change a
-   *  synced column and go through `update`, which correctly uploads. */
+   *  `is_field_form` — and ONLY those, without advancing `updated_at`.
+   *  Both are per-device reflections of `content` and are never
+   *  uploaded, so re-deriving them (in `core.deriveReferenceTarget`'s
+   *  same-tx amendment) must not mint an upload PATCH; `update(...,
+   *  {skipMetadata})` would, because it still bumps `updated_at`. No-op
+   *  when both already match. NOT for content-bundled retargets — those
+   *  change a synced column and go through `update`. */
   stampReferenceTarget(id: string, targetId: string | null, isFieldForm: boolean): Promise<void>
 
   // ──── Tree moves (structural) ────
