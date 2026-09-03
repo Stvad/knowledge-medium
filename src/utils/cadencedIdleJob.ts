@@ -13,6 +13,19 @@
 import { PendingIdleJobs } from '@/data/internals/idleMarkerJobs.js'
 import { scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 
+export interface LoopHandle {
+  /** Tear the loop down. */
+  stop: () => void
+  /** Re-arm the pending run at `delayMs` from now, discarding the delay the
+   *  last run chose.
+   *
+   *  For work that happens OUTSIDE the loop but answers the same question it
+   *  does — a manual refresh, say. Without this the loop sits on a delay
+   *  computed before that work existed, so a look someone just took by hand
+   *  cannot bring the next scheduled one forward. */
+  rearmIn: (delayMs: number) => void
+}
+
 export interface CadencedIdleJob {
   /** Start the loop; returns the disposer.
    *
@@ -29,7 +42,7 @@ export interface CadencedIdleJob {
   start: (
     run: () => Promise<number | void>,
     opts?: { onFailureDelayMs?: number },
-  ) => () => void
+  ) => LoopHandle
   /** Test helper — await runs whose deferral has already fired. */
   drain: () => Promise<void>
 }
@@ -67,9 +80,16 @@ export const cadencedIdleJob = (
         }, delayMs)
       }
       armIn(firstDelayMs)
-      return () => {
-        cancelled = true
-        if (timer) clearTimeout(timer)
+      return {
+        stop: () => {
+          cancelled = true
+          if (timer) clearTimeout(timer)
+        },
+        rearmIn: (delayMs) => {
+          if (cancelled) return
+          if (timer) clearTimeout(timer)
+          armIn(delayMs)
+        },
       }
     },
   }

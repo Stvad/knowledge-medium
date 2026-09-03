@@ -8,7 +8,7 @@ import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysis } from './analyze.js'
-import { clearPerfAnalyses, publishPerfAnalysis } from './store.js'
+import { clearPerfAnalyses, getPerfAnalysisFor, publishPerfAnalysis, subscribePerfAnalysis } from './store.js'
 import { currentMonitorRun, endMonitorRun, hasMonitorRunFor, startMonitorRun } from './monitorRun.js'
 
 /** Wall clock between analyses. Long: the series it reads only gains a point
@@ -108,10 +108,14 @@ export const perfAnalysisEffect: AppEffect = {
     clearPerfAnalyses()
     observeWorkspace(repo, workspaceId)
     // No special case for an environment that can never record. The ordinary
-    // pass reaches the same verdict there — without a durable client id the
-    // reader derives a fresh group id every load, so both series come back
-    // empty, nothing is judged, and `recordingBlockedBy` carries the reason —
-    // and it costs two index-hit queries that return nothing. A hand-built
+    // pass reaches the same verdict there: without a durable client id the
+    // RECORDERS refuse to write at all (`no-persistent-client`), so both series
+    // are empty, nothing is judged, and `recordingBlockedBy` carries the
+    // reason — and it costs two index-hit queries that return nothing.
+    //
+    // The eligibility rule is what empties them, NOT the id moving: within a
+    // page session `getClientId()` caches one fallback id, so the reader is
+    // looking in a consistent place. There is nothing there to find. A hand-built
     // analysis for that one state was a second constructor for every field of
     // `PerfAnalysis`, kept in step by hand, to show the same words one idle
     // delay sooner.
@@ -120,7 +124,20 @@ export const perfAnalysisEffect: AppEffect = {
     // gone, and letting it count would back off over a verdict that never
     // applied.
     let waits = 0
-    const stopJob = job.start(
+    /** The last analysis this loop produced, so a publication from elsewhere
+     *  can be told apart from its own. */
+    let ownSeq = -1
+    /** The cadence for a verdict, and the bookkeeping that goes with it —
+     *  applied identically whether the loop ran it or the dialog's refresh did,
+     *  so the two cannot disagree about how soon to look again. */
+    const cadenceFor = (analysis: { seq: number; awaitingLiveSample: { interaction: boolean; startup: boolean } }): number => {
+      const { interaction, startup } = analysis.awaitingLiveSample
+      const delay = nextAnalysisDelayMs(analysis.awaitingLiveSample, waits)
+      waits = interaction || startup ? waits + 1 : 0
+      ownSeq = analysis.seq
+      return delay
+    }
+    const loop = job.start(
       async () => {
         const { analysis, accepted } = await runPerfAnalysisNow(repo, workspaceId)
         // A refused result describes a span that no longer exists, so it says
@@ -128,16 +145,26 @@ export const perfAnalysisEffect: AppEffect = {
         // instead of adopting its answer — the state that made it stale (a
         // reset, a workspace switch) is exactly when a fresh verdict matters.
         if (!accepted) return RECHECK_MS
-        const { interaction, startup } = analysis.awaitingLiveSample
-        const delay = nextAnalysisDelayMs(analysis.awaitingLiveSample, waits)
-        waits = interaction || startup ? waits + 1 : 0
-        return delay
+        return cadenceFor(analysis)
       },
       // A pass that threw produced no verdict at all. Retrying on the full
       // cadence would leave the monitor silent for ten minutes over a
       // transient DB failure, which is the state it is least useful in.
       { onFailureDelayMs: RECHECK_MS },
     )
+    // The trend dialog's refresh runs OUTSIDE this loop, so a verdict it
+    // publishes leaves the loop sitting on a delay computed before that verdict
+    // existed — a manual refresh revealing a missing sample would then be
+    // followed by the full cadence, exactly when a prompt second look is what
+    // was asked for. Re-arm on the same terms the loop's own run uses.
+    const stopWatching = subscribePerfAnalysis(() => {
+      const analysis = getPerfAnalysisFor(repo, workspaceId)
+      // Only what this loop did not produce, and only what is still readable —
+      // `getPerfAnalysisFor` re-checks the run and the counter span, so a
+      // verdict the store would refuse cannot set the cadence here either.
+      if (analysis === null || analysis.seq === ownSeq) return
+      loop.rearmIn(cadenceFor(analysis))
+    })
     return () => {
       // Teardown is not a pause. This effect goes away when the monitor's own
       // toggle is switched off, and the counters its verdicts describe keep
@@ -151,8 +178,9 @@ export const perfAnalysisEffect: AppEffect = {
       // clear is housekeeping on top — it frees the snapshots and tells
       // subscribers to re-read.
       endMonitorRun(run)
+      stopWatching()
       clearPerfAnalyses()
-      stopJob()
+      loop.stop()
     }
   },
 }

@@ -33,7 +33,7 @@ describe('cadencedIdleJob', () => {
   it('re-arms on the delay the run returned, not the standing cadence', async () => {
     const job = make()
     const at: number[] = []
-    const stop = job.start(async () => {
+    const { stop } = job.start(async () => {
       at.push(Date.now())
       // Only the first pass asks to come back soon; the second takes the default.
       return at.length === 1 ? RETRY : undefined
@@ -57,7 +57,7 @@ describe('cadencedIdleJob', () => {
     const job = make()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     let runs = 0
-    const stop = job.start(async () => {
+    const { stop } = job.start(async () => {
       runs++
       if (runs === 1) throw new Error('transient')
     }, { onFailureDelayMs: RETRY })
@@ -77,7 +77,7 @@ describe('cadencedIdleJob', () => {
     const job = make()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     let runs = 0
-    const stop = job.start(async () => { runs++; throw new Error('transient') })
+    const { stop } = job.start(async () => { runs++; throw new Error('transient') })
 
     await settle(job, FIRST)
     expect(runs).toBe(1)
@@ -88,10 +88,51 @@ describe('cadencedIdleJob', () => {
     stop()
   })
 
+  // For work that answers the loop's question from outside it — a manual
+  // refresh. The pending run was armed on a delay computed before that work
+  // existed, so without this the loop waits out a cadence chosen in ignorance
+  // of it.
+  it('re-arms the pending run, replacing the delay the last run chose', async () => {
+    const job = make()
+    let runs = 0
+    const loop = job.start(async () => { runs++ })
+
+    await settle(job, FIRST)
+    expect(runs).toBe(1)
+    // Armed on REPEAT; nothing is due for a long time.
+    await settle(job, RETRY)
+    expect(runs).toBe(1)
+
+    loop.rearmIn(RETRY)
+    await settle(job, RETRY)
+    expect(runs).toBe(2)
+
+    // ...and the old timer is REPLACED, not left to fire as well: reaching the
+    // original cadence produces no extra run beyond the next scheduled one.
+    await settle(job, REPEAT)
+    expect(runs).toBe(3)
+    await settle(job, RETRY)
+    expect(runs).toBe(3)
+    loop.stop()
+  })
+
+  it('ignores a re-arm after disposal', async () => {
+    const job = make()
+    let runs = 0
+    const loop = job.start(async () => { runs++ })
+    await settle(job, FIRST)
+    loop.stop()
+
+    loop.rearmIn(RETRY)
+
+    await settle(job, REPEAT * 2)
+    expect(runs).toBe(1)
+  })
+
   it('stops re-arming once disposed', async () => {
     const job = make()
     let runs = 0
-    const stop = job.start(async () => { runs++ })
+    const { stop } = job.start(async () => { runs++ })
 
     await settle(job, FIRST)
     expect(runs).toBe(1)

@@ -39,7 +39,7 @@ export const interactionMetricsEffect: AppEffect = {
     // read-only half is NOT decided here — it resolves asynchronously after
     // mount, so the write consults it again at the moment it matters.
     if (metricsSessionContext(repo, workspaceId).blockedBy === 'no-persistent-client') return
-    return job.start(async () => { await writeInteractionSample(repo, workspaceId) })
+    return job.start(async () => { await writeInteractionSample(repo, workspaceId) }).stop
   },
 }
 
