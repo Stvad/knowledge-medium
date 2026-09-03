@@ -423,6 +423,16 @@ export const collectStartupMetricsEffect: AppEffect = {
     // Settling on the way out matters as much as on success: a reader fencing
     // on this would otherwise wait out its whole cap for a collector that has
     // been torn down and will never write.
-    return () => { done = true; disposed = true; runCleanups(); settleBootRecord() }
+    //
+    // Unless one is in flight. That write is not cancelled by teardown and can
+    // still commit, so it settles through its own completion path — announcing
+    // "over" here would send the reader to sample the series moments before the
+    // row lands, which is the exact misreport this signal exists to prevent.
+    return () => {
+      done = true
+      disposed = true
+      runCleanups()
+      if (!recording) settleBootRecord()
+    }
   },
 }
