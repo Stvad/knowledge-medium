@@ -105,11 +105,11 @@ const printTotal = (prefix, comment, code, fileCount) => {
 }
 
 const runDefault = () => {
-  const files = execFileSync('git', ['ls-files', ...SOURCE_GLOBS], {
+  const files = execFileSync('git', ['ls-files', '-z', ...SOURCE_GLOBS], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   })
-    .split('\n')
+    .split('\0')
     .filter(Boolean)
     .filter(f => !TEST_FILE.test(f) && !EXCLUDE_PATH.test(f))
 

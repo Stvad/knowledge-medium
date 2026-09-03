@@ -415,7 +415,7 @@ describe('createAssetResolver — replicate (the §8/§9 down-lane backlog lane)
     // has() throws (transient), so replicate falls through to the coalesced resolve — but
     // the asset IS local, so it's served from a get() hit, no download. That is presence,
     // not replication: reporting "replicated" would charge the down-lane budget for a
-    // steady-state asset every sweep (Codex P2 — local hits must not be charged).
+    // steady-state asset every sweep (local hits must not be charged).
     const plain = bytes(4, 4)
     const contentHash = await hashOf(plain)
     const byteStore = new InMemoryByteStore()

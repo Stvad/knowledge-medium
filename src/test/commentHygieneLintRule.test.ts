@@ -41,6 +41,10 @@ describe('comment-hygiene ESLint rules', () => {
         errors: [{ messageId: 'shadowed' }],
       },
       {
+        code: `/** first */\n/*** second */\nexport const x = 1`,
+        errors: [{ messageId: 'shadowed' }],
+      },
+      {
         code: `/** overview after imports */\n/** doc */\nexport const x = 1`,
         errors: [{ messageId: 'shadowed' }],
       },
@@ -84,6 +88,7 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `// see commit 429fd4b2\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// reviewer P2 asked for the guard\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// see pull request #123\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
+      { code: `// re-arm on paste (Codex P1)\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// review comment #3676752542 asked for this\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       // A directive for another rule is scanned like any comment.
       { code: `// @ts-expect-error fixed in PR #123\nconst x: number = 'a'`, errors: [{ messageId: 'provenance' }] },

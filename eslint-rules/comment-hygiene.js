@@ -18,7 +18,8 @@
  * A `#N` issue pointer is allowed; a design citation names a `docs/` path.
  */
 
-const isJsDoc = c => c.type === 'Block' && c.value.startsWith('*') && !c.value.startsWith('**')
+// `/**` and `/***` alike — TypeScript reads both as JSDoc.
+const isJsDoc = c => c.type === 'Block' && c.value.startsWith('*')
 // Blocks that stand on their own, with no node below: TypeScript's declaration
 // tags, file/package headers, and legal notices.
 // Matched in tag position (the start of a line of the block), not as a word in prose.
@@ -72,7 +73,7 @@ const noInvisibleJsdoc = {
 // name. A bare phrase ("round 2", "review round", "this review") is domain vocabulary
 // in this repo (handshakes, SRS reviews) and is never matched.
 const PROVENANCE =
-  /\b(?:PR|pull request) ?#\d+|\breview comment #?\d{6,}\b|\breview rounds? \d+\b|\brounds? \d+, P[0-4]\b|\bcommit [0-9a-f]{7,}\b|\bCodex (review|on (PR )?#\d)|\breviewer P[0-4]\b/i
+  /\b(?:PR|pull request) ?#\d+|\breview comment #?\d{6,}\b|\breview rounds? \d+\b|\brounds? \d+, P[0-4]\b|\bcommit [0-9a-f]{7,}\b|\bCodex (review|on (PR )?#\d|P[0-4]\b)|\breviewer P[0-4]\b/i
 
 const noReviewProvenance = {
   meta: {

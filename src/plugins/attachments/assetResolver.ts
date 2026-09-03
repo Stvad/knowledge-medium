@@ -63,7 +63,7 @@ export const NO_REMOTE_BLOB_STORE: BlobStore = {
  *  remote sync on; in local-only mode it behaves as {@link NO_REMOTE_BLOB_STORE} (a
  *  remote miss), so the resolver still serves local OPFS hits but never makes a
  *  Supabase request — the read-side half of the "no remote requests in local-only"
- *  contract (Codex P1). Checked PER CALL, so a re-login mode switch is respected
+ *  contract. Checked PER CALL, so a re-login mode switch is respected
  *  without rebuilding the singleton. Shared with the up-lane (assetUpload's
  *  getBlobStore) so the WRITE side gets the same per-call gate: an arm-time-only
  *  check can go stale if remote sync is toggled off while a drain lock is held. */
