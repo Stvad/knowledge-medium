@@ -9,15 +9,20 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks'
 import { getClientId, resetClientIdCache } from '@/utils/clientId'
+import { observeWorkspace } from '@/plugins/interaction-metrics/sessionContext'
+import { jsonPathForProperty } from '@/data/internals/typedBlockQuery'
 import type { User } from '@/data/api'
-import { definitionSeedsFacet } from '@/data/facets'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import type { FacetRuntime } from '@/facets/facet'
 import {
   buildStartupRecord,
   collectStartupMetricsEffect,
   resetStartupMetricsRecorded,
+  SETTLE_FALLBACK_MS,
   startupMetricsUIStateType,
   startupRecordProp,
+  startupRecordType,
+  WRITE_RETRY_MS,
   writeStartupRecord,
 } from '../record'
 import {
@@ -34,6 +39,7 @@ const USER: User = { id: 'user-1', name: 'Alice' }
 let sharedDb: TestDb
 let repo: Repo
 
+
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
@@ -44,7 +50,10 @@ beforeEach(async () => {
   repo = createTestRepo({
     db: sharedDb.db,
     user: USER,
-    extensions: [definitionSeedsFacet.of(startupRecordProp, {source: 'test'})],
+    extensions: [
+      definitionSeedsFacet.of(startupRecordProp, {source: 'test'}),
+      typeSeedsFacet.of(startupRecordType, {source: 'test'}),
+    ],
   }).repo
   repo.setActiveWorkspaceId(WS)
 })
@@ -100,7 +109,7 @@ describe('writeStartupRecord', () => {
     )
     expect(row?.parent_id).toBe(group)
 
-    const block = repo.block(id)
+    const block = repo.block(id!)
     await block.load()
     expect(block.peekProperty(startupRecordProp)).toMatchObject({
       recordedAt: 1700,
@@ -108,15 +117,9 @@ describe('writeStartupRecord', () => {
       repoReadyMs: 50,
       clientId: getClientId(),
     })
-    // Content is the ISO timestamp so the entry is legible in the tree.
-    const contentRow = await sharedDb.db.getOptional<{ content: string }>(
-      'SELECT content FROM blocks WHERE id = ?',
-      [id],
-    )
-    expect(contentRow?.content).toBe(new Date(1700).toISOString())
   })
 
-  it('groups records under a per-client block (child of the root, titled with the device label)', async () => {
+  it('groups records under a per-client block with nothing to index', async () => {
     await writeStartupRecord(repo, WS)
     const { root, group } = await resolveGroup()
     // The group hangs off the per-user root, not the record directly.
@@ -125,9 +128,12 @@ describe('writeStartupRecord', () => {
       [group],
     )
     expect(groupRow?.parent_id).toBe(root)
-    // Title carries the short client-id suffix so peers on the same platform
-    // string stay distinguishable.
-    expect(groupRow?.content).toContain(getClientId().slice(0, 8))
+    // Identified by its derived id, never a title: content is FTS-indexed and
+    // listed by every block-discovery surface. Asserted as EXACTLY empty — the
+    // previous version checked that the content CONTAINED the client-id prefix,
+    // which a bare client-UUID title also satisfies, so it went on passing when
+    // the device label was replaced by the UUID and the row stayed indexed.
+    expect(groupRow?.content).toBe('')
   })
 
   it('two distinct clients land under two distinct group blocks', async () => {
@@ -158,8 +164,8 @@ describe('writeStartupRecord', () => {
       (await sharedDb.db.getOptional<{ parent_id: string }>(
         'SELECT parent_id FROM blocks WHERE id = ?', [id],
       ))?.parent_id
-    expect(await parentOf(recA)).toBe(groupA.id)
-    expect(await parentOf(recB)).toBe(groupB.id)
+    expect(await parentOf(recA!)).toBe(groupA.id)
+    expect(await parentOf(recB!)).toBe(groupB.id)
   })
 
   it('block-per-session: two writes create two distinct records (no clobber)', async () => {
@@ -187,10 +193,10 @@ describe('writeStartupRecord', () => {
     expect(ordered.map(c => c.id)).toEqual([third, second, first])
   })
 
-  // This recorder is the app measuring itself, so its writes must stay out of
-  // the counters a performance reporter reads — otherwise the report includes
-  // its own bookkeeping. Measured across the SECOND write: the first also mints
-  // this client's containers, which are deliberately counted as ordinary work.
+  // The flag itself is set once, by the shared record owner; what this pins is
+  // that the startup path still goes through it rather than opening its own
+  // transaction. Measured across the SECOND write: the first also mints this
+  // client's containers, which are deliberately counted as ordinary work.
   it('leaves the non-telemetry counters alone', async () => {
     await writeStartupRecord(repo, WS)
     const before = repo.metrics().excludingTelemetry
@@ -201,6 +207,15 @@ describe('writeStartupRecord', () => {
     expect(after.writes).toBe(before.writes)
     expect(after.handleStore).toEqual(before.handleStore)
   })
+
+  it('writes nothing in a read-only workspace', async () => {
+    // Automation scope is admitted locally and refused by the server's RLS,
+    // landing in the rejection quarantine the status chip surfaces.
+    repo.setReadOnly(true)
+    const tx = vi.spyOn(repo, 'tx')
+    expect(await writeStartupRecord(repo, WS)).toBeNull()
+    expect(tx).not.toHaveBeenCalled()
+  })
 })
 
 describe('collectStartupMetricsEffect', () => {
@@ -209,14 +224,19 @@ describe('collectStartupMetricsEffect', () => {
   const effectCleanups: Array<() => void> = []
   afterEach(() => { for (const c of effectCleanups.splice(0)) c() })
 
-  const startEffect = (workspaceId: string): void => {
+  /** Returns the disposer the effect handed back — `undefined` means it
+   *  declined to arm anything, which is the only synchronous evidence the
+   *  once-per-session gate produced. */
+  const startEffect = (workspaceId: string): (() => void) | undefined => {
     const cleanup = collectStartupMetricsEffect.start({
       repo,
       workspaceId,
       runtime: {} as FacetRuntime,
       safeMode: false,
     })
-    if (typeof cleanup === 'function') effectCleanups.push(cleanup)
+    if (typeof cleanup !== 'function') return undefined
+    effectCleanups.push(cleanup)
+    return cleanup
   }
 
   const countRecords = async (): Promise<number> => {
@@ -232,6 +252,74 @@ describe('collectStartupMetricsEffect', () => {
     return rows[0]?.n ?? 0
   }
 
+  // By the time the deferred write runs, `record()` has torn down every timer
+  // and listener, so a write that FAILS has no path back unless it owns one —
+  // and a rejection is as transient as a decline.
+  // A plugin toggle can restart this effect while the previous instance's write
+  // is still running. At that instant `recorded` is still false, so it cannot
+  // be the only guard — two records for one boot would both match the
+  // current-boot check and take two of the three recent-window slots.
+  it('does not write twice when restarted while a write is in flight', async () => {
+    const realTx = repo.tx.bind(repo)
+    let release: (() => void) | undefined
+    const held = new Promise<void>((r) => { release = r })
+    let seen = 0
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description === 'startup metrics record' && seen++ === 0) await held
+      return realTx(fn, opts)
+    })
+
+    markStartup('firstContentPaint')
+    startEffect(WS)
+    await vi.waitFor(() => expect(seen).toBeGreaterThan(0))
+    // The toggle: a second collector starts before the first write lands.
+    startEffect(WS)
+    release!()
+
+    await vi.waitFor(async () => expect(await countRecords()).toBe(1))
+    // Assert the CAUSE, not elapsed-time absence: the second collector must
+    // never have entered the write at all, which a sleep could only ever
+    // suggest. `seen` counts record transactions.
+    expect(seen).toBe(1)
+    // Measured standalone at ~110ms, so the default would cover even the ~6x
+    // the gate's contention adds. The budget is raised for the INNER waits:
+    // this drives fake timers through a retry, and a `vi.waitFor` that could
+    // outlive its enclosing test can never report which assertion never
+    // settled — "timed out in 5000ms" with no clue why.
+  }, 20_000)
+
+  it('retries a write that rejects', async () => {
+    const realTx = repo.tx.bind(repo)
+    let failures = 0
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description === 'startup metrics record' && failures === 0) {
+        failures++
+        throw new Error('transient database failure')
+      }
+      return realTx(fn, opts)
+    })
+
+    // The retry sits behind a 30s production timer, advanced rather than waited
+    // out. Installed BEFORE the effect: `useFakeTimers` swaps the global timer
+    // functions and does not adopt timers already scheduled, so arming it after
+    // the first failure would leave the retry pending on the real clock.
+    // `shouldAdvanceTime` keeps the database's own async work progressing.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    markStartup('firstContentPaint')
+    startEffect(WS)
+    // `waitFor` advances the mocked clock itself, which the first attempt needs:
+    // its deferrals are timers but the database work between them is real I/O
+    // that a bare `advanceTimersByTime` returns without waiting for.
+    await vi.waitFor(() => expect(failures).toBe(1))
+    expect(await countRecords()).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(WRITE_RETRY_MS + 500)
+    vi.useRealTimers()
+    await vi.waitFor(async () => expect(await countRecords()).toBe(1))
+    // ~110ms standalone; raised for the same reason as above — the inner waits
+    // must stay strictly below the enclosing budget to be able to report.
+  }, 20_000)
+
   it('marks interactive after first paint and persists exactly one record', async () => {
     markStartup('firstContentPaint')
     startEffect(WS)
@@ -241,36 +329,110 @@ describe('collectStartupMetricsEffect', () => {
     expect(getStartupTimeline().marks.interactive).toBeDefined()
   })
 
+  // Asserted on the RECORD, not on a count or an elapsed window. Counting cannot
+  // pin this: with the gate deleted the pre-paint write lands, sets the
+  // once-per-boot flag, and the run still ends with exactly one record — the
+  // only difference is WHEN it was taken. The stored `firstContentPaintMs` is
+  // that difference, and it is durable rather than a race.
   it('does not record before first paint (no firstContentPaint mark)', async () => {
+    // A real pre-paint window, driven rather than slept through: far past the
+    // 250ms paint re-poll and every idle hop the write path uses, and short of
+    // the settle fallback, which is meant to record without paint. A write that
+    // starts in here builds its record from a timeline with no paint mark, and
+    // that lands in the stored row whenever the transaction finishes.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     startEffect(WS)
-    // Deliberate exception to AGENTS.md's "poll with vi.waitFor, not setTimeout"
-    // rule: that rule is for waiting on an EXPECTED round-trip. This is the
-    // inverse — a prove-absence check with no event to poll for. The recorder's
-    // only write paths are deferred (setTimeout / scheduleIdle), so an immediate
-    // count is trivially 0 even if the paint gate were broken; we must give an
-    // erroneous pre-paint write a real window to land before asserting it
-    // didn't. 50ms stays well under the effect's 60s settle-fallback. (The
-    // positive fence below proves the effect is live, so the 0 isn't a no-op.)
-    await new Promise(r => setTimeout(r, 50))
-    expect(await countRecords()).toBe(0)
-    // Then prove the effect is genuinely live (so the 0 above isn't a dead
-    // effect): once paint is marked, the same re-poll writes exactly one
-    // record — the count goes 0 → 1, never to a spurious pre-paint extra.
+    await vi.advanceTimersByTimeAsync(SETTLE_FALLBACK_MS / 2)
+
+    // Paint is marked while the clock is still mocked: switching back first
+    // would discard the effect's pending re-poll timer and leave it inert.
     markStartup('firstContentPaint')
+    await vi.advanceTimersByTimeAsync(1_000)
+    vi.useRealTimers()
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
+
+    const rows = await sharedDb.db.getAll<{ properties_json: string }>(
+      `SELECT properties_json FROM blocks
+       WHERE deleted = 0 AND json_extract(properties_json, ?) IS NOT NULL`,
+      [jsonPathForProperty(startupRecordProp.name)],
+    )
+    expect(rows).toHaveLength(1)
+    const record = JSON.parse(rows[0].properties_json)[startupRecordProp.name]
+    expect(record.firstContentPaintMs).toBeDefined()
   })
 
+  // Boot happens once and the marks are boot-relative, so a restart — a plugin
+  // toggle, a workspace switch — must not log a second startup.
+  //
+  // The timeline is page-global — it measures loading THIS workspace's graph —
+  // so a switch before the first write lands must not let the replacement
+  // instance file these timings as the new workspace's history. It would pass
+  // the once-per-session guard, which is still false at that moment.
+  //
+  // Asserted on the cause: the replacement arms nothing, so it returns no
+  // disposer. Declining is the safe direction — one boot unrecorded, against a
+  // baseline permanently skewed by another graph's load.
+  it('declines to record this boot into a workspace it did not happen in', () => {
+    markStartup('firstContentPaint')
+    expect(startEffect(WS)).toBeTypeOf('function')
+    expect(startEffect('ws-2')).toBeUndefined()
+  })
+
+  // This plugin is independently disableable, so a page can boot in one
+  // workspace with recording off, move to another, and be switched on there.
+  // The origin is claimed by the always-on observe effect rather than by this
+  // one, so being enabled later cannot make the workspace it was enabled in the
+  // boot's origin — which would file the first workspace's load as the second's.
+  it('declines when the page booted somewhere this effect never ran', () => {
+    markStartup('firstContentPaint')
+    observeWorkspace(repo, 'ws-booted-in')
+    expect(startEffect(WS)).toBeUndefined()
+  })
+
+  // The Repo as well as the workspace. A local sign-out swaps it without a
+  // reload, so the next user opening the SAME shared workspace satisfies a
+  // workspace-only pin and would receive the previous user's boot.
+  it('declines to record this boot into a Repo it did not happen in', async () => {
+    markStartup('firstContentPaint')
+    expect(startEffect(WS)).toBeTypeOf('function')
+
+    const other = createTestRepo({ db: sharedDb.db, user: USER }).repo
+    other.setActiveWorkspaceId(WS)
+    expect(await collectStartupMetricsEffect.start({ repo: other, workspaceId: WS } as Parameters<
+      typeof collectStartupMetricsEffect.start
+    >[0])).toBeUndefined()
+  })
+
+  // Asserted on the CAUSE: once the write has settled, the restart arms
+  // nothing, so it returns no disposer. A count cannot pin this — it is already
+  // 1, so both a bare assertion and a `waitFor` on it pass on the first tick
+  // while the duplicate write is still several idle hops and awaits away.
+  //
+  // But the ROW is not that precondition either. `appendClientRecord` resolves
+  // only after its retention pass, and the flag the restart consults is set on
+  // that resolution — so between "one row exists" and "a restart is refused"
+  // there is a whole extra query, and under gate load (one worker per core)
+  // that gap is wide enough to lose. A restart INSIDE it legitimately arms; the
+  // single owner of the boot write is what stops it writing a second row. Retry
+  // until the write has settled, disposing whatever an attempt arms so no
+  // attempt can leave a live instance behind.
   it('records at most once per session even if the effect restarts', async () => {
     markStartup('firstContentPaint')
-    startEffect(WS)
-    await vi.waitFor(async () => expect(await countRecords()).toBe(1))
-    // A second workspace open in the same session must not log a second
-    // startup. The once-per-session guard (`recorded`) makes the restart a
-    // synchronous no-op — no further write is scheduled — so the count is
-    // already final, no settle wait needed.
-    startEffect('ws-2')
+    expect(startEffect(WS)).toBeTypeOf('function')
+    await vi.waitFor(async () => expect(await countRecords()).toBe(1), { timeout: 5_000 })
+
+    await vi.waitFor(() => {
+      const stop = startEffect(WS)
+      stop?.()
+      expect(stop).toBeUndefined()
+    }, { timeout: 5_000 })
+
+    // The invariant the whole test is for, restated against the graph.
     expect(await countRecords()).toBe(1)
-  })
+    // ~55ms standalone. Raised because the two `vi.waitFor` budgets above are
+    // 5s each, which is the default test timeout — an inner wait that cannot
+    // expire before its test reports "timed out" and names nothing.
+  }, 20_000)
 
   it('debounces interactive off long-task events when the Long Tasks API is present', () => {
     vi.useFakeTimers()

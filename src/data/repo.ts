@@ -604,6 +604,8 @@ export class Repo {
    *  processors. Subscribers are responsible for the UI side
    *  (toast routing); the data layer stays UI-agnostic. */
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
+  private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
+  private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -1349,7 +1351,17 @@ export class Repo {
   /** Zero every counter and reservoir in `repo.metrics()`. Use to
    *  mark a baseline before measuring a discrete operation (e.g. a
    *  benchmark iteration, a UI interaction in a soak test, or a
-   *  cold-start "open page → metrics" investigation). */
+   *  cold-start "open page → metrics" investigation).
+   *
+   *  Operations ALREADY IN FLIGHT settle into the new span: a query, DB call or
+   *  transaction that began before this returns records its full pre-reset
+   *  duration into the reservoir this just cleared. ACCEPTED rather than
+   *  guarded. Discarding them means capturing the epoch at the start of every
+   *  asynchronous metric and comparing it at each recording site — five sites
+   *  in this file alone, each one a thing every future metric has to remember —
+   *  to serve one caller, the devtools console hook, in a session where someone
+   *  is deliberately measuring. Take a baseline when the page is quiet, and
+   *  read `epochStartedAt` to know how far back the span reaches. */
   resetMetrics(): void {
     this.metricsEpoch++
     this.metricsEpochWorkspaceId = this.client.activeWorkspaceId
@@ -1369,6 +1381,15 @@ export class Repo {
     this.reprojectionMetrics.skippedByAbsence = 0
     this.slowestTx = {description: null, ms: 0}
     this.txLog.length = 0
+    this.metricsResetListeners.notify()
+  }
+
+  /** Fires when `resetMetrics()` starts a new counter span. A consumer holding
+   *  figures from the old one has no other way to notice: the Repo, the
+   *  workspace and everything else it might compare are unchanged. Returns an
+   *  unsubscribe. */
+  onMetricsReset(listener: () => void): () => void {
+    return this.metricsResetListeners.add(listener)
   }
 
   /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
@@ -1635,7 +1656,17 @@ export class Repo {
    *  and upload regardless of this flag; only `BlockDefault` /
    *  `References` writes are rejected. */
   setReadOnly(value: boolean): void {
+    if (this.isReadOnly === value) return
     this.isReadOnly = value
+    this.readOnlyListeners.notify()
+  }
+
+  /** Fires when `isReadOnly` changes. A role change arrives from the server and
+   *  moves nothing else — not the Repo, not the workspace, not the metrics span
+   *  — so a reader with no other reason to re-read would keep reporting the
+   *  permissions the page started with. Returns an unsubscribe. */
+  onReadOnlyChange(listener: () => void): () => void {
+    return this.readOnlyListeners.add(listener)
   }
 
   /** Run a transactional session. Spec §3, §10. */

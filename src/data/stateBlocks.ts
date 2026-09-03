@@ -11,7 +11,7 @@
  * offline clients converging on the same row when they later sync.
  */
 
-import {memoize} from '@/utils/memoize'
+import {memoize, memoizeAsync} from '@/utils/memoize'
 import {
   ChangeScope,
   type PropertySchema,
@@ -252,7 +252,7 @@ const reconcileUserPage = async (repo: Repo, id: string, userId: string): Promis
  *  is already live in cache or in SQL. Tombstone branch lives INSIDE
  *  the tx because `repo.load` filters `deleted = 0` (so tombstones
  *  always come back as `null`); we have to use `tx.get` to see them. */
-export const getUserBlock = memoize(
+export const getUserBlock = memoizeAsync(
   async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
     const id = userPageBlockId(workspaceId, user.id)
     const live = await repo.load(id)
@@ -303,7 +303,7 @@ export const getUserBlock = memoize(
   (repo, workspaceId, user) => instanceKey(repo, workspaceId, user.id),
 )
 
-export const getUserPrefsBlock = memoize(
+export const getUserPrefsBlock = memoizeAsync(
   async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
     const userBlock = await getUserBlock(repo, workspaceId, user)
     return ensureUserPrefsChild(repo, userBlock)
@@ -319,7 +319,7 @@ export const getUserPrefsBlock = memoize(
  *  to one plugin's settings — the row-level UPDATE trigger writes the full
  *  `properties_json` column on any property change, so unrelated plugins'
  *  values are no longer at risk of being clobbered by a peer's edit. */
-export const getPluginPrefsBlock = memoize(
+export const getPluginPrefsBlock = memoizeAsync(
   async (
     repo: Repo,
     workspaceId: string,
@@ -345,7 +345,7 @@ export const getPluginPrefsBlock = memoize(
  *  In a panel context (`context.panelId`), returns the panel's own
  *  block — per-panel UI state lives directly on it. Outside a panel,
  *  returns the user-level `ui-state` child of the user page. */
-export const getUIStateBlock = memoize(
+export const getUIStateBlock = memoizeAsync(
   async (
     repo: Repo,
     workspaceId: string,
@@ -373,6 +373,22 @@ const LAYOUT_SESSIONS_PATH_PART = 'layout-sessions'
  *  of nesting both `stateChildBlockId` calls inline. */
 const uiStateBlockId = (workspaceId: string, userId: string): string =>
   stateChildBlockId(userPageBlockId(workspaceId, userId), UI_STATE_PATH_PART)
+
+/** Deterministic id of a plugin's ui-state ROOT block — the same uuidv5 chain
+ *  `getPluginUIStateBlock` resolves to (user page → ui-state → `type.id`),
+ *  derived without loading or CREATING anything.
+ *
+ *  That distinction is the point. `getPluginUIStateBlock` is an `ensure`: a
+ *  reader that used it to find a plugin's stored rows would mint the subtree as
+ *  a side effect of discovering it is empty. This lets a read path ask for the
+ *  container's children and get nothing back when there are none — which is
+ *  also what keeps such a read cheap, since the alternative is scanning every
+ *  block in the workspace for the property. */
+export const pluginUIStateBlockId = (
+  workspaceId: string,
+  userId: string,
+  typeId: string,
+): string => stateChildBlockId(uiStateBlockId(workspaceId, userId), typeId)
 
 /** Deterministic id of the layout-sessions CONTAINER block — the parent
  *  every per-device / per-perspective layout-session block lives under
@@ -420,7 +436,7 @@ export const layoutSessionBlockIdForKey = memoize(
  *  the session KEY, not a block id. For the ROOT ui-state block this
  *  resolves to `layoutSessionBlockIdForKey(workspaceId, userId, key)`
  *  (the pure derivation above) — keep the two in lockstep. */
-export const getLayoutSessionBlock = memoize(
+export const getLayoutSessionBlock = memoizeAsync(
   async (uiStateBlock: Block, layoutSessionId: string): Promise<Block> => {
     const layoutSessionsBlock = await ensureUiChild(uiStateBlock.repo, uiStateBlock, LAYOUT_SESSIONS_PATH_PART)
     return ensureUiChild(uiStateBlock.repo, layoutSessionsBlock, layoutSessionId)
@@ -433,7 +449,7 @@ export const getLayoutSessionBlock = memoize(
  *  "what blocks did the user open recently". Writes flow through
  *  `ChangeScope.UiState`: not undoable, but they upload and sync
  *  across devices like any other write. */
-export const getPluginUIStateBlock = memoize(
+export const getPluginUIStateBlock = memoizeAsync(
   async (
     repo: Repo,
     workspaceId: string,
@@ -460,7 +476,7 @@ export const getPluginUIStateBlock = memoize(
  *  instead of overloading a single block and discriminating by hand.
  *  Inherits the parent's `ChangeScope.UiState` (undo-segregated from
  *  document edits). Mirrors `getLayoutSessionBlock`. */
-export const getPluginUIStateChild = memoize(
+export const getPluginUIStateChild = memoizeAsync(
   async (pluginUIStateBlock: Block, key: string, content?: string): Promise<Block> =>
     ensureUiChild(pluginUIStateBlock.repo, pluginUIStateBlock, key, content),
   // Memo key ignores `content`: the child is identified by `key`, and `content`
