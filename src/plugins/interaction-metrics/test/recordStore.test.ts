@@ -95,6 +95,20 @@ const insertForeign = async (id: string): Promise<void> => {
   )
 }
 
+/** Put the workspace in the child-backed properties shape, where a property
+ *  write materializes field and VALUE blocks under the record — the production
+ *  shape, and the one where these rows stop being invisible. */
+const useChildBackedProperties = async (): Promise<void> => {
+  await sharedDb.db.execute(
+    `UPDATE workspaces SET properties_migration = 'children' WHERE id = ?`, [WS])
+  if ((await sharedDb.db.getAll('SELECT id FROM workspaces WHERE id = ?', [WS])).length === 0) {
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+         encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'test ws', ?, 1, 1, 'none', NULL, 'children')`, [WS, USER.id])
+  }
+}
+
 /** Run `during` as the retention transaction is entered — the window between
  *  the pass selecting its rows and it obtaining the write lock. */
 const duringRetention = (during: () => Promise<void>): void => {
@@ -403,6 +417,36 @@ describe('what a record shows the user', () => {
     expect(row?.content).toBe('')
   })
 
+  // The child-backed shape, where the record stops being the only row it
+  // creates: the property materializes a field block and a VALUE block whose
+  // CONTENT is the serialized record — non-empty, freshly stamped, and sitting
+  // in the user's tree. Empty content on the record itself does nothing for
+  // those, so the surfaces that offer blocks to a person have to exclude by
+  // LOCATION, which is what the authored-recents query does.
+  it('keeps its property machinery out of authored recents', async () => {
+    await useChildBackedProperties()
+    const { blockId } = await append(1)
+
+    const machinery = await sharedDb.db.getAll<{ id: string; content: string }>(
+      `WITH RECURSIVE d(id) AS (
+         SELECT ? UNION ALL SELECT b.id FROM blocks b JOIN d ON b.parent_id = d.id)
+       SELECT b.id, b.content FROM blocks b JOIN d ON b.id = d.id
+       WHERE b.deleted = 0 AND b.id != ? AND b.content != ''`,
+      [blockId, blockId],
+    )
+    // Precondition: there really are non-empty generated rows to exclude, and
+    // one of them really does carry the payload — without this the assertion
+    // below passes on a shape that never materialized anything.
+    expect(machinery.length).toBeGreaterThan(0)
+    expect(machinery.some((r) => r.content.includes('appSha'))).toBe(true)
+
+    const recents = await repo.query.recentUserBlocks({ workspaceId: WS, limit: 50 }).load()
+
+    const offered = new Set(recents.map((b) => b.id))
+    expect(offered.has(blockId)).toBe(false)
+    for (const row of machinery) expect(offered.has(row.id)).toBe(false)
+  })
+
   it('does not appear among recent blocks', async () => {
     const { blockId } = await append(1)
 
@@ -437,14 +481,7 @@ describe('retention deletion', () => {
   // thing keeping them from reading as hand-placed content — without it
   // retention silently stops, and both series grow without bound.
   it('prunes a record that has property machinery beneath it', async () => {
-    await sharedDb.db.execute(
-      `UPDATE workspaces SET properties_migration = 'children' WHERE id = ?`, [WS])
-    if ((await sharedDb.db.getAll('SELECT id FROM workspaces WHERE id = ?', [WS])).length === 0) {
-      await sharedDb.db.execute(
-        `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
-           encryption_mode, wk_canary, properties_migration)
-         VALUES (?, 'test ws', ?, 1, 1, 'none', NULL, 'children')`, [WS, USER.id])
-    }
+    await useChildBackedProperties()
 
     const { blockId: doomed } = await append(1)
     // The precondition, asserted rather than assumed: this record really does
