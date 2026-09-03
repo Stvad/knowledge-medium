@@ -92,6 +92,15 @@ export const endTestRepoScope = async (): Promise<void> => {
   const live = [...closing.refs]
     .map(ref => ref.deref())
     .filter((repo): repo is Repo => repo !== undefined)
+  // Settle the observer BEFORE detaching it. `dispose()` is synchronous and the
+  // drain only re-checks `disposed` at the top of its loop, so a window already
+  // inside `applyWindow` commits regardless — after this hook returns, and after
+  // the next test's `resetTestDb` has emptied the db under it. `flush` chains
+  // behind that window, so awaiting it is the barrier; its OUTCOME is not ours,
+  // and a drain error is already reported through the observer's own `onError`.
+  // Nothing here appends to `blocks_synced_changes`, so no new work can land
+  // between the flush and the dispose below.
+  await Promise.all(live.map(repo => repo.flushSyncObserver().catch(() => {})))
   for (const repo of live) {
     repo.stopSyncObserver()
     repo.setActiveWorkspaceId(null)
