@@ -38,10 +38,11 @@ setDevAssertionsEnabled(true)
 // Per-test Repo lifetime (issue #813). A Repo built during a test keeps a
 // parked seed-materialization pass subscribed to the SHARED db after that test
 // ends, and a later test's `workspace_members` INSERT wakes it to write into a
-// database `resetTestDb` has since emptied. Releasing here rather than at 246
-// call sites is what makes it structural; `testRepoScope` documents why a
-// `beforeAll`-built Repo is deliberately left alone. Both hooks are no-ops for
-// the ~500 files that never build one.
+// database `resetTestDb` has since emptied. The hooks live here, not in the
+// Repo factory, so the release reaches a Repo built inside a helper without
+// that helper's calling test being knowable; `testRepoScope` documents why a
+// `beforeAll`-built Repo is deliberately left alone. No-ops for a file that
+// never builds one.
 beforeEach(beginTestRepoScope)
 afterEach(endTestRepoScope)
 

@@ -6,12 +6,12 @@
  * on a `workspace_members` row holding an `onChange` subscription on the SHARED
  * db. A later test inserting that row wakes every parked pass at once, and they
  * write through their own Repo into a database `resetTestDb` has since emptied.
- * That is the flake behind #806/#812/#828 — each fixed in the one file it bit.
  *
- * The scope is opened and closed by global hooks in `src/test/setup.ts`, so
- * every Repo built during a test is released when that test ends, with no
- * per-call-site change across the 246 `createTestRepo` sites. The hook ordering
- * this relies on is fixed by vitest and asserted in `testRepoScope.test.ts`:
+ * The scope is opened and closed by global hooks in `src/test/setup.ts` rather
+ * than registered by the factory, so a Repo is enrolled without its call site
+ * opting in — which is what lets the release reach one built inside a helper,
+ * whose calling test is not knowable there. The hook ordering it relies on is
+ * fixed by vitest and asserted in `testRepoScope.test.ts`:
  *
  *   file beforeAll → [ SETUP beforeEach → file beforeEach → test →
  *                      file afterEach → SETUP afterEach ] → file afterAll
