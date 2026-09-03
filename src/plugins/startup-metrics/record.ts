@@ -200,14 +200,59 @@ let recorded = false
  *  instance's write is still running, and at that moment `recorded` is still
  *  false — so checking it alone lets both instances write, and two records for
  *  one boot then take two of the three slots in the recent window. */
-let recording = false
 /** Test helper — re-arm the once-per-session guard. */
 export const resetStartupMetricsRecorded = (): void => {
   recorded = false
-  recording = false
+  bootWrite = null
   resetPageOrigin()
 }
 
+
+/** The ONE write for this boot, whoever triggers it.
+ *
+ *  Retries live INSIDE it, so there is no second entry point for a superseded
+ *  collector to race through. A restart overlaps two collectors, and what this
+ *  replaces was each instance trying to notice the other — a check at the
+ *  attempt, a check at the retry, and a pair of module flags between them, none
+ *  of which a test could drive.
+ *
+ *  Teardown does NOT cancel it, deliberately. The boot happened; a toggle
+ *  flipped mid-write does not un-happen it, and cancelling was only ever
+ *  reachable through per-instance state that no longer exists. Teardown stops a
+ *  collector LISTENING. */
+let bootWrite: Promise<void> | null = null
+
+const untilIdle = (): Promise<void> => new Promise((resolve) => { scheduleIdle(() => resolve()) })
+const afterMs = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
+
+/** Attempts, in order, until one lands or they run out. A decline is transient
+ *  — the membership role may not have replicated yet — and a rejection is no
+ *  different, so both take the same path rather than one being logged and
+ *  dropped. */
+const attemptBootRecord = async (repo: Repo, workspaceId: string): Promise<void> => {
+  for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt++) {
+    if (attempt > 0) await afterMs(WRITE_RETRY_MS)
+    // Deferred to idle so the bookkeeping never re-adds boot contention.
+    await untilIdle()
+    try {
+      if (await writeStartupRecord(repo, workspaceId) !== null) {
+        recorded = true
+        return
+      }
+    } catch (err) {
+      console.warn('[startup-metrics] failed to write record', err)
+    }
+  }
+}
+
+const writeBootRecord = (repo: Repo, workspaceId: string): Promise<void> => {
+  bootWrite ??= attemptBootRecord(repo, workspaceId).finally(() => {
+    // Out of attempts with nothing on disk: let a later collector try again,
+    // which a restart could not otherwise do.
+    if (!recorded) bootWrite = null
+  })
+  return bootWrite
+}
 
 /**
  * On first workspace open, detect time-to-interactivity and persist one record.
@@ -239,74 +284,17 @@ export const collectStartupMetricsEffect: AppEffect = {
     const origin = pageOrigin(repo, workspaceId)
     if (origin.repo !== repo || origin.workspaceId !== workspaceId) return
     let done = false
-    // Distinct from `done`, which the record path sets on ITS way through:
-    // this tracks teardown, so a callback already queued can tell the two apart.
-    let disposed = false
     const cleanups: Array<() => void> = []
     const runCleanups = () => { for (const c of cleanups.splice(0)) c() }
 
     const record = () => {
       if (done) return
-      // Two instances can be live at once — a restart before the first write
-      // lands — and the two ways that ends are not the same.
-      //
-      // Already on disk: this instance has nothing left to do, and staying
-      // armed leaks its long-task listener for the life of the page, re-arming
-      // `acceptInteractive` against a mark nothing will read again.
-      //
-      // NOT covered by a test: reaching it needs a superseded instance whose
-      // quiet window elapses after another instance's held write succeeds —
-      // the fake PerformanceObserver path crossed with an in-flight write.
-      if (recorded) { done = true; runCleanups(); return }
-      // Merely in flight: stay armed. That write can still decline every
-      // attempt, and this instance's next quiet window is then the only thing
-      // that will try again.
-      if (recording) return
       done = true
       runCleanups()
-      attemptWrite(0)
-    }
-
-    /** The write can DECLINE transiently — the membership role may not have
-     *  replicated yet — and by the time it runs, `record()` has already torn
-     *  down every timer and listener that could lead back here. Without its own
-     *  retry the boot simply has no record for the rest of the session, and the
-     *  startup series stays unjudged. */
-    const attemptWrite = (attempt: number): void => {
-      scheduleIdle(() => {
-        // Re-taken HERE, at the write, not at `record()` where the attempt was
-        // decided. A retry is a second entry point that does not pass through
-        // `record()`, so a replacement collector can have started — or
-        // finished — its own write while this one was waiting out
-        // `WRITE_RETRY_MS`, and both would append a record for the same boot.
-        // This is the only place a write is issued, which is what makes one
-        // check cover both paths.
-        //
-        // UNPINNED, and not for want of trying: a test that starts a second
-        // collector never gets the first one's retry to reach a write at all,
-        // so it passes with this line deleted. Reasoned, not measured.
-        if (disposed || recorded || recording) return
-        const retryLater = (): void => {
-          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) return
-          const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
-          cleanups.push(() => clearTimeout(retry))
-        }
-        recording = true
-        void writeStartupRecord(repo, workspaceId)
-          .then((id) => {
-            recording = false
-            if (id !== null) { recorded = true; return }
-            retryLater()
-          })
-          // A rejection is as transient as a decline — a failed write is the
-          // case a retry exists for, so it takes the same path rather than
-          // being logged and dropped.
-          .catch((err) => {
-            recording = false
-            console.warn('[startup-metrics] failed to write record', err)
-            retryLater()
-          })
-      })
+      // One owner, so a second collector arriving here joins the write rather
+      // than starting one — the overlap this used to guard against per instance
+      // cannot arise.
+      void writeBootRecord(repo, workspaceId)
     }
 
     const fallback = setTimeout(record, SETTLE_FALLBACK_MS)
@@ -373,14 +361,9 @@ export const collectStartupMetricsEffect: AppEffect = {
     }
     waitForPaint()
 
-    // Settling on the way out matters as much as on success: a reader fencing
-    // on this would otherwise wait out its whole cap for a collector that has
-    // been torn down and will never write.
-    //
-    // Unless one is in flight. That write is not cancelled by teardown and can
-    // still commit, so it settles through its own completion path — announcing
-    // "over" here would send the reader to sample the series moments before the
-    // row lands, which is the exact misreport this signal exists to prevent.
-    return () => { done = true; disposed = true; runCleanups() }
+    // Stops this collector LISTENING, and nothing more. A write already
+    // triggered belongs to the boot rather than to any instance, and runs to
+    // completion — see `writeBootRecord`.
+    return () => { done = true; runCleanups() }
   },
 }
