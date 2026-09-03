@@ -26,14 +26,19 @@ export const nextAnalysisSeq = (): number => ++started
  *  the manual path does not go through the job — so an older run resuming after
  *  its history reads would otherwise replace a fresher verdict, and the chip
  *  would carry it until the next scheduled pass. */
-export const publishPerfAnalysis = (analysis: PerfAnalysis): void => {
+/** Publish, and say whether the store took it. The answer is the caller's
+ *  only honest basis for treating the verdict as describing the current state
+ *  — the scheduler picks its next delay from it, and a refused analysis
+ *  describes a span or a run that is gone. */
+export const publishPerfAnalysis = (analysis: PerfAnalysis): boolean => {
   // The run that produced it must still be the current one. A discarded Repo
   // keeps its own `activeWorkspaceId` forever, so its analysis resolves after a
   // swap with its pin intact and every value it compares back still matching.
-  if (!isCurrentRun(analysis.run)) return
+  if (!isCurrentRun(analysis.run)) return false
   const current = store.getFor(analysis.workspaceId)
-  if (current && current.seq > analysis.seq) return
+  if (current && current.seq > analysis.seq) return false
   store.publish(analysis)
+  return true
 }
 
 /** The verdict `repo` may show for `workspaceId`, or null.
@@ -55,10 +60,12 @@ export const getPerfAnalysisFor = (
   const analysis = store.getFor(workspaceId)
   if (analysis === null || analysis.run?.repo !== repo || !isCurrentRun(analysis.run)) return null
   // The SPAN too: `resetMetrics()` retires the counters a verdict rests on
-  // while the Repo, the workspace and the run are all unchanged, and it
-  // notifies nobody — so without this the chip carries a verdict about figures
-  // that no longer exist until the next scheduled pass.
-  return analysis.epoch === repo.metrics().epoch ? analysis : null
+  // while the Repo, the workspace and the run are all unchanged. Both readers
+  // are woken by `onMetricsReset`, so what this adds is the ANSWER that wake-up
+  // needs — the re-read it triggers has to come back null, and only the epoch
+  // says so. Dropping it would leave the notification re-rendering the same
+  // stale verdict.
+  return analysis.epoch === repo.metricsSpan().epoch ? analysis : null
 }
 export const subscribePerfAnalysis = store.subscribe
 /** The verdicts belong to a Repo; a swap invalidates them but not the chip

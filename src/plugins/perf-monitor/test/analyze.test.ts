@@ -145,7 +145,7 @@ describe('runPerfAnalysis', () => {
     resetPerfAnalysisStore()
     await pastSession()
     const stop = await startEffect()
-    const analysis = await runPerfAnalysisNow(repo, WS)
+    const { analysis } = await runPerfAnalysisNow(repo, WS)
     expect(getPerfAnalysisFor(repo, WS)).toBe(analysis)
 
     resetPerfAnalysisStore()
@@ -183,8 +183,8 @@ describe('runPerfAnalysis', () => {
     await pastSession()
     const stop = await startEffect()
     // The precondition, asserted rather than assumed.
-    const published = await runPerfAnalysisNow(repo, WS)
-    expect(getPerfAnalysisFor(repo, WS)).toBe(published)
+    const { analysis: first } = await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(repo, WS)).toBe(first)
 
     resetPerfAnalysisStore()
     const pending = runPerfAnalysisNow(repo, WS)
@@ -206,17 +206,20 @@ describe('runPerfAnalysis', () => {
     // so the refusal below is about the teardown and nothing else. Awaited into
     // a binding first — `expect(read()).toBe(await write())` evaluates the read
     // before the await, so it would always see the store as it was BEFORE.
-    const published = await runPerfAnalysisNow(repo, WS)
-    expect(getPerfAnalysisFor(repo, WS)).toBe(published)
+    const { analysis: first } = await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(repo, WS)).toBe(first)
 
     resetPerfAnalysisStore()
     stop?.()
-    const analysis = await runPerfAnalysisNow(repo, WS)
+    const { analysis, accepted } = await runPerfAnalysisNow(repo, WS)
 
     // The caller still gets its result; only the store is spared it. Asserted
     // on a field: the analysis carries its run, whose `repo` a failure message
     // would try to serialize.
     expect(analysis.workspaceId).toBe(WS)
+    // And the refusal is REPORTED, not merely visible in the store: the
+    // scheduler picks its next delay off this rather than off the verdict.
+    expect(accepted).toBe(false)
     expect(getPerfAnalysisFor(repo, WS)).toBeNull()
   })
 
@@ -252,14 +255,14 @@ describe('runPerfAnalysis', () => {
     const stop = await startEffect()
     // Awaited into a binding first: `expect(read()).toBe(await write())`
     // evaluates the read BEFORE the await, so it would see the store as it was.
-    const published = await runPerfAnalysisNow(repo, WS)
-    expect(getPerfAnalysisFor(repo, WS)).toBe(published)
+    const { analysis: first } = await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(repo, WS)).toBe(first)
 
     resetPerfAnalysisStore()
     stop?.()
     // A run for a DIFFERENT Repo, on the same workspace id.
     startMonitorRun({}, WS)
-    const analysis = await runPerfAnalysisNow(repo, WS)
+    const { analysis } = await runPerfAnalysisNow(repo, WS)
 
     expect(analysis.run).toBeNull()
     expect(getPerfAnalysisFor(repo, WS)).toBeNull()
@@ -276,8 +279,8 @@ describe('runPerfAnalysis', () => {
     // The precondition, asserted rather than assumed: this Repo CAN publish
     // here. Without it a null below proves nothing — publication is gated on
     // several things, and the store is module state shared across these tests.
-    const published = await runPerfAnalysisNow(repo, WS)
-    expect(getPerfAnalysisFor(repo, WS)).toBe(published)
+    const { analysis: first } = await runPerfAnalysisNow(repo, WS)
+    expect(getPerfAnalysisFor(repo, WS)).toBe(first)
 
     resetPerfAnalysisStore()
     // The context is captured synchronously on entry, so this lands inside.
@@ -294,9 +297,10 @@ describe('runPerfAnalysis', () => {
   // does not inherit that rule by the recorder having one.
   // The positive control for the test below: with this history the fan-out
   // comparison DOES fire, so the suppression it asserts is a real difference.
-  // The day-one state for every existing user: months of startup records, zero
-  // interaction records. A single readiness flag across both series turns that
-  // into "no slowdowns" for a comparison that never ran.
+  // One series long, the other empty — a state any client reaches whenever a
+  // recorder is enabled later than the other, or switched off for a while. A
+  // single readiness flag across both turns it into "no slowdowns" for a
+  // comparison that never ran.
   it('tracks readiness per series, not across them', async () => {
     await pastSession()
     const thin = await runPerfAnalysis(repo, WS, 1000)

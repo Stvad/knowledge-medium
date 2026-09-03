@@ -84,8 +84,14 @@ export const runPerfAnalysisNow = async (repo: Repo, workspaceId: string) => {
   const run = hasMonitorRunFor(repo, workspaceId) ? currentMonitorRun() : null
   const ctx = metricsContext(repo, workspaceId)
   const analysis = { ...await runPerfAnalysis(repo, workspaceId, Date.now()), run }
-  if (contextHolds(ctx, repo)) publishPerfAnalysis(analysis)
-  return analysis
+  // ACCEPTED means the store holds it, which is the only claim a caller can
+  // act on. Four things can refuse it — the context moving under this pass, a
+  // run that ended, a run that was never ours, a newer analysis already
+  // published — and the scheduler must not set its cadence from any of them.
+  // Three of those live in the store, so the store reports its own answer
+  // rather than the two halves being re-derived here and drifting.
+  const accepted = contextHolds(ctx, repo) && publishPerfAnalysis(analysis)
+  return { analysis, accepted }
 }
 
 export const perfAnalysisEffect: AppEffect = {
@@ -109,14 +115,20 @@ export const perfAnalysisEffect: AppEffect = {
     // analysis for that one state was a second constructor for every field of
     // `PerfAnalysis`, kept in step by hand, to show the same words one idle
     // delay sooner.
-    // Cadence state belongs to THIS loop, not to the module. An analysis that
-    // outlived a Repo swap or a metrics reset still settles, and writing its
-    // result to module state would let it set the cadence for the run that
-    // replaced it — postponing a corrective pass by the full interval.
-    let awaiting = { interaction: false, startup: false }
     const stopJob = job.start(
-      async () => { awaiting = (await runPerfAnalysisNow(repo, workspaceId)).awaitingLiveSample },
-      () => nextAnalysisDelayMs(awaiting, performance.now()),
+      async () => {
+        const { analysis, accepted } = await runPerfAnalysisNow(repo, workspaceId)
+        // A refused result describes a span that no longer exists, so it says
+        // nothing about what the CURRENT one is waiting for. Come back soon
+        // instead of adopting its answer — the state that made it stale (a
+        // reset, a workspace switch) is exactly when a fresh verdict matters.
+        if (!accepted) return RECHECK_MS
+        return nextAnalysisDelayMs(analysis.awaitingLiveSample, performance.now())
+      },
+      // A pass that threw produced no verdict at all. Retrying on the full
+      // cadence would leave the monitor silent for ten minutes over a
+      // transient DB failure, which is the state it is least useful in.
+      { onFailureDelayMs: RECHECK_MS },
     )
     return () => {
       // Teardown is not a pause. This effect goes away when the monitor's own

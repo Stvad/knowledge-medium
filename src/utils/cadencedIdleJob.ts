@@ -14,10 +14,22 @@ import { PendingIdleJobs } from '@/data/internals/idleMarkerJobs.js'
 import { scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 
 export interface CadencedIdleJob {
-  /** Start the loop; returns the disposer. `nextDelayMs`, when given, is asked
-   *  after each run and belongs to THIS loop — so state it reads dies with the
-   *  loop rather than outliving it as module state a superseded run can write. */
-  start: (run: () => Promise<void>, nextDelayMs?: () => number) => () => void
+  /** Start the loop; returns the disposer.
+   *
+   *  The run RETURNS its own next delay (or nothing, for `repeatDelayMs`)
+   *  rather than writing state a separate delay callback reads afterwards. The
+   *  two-callback shape could not express "this pass decided nothing": a run
+   *  that refused its own result, or threw, left the previous pass's state
+   *  standing and the cadence was then chosen from it. Returning the delay
+   *  makes the pass that computed the answer the only thing that can set it.
+   *
+   *  `onFailureDelayMs` is the answer for a run that THREW, which has no return
+   *  value to give one. Without it a transient failure would be rewarded with
+   *  the full cadence before the next attempt. */
+  start: (
+    run: () => Promise<number | void>,
+    opts?: { onFailureDelayMs?: number },
+  ) => () => void
   /** Test helper — await runs whose deferral has already fired. */
   drain: () => Promise<void>
 }
@@ -36,19 +48,21 @@ export const cadencedIdleJob = (
   const jobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, { minDelayMs: 0 }))
   return {
     drain: () => jobs.drain(),
-    start: (run, nextDelayMs) => {
+    start: (run, opts) => {
       let cancelled = false
       let timer: ReturnType<typeof setTimeout> | undefined
       const armIn = (delayMs: number): void => {
         timer = setTimeout(() => {
           jobs.schedule(async () => {
             if (cancelled) return
+            let next: number | void
             try {
-              await run()
+              next = await run()
             } catch (err) {
               console.warn(`[${label}] run failed`, err)
+              next = opts?.onFailureDelayMs
             }
-            if (!cancelled) armIn(nextDelayMs?.() ?? repeatDelayMs)
+            if (!cancelled) armIn(next ?? repeatDelayMs)
           })
         }, delayMs)
       }
