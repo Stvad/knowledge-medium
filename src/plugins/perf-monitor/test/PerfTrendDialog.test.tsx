@@ -59,6 +59,7 @@ const mocks = vi.hoisted(() => {
 vi.mock('@/context/repo.tsx', () => ({ useRepo: () => mocks.repo }))
 vi.mock('../schedule.ts', () => ({ runPerfAnalysisNow: mocks.runNow }))
 vi.mock('@/utils/toast.js', () => ({ showError: vi.fn(), showProgress: vi.fn() }))
+const showError = vi.mocked((await import('@/utils/toast.js')).showError)
 
 afterEach(() => {
   vi.clearAllMocks()
@@ -299,46 +300,72 @@ describe('overlapping series loads', () => {
 })
 
 /**
- * A refresh the dialog has moved past must not publish its history.
+ * A read nobody is waiting for says nothing.
  *
- * A refresh in flight when the Repo is swapped resolves afterwards, and must
- * not write the previous user's rows into the open dialog. Asserted on the
- * CAUSE — the reads never run — via the query count, because "the table did not
- * change" is also what a load that simply returned the same rows looks like.
+ * One flag owns this now — the load effect's own cleanup — so a superseded
+ * read, an unmounted one and a failed one are the same case. Each is asserted
+ * against the positive control below it: an absence that has never been seen to
+ * fail is not evidence.
  */
-describe('a superseded refresh', () => {
+describe('a series read that has been replaced', () => {
   beforeEach(freshRepo)
+  let gate: { mockRestore: () => void } | null = null
+  afterEach(() => { gate?.mockRestore(); gate = null; resetPerfAnalysisStore(); resetMonitorRun() })
 
-  it('reads no history once the dialog it belonged to is gone', async () => {
-    await writeInteractionSample(repo, WS)
-    await writeStartupRecord(repo, WS)
+  /** Holds every series read, then fails it — the shape of a read that is still
+   *  in flight when the thing that asked for it goes away. */
+  const failingReads = (): { held: () => number; take: () => Array<() => void> } => {
+    const read = sharedDb.db.getAll
+    let waiting: Array<() => void> = []
+    gate = vi.spyOn(sharedDb.db, 'getAll').mockImplementation(
+      async (sql: string, params?: unknown[]) => {
+        if (!sql.includes('AS payload')) return read.call(sharedDb.db, sql, params)
+        await new Promise<void>((r) => waiting.push(r))
+        throw new Error('the database went away')
+      })
+    // Taken, not just released: a later load holds its own reads, and a test
+    // that means "the two from THAT load" has to name them.
+    return { held: () => waiting.length, take: () => { const w = waiting; waiting = []; return w } }
+  }
+
+  // The control. Everything below asserts this toast does NOT appear, and would
+  // hold with the guard deleted if the failure never reached it at all.
+  it('reports one that is still the current read', async () => {
+    const reads = failingReads()
     render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
-    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
+    await waitFor(() => expect(reads.held()).toBe(2))
 
-    // Hold the analysis open so the refresh is mid-flight when we supersede it.
-    let release = (): void => {}
-    mocks.runNow.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { release = () => resolve() }))
-    await userEvent.click(screen.getByRole('button', { name: /re-analyze/i }))
+    await act(async () => { for (const release of reads.take()) release() })
 
-    // The dialog goes away — the same invalidation a Repo swap performs.
+    await waitFor(() => expect(showError).toHaveBeenCalledWith(
+      expect.stringContaining("Couldn't read performance history")))
+  })
+
+  it('says nothing once a newer publication has replaced it', async () => {
+    startMonitorRun(repo, WS)
+    const reads = failingReads()
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(reads.held()).toBe(2))
+    const superseded = reads.take()
+
+    // The publication re-runs the load effect, which invalidates the read above.
+    act(() => { publishPerfAnalysis(analysisFixture({ workspaceId: WS, seq: 2 })) })
+    await waitFor(() => expect(reads.held()).toBe(2))
+
+    await act(async () => { for (const release of superseded) release() })
+
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('says nothing once the dialog it belonged to is gone', async () => {
+    const reads = failingReads()
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(reads.held()).toBe(2))
+
     cleanup()
-    // Counted at CALL time. `repo.metrics().db.getAll.calls` increments in a
-    // `finally` AFTER the round trip, so it cannot prove a call did not happen —
-    // watching it means waiting out a duration, and under load the continuation
-    // outlives any window chosen here. A spy increments the instant the read is
-    // issued, which is the event this asserts the absence of.
-    const reads = vi.spyOn(repo.db, 'getAll')
-    release()
+    await act(async () => { for (const release of reads.take()) release() })
 
-    // One event-loop TURN, not a duration. The refresh resumes in a microtask
-    // off the promise just resolved and issues its reads synchronously from
-    // there, so a macrotask boundary — after which every pending microtask has
-    // run — is a language guarantee rather than a bet on timing. It neither
-    // slows a passing run nor weakens under gate load.
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(reads).not.toHaveBeenCalled()
+    expect(showError).not.toHaveBeenCalled()
   })
 })
 

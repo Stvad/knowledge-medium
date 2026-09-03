@@ -32,9 +32,12 @@ export const MIN_STARTUP_HISTORY = MIN_BASELINE_SESSIONS + RECENT_WINDOW
 /** `insufficient` stays distinct from `steady` — collapsing "nothing judged"
  *  into "fine" would report a clean bill of health for a run that never happened. */
 export type TrendResult =
-  /** `reason` separates two failure modes callers act on differently:
-   *  'history' fills by waiting; 'no-current-sample' may resolve without more history (live counters, a late-enabled recorder). */
-  | { status: 'insufficient'; reason: 'history' | 'no-current-sample' }
+  /** `reason` separates failure modes callers act on differently: 'history'
+   *  fills by waiting; 'no-current-sample' may resolve without more history
+   *  (live counters, a late-enabled recorder); 'no-baseline' is a FULL history
+   *  that happens to be all zeros, where telling the user to keep waiting
+   *  points at the one thing that is not the problem. */
+  | { status: 'insufficient'; reason: 'history' | 'no-current-sample' | 'no-baseline' }
   /** `baselineCount` is sessions actually consumed, not rows loaded — rows with no usable sample are filtered out before the median. */
   | { status: 'steady'; baselineCount: number }
   | { status: 'regressed'; regression: Regression; baselineCount: number }
@@ -42,6 +45,8 @@ export type TrendResult =
 const INSUFFICIENT: TrendResult = { status: 'insufficient', reason: 'history' }
 /** This session contributed no sample, so no amount of history helps. */
 const NO_CURRENT_SAMPLE: TrendResult = { status: 'insufficient', reason: 'no-current-sample' }
+/** History enough, and every session in it zero — there is no ratio to form. */
+const NO_BASELINE: TrendResult = { status: 'insufficient', reason: 'no-baseline' }
 
 export interface Regression {
   /** Stable machine id, e.g. `query:groupedBacklinks.forBlock`. */
@@ -79,9 +84,10 @@ const trendRegression = (
   const base = median(baseline)
   // Judged, and too small to matter — a verdict, not a gap in the data.
   if (current < spec.minAbsolute) return { status: 'steady', baselineCount: baseline.length }
-  // A zero baseline is ambiguous: still-zero is genuinely unchanged (steady);
-  // zero-to-something has no ratio and would falsely certify a regression as healthy, so it's reported insufficient instead.
-  if (base <= 0) return current === 0 ? { status: 'steady', baselineCount: baseline.length } : INSUFFICIENT
+  // A zero baseline is ambiguous: still-zero is genuinely unchanged (steady); zero-to-something has no ratio and would falsely
+  // certify a regression as healthy, so it's insufficient instead — under its OWN reason, since the history a reader would then
+  // be told to keep building is already full.
+  if (base <= 0) return current === 0 ? { status: 'steady', baselineCount: baseline.length } : NO_BASELINE
   const ratio = current / base
   if (ratio < REGRESSION_RATIO) return { status: 'steady', baselineCount: baseline.length }
   return {
@@ -118,6 +124,12 @@ export const partlyJudged = (results: readonly TrendResult[]): boolean =>
 export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean =>
   results.length > 0 &&
   results.some((r) => r.status === 'insufficient' && r.reason === 'no-current-sample')
+
+/** Nothing judged, and at least one metric had a full but all-zero baseline —
+ *  the gap waiting cannot close. `some`, like `awaitingCurrentSample`: it names
+ *  the more specific reason where one exists. */
+export const lacksBaseline = (results: readonly TrendResult[]): boolean =>
+  results.some((r) => r.status === 'insufficient' && r.reason === 'no-baseline')
 
 /** Sessions the THINNEST judged comparison rested on, or 0 if none was
  *  judged — smallest, not largest, so a clean verdict isn't overstated. */

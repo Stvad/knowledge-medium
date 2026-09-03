@@ -301,7 +301,10 @@ describe('loadRecords', () => {
   // being judged topping up and skewing the history it is judged against.
   it('drops this session own row from the window it is judged against', async () => {
     const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
-    const total = 8
+    // MORE than the window, so the exclusion has somewhere to draw from: taken
+    // out after the cap it would leave 39 past sessions where the count says 40,
+    // dropping the oldest eligible sample and moving the median with it.
+    const total = HISTORY_LIMIT + 5
     for (let i = 0; i < total; i++) {
       await sharedDb.db.execute(
         `INSERT INTO blocks
@@ -328,8 +331,8 @@ describe('loadRecords', () => {
     expect(current).not.toBeNull()
     expect(mine(current!)).toBe(true)
     expect(window.some((r) => mine(r.record))).toBe(false)
-    // Every OTHER row survives — the filter addresses one row, not a slice.
-    expect(window).toHaveLength(total - 1)
+    // A FULL window of past sessions, not one short.
+    expect(window).toHaveLength(HISTORY_LIMIT)
   })
 
   // Marks stay optional, but a PRESENT one has to be finite: the comparison

@@ -61,6 +61,7 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
     : 'no usable interaction measurement this session',
   'not-recording': (s) => `no ${s} record for this session (${s} recording may be off)`,
   'history-short': (s) => `${s} history still building`,
+  'no-baseline': (s) => `no ${s} baseline to compare against (recent sessions all measured zero)`,
   'partly-judged': (s) => `some ${s} metrics could not be judged this session`,
 }
 

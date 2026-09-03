@@ -65,6 +65,18 @@ describe('summarize', () => {
     expect(v.notes.join(' ')).toContain('40 interaction and 40 startup sessions recorded')
   })
 
+  // A full history that happens to be all zeros: nothing to form a ratio
+  // against. "Building a baseline" would send the reader to wait for sessions
+  // the note beside it reports forty of.
+  it('does not call an all-zero baseline a building baseline', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'no-baseline', startup: 'no-baseline' },
+      recorded: { interaction: 40, startup: 40 },
+    }))
+    expect(v.headline).not.toBe('Building a baseline')
+    expect(v.notes.join(' ')).toContain('no interaction baseline to compare against')
+  })
+
   // ...and it still says so when a series really is just short of history.
   it('calls a genuinely short history a building baseline', () => {
     const v = summarize(analysis({

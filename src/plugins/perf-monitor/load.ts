@@ -179,6 +179,9 @@ const scanSeries = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
   { typeId, recordName, isUsable, orderField }: RecordSeries<T>,
+  /** Rows this window is not FOR — applied before the cap counts them, so
+   *  excluding one shortens the scan rather than the window. */
+  excluded: (row: { id: string; record: T }) => boolean = () => false,
 ): Promise<Array<{ id: string; record: T }>> => {
   const recordPath = jsonPathForProperty(recordName)
   const groupId = seriesGroupId(repo, workspaceId, typeId)
@@ -200,13 +203,16 @@ const scanSeries = async <T extends { recordedAt: number }>(
     // the baseline toward older, smaller-graph sessions — a false regression.
     if (window.length >= HISTORY_LIMIT) break
     const record = parseRecord<T>(row.payload, isUsable)
-    if (record !== null) window.push({ id: row.id, record })
+    if (record === null) continue
+    const entry = { id: row.id, record }
+    if (!excluded(entry)) window.push(entry)
   }
   return window
 }
 
 /** This client's records, newest first — the bounded window a comparison
- *  averages. For this session's own row too, use `loadSeriesWithCurrent`. */
+ *  averages, optionally minus rows the caller is judging rather than averaging.
+ *  For this session's own STORED row too, use `loadSeriesWithCurrent`. */
 export const loadRecords = scanSeries
 
 /**
@@ -217,7 +223,8 @@ export const loadRecords = scanSeries
  *
  * Filtered here rather than left to the caller's slicing: other tabs writing
  * newer rows sink this one THROUGH the window, so it is neither reliably at
- * the front nor reliably past the cap.
+ * the front nor reliably past the cap. Before the cap, so the window still
+ * holds a full `HISTORY_LIMIT` of past sessions rather than one short.
  *
  * `current` is a POINT LOOKUP by identity, not a wider scan: no candidate
  * limit can hide it, however far those other tabs may have pushed it.
@@ -228,14 +235,12 @@ export const loadSeriesWithCurrent = async <T extends { recordedAt: number }>(
   series: RecordSeries<T>,
   identity: { field: keyof T & string; value: unknown },
 ): Promise<{ window: Array<{ id: string; record: T }>; current: T | null }> => {
-  const [scanned, current] = await Promise.all([
-    scanSeries(repo, workspaceId, series),
+  const [window, current] = await Promise.all([
+    scanSeries(repo, workspaceId, series,
+      ({ record }) => record[identity.field] === identity.value),
     findRecord(repo, workspaceId, series, identity),
   ])
-  return {
-    window: scanned.filter(({ record }) => record[identity.field] !== identity.value),
-    current,
-  }
+  return { window, current }
 }
 
 /** The one record whose `field` holds `value`, or null. */

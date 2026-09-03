@@ -254,22 +254,29 @@ export const awaitRecordingAllowed = async (
  *  new span) — so an artifact outliving any of them describes a world that
  *  no longer exists. Tracked together so a consumer cannot guard one and
  *  miss the others; captured where work starts, compared where it's used. */
+/** What a context is captured from and compared against — the span accessor
+ *  plus the active workspace, and nothing else off the Repo. */
+export type MetricsContextSource = MetricsSpanSource & { activeWorkspaceId: string | null }
+
 export interface MetricsContext {
   readonly repo: object
   readonly workspaceId: string
   readonly epoch: number
 }
 
-export const metricsContext = (repo: Repo, workspaceId: string): MetricsContext =>
-  ({ repo, workspaceId, epoch: repo.metrics().epoch })
+// `metricsSpan()`, not `metrics()`: only the epoch is wanted, and a full
+// snapshot walks and sorts every handle and copies the reservoirs and the
+// transaction log. Two of those per monitor pass, for one integer each.
+export const metricsContext = (repo: MetricsContextSource, workspaceId: string): MetricsContext =>
+  ({ repo, workspaceId, epoch: repo.metricsSpan().epoch })
 
 /** Does `ctx` still describe the world? Identity on the Repo, because a
  *  discarded one keeps its own `activeWorkspaceId` forever and so answers every
  *  question about itself in the affirmative. */
-export const contextHolds = (ctx: MetricsContext, repo: Repo): boolean =>
+export const contextHolds = (ctx: MetricsContext, repo: MetricsContextSource): boolean =>
   ctx.repo === repo &&
   ctx.workspaceId === repo.activeWorkspaceId &&
-  ctx.epoch === repo.metrics().epoch
+  ctx.epoch === repo.metricsSpan().epoch
 
 /** Thrown to roll back a record write whose eligibility lapsed mid-transaction. */
 export class NoLongerEligible extends Error {}

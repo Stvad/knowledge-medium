@@ -16,6 +16,7 @@ import {
   partlyJudged,
   awaitingCurrentSample,
   judgedBaselineCount,
+  lacksBaseline,
   baselineWindow,
   fanoutRegression,
   median,
@@ -38,6 +39,8 @@ export type UnjudgedReason =
   | 'not-recording'
   /** Short of stored sessions, which accumulate on nobody's schedule — the ordinary cadence's business, not the fast recheck's. */
   | 'history-short'
+  /** History enough, and all of it zero — no ratio can be formed, and telling the user to keep waiting points at the one thing that is fine. */
+  | 'no-baseline'
   /** Partly judged: incomplete, not clean — the unjudged metric is exactly where a finding could be hiding. */
   | 'partly-judged'
 
@@ -86,7 +89,8 @@ export const unjudgedReason = (
     : anyJudged(results) ? (partlyJudged(results) ? 'partly-judged' : null)
       : awaitingCurrentSample(results) ? 'no-current-sample'
         : session.notRecording ? 'not-recording'
-          : 'history-short'
+          : lacksBaseline(results) ? 'no-baseline'
+            : 'history-short'
 
 /** Is a series waiting on a sample from THIS session, whatever else it
  *  judged? The scheduler needs this even where `reason` doesn't say so.
@@ -105,25 +109,29 @@ export const runPerfAnalysis = async (
 ): Promise<PerfComparison> => {
   // Allocated BEFORE the first await, else the run finishing first would win the lower seq.
   const seq = nextAnalysisSeq()
-  const interaction = await loadRecords(repo, workspaceId, INTERACTION_SERIES)
-  // The window comes back WITHOUT this boot's own row, so this session can't
-  // land in its own baseline — the same rule the interaction side applies by
-  // id below, which is the only identity a live-counter session has.
-  const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
-    repo, workspaceId, STARTUP_SERIES,
-    { field: 'timeOriginMs', value: performance.timeOrigin },
-  )
-
   // Live counters are page-global — a session touching a second workspace
   // would manufacture regressions against one workspace's history; this
   // reader needs the recorder's "blended" rule without inheriting it.
   // PEEK, not read: marking this workspace observed would wrongly disable
   // sampling for one that never actually blended anything.
+  // Read BEFORE the history loads, which are themselves queries this session
+  // would otherwise be measured on.
   const { metrics, session } = peekLiveSession(repo, workspaceId)
 
-  // Exclude THIS session's record by id, not position — it's updated in
-  // place (no history), and the first row could be a genuine past session.
-  const history = interaction.filter((r) => r.id !== session.recordId).map((r) => r.record)
+  // Both windows exclude THIS session at the READ, so neither can contribute to
+  // the history it is judged against — and neither comes back one session short
+  // of the history it reports, which filtering after the cap would do.
+  // Interaction goes by block id (a live-counter session has no other identity,
+  // and its record is updated in place, so position says nothing); startup by
+  // boot time, which also addresses the row for `current`.
+  const interaction = await loadRecords(
+    repo, workspaceId, INTERACTION_SERIES, ({ id }) => id === session.recordId)
+  const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
+    repo, workspaceId, STARTUP_SERIES,
+    { field: 'timeOriginMs', value: performance.timeOrigin },
+  )
+
+  const history = interaction.map((r) => r.record)
   const current = interactionComparable(metrics)
 
   // Judged, not counted: a record with no writes (or missing paint marks) carries no usable sample.

@@ -118,31 +118,23 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
    *  is exactly long enough to paint the previous workspace's history. */
   const context = useMemo(() => ({ repo, ws, run }), [repo, ws, run])
 
-  /** The latest context, for async work deciding whether to write at all.
-   *  Display correctness does not depend on this — a superseded result is
-   *  tagged with its own context and never matches — so being one commit
-   *  behind only means a pointless `setState` or a toast for a refresh nobody
-   *  is waiting for. */
+  /** The latest context, so a refresh can tell whether anyone is still waiting
+   *  on it. Display correctness does not depend on this — a superseded result
+   *  is tagged with its own context and never matches — so being one commit
+   *  behind only costs a toast nobody is waiting for. */
   const latest = useRef(context)
   useEffect(() => { latest.current = context }, [context])
-  const claimLoad = useCallback((): (() => boolean) => {
-    const started = latest.current
-    return () => latest.current === started
-  }, [])
 
-  /** The loaded series WITH the claim it was read under and the PUBLICATION it
-   *  was read for. Derived rather than cleared: a sign-out swaps the Repo, and
-   *  rows in bare state would go on showing the previous user's history until
-   *  the new read finished — or forever, if it failed.
+  /** The loaded series WITH the world it was read in and the PUBLICATION it was
+   *  read for. Derived rather than cleared: a sign-out swaps the Repo, and rows
+   *  in bare state would go on showing the previous user's history until the
+   *  new read finished — or forever, if it failed.
    *
    *  `seq` because the tables are what a reader checks the verdict against and
    *  the series moves underneath an open dialog. It proves which publication
    *  these rows were read FOR, not that the analysis read the same bytes: this
    *  is a second query. ACCEPTED — one round trip against a cadence of minutes.
    */
-  /** Which load may write. `context` cannot answer this: it is deliberately
-   *  blind to the publication, so that a refresh survives the one it causes. */
-  const loadGen = useRef(0)
   const [series, setSeries] = useState<{
     context: object
     seq: number | null
@@ -156,38 +148,37 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   const startup = shown?.startup ?? null
   const interaction = shown?.interaction ?? null
 
-  /** Reads both series. Shared by the mount effect and the manual refresh: the
-   *  tables are what a reader checks the verdict against, so refreshing one
-   *  without the other shows a verdict computed from history the tables do not
-   *  display. `alive` guards against a resolve after unmount. */
-  const loadSeries = useCallback(async (alive: () => boolean): Promise<void> => {
-    if (!ws) return
-    const gen = ++loadGen.current
-    try {
-      const [s, i] = await Promise.all([
-        loadRecords(repo, ws, STARTUP_SERIES),
-        loadRecords(repo, ws, INTERACTION_SERIES),
-      ])
-      // Newest load wins. Successive publications share ONE context — a
-      // publication is not a world change — so `alive` alone lets a slower
-      // older load land rows tagged with a `seq` that `shown` then rejects,
-      // leaving both tables on "Loading…" until something else publishes.
-      if (!alive() || loadGen.current !== gen) return
-      setSeries({
-        context, seq,
-        startup: s.map((r) => r.record),
-        interaction: i.map((r) => r.record),
-      })
-    } catch (e) {
-      if (alive()) showError(`Couldn't read performance history: ${e instanceof Error ? e.message : String(e)}`)
-    }
-  }, [repo, ws, seq, context])
-
+  /** The ONE place the series is read, keyed on everything a row is tagged
+   *  with. React's own cleanup is then the whole ownership story: a new world
+   *  or a new publication re-runs this and invalidates the read in flight,
+   *  unmounting invalidates it, and success and failure consult the same flag.
+   *
+   *  Which is why the manual refresh below does not read: its publication
+   *  re-runs this effect with the right `seq`, where loading from the refresh
+   *  meant loading under the `seq` captured before it published. */
   useEffect(() => {
-    const alive = claimLoad()
+    if (!ws) return
+    let alive = true
     // Async IIFE: the state lands on resolve, not during the effect.
-    void (async () => { await loadSeries(alive) })()
-  }, [loadSeries, claimLoad])
+    void (async () => {
+      try {
+        const [s, i] = await Promise.all([
+          loadRecords(repo, ws, STARTUP_SERIES),
+          loadRecords(repo, ws, INTERACTION_SERIES),
+        ])
+        if (!alive) return
+        setSeries({
+          context, seq,
+          startup: s.map((r) => r.record),
+          interaction: i.map((r) => r.record),
+        })
+      } catch (e) {
+        if (!alive) return
+        showError(`Couldn't read performance history: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    })()
+    return () => { alive = false }
+  }, [repo, ws, seq, context])
 
   // The dialog is pinned to the workspace it opened on, but a fresh analysis
   // reads AMBIENT state — `repo.isReadOnly` describes whichever workspace is
@@ -218,21 +209,17 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
     // context whose publication will then be refused. Refuse before the
     // expensive step, not after it.
     if (!ws || ws !== repo.activeWorkspaceId || monitorRunFor(repo, ws) === null) return
-    // Claimed BEFORE the analysis, not just before the read: the analysis is the
-    // longer await of the two, and a refresh the dialog has moved past must not
-    // publish its history either.
-    const alive = claimLoad()
     const mine = context
     setRefreshingFor(mine)
     try {
+      // An accepted analysis publishes, which re-runs the load effect. A refused
+      // one changes no verdict, so the tables beside it are still current.
       await runPerfAnalysisNow(repo, ws)
-      if (!alive()) return
-      await loadSeries(alive)
     } catch (e) {
-      // The same guard the success path uses. A refresh superseded by a
-      // sign-out or a workspace change would otherwise raise its failure over
-      // whatever is on screen now, describing an analysis nobody is waiting for.
-      if (!alive()) return
+      // A refresh superseded by a sign-out or a workspace change would otherwise
+      // raise its failure over whatever is on screen now, describing an analysis
+      // nobody is waiting for.
+      if (latest.current !== mine) return
       showError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setRefreshingFor((current) => (current === mine ? null : current))

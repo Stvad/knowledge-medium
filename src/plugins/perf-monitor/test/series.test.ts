@@ -186,6 +186,10 @@ describe('fanoutRegression', () => {
     const result = fanoutRegression(now(), [now(), now(), ...history(8, base)])
     expect(result.status).toBe('insufficient')
     expect(result.status).not.toBe('steady')
+    // ...and under its own reason. Reported as short history, the verdict tells
+    // the reader to keep waiting for sessions it already has ten of, and the one
+    // thing that would actually change the answer goes unsaid.
+    expect(result).toEqual({ status: 'insufficient', reason: 'no-baseline' })
   })
 })
 
