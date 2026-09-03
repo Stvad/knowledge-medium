@@ -10,6 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { ChangeScope } from '@/data/api'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import type { Repo } from '@/data/repo'
+import type { Materializability } from '@/sync/transform'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { beginTestRepoScope, endTestRepoScope } from '@/data/test/testRepoScope'
@@ -85,7 +86,7 @@ describe('per-test Repo scope', () => {
       db: shared.db,
       startSyncObserver: true,
       syncObserverDeps: {
-        getMaterializability: async () => {
+        getMaterializability: async (): Promise<Materializability> => {
           reachedGate = true
           await gate
           order.push('drain')

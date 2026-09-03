@@ -105,5 +105,5 @@ export const endTestRepoScope = async (): Promise<void> => {
     repo.stopSyncObserver()
     repo.setActiveWorkspaceId(null)
   }
-  await Promise.all(live.map(repo => repo.awaitSeedMaterialization()))
+  await Promise.all(live.map(repo => repo.awaitDeferredWork()))
 }

@@ -4412,6 +4412,29 @@ export class Repo {
     await this.workspaceBackfillJobs.drain()
   }
 
+  /** Every deferred-work family at once — what a harness tearing a Repo down
+   *  needs, rather than the specific one a given test is waiting on.
+   *
+   *  A NEW family belongs in this list. Each of these schedules work that
+   *  writes to the db after the call that scheduled it returned, so one left
+   *  out can still be running when its owner is gone — which in tests means
+   *  writing into the next test's database (`testRepoScope.ts`, issue #813).
+   *  Only the seed-materialization family is known to have done that; the rest
+   *  are here so the class cannot recur family by family, and dropping them
+   *  fails no test today. Like its members, this does not advance timers: work
+   *  whose deferral timer has not fired is not pending yet and is not waited on. */
+  async awaitDeferredWork(): Promise<void> {
+    await Promise.all([
+      this.awaitSeedMaterialization(),
+      this.awaitReferenceTargetDerive(),
+      this.awaitPropertyDefinitionMigrations(),
+      this.awaitReconcileRescans(),
+      this.awaitProcessors(),
+      this.awaitReprojections(),
+      this.awaitWorkspaceBackfills(),
+    ])
+  }
+
   /** Test-only escape hatch retained for stage-level tests that wire
    *  specific processor sets without a FacetRuntime. */
   __setProcessorsForTesting(processors: ReadonlyArray<AnyPostCommitProcessor>): void {
