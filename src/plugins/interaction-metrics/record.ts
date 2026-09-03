@@ -342,14 +342,12 @@ export const writeInteractionSample = async (
         description: 'interaction metrics record',
         retain: INTERACTION_RETAIN,
         recordName: interactionRecordProp.name,
-        // STRONGER than the shared default: these counters are only meaningful
-        // if they belong to one workspace, and a switch during the awaits above
-        // invalidates them. The shared path cannot know that rule.
+        // STRONGER than the shared default: a workspace switch during the
+        // awaits above invalidates these counters — the shared path can't know that rule.
         assertEligible: (r, ws) => assertStillAttributable(r, ws, metrics.epoch),
         record: { property: interactionRecordProp, data },
-        // Claimed at commit, not from the return value: the append also awaits
-        // a retention pass, and an analysis in that window would find the row
-        // readable but unclaimed and count this session twice.
+        // Claimed at commit, not the return value: the append also awaits a
+        // retention pass, and reading in that window would count this session twice.
         onCommitted: (id) => setPageRecord(repo, workspaceId, id, startedAt, metrics.epoch),
       })
       return blockId
