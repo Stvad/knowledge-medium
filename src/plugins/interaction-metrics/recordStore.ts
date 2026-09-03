@@ -298,6 +298,10 @@ export const clientSeriesQuery = (
     groupId: string
     recordName: PropertyName
     deviceSurface: string
+    /** Whose records these are. The group id is DERIVED from it, so the two only
+     *  disagree for a row moved in by hand — which is not this client's to
+     *  prune, and not this client's history to show. */
+    clientId: string
     /** Kept out of the candidate set BEFORE any offset — retention bounds the
      *  records that came before the one it just wrote, not including it. */
     excludeId?: string
@@ -316,6 +320,7 @@ export const clientSeriesQuery = (
 ): { sql: string; params: unknown[] } => {
   const record = jsonPathForProperty(opts.recordName)
   const label = `${record}.deviceLabel`
+  const owner = `${record}.clientId`
   return {
     sql: `SELECT ${select} FROM blocks
            WHERE parent_id = ? AND deleted = 0
@@ -323,13 +328,17 @@ export const clientSeriesQuery = (
              AND json_extract(properties_json, ?) IS NOT NULL
              AND (json_extract(properties_json, ?) IS NULL
                   OR json_extract(properties_json, ?) LIKE ?)
+             AND (json_extract(properties_json, ?) IS NULL
+                  OR json_extract(properties_json, ?) = ?)
            ORDER BY json_extract(properties_json, ?) DESC, order_key, id
            ${opts.tail}`,
     params: [
       ...(opts.selectParams ?? []),
       opts.groupId,
       ...(opts.excludeId === undefined ? [] : [opts.excludeId]),
-      record, label, label, `${opts.deviceSurface}:%`, `${record}.recordedAt`,
+      record, label, label, `${opts.deviceSurface}:%`,
+      owner, owner, opts.clientId,
+      `${record}.recordedAt`,
       ...(opts.tailParams ?? []),
     ],
   }
@@ -370,7 +379,7 @@ const pruneGroup = async (
   keepId: string,
 ): Promise<void> => {
   const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS stamp', {
-    groupId, recordName: spec.recordName, deviceSurface: deviceSurface(),
+    groupId, recordName: spec.recordName, deviceSurface: deviceSurface(), clientId: getClientId(),
     excludeId: keepId,
     selectParams: [`${jsonPathForProperty(spec.recordName)}.recordedAt`],
     tail: 'LIMIT -1 OFFSET ?', tailParams: [spec.retain],
@@ -414,6 +423,20 @@ const pruneGroup = async (
       // counted.
       const label = (record as { deviceLabel?: unknown }).deviceLabel
       if (label != null && !String(label).startsWith(`${deviceSurface()}:`)) continue
+      // Whose record it says it is. The group id is derived from the client id,
+      // so for a row this module wrote the two cannot disagree — a row that
+      // does is one a person moved in from another client's group, and this
+      // client has no business pruning another's history.
+      const owner = (record as { clientId?: unknown }).clientId
+      if (owner != null && owner !== getClientId()) continue
+      // The type tag by VALUE, not just by key. A second type added by hand
+      // lives inside the same `types` property, so the key-level check below
+      // cannot see it. Absent is fine — records written before this type
+      // existed carry none, and reading those as edits would leave every one of
+      // them unprunable.
+      const tags = now.properties[typesProp.name]
+      if (tags != null && !(Array.isArray(tags)
+        && tags.length === 1 && tags[0] === spec.recordType.id)) continue
       // Unchanged since it was selected. This does NOT re-establish RANK, which
       // is what put the row past the bound: `Tx` exposes `get`/`peek` by id and
       // no queries, so the series cannot be re-ranked from in here. ACCEPTED —

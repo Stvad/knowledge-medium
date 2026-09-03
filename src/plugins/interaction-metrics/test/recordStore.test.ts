@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { deviceSurface, getDeviceLabel, resetClientIdCache } from '@/utils/clientId'
+import { deviceSurface, getClientId, getDeviceLabel, resetClientIdCache } from '@/utils/clientId'
 import { pluginUIStateBlockId } from '@/data/stateBlocks'
 import { ChangeScope, type User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
@@ -47,7 +47,7 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks() })
 
 const DATA = {
-  recordedAt: 1, startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'c',
+  recordedAt: 1, startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'set-per-test',
   deviceLabel: getDeviceLabel(), sessionMs: 1, blockCount: 1, writes: 1,
   queries: {}, fanout: {}, db: {},
   handles: { count: 0, totalDeps: 0, maxDeps: 0, p50Deps: 0, p95Deps: 0, topHeavy: [] },
@@ -61,7 +61,11 @@ const spec = (retain: number): ClientRecordSpec => ({
   retain,
   recordName: interactionRecordProp.name,
   setProperty: async (tx, id) => {
-    await tx.setProperty(id, interactionRecordProp, DATA, { skipMetadata: true })
+    // Resolved at write time: `resetClientIdCache` mints a new id per test, so
+    // a module-scope capture would be a different client's by the time it lands
+    // — and retention refuses to prune another client's records.
+    await tx.setProperty(id, interactionRecordProp, { ...DATA, clientId: getClientId() },
+      { skipMetadata: true })
   },
 })
 
@@ -235,7 +239,8 @@ describe('appendClientRecord retention', () => {
     // stayed open across the sessions that created the others.
     await sharedDb.db.execute(
       'UPDATE blocks SET properties_json = ? WHERE id = ?',
-      [JSON.stringify({ [interactionRecordProp.name]: { ...DATA, recordedAt: 9_000_000 } }), ids[0]],
+      [JSON.stringify({ [interactionRecordProp.name]:
+        { ...DATA, clientId: getClientId(), recordedAt: 9_000_000 } }), ids[0]],
     )
     const fresh = (await append(1)).blockId
 
@@ -311,7 +316,8 @@ describe('appendClientRecord retention', () => {
     duringRetention(async () => {
       await sharedDb.db.execute(
         'UPDATE blocks SET properties_json = ? WHERE id = ?',
-        [JSON.stringify({ [interactionRecordProp.name]: { ...DATA, recordedAt: 9e12 } }), victim],
+        [JSON.stringify({ [interactionRecordProp.name]:
+          { ...DATA, clientId: getClientId(), recordedAt: 9e12 } }), victim],
       )
     })
     const fresh = (await append(1)).blockId
@@ -484,6 +490,60 @@ describe('retention deletion', () => {
     await append(1)
 
     expect(await liveIds()).not.toContain(legacy)
+  })
+
+  // The group id is derived from the client id, so for a row this module wrote
+  // the two cannot disagree. One that does was moved in from another client's
+  // group by hand, and this client has no business pruning another's history.
+  // The RE-TAKE, not the selection: a row that changes hands between the query
+  // and the write lock is another client's by the time we hold it, and the
+  // query cannot know that.
+  it('leaves a row alone when it changes client after selection', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) ids.push((await append(3)).blockId)
+    const victim = ids[0]
+    duringRetention(async () => {
+      await sharedDb.db.execute(
+        'UPDATE blocks SET properties_json = ? WHERE id = ?',
+        [JSON.stringify({ [interactionRecordProp.name]:
+          { ...DATA, clientId: 'another-device' } }), victim],
+      )
+    })
+
+    await append(1)
+
+    expect(await liveIds()).toContain(victim)
+  })
+
+  it('leaves a record belonging to another client alone', async () => {
+    const { blockId: foreign } = await append(1)
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({ [interactionRecordProp.name]:
+        { ...DATA, clientId: 'another-device' } }), foreign],
+    )
+
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).toContain(foreign)
+  })
+
+  // A second type added by hand lives INSIDE the same `types` property, so a
+  // check that only whitelists the key cannot see it.
+  it('leaves a record alone once someone has tagged it', async () => {
+    const { blockId: tagged } = await append(1)
+    await repo.tx(async (tx) => {
+      const row = await tx.get(tagged)
+      await tx.update(tagged, {
+        properties: { ...row!.properties, types: [interactionRecordType.id, 'user:favourite'] },
+      })
+    }, { scope: ChangeScope.Automation, description: 'seed a hand type tag' })
+
+    await append(1)
+    await append(1)
+
+    expect(await liveIds()).toContain(tagged)
   })
 
   it('leaves a record alone once someone has put a block under it', async () => {
