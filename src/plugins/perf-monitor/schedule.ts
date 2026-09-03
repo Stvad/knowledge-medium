@@ -5,7 +5,7 @@
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
-import { WRITE_ATTEMPTS, WRITE_RETRY_MS, whenBootRecordSettled } from '@/plugins/startup-metrics/record.js'
+import { MAX_BOOT_RECORD_MS, whenBootRecordSettled } from '@/plugins/startup-metrics/record.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { contextHolds, metricsContext, observeWorkspace } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysis } from './analyze.js'
@@ -19,18 +19,14 @@ const REANALYZE_MS = 10 * 60_000
 
 /** How long to wait on the startup recorder before analyzing anyway.
  *
- *  A cap, not a schedule: the wait ends the moment that recorder settles, and
- *  this only bounds the case where it never runs at all — its toggle is off, or
- *  the page booted elsewhere — where nothing would ever settle. Sized to its
- *  full retry schedule, since a fresh device can legitimately decline while it
- *  waits for its membership row and retry twice.
+ *  A cap, not a schedule: the wait ends the moment that recorder settles — on a
+ *  record, on running out of retries, or on declining to arm at all. This only
+ *  bounds the case where its plugin never starts, where nothing settles.
  *
- *  A fixed cushion was the previous answer and could not work: the two are
- *  idle-scheduled at the same floor, so any constant is a bet on how long the
- *  writer takes, and a boot whose record has not landed yet reads as "no
- *  startup record for this session" — the message for a recorder that is off,
- *  held for the whole cadence over a row that arrives moments later. */
-const BOOT_RECORD_WAIT_MS = WRITE_ATTEMPTS * WRITE_RETRY_MS
+ *  Sized from the writer's own worst case rather than a number chosen here, so
+ *  the cap cannot fall behind its retry schedule. Sampling the startup series
+ *  early reads a working recorder as an absent one. */
+const BOOT_RECORD_WAIT_MS = MAX_BOOT_RECORD_MS
 
 const job = cadencedIdleJob({
   firstDelayMs: LAZY_DEEP_IDLE.minDelayMs,

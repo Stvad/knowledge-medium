@@ -259,10 +259,9 @@ describe('the monitor being switched off', () => {
     expect(getPerfAnalysisFor(repo, 'ws-1')).toBeNull()
   })
 
-  // Why the clear belongs at TEARDOWN rather than at the next start: ownership
-  // survives, so re-enabling in the same workspace still owns the store and the
-  // start-time clear is skipped — which would present a verdict from before
-  // whatever happened while the monitor was off.
+  // Publishing while the monitor is OFF must not reach a later run: the counters
+  // its verdicts describe keep moving while it is gone, so anything cached from
+  // that window describes a world nobody was watching.
   it('shows nothing cached from before it was switched off', async () => {
     const repo = repoStub()
     const stop = await start(repo)
