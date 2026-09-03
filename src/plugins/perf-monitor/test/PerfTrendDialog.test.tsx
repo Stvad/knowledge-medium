@@ -59,6 +59,13 @@ vi.mock('@/utils/toast.js', () => ({ showError: vi.fn(), showProgress: vi.fn() }
 
 afterEach(() => {
   vi.clearAllMocks()
+  // `clearAllMocks` clears recorded CALLS but not queued
+  // `mockImplementationOnce`s. Several tests here queue one per click, so a
+  // single unconsumed impl — a click that lands a beat later than the test
+  // expected — is inherited by the next test, which then pairs every
+  // subsequent impl with the wrong call. `mockReset` drains the queue and
+  // restores the implementation `vi.fn` was created with.
+  mocks.runNow.mockReset()
   mocks.repo = mocks.repoStub()
 })
 

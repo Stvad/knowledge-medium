@@ -116,6 +116,40 @@ describe('cadencedIdleJob', () => {
     loop.stop()
   })
 
+  // Only the FIRST of an arming's three phases — a pending timer, a callback
+  // queued on idle, a run in flight — is a timer to clear. This is the third:
+  // the run cannot be recalled, but it must not arm a successor once it has
+  // been superseded, or the loop keeps two chains from then on and every later
+  // re-arm adds another.
+  it('stops a run in flight from arming a successor once superseded', async () => {
+    const job = make()
+    let runs = 0
+    let release = (): void => {}
+    const loop = job.start(async () => {
+      runs++
+      if (runs === 1) await new Promise<void>((r) => { release = () => r() })
+    })
+
+    // Started and BLOCKED — not drained, which would wait on it forever.
+    await vi.advanceTimersByTimeAsync(FIRST)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(runs).toBe(1)
+
+    loop.rearmIn(RETRY)
+    release()
+    await job.drain()
+
+    // One chain, not two: the re-armed run fires, and the settled first run
+    // added nothing of its own — so nothing else is due until the cadence.
+    await settle(job, RETRY)
+    expect(runs).toBe(2)
+    await settle(job, RETRY)
+    expect(runs).toBe(2)
+    await settle(job, REPEAT)
+    expect(runs).toBe(3)
+    loop.stop()
+  })
+
   it('ignores a re-arm after disposal', async () => {
     const job = make()
     let runs = 0

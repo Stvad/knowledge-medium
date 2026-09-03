@@ -64,10 +64,27 @@ export const cadencedIdleJob = (
     start: (run, opts) => {
       let cancelled = false
       let timer: ReturnType<typeof setTimeout> | undefined
+      /** Which arming the pending work belongs to. EXACTLY ONE chain is live,
+       *  and this is what makes that true rather than a property of the call
+       *  order.
+       *
+       *  `clearTimeout` alone cannot enforce it: an arming passes through three
+       *  phases — a pending timer, a callback queued on idle, a run in flight —
+       *  and only the first is a timer to clear. A re-arm during either of the
+       *  others left the superseded work to arm its OWN successor, so the loop
+       *  ran two chains from then on, each later re-arm adding another. */
+      let generation = 0
       const armIn = (delayMs: number): void => {
+        const mine = ++generation
         timer = setTimeout(() => {
           jobs.schedule(async () => {
-            if (cancelled) return
+            // The generation half is DEFENCE IN DEPTH and unpinned: it skips a
+            // pass superseded while its callback sat on the idle queue, which
+            // saves redundant work but cannot affect how many chains are live —
+            // the check after the run already prevents a superseded arming
+            // scheduling a successor. Kept because running an analysis whose
+            // answer someone has already superseded is pure cost.
+            if (cancelled || mine !== generation) return
             let next: number | void
             try {
               next = await run()
@@ -75,7 +92,10 @@ export const cadencedIdleJob = (
               console.warn(`[${label}] run failed`, err)
               next = opts?.onFailureDelayMs
             }
-            if (!cancelled) armIn(next ?? repeatDelayMs)
+            // THE one-chain invariant. A run already in flight cannot be
+            // recalled, but it must not arm a successor once superseded — that
+            // successor is the second chain, and it never goes away.
+            if (!cancelled && mine === generation) armIn(next ?? repeatDelayMs)
           })
         }, delayMs)
       }
@@ -87,6 +107,10 @@ export const cadencedIdleJob = (
         },
         rearmIn: (delayMs) => {
           if (cancelled) return
+          // Still worth clearing: in the common case the pending work IS a
+          // timer, and leaving it to fire would run a pass this re-arm has
+          // already replaced. The generation is what covers the other two
+          // phases, where there is nothing to clear.
           if (timer) clearTimeout(timer)
           armIn(delayMs)
         },
