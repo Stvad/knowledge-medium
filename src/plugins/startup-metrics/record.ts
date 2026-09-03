@@ -292,6 +292,21 @@ export const collectStartupMetricsEffect: AppEffect = {
     const origin = pageOrigin(repo, workspaceId)
     if (origin.repo !== repo || origin.workspaceId !== workspaceId) { settleBootRecord(); return }
     armedCollectors++
+    /** This collector can no longer write — torn down, or out of attempts.
+     *  Idempotent, because both reach here. Settling is the LAST viable
+     *  collector's job: a replacement may still have a quiet window ahead of
+     *  it, and an in-flight write settles through its own completion.
+     *
+     *  The out-of-attempts path is UNPINNED: driving three failed attempts
+     *  through their idle deferrals and retry timers does not settle in this
+     *  harness, which is the same wall the other clauses in this file hit. */
+    let retired = false
+    const retire = (): void => {
+      if (retired) return
+      retired = true
+      armedCollectors--
+      if (armedCollectors === 0 && !recording) settleBootRecord()
+    }
     let done = false
     // Distinct from `done`, which the record path sets on ITS way through:
     // this tracks teardown, so a callback already queued can tell the two apart.
@@ -341,12 +356,7 @@ export const collectStartupMetricsEffect: AppEffect = {
         // so it passes with this line deleted. Reasoned, not measured.
         if (disposed || recorded || recording) return
         const retryLater = (): void => {
-          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) {
-            // Same rule as teardown: a replacement may still be armed, and this
-            // collector running out of attempts does not speak for it.
-            if (armedCollectors === 0) settleBootRecord()
-            return
-          }
+          if (attempt + 1 >= WRITE_ATTEMPTS || disposed) { retire(); return }
           const retry = setTimeout(() => attemptWrite(attempt + 1), WRITE_RETRY_MS)
           cleanups.push(() => clearTimeout(retry))
         }
@@ -444,11 +454,7 @@ export const collectStartupMetricsEffect: AppEffect = {
       done = true
       disposed = true
       runCleanups()
-      armedCollectors--
-      // Only when nothing else could still write: a replacement collector may
-      // be armed with a quiet window ahead of it, and an in-flight write is not
-      // cancelled by teardown and settles through its own completion path.
-      if (armedCollectors === 0 && !recording) settleBootRecord()
+      retire()
     }
   },
 }
