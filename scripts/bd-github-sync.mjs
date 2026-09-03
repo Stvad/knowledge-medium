@@ -1453,7 +1453,11 @@ if (isMainModule(import.meta.url)) {
       runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') })
     } catch (e) {
       console.error(`bd-github-sync: failed — ${e.message ?? e}`)
-      process.exit(1)
+      // `exitCode`, not `exit()`: a failed push still printed the km→#N
+      // mappings an earlier chunk minted, and those ARE the product — the next
+      // run needs them. `process.exit()` drops whatever stdout is still queued
+      // when the reader is slow, which on Linux silently truncates the tail.
+      process.exitCode = 1
     }
   }
 }
