@@ -21,6 +21,7 @@ import {
   NoLongerEligible,
   pageOrigin,
   resetPageOrigin,
+  ROLE_WAIT_MS,
 } from '@/plugins/interaction-metrics/sessionContext.js'
 import { appendClientRecord } from '@/plugins/interaction-metrics/recordStore.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
@@ -191,6 +192,9 @@ export const SETTLE_FALLBACK_MS = 60_000
  *  expected while a fresh device waits for its membership row to replicate. */
 export const WRITE_ATTEMPTS = 3
 export const WRITE_RETRY_MS = 30_000
+/** Headroom per attempt for the idle scheduling and the transaction itself —
+ *  neither is bounded by a constant, and both sit inside every attempt. */
+const WRITE_IDLE_SLACK_MS = 5_000
 
 // Once per page session: boot happens once, and the marks are boot-relative, so
 // a later workspace switch must not record a second "startup".
@@ -226,6 +230,14 @@ const armBootRecordSettled = (): void => {
 }
 armBootRecordSettled()
 
+/** Worst-case wall clock for the whole boot-record attempt, once it starts:
+ *  every attempt waits up to the membership timeout and is idle-scheduled, and
+ *  each retry adds `WRITE_RETRY_MS` on top. Exported so a reader fencing on
+ *  `whenBootRecordSettled` sizes its cap from the writer's own numbers instead
+ *  of a constant that has to be revisited whenever these move. */
+export const MAX_BOOT_RECORD_MS =
+  WRITE_ATTEMPTS * (ROLE_WAIT_MS + WRITE_IDLE_SLACK_MS) + (WRITE_ATTEMPTS - 1) * WRITE_RETRY_MS
+
 /** Awaits the settle, giving up after `timeoutMs`.
  *
  *  The timeout is the answer for a recorder that never runs at all — its toggle
@@ -257,7 +269,9 @@ export const whenBootRecordSettled = (timeoutMs: number): Promise<void> => {
 export const collectStartupMetricsEffect: AppEffect = {
   id: 'startup-metrics.collect',
   start: ({ repo, workspaceId }) => {
-    if (!workspaceId || recorded) return
+    // Every path that declines to arm settles the boot signal: nothing here is
+    // going to write, so a reader fencing on it must not wait out its cap.
+    if (!workspaceId || recorded) { settleBootRecord(); return }
     // The timeline is page-global and measures loading THAT graph, so only the
     // context the page started in may receive it. Both halves matter: a
     // workspace switch before the write lands would otherwise file these
@@ -270,7 +284,7 @@ export const collectStartupMetricsEffect: AppEffect = {
     // origin. Declining is the safe direction — one boot unrecorded, against a
     // permanently skewed series.
     const origin = pageOrigin(repo, workspaceId)
-    if (origin.repo !== repo || origin.workspaceId !== workspaceId) return
+    if (origin.repo !== repo || origin.workspaceId !== workspaceId) { settleBootRecord(); return }
     let done = false
     // Distinct from `done`, which the record path sets on ITS way through:
     // this tracks teardown, so a callback already queued can tell the two apart.
@@ -406,6 +420,9 @@ export const collectStartupMetricsEffect: AppEffect = {
     }
     waitForPaint()
 
-    return () => { done = true; disposed = true; runCleanups() }
+    // Settling on the way out matters as much as on success: a reader fencing
+    // on this would otherwise wait out its whole cap for a collector that has
+    // been torn down and will never write.
+    return () => { done = true; disposed = true; runCleanups(); settleBootRecord() }
   },
 }

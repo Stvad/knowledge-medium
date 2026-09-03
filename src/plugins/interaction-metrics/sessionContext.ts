@@ -270,7 +270,7 @@ export const resetMetricsSession = (repo: object): void => {
 
 /** How long to wait for the membership row before giving up on this attempt.
  *  The callers are idle-scheduled and retry, so a timeout costs one sample. */
-const ROLE_WAIT_MS = 10_000
+export const ROLE_WAIT_MS = 10_000
 
 /**
  * The authoritative "may I write here?" — awaited, unlike `canRecord`.
