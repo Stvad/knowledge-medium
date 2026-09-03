@@ -8,7 +8,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PerfTrendDialog } from '../PerfTrendDialog.tsx'
-import { publishPerfAnalysis, resetPerfAnalysisStore } from '../store'
+import { clearPerfAnalyses, publishPerfAnalysis, resetPerfAnalysisStore } from '../store'
 import { resetMonitorRun, startMonitorRun } from '../monitorRun'
 import { analysisFixture } from './fixtures'
 import { Repo } from '@/data/repo'
@@ -92,9 +92,31 @@ const freshRepo = async (): Promise<void> => {
 }
 
 describe('PerfTrendDialog', () => {
+  afterEach(() => { resetMonitorRun() })
+
   it('offers re-analysis for the workspace it is pinned to', async () => {
+    startMonitorRun(mocks.repo, 'ws-A')
     render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId="ws-A" />)
     await waitFor(() => expect(reanalyze()).toBeEnabled())
+  })
+
+  // The monitor's own toggle can go off while this dialog stays mounted in the
+  // shared DialogHost. Nothing can publish then, so the button would spin and
+  // leave the panel saying there is no analysis — an advertised action with no
+  // visible effect.
+  it('refuses re-analysis once the monitor is switched off', async () => {
+    startMonitorRun(mocks.repo, 'ws-A')
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId="ws-A" />)
+    await waitFor(() => expect(reanalyze()).toBeEnabled())
+
+    // The toggle going off, and the store notification its teardown sends.
+    resetMonitorRun()
+    act(() => { clearPerfAnalyses() })
+
+    await waitFor(() => expect(reanalyze()).toBeDisabled())
+    expect(screen.getByText(/monitoring is switched off/i)).toBeInTheDocument()
+    await userEvent.click(reanalyze())
+    expect(mocks.runNow).not.toHaveBeenCalled()
   })
 
   // Analyzing the pinned workspace from inside another reports the ACTIVE

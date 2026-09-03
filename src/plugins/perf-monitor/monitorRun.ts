@@ -15,26 +15,48 @@
  * Object identity, not a counter: `A→B→A` mints a third run, where a counter
  * comparison has to be relied on to have been bumped on every leg.
  */
+import { CallbackSet } from '@/utils/callbackSet.js'
+
 export interface MonitorRun {
   readonly repo: object
   readonly workspaceId: string
 }
 
 let current: MonitorRun | null = null
+const listeners = new CallbackSet('perf-monitor.run')
 
-export const startMonitorRun = (repo: object, workspaceId: string): MonitorRun =>
-  (current = { repo, workspaceId })
+/** Fires whenever the run starts or ends. A surface that offers to produce a
+ *  verdict has to re-render on this: the analysis store cannot stand in for it,
+ *  since a store notification only re-renders a reader whose SNAPSHOT changed,
+ *  and with nothing published that snapshot is null on both sides of a
+ *  teardown. */
+export const subscribeMonitorRun = (listener: () => void): (() => void) =>
+  listeners.add(listener)
+
+export const startMonitorRun = (repo: object, workspaceId: string): MonitorRun => {
+  current = { repo, workspaceId }
+  listeners.notify()
+  return current
+}
 
 /** Ends `run` if it is still the current one. Guarded, so a teardown arriving
  *  after the next run has started cannot retire its successor. */
 export const endMonitorRun = (run: MonitorRun): void => {
-  if (current === run) current = null
+  if (current !== run) return
+  current = null
+  listeners.notify()
 }
 
 export const currentMonitorRun = (): MonitorRun | null => current
+
+/** Is the monitor running right now, for this Repo and workspace? A surface
+ *  that offers to produce a verdict has to ask: with no run in force nothing
+ *  can publish, so the work would be done and discarded. */
+export const hasMonitorRunFor = (repo: object, workspaceId: string): boolean =>
+  current !== null && current.repo === repo && current.workspaceId === workspaceId
 
 export const isCurrentRun = (run: MonitorRun | null | undefined): boolean =>
   run != null && run === current
 
 /** Test helper — no production caller may end a run it did not start. */
-export const resetMonitorRun = (): void => { current = null }
+export const resetMonitorRun = (): void => { current = null; listeners.notify() }

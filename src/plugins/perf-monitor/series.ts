@@ -97,9 +97,12 @@ export const median = (values: readonly number[]): number => {
  *  same rate in a headline cannot round differently. */
 export const round2 = (n: number): number => Math.round(n * 100) / 100
 
-/** Median of the recent window vs median of the baseline, or null if either
- *  side is too thin or the move is within tolerance. The one place the
- *  thresholds are applied, so every metric is judged on the same terms. */
+/** Median of the recent window vs median of the baseline. Always a result,
+ *  never an absence: `insufficient` when either side is too thin, `steady` when
+ *  the move is within tolerance, `regressed` otherwise. The one place the
+ *  thresholds are applied, so every metric is judged on the same terms — and
+ *  the reason a caller can tell "judged and fine" from "not judged", which a
+ *  nullable return collapses. */
 const trendRegression = (
   spec: { metric: string; label: string; unit: 'ms' | 'ratio'; minAbsolute: number },
   recent: readonly number[],

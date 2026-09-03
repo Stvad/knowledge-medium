@@ -216,10 +216,10 @@ export const runPerfAnalysis = async (
     },
     regressions,
     // Derived from what the comparisons actually consume, not from the
-    // baseline length alone: with history that is long enough to look
-    // sufficient but too short once the recent window is taken out, every
-    // comparison necessarily returns null and the chip would report "no
-    // slowdowns" for a comparison that never ran.
+    // baseline length alone: with history long enough to look sufficient but
+    // too short once the recent window is taken out, every comparison comes
+    // back `insufficient` and the chip would report "no slowdowns" for a
+    // comparison that never ran.
     ready: { interaction: interactionReady, startup: startupReady },
     unjudgedBecause: { interaction: interactionUnjudged, startup: startupUnjudged },
     graphGrowth,

@@ -27,6 +27,7 @@ import { summarize } from './verdict.js'
 import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysisNow } from './schedule.js'
 import { getPerfAnalysisFor, subscribePerfAnalysis } from './store.js'
+import { hasMonitorRunFor, subscribeMonitorRun } from './monitorRun.js'
 
 /** Sessions shown per table. The stored series is longer (see `HISTORY_LIMIT`);
  *  this is what fits in a dialog without becoming a spreadsheet. */
@@ -162,12 +163,25 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   // active now. Re-analyzing a pinned workspace from inside another would
   // report its blocker as the active one's: an editable workspace shown as
   // recording-disabled, or a read-only one shown as fine.
+  const runActive = useSyncExternalStore(
+    subscribeMonitorRun,
+    () => ws != null && hasMonitorRunFor(repo, ws),
+  )
   const stale = !ws || ws !== repo.activeWorkspaceId
+  // The monitor's own toggle can go off while this dialog stays mounted in the
+  // shared DialogHost. Nothing could publish then, so the button would spin and
+  // leave the panel saying "No analysis yet" — an advertised action with no
+  // visible effect.
+  //
+  // Its OWN subscription, not the analysis store's: a store notification only
+  // re-renders a reader whose snapshot changed, and with nothing published that
+  // snapshot is null on both sides of a teardown.
+  const monitorOff = !stale && !runActive
 
   const refresh = async () => {
     // Unpinned defence in depth behind the button's `disabled` — a click cannot
     // reach here while `stale`. It covers the gap between render and click.
-    if (stale) return
+    if (stale || monitorOff) return
     // Claimed BEFORE the analysis, not just before the read: the analysis is the
     // longer await of the two, and a refresh the dialog has moved past must not
     // publish its history either.
@@ -242,12 +256,17 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
               )
             })()
           )}
-          <Button size="sm" variant="outline" className="mt-3" onClick={() => void refresh()} disabled={refreshing || stale}>
+          <Button size="sm" variant="outline" className="mt-3" onClick={() => void refresh()} disabled={refreshing || stale || monitorOff}>
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} /> Re-analyze
           </Button>
           {stale && (
             <p className="text-xs text-muted-foreground mt-1">
               Switched workspace since this opened — reopen here to re-analyze.
+            </p>
+          )}
+          {monitorOff && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Performance monitoring is switched off — turn it back on to re-analyze.
             </p>
           )}
         </section>
