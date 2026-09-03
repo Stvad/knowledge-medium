@@ -25,7 +25,7 @@ export const classifyLines = text => {
       return 'comment'
     }
     if (line.startsWith('//')) return 'comment'
-    if (line.startsWith('/*')) {
+    if (line.startsWith('/*') || line.startsWith('{/*')) {
       if (!line.includes('*/')) inBlock = true
       return 'comment'
     }
@@ -148,6 +148,9 @@ const runAdded = range => {
       '-c', 'core.quotePath=false',
       'diff',
       '--no-ext-diff',
+      '--no-color',
+      '--src-prefix=a/',
+      '--dst-prefix=b/',
       '--unified=0',
       '--inter-hunk-context=0',
       range,

@@ -9,16 +9,18 @@
  * and its declaration does NOT detach it (verified against the TS API), so
  * those are deliberately not flagged.
  *
- * `no-review-provenance`: `PR #N`, review-comment ids, round numbers,
- * reviewer attributions and commit shas inside a comment. The rule a comment keeps
+ * `no-review-provenance`: `PR #N`, review-comment ids, rounds of review,
+ * reviewer attributions and `commit <sha>` inside a comment. A BARE sha is
+ * not matched: 7–10 hex chars is also a uuid fragment or a colour, and a
+ * noisy gate is worse than none — the prose rule covers that form. The rule a comment keeps
  * is timeless; who asked for it and in which round is not, and the audit that
  * produced this rule found the provenance was where stale claims hid.
  * A `#N` issue pointer is allowed; a design citation names a `docs/` path.
  */
 
 const isJsDoc = c => c.type === 'Block' && c.value.startsWith('*') && !c.value.startsWith('**')
-// `@typedef` / `@callback` blocks are declarations in their own right; TS reads them with no node below.
-const isStandaloneDeclaration = c => /@(typedef|callback)\b/.test(c.value)
+// TypeScript's standalone JSDoc declarations — read with no node below them.
+const isStandaloneDeclaration = c => /@(typedef|callback|overload|import)\b/.test(c.value)
 const isDirective = c => /^\s*(eslint-|@ts-|prettier-|biome-)/.test(c.value)
 
 const noInvisibleJsdoc = {

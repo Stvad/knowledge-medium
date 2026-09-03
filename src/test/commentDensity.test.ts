@@ -20,6 +20,10 @@ describe('countLines', () => {
     expect(countLines('const x = 1\n\n\nconst y = 2')).toEqual({ comment: 0, code: 2 })
   })
 
+  it('counts a JSX comment container as comment, across lines', () => {
+    expect(classifyLines('<div>\n  {/* one */}\n  {/* two\n     lines */}\n</div>')).toEqual(['code', 'comment', 'comment', 'comment', 'code'])
+  })
+
   it('classifies per line', () => {
     expect(classifyLines('/**\n * doc\n */\n\nconst x = 1')).toEqual(['comment', 'comment', 'comment', 'blank', 'code'])
   })

@@ -2453,11 +2453,7 @@ export class Repo {
       //    when a non-essential plugin is toggled off, and when ?safeMode forces
       //    every non-essential off at once. Stripping on absence is what
       //    silently deleted ~10k `next-review-date` backlinks fleet-wide when
-      //    SRS was toggled off. (bd7c363a re-enabled that strip believing that,
-      //    after workspace-scoping, absence ⟺ a genuine redefine/delete — but it
-      //    reasoned only about grow-only cold-start materialization and
-      //    cross-workspace switches, never the toggle/safeMode re-resolve that
-      //    removes a plugin's schema without deleting anything.)
+      //    SRS was toggled off.
       //  - PRESENT but non-ref ⇒ scanned, but reprojection is ADD-ONLY (see the
       //    per-block loop), so this is a no-op: there is nothing new to project.
       //    A real ref→non-ref redefine's now-stale derived refs are swept lazily
@@ -2571,7 +2567,7 @@ export class Repo {
             if (devAssertionsEnabled()) {
               // L2 dev/test-only assertion (off in prod): reprojection
               // must be ADD-ONLY — prior ⊆ reconciled. A dropped ref here is the
-              // mass-strip regression 21494fdb fixed; fail it in CI, never on a
+              // mass-strip regression; fail it in CI, never on a
               // user's write. (The length-equality skip below also assumes this
               // superset, so this guards that optimization too.)
               const nextKeys = new Set(reconciled.map(derivedRefKey))
