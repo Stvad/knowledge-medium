@@ -132,10 +132,10 @@ const consumingParentIds = async (
 }
 
 /** Re-key one parent's cell for every rename that owns a field row under it.
- *  The shared `rekeyParentPropertyCell` owns the parent guard, the §9 ancestry
- *  gate, and the swap-safe drop-all-then-set-all apply; this supplies only the
- *  per-parent PLAN — project each renamed field's FIRST parseable value under
- *  the tx-start (rename-unchanged) codec, drop the old name, set the new. */
+ *  The shared `rekeyParentPropertyCell` owns the parent guard and the
+ *  swap-safe drop-all-then-set-all apply; this supplies only the per-parent
+ *  PLAN — project each renamed field's FIRST parseable value under the
+ *  tx-start (rename-unchanged) codec, drop the old name, set the new. */
 const rekeyParent = (
   ctx: SameTxCtx,
   parentId: string,

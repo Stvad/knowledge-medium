@@ -9,31 +9,17 @@
  * since the observer is the load-bearing complexity the doc flags and the
  * part that can't be integration-tested without a live sync backend.
  *
- * The decision answers, for one staging row: apply it now (and how), or
- * leave it staged, or — for a row that left the synced set — hard-delete
- * the local copy.
+ * The decision answers, for one staging row: apply it now (and how), leave
+ * it staged (see {@link ReconcileAction}'s `defer` / `skip-stale`), or —
+ * for a row that left the synced set — hard-delete the local copy.
  *
- * Two distinct "don't apply" reasons, which the original "just decrypt and
- * copy" framing conflated:
- *
- *   - DEFER: the workspace isn't materializable yet — it's e2ee but the WK
- *     isn't loaded (locked pin, or never-pinned key-required), or it's
- *     encryption-uncertain (quarantine). The row stays in staging and is
- *     re-processed when the workspace becomes materializable (WK paste /
- *     plaintext confirm). NOTE: a *plaintext* workspace is always
- *     materializable (copy-through, no key) — "no WK" is NOT the defer
- *     test, or plaintext rows would strand in staging forever.
- *
- *   - SKIP_STALE: the workspace IS materializable, but a pending local
- *     edit is newer than this staging snapshot. Applying would clobber an
- *     unsynced local edit; instead let the upload echo reconcile when it
- *     returns. This is the ps_crud / updated_at gate the doc calls out.
+ * A *plaintext* workspace is always materializable (copy-through, no key)
+ * — "no WK" is NOT the defer test, or plaintext rows would strand in
+ * staging forever.
  */
 
-// `Materializability` is sync-seam vocabulary shared with the §6 resolver;
-// it lives in the data-free `@/sync/transform` layer. `materialize.ts`
-// re-exports it for the observer's callers; reconcile only consumes it.
 import type { Materializability } from '@/sync/transform.js'
+import { BLOCK_STORAGE_COLUMNS } from '@/data/blockSchema.js'
 
 /** Local state for the block id a staging row targets. */
 export interface LocalRowState {
@@ -81,9 +67,10 @@ export type ReconcileAction =
  * why neither is obvious from the other. {@link STAGED_VIEW_GAP_SQL} carries its
  * NEGATION over a left join (`b.updated_at = 0 OR b.updated_at <> s.updated_at`),
  * with the no-local-row case split out into its own `b.id IS NULL` disjunct.
- * {@link SEED_STAGING_NEEDS_APPLY_SQL} carries it as one half of a larger rule —
- * this OR a tombstone invisible on both sides — the same combination the drain
- * asks before it records the flag.
+ * {@link SEED_STAGING_NEEDS_APPLY_SQL} carries it as one arm of three — this, a
+ * tombstone invisible on both sides, or every synced column matching. That last
+ * one is the seed's alone and is deliberately wider than the drain; see its
+ * header.
  *
  * Holds only for two SYNCED writes to one id: two INDEPENDENT mints of the same
  * deterministic id in the same millisecond also share a nonzero stamp, and I1
@@ -122,8 +109,14 @@ const isInvisibleEitherWay = (staged: RowVersion, local: RowVersion | undefined)
  * The question `blocks_synced.needs_apply` records an answer to, and the reason
  * a drain that CANNOT apply a row still has something to decide. Two ways to be
  * satisfied without applying anything, and {@link SEED_STAGING_NEEDS_APPLY_SQL}
- * is the same pair in SQL — which is why this lives here beside it rather than
- * at its one call site in `materialize.ts`.
+ * carries both in SQL — which is why this lives here beside it rather than at
+ * its one call site in `materialize.ts`.
+ *
+ * The seed has a THIRD, comparing every synced column, which this cannot: it is
+ * handed a {@link RowVersion}, and reading full rows here to match would put a
+ * per-row full-row read in the drain's hot path for a shape only a one-shot
+ * pass meets. So the two genuinely differ, on purpose — see the seed's header
+ * for what that costs.
  */
 export const blocksAlreadyReflects = (
   staged: RowVersion,
@@ -188,54 +181,33 @@ export const decideStagingRow = (
 /**
  * Is any staged row one the drain would actually APPLY?
  *
- * `blocks_synced_changes` being non-empty is not the same claim as "my view of
- * `blocks` is behind". Every local write echoes back down the sync stream and
- * re-stages itself, so a device that is writing has a near-permanently
- * non-empty queue built entirely from rows it already has — and a pass that
- * refuses while rows are staged then refuses because of its own progress.
+ * `blocks_synced_changes` being non-empty is not "my view of `blocks` is
+ * behind": every local write echoes back down the sync stream and
+ * re-stages itself, so a pass that refuses on staged rows refuses on its
+ * own progress.
  *
- * The exclusion is not a heuristic about who wrote the row: it is
- * {@link decideStagingRow}'s invariant I1 — the rule this file exists to
- * state, which is why the SQL lives beside it rather than at its call site.
- * Equal NONZERO stamps ⟺ identical content,
- * because the server strictly advances `updated_at` on any content change, so
- * such a row resolves `skip-stale` and changes nothing. Counting it as a gap
- * reports work the drain is about to discard.
+ * The exclusion is {@link decideStagingRow}'s invariant I1 (equal NONZERO
+ * stamps ⟺ identical content, since the server strictly advances
+ * `updated_at` on any content change) — the rule this file exists to
+ * state, which is why the SQL lives beside the predicate. Such a row
+ * resolves `skip-stale`, so counting it as a gap reports work the drain
+ * is about to discard. Exempt: a device whose clock leads the server,
+ * whose own creates echo back with a LOWER stamp and read a genuine gap —
+ * correctly, since the drain really would rewrite those rows.
  *
- * The identity holds only while the client's proposed stamp is at or below
- * server-now: `blocks_clamp_updated_at` clamps a FUTURE stamp down on insert,
- * and a create gets no floor to restore it. A device whose clock leads the
- * server therefore sees its own creates echo back with a LOWER stamp, reads a
- * genuine gap, and gains nothing here — correctly, since the drain really
- * would rewrite those rows.
+ * Everything else unproven is a gap, deliberately (a missing synced/local
+ * row, I2's `0` sentinel, and rows held by the `hasPendingUpload` skip,
+ * since excluding those would mean reading `ps_crud` per call).
  *
- * Everything unproven is a gap, deliberately: a missing synced row, a missing
- * local row, and I2's `0` sentinel (a speculative deterministic-id mint, where
- * equal stamps do NOT imply equal content and the local row always yields).
- * Rows held by I1's sibling `hasPendingUpload` skip are NOT excluded — that
- * would mean reading `ps_crud` per call, and over-reporting is the safe
- * direction for a predicate whose callers refuse on it.
+ * SCOPE — this reads the QUEUE, so it cannot see
+ * `observer.materializeWorkspace`, which rewrites `blocks` straight from
+ * `blocks_synced` and stages nothing; a null answer means no QUEUED work,
+ * not that `blocks` is at rest.
  *
- * SCOPE — this reads the QUEUE, so it cannot see `observer.materializeWorkspace`,
- * which rewrites `blocks` straight from `blocks_synced` and stages nothing
- * (`clientSchema.ts`: "that is the BIG path… every cheap probe for 'still
- * materializing' is wrong"). A null answer means no QUEUED work, not that
- * `blocks` is at rest. Threading the observer's in-flight state in is the
- * standing fix for that, and is not done here.
- *
- * ONE statement, not two. Two are two read snapshots: a drain window
- * committing between them lets rows the first arm never reached slip under
- * the second arm's offset, and the pair then reports no gap while
- * genuinely-gapped rows are still staged (measured). That part is
- * correctness.
- *
- * The depth arm coming first is NOT: when both would fire, either answer is a
- * gap and every caller defers the same way. It buys the better message and
- * lets `LIMIT 1` skip the joined scan in the one case where that scan cannot
- * short-circuit (measured 0.001s vs 0.013s on a 200k queue). It also rests on
- * SQLite evaluating UNION ALL arms in order, which is observed rather than
- * promised — fine for a preference, which is why nothing correctness-bearing
- * is built on it.
+ * ONE statement, not two: two read snapshots let a drain window
+ * committing between them slip rows under the second arm's offset. Arm
+ * order is a preference, not correctness — nothing rests on UNION ALL
+ * evaluation order.
  *
  * Bind `[STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT]`; the result's `why` names
  * which arm fired.
@@ -255,31 +227,15 @@ export const STAGED_VIEW_GAP_SQL = `
         OR b.updated_at <> s.updated_at
   ) LIMIT 1`
 
-/** How many staged rows the benign-echo probe will examine per call.
+/** How many staged rows the benign-echo probe examines per call.
  *
- *  The probe runs INSIDE the backfill's write transaction, and the echo case
- *  it exists for is precisely the one where no row qualifies — so `LIMIT 1`
- *  never short-circuits and the scan runs to the end. Measured at 0.7us/row
- *  under `@powersync/node` and ~4.5us/row under a plain sqlite3 build, so an
- *  unbounded scan of a 200k-row queue costs somewhere between 150ms and 900ms
- *  per batch against the ~430ms whole-batch budget `TARGET_INSERT_ROWS` exists
- *  to protect — and the browser's wa-sqlite/OPFS, the substrate that actually
- *  matters, is measured by neither. Revisit the bound only with a number from
- *  the environment you are bounding. The bigger the backlog the narrowing is
- *  meant to tolerate, the more the tolerating costs.
- *
- *  Past the bound we report a gap rather than scanning on. That is not a
- *  fallback to the old bug: ~10 drain windows' worth of undrained rows means
- *  this device has a real materialization backlog, and yielding so the drain
- *  can catch up is the correct answer — the pass resumes on the next attempt,
- *  which is cheap because its progress is derived from the data.
- *
- *  For an OPERATOR pass that attempt is a person clicking again, not a
- *  re-arm: `scheduleWorkspaceBackfills` filters operator triggers out, by
- *  design (the deliberate act is the point). A long uploading pass can put
- *  itself over this bound with its own echoes, so that is a real ending an
- *  operator can hit — they are told what happened and that re-running
- *  continues, which is the whole contract of a resumable pass. */
+ *  The probe runs inside a write transaction, and its own success case is
+ *  the one where no row qualifies — so `LIMIT 1` never short-circuits, and
+ *  an unbounded scan of a large queue would sit inside the write lock.
+ *  Past the bound we report a gap rather than scanning on: that much
+ *  undrained backlog IS a real gap, and the pass resumes on the next
+ *  attempt. Re-measure before changing it; wa-sqlite/OPFS (the browser
+ *  substrate) is what matters, not native SQLite. */
 export const STAGED_SCAN_LIMIT = 10_000
 
 /**
@@ -319,36 +275,99 @@ export const STAGED_SCAN_LIMIT = 10_000
  * Bind `[workspaceId, cap]`; `cap` bounds only the COUNT (so a wholly
  * unapplied workspace stops counting early), never the coverage.
  */
+const WORKSPACE_UNAPPLIED_WHERE = `
+     WHERE s.workspace_id = ? AND s.needs_apply = 1
+       AND NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id = s.id)`
+
 export const WORKSPACE_UNAPPLIED_SQL = `
   SELECT COUNT(*) AS behind FROM (
     SELECT 1 FROM blocks_synced s
-     WHERE s.workspace_id = ? AND s.needs_apply = 1
-       AND NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id = s.id)
+    ${WORKSPACE_UNAPPLIED_WHERE}
      LIMIT ?
   )`
+
+/**
+ * The same rows {@link WORKSPACE_UNAPPLIED_SQL} counts, by id — what an
+ * operator-invoked rematerialization re-delivers to the drain.
+ *
+ * Shares the WHERE clause rather than restating it, because the remedy naming a
+ * different set than the refusal counts is the failure that matters here: rows
+ * the operator is told about but the pass never looks at, or the reverse.
+ *
+ * Unbounded, unlike the count: the caller materializes every id it gets back,
+ * in the same windows the queue drain uses, so the list is the work rather than
+ * a message. Bind `[workspaceId]`.
+ */
+export const WORKSPACE_UNAPPLIED_IDS_SQL = `
+  SELECT s.id FROM blocks_synced s
+  ${WORKSPACE_UNAPPLIED_WHERE}
+   ORDER BY s.id`
+
+/** The same rows again, counted to the end rather than to the cap.
+ *
+ *  For a before/after PAIR, which is a subtraction — see
+ *  `Repo.workspaceUnappliedExactCount` for why the capped sibling gives the
+ *  wrong answer there. Bind `[workspaceId]`. */
+export const WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL = `
+  SELECT COUNT(*) AS behind FROM blocks_synced s
+  ${WORKSPACE_UNAPPLIED_WHERE}`
 
 /** Count cap for {@link WORKSPACE_UNAPPLIED_SQL}. The number only shapes the
  *  message an operator reads — "some" and "all of them" are different
  *  diagnoses — so it stops where that distinction stops paying. */
 export const WORKSPACE_UNAPPLIED_COUNT_CAP = 1_000
 
+/** Every synced column equal, `IS` rather than `=` so NULL matches NULL — the
+ *  witness is `parent_id`, NULL on a top-level block on both sides, and
+ *  `user_updated_at` is nullable too.
+ *
+ *  Derived from {@link BLOCK_STORAGE_COLUMNS}, not listed: this clause CLEARS a
+ *  flag, so a column missing from it is a false clear. `id` is excluded — it is
+ *  the join. The list is the columns the two tables SHARE; a storage column
+ *  added without an ALTER reaching both fails loudly here ("no such column",
+ *  aborting client-schema bootstrap) rather than silently comparing fewer. */
+const STORAGE_COLUMNS_IDENTICAL = BLOCK_STORAGE_COLUMNS
+  .map(column => column.name)
+  .filter(name => name !== 'id')
+  .map(name => `b.${name} IS blocks_synced.${name}`)
+  .join(' AND ')
+
 /**
  * One-time seed for `needs_apply` on a device that already has staged rows.
  *
  * The column arrives defaulting to "unapplied", which is right for every future
  * delivery and wrong for everything already on disk — so this clears it for the
- * rows a drain demonstrably already handled. Its rule is {@link decideStagingRow}'s,
- * expressed against what the two tables can still show after the fact: the live
- * row carries the SAME nonzero stamp (I1 — identical content, the drain would
- * skip it), or the row is a tombstone on both sides and so invisible to every
- * reader either way.
+ * rows a drain demonstrably already handled. THREE ways to demonstrate it:
  *
- * Necessarily an APPROXIMATION — it cannot see the upload queue or a decode
- * result — and that is tolerable only because it runs ONCE and is dead
- * afterwards. It errs toward leaving the flag SET, which reads as a gap and
- * refuses: equality rather than `>=`, because a strictly-newer local row is an
- * acked edit that `decideStagingRow` would APPLY over, not skip, and its echo
- * re-delivers and re-judges it anyway.
+ *   - the live row carries the SAME nonzero stamp (I1 — identical content, the
+ *     drain would skip it);
+ *   - the row is a tombstone on both sides, invisible to every reader either way;
+ *   - every synced column is identical.
+ *
+ * The third does NOT violate I2, and someone will eventually think it does. I2
+ * exempts stamp 0 because equal stamps THERE do not imply equal content — two
+ * devices minting the same deterministic id both sit at 0. That is a claim about
+ * what a STAMP proves. Comparing the columns proves it directly, without the
+ * stamp, and a row whose every column matches needs no applying by definition:
+ * `blocks` already holds the staged version, which is the whole claim the flag
+ * makes. (A LOSING deterministic mint differs in `created_at`, so this arm does
+ * not fire on the case I2 is about.)
+ *
+ * DELIBERATELY WIDER THAN THE DRAIN, which is the one place this file tolerates
+ * that. {@link blocksAlreadyReflects} answers the first two arms only: it is
+ * handed a {@link RowVersion}, and giving it the third would mean a full-row
+ * read per row in the drain's hot path to serve a shape only a one-shot pass
+ * meets. The cost of the fork is that the drain re-flags such a row if it
+ * re-delivers into a non-materializable window, and the marker means this pass
+ * will not clear it again — over-reporting, so a refusal rather than a loss, and
+ * the operator verb clears it.
+ *
+ * Still an APPROXIMATION in its first two arms — they cannot see the upload
+ * queue or a decode result — and that is tolerable only because this runs ONCE
+ * and is dead afterwards. It errs toward leaving the flag SET, which reads as a
+ * gap and refuses: equality rather than `>=`, because a strictly-newer local row
+ * is an acked edit that `decideStagingRow` would APPLY over, not skip, and its
+ * echo re-delivers and re-judges it anyway.
  *
  * ONE statement, deliberately, even at the 320k-row scale it exists for: it
  * runs once, at boot, with nothing else contending for the write lock, and was
@@ -374,6 +393,11 @@ export const SEED_STAGING_NEEDS_APPLY_SQL = `
              AND COALESCE(
                    (SELECT b.deleted FROM blocks b WHERE b.id = blocks_synced.id), 1
                  ) = 1
+           )
+           OR EXISTS (
+             SELECT 1 FROM blocks b
+              WHERE b.id = blocks_synced.id
+                AND ${STORAGE_COLUMNS_IDENTICAL}
            )
          )
 `

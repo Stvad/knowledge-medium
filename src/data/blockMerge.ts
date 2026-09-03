@@ -13,7 +13,6 @@ import {
   materializePropertyChildrenForExistingRow,
 } from './internals/propertyChildrenProcessor'
 import { mergeProperties } from './mergeProperties'
-import { deleteSubtreeInTx } from './subtreeDelete'
 
 export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }
 
@@ -161,28 +160,11 @@ export const foldBlocksInTx = async (
       }
     }
 
-    // Fold `from`'s property-field children into `into`'s using the SAME §9
-    // dedup the materializer runs for within-block duplicate field rows
-    // (`collapseDuplicateFieldRow`) — this is the merge form of #23's
-    // union-with-dedupe:
-    //   - a `from` value equal to `into`'s winning value folds (its
-    //     user-authored descendants ride onto `into`'s value);
-    //   - a DIVERGENT `from` value is kept as a peer SIBLING value under the
-    //     survivor field row (NOT nested under the winner as if it were an
-    //     annotation — see `collapseDuplicateFieldRow`): projection reads the
-    //     first value, so the cell keeps the winner while the conflicting one
-    //     stays visible and reconcilable. It is never reclassified either:
-    //     §9 recognition needs the `::` bit, and a value row doesn't carry
-    //     one wherever it is moved. That
-    //     is why no derived stamp is cleared here. The old path relocated
-    //     losers to ORDINARY content and had to null a definition-shaped
-    //     `reference_target_id` to stop them projecting as `into`'s field
-    //     rows — but that column is content-derived and device-LOCAL, so the
-    //     clear evaporated on the next edit and never synced (a peer kept
-    //     hiding the row). Marked-form recognition removes the need entirely
-    //     (#19): the loser is unmarked, so nothing can read it as machinery.
-    //   - a property `into` LACKS: the whole `from` field row moves over
-    //     intact (value + comments), becoming `into`'s field row for it.
+    // Folds `from`'s property-field children into `into`'s via
+    // `collapseDuplicateFieldRow`. A divergent `from` value stays a peer
+    // SIBLING under the survivor field row, and nothing clears a derived stamp
+    // on it — §9 recognition needs the `::` bit, which a value row never
+    // carries wherever it is moved.
     //
     // `into` as it stands BEFORE this source folds in — what the pre-backfill
     // catch-up below judges against. Against the post-merge bag every
@@ -194,55 +176,32 @@ export const foldBlocksInTx = async (
     const fromPropertyChildren = (await tx.childrenOf(
       from.id, undefined,
     )).filter(child => !fromChildren.some(visible => visible.id === child.id))
-    // Destination map, built the SAME way as `fromPropertyChildren` above:
-    // raw children minus the visible ones, so a row counts as `into`'s field row
-    // only when the canonical exclusion actually hid it — which carries the flip
-    // gate, definition-ness, AND the `::` bit with it.
+    // Built the SAME raw-minus-visible way as `fromPropertyChildren`, so a row
+    // counts as a field row only where the canonical exclusion hid it — which
+    // carries definition-ness AND the `::` bit. Reading `referenceTargetId` off
+    // raw children instead matches ANY whole-block ref, and
+    // `collapseDuplicateFieldRow` then relocates `from`'s values under that
+    // unrelated block.
     //
-    // Reading `referenceTargetId` off every raw child instead (the first version
-    // of this, PR #386 review) skipped all three. The column is a bare
-    // content-derived stamp: ANY child that is a whole-block ref carries one, so
-    // an ordinary `((definitionId))` child was recorded as the destination field
-    // row, and `collapseDuplicateFieldRow` then relocated `from`'s real
-    // values/comments under that unrelated block and tombstoned the genuine
-    // field row. Reachable from the "Merge into…" picker, not just raw tooling:
-    // its `searchByContent` has no property-child exclusion, so a property VALUE
-    // row matches on its own text and can be picked as the target.
-    //
-    // Under flat §9 recognition this needs no special case for a value-row
-    // `into`: every block hosts its own field rows through its `::` children at
-    // any depth, so the same raw-minus-visible difference is the right answer
-    // whether `into` is a page, a field row, or a value row.
-    //
-    // `intoAnchor` still walks EVERY raw child: it is the placement anchor for an
-    // adopted field row, so it wants the last physical sibling, hidden or not.
-    // Re-scanned per source: an earlier source's adopted field rows are `into`'s
-    // now, and this one must collapse into them rather than adopt a second.
+    // `intoAnchor` still walks EVERY raw child: it is the placement anchor for
+    // an adopted row and wants the last physical sibling, hidden or not.
+    // Re-scanned per source so a later source collapses into an earlier one's
+    // adopted rows.
     await scanIntoChildren()
 
-    // Pre-backfill catch-up (§5, #389 item 9). Between a workspace flipping and
-    // the backfill reaching `into`, `into` holds a full cell and zero field
-    // rows — the same shape as any row that arrives by sync after the flip.
-    // Without this, a key BOTH blocks hold takes the adopt branch below, and
-    // since target-wins makes the merged bag a no-op for that key, MATERIALIZE
-    // has no change to reconcile — so PROJECT rebuilds the cell from the only
-    // field row present, `from`'s, and the target's value is gone. Silent, from
-    // a plain backspace-at-start, and it uploads.
+    // Materialize `into`'s own field row for a key BOTH blocks hold before the
+    // adopt loop below — after adoption `into` has a row and this no longer
+    // fires. Without it, target-wins makes the merged bag a no-op for that key,
+    // so PROJECT rebuilds the cell from `from`'s row and the target's value is
+    // silently lost.
     //
-    // Materializing `into`'s own row first restores the precondition the
-    // adopt/collapse split assumes, so the ordinary `collapseDuplicateFieldRow`
-    // path runs and the result matches a merge of two child-backed blocks:
-    // target's value wins the cell, `from`'s divergent value survives as a peer.
+    // Deliberately NOT flip-gated (km-g5ev), unlike the other property-child
+    // writers: recognition is content-derived, so gating leaves the SOURCE's
+    // value as `into`'s only value row, which projection publishes over the
+    // target's at the first touch past the flip.
     //
-    // Must run BEFORE the adopt loop, not after: once `from`'s row is adopted,
-    // `into` HAS a field row for that fieldId and the catch-up no longer fires.
-    //
-    // The `has(fieldId)` clause is the condition for needing catch-up at all —
-    // a key `into` already has a row for takes the collapse branch and wants
-    // nothing. It doubles as defence in depth against a find-or-create letting
-    // the cell overwrite children, but that direction needs cell/child
-    // divergence, which nothing can produce until the §5 arrival reconcile
-    // lands; deleting the clause today fails no test.
+    // The `has(fieldId)` clause is defence in depth — deleting it fails no test
+    // today.
     const pendingByName = new Map<string, AnyPropertySchema & {fieldId: string}>()
     for (const fromField of fromPropertyChildren) {
       const fieldId = getPropertyFieldTargetId(fromField)
@@ -275,20 +234,18 @@ export const foldBlocksInTx = async (
         await collapseDuplicateFieldRow(tx, intoField.id, fromField)
         continue
       }
-      // `into` lacks this field. Adopt it only if the merged bag actually keeps
-      // the property: a custom `mergeProperties` strategy can deliberately drop a
-      // source-only key, and since `into` never had it the final `properties`
-      // write is a no-op for that key — so MATERIALIZE wouldn't remove a moved
-      // field row, and its projection would add the property back, overriding the
-      // strategy. Orphan/unresolvable field rows (no schema) don't project, so
-      // they ride along harmlessly.
-      const schema = fieldId !== undefined
-        ? tx.resolvePropertyFieldSchema(from.workspaceId, fieldId)
-        : null
-      if (schema !== null && !Object.prototype.hasOwnProperty.call(mergedProperties, schema.name)) {
-        await deleteSubtreeInTx(tx, fromField.id)
-        continue
-      }
+      // `into` lacks this field, so there is nothing to dedupe against — move
+      // the row over intact. A merge RELOCATES and never reaps: the only rows it
+      // may tombstone are husks something emptied first (`collapseDuplicateFieldRow`
+      // above, `from` itself below), and a field row carries user-authored
+      // descendants at any depth.
+      //
+      // Deliberate consequence: a `mergeProperties` strategy that drops a key
+      // whose rows survive does NOT remove the property — PROJECT re-derives it
+      // from the moved row. Child-backed properties are owned by their rows
+      // (§5's one-direction rule), so dropping the key is not a way to delete
+      // one; a strategy that means it has to remove the rows itself, knowing
+      // what is nested under them (#728).
       const [key] = keysBetween(intoAnchor, null, 1)
       await tx.move(fromField.id, {parentId: into.id, orderKey: key})
       intoAnchor = key

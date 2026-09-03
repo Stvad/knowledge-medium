@@ -29,6 +29,9 @@ import {
   errorMessage,
   startBridgeInBackground,
   listStoredProfiles as listProfilesInStore,
+  MissingTokenError,
+  formatTokenContext,
+  withProfileHelp,
   loadStoredToken as loadStoredTokenFor,
   normalizeProfileName,
   removeStoredToken as removeStoredTokenFor,
@@ -41,7 +44,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {renderSubtreeOutline} from './subtreeOutline.js'
-import {limitOption, workspaceAssertion} from './cliOptions.js'
+import {limitOption, scopeAssertion, workspaceAssertion} from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -355,11 +358,18 @@ const whoamiWithToken = (token: string): Promise<WhoamiInfo> =>
 const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   const token = await resolveToken()
   if (!token) {
-    throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`kmagent --profile ${selectedProfileName} connect\` first.`)
+    throw new MissingTokenError(selectedProfileName)
   }
 
-  const before = await whoamiWithToken(token).catch(() => null)
-  if (!before?.connected) {
+  // Not swallowed, unlike the wait loop below: a whoami that THREW is not a
+  // disconnected tab. A stale token 401s right here, and reporting that as "no
+  // app tab" names the wrong cause and discards the typed error the top-level
+  // handler needs. The loop below keeps its catch because the app really is
+  // mid-reload there. NOT unit-pinned: reaching this line needs a live bridge
+  // answering 401, which no harness stands up, so a green suite says nothing
+  // about it.
+  const before = await whoamiWithToken(token)
+  if (!before.connected) {
     throw new Error('No app tab is currently connected — nothing to reload. Open the app, then retry.')
   }
   const previousClientId = before.clientId
@@ -590,10 +600,7 @@ cli
     await ensureBridgeRunning()
     const token = await resolveToken()
     if (!token) {
-      throw new Error(
-        `No agent token configured for profile "${selectedProfileName}". `
-        + `Run \`kmagent --profile ${selectedProfileName} connect\` first.`,
-      )
+      throw new MissingTokenError(selectedProfileName)
     }
     const info = await whoamiWithToken(token)
     process.stdout.write(`${JSON.stringify(info, null, 2)}\n`)
@@ -954,22 +961,19 @@ cli
 // the CLI's own clear timeout message.
 const runBackfillDefaultWaitSeconds = 3540
 
+/** Same bound, same reason — see the note above `runBackfillDefaultWaitSeconds`. */
+const rematerializeDefaultWaitSeconds = runBackfillDefaultWaitSeconds
+
 cli
   .command('run-backfill <backfillId>', wireDescription('run-backfill'))
   .option('--workspace <id>', 'Assert the workspace the pass writes to (defaults to the active one)')
   .option('--wait <seconds>', `How long to wait for the pass to finish (default ${runBackfillDefaultWaitSeconds}). A full properties migration is hundreds of thousands of writes and runs for minutes; the default command timeout would give up while the app is still working, reporting a timeout for a run that is in fact progressing.`, {default: runBackfillDefaultWaitSeconds})
-  .action(async (backfillId: string, options: {workspace?: string | number; wait?: string | number}) => {
-    // Same 0-for-empty artifact CAC produces for `--workspace ""` as in
-    // `audit-properties`; normalize it back so the command layer's purpose-built
-    // refusal is what the operator sees.
-    const asserted = options.workspace === undefined
-      ? undefined
-      : options.workspace === 0 ? '' : String(options.workspace)
+  .action(async (backfillId: string, options: {workspace?: unknown; wait?: string | number}) => {
     await ensureBridgeRunning()
     const value = await client().runCommand({
       type: 'run-backfill',
       backfillId,
-      ...(asserted !== undefined ? {workspaceId: asserted} : {}),
+      ...workspaceAssertion(options.workspace),
     }, {timeoutMs: Math.max(1, Number(options.wait) || runBackfillDefaultWaitSeconds) * 1000})
       .catch((cause: unknown) => {
         // Giving up WAITING is not the pass giving up: it keeps running in the
@@ -982,6 +986,41 @@ cli
           'waiting for it. Re-running is safe (it is single-flighted and resumes from ' +
           'whatever is left), but the list of values it could not migrate is in the app ' +
           'console, not here.',
+        )
+      })
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+  })
+
+// A `--scope all` pass re-judges every staged row of the workspace, which on a
+// large graph is the same order of work as `run-backfill` — so it takes the
+// same wait, and for the same reason: the default command timeout would give up
+// while the app is still materializing.
+cli
+  .command('rematerialize-workspace', wireDescription('rematerialize-workspace'))
+  .option('--workspace <id>', 'Assert the workspace being re-materialized (defaults to the active one, which it must be)')
+  // No CAC `default` for --scope: the kernel already defaults it, and that is
+  // also where the unknown-value refusal lives. Defaulting here too would make
+  // one of the two unreachable rather than agreeing with it.
+  .option('--scope <scope>', 'unapplied (default) — only the rows the durable refusal counts; all — every staged row of the workspace')
+  .option('--wait <seconds>', `How long to wait for the pass to finish (default ${rematerializeDefaultWaitSeconds}).`, {default: rematerializeDefaultWaitSeconds})
+  .action(async (options: {workspace?: unknown; scope?: unknown; wait?: string | number}) => {
+    const scope = scopeAssertion(options.scope)
+    await ensureBridgeRunning()
+    const value = await client().runCommand({
+      type: 'rematerialize-workspace',
+      ...workspaceAssertion(options.workspace),
+      ...scope,
+    }, {timeoutMs: Math.max(1, Number(options.wait) || rematerializeDefaultWaitSeconds) * 1000})
+      .catch((cause: unknown) => {
+        // The sniff is what makes this branch reachable: `client.runCommand`
+        // gives up POLLING and never aborts the app-side pass.
+        if (!(cause instanceof Error) || !/timed out/i.test(cause.message)) throw cause
+        throw new Error(
+          `${cause.message}\nThe pass is still running in the app — this only stopped ` +
+          'waiting for it, and the windows it has already committed are kept. Re-running ' +
+          'is safe: at --scope unapplied it resumes (the rows it finished have dropped out ' +
+          'of the set), at --scope all it starts over. Either way a re-run queues BEHIND ' +
+          'the pass still running, so prefer waiting for that one to finish.',
         )
       })
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
@@ -1099,7 +1138,17 @@ const main = async () => {
   await cli.runMatchedCommand()
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${errorMessage(error)}\n`)
+main().catch(async (error: unknown) => {
+  process.stderr.write(`${await withProfileHelp(
+    error,
+    async () => formatTokenContext({
+      // Degrades to `null` rather than rejecting: an unreadable store must not
+      // take the override and the selection down with it.
+      profiles: await listStoredProfiles().catch(() => null),
+      tokenStorePath,
+      selected: selectedProfileName,
+      envTokenOverride: (process.env.AGENT_RUNTIME_TOKEN ?? '').trim() !== '',
+    }),
+  )}\n`)
   process.exitCode = 1
 })

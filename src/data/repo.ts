@@ -1,17 +1,7 @@
 /**
- * New `Repo` class for the data-layer redesign (spec §3, §8).
- *
- * Stage 1.4 scope: holds `db` + `cache` + `user` + the mutator registry
- * (kernel mutators registered at construction time). Exposes:
- *   - `repo.tx(fn, opts)` — primitive transactional session
- *   - `repo.mutate.X(args)` — typed-dispatch sugar (1-mutator tx wrapping)
- *   - `repo.run(name, args)` — runtime-validated dispatch (dynamic plugins)
- *   - `repo.setFacetRuntime(runtime)` — refresh mutator registry from a
- *     FacetRuntime. Minimal impl reads `mutatorsFacet` contributions.
- *
- * Stage 2 of Phase 1 (post-1.6) adds:
- *   - HandleStore + `repo.block(id)` / `repo.children(id)` / etc.
- *   - Layout B sync observer for sync-applied invalidation (design doc §9.2)
+ * `Repo`: the data-layer entry point. Owns `db` + `cache` + client context
+ * + the mutator/query/processor registries. Surface: `tx` / `mutate.X` /
+ * `run` / `query` / `block`, plus registry accessors and sync/undo control.
  */
 
 import { v4 as uuidv4 } from 'uuid'
@@ -91,11 +81,14 @@ import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
+  type RematerializeReport,
+  type RematerializeScope,
 } from '@/data/internals/syncObserver/observer'
 import {
   STAGED_SCAN_LIMIT,
   STAGED_VIEW_GAP_SQL,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,
   WORKSPACE_UNAPPLIED_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
@@ -487,6 +480,26 @@ export interface ViewGap {
   readonly transient: boolean
 }
 
+/** What {@link Repo.rematerializeWorkspace} did, for the operator who ran it.
+ *
+ *  `unappliedBefore` / `unappliedAfter` are the size of the durable gap on
+ *  either side of the pass — the one thing that answers "did that help?", which
+ *  is why they are EXACT counts and not the capped one the refusal reports.
+ *
+ *  Not closed arithmetic with `resolved`, deliberately: the pair excludes rows
+ *  with a live queue entry (that half is the in-flight predicate's) while `all`
+ *  re-judges every staged row, so a pass CAN resolve a row that neither end
+ *  counted. `resolved > unappliedBefore` is therefore reachable and is not a
+ *  bug — it is the two predicates owning disjoint populations. */
+export interface WorkspaceRematerialization extends RematerializeReport {
+  readonly workspaceId: string
+  readonly unappliedBefore: number
+  readonly unappliedAfter: number
+  /** What {@link Repo.workspaceViewGap} says now — null when the workspace's
+   *  one-way passes are unblocked. */
+  readonly remainingGap: ViewGap | null
+}
+
 /** What an operator-triggered backfill did, for a caller that has a human to
  *  report to. `undoHistoryCleared` is not incidental detail: the pass drops
  *  the workspace's undo stack whenever it writes, and a user who is not told
@@ -587,6 +600,8 @@ export class Repo {
    *  processors. Subscribers are responsible for the UI side
    *  (toast routing); the data layer stays UI-agnostic. */
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
+  private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
+  private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -653,6 +668,35 @@ export class Repo {
    *  execute / writeTransaction). Populated by the metrics-wrapping
    *  proxy installed around `this.db` at construction. */
   readonly dbMetrics = new DbMetrics()
+  /** Committed transactions NOT flagged `telemetry`, and the handle fan-out
+   *  they caused. Counted HERE rather than reconstructed by a consumer from
+   *  before/after snapshots: a consumer's window spans its own awaits, so it
+   *  cannot tell its own work from anyone else's, while this pair is written in
+   *  the same synchronous block as the events it counts.
+   *
+   *  A transaction that CHANGED NO ROW is counted on neither side — rolled
+   *  back, or committed empty as an idempotent ensure does. It invalidates
+   *  nothing, so counting the write alone would deflate the ratio a reader
+   *  builds from the pair. */
+  private nonTelemetryWrites = 0
+  private readonly nonTelemetryFanout: Record<string, number> = {}
+  /** Bumped by `resetMetrics()`. A consumer holding figures from before a reset
+   *  can compare epochs instead of inferring the reset from a counter going
+   *  backwards, which is undetectable once other writes have carried it back up. */
+  private metricsEpoch = 0
+  /** Workspace active when the current counter span began — at construction, or
+   *  at the last `resetMetrics()`. The counters are page-global while the
+   *  features reading them attribute a span to ONE workspace, and a reset can
+   *  land in any of them: work done between the reset and the reader noticing it
+   *  belongs to whatever was active then, not to whatever is active by the time
+   *  it looks. Without this the reader can only start the new span empty, which
+   *  reads as "attributable to the first workspace observed after the reset". */
+  private metricsEpochWorkspaceId: string | null = null
+  /** Wall clock when the current counter span began. Starts at the page's time
+   *  origin, so before any reset it is page-load time. A consumer reporting a
+   *  duration alongside these counters needs the span's start, not the page's:
+   *  after a reset the two differ by everything that happened before it. */
+  private metricsEpochStartedAt = Date.now() - performance.now()
   /** Per-query-name resolve timings. The dispatcher records each
    *  `loader(ctx)` invocation here keyed by the query's full name. */
   readonly queryMetrics = new QueryMetrics()
@@ -1177,9 +1221,15 @@ export class Repo {
 
   /** Re-materialize a workspace's staged `blocks_synced` rows after it becomes
    *  materializable (WK pasted / plaintext confirmed via the §8.2 gate). No-op
-   *  if the observer isn't running. */
+   *  if the observer isn't running.
+   *
+   *  `'all'`, not `'unapplied'`: this and the reconcile rescan are the paths for
+   *  a workspace whose FLAGS may be wrong — the deterministic-id shadow this
+   *  predates the flag entirely — so trusting the flag to name the work is the
+   *  one thing they must not do. Unpinned by any test (the two scopes agree on
+   *  every shape a test can build), which is why it is written here. */
   async drainSyncWorkspace(workspaceId: string): Promise<void> {
-    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId)
+    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId, 'all')
   }
 
   /** Frozen snapshot of internal data-layer counters + timings
@@ -1227,6 +1277,31 @@ export class Repo {
    *      without needing a Playwright + profiler harness. */
   metrics(): Readonly<{
     handleStore: Readonly<Record<string, number>>
+    /** The same counters, restricted to committed transactions this Repo ran
+     *  that CHANGED a row and were NOT flagged `telemetry` — the user's work,
+     *  with the app's self-measurement left out. `writes` is those
+     *  transactions; `handleStore` is the fan-out they caused, measured around
+     *  each one's own invalidation walk. A feature reporting performance
+     *  figures should read THIS rather than subtracting its own activity from
+     *  the totals above.
+     *
+     *  `handleStore` here holds only the counters that walk can ATTRIBUTE —
+     *  those bumped inside the synchronous invalidation pass. Counters bumped
+     *  later, from a loader's settle path, are absent rather than zero; see the
+     *  delta loop in `_runAndDispatch`. */
+    excludingTelemetry: Readonly<{
+      writes: number
+      handleStore: Readonly<Record<string, number>>
+    }>
+    /** Increments on every `resetMetrics()`. Compare it rather than watching a
+     *  counter for a backwards step. */
+    epoch: number
+    /** Workspace active when this span of the counters began. `null` before any
+     *  workspace has been activated. */
+    epochWorkspaceId: string | null
+    /** Wall clock when this span began — the page's time origin until the first
+     *  `resetMetrics()`. */
+    epochStartedAt: number
     /** Live-state aggregates over the registered handle set: handle
      *  count, dep-count percentiles, and the top-3 keys by dep count.
      *  Pairs with `handleStore` counters — counters describe events
@@ -1261,6 +1336,13 @@ export class Repo {
   }> {
     return Object.freeze({
       handleStore: this.handleStore.metrics.snapshot(),
+      excludingTelemetry: Object.freeze({
+        writes: this.nonTelemetryWrites,
+        handleStore: Object.freeze({...this.nonTelemetryFanout}),
+      }),
+      epoch: this.metricsEpoch,
+      epochWorkspaceId: this.metricsEpochWorkspaceId,
+      epochStartedAt: this.metricsEpochStartedAt,
       handleStoreInventory: this.handleStore.snapshotInventory(),
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
@@ -1274,8 +1356,23 @@ export class Repo {
   /** Zero every counter and reservoir in `repo.metrics()`. Use to
    *  mark a baseline before measuring a discrete operation (e.g. a
    *  benchmark iteration, a UI interaction in a soak test, or a
-   *  cold-start "open page → metrics" investigation). */
+   *  cold-start "open page → metrics" investigation).
+   *
+   *  Operations ALREADY IN FLIGHT settle into the new span: a query, DB call or
+   *  transaction that began before this returns records its full pre-reset
+   *  duration into the reservoir this just cleared. ACCEPTED rather than
+   *  guarded. Discarding them means capturing the epoch at the start of every
+   *  asynchronous metric and comparing it at each recording site — five sites
+   *  in this file alone, each one a thing every future metric has to remember —
+   *  to serve one caller, the devtools console hook, in a session where someone
+   *  is deliberately measuring. Take a baseline when the page is quiet, and
+   *  read `epochStartedAt` to know how far back the span reaches. */
   resetMetrics(): void {
+    this.metricsEpoch++
+    this.metricsEpochWorkspaceId = this.client.activeWorkspaceId
+    this.metricsEpochStartedAt = Date.now()
+    this.nonTelemetryWrites = 0
+    for (const k of Object.keys(this.nonTelemetryFanout)) delete this.nonTelemetryFanout[k]
     this.handleStore.metrics.reset()
     this.cache.metrics.reset()
     this.queryMetrics.reset()
@@ -1289,6 +1386,15 @@ export class Repo {
     this.reprojectionMetrics.skippedByAbsence = 0
     this.slowestTx = {description: null, ms: 0}
     this.txLog.length = 0
+    this.metricsResetListeners.notify()
+  }
+
+  /** Fires when `resetMetrics()` starts a new counter span. A consumer holding
+   *  figures from the old one has no other way to notice: the Repo, the
+   *  workspace and everything else it might compare are unchanged. Returns an
+   *  unsubscribe. */
+  onMetricsReset(listener: () => void): () => void {
+    return this.metricsResetListeners.add(listener)
   }
 
   /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
@@ -1555,7 +1661,17 @@ export class Repo {
    *  and upload regardless of this flag; only `BlockDefault` /
    *  `References` writes are rejected. */
   setReadOnly(value: boolean): void {
+    if (this.isReadOnly === value) return
     this.isReadOnly = value
+    this.readOnlyListeners.notify()
+  }
+
+  /** Fires when `isReadOnly` changes. A role change arrives from the server and
+   *  moves nothing else — not the Repo, not the workspace, not the metrics span
+   *  — so a reader with no other reason to re-read would keep reporting the
+   *  permissions the page started with. Returns an unsubscribe. */
+  onReadOnlyChange(listener: () => void): () => void {
+    return this.readOnlyListeners.add(listener)
   }
 
   /** Run a transactional session. Spec §3, §10. */
@@ -1666,46 +1782,18 @@ export class Repo {
    *  Consecutive txs opened through the facade — directly via
    *  `grouped.tx`, or indirectly via `grouped.mutate.X` / `grouped.run`
    *  — MERGE into a single undo entry at record time, so the whole
-   *  composite reverts with one cmd-Z. Helpers that take a `Repo`
-   *  parameter join the group simply by being handed the facade.
+   *  composite reverts with one cmd-Z.
    *
-   *  Wrap-site convention: name the callback parameter `repo`,
-   *  shadowing the raw repo — that way an out-of-habit `repo.tx(...)`
-   *  inside the group cannot silently open a foreign tx and split it.
+   *  Wrap-site convention: name the callback parameter `repo`, shadowing
+   *  the raw repo — that way an out-of-habit `repo.tx(...)` inside the
+   *  group cannot silently open a foreign tx and split it.
    *
-   *  Semantics to be aware of:
-   *   - Merging is top-of-stack only: a foreign tx (one opened on the
-   *     plain repo, e.g. a background write) landing mid-group SPLITS
-   *     the group into two entries rather than folding across it.
-   *   - No atomicity: each tx still commits independently. If a later
-   *     tx throws, the committed prefix stays applied and remains
-   *     covered by the (single) group entry; the error propagates.
-   *   - Nested `undoGroup` on the facade joins the OUTER group — one
-   *     user-perceived action, one entry.
-   *   - The facade must not escape the callback: its token never
-   *     expires, so a leaked reference would stamp far-future txs into
-   *     a long-dead group (see the `block` override below for the one
-   *     leak path that existed).
-   *   - Grouping covers `tx` / `mutate` / `run` and the TypeTagger
-   *     convenience writes. Two write styles deliberately do NOT join:
-   *     Block-facade sugar (`grouped.block(id).setContent(...)` routes
-   *     through `block.repo` = the real repo — a group-bound Block
-   *     would be exactly the leak the `block` override closes) and
-   *     stateful service writes (`userSchemas` / `userTypes` /
-   *     `projectors` — constructed against the real repo; a
-   *     facade-hosted twin would clobber their shared contribution
-   *     buckets). Both land as foreign txs and split the group; use
-   *     `grouped.tx` / `grouped.mutate` inside a group instead.
-   *   - Everything not overridden delegates to the real repo via the
-   *     prototype chain and therefore runs with the facade as `this` —
-   *     safe for reads and shared-object mutation, NOT safe for three
-   *     hazard classes (shared-state minting, instance-field
-   *     assignment, construction-captured collaborators), which the
-   *     overrides in {@link groupedFacade} cover — each carries its
-   *     rationale at the override. The classification rubric and the
-   *     structural enforcement live in `repoFacadeGate.test.ts`, which
-   *     fails on any Repo member that is neither overridden nor
-   *     consciously allowlisted. */
+   *  Merging is top-of-stack only: a foreign tx landing mid-group SPLITS
+   *  the group. No atomicity: each tx still commits independently. The
+   *  facade must not escape the callback — its token never expires.
+   *
+   *  Why each facade override exists: at the override, and
+   *  docs/undo-grouping.md. */
   async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
     return fn(this.groupedFacade(this.newId()))
   }
@@ -1852,7 +1940,11 @@ export class Repo {
         opts,
         user: this.user,
         isReadOnly: this.isReadOnly,
-        newTxId: this.newId,
+        // uuid, never `this.newId`: `command_events.tx_id` is a PRIMARY KEY on
+        // a database that outlives any single Repo, while `newId` is injectable
+        // and the test harness injects per-Repo counters that restart. Deriving
+        // one from the other let two Repos over one db mint the same id (#866).
+        newTxId: uuidv4,
         newTxSeq: this.newTxSeq,
         newId: this.newId,
         blockIdPolicy: this.blockIdPolicy,
@@ -1916,9 +2008,36 @@ export class Repo {
     // pendingReinvalidate / kicks off a microtask, so the caller's tx
     // resolve isn't blocked on handle re-resolution.
     if (result.snapshots.size > 0) {
+      // Counted on both sides or neither. A transaction that changed no row
+      // invalidates nothing, so counting the write alone would deflate the
+      // ratio a reader builds from the pair — and idempotent ensures commit
+      // empty routinely.
+      if (!opts.telemetry) this.nonTelemetryWrites++
+      // The fan-out delta is taken across THIS call and nothing else. The walk
+      // is synchronous, so no other transaction and no sync drain can land
+      // inside it — which is the whole reason the count lives here.
+      const before = opts.telemetry ? null : this.handleStore.metrics.snapshot()
       this.handleStore.invalidate(
         snapshotsToChangeNotification(result.snapshots, this.invalidationRules),
       )
+      if (before !== null) {
+        const after = this.handleStore.metrics.snapshot()
+        for (const [k, v] of Object.entries(after)) {
+          const delta = v - (before[k] ?? 0)
+          // A zero delta does NOT create the key. Only counters bumped inside
+          // the synchronous walk can ever move here; the settle-path ones
+          // (`notifiesFired`, `notifiesSkippedByDiff`, `reloadsAfterSettle`,
+          // and the `loaderRuns` of post-settle reloads) are bumped from a
+          // `.then` / microtask after this window closes, and no per-tx token
+          // reaches them. Writing them as 0 would report "no reloads" for a
+          // counter that is simply never measured — and this map is persisted
+          // and compared against later sessions, where a 0-vs-0 comparison
+          // reads as a clean verdict rather than as missing data. Absent says
+          // what is true.
+          if (delta === 0 && !(k in this.nonTelemetryFanout)) continue
+          this.nonTelemetryFanout[k] = (this.nonTelemetryFanout[k] ?? 0) + delta
+        }
+      }
     }
     // Step 9 of the §10 pipeline — start field-watch + explicit
     // post-commit processors. Failures are caught + logged inside the
@@ -2084,6 +2203,14 @@ export class Repo {
     const workspaceId = this.activeWorkspaceId
     if (!workspaceId) return []
     return this.queryBlocks({...query, workspaceId})
+  }
+
+  /** Tell a `subscribeBlocks` query that its subscriber now holds state the
+   *  subscription never delivered, so the next settle must reach it even when
+   *  the rows are unchanged. For `ProjectorLifecycle.upsert`, its only caller;
+   *  `LoaderHandle.forgetNotifiedValue` carries the reasoning. */
+  requireNextBlockDelivery(query: TypedBlockQuery): void {
+    this.query.typedBlocks(this.resolveTypedBlockQuery(query)).forgetNotifiedValue()
   }
 
   /** Active-workspace shorthand for `subscribeBlocks`. Same caveat as
@@ -2909,19 +3036,114 @@ export class Repo {
         transient: true,
       }
     }
-    const {behind} = await this.db.get<{behind: number}>(
-      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
-    )
+    const behind = await this.workspaceUnappliedCount(workspaceId)
     if (behind === 0) return null
     const count = behind >= WORKSPACE_UNAPPLIED_COUNT_CAP
       ? `at least ${WORKSPACE_UNAPPLIED_COUNT_CAP.toLocaleString()}`
       : `${behind.toLocaleString()}`
+    // The remedy rides with the CAUSE on this arm alone: nothing clears it on
+    // its own, and every caller's answer is the same one, so stating it here
+    // beats each of them remembering to.
     return {
       reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
         + 'this device — never materialized, or still showing an older version — '
-        + 'and nothing is in flight to change that',
+        + 'and nothing is in flight to change that; the `rematerialize-workspace` '
+        + 'agent verb re-runs the drain over exactly these rows',
       transient: false,
     }
+  }
+
+  /**
+   * Re-run the drain over a workspace's staged rows, because an operator asked.
+   *
+   * The remedy for {@link workspaceViewGap}'s durable arm: rows that reached
+   * the drain, were not applied, and had their queue entry consumed, so nothing
+   * re-delivers them and every one-way pass on the workspace refuses for as
+   * long as they sit there.
+   *
+   * A DERIVATION pass, not a data migration: it rebuilds this device's `blocks`
+   * from rows this device already downloaded, writes with `tx_context.source`
+   * NULL (so the upload triggers skip it), and touches no synced state. It
+   * therefore needs no per-graph claim and does not clear the undo stack.
+   *
+   * Nothing here clears a flag on its own reasoning: every flag this drops is
+   * dropped by the drain, on the drain's rules, in the transaction that decides
+   * it.
+   *
+   * The default `unapplied` scope re-delivers exactly the rows the refusal
+   * counts. `all` re-judges every staged row instead, which is what to reach for
+   * when the FLAG is suspect rather than the rows it names — at the cost of a
+   * full pass, and reporting its repairs in `applied` rather than `resolved`
+   * (a row the flag is wrong about is already clear, so no flag moves).
+   *
+   * What it is not:
+   *
+   * - not free of a transient revert. A rescan can write an older staged row
+   *   over a newer LOCAL edit that is acked but not yet echoed back; the echo
+   *   re-asserts it, so the window is short and self-healing, but a tab closed
+   *   inside it reloads the reverted content. Prefer running this with sync
+   *   settled. NOT guarded, and the reason is not that the window is invisible
+   *   (it is — `syncViewGap` reads the download side only): the guard that
+   *   would close it is the strictly-newer-local skip `decideStagingRow` dropped
+   *   on purpose, because a device whose clock leads the server sees its own
+   *   creates echo back with a LOWER stamp, and that guard would strand them
+   *   flagged forever — manufacturing the durable gap this verb exists to clear.
+   * - not all-or-nothing. Windows commit independently, so a pass that REJECTS
+   *   still leaves its committed windows in place — but it rejects out of here,
+   *   so the caller gets the error and none of the counts. A re-run at
+   *   `unapplied` resumes; at `all` it starts over.
+   */
+  async rematerializeWorkspace(
+    workspaceId: string,
+    options: {scope?: RematerializeScope} = {},
+  ): Promise<WorkspaceRematerialization> {
+    if (!workspaceId) throw new Error('rematerializeWorkspace requires a workspace id')
+    if (!this.syncObserver) {
+      throw new Error(
+        '[rematerializeWorkspace] this client has no sync observer running, so there is '
+        + 'nothing to re-materialize with. Reload the app and try again.',
+      )
+    }
+    const scope = options.scope ?? 'unapplied'
+    const unappliedBefore = await this.workspaceUnappliedExactCount(workspaceId)
+    const pass = await this.syncObserver.drainWorkspace(workspaceId, scope)
+    return {
+      ...pass,
+      workspaceId,
+      unappliedBefore,
+      unappliedAfter: await this.workspaceUnappliedExactCount(workspaceId),
+      // The predicate the refusal takes, re-asked. Null is the operator's
+      // answer that the pass is now unblocked; anything else is what they would
+      // have been told on the next attempt anyway, one round earlier.
+      remainingGap: await this.workspaceViewGap(workspaceId),
+    }
+  }
+
+  /** How many of `workspaceId`'s downloaded rows the drain has not applied —
+   *  the number {@link workspaceViewGap}'s durable arm reports, capped the same
+   *  way (so `>= WORKSPACE_UNAPPLIED_COUNT_CAP` reads as a floor, not a total). */
+  private async workspaceUnappliedCount(workspaceId: string): Promise<number> {
+    const {behind} = await this.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    return behind
+  }
+
+  /** The same population, counted to the end.
+   *
+   *  The capped sibling is right for the refusal, which spends the number on one
+   *  sentence — "some" and "all of them" are different diagnoses and nothing
+   *  past that pays. It is WRONG for a before/after pair, which is a subtraction:
+   *  clamped, two ends that both sit past the cap read as a delta of zero, and
+   *  the one question the pair exists to answer gets the opposite answer.
+   *
+   *  Affordable because this runs twice per deliberate operator action, never in
+   *  the per-transaction gate. */
+  private async workspaceUnappliedExactCount(workspaceId: string): Promise<number> {
+    const {behind} = await this.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL, [workspaceId],
+    )
+    return behind
   }
 
   private async assertBackfillMayWrite(
@@ -2942,12 +3164,6 @@ export class Repo {
         `longer active. Its writes would land under the current session's access state.`,
       ), {kind: Repo.TRANSIENT})
     }
-    // The SAME predicate the pre-claim gate takes, not a cheaper stand-in for
-    // it: a pass runs for minutes, and a row that becomes unapplicable after
-    // the gate — an evicted key, a delivery that will not decode — is deferred
-    // with its queue entry consumed, so anything that only watches work in
-    // flight reads clear again for every batch that follows.
-    //
     // Re-sampled per transaction while the write lock is held, so a drain
     // cannot commit between this check and the write. Reading through
     // `this.db` rather than the tx handle is deliberate: the drain is excluded
@@ -3109,36 +3325,14 @@ export class Repo {
         )
         continue
       }
-      // BEFORE claiming, not only before writing. `tryClaim` itself WRITES —
-      // it ensures the Migrations page and creates the claim row — so on a
-      // disconnected or stale device the old order wrote a claim, hit the
-      // in-transaction sync assertion, and released it. Both writes then sat
-      // in the upload queue, and on reconnect the create could conflict with
-      // an unseen server completion while the following `deleted=1` patch
-      // tombstoned it, freeing later operators to repeat the migration.
-      // The SAME predicate the writes assert on, not just its caught-up half:
-      // a device can also be behind with rows staged and undrained, and that
-      // half reached `tryClaim` unchecked.
-      //
-      // What this closes is the STALE-DEVICE case — a device disconnected or
-      // catching up, whose claim create and release tombstone both sit in the
-      // upload queue and land later, out of order, against a completion it
-      // never saw. It does NOT make the claim atomic: rows can stage in the
-      // window between this check and `tryClaim`'s transaction, and a peer's
-      // claim that is staged-but-undrained is invisible to the in-tx re-read
-      // there. That residual is accepted, not overlooked — closing it means
-      // arbitration, which `graphBackfillClaim`'s header forbids by name and
-      // for a recorded reason (an earlier revision tried; the regress had no
-      // fixed point). Exactly-once here is a person running it in one place.
-      //
-      // Note the create+tombstone pair is ROUTINE, not exceptional: every
-      // mid-run abort releases the claim. Its being queued while stale is the
-      // problem, not its existence.
-      // A pass that claims and uploads from a graph half of which is still
-      // ciphertext on disk is the same stale-view write as one that claims
-      // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
-      // transaction — there is deliberately no cheaper approximation for the
-      // hot path, because that split is what let the two answers disagree.
+      // Gate BEFORE `tryClaim`, not just before the writes: `tryClaim`
+      // itself writes (ensures the Migrations page, creates the claim
+      // row), so a stale device would queue a claim and its release
+      // tombstone and land them out of order against a completion it
+      // never saw. This does not make the claim atomic — a peer's
+      // staged-but-undrained claim is invisible to the in-tx re-read.
+      // Accepted: closing it means arbitration, which
+      // `graphBackfillClaim`'s header refuses.
       const gap = await this.workspaceViewGap(workspaceId)
       if (gap !== null) {
         deferred = gap.reason
@@ -4285,6 +4479,40 @@ export class Repo {
    *  timers; fake-timer callers must advance the clock first. */
   async awaitWorkspaceBackfills(): Promise<void> {
     await this.workspaceBackfillJobs.drain()
+  }
+
+  /** Every deferred-work family at once — what a harness tearing a Repo down
+   *  needs, rather than the specific one a given test is waiting on.
+   *
+   *  A NEW family belongs in this list. Each of these schedules work that
+   *  writes to the db after the call that scheduled it returned, so one left
+   *  out can still be running when its owner is gone — which in tests means
+   *  writing into the next test's database (`testRepoScope.ts`, issue #813).
+   *  The list is deliberately complete rather than demand-driven: a family
+   *  earns its place by being ABLE to outlive its owner, so do not expect
+   *  removing one to fail a test.
+   *
+   *  Producers first, then processors. Every family above can commit a
+   *  `repo.tx`, and a tx dispatches post-commit processors — so draining all
+   *  seven together lets `awaitProcessors` observe an empty set and return
+   *  before a maintenance job's tx has queued anything. `awaitIdle` is itself a
+   *  fixed point over processors that schedule processors, which is what makes
+   *  one pass at the end enough.
+   *
+   *  NOT a fixed point across families, and NOT a cancel. Like its members it
+   *  does not advance timers: work whose deferral timer has not fired is not
+   *  pending yet, so an armed `delayMs` processor or idle callback survives
+   *  this (#892 — cancelling one needs a handle neither framework keeps). */
+  async awaitDeferredWork(): Promise<void> {
+    await Promise.all([
+      this.awaitSeedMaterialization(),
+      this.awaitReferenceTargetDerive(),
+      this.awaitPropertyDefinitionMigrations(),
+      this.awaitReconcileRescans(),
+      this.awaitReprojections(),
+      this.awaitWorkspaceBackfills(),
+    ])
+    await this.awaitProcessors()
   }
 
   /** Test-only escape hatch retained for stage-level tests that wire

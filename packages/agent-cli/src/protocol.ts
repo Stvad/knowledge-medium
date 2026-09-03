@@ -17,6 +17,21 @@ import {z} from 'zod'
 
 // ---------- Token / audience ----------
 
+/** The distinctive first sentence of {@link unknownTokenMessage}. The CLI
+ *  matches on THIS rather than the whole string so it can enrich a 401 the
+ *  bridge produced, without the two copies having to stay byte-identical
+ *  across versions (an older bridge may still be running). */
+export const UNKNOWN_TOKEN_MARKER = 'Agent token is not registered with the local bridge.'
+
+/** What the bridge returns for a token it has no client for. Lives here, not
+ *  in the server, because the CLI appends the half only IT can know — which
+ *  profiles are actually paired on this machine. */
+export const unknownTokenMessage = [
+  UNKNOWN_TOKEN_MARKER,
+  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token.',
+  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
+].join(' ')
+
 export const tokenScopeSchema = z.enum(['read-write', 'read-only'])
 export type TokenScope = z.infer<typeof tokenScopeSchema>
 
@@ -272,6 +287,15 @@ export const runBackfillCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const rematerializeWorkspaceCommandSchema = z.looseObject({
+  type: z.literal('rematerialize-workspace'),
+  workspaceId: z.string().optional(),
+  /** `'unapplied' | 'all'`; validated kernel-side so an unknown value comes
+   *  back as a named refusal rather than a schema rejection with no advice. */
+  scope: z.string().optional(),
+  ...commandIdField,
+})
+
 export const runActionCommandSchema = z.looseObject({
   type: z.literal('run-action'),
   id: z.string(),
@@ -496,6 +520,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   auditExtensionCommandSchema,
   auditPropertiesCommandSchema,
   runBackfillCommandSchema,
+  rematerializeWorkspaceCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
   backlinksCommandSchema,
@@ -540,6 +565,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   auditExtensionCommandSchema,
   auditPropertiesCommandSchema,
   runBackfillCommandSchema,
+  rematerializeWorkspaceCommandSchema,
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
@@ -698,6 +724,12 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'run-backfill': {
     usage: 'kmagent run-backfill <backfillId> [--workspace <id>] [--wait <seconds>]',
     description: 'Run one operator-triggered workspace backfill (currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched). Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
+    readOnly: false,
+  },
+  'rematerialize-workspace': {
+    usage: 'kmagent rematerialize-workspace [--workspace <id>] [--scope unapplied|all] [--wait <seconds>]',
+    description: 'Re-run the sync drain over rows this device downloaded but never applied — the remedy for the durable materialization gap every one-way pass refuses on ("N synced row(s) of this workspace have not reached `blocks` on this device"). Those rows reached the drain, were not applied (workspace not unlocked, mode unresolved, a key-store read that failed, ciphertext that would not decode, or a speculative stamp-0 mint the seed could not vouch for), and had their queue entry consumed — so nothing re-delivers them and waiting never clears them. A DERIVATION pass over LOCAL state: it rebuilds this device\'s `blocks` from rows this device already downloaded, uploads nothing, needs no per-graph claim, does not clear the undo stack, and is safe to run on any device any number of times. `--scope unapplied` (default) re-delivers exactly the rows the refusal counts; `--scope all` re-judges every staged row of the workspace, which is what to use when the flag itself is suspect, at the cost of a full pass. Returns the exact `unappliedBefore`/`unappliedAfter` gap sizes plus the pass\'s own counts and `remainingGap` — the predicate re-asked. A pass that leaves rows unapplied has not failed: its `deferred` / `quarantined` counts say why. Neither is fixed by re-running ALONE — `deferred` needs the workspace materializable first (unlock it, or a key store that reads: a transient key-store failure defers too, and that one a re-run does fix), `quarantined` needs bytes that decode. `reflagged` is the count going the other way — at `--scope all`, a workspace that answers `defer` re-flags rows an earlier drain had cleared, so that scope CAN leave the gap larger (at `--scope unapplied` it is always 0, since every row in that set is flagged already). Two more things to know before running it: prefer a settled sync, because a re-pass can briefly write an older staged row over a local edit that is acked but not yet echoed back (the echo re-asserts it, so it self-heals unless the tab closes inside that window); and the pass occupies this device\'s materialization queue for its whole run, so no synced row reaches `blocks` until it finishes — seconds at `unapplied`, minutes at `all` on a large graph.',
+    // Writes the local `blocks` table (never `blocks_synced`, never an upload).
     readOnly: false,
   },
   'run-action': {

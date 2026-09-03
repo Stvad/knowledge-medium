@@ -541,4 +541,148 @@ describe('findReplaceDataExtension', () => {
       expect((await load('owner'))?.properties[relatedSchema.name]).toBe(other)
     })
   })
+
+  /** The same guard for the codec family that had none (#688). `codecs.string`
+   *  and `codecs.url` accept ANY string, so the decode-only guard above could
+   *  never fire for them — a replace could turn a value row into a field row
+   *  and drop the owner's key with nothing reported. `setProperty` escapes such
+   *  a value; this path writes text the user chose, so it refuses instead. */
+  describe('#688 — string/url value guard, where decoding alone never refuses', () => {
+    const STR_DEF = '99999999-9999-4999-8999-999999999999'
+    const noteSchema = defineProperty<string>('note', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const nullableNoteSchema = defineProperty<string | undefined>('maybe-note', {
+      codec: codecs.optionalString,
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const seedStringProperty = (value: string): Promise<{valueId: string}> =>
+      seedFlippedWorkspaceWithProperty({
+        fieldId: STR_DEF,
+        schema: noteSchema,
+        value,
+      })
+
+    it.each([
+      ['a field-form span, which would delete the property', 'x', `::((${STR_DEF}))`],
+      ['a lone surrogate, which the content column mangles to U+FFFD', 'x', 'a\uD800b'],
+    ])('skips a replacement producing %s', async (_name, find, replace) => {
+      const {valueId} = await seedStringProperty(find)
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find,
+          replace,
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: find}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect(result.unparseableProperties).toEqual([noteSchema.name])
+      // Untouched in BOTH forms — the row keeps its text and the cell its value.
+      expect((await load(valueId))?.content).toBe(find)
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe(find)
+    })
+
+    // The gap between the two predicates, and the reason it exists. An UNMARKED
+    // span keeps the bit clear, so the row stays in the value set and decodes
+    // back to the text -- nothing is lost, the value has just become a link.
+    // `Roadmap` -> `[[Roadmap]]` across the workspace is an ordinary bulk edit,
+    // and refusing it on property rows only would buy no safety.
+    it('allows a replacement that turns the value into an unmarked reference', async () => {
+      const {valueId} = await seedStringProperty('Roadmap')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'Roadmap',
+          replace: '[[Roadmap]]',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'Roadmap'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe('[[Roadmap]]')
+      // The property is intact -- that is what makes refusing it unjustified.
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe('[[Roadmap]]')
+    })
+
+    // Round 2 of review: the third destroyer. Bare `null` content IS the unset
+    // value to a codec that accepts one, so this cleared the property with
+    // nothing reported -- the guard checked spans and surrogates but not the
+    // sentinel the encoder itself escapes for.
+    it('skips a replacement producing the null sentinel for a nullable property', async () => {
+      const {valueId} = await seedFlippedWorkspaceWithProperty({
+        fieldId: '55555555-5555-4555-8555-555555555555',
+        schema: nullableNoteSchema,
+        value: 'placeholder',
+      })
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'placeholder',
+          replace: 'null',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'placeholder'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect((await load(valueId))?.content).toBe('placeholder')
+      expect((await load('owner'))?.properties[nullableNoteSchema.name]).toBe('placeholder')
+    })
+
+    // ...and the same text is harmless for a codec with no null sentinel, so
+    // the clause stays gated on the codec rather than on the word.
+    it('allows the literal text "null" for a non-nullable string property', async () => {
+      const {valueId} = await seedStringProperty('placeholder')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'placeholder',
+          replace: 'null',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'placeholder'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe('null')
+    })
+
+    it('still allows an ordinary string replacement', async () => {
+      // Liveness: the guard must not have become "refuse every string edit".
+      const {valueId} = await seedStringProperty('draft')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'draft',
+          replace: 'shipped',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'draft'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe('shipped')
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe('shipped')
+    })
+  })
 })

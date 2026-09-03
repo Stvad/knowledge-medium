@@ -5,16 +5,12 @@
  *
  * Surface: SQL constants up top (used by tests, kept stable for plugin
  * authors who want the same queries without going through the facet),
- * then `KERNEL_QUERIES` (Phase 4 chunk B) — the bundle that the kernel
- * data extension and the Repo's construction-time registration consume.
- * Each `defineQuery` wraps a SQL constant and re-declares the same
- * dependencies the legacy `repo.X(id)` factories on `Repo` did.
+ * then `KERNEL_QUERIES` — the bundle that the kernel data extension and
+ * the Repo's construction-time registration consume.
  *
- * Property-shape note: the new `BlockData.properties` is flat
- * `{name: encodedValue}`, NOT the legacy `{name: {name, type, value}}`
- * record. So `json_extract(properties_json, '$.alias')` returns the
- * encoded value directly (string[] for alias, string for type, etc.).
- * The legacy `'$.alias.value'` paths don't exist anymore.
+ * `BlockData.properties` is flat `{name: encodedValue}`, so
+ * `json_extract(properties_json, '$.alias')` yields the encoded value
+ * directly (string[] for alias, string for type, etc.).
  */
 
 import { z } from 'zod'
@@ -30,6 +26,7 @@ import {
   type Schema,
   type SubtreeRow,
   type TypedBlockQueryReferenceFilter,
+  type AnyPropertySchema,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
@@ -37,6 +34,7 @@ import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import type { Repo } from '@/data/repo'
+import { refCodecKind } from './refProjection'
 import {
   ANCESTORS_SQL,
   CHILDREN_IDS_SQL,
@@ -53,6 +51,7 @@ import {
   compileTypedBlockQuery,
   isSelectiveWhereValue,
   normalizeTypedBlockQuery,
+  inlineJsonPath,
 } from './typedBlockQuery'
 import {
   KERNEL_ALIASES_CHANNEL,
@@ -321,39 +320,20 @@ export const SELECT_USER_PAGE_IDS_SQL = `
  *  activity view (Recents), where a panel row or a preferences block is
  *  noise, not an edit.
  *
- *  Three exclusions, and the structural one carries the weight: every
- *  per-user state row (panels, layout sessions, per-plugin prefs and
- *  ui-state, and whatever records a plugin files under them) descends
- *  from one of that user's two state roots, so walking DOWN from those
- *  roots — a set bounded by the UI surface, not by document size — drops
- *  all of it without the kernel knowing any plugin's type ids.
- *
- *  The walk starts at the ROOTS, not at the user page above them: a user
- *  page is an ordinary navigable page, and a note authored directly on it
- *  is content. Only `ui-state` / `user-prefs` and their descendants are
- *  app-owned (`USER_STATE_ROOT_PATHS`).
- *
- *  Then `SYSTEM_BLOCK_TYPES` covers app-owned rows that live at the
- *  workspace root instead, and a `seed:key` property marks a block as a
- *  materialized CODE seed. The seed-key test is what lets the type list
- *  stay narrow: a property-schema or block-type block a user created is
- *  authored content and stays, while the kernel's own definition blocks —
- *  rewritten en masse on a seed revision bump — do not.
+ *  The walk starts at the state ROOTS, not the user page above them: a
+ *  user page is an ordinary navigable page, and a note authored
+ *  directly on it is content. The seed-key test keeps the type list
+ *  narrow — a user-created property-schema block is authored content
+ *  and stays.
  *
  *  All of it sits inside the statement, before the LIMIT: filtering a
  *  fetched window instead would hand back a page short by whatever it
- *  dropped, and a run of ineligible rows would empty it.
+ *  dropped.
  *
- *  The walk deliberately does NOT filter `deleted = 0`, for the same
- *  reason `IS_DESCENDANT_OF_SQL` doesn't: descent is a structural fact
- *  about `parent_id`, independent of soft-delete. Sync-apply permits a
- *  live child under a tombstoned parent (`blocks_parent_not_deleted_check_*`
- *  is skipped for `source IS NULL` writes), so stopping at a tombstone
- *  would leak that live state row into the feed as user activity. The
- *  outer query still filters deleted rows out of the RESULT.
- *
- *  Params: stateRootIdsJson, workspaceId, ...SYSTEM_BLOCK_TYPES, limit —
- *  see `recentUserBlocksParams`. */
+ *  The walk deliberately does NOT filter `deleted = 0` — sync-apply
+ *  permits a live child under a tombstoned parent, so stopping at a
+ *  tombstone would leak a state row into the feed. The outer query
+ *  still filters deleted rows out of the result. */
 export const SELECT_RECENT_USER_BLOCKS_SQL = `
   WITH RECURSIVE user_state(id) AS (
     SELECT value FROM json_each(?)
@@ -580,15 +560,8 @@ export interface AliasClaimantCount {
   claimants: number
 }
 
-// ════════════════════════════════════════════════════════════════════
-// Phase 4 chunk B — kernel queries as `queriesFacet` contributions
-// ════════════════════════════════════════════════════════════════════
-//
-// Each query mirrors the dep declarations from the corresponding
-// `repo.X(id)` factory on `Repo` (which Phase 1 / 2 already wrote
-// correctly). Once chunk C lands, those factories become thin shims —
-// then deleted entirely — and `repo.query.X(...)` is the only surface.
-//
+// ──── Kernel queries as `queriesFacet` contributions ────
+
 /** Local cast: `BlockRow` has typed fields; `QueryCtx.hydrateBlocks`
  *  takes the looser `Record<string, unknown>` shape so the api module
  *  doesn't depend on the row schema. The cast is safe — `hydrateBlocks`
@@ -628,8 +601,7 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
 /** Subtree rooted at `id`, includeRoot=true (spec §11). Returns
  *  {@link SubtreeRow}s — each block plus its `depth` relative to the root —
  *  in pre-order, siblings by `(order_key, id)`. Identity-stable via the
- *  dispatcher's handle-store key. Dep declaration mirrors the legacy
- *  `repo.subtree(id)` factory in `repo.ts`.
+ *  dispatcher's handle-store key.
  *
  *  Returns the FULL subtree by default (property field/value machinery
  *  included) — the structural view, so a consumer never silently misses
@@ -754,15 +726,11 @@ export const manyAncestorsQuery = defineQuery<
  *  block on a warm device, and the SQL view showed a row the tx-layer
  *  recognizer hid.
  *
- *  MEMOIZED on snapshot identity, and not as a micro-optimisation: these SQL
- *  constants back `core.children` / `childIds` / `subtree`, which the outline
- *  resolves once per rendered block, and the set is ~100 SHA-1 hashes plus a
- *  multi-KB JSON string. Recomputing it per resolve cost tens of
- *  milliseconds per page render for a value that only changes when the
- *  registry is REPLACED — which is exactly what a WeakMap key expresses.
- *
- *  Returns `['[]', '']` when no registry is primed, which is precisely the
- *  pre-existing `block_types`-only behaviour. */
+ *  MEMOIZED on snapshot identity, not as a micro-optimisation: these
+ *  constants back `core.children` / `childIds` / `subtree`, which the
+ *  outline resolves once per rendered block, and the value only
+ *  changes when the registry is REPLACED — which is exactly what a
+ *  WeakMap key expresses. */
 const seedParamsBySnapshot = new WeakMap<object, readonly [string, string]>()
 
 export const registrySeedParams = (repo: Repo): readonly [string, string] => {
@@ -866,6 +834,9 @@ const typedBlocksArgsSchema = z.object({
   order: z.enum(['created-asc', 'created-desc']).optional(),
 })
 
+const ANCESTOR_DEP_KIND = 'a'
+const TARGET_DEP_KIND = 't'
+
 /** SQL that materializes every (block_id, anc_id) pair the typed query
  *  considers when an ancestor-scoped predicate is present. Returns the
  *  full set of ancestor ids touched so the resolver can register row
@@ -873,8 +844,13 @@ const typedBlocksArgsSchema = z.object({
  *  ancestor can flip membership and we need to wake. Mirrors the
  *  ancestor_chain CTE the compiler emits, but materializes only the
  *  candidate seed (no per-predicate filtering) since we want every
- *  potentially-relevant ancestor in the dep set. */
-const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string) => `
+ *  potentially-relevant ancestor in the dep set.
+ *
+ *  Each `targetArms` entry rides the SAME walk to return the target ids those
+ *  rows point at, for one named property. One statement rather than two so the
+ *  recursive walk — the expensive part — is paid once; the arms are told apart
+ *  by `dep_kind`. See `declareAncestorDeps`. */
+const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string, targetArms: readonly string[]) => `
   WITH RECURSIVE
     ${candidatesCte},
     walk(anc_id, anc_parent_id, depth, path) AS (
@@ -894,8 +870,12 @@ const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string) => `
         AND walk.depth < 100
         AND INSTR(walk.path, '!' || hex(parent.id) || '/') = 0
     )
-  SELECT DISTINCT anc_id FROM walk
+  SELECT DISTINCT '${ANCESTOR_DEP_KIND}' AS dep_kind, anc_id AS dep_id FROM walk${
+    targetArms.map(arm => `
+  UNION
+  ${arm}`).join('')}
 `
+
 
 
 /** Subscribe to the property channels relevant to a single `where`
@@ -917,6 +897,11 @@ const collectWhereDeps = (
   where: Readonly<Record<string, unknown>> | undefined,
   workspaceId: string,
   ctx: QueryCtx,
+  /** Sink for property names whose non-selective `target:` predicate needs
+   *  target-row liveness. Non-null only where the caller can later NAME those
+   *  target ids (`declareAncestorDeps`); null means fall back to the
+   *  workspace-wide live channel. */
+  enumerableTargetProps: Set<string> | null,
 ): void => {
   if (where === undefined) return
   for (const [name, value] of Object.entries(where)) {
@@ -934,16 +919,28 @@ const collectWhereDeps = (
     const inner = operand as Record<string, unknown>
     const innerHasSelective = Object.values(inner).some(isSelectiveWhereValue)
     if (!innerHasSelective) {
-      ctx.depend({
-        kind: 'plugin',
-        channel: TYPED_BLOCKS_LIVE_CHANNEL,
-        key: typedBlocksLiveKey(workspaceId),
-      })
+      // An ancestor-scope caller reaches every row this predicate is
+      // evaluated against, so it can depend on the handful of target ids
+      // those rows point at instead of on every block in the workspace.
+      // Self scope cannot: its candidate CTE has already dropped the rows a
+      // newly-live target would admit, so the ids are not observable from
+      // the result set and the coarse channel stays.
+      if (enumerableTargetProps) enumerableTargetProps.add(name)
+      else {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_LIVE_CHANNEL,
+          key: typedBlocksLiveKey(workspaceId),
+        })
+      }
     }
     // Always recurse for the narrower per-property channels too —
     // updates to an existing target row's properties still wake via
     // those even when the live channel is also subscribed.
-    collectWhereDeps(inner, workspaceId, ctx)
+    //
+    // `null`, not the sink: a nested target hangs off the TARGET row, which
+    // the ancestor walk never reaches, so its ids are not enumerable here.
+    collectWhereDeps(inner, workspaceId, ctx, null)
   }
 }
 
@@ -979,9 +976,15 @@ const collectPredicateDeps = (
   predicates: readonly BlockPredicate[],
   workspaceId: string,
   ctx: QueryCtx,
+  ancestorTargetProps: Set<string>,
 ): void => {
   for (const predicate of predicates) {
-    collectWhereDeps(predicate.where, workspaceId, ctx)
+    collectWhereDeps(
+      predicate.where,
+      workspaceId,
+      ctx,
+      predicate.scope === 'ancestor' ? ancestorTargetProps : null,
+    )
     if (predicate.referencedBy !== undefined) {
       collectReferenceFilterDeps(predicate.referencedBy, workspaceId, ctx, {
         includeImplicitAncestorStructure: predicate.scope === 'ancestor',
@@ -999,6 +1002,9 @@ const collectTypedBlockAxisDeps = (
   referencedBy: ResolvedTypedBlockQuery['referencedBy']
   matchPredicates: readonly BlockPredicate[]
   excludePredicates: readonly BlockPredicate[]
+  /** Properties whose ancestor-scoped `target:` predicate still needs its
+   *  target ids named — see `declareAncestorDeps`. */
+  ancestorTargetProps: ReadonlySet<string>
 } => {
   const workspaceId = normalized.workspaceId
   const types = normalized.types ?? []
@@ -1013,12 +1019,14 @@ const collectTypedBlockAxisDeps = (
       key: typedBlocksTypeKey(workspaceId, t),
     })
   }
-  collectWhereDeps(normalized.where, workspaceId, ctx)
+  const ancestorTargetProps = new Set<string>()
+  // Top-level `where` is self scope — not enumerable (see collectWhereDeps).
+  collectWhereDeps(normalized.where, workspaceId, ctx, null)
   if (referencedBy !== undefined) {
     collectReferenceFilterDeps(referencedBy, workspaceId, ctx)
   }
-  collectPredicateDeps(matchPredicates, workspaceId, ctx)
-  collectPredicateDeps(excludePredicates, workspaceId, ctx)
+  collectPredicateDeps(matchPredicates, workspaceId, ctx, ancestorTargetProps)
+  collectPredicateDeps(excludePredicates, workspaceId, ctx, ancestorTargetProps)
 
   // Live channel — only when there's no positive membership axis to
   // catch "fresh row could enter the result". A type/referencedBy
@@ -1047,7 +1055,7 @@ const collectTypedBlockAxisDeps = (
     })
   }
 
-  return {workspaceId, types, referencedBy, matchPredicates, excludePredicates}
+  return {workspaceId, types, referencedBy, matchPredicates, excludePredicates, ancestorTargetProps}
 }
 
 const typedBlockNeedsAncestorChain = (
@@ -1057,25 +1065,92 @@ const typedBlockNeedsAncestorChain = (
   matchPredicates.some(p => p.scope === 'ancestor') ||
   excludePredicates.some(p => p.scope === 'ancestor')
 
+/** One UNION arm per named property, reading the target ids out of the SAME
+ *  `properties_json` expression the predicate itself compiles to
+ *  (`compileTargetTraversal`).
+ *
+ *  NOT `block_references`: that edge index is trigger-maintained from
+ *  `references_json`, which the references processor writes POST-COMMIT. A
+ *  ref-typed property write therefore lands (and invalidates on the property
+ *  channel) before its edge exists, so a resolve in that window would see no
+ *  target and register no dep. On the `kind: 'structure'` paths the ancestor
+ *  deps do not fire on the later `references_json` edit either, so the miss
+ *  would be permanent. Reading the property value cannot skew from the
+ *  predicate, because it is the same expression. */
+const targetLivenessArms = (
+  props: ReadonlySet<string>,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+): string[] => {
+  const arms: string[] = []
+  for (const name of [...props].sort()) {
+    const extract = `json_extract(b.properties_json, ${inlineJsonPath(name)})`
+    const kind = refCodecKind(propertySchemas.get(name))
+    if (kind === 'ref') {
+      arms.push(
+        `SELECT DISTINCT '${TARGET_DEP_KIND}', ${extract}\n` +
+        `  FROM walk JOIN blocks b ON b.id = walk.anc_id\n` +
+        `  WHERE ${extract} IS NOT NULL`,
+      )
+    } else if (kind === 'refList') {
+      // Same fan-out the predicate uses; `json_each` over a NULL/absent value
+      // yields no rows, which is why it needs no null guard there or here.
+      arms.push(
+        `SELECT DISTINCT '${TARGET_DEP_KIND}', je.value\n` +
+        `  FROM walk JOIN blocks b ON b.id = walk.anc_id, json_each(${extract}) je`,
+      )
+    }
+  }
+  return arms
+}
+
 const declareAncestorDeps = async (
   normalized: ResolvedTypedBlockQuery,
   ctx: QueryCtx,
   kind: 'row' | 'structure',
+  /** Properties whose ancestor-scoped `target: {}` predicate needs its target
+   *  rows' liveness. Declared HERE, not at the call sites, so a resolver that
+   *  walks ancestors cannot suppress the coarse `typedBlocks.live` channel
+   *  (which `collectWhereDeps` already did) without also picking up the
+   *  precise ids that replace it — the under-firing direction. */
+  targetProps: ReadonlySet<string>,
 ): Promise<void> => {
   assertAncestorWalkBounded(normalized)
   const candidatesCte = buildCandidatesCte(normalized, ctx.repo.propertySchemas)
-  const ancestorRows = await ctx.db.getAll<{anc_id: string}>(
-    ANCESTOR_DEP_NODES_SQL(candidatesCte.sql),
+  const rows = await ctx.db.getAll<{dep_kind: string; dep_id: string | null}>(
+    ANCESTOR_DEP_NODES_SQL(
+      candidatesCte.sql,
+      targetLivenessArms(targetProps, ctx.repo.propertySchemas),
+    ),
     candidatesCte.params,
   )
-  for (const row of ancestorRows) {
+  for (const row of rows) {
+    if (row.dep_id === null) continue
+    if (row.dep_kind === TARGET_DEP_KIND) {
+      // The predicate compiles to `EXISTS(… AND deleted = 0)`, so this target
+      // being created, deleted or restored flips membership, and
+      // `typedBlocks.structure` is emitted keyed on the changed block's own
+      // id. A target with no row yet still gets a dep — that is the case a
+      // later create would otherwise admit unnoticed.
+      //
+      // The branch only diverges from the fallthrough when `kind === 'row'`:
+      // a row dep would also fire on the target's CONTENT edits, which cannot
+      // change this predicate. Under `kind === 'structure'` both arms land on
+      // the same dep, so deleting this branch fails nothing there — what the
+      // tests pin is the SQL arm that produces these rows at all.
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+        key: typedBlocksStructureKey(normalized.workspaceId, row.dep_id),
+      })
+      continue
+    }
     if (kind === 'row') {
-      ctx.depend({kind: 'row', id: row.anc_id})
+      ctx.depend({kind: 'row', id: row.dep_id})
     } else {
       ctx.depend({
         kind: 'plugin',
         channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
-        key: typedBlocksStructureKey(normalized.workspaceId, row.anc_id),
+        key: typedBlocksStructureKey(normalized.workspaceId, row.dep_id),
       })
     }
   }
@@ -1097,6 +1172,7 @@ export const resolveTypedBlocks = async (
     referencedBy,
     matchPredicates,
     excludePredicates,
+    ancestorTargetProps,
   } = collectTypedBlockAxisDeps(normalized, ctx)
   const needsAncestorChain = typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)
 
@@ -1104,7 +1180,7 @@ export const resolveTypedBlocks = async (
   // Register row deps on every ancestor id touched so a property /
   // content / parent_id change on any ancestor wakes the handle.
   if (needsAncestorChain) {
-    await declareAncestorDeps(normalized, ctx, 'row')
+    await declareAncestorDeps(normalized, ctx, 'row', ancestorTargetProps)
   }
 
   if (
@@ -1135,9 +1211,10 @@ export const resolveTypedBlockIds = async (
 ): Promise<string[]> => {
   if (!query.workspaceId) return []
   const normalized = normalizeTypedBlockQuery(query)
-  const {matchPredicates, excludePredicates} = collectTypedBlockAxisDeps(normalized, ctx)
+  const {matchPredicates, excludePredicates, ancestorTargetProps} =
+    collectTypedBlockAxisDeps(normalized, ctx)
   if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
-    await declareAncestorDeps(normalized, ctx, 'structure')
+    await declareAncestorDeps(normalized, ctx, 'structure', ancestorTargetProps)
   }
   const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas, {projection: 'ids'})
   const rows = await ctx.db.getAll<{id: string}>(compiled.sql, [...compiled.params])
@@ -1190,9 +1267,10 @@ export const resolveTypedBlockCount = async (
 ): Promise<number> => {
   if (!query.workspaceId) return 0
   const normalized = normalizeTypedBlockQuery(query)
-  const {matchPredicates, excludePredicates} = collectTypedBlockAxisDeps(normalized, ctx)
+  const {matchPredicates, excludePredicates, ancestorTargetProps} =
+    collectTypedBlockAxisDeps(normalized, ctx)
   if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
-    await declareAncestorDeps(normalized, ctx, 'structure')
+    await declareAncestorDeps(normalized, ctx, 'structure', ancestorTargetProps)
   }
   const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas, {projection: 'count'})
   const row = await ctx.db.get<{count: number}>(compiled.sql, [...compiled.params])
@@ -1313,6 +1391,87 @@ const recentActivityResultSchema: Schema<RecentActivityEntry[]> = {
   parse: (input) => input as RecentActivityEntry[],
 }
 
+/** The rows + dep declaration both user-authored recents queries share, so
+ *  "what counts as authored" and "what wakes this" cannot drift between the
+ *  one that returns chains and the one that does not. */
+const resolveRecentUserBlocks = async (
+  workspaceId: string,
+  limit: number,
+  ctx: Parameters<Parameters<typeof defineQuery>[0]['resolve']>[1],
+): Promise<BlockData[]> => {
+  // Same dep policy as `recentBlocks` — `kernel.content` covers content
+  // edits and live-set membership, and we accept lightly stale recency
+  // ordering between content events rather than waking on every
+  // `updated_at` bump (which every UiState write causes).
+  //
+  // TYPE TAGS are the one filtering axis with no dep, accepted rather
+  // than missed: a block acquires a system type at the moment it is
+  // minted (a create, which fires this channel), and the one gesture
+  // that adds a type to a live block — `#type` — rewrites its content
+  // in the same breath. Tagging an already-listed row `panel` out of
+  // nowhere is not a flow that exists.
+  ctx.depend({
+    kind: 'plugin',
+    channel: KERNEL_CONTENT_CHANNEL,
+    key: kernelContentKey(workspaceId),
+  })
+  const rows = await ctx.db.getAll<BlockRow>(
+    SELECT_RECENT_USER_BLOCKS_SQL,
+    recentUserBlocksParams(await userStateRootIds(ctx, workspaceId), workspaceId, limit),
+  )
+  const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+  // A parent change is what moves a row ACROSS this query's exclusion, and
+  // `kernel.content` does not carry it: reparented under a state root, a row
+  // should leave these results, and it would otherwise go on being offered in a
+  // picker as something to link to until an unrelated content edit.
+  //
+  // Per returned row, which is how the channel is keyed. NOT covered, and
+  // accepted: a move of some ANCESTOR of a returned row, and a row moving OUT
+  // of a state root into authored content. Both would need deps on blocks this
+  // query does not have — the ancestry it deliberately does not walk, and rows
+  // it by definition did not return — and `core.recentActivity` has the second
+  // gap for the same reason. Both settle on the next content event in the
+  // workspace, the channel these results already ride.
+  for (const block of blocks) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+      key: typedBlocksStructureKey(workspaceId, block.id),
+    })
+  }
+  return blocks
+}
+
+const recentUserBlocksResultSchema: Schema<BlockData[]> = {
+  parse: (input) => input as BlockData[],
+}
+
+/** Recently edited USER-AUTHORED blocks, WITHOUT ancestor chains — for callers
+ *  that show a block and nothing about where it lives.
+ *
+ *  Separate from `core.recentActivity` rather than a flag on it: the chain
+ *  costs a second recursive query over every candidate's ancestry plus a
+ *  structure dep per ancestor, which an interactive path (the `((` picker)
+ *  pays on every open for something it never reads. The drift hazard that
+ *  makes `recentActivity` resolve both together does not apply here — it is
+ *  about a consumer needing rows and chains to correspond, and this one has
+ *  no chains to disagree with. */
+export const recentUserBlocksQuery = defineQuery<
+  {workspaceId: string; limit?: number},
+  BlockData[]
+>({
+  name: 'core.recentUserBlocks',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    limit: z.number().optional(),
+  }),
+  resultSchema: recentUserBlocksResultSchema,
+  resolve: async ({workspaceId, limit = 50}, ctx) => {
+    if (!workspaceId) return []
+    return resolveRecentUserBlocks(workspaceId, limit, ctx)
+  },
+})
+
 /** Recently edited USER-AUTHORED blocks, each with its ancestor chain —
  *  what an activity feed needs to fold an edited tree back into one entry
  *  and to name the page an edit happened on.
@@ -1339,30 +1498,10 @@ export const recentActivityQuery = defineQuery<
   resultSchema: recentActivityResultSchema,
   resolve: async ({workspaceId, limit = 50}, ctx) => {
     if (!workspaceId) return []
-    // Same dep policy as `recentBlocks` — `kernel.content` covers content
-    // edits and live-set membership, and we accept lightly stale recency
-    // ordering between content events rather than waking on every
-    // `updated_at` bump (which every UiState write causes).
-    //
-    // TYPE TAGS are the one filtering axis with no dep, accepted rather
-    // than missed: a block acquires a system type at the moment it is
-    // minted (a create, which fires this channel), and the one gesture
-    // that adds a type to a live block — `#type` — rewrites its content
-    // in the same breath. Tagging an already-listed row `panel` out of
-    // nowhere is not a flow that exists.
-    //
+    // Rows + dep policy are shared; the chains below are what this query adds.
     // Ancestors skip per-row deps: what a reader sees of an ancestor is
-    // its CONTENT (the entry's title), and a rename fires this channel.
-    ctx.depend({
-      kind: 'plugin',
-      channel: KERNEL_CONTENT_CHANNEL,
-      key: kernelContentKey(workspaceId),
-    })
-    const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_RECENT_USER_BLOCKS_SQL,
-      recentUserBlocksParams(await userStateRootIds(ctx, workspaceId), workspaceId, limit),
-    )
-    const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+    // its CONTENT (the entry's title), and a rename fires that channel.
+    const blocks = await resolveRecentUserBlocks(workspaceId, limit, ctx)
     if (blocks.length === 0) return []
 
     type ChainRow = BlockRow & {chain_start_id: string}
@@ -1379,17 +1518,15 @@ export const recentActivityQuery = defineQuery<
       const ancestors = ctx.hydrateBlocks(
         asBlockRows(chainsByStart.get(block.id) ?? []), {declareRowDeps: false},
       )
-      // A parent change is the one edit that changes what this entry SAYS
-      // without touching any content: moved to another page, the entry
-      // keeps naming the old one; moved under a state root, it should
-      // have left the feed entirely. `kernel.content` doesn't carry it,
-      // so declare it per block — on the ancestors too, since a page
-      // moved out from under a row re-homes that row's entry without the
-      // row itself moving. Narrow on purpose: this channel is keyed per
-      // block and fires only on a `parent_id` change, so it costs a wake
-      // exactly when the answer changed, unlike a row dep (which every
-      // UiState property write would trip).
-      for (const shown of [block, ...ancestors]) {
+      // The ANCESTORS only: the rows themselves are declared by the shared
+      // resolver, which needs the same channel for the same reason. A page
+      // moved out from under a row re-homes that row's entry without the row
+      // itself moving, so what this entry SAYS changes with no content edit
+      // anywhere. Narrow on purpose: this channel is keyed per block and fires
+      // only on a `parent_id` change, so it costs a wake exactly when the
+      // answer changed, unlike a row dep (which every UiState property write
+      // would trip).
+      for (const shown of ancestors) {
         ctx.depend({
           kind: 'plugin',
           channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
@@ -1562,18 +1699,14 @@ export const aliasMatchesFuzzyQuery = defineQuery<
  *  Reads `properties_json.$.types` directly rather than that index,
  *  because the index cannot answer this question faithfully: its
  *  PRIMARY KEY is `(block_id, type)`, so it hands rows back
- *  type-ascending and the block's own ordering is gone. Consumers show
- *  the FIRST type, and `searchAliasLabels`' other path reads the
- *  property array — so an index read made the hint change (`Author` →
- *  `Person`) as soon as the user typed a character. Both are an
- *  `id IN (...)` seek; this one just keeps `je.key` (the array index)
- *  to sort by, and applies the same `typeof(je.value) = 'text'`
- *  tolerance the `block_types` trigger does, so the two paths agree on
- *  malformed values too. Measured at 20k pages / 50 ids it costs what
- *  the index read did — 0.277ms vs 0.284ms, best-of-60 — so the
- *  correctness is free. Folding it into one row per block with
- *  `json_extract(...,'$.types')` is NOT free (4.3ms, ~15x worse);
- *  don't "optimize" it into that shape.
+ *  type-ascending and the block's own declared order is gone, and
+ *  consumers show the FIRST type. Both are an `id IN (...)` seek; this
+ *  one just keeps `je.key` (the array index) to sort by, and applies
+ *  the same `typeof(je.value) = 'text'` tolerance the `block_types`
+ *  trigger does, so the two paths agree on malformed values too. This
+ *  read costs the same as the index read; folding it into one row per
+ *  block with `json_extract(...,'$.types')` costs an order of
+ *  magnitude more — don't "optimize" it into that shape.
  *
  *  Per-id row deps (not just per returned row): a block that has no
  *  types yet returns nothing, and tagging it later has to invalidate
@@ -1773,6 +1906,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   typedBlockCountQuery,
   searchByContentQuery,
   recentBlocksQuery,
+  recentUserBlocksQuery,
   recentActivityQuery,
   firstChildByContentQuery,
   aliasesInWorkspaceQuery,
@@ -1804,6 +1938,7 @@ declare module '@/data/api' {
     'core.typedBlockCount': typeof typedBlockCountQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.recentBlocks': typeof recentBlocksQuery
+    'core.recentUserBlocks': typeof recentUserBlocksQuery
     'core.recentActivity': typeof recentActivityQuery
     'core.firstChildByContent': typeof firstChildByContentQuery
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery

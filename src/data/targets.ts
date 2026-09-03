@@ -1,50 +1,13 @@
 /**
- * Target-block primitives for parseReferences + Roam import (spec §7,
- * §13.1, v4.31).
+ * Target-block primitives for parseReferences + Roam import: alias and
+ * daily-note seat blocks — a Layer-1 create-or-restore primitive plus
+ * per-domain wrappers.
  *
- *   Layer 1 — `createOrRestoreTargetBlock(tx, args)` is the shared
- *   primitive: SELECT-then-branch via `tx.createOrGet`, restore
- *   tombstones via `tx.restore`. Same semantics every domain helper
- *   gets the catch-and-restore boilerplate from. Returns
- *   `{id, inserted}` where `inserted: true` covers both fresh-insert
- *   and tombstone-restore (both are "this tx wrote the row").
+ * Restore is domain policy, which is why `tx.createOrGet` throws
+ * `DeletedConflictError` instead of restoring.
  *
- *   Layer 2 — `ensureAliasTarget` (here) and `ensureDailyNoteTarget`
- *   (in `@/plugins/daily-notes`) are thin per-domain wrappers. Each
- *   computes its own deterministic id, picks `freshContent` (the
- *   alias text — so the freshly-materialised seat renders with a
- *   non-empty title; steady-state drift after a rename is still
- *   allowed and healed by the A3 sync rule), and supplies an
- *   `onInsertedOrRestored` callback that writes the alias list via
- *   `tx.setProperty`.
- *   Per-domain also drives the cleanup-eligibility routing in §7.6:
- *   only ensureAliasTarget results enter the newlyInsertedAliasTargetIds
- *   list passed to `references.cleanupOrphanAliases` (date-shaped aliases
- *   never enter the cleanup list — daily notes persist regardless of
- *   whether a referencing block is removed within 4s).
- *
- * Why `tx.createOrGet` doesn't restore on tombstone (v4.26):  Restore
- * is domain policy. The primitive throws DeletedConflictError loudly
- * and lets the domain helper decide what fields to refresh. The
- * shared helper here is the canonical refresh policy for parseReferences
- * + Roam import.
- *
- * Indexed-deterministic seat ids: rather than a single deterministic
- * id per `(alias, workspaceId)`, alias seats live in a probed sequence
- * `id₀, id₁, id₂, …` derived from `uuidv5("${ws}:${alias}:${i}",
- * ALIAS_NS)`. `ensureAliasTarget` walks the sequence until it finds
- * an empty slot (insert here) or a live row that already claims the
- * alias (reuse). Live rows that claim a different alias — typical
- * post-rename case — and tombstones are skipped. Two offline clients
- * with the same world-state probe the same way and land on the same
- * slot, preserving the deterministic-id convergence guarantee. The
- * "claims this alias?" check is what preserves the happy-path
- * convergence at slot 0; without it the probe would always run past
- * the existing seat.
- *
- * NOTE: `createOrRestoreTargetBlock` is helper-layer, NOT exposed on
- * the public Tx surface (per v4.31). Plugin authors writing their own
- * deterministic-id flows can import it from `@/data/targets`.
+ * `createOrRestoreTargetBlock` is helper-layer, deliberately not on the
+ * public `Tx` surface.
  */
 
 import {
@@ -81,15 +44,10 @@ export interface CreateOrRestoreArgs {
    *  creators (Roam import, which uses its own tx.create, not this
    *  primitive) do not. */
   systemMint?: boolean
-  /** Strip the tombstone bag's `aliases` key in the SAME restore UPDATE.
-   *  Set by callers whose `onInsertedOrRestored` OWNS the alias write
-   *  (the alias/daily seat wrappers): a tombstoned seat can carry a
-   *  stale claim, and restoring it as-is trips the alias-uniqueness
-   *  trigger against the current claimant before the callback can
-   *  correct it (whole-tx rollback; found by
-   *  referencesRecompute.fuzz.test.ts). Callers that do NOT re-write
-   *  aliases (sidebar shortcuts, media assets) must leave this unset so
-   *  a user-set alias survives the restore. */
+  /** Strip the tombstone's `aliases` in the same restore UPDATE. Set it
+   *  iff your `onInsertedOrRestored` re-writes the alias list (alias/daily
+   *  seats); leave it unset so a user-set alias survives (shortcuts,
+   *  media). See {@link restorePropertiesStrippingAliases}. */
   stripAliasesOnRestore?: boolean
   /** Optional callback invoked after the row is inserted OR restored
    *  (NOT on the live-row-hit path). Used by per-domain wrappers to
@@ -166,18 +124,6 @@ export const createOrRestoreTargetBlock = async (
     return result
   } catch (err) {
     if (err instanceof DeletedConflictError) {
-      // Tombstone — restore + apply onInsertedOrRestored. v4.26 / v4.27
-      // / v4.31 design: the typed `tx.restore` primitive accepts a
-      // BlockDataPatch, so we can refresh content in the same UPDATE.
-      // Property writes that need codec encoding still go through
-      // tx.setProperty inside the callback.
-      //
-      // See `stripAliasesOnRestore`'s docblock for why alias-owning
-      // callers strip the tombstone bag's aliases in the same UPDATE
-      // (stale-claim resurrection trips the uniqueness trigger and rolls
-      // back the whole tx; found by referencesRecompute.fuzz.test.ts) —
-      // and why non-alias-owning callers must NOT (a user-set alias on
-      // a restored shortcuts/media row must survive).
       if (args.stripAliasesOnRestore) {
         const restoredProperties = await restorePropertiesStrippingAliases(tx, args.id)
         await tx.restore(args.id, {content: args.freshContent, properties: restoredProperties})
@@ -474,17 +420,6 @@ export const resolveAliasSeatId = async (
   )
 }
 
-// Note on alias-collision detection: this used to live here as
-// `findAliasClaimant` walking seat-id slots. That was incorrect — it
-// only found claimants whose block id matched
-// `computeAliasSeatId(alias, ws, *)`, missing blocks that claim an
-// alias but were created via `tx.create` with an unrelated id. The
-// correct primitive is `tx.aliasLookup(alias, workspaceId)` which
-// reads the trigger-maintained `block_aliases` table directly,
-// covering every claimant regardless of id provenance. See
-// docs/alias-rename-cases.html ("Alias collisions") and
-// `tx.aliasLookup` in tx.ts.
-
 // ──── Layer 2 — per-domain wrappers ────
 
 /** Ensure a stub-block seat exists for `alias` in `workspaceId`. The
@@ -518,7 +453,7 @@ export const ensureAliasTarget = async (
   // converges with what a fresh read-phase lookup would have produced.
   // The seat-slot probe can't catch this case: it only inspects
   // deterministic seat ids, and a claimant created via tx.create has an
-  // unrelated id (see the findAliasClaimant note above).
+  // unrelated id.
   const claimant = await tx.aliasLookup(alias, workspaceId)
   if (claimant !== null) return {id: claimant.id, inserted: false}
   const id = await resolveAliasSeatId(aliasSeatReaderFromTx(tx), alias, workspaceId)

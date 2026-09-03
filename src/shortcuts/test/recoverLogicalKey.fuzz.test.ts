@@ -101,6 +101,7 @@ import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { matchKeybindingPress, parseKeybinding } from 'tinykeys'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { utf16UnitArb } from '@/test/arbitraries/utf16'
 import { withRecoveredLetterKey } from '../utils.ts'
 
 const ASCII_A = 65
@@ -148,7 +149,8 @@ const wildKeyCodeArb: fc.Arbitrary<number> = fc.oneof(
 
 const garbageKeyArb: fc.Arbitrary<string> = fc.oneof(
   fc.string({ maxLength: 6 }),
-  fc.string({ unit: 'binary', maxLength: 6 }), // incl. unpaired surrogates
+  fc.string({ unit: 'binary', maxLength: 6 }), // whole code points, astral included
+  fc.string({ unit: utf16UnitArb, maxLength: 6 }), // ill-formed UTF-16: lone surrogates
   fc.constantFrom('', 'Escape', 'Enter', 'Tab', 'Shift', 'Unidentified', '¥', 'Ω', 'ÿ'),
 )
 const garbageCodeArb: fc.Arbitrary<string> = fc.oneof(

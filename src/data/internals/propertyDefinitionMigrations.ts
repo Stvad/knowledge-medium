@@ -1,6 +1,6 @@
 /**
- * Schema-change migration detection for properties-as-blocks (PR #288 §7/§9,
- * slice B2). Renames and codec changes are MIGRATIONS, not edits:
+ * Schema-change migration detection for properties-as-blocks. Renames and
+ * codec changes are MIGRATIONS, not edits:
  *
  *  - After a rename the cell is still keyed by the OLD name — the registry
  *    no longer knows that key, materialize skips unknown names, and every
@@ -17,9 +17,9 @@
  * Detection rides the registry rebuild: the facet bridge diffs the previous
  * vs incoming `PropertyDefinitionRegistrySnapshot` per fieldId (durable
  * identity), falling back to `propertyDefinitionBaseline.ts` on a PRIME, where
- * the previous snapshot is null. The multi-device rename RACE (a
- * block edited offline across a rename syncs up under a key no registry knows)
- * is slice C's reconcile; this one-shot pass can't reach it.
+ * the previous snapshot is null. The multi-device rename RACE (a block edited
+ * offline across a rename syncs up under a key no registry knows) is out of
+ * this one-shot pass's reach.
  */
 
 import type { ResolvedPropertySchema } from '@/data/api'
@@ -41,7 +41,7 @@ export interface PropertyDefinitionChange {
  *  previous workspace and fails closed otherwise, so a batch that re-resolved
  *  after two more workspace switches would return zero plans and drop the
  *  migration with no retry. A fieldId that doesn't resolve at capture time
- *  (shadowed / unavailable, §6) is dropped. */
+ *  (shadowed / unavailable) is dropped. */
 export interface PropertyDefinitionMigrationPlan {
   readonly change: PropertyDefinitionChange
   readonly schema: ResolvedPropertySchema<unknown>
@@ -117,14 +117,14 @@ export const changedPropertyDefinitionFacts = (
  *    owner's cell projection with the wrong value — the renamer is likely
  *    shadowed there, not the winner.
  *  - OLD name: a rename UN-SHADOWS any definition that shared the old name
- *    (§6), so afterwards that name answers to the sibling. Dropping it would
+ *    so afterwards that name answers to the sibling. Dropping it would
  *    strand the sibling's cell — and in the deferred batch, whose re-key is an
  *    ordinary `tx.update` rather than a settled write, MATERIALIZE runs on it
  *    in the same tx, reads the missing key as a user deletion, and TOMBSTONES
  *    the sibling's field rows and value children.
  *
- * Either way the contested case belongs to the shadowing model's reconcile
- * (#389 item 8), not to a one-shot re-key.
+ * Either way the contested case belongs to the shadowing model's own
+ * reconcile, not to a one-shot re-key.
  *
  * Two subtleties:
  *

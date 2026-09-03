@@ -11,15 +11,10 @@
  * the queue in bounded seq-ordered windows ({@link DEFAULT_DRAIN_CHUNK}) until
  * it's empty — a large initial sync or a long observer-down backlog can queue
  * hundreds of thousands of changes, and one unbounded pass would build the whole
- * working set in memory and wrap every write in a single transaction. Per window:
- *   1. read the next <= chunk changes (ORDER BY seq LIMIT chunk),
- *   2. dedup per id (latest op wins — a hot row materializes once per window),
- *   3. `materializeStagingRows` (decrypt/copy/defer/skip/delete) +
- *      `applySyncInvalidation` (cache + handles, one LWW gate),
- *   4. `DELETE … WHERE seq <= <that window's max>`.
- * A delivery that lands mid-drain gets a higher seq, so step 4 can't drop it —
- * it's picked up by a later window. If any step throws, that window's delete is
- * skipped (prior committed windows survive) and the rows retry next tick.
+ * working set in memory and wrap every write in a single transaction.
+ * A delivery that lands mid-drain gets a higher seq, so the window's delete can't
+ * drop it — it's picked up by a later window. If any step throws, that window's
+ * delete is skipped (prior committed windows survive) and the rows retry next tick.
  *
  * Drains serialize on a single promise chain, so two never overlap (duplicate
  * invalidations) and `flush()` is a real settle barrier for tests. A barrier
@@ -35,8 +30,12 @@
  * queue cannot report it; `isRematerializingWorkspace` is how a reader learns
  * `blocks` is being rewritten under it.
  *
- * The §4.7 cycle-scan telemetry that lived in rowEventsTail is relocated here
- * (`runCycleScan`), so the observer fully subsumes the tail's responsibilities.
+ * It is also the only thing that can re-deliver a row the drain reached and
+ * could not apply — the durable gap `WORKSPACE_UNAPPLIED_SQL` counts, whose
+ * queue entry is long since consumed. That is why it takes a
+ * {@link RematerializeScope}: `unapplied` re-runs the drain over exactly those
+ * rows, which is an operator's remedy for a refusal rather than a full pass
+ * over the workspace (`Repo.rematerializeWorkspace`).
  */
 
 import type { CycleDetectedEvent } from '@/data/api'
@@ -54,9 +53,10 @@ import {
   type SyncCache,
   type SyncInvalidationTarget,
 } from './invalidate.js'
+import { WORKSPACE_UNAPPLIED_IDS_SQL } from './reconcile.js'
 
-/** Drain-throttle window (ms). Matches the row_events tail default — coalesces
- *  sync-burst arrivals into one batched drain. */
+/** Drain-throttle window (ms) — coalesces sync-burst arrivals into one batched
+ *  drain. */
 const DEFAULT_THROTTLE_MS = 100
 
 /** Max queued changes materialized per drain window. Draining a large backlog in
@@ -75,8 +75,8 @@ export interface BlocksSyncedObserverArgs {
    *  after the observer starts). */
   readonly getInvalidationRules?: () => readonly InvalidationRule[]
   /** §4.7 cycle-detection telemetry. Fired (with a console.warn) when a
-   *  sync-applied parent_id change closes a loop — relocated from
-   *  rowEventsTail. txIdsInvolved is always empty (sync writes carry no tx_id). */
+   *  sync-applied parent_id change closes a loop. txIdsInvolved is always
+   *  empty (sync writes carry no tx_id). */
   readonly onCycleDetected?: (event: CycleDetectedEvent) => void
   readonly throttleMs?: number
   /** Max changes materialized per drain window (default {@link DEFAULT_DRAIN_CHUNK}).
@@ -85,18 +85,68 @@ export interface BlocksSyncedObserverArgs {
   readonly onError?: (err: unknown) => void
 }
 
+/** Which of a workspace's staged rows a {@link BlocksSyncedObserver.drainWorkspace}
+ *  pass re-materializes.
+ *
+ *  `unapplied` is the population {@link WORKSPACE_UNAPPLIED_IDS_SQL} names — the
+ *  rows a durable-gap refusal is counting, and nothing else. `all` is every
+ *  staged row of the workspace, which is what a gate-resolution rescan wants:
+ *  it also re-judges rows the flag says are fine, so it is the one that can
+ *  repair a row whose flag is wrong (a pre-flag legacy shadow), and the one
+ *  that costs a full pass over the workspace to do it. */
+export type RematerializeScope = 'all' | 'unapplied'
+
+/** What one queue-less rematerialization pass did, summed over its windows.
+ *
+ *  `applied` / `deferred` / `skippedStale` / `quarantined` are per row over a
+ *  distinct id set, so they sum to `scanned` MINUS any row whose staging row
+ *  left between the one-shot id read and its window (that one is scanned and
+ *  nothing else). `resolved` and `reflagged` are orthogonal to all of them —
+ *  they count flag MOVEMENT, in either direction, by any of the drain's
+ *  reasons.
+ *
+ *  The point of reporting `deferred` and `quarantined` separately: when a pass
+ *  does NOT close the gap, these are why. Deferred means the workspace was not
+ *  materializable (locked e2ee, mode unresolved, a key-store read that failed);
+ *  quarantined means the ciphertext did not decode. Neither is fixed by running
+ *  the pass again. */
+export interface RematerializeReport {
+  readonly scope: RematerializeScope
+  /** Staged rows the pass fed to the drain. */
+  readonly scanned: number
+  readonly applied: number
+  readonly deferred: number
+  readonly skippedStale: number
+  readonly quarantined: number
+  /** Rows whose `needs_apply` flag this pass moved from set to clear.
+   *
+   *  NOT the success signal for `scope: 'all'`. That scope exists for a row the
+   *  flag is WRONG about — already clear, and `blocks` behind anyway — which by
+   *  definition moves no flag. `applied` is the number that says it did
+   *  something there; `resolved` is the one for the narrow scope. */
+  readonly resolved: number
+  /** Rows whose flag this pass SET: it found a row it could not apply that
+   *  `blocks` does not already reflect. This is how a pass can leave the gap
+   *  BIGGER than it found it — a workspace that answers `defer` re-flags rows an
+   *  earlier drain had cleared. Nonzero does not by itself mean it grew: one
+   *  pass can resolve and reflag different rows. Structurally 0 at scope
+   *  `unapplied`, where every row in the set is flagged already. */
+  readonly reflagged: number
+}
+
 export interface BlocksSyncedObserver {
   /** Drain the pending queue once. Awaitable settle barrier (awaits every
    *  drain enqueued before it). */
   flush(): Promise<void>
   /** Re-materialize a workspace's staged rows after it becomes materializable
-   *  (WK paste / plaintext confirm), or as the on-open recovery rescan. Reads
-   *  `blocks_synced` directly. Server-enforced `updated_at` monotonicity makes
-   *  one gate correct for both — no separate healing mode.
+   *  (WK paste / plaintext confirm), as the on-open recovery rescan, or because
+   *  an operator asked. Reads `blocks_synced` directly. Server-enforced
+   *  `updated_at` monotonicity makes one gate correct for all of them — no
+   *  separate healing mode.
    *
    *  REJECTS if the pass did not finish — see {@link startBlocksSyncedObserver}'s
    *  enqueue. */
-  drainWorkspace(workspaceId: string): Promise<void>
+  drainWorkspace(workspaceId: string, scope: RematerializeScope): Promise<RematerializeReport>
   /** Is a {@link drainWorkspace} pass for `workspaceId` outstanding (running OR
    *  queued behind another unit)? The one thing a reader cannot learn from the
    *  queue: that path rewrites `blocks` straight from `blocks_synced` and
@@ -145,7 +195,7 @@ const isDisposedMidDrain = (err: unknown): boolean =>
  * The §4.7 cycle-scan starting set: ids whose parent_id actually moved while
  * the row stayed live (a fresh insert or a delete can't close a loop on its
  * own; a content edit doesn't change reachability), grouped by the row's
- * current workspace. Relocated from rowEventsTail's inline selection.
+ * current workspace.
  */
 export const cycleScanCandidatesByWorkspace = (
   snapshots: ReadonlyMap<string, SyncSnapshot>,
@@ -186,7 +236,7 @@ export const startBlocksSyncedObserver = (
 
   /** §4.7 detection-only telemetry. One bounded, truncation-safe scan per
    *  workspace whose parent_id mutations might have closed a loop. A scan
-   *  failure is reported but never aborts the drain (matches rowEventsTail). */
+   *  failure is reported but never aborts the drain. */
   const runCycleScan = async (snapshots: ReadonlyMap<string, SyncSnapshot>): Promise<void> => {
     if (!onCycleDetected) return
     for (const [workspaceId, ids] of cycleScanCandidatesByWorkspace(snapshots)) {
@@ -219,16 +269,13 @@ export const startBlocksSyncedObserver = (
   const applyWindow = async (
     upserted: readonly string[],
     removed: readonly string[],
-  ): Promise<void> => {
+  ): Promise<MaterializeOutcome> => {
     const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
     await applyOutcome(outcome)
+    return outcome
   }
 
   const drainQueueOnce = async (): Promise<void> => {
-    // Loop over the queue in bounded seq-ordered windows until it's empty, so a
-    // large backlog never builds the whole working set in one in-memory pass /
-    // one transaction. Each window commits independently (step 4), so the next
-    // window — and any retry after a throw — resumes from the last consumed seq.
     for (;;) {
       if (disposed) throw disposedMidDrain()
       const rows = await db.getAll<QueueRow>(
@@ -263,25 +310,35 @@ export const startBlocksSyncedObserver = (
 
   const materializeWorkspace = async (
     workspaceId: string,
-  ): Promise<void> => {
+    scope: RematerializeScope,
+  ): Promise<RematerializeReport> => {
     if (disposed) throw disposedMidDrain()
+    // The id set is read ONCE, before the first window. A delivery that lands
+    // mid-pass is therefore not in it — correctly: that one is in the QUEUE,
+    // which the queue drain owns, and picking it up here would mean a pass
+    // whose end depends on the sync stream going quiet.
     const ids = (await db.getAll<{ id: string }>(
-      'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
+      scope === 'unapplied'
+        ? WORKSPACE_UNAPPLIED_IDS_SQL
+        : 'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
       [workspaceId],
     )).map(row => row.id)
-    // Materialize in the same bounded windows as drainQueueOnce. A workspace
-    // that synced while still unpinned (fresh-device initial sync: every row
-    // defers and drainQueueOnce consumes its queue signal) can strand hundreds
-    // of thousands of staged rows that only this re-pass recovers. Doing it in
-    // one materializeStagingRows call would build the whole working set in
-    // memory and wrap every upsert in a single transaction — the freeze a real
-    // client hit on a 320k workspace, which then rolled back ALL progress when
-    // interrupted. Independently-committed windows keep memory flat and let a
-    // re-invocation resume (already-materialized rows LWW-skip next pass).
+    const totals = {
+      applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, resolved: 0, reflagged: 0,
+    }
+    // Same bounded windows as the queue drain; a re-invocation resumes because
+    // already-materialized rows LWW-skip.
     for (let i = 0; i < ids.length; i += drainChunk) {
       if (disposed) throw disposedMidDrain()
-      await applyWindow(ids.slice(i, i + drainChunk), [])
+      const outcome = await applyWindow(ids.slice(i, i + drainChunk), [])
+      totals.applied += outcome.applied.length
+      totals.deferred += outcome.deferred.length
+      totals.skippedStale += outcome.skippedStale.length
+      totals.quarantined += outcome.quarantined.length
+      totals.resolved += outcome.resolved.length
+      totals.reflagged += outcome.reflagged.length
     }
+    return { scope, scanned: ids.length, ...totals }
   }
 
   // Serialize all work on one chain so drains never overlap and flush() awaits
@@ -299,7 +356,7 @@ export const startBlocksSyncedObserver = (
   // The SPINE is a separate promise that never rejects. It is what keeps a
   // failed unit from wedging every later drain, and — because it always
   // attaches a rejection handler — what makes an unawaited `flush()` safe.
-  const enqueue = (work: () => Promise<void>): Promise<void> => {
+  const enqueue = <T>(work: () => Promise<T>): Promise<T> => {
     const done = chain.then(async () => {
       // ONE catch for both disposal checks — the one here and the loop-top ones
       // inside the drains. Written as two paths it was asymmetric: an
@@ -307,7 +364,7 @@ export const startBlocksSyncedObserver = (
       // teardown through `onError` while a not-yet-started one did not.
       try {
         if (disposed) throw disposedMidDrain()
-        await work()
+        return await work()
       } catch (err) {
         if (!isDisposedMidDrain(err)) onError(err)
         throw err
@@ -318,17 +375,28 @@ export const startBlocksSyncedObserver = (
   }
 
   const flush = (): Promise<void> => enqueue(drainQueueOnce)
-  const drainWorkspace = (workspaceId: string): Promise<void> => {
+  const drainWorkspace = (
+    workspaceId: string,
+    // REQUIRED, though every call site but one passes 'all'. The two scopes
+    // differ by three orders of magnitude on a real workspace, and a default
+    // here would be the second one in the stack — `Repo.rematerializeWorkspace`
+    // defaults to 'unapplied' — so a reader who learned one would have the
+    // other wrong.
+    scope: RematerializeScope,
+  ): Promise<RematerializeReport> => {
     // Counted from ENQUEUE rather than from the first window: a rescan waiting
     // its turn on the chain will still rewrite `blocks` with nothing in the
     // queue to show for it, which is the whole blindness. Decremented off the
     // promise, which settles on every exit including the disposed one, so the
     // count cannot leak; the derived promise gets its own handler because
     // `done` alone is what we hand back.
+    //
+    // Both scopes, not just the wide one: the narrow pass writes fewer rows,
+    // not none.
     const bump = (by: number) =>
       workspaceRescans.set(workspaceId, (workspaceRescans.get(workspaceId) ?? 0) + by)
     bump(1)
-    const done = enqueue(() => materializeWorkspace(workspaceId))
+    const done = enqueue(() => materializeWorkspace(workspaceId, scope))
     void done.finally(() => bump(-1)).catch(() => {})
     return done
   }

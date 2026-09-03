@@ -1,30 +1,12 @@
 /**
- * Timing-based metrics: bounded reservoir + DB / query wrappers
- * (perf-baseline follow-up #4 extension).
+ * Timing-based metrics: bounded reservoir + DB / query wrappers.
  *
  * Counterpart to the simple-counter metrics on HandleStore / BlockCache.
- * Where those answer "how often", these answer "how long":
+ * Where those answer "how often", these answer "how long".
  *
- *   - `DbMetrics` aggregates wall-clock timings for every PowerSyncDb
- *     call site that flows through the Repo (`getAll`, `getOptional`,
- *     `get`, `execute`, `writeTransaction`). Use to tell whether
- *     a slow cold-start lives in raw SQL roundtrip cost or above it.
- *   - `QueryMetrics` keys by query name (e.g. `core.subtree`,
- *     `plugin:tasks/dueSoon`) and records the wall-clock time of each
- *     `loader(ctx)` invocation. Re-resolves (LoaderHandle.invalidate)
- *     count as separate samples — the dispatcher path runs the loader
- *     fresh each time, and that's the unit you care about for "open
- *     page → ms to settle".
- *
- * Approximate percentiles via a fixed-capacity ring buffer (default 256
- * samples). Cheap, bounded memory, and accurate enough for the
- * "is this 10 ms or 100 ms?" decisions we'd make from a debug panel.
- * For higher-precision distributions, use the bench harness instead —
- * this exists for in-app awareness, not benchmark output.
- *
- * Cost: a `performance.now()` pair + ring-buffer write per call. At
- * the rates the data layer hits (a few thousand SQL calls/sec under
- * worst-case sync bursts) that's well under 1% of wall time.
+ * Approximate percentiles via a fixed-capacity ring buffer — accurate
+ * enough for "is this 10 ms or 100 ms?"; for higher-precision
+ * distributions use the bench harness instead.
  */
 
 /** Approximate-percentile ring buffer. Records the last `capacity`
@@ -87,8 +69,6 @@ export class TimingReservoir {
     // Sort a copy — the live buffer is rotated, not order-preserved.
     const sorted = this.samples.slice().sort((a, b) => a - b)
     const at = (q: number) => sorted[Math.min(n - 1, Math.floor(n * q))]
-    // Mean over the *windowed* samples, not the lifetime sum, so it
-    // pairs sensibly with p50/p95 (which are also windowed).
     let windowSum = 0
     for (const s of sorted) windowSum += s
     return Object.freeze({
@@ -129,8 +109,9 @@ export interface TimingSnapshot {
 }
 
 /** Aggregate timings for every PowerSyncDb call that flows through the
- *  Repo (read calls + writeTransaction wall-clock). One instance per
- *  Repo. */
+ *  Repo (`getAll`, `getOptional`, `get`, `execute`, `writeTransaction`).
+ *  Use to tell whether a slow cold-start lives in raw SQL roundtrip cost
+ *  or above it. One instance per Repo. */
 export class DbMetrics {
   readonly getAll = new TimingReservoir()
   readonly getOptional = new TimingReservoir()
@@ -163,8 +144,11 @@ export class DbMetrics {
 }
 
 /** Per-query-name resolve timings. Keys are full query names
- *  (`core.subtree`, `plugin:foo/bar`, …). Empty entries don't appear
- *  in the snapshot — only queries that actually ran are surfaced. */
+ *  (`core.subtree`, `plugin:foo/bar`, …); empty entries don't appear in
+ *  the snapshot — only queries that actually ran are surfaced.
+ *  Re-resolves (LoaderHandle.invalidate) count as separate samples — the
+ *  dispatcher path runs the loader fresh each time, and that's the unit
+ *  you care about for "open page → ms to settle". */
 export class QueryMetrics {
   private readonly perName = new Map<string, TimingReservoir>()
 

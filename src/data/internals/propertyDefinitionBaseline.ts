@@ -15,10 +15,10 @@
  * like any other write. A receiving device therefore gets correct cells and has
  * nothing to re-key. What survives is a row the originating device never had,
  * or lost LWW on — a block created or edited offline across the change. That is
- * a divergence between a cell and its field rows, which the slice C reconcile
- * detects from CONTENT, on whichever device holds the stale row and whether or
- * not it ever recorded a before-state. A baseline is a strictly weaker answer
- * there, so renames are left to it.
+ * a divergence between a cell and its field rows, which a content-driven
+ * reconcile detects on whichever device holds the stale row, whether or not it
+ * ever recorded a before-state. A baseline is a strictly weaker answer there,
+ * so renames are left to that.
  *
  * A CODEC change is the case content comparison cannot see: cells and field
  * rows agree, and only the stored encoding is stale. Detecting that needs a

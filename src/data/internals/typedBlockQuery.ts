@@ -15,8 +15,27 @@ export interface CompiledTypedBlockQuery {
 
 export type TypedBlockQueryProjection = 'rows' | 'ids' | 'count'
 
-export const jsonPathForProperty = (name: string): string =>
-  `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+declare const jsonPathBrand: unique symbol
+
+/** A JSON path built by {@link jsonPathForProperty}. Branded so it cannot be
+ *  passed back in where a property NAME belongs — see the parameter type
+ *  below. */
+export type JsonPath = string & { readonly [jsonPathBrand]: 'json-path' }
+
+/** A property name: any plain string, but NOT an already-derived {@link
+ *  JsonPath}. The optional `never`-typed brand is what expresses that — a plain
+ *  string has no such property and satisfies it, while a `JsonPath` carries one
+ *  typed `'json-path'`, which is not assignable to `never`.
+ *
+ *  Costs nothing at a declaration site and catches the one mistake these two
+ *  types invite: double-encoding. A path passed where a name belongs derives
+ *  `$."$.\"foo\""`, which addresses a property nothing writes — so the query
+ *  is valid, returns no rows, and the feature reads as empty rather than
+ *  broken. */
+export type PropertyName = string & { readonly [jsonPathBrand]?: never }
+
+export const jsonPathForProperty = (name: PropertyName): JsonPath =>
+  `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"` as JsonPath
 
 /** Inline a JSON path as a SQL string literal — needed so SQLite's
  *  query planner can match expression indexes. SQLite only treats
@@ -27,7 +46,7 @@ export const jsonPathForProperty = (name: string): string =>
  *  trusted facets, but the literal still gets standard `''`-escaping
  *  defensively so a name containing a single quote can't break the
  *  surrounding SQL. */
-const inlineJsonPath = (name: string): string => {
+export const inlineJsonPath = (name: string): string => {
   const path = jsonPathForProperty(name)
   return `'${path.replaceAll("'", "''")}'`
 }
@@ -438,25 +457,18 @@ export const buildCandidatesCte = (
   const clauses: string[] = []
   let from: string
 
-  // A JOIN rather than a correlated `EXISTS (SELECT 1 FROM block_types …)`.
+  // A JOIN rather than a correlated `EXISTS (SELECT 1 FROM block_types …)`:
   // SQLite cannot hoist a correlated subquery into the outer loop, so the
-  // EXISTS form pinned the candidate scan to `blocks` filtered by workspace
-  // alone — every live block in the workspace, probing `block_types` once per
-  // row (346k probes to return 562 rows on a real client: 294ms warm, 5.3s
-  // cold). As a join the planner may instead drive from
+  // EXISTS form scanned every live block in the workspace, probing
+  // `block_types` per row; as a join the planner can drive from
   // `idx_block_types_type_workspace`, whose leading `type` column is the
-  // selective one — measured 12ms. Matches the shape `SELECT_BLOCKS_BY_TYPE_SQL`
-  // has always used.
+  // selective one.
   //
-  // NOT strictly faster, and the crossover is worth knowing: the join wins when
-  // the type is more selective than the other predicates, which is the reported
-  // shape (types-only, or a type covering a small share of the workspace). When
-  // a type covers most of the workspace AND a `where` term is the selective one
-  // AND `sqlite_stat1` is absent, the planner can pick bt-driving and pay a
-  // per-type-row `blocks` PK lookup that the EXISTS form deferred until after
-  // the cheap `json_extract` filter — measured 82ms → 185ms at 100% type
-  // coverage over 300k blocks. Bounded (~2-3x, still sub-200ms) and it
-  // evaporates once ANALYZE has run, which `runAnalyzeIfStale` now keeps true.
+  // NOT strictly faster — when a type covers most of the workspace AND a
+  // `where` term is the selective one AND `sqlite_stat1` is absent, the
+  // planner can drive from bt and pay a per-row `blocks` PK lookup the
+  // EXISTS form deferred. Bounded, and it evaporates once ANALYZE has run,
+  // which `runAnalyzeIfStale` keeps true.
   //
   // `bt.workspace_id = b.workspace_id` is redundant for correctness (the
   // `(block_id, type)` PK already pins the row) but load-bearing for hitting
@@ -517,9 +529,7 @@ export const buildCandidatesCte = (
     // the property is missing; `NOT (NULL)` is NULL — not TRUE — so a
     // bare `NOT` would drop every row that never set the property. The
     // documented contract is NOR ("exclude iff a predicate matches"),
-    // and an unknown does not match, so unset rows must survive. See
-    // SRS due-cards: `exclude {archived: true}` was silently hiding
-    // every card that had never been archived.
+    // and an unknown does not match, so unset rows must survive.
     clauses.push(`(${compiled.sql}) IS NOT TRUE`)
     params.push(...compiled.params)
   }

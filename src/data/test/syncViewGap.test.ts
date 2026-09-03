@@ -23,6 +23,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   decideStagingRow,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_IDS_SQL,
   WORKSPACE_UNAPPLIED_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import { ChangeScope } from '@/data/api'
@@ -294,6 +295,9 @@ describe('Repo.workspaceViewGap', () => {
     expect(await repo.workspaceViewGap(WS)).toBeNull()
     ;(repo as unknown as {syncObserver: unknown}).syncObserver = {
       isRematerializingWorkspace: (id: string) => id === 'ws-elsewhere',
+      // Standing in for the observer means standing in for its teardown too:
+      // the per-test release (`testRepoScope`) stops every Repo's observer.
+      dispose: () => {},
     }
 
     expect(await repo.workspaceViewGap(WS)).toBeNull()
@@ -325,16 +329,40 @@ describe('Repo.workspaceViewGap', () => {
     expect(plan.map(row => row.detail).join(' | ')).toMatch(/idx_blocks_synced_needs_apply/)
   })
 
+  it('names the same rows the remedy re-materializes', async () => {
+    // The refusal counts a set; `rematerializeWorkspace` re-delivers a set.
+    // Those being the same set is the contract — rows an operator is told about
+    // but the pass never looks at (or the reverse) is how a remedy stops being
+    // one. Pinned over a fixture with one row of every reason the two clauses
+    // exist for, so a clause added to one side and not the other fails here.
+    const repo = makeRepo()
+    await deliverAndConsumeQueue(syncedRow({id: 'durable-gap', updatedAt: 5}))
+    await deliverAndConsumeQueue(syncedRow({id: 'resolved', updatedAt: 5}))
+    await markApplied('resolved')
+    await deliverAndConsumeQueue(syncedRow({id: 'other-ws', workspaceId: 'ws-other', updatedAt: 5}))
+    // Flagged, but still QUEUED — the in-flight predicate's row, not this one's.
+    await deliver(syncedRow({id: 'still-queued', updatedAt: 5}))
+
+    const ids = (await sharedDb.db.getAll<{id: string}>(WORKSPACE_UNAPPLIED_IDS_SQL, [WS]))
+      .map(row => row.id)
+    expect(ids).toEqual(['durable-gap'])
+    // Same count, from the arm the refusal actually reads. `repo` is in scope
+    // to keep the two answers taken against one device.
+    expect((await repo.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_SQL, [WS, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )).behind).toBe(ids.length)
+  })
+
+  // 1,005 serialized deliveries, 268ms solo. The "~6x the gate adds" reasoning
+  // this carried was measured wrong on the same shape one file away
+  // (`stagingNeedsApplyMigration`: 23x), and this test then timed out 4/4 at the
+  // 5,000ms default under a loaded gate. Budgeted, with the measurement.
   it('caps the count it reports rather than the rows it examines', async () => {
-    // 1,005 serialized deliveries, 268ms measured solo — so no explicit budget,
-    // matching the 10k-row test above: even at the ~6x the full gate adds this
-    // stays far under vitest's 5000ms default, and a genuine hang then reports
-    // in 5s rather than 20.
     const repo = makeRepo()
     for (let i = 0; i < WORKSPACE_UNAPPLIED_COUNT_CAP + 5; i++) {
       await deliver(syncedRow({id: `staged-${i}`, updatedAt: 5}))
     }
     await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
     expect((await repo.workspaceViewGap(WS))?.reason).toMatch(/at least 1,000/)
-  })
+  }, 30_000)
 })

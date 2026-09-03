@@ -1,14 +1,14 @@
 /**
- * §9 orphan-definition synthesis: give every definition-less cell key a
+ * Orphan-definition synthesis: give every definition-less cell key a
  * definition block, so "every key resolves a definition" can be an INVARIANT
  * rather than a branch every consumer has to carry.
  *
- * A key nothing declares — historic residue, a plugin disabled before the
- * unification's cutover, a dormant dynamic extension, a raw bag writer — is
- * the one class of property data a flipped workspace cannot make
- * child-backed: `materializePropertyChildrenForExistingRow` resolves the name,
- * gets nothing, and correctly skips the cell rather than inventing data. Left
- * alone the key rides the cell forever, which the §11 column drop can't allow.
+ * A key nothing declares — historic residue, a dormant dynamic extension, a
+ * raw bag writer — is the one class of property data a flipped workspace
+ * cannot make child-backed: `materializePropertyChildrenForExistingRow`
+ * resolves the name, gets nothing, and correctly skips the cell rather than
+ * inventing data. Left alone the key rides the cell forever, which the
+ * column drop can't allow.
  *
  * So the minting happens HERE instead, as an explicit operator step before
  * the flip — where it can refuse the keys it must not mint for, report the
@@ -19,16 +19,10 @@
  * SEED owner. Doing it the other way round leaves two definitions in the
  * winner machinery, with field rows stranded on the loser's fieldId.
  *
- * A `defineProperty` owner (a plain schema with no definition block — one of
- * the exact shapes that produces an orphan key) is different: `allowUnregisteredPlainSchemas`
- * admits its writes while nothing claims the name, but once a definition
- * exists `resolveBoundary` finds a winner that isn't the caller's schema and
- * every write starts failing `shadowed`. Enabling it first does NOT help here:
- * `resolveName` sees only definition blocks and seeds, so a live plain schema
- * stays invisible and the key stays a candidate either way — there is no
- * registry of plain-schema owners to consult, that being what makes them
- * plain. The gap is tracked separately; the ordering advice above is honest
- * only for SEED owners.
+ * That ordering advice is honest only for SEED owners. A `defineProperty`
+ * owner is invisible to `resolveName`, which sees only definition blocks and
+ * seeds — so enabling it first does not take the key off the candidate list,
+ * and once a definition exists its writes start failing `shadowed`.
  *
  * `audit-properties` names the owner where it can.
  */
@@ -116,10 +110,9 @@ export const synthesizedPropertyDefinitionBlockId = (
  *  value unchanged through `encodedValueToContent` → `contentToEncodedValue`;
  *  see {@link provePresetId} for why that is the selection criterion.
  *
- *  One exception, tracked in #688 and not this module's to fix: a `string`
- *  value that is itself field-form content round-trips to nothing. Synthesis
- *  widens the set that can bite, because these keys come from writers nothing
- *  vetted. */
+ *  The codec pair agreeing proves nothing about the layers between them —
+ *  `needsEscape` is what keeps `encodedValueToContent`'s output storable as
+ *  text, so weakening it silently over-approves this proof (#688). */
 export type SynthesizedPresetId = 'boolean' | 'number' | 'string' | 'raw-json'
 
 /** Tried narrowest-first; the first that carries every stored value wins.
@@ -133,10 +126,8 @@ const PRESET_LADDER: readonly SynthesizedPresetId[] =
  *
  *  Not a sampling cap — sampling would put the guessing back. A key with more
  *  distinct values than this is not checked and so is not proven, which makes
- *  it a blocker: this module hands out no codec it has not run. Measured on a
- *  ~360k-cell production graph the heaviest key of any kind has ~26k distinct
- *  values and the unregistered ones had 23 between them, so this bounds a case
- *  that does not arise rather than trimming one that does. */
+ *  it a blocker: this module hands out no codec it has not run. Set high
+ *  enough that no real key reaches it. */
 export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
 
 /**
@@ -152,22 +143,13 @@ export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
  * instance — it simply fails, because `codecs.date` re-encodes `"2026-08-20"`
  * as `"2026-08-20T00:00:00.000Z"`.
  *
- * WHAT THIS DOES NOT PROVE: only the JS half. Content that survives here can
- * still be transformed at the database text boundary or by a processor —
- * see #688 — which is why that stays tracked separately rather than papered
- * over here.
- *
- * And it proves things about values AS JAVASCRIPT SEES THEM. Anything the
- * JSON-to-JS boundary has already collapsed is invisible here — and equally
- * invisible to the rest of the app, which reads the same cells through the same
- * boundary. Measured: a stored `9007199254740993` arrives from both `json_each`
- * and `json_extract` as `9007199254740992`, so no reader can tell the two
- * apart. Reproducing that distinction here would mean parsing numeric tokens
- * out of the raw JSON text, to refuse a key over a difference nothing in this
- * app can observe. Accepted deliberately, tracked as #712. Do not add a fourth
- * value-shape special case without checking which side of this line it falls
- * on — see `containsNonFinite` and its `-0` note below for where that line
- * runs today.
+ * Proves only the JS half — a value that survives here can still be
+ * transformed at the database text boundary or by a processor (#688) — and
+ * only as JavaScript sees it: anything the JSON-to-JS boundary already
+ * collapses (a number past 2^53) is invisible here, and equally invisible to
+ * every other reader, so it is accepted rather than reproduced (#712). Before
+ * adding a fourth value-shape special case, check which side of that line it
+ * falls on — see `containsNonFinite`.
  */
 export const provePresetId = (
   values: readonly unknown[],
@@ -261,8 +243,7 @@ export interface SynthesisBlocker {
 export interface PropertyDefinitionSynthesisPlan {
   workspaceId: string
   /** Non-null when this workspace must not be synthesized into at all — see
-   *  {@link resolveSynthesisNamespace}. `candidates` is still filled
-   *  in, because a refusal only matters when there is something to mint. */
+   *  {@link resolveSynthesisNamespace}. */
   refusal: string | null
   /** Live blocks whose property bag is not a JSON object, so the scan could
    *  not read their keys. NOT a count of bad data — a measure of how much of
@@ -569,9 +550,8 @@ export const planPropertyDefinitionSynthesis = async (
  * Why this workspace must not be flipped to child-backed properties yet, or
  * null. See {@link SynthesisBlocker} for what makes a key hopeless.
  *
- * A workspace refusal blocks only when there is something to mint; otherwise
- * the invariant already holds. Advisory for an ALREADY-flipped workspace,
- * where no irreversible step is left to guard.
+ * Advisory for an ALREADY-flipped workspace, where no irreversible step is
+ * left to guard.
  */
 export const flipBlockedBySynthesis = (
   plan: PropertyDefinitionSynthesisPlan,
@@ -587,20 +567,11 @@ export const flipBlockedBySynthesis = (
     return `${outcome.skipped.length} property key(s) still have no definition after trying ` +
       `to add one: ${named}. Nothing was switched over; resolve these and run this again.`
   }
-  // An unreadable bag is not "some bad data over there" — it is a hole in the
-  // scan this decision is made from, so "every cell key resolves a definition"
-  // is UNVERIFIED rather than satisfied. Refusing an irreversible step on an
-  // incomplete survey is the whole reason the count is reported at all.
   if (plan.unreadableBlocks > 0) {
     return `${plan.unreadableBlocks} block(s) have a property bag this device cannot read, so ` +
       'their property keys are invisible here and this check cannot vouch for them. That ' +
       'means local database corruption — investigate before migrating anything.'
   }
-  // The same hole from the other direction: rows still staged when the survey
-  // ran are keys it could not see. Read off the PLAN rather than asked again
-  // here, because a gap that has since drained is exactly the dangerous case —
-  // the caller's checks either side of the plan both come back clean while the
-  // plan itself was built without the keys that arrived.
   if (plan.scanSyncGap !== null) {
     return `The property survey ran while this device was still catching up (${plan.scanSyncGap}), `
       + 'so keys that arrived during it are missing from it. Run this again once sync is idle.'
@@ -931,20 +902,11 @@ export const applyPropertyDefinitionSynthesis = async (
                           + 'no behavior — repair it rather than adding a second'})
           continue
         }
-        // Built by the SAME function the projector uses, from the RUNTIME
-        // presets — so what this publishes now and what the projector rebuilds
-        // a tick later are the same schema, which is the entire point of
-        // publishing early. Nothing about the block is re-derived here: its
-        // preset, its stored config, its stored default and its change scope
-        // are all the block's own, whatever they are.
-        //
-        // Note the asymmetry with the mint path below, which is deliberate.
-        // There we persist a preset id chosen by proving it against the stored
-        // values, so it must be the kernel core BY IDENTITY. Here the choice
-        // was already made — by the user, or by whichever device wrote this
-        // definition — and our job is to report it faithfully, not to re-judge
-        // it. An extension-provided or config-carrying preset is therefore
-        // published rather than skipped.
+        // Deliberate asymmetry with the mint path below: there we persist a
+        // preset id proven against the stored values, so it must be the kernel
+        // core BY IDENTITY; here the choice is already the block's own and our
+        // job is to report it faithfully — an extension-provided or
+        // config-carrying preset is published, not skipped.
         if (holding.schema === null) {
           skipped.push({key: candidate.key,
                         reason: `block ${id} defines this key with a preset this device cannot `

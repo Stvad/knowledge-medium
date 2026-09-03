@@ -736,9 +736,10 @@ const reapSeatsInTx = async (
       // reach the shape there, so the gate is not dead. `is_field_form` is
       // stamped from CONTENT by the derive pass, so a user who writes
       // `::((aliases-definition))` under a seat and gives it a value has one; and
-      // `blockMerge`'s pre-backfill catch-up materializes a key's children with
-      // no flip check at all (km-g5ev). Either way the cell stays pristine and
-      // the projection is dormant, so the seed match cannot see an edit.
+      // `blockMerge`'s pre-backfill catch-up mints them un-flipped BY DESIGN
+      // (gating it there loses the merge target's value — see its comment).
+      // Either way the cell stays pristine and the projection is dormant, so
+      // the seed match cannot see an edit.
       //
       // Not reaping is the documented SAFE MISS (see the gate list below): the
       // seat squats until the alias is re-typed and re-dropped, and normal

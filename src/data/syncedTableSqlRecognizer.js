@@ -168,8 +168,7 @@ const NAME_PART_Q = String.raw`(?:'[^']*'|` + NAME_PART.slice(3)
 
 /** A possibly schema-qualified table reference, allowing whitespace around the
  *  dots — SQLite accepts `UPDATE main . blocks`, and a capture that stopped at
- *  the first whitespace saw only `main` and read it as an unsynced table
- *  (PR #386 review). */
+ *  the first whitespace saw only `main` and read it as an unsynced table. */
 const QUALIFIED_NAME = `(${NAME_PART}(?:\\s*\\.\\s*${NAME_PART})*)`
 const QUALIFIED_NAME_Q = `(${NAME_PART_Q}(?:\\s*\\.\\s*${NAME_PART_Q})*)`
 
@@ -194,9 +193,9 @@ const QUOTED_NAME_DML_PATTERNS = [
 ]
 
 /**
- * DESTRUCTIVE DDL shapes (PR #386 review). `DROP TABLE blocks` desyncs the
- * local store more completely than any UPDATE could, and a DML-only scan
- * waved it through — so the same guard has to see it.
+ * DESTRUCTIVE DDL shapes. `DROP TABLE blocks` desyncs the local store more
+ * completely than any UPDATE could, and a DML-only scan waved it through —
+ * so the same guard has to see it.
  *
  * The line is drawn at DESTRUCTIVE, not at DDL in general: additive schema
  * evolution against a synced table is legitimate and must not be refused.
@@ -206,17 +205,8 @@ const QUOTED_NAME_DML_PATTERNS = [
  * REMOVE or RENAME existing structure; never ADD COLUMN, never CREATE/DROP
  * TRIGGER or INDEX (a trigger's name may start with the table's, but
  * `unqualifiedTableName` compares the whole name, so `blocks_upload_insert`
- * is not `blocks`).
- *
- * Correcting the first version of this comment (PR #386 areview): it claimed
- * those bootstrap statements run THROUGH this guard, so a blanket DDL rule
- * would brick startup. They do not — `repoProvider.ts` calls
- * `ensureBlockLocalColumns(powerSyncDb)` on the UNGUARDED handle, and only
- * the one-shot side-index backfills use the guarded `backfillDb`. The
- * narrowing above is still right, but on principle rather than on that
- * (false) blast radius. The realistic destructive caller is the agent
- * bridge's raw `sql` verb, which is exactly where a `DROP TABLE blocks`
- * would come from.
+ * is not `blocks`). The realistic destructive caller is the agent bridge's
+ * raw `sql` verb.
  *
  * The verb sits AFTER the table name in the ALTER forms, which is why these
  * can't just be folded into {@link DML_PATTERNS}.

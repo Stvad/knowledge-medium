@@ -86,6 +86,7 @@ import {
   importRawSqliteDb,
   rawSqliteDbExportFilename,
 } from '@/utils/exportSqliteDb.js'
+import { DB_FILE_SIBLING_SUFFIXES } from '@/data/dbFileSiblings.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { WipeLocalDataDialog } from '@/shortcuts/WipeLocalDataDialog.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
@@ -539,20 +540,30 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
     {
       id: 'import_sqlite_db',
-      description: 'Replace database with uploaded SQLite file (.db)',
+      description: 'Replace database with an uploaded SQLite file or recovery archive',
       context: ActionContextTypes.GLOBAL,
       handler: () => {
         const input = document.createElement('input')
         input.type = 'file'
-        input.accept = '.db,application/vnd.sqlite3,application/octet-stream'
+        // Multiple, because a recovery backup is a fileset: a `.db` plus the
+        // write-ahead sidecars holding transactions that never reached it. The
+        // archive restores whole, but Safari expands zips on download, so the
+        // user may only have the loose files.
+        input.multiple = true
+        input.accept = [
+          '.db', ...DB_FILE_SIBLING_SUFFIXES.map(s => `.db${s}`), '.zip',
+          'application/vnd.sqlite3', 'application/octet-stream',
+        ].join(',')
 
         input.onchange = async (e) => {
-          const file = (e.target as HTMLInputElement).files?.[0]
-          if (!file) return
+          const files = [...((e.target as HTMLInputElement).files ?? [])]
+          if (files.length === 0) return
 
-          const sizeMiB = (file.size / 1024 / 1024).toFixed(1)
+          const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
+          const sizeMiB = (totalBytes / 1024 / 1024).toFixed(1)
           const ok = window.confirm(
-            `Replace this device's database with "${file.name}" (${sizeMiB} MiB)?\n\n` +
+            `Replace this device's database with ${files.map(f => `"${f.name}"`).join(', ')} ` +
+            `(${sizeMiB} MiB)?\n\n` +
             `Any local data not already synced to the server will be lost. ` +
             `The page will reload after the import.`,
           )
@@ -560,7 +571,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
           const banner = showProgress(`Importing SQLite database (${sizeMiB} MiB)…`)
           try {
-            await importRawSqliteDb(repo, file)
+            await importRawSqliteDb(repo, files)
             banner.update('Import complete — reloading…')
             window.location.reload()
           } catch (err) {

@@ -1,6 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom'
-import type { Repo } from '@/data/repo'
+import type { Repo, WorkspaceRematerialization } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
@@ -87,6 +87,7 @@ import type {
   MoveBlockPosition,
   RestoreBlockInput,
   RunBackfillResult,
+  RematerializeWorkspaceInput,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -502,6 +503,48 @@ const runRuntimeBackfill = async (
   }
 }
 
+/** Re-run the drain over a workspace's downloaded-but-unapplied rows.
+ *
+ *  The operator answer to `workspaceViewGap`'s durable arm — rows this device
+ *  downloaded, could not apply, and consumed the queue entry for, which nothing
+ *  re-delivers on its own. A DERIVATION pass over local state (see
+ *  `Repo.rematerializeWorkspace`): no uploads, no claim, no undo-stack clearing,
+ *  safe to re-run. */
+const rematerializeRuntimeWorkspace = async (
+  repo: Repo,
+  input: RematerializeWorkspaceInput,
+): Promise<WorkspaceRematerialization> => {
+  const scope = input.scope ?? 'unapplied'
+  if (scope !== 'all' && scope !== 'unapplied') {
+    throw new Error(`rematerialize-workspace: --scope must be "unapplied" or "all", got "${scope}"`)
+  }
+  // Same rule as `run-backfill`: `--workspace "$UNSET"` must fail rather than
+  // fall back to the active workspace, and for the same reason — the option is
+  // an assertion about which graph is being touched.
+  const workspaceId = assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo)
+  // The pass rebuilds THIS client's view of the workspace it has open. Its key
+  // state and its block cache are the active workspace's, so pointing it
+  // elsewhere would rewrite rows for a workspace nobody opened — the one thing
+  // workspace-scoped maintenance is not allowed to do.
+  //
+  // Checked ONCE, unlike `assertBackfillMayWrite`, which re-takes the same
+  // question inside every writing transaction of a pass of the same duration.
+  // Accepted, not overlooked: a user who navigates away mid-pass leaves it
+  // writing `blocks` for a workspace they no longer have open, but
+  // `getMaterializability` is keyed on each ROW's workspace_id rather than the
+  // active one, so the write is still correct — the cost is wasted work and
+  // cache growth, and the WK-paste path has had the same shape all along.
+  if (workspaceId !== repo.activeWorkspaceId) {
+    throw new Error(
+      `rematerialize-workspace: --workspace ${workspaceId} is not the active workspace ` +
+      `(${repo.activeWorkspaceId ?? 'none'}). The pass rebuilds the view of the workspace ` +
+      'this client has open, so the option is an assertion, not a target — open that ' +
+      'workspace and re-run.',
+    )
+  }
+  return repo.rematerializeWorkspace(workspaceId, {scope})
+}
+
 const mapPosition = (
   position: BlockPosition | undefined,
 ): {kind: 'first'} | {kind: 'last'} | undefined => {
@@ -526,6 +569,76 @@ const withGrainWarnings = async (
   return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
+/** Refuse a bridge mutation aimed at a workspace this client does not have open.
+ *
+ *  Field-row recognition resolves the definition through
+ *  `Repo.propertySchemaResolverFor`, which serves the active workspace and the
+ *  retained previous one and fails CLOSED for any other — so a mutation run
+ *  against a background workspace runs with recognition off, and a delete
+ *  there rewrites `::((fieldId))` field rows to prose instead of leaving the
+ *  dangling ref intact (#790).
+ *
+ *  Not in the kernel: `repo.tx` is workspace-agnostic on purpose — sync
+ *  arrival writes background rows through a path that needs no recognition,
+ *  and tests seed unopened workspaces directly — so a throw there would refuse
+ *  both. The bridge is where a block ID can name a row outside the workspace
+ *  its client is paired to. `eval` and raw `sql execute` reach `repo` directly
+ *  and stay unguardable. */
+const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): void => {
+  if (workspaceId === repo.activeWorkspaceId) return
+  throw new Error(
+    `${verb}: target is in workspace ${workspaceId}, which is not the active one `
+    + `(${repo.activeWorkspaceId ?? 'none'}). Mutating verbs write through the active `
+    + "workspace's property and alias registries, which resolve nothing for another "
+    + 'workspace — open that workspace and re-run.',
+  )
+}
+
+/** `assertActiveWorkspace` for every existing block a verb is about to touch.
+ *
+ *  Contract for callers:
+ *    - MISSING blocks PASS, so each verb still reports its own not-found error.
+ *    - The read is raw, not `repo.load`, so it sees tombstones —
+ *      `restore-block`'s target always is one.
+ *    - Pass the whole id set; it is deduplicated into one query.
+ *    - ISSUE THE WRITE on the synchronous path immediately after this
+ *      resolves. The lookup is async and the active workspace can move during
+ *      it, so the pin re-check at the end is the last word — an await between
+ *      it and the write reopens the window it closes.
+ *
+ *  Two residuals are accepted, both needing the check inside the writing
+ *  transaction: an id absent here that sync delivers before the mutator's
+ *  transaction opens, and a switch during a `run-action` handler. See the
+ *  kernel-side follow-up issue. */
+const assertActiveWorkspaceBlocks = async (
+  repo: Repo,
+  verb: string,
+  blockIds: readonly (string | undefined)[],
+): Promise<void> => {
+  const unique = [...new Set(blockIds.filter((id): id is string => id !== undefined && id !== ''))]
+  if (unique.length === 0) return
+  const pinned = repo.activeWorkspaceId
+  const rows = await repo.db.getAll<{workspace_id: string}>(
+    'SELECT workspace_id FROM blocks WHERE id IN (SELECT value FROM json_each(?))',
+    [JSON.stringify(unique)],
+  )
+  for (const row of rows) assertActiveWorkspace(repo, verb, row.workspace_id)
+  if (repo.activeWorkspaceId !== pinned) {
+    throw new Error(
+      `${verb}: the active workspace changed from ${pinned ?? 'none'} to `
+      + `${repo.activeWorkspaceId ?? 'none'} while checking this command's targets. `
+      + 'Refusing rather than writing against a registry they were not checked '
+      + 'for — re-run against the workspace you want.',
+    )
+  }
+}
+
+const assertActiveWorkspaceBlock = (
+  repo: Repo,
+  verb: string,
+  blockId: string,
+): Promise<void> => assertActiveWorkspaceBlocks(repo, verb, [blockId])
+
 const createRuntimeBlock = async (
   repo: Repo,
   input: CreateBlockInput = {},
@@ -547,6 +660,7 @@ const createRuntimeBlock = async (
   const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId) {
+    await assertActiveWorkspaceBlock(repo, 'create-block', input.parentId)
     const id = await repo.mutate.createChild({
       parentId: input.parentId,
       content,
@@ -562,6 +676,7 @@ const createRuntimeBlock = async (
   if (!workspaceId) {
     throw new Error('createBlock with no parentId requires an active workspace')
   }
+  assertActiveWorkspace(repo, 'create-block', workspaceId)
 
   const id = explicitId ?? crypto.randomUUID()
   await repo.tx(async tx => {
@@ -613,6 +728,10 @@ const reconcileMarkdownSubtree = async (
   input: ReconcileMarkdownSubtreeInput,
 ): Promise<ReconcileMarkdownSubtreeResult> => {
   const {parentId, key, properties, shape, final} = input
+  // Before `parseMarkdownToBlocks`, not merely before the write: a doomed
+  // request should not pay the parser first. The in-tx assertion below stays —
+  // this one is the cheap refusal, that one is the atomic decision.
+  await assertActiveWorkspaceBlock(repo, 'reconcile-markdown-subtree', parentId)
   // shape 'block' → the whole markdown is ONE root block (newlines kept);
   // 'outline' (default) → split along the markdown outline.
   const parsed: ParsedBlock[] = shape === 'block'
@@ -628,6 +747,7 @@ const reconcileMarkdownSubtree = async (
     const parent = await tx.get(parentId)
     if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
     const {workspaceId} = parent
+    assertActiveWorkspace(repo, 'reconcile-markdown-subtree', workspaceId)
 
     // This subtree's existing blocks, in pre-order (the target we reconcile
     // onto). Walk children depth-first following ONLY tagged blocks, so user
@@ -790,6 +910,7 @@ const updateRuntimeBlock = async (
   await repo.tx(async tx => {
     const before = await tx.get(input.id)
     if (!before || before.deleted) return
+    assertActiveWorkspace(repo, 'update-block', before.workspaceId)
     found = true
     const nextProperties = input.properties === undefined
       ? undefined
@@ -819,6 +940,7 @@ const moveRuntimeBlock = async (
   repo: Repo,
   input: MoveBlockInput,
 ): Promise<BlockData | null> => {
+  await assertActiveWorkspaceBlock(repo, 'move-block', input.id)
   await repo.mutate.move(input)
   return repo.load(input.id)
 }
@@ -827,6 +949,7 @@ const deleteRuntimeBlock = async (
   repo: Repo,
   input: DeleteBlockInput,
 ): Promise<DeleteBlockResult> => {
+  await assertActiveWorkspaceBlock(repo, 'delete-block', input.id)
   // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge is not a UI gesture; UI-layer guards deliberately don't apply
   await repo.mutate.delete(input)
   return {id: input.id, deleted: true}
@@ -836,6 +959,7 @@ const restoreRuntimeBlock = async (
   repo: Repo,
   input: RestoreBlockInput,
 ): Promise<BlockData | null> => {
+  await assertActiveWorkspaceBlock(repo, 'restore-block', input.id)
   await repo.mutate.restore(input)
   return repo.load(input.id)
 }
@@ -1145,6 +1269,15 @@ const runtimeBlock = (
   id: unknown,
 ) => isString(id) && id ? repo.block(id) : null
 
+/** The id a dependency's fallback chain actually selects. `runtimeBlock`'s
+ *  `??` chain expressed as the ID rather than the facade, so the workspace
+ *  guard can validate exactly what the handler is handed instead of
+ *  re-deciding precedence over the raw fields — an ignored back-compat id
+ *  belonging to another workspace must not refuse a request whose effective
+ *  dependencies are all local. */
+const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
+  candidates.find((id): id is string => isString(id) && id !== '')
+
 const runRuntimeAction = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
@@ -1158,12 +1291,11 @@ const runRuntimeAction = async (
   }
 
   const dependencies = command.dependencies ?? {}
-  const realUiStateBlock = runtimeBlock(context.repo, dependencies.uiStateBlockId)
-    ?? runtimeBlock(context.repo, command.uiStateBlockId)
+  const uiStateBlockId = chosenBlockId(dependencies.uiStateBlockId, command.uiStateBlockId)
+  const blockId = chosenBlockId(dependencies.blockId, command.blockId)
+  const realUiStateBlock = runtimeBlock(context.repo, uiStateBlockId)
   const uiStateBlock = realUiStateBlock ?? fakeUiStateBlock(context.repo)
-  const block = runtimeBlock(context.repo, dependencies.blockId)
-    ?? runtimeBlock(context.repo, command.blockId)
-    ?? uiStateBlock
+  const block = runtimeBlock(context.repo, blockId) ?? uiStateBlock
 
   if (action.context === 'edit-mode-cm' || action.context === 'property-editing') {
     throw new Error(
@@ -1175,7 +1307,8 @@ const runRuntimeAction = async (
     ? dependencies.selectedBlockIds.filter(isString)
     : []
   const selectedBlocks = selectedBlockIds.map(id => context.repo.block(id))
-  const anchorBlock = runtimeBlock(context.repo, dependencies.anchorBlockId)
+  const anchorBlockId = chosenBlockId(dependencies.anchorBlockId)
+  const anchorBlock = runtimeBlock(context.repo, anchorBlockId)
 
   // Imperative runner (no React context), so scopeRootId isn't injected
   // by useShortcutSurfaceActivations. Forward a caller-supplied one, else
@@ -1184,6 +1317,17 @@ const runRuntimeAction = async (
   const scopeRootId = isString(dependencies.scopeRootId)
     ? dependencies.scopeRootId
     : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
+
+  // `run-action` is the widest route to a kernel mutator: it turns
+  // caller-supplied ids into Block facades and hands them to a handler that
+  // may call `Block.delete()` (the `delete_block` action does). Guarding only
+  // the typed verbs would leave the same background-workspace corruption
+  // reachable through here — so every id that BECOMES a dependency is checked
+  // before dispatch, which is also the last point we can refuse: once
+  // `invokeAction` runs, the writes are inside a handler we don't control.
+  await assertActiveWorkspaceBlocks(context.repo, `run-action ${actionId}`, [
+    blockId, uiStateBlockId, anchorBlockId, scopeRootId, ...selectedBlockIds,
+  ])
 
   // Route imperative agent dispatch through the same `invokeAction` choke the
   // keyboard / pointer / runActionById paths use, so the action-dispatch
@@ -1669,6 +1813,7 @@ export const createAgentRuntimeContext = ({
     auditExtension: input => auditRuntimeExtension(repo, input),
     auditProperties: input => auditRuntimeProperties(repo, input),
     runBackfill: input => runRuntimeBackfill(repo, input),
+    rematerializeWorkspace: input => rematerializeRuntimeWorkspace(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1867,6 +2012,16 @@ export const executeCommand = async (
         workspaceId: command.workspaceId === undefined
           ? undefined
           : requireString(command.workspaceId, 'workspaceId'),
+      })
+
+    case 'rematerialize-workspace':
+      return context.rematerializeWorkspace({
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+        scope: command.scope === undefined
+          ? undefined
+          : requireString(command.scope, 'scope'),
       })
 
     case 'run-action':

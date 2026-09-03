@@ -176,12 +176,22 @@ export interface MaterializeOutcome {
   readonly quarantined: readonly string[]
   /** Ids hard-deleted from `blocks`. */
   readonly deleted: readonly string[]
-  /** Ids whose `needs_apply` flag this pass CLEARED — every row it decided
-   *  leaves `blocks` correct: applied, skip-staled (the local row wins by the
-   *  gate's own rule), or already reflected by `blocks` even though the drain
-   *  could not apply it (`blocksAlreadyReflects`). The rows it did NOT
-   *  clear are the durable gap `WORKSPACE_UNAPPLIED_SQL` reports. */
+  /** Ids whose `needs_apply` flag this pass CLEARED — rows that arrived flagged
+   *  and that it decided leave `blocks` correct: applied, skip-staled (the local
+   *  row wins by the gate's own rule), or already reflected by `blocks` even
+   *  though the drain could not apply it (`blocksAlreadyReflects`). The rows it
+   *  did NOT clear are the durable gap `WORKSPACE_UNAPPLIED_SQL` reports.
+   *
+   *  A row that was ALREADY clear is not here, however the pass decided it. The
+   *  flag moving is the whole claim — a re-pass over a settled workspace
+   *  (`RematerializeScope` 'all') decides every row it reads and must report
+   *  having repaired none of them. */
   readonly resolved: readonly string[]
+  /** The other direction: ids whose `needs_apply` flag this pass SET, having
+   *  found a row it cannot apply that `blocks` does not already reflect.
+   *  Near-always empty on the queue path — a delivery arrives flagged, so its
+   *  own arrival does this, not a decision. */
+  readonly reflagged: readonly string[]
 }
 
 interface ApplyCandidate {
@@ -440,11 +450,12 @@ export const materializeStagingRows = async (
   const deleted: string[] = []
 
   const resolved: string[] = []
+  const reflagged: string[] = []
   // `decisions` counts too: a window whose every row skip-staled writes no
   // `blocks` row and still has flags to clear, and leaving them set would make
   // an echo-only drain look like a permanent gap.
   if (candidates.length === 0 && change.removed.length === 0 && decisions.length === 0) {
-    return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved }
+    return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged }
   }
 
   // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
@@ -477,25 +488,14 @@ export const materializeStagingRows = async (
         applied.push(plaintext.id)
         const after = parseBlockRow(plaintext)
         if (devAssertionsEnabled()) {
-          // L2 dev/test-only assertion (off in prod — issue #404 item 2):
-          // this UPSERT trusts arrived `references_json` as already
-          // canonical and never re-normalizes it. That's safe only because
-          // every writer in this codebase runs `core.normalizeReferences`
-          // (a same-tx processor, `normalizeReferencesProcessor.ts`) before
-          // the row is ever uploaded — a cross-device invariant with no
-          // local enforcement here, since sync-applied rows bypass
-          // `repo.tx` entirely and never pass through that processor.
-          // Deliberately NOT fixed by normalizing on every arrival: that
-          // would cost a JSON round-trip on every synced row (~320k in the
-          // existing dataset) to guard a risk that has never materialized.
-          // This assertion exists to catch the day that stops being true —
-          // a future writer that skips normalization, a hand-crafted sync
-          // fixture, or a non-app writer hitting the same tables directly
-          // (see issue #404 item 1) — in CI/dev, before a non-canonical row
-          // silently breaks the set-equality consumers that assume
-          // `references_json` is already sorted+deduped (the `json_each`
-          // backlinks index, `BACKLINKS_FOR_BLOCK_QUERY`, Map-keyed
-          // invalidation).
+          // Arrived `references_json` is trusted canonical: every writer
+          // runs `core.normalizeReferences` before upload, and sync-applied
+          // rows bypass `repo.tx`, so nothing re-checks it here. Deliberately
+          // NOT fixed by normalizing every arrival — a JSON round-trip per
+          // synced row to guard a risk that has never occurred. Dev-only, so
+          // a writer that stops normalizing fails in CI before it breaks the
+          // set-equality consumers (`json_each` backlinks index, Map-keyed
+          // invalidation). #404 item 2.
           const canonical = normalizeReferences(after.references)
           if (JSON.stringify(canonical) !== JSON.stringify(after.references)) {
             throw new Error(
@@ -549,49 +549,36 @@ export const materializeStagingRows = async (
       const beforeRow = removedBeforeById.get(id)
       if (beforeRow) snapshots.set(id, { before: parseBlockRow(beforeRow), after: null })
     }
-    // #404 item 6 — DOCUMENTED ASSUMPTION, deliberately not fixed here (Vlad,
-    // 2026-07-20). If a hard-deleted `id` was a property field/value child in a
-    // flipped workspace, its owner's projected cell keeps the now-orphaned key:
-    // the sync path doesn't run PROJECT, and there is no authoring device to
-    // upload a corrected cell (see below). We do NOT reproject the parent on
-    // arrival, because that would mean writing `properties_json` — a SYNCED
-    // column — from the arrival path, a categorically different move than the
-    // local-only derivations this path is allowed to make (see
-    // `arrivalProcessors.ts`).
-    //
-    // Why it's safe to leave: this is unreachable in normal operation. A user
-    // delete is a SOFT delete (`deleted = 1`, an UPDATE), which arrives as an
-    // upsert, not a `removed` — and the deleting device already ran PROJECT and
-    // uploaded the corrected cell, so peers converge. A `removed` here is a
-    // physical row disappearance: a stream-exit (scope-granular — it takes the
-    // parent too, so there's nothing local to reproject) or an OUT-OF-BAND hard
-    // delete of an individual block (manual server SQL / admin op / a future
-    // block-level GC — none exist as a normal path). Only that last case strands
-    // a cell. Recovery when it does: the parent's next content edit re-triggers
-    // PROJECT locally, or a manual reproject. If a routine individual-block
-    // hard-delete is ever introduced server-side, revisit this.
+    // A hard-deleted property field/value child leaves its owner's projected
+    // cell holding an orphaned key. Not repaired here: reprojecting would
+    // write `properties_json`, a SYNCED column, from the arrival path — see
+    // `arrivalProcessors.ts`. Accepted: a user delete is a soft delete and
+    // arrives as an upsert, so only an out-of-band hard delete reaches this
+    // branch. #404 item 6.
 
     // The decision and its record commit together — that is the whole reason
     // this is a column on the staging row rather than something a reader
     // re-derives. A pass that reads the flag inside its own write transaction
     // is excluded from this one by the write lock, so it never sees a decision
-    // half-made. Only for the version actually judged, and only where the flag disagrees:
-    // a row replaced since Phase 1 belongs to whoever judges THAT version, and
-    // `needs_apply <> value` keeps a window that decided nothing new from
-    // rewriting pages (a locked workspace re-defers the same rows every drain).
+    // half-made. Only for the version actually judged: a row replaced since
+    // Phase 1 belongs to whoever judges THAT version.
     const stagedNow = await readStagingFlagState(
       tx, decisions.map(decision => decision.id), readChunkSize,
     )
-    const stale: string[] = []
     for (const decision of decisions) {
       const now = stagedNow.get(decision.id)
       if (now === undefined || now.updatedAt !== decision.stagedUpdatedAt) continue
-      if (decision.needsApply) stale.push(decision.id)
+      // Only rows whose flag actually MOVES — see `resolved` / `reflagged` on
+      // MaterializeOutcome. The write is a no-op either way; the report is not.
+      if (decision.needsApply === now.needsApply) continue
+      if (decision.needsApply) reflagged.push(decision.id)
       else resolved.push(decision.id)
     }
-    for (const [value, ids] of [[0, resolved], [1, stale]] as const) {
+    for (const [value, ids] of [[0, resolved], [1, reflagged]] as const) {
       for (let i = 0; i < ids.length; i += readChunkSize) {
         const chunk = ids.slice(i, i + readChunkSize)
+        // `needs_apply <> value` is DEFENCE IN DEPTH now that the lists carry
+        // only movers: it filters on the read they were built from, in this lock.
         await tx.execute(setNeedsApplySql(value, chunk.length), chunk)
       }
     }
@@ -632,5 +619,5 @@ export const materializeStagingRows = async (
     }
   }
 
-  return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved }
+  return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged }
 }
