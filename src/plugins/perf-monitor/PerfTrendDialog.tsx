@@ -341,9 +341,10 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : interaction.length === 0 ? (
             <p className="text-sm text-muted-foreground">
+              {/* The timing is only true while recording is possible. Blocked,
+                  the verdict above says so, and promising a record a minute
+                  from now contradicts it. */}
               {blockedBy === null
-                // Blocked, and the verdict above says so — promising a record a
-                // minute from now would contradict it.
                 ? 'No interaction records yet — the first lands about a minute into a session.'
                 : 'No interaction records on this device.'}
             </p>

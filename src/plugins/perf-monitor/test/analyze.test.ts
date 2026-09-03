@@ -113,6 +113,34 @@ const seedFiringHistory = async (): Promise<void> => {
   }
 }
 
+/** Runs an analysis with the recorder committing this session's first record
+ *  from inside the history read — after the analysis has peeked at the session
+ *  and before the query reaches the database.
+ *
+ *  Spied on the RAW database: `repo.db` is a timing proxy whose own `getAll`
+ *  re-reads the property it was reached through, so a spy there calling the
+ *  original recurses until the stack goes. */
+const analyzeWithRecordCommittedMidRead = async (): Promise<{
+  analysis: Awaited<ReturnType<typeof runPerfAnalysis>>
+  committed: string
+}> => {
+  let committed: string | null = null
+  const read = sharedDb.db.getAll
+  const spy = vi.spyOn(sharedDb.db, 'getAll').mockImplementation(
+    async (sql: string, params?: unknown[]) => {
+      if (committed === null && sql.includes('AS payload')) {
+        committed = ''
+        committed = (await writeInteractionSample(repo, WS)) ?? ''
+      }
+      return read.call(sharedDb.db, sql, params)
+    })
+  try {
+    return { analysis: await runPerfAnalysis(repo, WS, 1000), committed: committed ?? '' }
+  } finally {
+    spy.mockRestore()
+  }
+}
+
 describe('runPerfAnalysis', () => {
   // A session that wrote nothing is a valid, loadable record that no rate can
   // be computed from — the comparison drops it before the median. Reporting the
@@ -376,27 +404,7 @@ describe('runPerfAnalysis', () => {
     // against it rather than a number keeps this test off the windowing math.
     const control = await runPerfAnalysis(repo, WS, 1000)
 
-    // Spied on the RAW database — `repo.db` is a timing proxy whose own
-    // `getAll` re-reads the property it was reached through, so a spy there
-    // calling the original recurses until the stack goes.
-    let committed: string | null = null
-    const read = sharedDb.db.getAll
-    const spy = vi.spyOn(sharedDb.db, 'getAll').mockImplementation(
-      async (sql: string, params?: unknown[]) => {
-        // The commit lands before the history query reads, and after the
-        // analysis has already peeked at the session.
-        if (committed === null && sql.includes('AS payload')) {
-          committed = ''
-          committed = (await writeInteractionSample(repo, WS)) ?? ''
-        }
-        return read.call(sharedDb.db, sql, params)
-      })
-    let analysis
-    try {
-      analysis = await runPerfAnalysis(repo, WS, 1000)
-    } finally {
-      spy.mockRestore()
-    }
+    const { analysis, committed } = await analyzeWithRecordCommittedMidRead()
 
     // Preconditions: the row really was written mid-read, and it really is in
     // the series the query returns.

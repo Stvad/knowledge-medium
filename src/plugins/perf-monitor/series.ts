@@ -118,9 +118,11 @@ export const partlyJudged = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status !== 'insufficient') &&
   results.some((r) => r.status === 'insufficient')
 
-/** Nothing was judged, and at least one metric is short of a sample from
- *  THIS session, not history — missing NOW, not necessarily forever. `some`,
- *  not `every`: a mixed set still has one metric a live counter could unblock. */
+/** At least one metric is short of a sample from THIS session, not of history
+ *  — missing NOW, not necessarily forever. `some`, and deliberately no
+ *  `anyJudged` guard: a set with one metric judged and another awaiting its
+ *  sample is exactly what the scheduler must come back to, and requiring
+ *  nothing to have been judged would stop it rechecking the unmeasured one. */
 export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean =>
   results.length > 0 &&
   results.some((r) => r.status === 'insufficient' && r.reason === 'no-current-sample')

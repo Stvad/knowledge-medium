@@ -224,6 +224,10 @@ export const clientSeriesQuery = (
     selectParams?: unknown[]
     /** Point lookup (e.g. `timeOriginMs`) — not bounded by a windowed read's candidate limit. */
     matchField?: { field: string; value: unknown }
+    /** Strict upper bound on the same kind of field, applied BEFORE the limit,
+     *  so a window of "what came before this one" is a window of that and not
+     *  of whatever the cap happened to reach. */
+    beforeField?: { field: string; value: unknown }
     tail: string
     tailParams?: unknown[]
   },
@@ -241,6 +245,7 @@ export const clientSeriesQuery = (
              AND (json_extract(properties_json, ?) IS NULL
                   OR json_extract(properties_json, ?) = ?)
              ${opts.matchField === undefined ? '' : 'AND json_extract(properties_json, ?) = ?'}
+             ${opts.beforeField === undefined ? '' : 'AND json_extract(properties_json, ?) < ?'}
            ORDER BY json_extract(properties_json, ?) DESC, order_key, id
            ${opts.tail}`,
     params: [
@@ -252,6 +257,9 @@ export const clientSeriesQuery = (
       ...(opts.matchField === undefined
         ? []
         : [`${record}.${opts.matchField.field}`, opts.matchField.value]),
+      ...(opts.beforeField === undefined
+        ? []
+        : [`${record}.${opts.beforeField.field}`, opts.beforeField.value]),
       `${record}.${opts.orderField ?? 'recordedAt'}`,
       ...(opts.tailParams ?? []),
     ],

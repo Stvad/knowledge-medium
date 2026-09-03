@@ -179,12 +179,18 @@ const scanSeries = async <T extends { recordedAt: number }>(
   repo: Repo,
   workspaceId: string,
   { typeId, recordName, isUsable, orderField }: RecordSeries<T>,
-  /** Rows this window is not FOR — applied before the cap counts them, so
-   *  excluding one shortens the scan rather than the window. Asked once per row
-   *  as the rows are PARSED, so a caller may read state that the query itself
-   *  was slow enough to have changed. */
-  excluded: (row: { id: string; record: T }) => boolean = () => false,
+  opts: {
+    /** Rows this window is not FOR — asked once per row as the rows are PARSED,
+     *  so a caller may read state that the query itself was slow enough to have
+     *  changed. Before the cap counts them, so excluding one shortens the scan
+     *  rather than the window. */
+    excluded?: (row: { id: string; record: T }) => boolean
+    /** Strict upper bound on the ordering field, in SQL. For a window that
+     *  means "before this one" rather than "the newest ones". */
+    before?: { field: keyof T & string; value: unknown }
+  } = {},
 ): Promise<Array<{ id: string; record: T }>> => {
+  const excluded = opts.excluded ?? (() => false)
   const recordPath = jsonPathForProperty(recordName)
   const groupId = seriesGroupId(repo, workspaceId, typeId)
   // ONE query, not a page walk: `OFFSET` over an order other tabs keep
@@ -196,6 +202,7 @@ const scanSeries = async <T extends { recordedAt: number }>(
   const q = clientSeriesQuery('id, json_extract(properties_json, ?) AS payload', {
     groupId, recordName, orderField, deviceSurface: deviceSurface(), clientId: getClientId(),
     selectParams: [recordPath],
+    beforeField: opts.before,
     tail: 'LIMIT ?', tailParams: [CANDIDATE_LIMIT],
   })
   const rows = await repo.db.getAll<{ id: string; payload: string | null }>(q.sql, q.params)
@@ -218,18 +225,21 @@ const scanSeries = async <T extends { recordedAt: number }>(
 export const loadRecords = scanSeries
 
 /**
- * The baseline window with THIS session's own row REMOVED, plus that row. A
- * session must not contribute to the history it is judged against: it both
- * inflates the count — letting four genuine samples pass for the five a
- * verdict requires — and pulls the median toward itself.
+ * The sessions BEFORE this one, plus this one's own record.
  *
- * Filtered here rather than left to the caller's slicing: other tabs writing
- * newer rows sink this one THROUGH the window, so it is neither reliably at
- * the front nor reliably past the cap. Before the cap, so the window still
- * holds a full `HISTORY_LIMIT` of past sessions rather than one short.
+ * Strictly before, in SQL: this client's other tabs and its installed app keep
+ * booting while a long-lived tab stays open, and those rows sort above this
+ * session's. Left in, they become the "recent history" this session is judged
+ * against — so two later slow boots can report an earlier clean one as a
+ * regression, and past `CANDIDATE_LIMIT` later boots no genuinely prior
+ * session is loaded at all. The bound also removes this session's own row,
+ * which must not contribute to the history it is judged against.
  *
- * `current` is a POINT LOOKUP by identity, not a wider scan: no candidate
- * limit can hide it, however far those other tabs may have pushed it.
+ * Before the LIMIT, so the window holds a full `HISTORY_LIMIT` of earlier
+ * sessions rather than however many the cap had left over.
+ *
+ * `current` is a POINT LOOKUP by the same identity: no candidate limit can
+ * hide it, however far those later sessions have pushed it down.
  */
 export const loadSeriesWithCurrent = async <T extends { recordedAt: number }>(
   repo: Repo,
@@ -238,8 +248,7 @@ export const loadSeriesWithCurrent = async <T extends { recordedAt: number }>(
   identity: { field: keyof T & string; value: unknown },
 ): Promise<{ window: Array<{ id: string; record: T }>; current: T | null }> => {
   const [window, current] = await Promise.all([
-    scanSeries(repo, workspaceId, series,
-      ({ record }) => record[identity.field] === identity.value),
+    scanSeries(repo, workspaceId, series, { before: identity }),
     findRecord(repo, workspaceId, series, identity),
   ])
   return { window, current }

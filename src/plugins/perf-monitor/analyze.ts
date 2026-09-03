@@ -131,7 +131,7 @@ export const runPerfAnalysis = async (
   // beforehand is still null when the row it names comes back.
   const interaction = await loadRecords(
     repo, workspaceId, INTERACTION_SERIES,
-    ({ id }) => id === pageRecordFor(repo, workspaceId)?.blockId)
+    { excluded: ({ id }) => id === pageRecordFor(repo, workspaceId)?.blockId })
   const { window: startup, current: thisBoot } = await loadSeriesWithCurrent(
     repo, workspaceId, STARTUP_SERIES,
     { field: 'timeOriginMs', value: performance.timeOrigin },
@@ -154,7 +154,11 @@ export const runPerfAnalysis = async (
   // Read off the comparison RESULTS, not adjacent state — a session can own a row and still measure nothing usable.
   const interactionUnjudged = unjudgedReason(interactionResults, {
     blended: !session.attributable,
-    notRecording: session.recordId === null,
+    // Read AFTER the loads, for the same reason the exclusion above is: the
+    // recorder can commit this session's first record while they run, and the
+    // pre-load answer reports "nothing recorded" beside a count and a trend
+    // table that both already show the row.
+    notRecording: pageRecordFor(repo, workspaceId) === null,
   })
   const startupUnjudged = unjudgedReason(startupResults, {})
 

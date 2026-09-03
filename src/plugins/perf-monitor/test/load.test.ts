@@ -252,46 +252,51 @@ describe('loadRecords', () => {
     expect(loaded.map((r) => r.record.timeOriginMs)).toEqual([3_000, 2_000, 1_000])
   })
 
-  // The cap bounds the BASELINE; addressing this session's own row is a
-  // different question, answered by identity rather than by scanning further.
-  // This client's other tabs write newer rows for as long as the page stays
-  // open, so no scan bound is enough — the comparison would report no current
-  // sample with the row sitting on disk.
-  it('keeps the row a caller must recognise, past the window', async () => {
+  // A long-lived tab sits still while this client's OTHER tabs and its
+  // installed app keep starting, so this session's row sinks under theirs
+  // without limit — past the candidate cap, given enough of them. Two things
+  // have to survive that: addressing this session's own row, which is a point
+  // lookup and not a matter of scanning further; and the window meaning "the
+  // sessions BEFORE this one", which those later rows are not.
+  it('reads earlier sessions only, and still finds this one past the cap', async () => {
     const groupId = clientGroupId(repo, WS, interactionMetricsUIStateType)
-    // Past the CANDIDATE cap, not merely the history window: retention keeps
-    // thousands, and a long-lived page accumulates other tabs' rows above its
-    // own without limit. Any scan-based lookup fails here whatever its bound.
-    const buried = CANDIDATE_LIMIT + 5
-    for (let i = 0; i <= buried; i++) {
+    const later = CANDIDATE_LIMIT + 5
+    const earlier = HISTORY_LIMIT + 5
+    const MINE = 5e9
+    // Rows above and below this session's, and this session's between them.
+    const stamps = [
+      ...Array.from({ length: later }, (_, i) => MINE + later - i),
+      MINE,
+      ...Array.from({ length: earlier }, (_, i) => MINE - 1 - i),
+    ]
+    for (const [i, recordedAt] of stamps.entries()) {
       await sharedDb.db.execute(
         `INSERT INTO blocks
            (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
             created_at, updated_at, created_by, updated_by)
          VALUES (?, ?, ?, ?, '', ?, 0, 1, 1, ?, ?)`,
         [`rec-${i}`, WS, groupId, `a${String(i).padStart(4, '0')}`,
-         JSON.stringify({ [interactionRecordProp.name]: { ...ourRecord(), recordedAt: 9e9 - i } }),
+         JSON.stringify({ [interactionRecordProp.name]: { ...ourRecord(), recordedAt } }),
          USER.id, USER.id],
       )
     }
-    const buriedAt = 9e9 - buried
-    const mine = (r: { recordedAt: number }) => r.recordedAt === buriedAt
+    const mine = (r: { recordedAt: number }) => r.recordedAt === MINE
 
-    // Precondition: this row really is past the cap, so the assertion below is
-    // about addressing it directly and not about the arrangement.
-    const capped = await loadRecords(repo, WS, INTERACTION_SERIES)
-    expect(capped.some((r) => mine(r.record))).toBe(false)
+    // Precondition: this row really is past the cap, so the point lookup below
+    // is doing the work and not the arrangement.
+    expect((await loadRecords(repo, WS, INTERACTION_SERIES)).some((r) => mine(r.record)))
+      .toBe(false)
 
     const { window, current } = await loadSeriesWithCurrent(
-      repo, WS, INTERACTION_SERIES, { field: 'recordedAt', value: buriedAt })
+      repo, WS, INTERACTION_SERIES, { field: 'recordedAt', value: MINE })
 
     expect(current).not.toBeNull()
     expect(mine(current!)).toBe(true)
-    // SEPARATE, not appended: the window is exactly the bounded history a
-    // comparison averages, and folding this session's row into it would put it
-    // in the baseline it is judged against.
+    // A full window, drawn entirely from BELOW this session — the later rows
+    // are not its history, and taking them would leave the comparison judging
+    // this session against sessions that came after it.
     expect(window).toHaveLength(HISTORY_LIMIT)
-    expect(window.some((r) => mine(r.record))).toBe(false)
+    expect(window.every((r) => r.record.recordedAt < MINE)).toBe(true)
   })
 
   // The row can be INSIDE the window as well as past it. Other tabs of this

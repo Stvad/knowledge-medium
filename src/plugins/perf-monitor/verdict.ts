@@ -14,11 +14,12 @@ const nothingJudged = (a: PerfAnalysis): boolean => !a.ready.interaction && !a.r
 import type { Regression } from './series.js'
 
 export interface PerfVerdict {
-  /** `pending` means the comparison is INCOMPLETE — nothing judged, or one
-   *  series judged and another not. Reported distinctly from `clean` because an
-   *  empty regression list is the same shape for both and the opposite
-   *  statement, and a partial verdict is not a clean one: the series that went
-   *  unjudged is exactly where a finding could have been hiding. */
+  /** `clean` is the only one that claims a COMPLETE comparison. `pending` says
+   *  nothing regressed among what was judged and something was not judged —
+   *  reported distinctly from `clean` because an empty regression list is the
+   *  same shape for both and the opposite statement. `regressed` says only that
+   *  a finding was found; a series or metric may still have gone unjudged
+   *  beside it, and `notes` carries that. */
   kind: 'regressed' | 'clean' | 'pending'
   headline: string
   /** Context that qualifies the headline, in reading order. */
