@@ -220,6 +220,12 @@ export const createDbMirrorSchedule = ({
     } catch (err) {
       await recordStatus(userId, {
         lastCheckedAt: at,
+        // The permission check happens before the copy and returns rather than
+        // throwing, so a throw here is some OTHER failure — a full disk, a
+        // vanished drive. Leaving a stale permission flag set would have the
+        // chip offer "Grant access again" for a problem that is nothing of the
+        // sort; if the grant really is gone, the next run records it again.
+        permissionLost: false,
         lastError: describeError(err),
         lastErrorAt: at,
       })

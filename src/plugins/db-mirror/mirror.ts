@@ -243,7 +243,14 @@ export const runDbMirror = async ({
     const present = scanned.some(
       copy =>
         copy.name === lastCopy.filename &&
-        !copy.empty &&
+        // A size we could actually READ. An unreadable entry — an offline cloud
+        // placeholder — is not evidence a usable copy is there, and accepting
+        // it would protect the unreadable file while pruning the readable ones
+        // behind it. Neither deleted nor believed.
+        copy.size !== undefined &&
+        copy.size !== 0 &&
+        // And the size it was written with, since an interrupted sync can
+        // truncate a copy to something plausible.
         (lastCopy.bytes === undefined || copy.size === lastCopy.bytes),
     )
     // Housekeeping is about the folder, not about the copy, so it runs here

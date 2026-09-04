@@ -316,6 +316,24 @@ describe('the mirror schedule', () => {
     })
   })
 
+  it('does not report a full disk as a lost folder permission', async () => {
+    // The permission check runs before the copy and returns rather than
+    // throwing, so a throw is some other failure. A stale flag left set would
+    // have the chip offer "Grant access again" for a full disk.
+    await enable()
+    outcomes = [{kind: 'permission-lost', permission: 'prompt'}]
+    const {job} = build()
+    await job.body!()
+    expect((await store.load(USER)).status.permissionLost).toBe(true)
+
+    outcomes = [new Error('The disk is full')]
+    await expect(job.body!()).rejects.toThrow('The disk is full')
+
+    const {status} = await store.load(USER)
+    expect(status.permissionLost).toBe(false)
+    expect(status.lastError).toBe('The disk is full')
+  })
+
   describe('another tab already mirroring', () => {
     it('stands down, and comes back well before the full cadence', async () => {
       // The holder may be mid-copy — or may have crashed, closed, or failed. On

@@ -18,7 +18,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DbMirrorSettingsDialog } from '../DbMirrorSettingsDialog.tsx'
-import { createDbMirrorStore, DB_MIRROR_DEFAULTS, type DbMirrorStore } from '../store.js'
+import {
+  createDbMirrorStore,
+  DB_MIRROR_DEFAULTS,
+  MAX_INTERVAL_MINUTES,
+  MAX_KEEP_COUNT,
+  type DbMirrorStore,
+} from '../store.js'
 
 const USER = 'alice'
 
@@ -179,20 +185,49 @@ describe('DbMirrorSettingsDialog', () => {
     expect(mocks.resume).toHaveBeenCalled()
   })
 
-  it('an emptied keep-count field is left alone rather than clamped mid-edit', async () => {
+  it('lets the keep-count field be cleared and retyped', async () => {
+    // The input is controlled by the stored number, so without a draft React
+    // restores that number the instant the field is cleared — backspace-then-
+    // type is then impossible.
     renderDialog()
     await waitForLoaded()
+    const field = () => screen.getByLabelText(/^keep$/i) as HTMLInputElement
     const write = vi.spyOn(store, 'updateSettings')
 
-    fireEvent.change(screen.getByLabelText(/^keep$/i), {target: {value: ''}})
+    fireEvent.change(field(), {target: {value: ''}})
 
-    // On the WRITE, not on the stored value: a settings write is async, so
-    // reading the snapshot straight after the change passes either way.
+    expect(field().value).toBe('')
     expect(write).not.toHaveBeenCalled()
-    // And typing on still works — the guard skips the empty field, it does not
-    // wedge the input.
-    fireEvent.change(screen.getByLabelText(/^keep$/i), {target: {value: '5'}})
+
+    fireEvent.change(field(), {target: {value: '5'}})
     await waitFor(() => expect(store.getSnapshot()?.settings.keepCount).toBe(5))
+    expect(field().value).toBe('5')
+  })
+
+  it('shows the stored value again once the field is left', async () => {
+    // A value the store clamps stays on screen while typing and snaps to what
+    // was actually saved on blur.
+    renderDialog()
+    await waitForLoaded()
+    const field = () => screen.getByLabelText(/^keep$/i) as HTMLInputElement
+
+    fireEvent.change(field(), {target: {value: '999'}})
+    await waitFor(() => expect(store.getSnapshot()?.settings.keepCount).toBe(MAX_KEEP_COUNT))
+    expect(field().value).toBe('999')
+
+    fireEvent.blur(field())
+
+    expect(field().value).toBe(String(MAX_KEEP_COUNT))
+  })
+
+  it('offers every cadence the settings actually support', async () => {
+    // The stored maximum is a week and the retry logic reasons about weekly
+    // schedules; a selector that stopped at a day made that unreachable.
+    renderDialog()
+    await waitForLoaded()
+
+    const options = [...(screen.getByLabelText(/how often/i) as HTMLSelectElement).options]
+    expect(Number(options.at(-1)?.value)).toBe(MAX_INTERVAL_MINUTES)
   })
 
   it('changing the keep count and the interval persists through the store', async () => {

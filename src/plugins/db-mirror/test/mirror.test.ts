@@ -101,6 +101,24 @@ describe('runDbMirror', () => {
       expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, DB1, AT, TOKEN)})
     })
 
+    it('does not accept an unreadable copy as proof a usable one is there', async () => {
+      // An offline cloud placeholder is neither deleted nor believed: accepting
+      // it would protect the unreadable file while pruning the readable ones
+      // behind it, and report success forever.
+      const dir = new FakeDirectoryHandle()
+      const previous = dbMirrorFilename(DB, DB1, AT - HOUR, TOKEN)
+      dir.seed(previous, 512)
+      dir.unreadable.add(previous)
+
+      const outcome = await run({
+        directory: dir.asHandle(),
+        lastCopy: {marker: MARKER, filename: previous},
+      })
+
+      expect(outcome).toMatchObject({kind: 'mirrored'})
+      expect(dir.names()).toContain(previous)
+    })
+
     it('treats a copy truncated to a plausible size as gone', async () => {
       // An interrupted cloud sync leaves something that is not empty and not
       // the backup. Calling it present would protect the damaged file while

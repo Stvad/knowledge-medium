@@ -48,6 +48,7 @@ const INTERVAL_OPTIONS = (
     {minutes: 60, label: '1 hour'},
     {minutes: 6 * 60, label: '6 hours'},
     {minutes: 24 * 60, label: '24 hours'},
+    {minutes: 7 * 24 * 60, label: '7 days'},
   ] as const
 ).filter(o => o.minutes >= MIN_INTERVAL_MINUTES && o.minutes <= MAX_INTERVAL_MINUTES)
 
@@ -70,6 +71,11 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
   const state = useSyncExternalStore(dbMirrorStore.subscribe, dbMirrorStore.getSnapshot, dbMirrorStore.getSnapshot)
   const [running, setRunning] = useState(false)
   const [granting, setGranting] = useState(false)
+  /** What the keep-count field shows while it is being edited, or null when it
+   *  shows the stored value. The input is controlled, so without somewhere to
+   *  hold a half-typed value React restores the old number the moment the field
+   *  is cleared — backspace-then-type fights the user. */
+  const [keepDraft, setKeepDraft] = useState<string | null>(null)
 
   useEffect(() => {
     dbMirrorStore
@@ -134,11 +140,13 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
   }
 
   const handleKeepCountChange = (value: string): void => {
-    // An emptied field is someone part-way through typing a new number, not a
-    // request for the minimum — clamping it would fight them mid-edit.
-    if (value.trim() === '') return
+    setKeepDraft(value)
+    // An emptied or half-typed field is not a request for the minimum, so it is
+    // shown but not saved. Whatever IS a number gets saved as it is typed; the
+    // store clamps it, and the draft keeps that clamp off the screen until the
+    // user leaves the field.
     const parsed = Number(value)
-    if (!Number.isFinite(parsed)) return
+    if (value.trim() === '' || !Number.isFinite(parsed)) return
     void saving(dbMirrorStore.updateSettings(userId, {keepCount: parsed}))
   }
 
@@ -270,8 +278,9 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
                 max={MAX_KEEP_COUNT}
                 step={1}
                 inputMode="numeric"
-                value={state.settings.keepCount}
+                value={keepDraft ?? String(state.settings.keepCount)}
                 onChange={event => handleKeepCountChange(event.target.value)}
+                onBlur={() => setKeepDraft(null)}
               />
               <p className="text-xs text-muted-foreground">
                 Copies kept in the folder; older ones this app wrote are deleted.
