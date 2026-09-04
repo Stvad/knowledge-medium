@@ -27,6 +27,9 @@ export interface DbMirrorStatus {
   /** Change marker of the last copy written, for the skip-when-unchanged test. */
   lastMarker?: string
   lastMirrorAt?: number
+  /** When a run last COMPLETED, mirrored or skipped. Tells "nothing has
+   *  changed since the last copy" apart from "the mirror has stalled". */
+  lastCheckedAt?: number
   lastFilename?: string
   lastBytes?: number
   /** The folder grant lapsed. Only a user gesture can clear this, so the
@@ -78,6 +81,7 @@ const normalizeStatus = (value: unknown): DbMirrorStatus => {
   return dropUndefined({
     lastMarker: typeof raw.lastMarker === 'string' ? raw.lastMarker : undefined,
     lastMirrorAt: typeof raw.lastMirrorAt === 'number' ? raw.lastMirrorAt : undefined,
+    lastCheckedAt: typeof raw.lastCheckedAt === 'number' ? raw.lastCheckedAt : undefined,
     lastFilename: typeof raw.lastFilename === 'string' ? raw.lastFilename : undefined,
     lastBytes: typeof raw.lastBytes === 'number' ? raw.lastBytes : undefined,
     permissionLost: typeof raw.permissionLost === 'boolean' ? raw.permissionLost : undefined,
