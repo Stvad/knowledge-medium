@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from 'react'
+import { useRef, type KeyboardEvent } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { isRefCodec, isRefListCodec } from '@/data/api'
@@ -69,6 +69,13 @@ export function PropertyRow({
   const Editor = row.Editor
   const rowReadOnly = readOnly || row.readOnly
   const renameAllowed = row.canRename && !rowReadOnly
+  // Whether the user typed in the rename field. NOT derivable by comparing the
+  // field's value to the stored key: a text input's value is sanitized — CR and
+  // LF are stripped — so a key holding either already reads as "changed" before
+  // anyone touches it, and committing that sanitized string re-keys the cell
+  // (onto an existing normalized key, if one is there). Only an input event
+  // means an edit.
+  const editedRef = useRef(false)
   const renameFocusHandlers = usePropertyEditingActivation(block)
   // Activation for the VALUE cell lives here rather than in each editor: the
   // row renders whatever editor a value preset resolved to, including one a
@@ -114,24 +121,24 @@ export function PropertyRow({
           {renameAllowed ? (
             <Input
               className="h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none focus-visible:border-transparent focus-visible:ring-0"
-              // The RAW key, never `row.labelText`: `renameProperty` reads
-              // "did the user edit this" off `newName === oldName`, so seeding
-              // the display label would rename every overridden row to its
-              // label on a bare focus-and-leave.
+              // The RAW key, never `row.labelText`: a rename commits what this
+              // field holds, so seeding the display label would rename every
+              // overridden row to its label the first time it is edited.
               defaultValue={row.name}
               aria-label={`Field ${row.labelText}`}
               data-property-label="true"
               title={hintText}
+              onChange={() => { editedRef.current = true }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === 'Tab') {
                   event.preventDefault()
-                  onRename(event.currentTarget.value)
+                  if (editedRef.current) onRename(event.currentTarget.value)
                 }
               }}
               onFocus={renameFocusHandlers.onFocus}
               onBlur={(event) => {
                 renameFocusHandlers.onBlur()
-                onRename(event.target.value)
+                if (editedRef.current) onRename(event.target.value)
               }}
             />
           ) : (

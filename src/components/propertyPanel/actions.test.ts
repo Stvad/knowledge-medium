@@ -272,7 +272,9 @@ describe('property panel action visibility guards', () => {
   })
 
   // A padded key is what synthesis mints for an orphaned cell key, verbatim.
-  it('leaves an unedited padded key alone instead of re-keying its cell', async () => {
+  // Reachable as an edit that lands back on the stored key — PropertyRow no
+  // longer commits at all unless an input event fired.
+  it('leaves a padded key alone when the edit lands back on it', async () => {
     const {update, block} = deleteBlock({' padded ': 1, keep: 'me'})
     await renameProperty({
       block,

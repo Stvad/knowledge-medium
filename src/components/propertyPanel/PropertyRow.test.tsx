@@ -30,6 +30,27 @@ const paddedProp = defineProperty<string>(' padded ', {
   changeScope: ChangeScope.BlockDefault,
 })
 
+// A stored key carrying a line break: a text input cannot hold one, so its DOM
+// value is already a different string before the user touches anything.
+const newlineRow = (): PropertyPanelModelRow => ({
+  name: ' pad\nded ',
+  encodedValue: 'v',
+  isSet: true,
+  labelText: ' pad\nded ',
+  shape: paddedProp.codec.type,
+  schema: paddedProp,
+  schemaUnknown: true,
+  decodeFailed: false,
+  value: 'v',
+  Editor: undefined,
+  Glyph: undefined,
+  canRename: true,
+  canDelete: true,
+  canChangeShape: false,
+  isHidden: false,
+  readOnly: false,
+})
+
 describe('PropertyRow', () => {
   it('renders the raw JSON value when a known property fails to decode', () => {
     const row: PropertyPanelModelRow = {
@@ -257,7 +278,65 @@ describe('PropertyRow', () => {
 
     const input = screen.getByLabelText(`Field ${row.labelText}`) as HTMLInputElement
     expect(input.value).toBe(' padded ')
+    // The edit itself still commits the raw key it was seeded from.
+    fireEvent.change(input, {target: {value: ' padded x'}})
     fireEvent.blur(input)
-    expect(onRename).toHaveBeenCalledWith(' padded ')
+    expect(onRename).toHaveBeenCalledWith(' padded x')
+  })
+
+  // A text input's DOM value is sanitized — CR/LF are stripped — so an
+  // UNTOUCHED field hands back a string that differs from the stored key, and
+  // an editedness test that compares strings reads that as a rename. Only an
+  // actual input event means the user typed something.
+  it('does not rename a key containing a newline on a bare focus-and-blur', () => {
+    const row = newlineRow()
+    const onRename = vi.fn()
+
+    const {container} = render(
+      <PropertyRow
+        row={row}
+        block={{id: 'block-1'} as Block}
+        readOnly={false}
+        canConfigure={false}
+        onNavigate={vi.fn()}
+        onConfigure={vi.fn()}
+        onChange={vi.fn()}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />,
+    )
+
+    const input = container.querySelector('input[data-property-label]') as HTMLInputElement
+    // The precondition this case turns on: the DOM already differs from the key.
+    expect(input.value).toBe(' padded ')
+    expect(row.name).toBe(' pad\nded ')
+
+    fireEvent.focus(input)
+    fireEvent.blur(input)
+    expect(onRename).not.toHaveBeenCalled()
+  })
+
+  it('still renames a newline key the user actually edits', () => {
+    const row = newlineRow()
+    const onRename = vi.fn()
+
+    const {container} = render(
+      <PropertyRow
+        row={row}
+        block={{id: 'block-1'} as Block}
+        readOnly={false}
+        canConfigure={false}
+        onNavigate={vi.fn()}
+        onConfigure={vi.fn()}
+        onChange={vi.fn()}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />,
+    )
+
+    const input = container.querySelector('input[data-property-label]') as HTMLInputElement
+    fireEvent.change(input, {target: {value: 'padded'}})
+    fireEvent.blur(input)
+    expect(onRename).toHaveBeenCalledWith('padded')
   })
 })
