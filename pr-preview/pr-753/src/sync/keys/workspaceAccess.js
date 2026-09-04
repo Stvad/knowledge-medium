@@ -1,2 +1,2 @@
-var e=(e,t,n)=>e===`plaintext`?{kind:`ready`}:e===`e2ee`?n?{kind:`ready`}:{kind:`locked`,reason:`key-required`}:t===`e2ee`?{kind:`locked`,reason:`key-required`}:{kind:`locked`,reason:`quarantine`},t=(t,n,r)=>!(t===`plaintext`||t===`e2ee`&&n)&&r===null?{kind:`waiting`}:e(t,r?.encryptionMode??`none`,n);export{t as decideWorkspaceEntry};
+var e=(e,t,n)=>e===`plaintext`?{kind:`ready`}:e===`e2ee`?n?{kind:`ready`}:{kind:`locked`,reason:`key-required`}:t===`e2ee`?{kind:`locked`,reason:`key-required`}:{kind:`locked`,reason:`quarantine`},t=(t,n,r)=>!(t===`plaintext`||t===`e2ee`&&n)&&r===null?{kind:`waiting`}:e(t,r?.encryptionMode??`none`,n);export{t as decideWorkspaceEntry,e as resolveWorkspaceAccess};
 //# sourceMappingURL=workspaceAccess.js.map
