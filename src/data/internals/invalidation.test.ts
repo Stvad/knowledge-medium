@@ -47,14 +47,14 @@ const setup = async (
   await resetTestDb(sharedDb.db)
   const h = sharedDb
   const cache = new BlockCache()
-  const repo = new Repo({
+  const repo = trackTestRepo(new Repo({
     db: h.db,
     cache,
     user: {id: 'u1'},
     startSyncObserver: opts.startTail ?? false, // off by default for determinism
     // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
     blockIdPolicy: 'any',
-  })
+  }))
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     ...(opts.extraExtensions ?? []),
@@ -831,3 +831,4 @@ describe('sync observer: sync-applied invalidation', () => {
 })
 
 import type { BlockData, BlockReference } from '@/data/api'
+import { trackTestRepo } from '@/data/test/testRepoScope'

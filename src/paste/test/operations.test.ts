@@ -645,9 +645,8 @@ describe('pasteFromClipboard (shortcut/programmatic paste)', () => {
     vi.stubGlobal('navigator', {clipboard: {readText: async () => text}})
 
   it('honors a forced single-block override from the verb (no split)', async () => {
-    // The gap Codex flagged: shortcut paste used to bypass pasteDecisionVerb,
-    // so a plugin preference like "always paste verbatim" was silently
-    // ignored. It must now apply here too.
+    // Shortcut paste goes through pasteDecisionVerb too, so a plugin
+    // preference like "always paste verbatim" applies here as well.
     stubClipboard('alpha\nbeta')
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'Target', 'root', 'a0')

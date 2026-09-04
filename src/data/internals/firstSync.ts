@@ -1,4 +1,4 @@
-/**
+/*
  * Await the initial PowerSync download from a structural status surface, shared
  * by the cold-start consumers that each used to hand-roll the same
  * `currentStatus.hasSynced` + `registerListener({statusChanged})` dance (the

@@ -1,5 +1,5 @@
 import { FolderTree } from 'lucide-react'
-import type { OperatorBackfillResult, Repo } from '@/data/repo'
+import type { OperatorBackfillPass, OperatorBackfillResult, Repo } from '@/data/repo'
 import {
   PROPERTY_CELL_BACKFILL_ID,
   countPropertyCellBackfillCandidates,
@@ -16,7 +16,7 @@ import { flipWorkspaceToChildBackedProperties } from '@/data/workspaces'
 import { isRemoteSyncActive } from '@/data/repoProvider'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { dismissToast, showInfo, showProgress } from '@/utils/toast.js'
+import { dismissToast, showInfo, showProgress, type ProgressToast } from '@/utils/toast.js'
 import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
 
 /** The runner's reasons come from several places and only some end in a
@@ -103,14 +103,12 @@ export const describeOutcome = (
     blocksMaterialized: number
     valuesMaterializedTotal: number
     unmigrated: number
-    orphanedOwnersSwept: number
   },
-  editedUnderPass: boolean,
   {flipped, undoCleared}: {flipped: boolean; undoCleared: boolean}
     = {flipped: false, undoCleared: false},
 ): {message: string; failed: boolean; followUp?: string} => {
   const cleared = result.undoHistoryCleared || undoCleared
-  const described = describePassOutcome(result, counts, editedUnderPass, cleared)
+  const described = describePassOutcome(result, counts, cleared)
   // Both tails appended HERE, not inside the switch: a branch cannot forget a
   // suffix it does not apply, and every branch needs both.
   return {
@@ -133,20 +131,18 @@ const describePassOutcome = (
     blocksMaterialized: number
     valuesMaterializedTotal: number
     unmigrated: number
-    orphanedOwnersSwept: number
   },
-  editedUnderPass: boolean,
   /** Already folded by the caller — the pass's own clear OR the gesture's. */
   cleared: boolean,
 ): {message: string; failed: boolean; followUp?: string} => {
-  const {blocksMaterialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept} = counts
+  const {blocksMaterialized, valuesMaterializedTotal, unmigrated} = counts
   switch (result.outcome) {
     case 'ran':
       // On VALUES, not on blocks: `blocksMaterialized` counts blocks accepted in
       // FULL, so one junk key on every block reads as zero for a run that wrote
-      // all the other keys. And on the RUN's total, not the last sweep's — past
-      // the flip the converging sweep is by definition the one that found nothing
-      // left pending, so a per-sweep zero is how every successful run ends.
+      // all the other keys. And on the RUN's total, not the last sweep's — the
+      // converging sweep is by definition the one that found nothing left
+      // pending, so a per-sweep zero is how every successful run ends.
       if (valuesMaterializedTotal === 0 && unmigrated > 0) {
         return {
           message: `Nothing was migrated — all ${unmigrated.toLocaleString()} property ` +
@@ -156,17 +152,7 @@ const describePassOutcome = (
         }
       }
       return {
-        message: `Migrated properties on ${blocksMaterialized.toLocaleString()} blocks.` +
-          // Deletion is the part of this pass an operator would want to check,
-          // and it is otherwise reported nowhere.
-          (orphanedOwnersSwept > 0
-            ? ` Removed the property children of ${orphanedOwnersSwept.toLocaleString()} ` +
-              'block(s) whose properties had been deleted.'
-            : '') +
-          (editedUnderPass
-            ? ' The workspace was edited while it ran, so some values may already be behind —' +
-              ' run this again.'
-            : ''),
+        message: `Migrated properties on ${blocksMaterialized.toLocaleString()} blocks.`,
         // Surfaced through `done`, not `fail`: the pass DID complete, and
         // saying otherwise would send an operator looking for a broken run
         // rather than for the handful of values named in the console.
@@ -181,9 +167,18 @@ const describePassOutcome = (
       return {
         // "Not started" only if NOTHING did: the pass aborts mid-run too, and a
         // run that flipped has already made its one irreversible change.
+        //
+        // `retryable` is read on BOTH branches. Past the flip `cleared` is
+        // always true, so a branch that ignored it told every durable
+        // blocker — a view gap nothing is draining, a workspace turned
+        // read-only — to "run it again", which is the forever-retry loop
+        // `retryable` exists to prevent.
         message: (cleared
-          ? `Stopped before finishing — ${withPeriod(result.reason)} Already-migrated blocks ` +
-            'are skipped, so run it again.'
+          ? `Stopped before finishing — ${withPeriod(result.reason)} ` +
+            (result.retryable === false
+              ? 'Nothing is working on it, so running this again will not get further ' +
+                'until that is fixed.'
+              : 'Already-migrated blocks are skipped, so run it again.')
           : notStarted(result.reason, result.retryable)),
         failed: true,
       }
@@ -201,9 +196,14 @@ const describePassOutcome = (
         // so this outcome only ever means another device holds the claim —
         // including one that took it and never came back, which no timeout
         // clears. Naming where the claim lives is the whole recovery.
-        message: 'Another client holds this migration — another device, or another tab of ' +
-          'this browser. Wait for it to finish; if nothing is running, check the claim ' +
-          'block on the "System Migrations (km)" page and delete it to release the pass.',
+        // NOT "another tab": the claimant id is per browser PROFILE, so two
+        // tabs share one claim and read it as their own — an overlap this
+        // seam does not separate and never reports. Naming tabs here sent
+        // operators to close one, which changes nothing.
+        message: 'Another client holds this migration — another device, or this browser ' +
+          'signed in elsewhere. Wait for it to finish; if nothing is running, check the ' +
+          'claim block on the "System Migrations (km)" page and delete it to release the ' +
+          'pass.',
         failed: true,
       }
     case 'already-running':
@@ -221,6 +221,210 @@ const describePassOutcome = (
         message: `No migration is registered under "${PROPERTY_CELL_BACKFILL_ID}".`,
         failed: true,
       }
+  }
+}
+
+/** The counts a run that never started migrated. `describeOutcome` reads them
+ *  only on the `ran` branch, which a refusal cannot reach — spelled out rather
+ *  than faked per call site so a future branch that does read them sees zeros
+ *  and not a guess. */
+const NOTHING_MIGRATED = {
+  blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 0,
+} as const
+
+/** Everything {@link migrateUnderClaim} needs that was decided BEFORE the
+ *  claim: the plan and the counts were taken to build the confirmation, and
+ *  re-deriving them under the claim would ask a different question than the
+ *  user answered. */
+interface ClaimedMigration {
+  readonly repo: Repo
+  readonly workspaceId: string
+  /** Whether the workspace was ALREADY child-backed, so the flip is skipped. */
+  readonly childBacked: boolean
+  readonly plan: PropertyDefinitionSynthesisPlan
+  /** How many of the plan's candidates will actually be minted — zero for a
+   *  refused plan, whose keys stay cell-only. */
+  readonly willSynthesize: number
+  readonly blockCount: number
+  readonly banner: ProgressToast
+}
+
+/** What the gesture WRITES, plus the report that follows it — everything that
+ *  must happen with the graph-wide claim held.
+ *
+ *  Every `return` in here is a return from the CLAIMED region: the wrapper
+ *  hands the claim back on all of them. */
+const migrateUnderClaim = async (
+  {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}: ClaimedMigration,
+  pass: OperatorBackfillPass,
+): Promise<void> => {
+  // BEFORE the flip, per the §9 runbook. A definition is an ordinary dormant
+  // block at 'cell', so minting one early is free; minting one AFTER the flip
+  // would leave a window in which the pass skips those keys and reports
+  // success over them.
+  let synthesized = 0
+  // TWO flags, not one. The flip is what makes the workspace child-backed for
+  // everyone; clearing the stack is a consequence of any write this gesture
+  // commits, synthesis included. Collapsing them made an already-flipped run
+  // that only synthesized announce a flip that never happened.
+  let undoCleared = false
+  let flipLanded = false
+  if (willSynthesize > 0) {
+    banner.update('Adding definitions for properties that have none…')
+    try {
+      const result = await applyPropertyDefinitionSynthesis(repo, plan)
+      synthesized = result.created
+      // About the entries ALREADY on the stack, not synthesis's own writes
+      // (its transaction is `skipUndo`, and its Properties-page bootstrap is
+      // a no-op — `kernel:properties` is a `systemPagesFacet` entry, so the
+      // page exists before this gesture can be invoked). A key with no
+      // definition was a key nothing materialized, so once one is MINTED a
+      // replayed pre-synthesis snapshot writes a cell for a key that now has
+      // children. Hence `created`, not "did this run": a run that only
+      // converged changed nothing, and clearing then costs the user history
+      // for no hazard.
+      if (synthesized > 0) {
+        repo.undoManagerFor(workspaceId).clear()
+        undoCleared = true
+      }
+      // Asked AGAIN, with the OUTCOME. The pre-mint answer was about what we
+      // expected to be able to do; this is about what actually happened, and
+      // a key that came back skipped still has no definition. The backfill
+      // excludes unregistered keys from its work list, so without this the
+      // flip lands and the pass reports success with zero failures over a key
+      // it silently could not migrate.
+      const stillBlocked = flipBlockedBySynthesis(plan, result)
+      if (!childBacked && stillBlocked !== null) {
+        banner.fail(stillBlocked + undoNote(undoCleared))
+        return
+      }
+      if (stillBlocked !== null) showInfo(stillBlocked, SYNTHESIS_TOAST)
+    } catch (err) {
+      console.error('[properties-migration] definition synthesis failed:', err)
+      banner.fail('Could not add definitions for the properties that have none, so ' +
+        `nothing was migrated: ${err instanceof Error ? err.message : String(err)}` +
+        undoNote(undoCleared))
+      return
+    }
+  }
+  if (!childBacked) {
+    // FIRST, and that is the whole point: the flip turns the live maintainers
+    // on, so a workspace flipped with zero children keeps reading cells (§5's
+    // pending-materialization fallback) while new writes grow children.
+    // Backfilling first opens a window where machinery exists that nothing
+    // recognizes and nothing maintains.
+    // Assumes no workspace has run an earlier build's pass, so none holds
+    // stale property machinery. Owner's call not to carry a check for a state
+    // that cannot exist.
+    // The second of exactly TWO active-workspace checks, not a rule applied
+    // at every await. Each guards a step the user cannot take back: the
+    // post-dialog one because a confirmation is a user-length pause, this one
+    // because the flip is fleet-wide and irreversible. Synthesis deliberately
+    // has neither — it writes dormant blocks scoped to the workspace named in
+    // its own argument, so navigating away withdraws nothing. Do not add a
+    // third.
+    if (repo.activeWorkspaceId !== workspaceId) {
+      banner.fail('Stopped before switching this workspace over: a different workspace ' +
+        'is open now. Nothing was switched.' + undoNote(undoCleared))
+      return
+    }
+    banner.update('Switching this workspace to property blocks…')
+    let localApplied: boolean
+    try {
+      ;({localApplied} = await flipWorkspaceToChildBackedProperties(repo, workspaceId))
+    } catch (err) {
+      console.error('[properties-migration] flip failed:', err)
+      // "so nothing was migrated" is only true because this catch cannot see a
+      // committed flip: the server write is the only thing that throws here.
+      // The definitions minted a moment ago DID land, though — they are inert
+      // at 'cell' and a re-run reuses them, but saying "nothing" would be a
+      // small lie about a write that shows up on the Properties page.
+      banner.fail('Could not switch this workspace to property blocks, so nothing ' +
+        `was migrated: ${err instanceof Error ? err.message : String(err)}` +
+        (synthesized > 0
+          ? ` The ${synthesized.toLocaleString()} definition(s) added just before it ` +
+            'are still there, and do nothing until this runs again.'
+          : '') +
+        undoNote(undoCleared))
+      return
+    }
+    // Immediately, not by waiting for the pass's first committed batch. Undo
+    // replay drives each row to a whole restored snapshot and SKIPS the same-tx
+    // processors (`isReplay`), so a cmd-Z of a pre-flip edit puts a cell back
+    // without the materializer syncing its children — and past the flip the
+    // children are the truth, so the two just diverge. Every way the run can
+    // end after this point without writing a batch (a peer holds the claim, the
+    // runner defers, there is nothing left to migrate) leaves that window open.
+    //
+    // THIS DEVICE ONLY, deliberately (#684): a peer that stayed open across the
+    // flip keeps its pre-flip entries, and nothing watches the column's arrival
+    // to clear them. Declined rather than built — the stack is in-memory and the
+    // transition happens once per workspace, so a watcher is permanent machinery
+    // for a single scheduled event, and the damage a replayed pre-flip snapshot
+    // does is a stale cell over live children, which the next write to those
+    // children projects away. The dialog tells the operator to reload other
+    // devices, which is what actually clears them.
+    repo.undoManagerFor(workspaceId).clear()
+    undoCleared = true
+    flipLanded = true
+    if (!localApplied) {
+      // The flip COMMITTED; this device just has no local `workspaces` row to
+      // stamp yet, so the pass would read 'cell' and refuse — every batch
+      // re-asserts the flip. Stop here instead, with the message that says the
+      // flip landed, rather than letting it fail on its own and report a
+      // migration that broke.
+      banner.fail(`${FLIP_LANDED} This device has not received the workspace row yet, ` +
+        'so the migration could not run here — run this again once sync catches up.' +
+        undoNote(undoCleared))
+      return
+    }
+  }
+  let materialized = 0
+  // Subscribed for the whole run, not just started with it: the pass reports
+  // per committed batch, and a run of several minutes with a silent toast is
+  // indistinguishable from a hung one.
+  let unmigrated = 0
+  let valuesMaterializedTotal = 0
+  const unsubscribe = onPropertyCellBackfillProgress(progress => {
+    materialized = progress.blocksMaterialized
+    valuesMaterializedTotal = progress.valuesMaterializedTotal
+    unmigrated = progress.failureCount
+    // Counts are per-sweep, and the sweep number is shown because a second
+    // pass over the same blocks is normal — without it the bar restarts from
+    // zero for no reason the operator can see.
+    banner.update(
+      `Migrating properties to blocks… sweep ${progress.sweeps}, ` +
+      `${progress.blocksScanned.toLocaleString()}/` +
+      `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`,
+    )
+  })
+  try {
+    const result = await pass.run()
+    const {message, failed, followUp} = describeOutcome(
+      result,
+      {blocksMaterialized: materialized, valuesMaterializedTotal, unmigrated},
+      {flipped: flipLanded, undoCleared},
+    )
+    if (failed) banner.fail(message)
+    else banner.done(message)
+    // A stable id: the follow-up tells the operator to run this again, and
+    // without one the next run stacks a second sticky toast beside the
+    // first, identical apart from a count that is now wrong.
+    if (followUp) {
+      showInfo(followUp, {id: 'properties-migration-worklist',
+                          duration: Number.POSITIVE_INFINITY})
+    }
+  } catch (err) {
+    console.error('[properties-migration] failed:', err)
+    // The runner can REJECT rather than return an outcome (a claim write that
+    // throws before its own pass-level catch), and describeOutcome — which is
+    // what otherwise carries these two sentences — never runs on that path. By
+    // then the flip has committed and the undo stack is gone.
+    banner.fail((flipLanded ? `${FLIP_LANDED} ` : '') +
+      `Migration failed: ${err instanceof Error ? err.message : String(err)}` +
+      undoNote(undoCleared))
+  } finally {
+    unsubscribe()
   }
 }
 
@@ -342,168 +546,31 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       banner.fail(notStarted(unfit.reason, unfit.retryable))
       return
     }
-    // BEFORE the flip, per the §9 runbook. A definition is an ordinary dormant
-    // block at 'cell', so minting one early is free; minting one AFTER the flip
-    // would leave a window in which the pass skips those keys and reports
-    // success over them.
-    let synthesized = 0
-    // TWO flags, not one. The flip is what makes the workspace child-backed for
-    // everyone; clearing the stack is a consequence of any write this gesture
-    // commits, synthesis included. Collapsing them made an already-flipped run
-    // that only synthesized announce a flip that never happened.
-    let undoCleared = false
-    let flipLanded = false
-    if (willSynthesize > 0) {
-      banner.update('Adding definitions for properties that have none…')
-      try {
-        const result = await applyPropertyDefinitionSynthesis(repo, plan)
-        synthesized = result.created
-        // About the entries ALREADY on the stack, not synthesis's own writes
-        // (its transaction is `skipUndo`, and its Properties-page bootstrap is
-        // a no-op — `kernel:properties` is a `systemPagesFacet` entry, so the
-        // page exists before this gesture can be invoked). A key with no
-        // definition was a key nothing materialized, so once one is MINTED a
-        // replayed pre-synthesis snapshot writes a cell for a key that now has
-        // children. Hence `created`, not "did this run": a run that only
-        // converged changed nothing, and clearing then costs the user history
-        // for no hazard.
-        if (synthesized > 0) {
-          repo.undoManagerFor(workspaceId).clear()
-          undoCleared = true
-        }
-        // Asked AGAIN, with the OUTCOME. The pre-mint answer was about what we
-        // expected to be able to do; this is about what actually happened, and
-        // a key that came back skipped still has no definition. The backfill
-        // excludes unregistered keys from its work list, so without this the
-        // flip lands and the pass reports success with zero failures over a key
-        // it silently could not migrate.
-        const stillBlocked = flipBlockedBySynthesis(plan, result)
-        if (!childBacked && stillBlocked !== null) {
-          banner.fail(stillBlocked + undoNote(undoCleared))
-          return
-        }
-        if (stillBlocked !== null) showInfo(stillBlocked, SYNTHESIS_TOAST)
-      } catch (err) {
-        console.error('[properties-migration] definition synthesis failed:', err)
-        banner.fail('Could not add definitions for the properties that have none, so ' +
-          `nothing was migrated: ${err instanceof Error ? err.message : String(err)}` +
-          undoNote(undoCleared))
-        return
-      }
-    }
-    if (!childBacked) {
-      // FIRST, and that is the whole point: the flip turns the live maintainers
-      // on, so a workspace flipped with zero children keeps reading cells (§5's
-      // pending-materialization fallback) while new writes grow children.
-      // Backfilling first opens a window where machinery exists that nothing
-      // recognizes and nothing maintains.
-      // Assumes no workspace has run an earlier build's pass, so none holds
-      // stale property machinery. Owner's call not to carry a check for a state
-      // that cannot exist.
-      // The second of exactly TWO active-workspace checks, not a rule applied
-      // at every await. Each guards a step the user cannot take back: the
-      // post-dialog one because a confirmation is a user-length pause, this one
-      // because the flip is fleet-wide and irreversible. Synthesis deliberately
-      // has neither — it writes dormant blocks scoped to the workspace named in
-      // its own argument, so navigating away withdraws nothing. Do not add a
-      // third.
-      if (repo.activeWorkspaceId !== workspaceId) {
-        banner.fail('Stopped before switching this workspace over: a different workspace ' +
-          'is open now. Nothing was switched.' + undoNote(undoCleared))
-        return
-      }
-      banner.update('Switching this workspace to property blocks…')
-      let localApplied: boolean
-      try {
-        ;({localApplied} = await flipWorkspaceToChildBackedProperties(repo, workspaceId))
-      } catch (err) {
-        console.error('[properties-migration] flip failed:', err)
-        // "so nothing was migrated" is only true because this catch cannot see a
-        // committed flip: the server write is the only thing that throws here.
-        // The definitions minted a moment ago DID land, though — they are inert
-        // at 'cell' and a re-run reuses them, but saying "nothing" would be a
-        // small lie about a write that shows up on the Properties page.
-        banner.fail('Could not switch this workspace to property blocks, so nothing ' +
-          `was migrated: ${err instanceof Error ? err.message : String(err)}` +
-          (synthesized > 0
-            ? ` The ${synthesized.toLocaleString()} definition(s) added just before it ` +
-              'are still there, and do nothing until this runs again.'
-            : '') +
-          undoNote(undoCleared))
-        return
-      }
-      // Immediately, not by waiting for the pass's first committed batch. Undo
-      // replay drives each row to a whole restored snapshot and SKIPS the same-tx
-      // processors (`isReplay`), so a cmd-Z of a pre-flip edit puts a cell back
-      // without the materializer syncing its children — and past the flip the
-      // children are the truth, so the two just diverge. Every way the run can
-      // end after this point without writing a batch (a peer holds the claim, the
-      // runner defers, there is nothing left to migrate) leaves that window open.
-      repo.undoManagerFor(workspaceId).clear()
-      undoCleared = true
-      flipLanded = true
-      if (!localApplied) {
-        // The flip COMMITTED; this device just has no local `workspaces` row to
-        // stamp yet, so the pass would read 'cell' and take the reconcile branch
-        // on a workspace that is in fact flipped. Stop instead, and do not say
-        // nothing happened.
-        banner.fail(`${FLIP_LANDED} This device has not received the workspace row yet, ` +
-          'so the migration could not run here — run this again once sync catches up.' +
-          undoNote(undoCleared))
-        return
-      }
-    }
-    let materialized = 0
-    // Subscribed for the whole run, not just started with it: the pass reports
-    // per committed batch, and a run of several minutes with a silent toast is
-    // indistinguishable from a hung one.
-    let unmigrated = 0
-    let valuesMaterializedTotal = 0
-    let orphanedOwnersSwept = 0
-    let editedUnderPass = false
-    const unsubscribe = onPropertyCellBackfillProgress(progress => {
-      materialized = progress.blocksMaterialized
-      valuesMaterializedTotal = progress.valuesMaterializedTotal
-      orphanedOwnersSwept = progress.orphanedOwnersSwept
-      unmigrated = progress.failureCount
-      editedUnderPass = progress.editedUnderPass
-      // Counts are per-sweep, and the sweep number is shown because a second
-      // pass over the same blocks is normal — without it the bar restarts from
-      // zero for no reason the operator can see.
-      banner.update(
-        `Migrating properties to blocks… sweep ${progress.sweeps}, ` +
-        `${progress.blocksScanned.toLocaleString()}/` +
-        `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`,
-      )
-    })
-    try {
-      const result = await repo.runWorkspaceBackfillNow(workspaceId, PROPERTY_CELL_BACKFILL_ID)
-      const {message, failed, followUp} = describeOutcome(
-        result,
-        {blocksMaterialized: materialized, valuesMaterializedTotal, unmigrated, orphanedOwnersSwept},
-        editedUnderPass,
-        {flipped: flipLanded, undoCleared},
-      )
+    // The claim is taken HERE: after the last precondition, before SYNTHESIS
+    // (this gesture's first write), and not inside the pass (its last). What
+    // two unclaimed devices produce is a definition for the same orphan key at
+    // the same deterministic id carrying DIFFERENT presets — which presets a
+    // device can prove is a local fact — so sync picks one and the children
+    // the other migrated decode under a codec it does not declare. The seam
+    // says how far that window narrows, and what it still leaves open.
+    //
+    // After the dialog, though, never before: a claim held across a
+    // user-length pause blocks every other device while a dialog sits open,
+    // and a tab closed at the dialog strands it — over a flipped workspace,
+    // once the flip below has landed.
+    const gesture = await repo.withOperatorBackfillClaim(
+      workspaceId, PROPERTY_CELL_BACKFILL_ID,
+      pass => migrateUnderClaim(
+        {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}, pass),
+    )
+    if (!gesture.claimed) {
+      // The same reporter the pass's own outcomes go through. Which step
+      // turned this device away is an implementation detail of where the
+      // claim sits; a second vocabulary for "another device owns this run"
+      // would drift from the first.
+      const {message, failed} = describeOutcome(gesture.result, NOTHING_MIGRATED)
       if (failed) banner.fail(message)
       else banner.done(message)
-      // A stable id: the follow-up tells the operator to run this again, and
-      // without one the next run stacks a second sticky toast beside the
-      // first, identical apart from a count that is now wrong.
-      if (followUp) {
-        showInfo(followUp, {id: 'properties-migration-worklist',
-                            duration: Number.POSITIVE_INFINITY})
-      }
-    } catch (err) {
-      console.error('[properties-migration] failed:', err)
-      // The runner can REJECT rather than return an outcome (a claim write that
-      // throws before its own pass-level catch), and describeOutcome — which is
-      // what otherwise carries these two sentences — never runs on that path. By
-      // then the flip has committed and the undo stack is gone.
-      banner.fail((flipLanded ? `${FLIP_LANDED} ` : '') +
-        `Migration failed: ${err instanceof Error ? err.message : String(err)}` +
-        undoNote(undoCleared))
-    } finally {
-      unsubscribe()
     }
   },
 })

@@ -1,5 +1,5 @@
 /**
- * Same-tx property-definition RENAME (PR #288 §7/§9, PR #386 follow-up).
+ * Same-tx property-definition RENAME (docs/properties-as-blocks-migration.html §7/§9).
  *
  * A rename re-keys every consuming parent's cell (drop the old name, project
  * the new name from the field row's value) ATOMICALLY in the same tx that
@@ -102,9 +102,9 @@ const collectRenames = (
   // still maps the renamed field under its OLD name, so it can't tell us who
   // wins the new name post-commit. If some OTHER definition already owns the
   // new name and is NOT itself renaming away from it, re-keying our value under
-  // that name would overwrite that owner's cell projection with the wrong value
-  // (found by Codex on PR #386) — the renamed field is likely shadowed there,
-  // not the winner. Leave the whole re-key to the post-commit registry rebuild
+  // that name would overwrite that owner's cell projection with the wrong
+  // value — the renamed field is likely shadowed there, not the winner.
+  // Leave the whole re-key to the post-commit registry rebuild
   // + PROJECT / slice-C reconcile under the shadowing model (#389 item 8). A
   // SWAP (`a<->b`) is preserved: each new name is owned by a peer that IS
   // renaming away, so it isn't a real collision.
@@ -141,10 +141,10 @@ const consumingParentIds = async (
 }
 
 /** Re-key one parent's cell for every rename that owns a field row under it.
- *  The shared `rekeyParentPropertyCell` owns the parent guard, the §9 ancestry
- *  gate, and the swap-safe drop-all-then-set-all apply; this supplies only the
- *  per-parent PLAN — project each renamed field's FIRST parseable value under
- *  the tx-start (rename-unchanged) codec, drop the old name, set the new. */
+ *  The shared `rekeyParentPropertyCell` owns the parent guard and the
+ *  swap-safe drop-all-then-set-all apply; this supplies only the per-parent
+ *  PLAN — project each renamed field's FIRST parseable value under the
+ *  tx-start (rename-unchanged) codec, drop the old name, set the new. */
 const rekeyParent = (
   ctx: SameTxCtx,
   parentId: string,

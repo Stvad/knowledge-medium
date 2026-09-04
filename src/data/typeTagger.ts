@@ -61,7 +61,7 @@ const readResolvedProperty = <T>(
 
 // Property-bag writes in this class stay RAW (`tx.update`) rather than routing
 // through `tx.setProperty` / `tx.setProperties`, and that is correct on a
-// flipped (child-backed) workspace (PR #288 props-bag audit, verified). Every
+// flipped (child-backed) workspace (verified). Every
 // write here is a net ADD or CHANGE of the registered `typesProp` — plus, in
 // `_addTypeInTx`, registered initial-value schemas resolved through the SAME
 // identity boundary `setProperty` uses — never a set-then-unset of one key
@@ -196,7 +196,7 @@ export class TypeTagger {
    *  that may legitimately observe a concurrent delete between
    *  pre-tx state and tx-start. New orchestration code should prefer
    *  `addTypeInTx` (strict) so a footgun like the Roam-isa adoption
-   *  bug (PR #47) can't be expressed. */
+   *  bug can't be expressed. */
   async addTypeInTxLenient(
     tx: Tx,
     blockId: string,

@@ -18,6 +18,7 @@ import {
   type KnownCommandMeta,
   registerClientMetadataSchema,
   registerTokenSpecSchema,
+  unknownTokenMessage,
   type TokenAudience,
   type TokenScope,
   type RegisterClientMetadata,
@@ -44,11 +45,6 @@ const commandTtlMs = envDurationMsOverride('AGENT_RUNTIME_COMMAND_TTL_MS', 10 * 
  *  going. Still bounded, so a tab that dies mid-command cannot leak forever. */
 const inFlightCommandTtlMs = envDurationMsOverride('AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS', 60 * 60 * 1000)
 const clientTtlMs = 60_000
-const unknownTokenMessage = [
-  'Agent token is not registered with the local bridge.',
-  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token.',
-  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
-].join(' ')
 const configuredMaxBodyBytes = Number(process.env.AGENT_RUNTIME_MAX_BODY_BYTES ?? 10 * 1024 * 1024)
 const maxBodyBytes = Number.isFinite(configuredMaxBodyBytes) && configuredMaxBodyBytes > 0
   ? configuredMaxBodyBytes

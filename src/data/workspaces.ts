@@ -43,7 +43,7 @@ type RpcWorkspaceRow = {
   // the domain Workspace so the optimistic prime preserves the canary.
   encryption_mode: string
   wk_canary: string | null
-  // Properties-as-blocks rollout lever (PR #288 §6). Optional: RPCs
+  // Properties-as-blocks rollout lever (docs/properties-as-blocks-migration.html §6). Optional: RPCs
   // deployed before the column exist return rows without it; absence
   // parses as 'cell' (dormant).
   properties_migration?: string | null
@@ -286,11 +286,11 @@ export const renameWorkspace = async (workspaceId: string, name: string): Promis
  * legitimately ABSENT — `resolveWorkspace` admits a URL-hash workspace on the
  * server's say-so before PowerSync has replicated it — and a 0-row UPDATE is not
  * an error. Silently, the flip would then be invisible to
- * `tx.isPropertyChildBackedWorkspace`, and the pass would take its RECONCILE
- * branch against a workspace that is in fact flipped, which is the one thing the
- * create-only path exists to prevent. Reported rather than thrown: past the
- * PostgREST call the flip HAS committed, and a throw here would be caught as
- * "the flip failed" and reported as "nothing was migrated".
+ * `tx.isPropertyChildBackedWorkspace`, and the pass — which re-asserts it in
+ * every writing transaction — would refuse a workspace that is in fact flipped.
+ * Reported rather than thrown: past the PostgREST call the flip HAS committed,
+ * and a throw here would be caught as "the flip failed" and reported as
+ * "nothing was migrated".
  *
  * @returns whether the local replica now reflects the flip.
  */

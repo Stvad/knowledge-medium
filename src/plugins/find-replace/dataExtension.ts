@@ -14,6 +14,7 @@ import {
 import {
   propertyChildContentToEncodedValue,
   resolvePropertyValueFieldSchema,
+  contentLosesPropertyValue,
 } from '@/data/propertyChildren'
 import {
   DEFAULT_FIND_REPLACE_OPTIONS,
@@ -205,7 +206,8 @@ export const applyContentReplaceMutator = defineMutator<
       // VALUE rows get the codec skip — see below — because a broken value
       // fails SILENTLY: the key drops from the owner's cell with no error.)
       //
-      // #404 item 5: under properties-as-blocks (PR #288 §9), a property
+      // #404 item 5: under properties-as-blocks
+      // (docs/properties-as-blocks-migration.html §9), a property
       // VALUE child's `content` IS its typed value — writing straight
       // through here can leave it unparseable under its codec (a
       // `number`/`date`/`boolean` value in particular), and PROJECT's
@@ -237,15 +239,23 @@ export const applyContentReplaceMutator = defineMutator<
         // turning `((id))` into `[[SomeName]]` resolved to a non-null target,
         // passed the guard, and PROJECT then wrote the WRONG id into the
         // owner's cell. Now it reads as unparseable and is reported as a skip.
-        const breaksCodec = (() => {
+        //
+        // Decoding is NOT the whole question, and asking only it let #688
+        // through here: `codecs.string` / `codecs.url` accept any string, so a
+        // replace that turned a value into `::((id))` decoded fine, was
+        // written, and then had the row classified as a field row out from
+        // under it — the owner's key dropped with no error. `setProperty`
+        // ESCAPES such a value; this path writes content the user chose, so it
+        // refuses instead and offers "replace anyway" like every other skip.
+        const unsafeToWrite = (() => {
           try {
             propertyChildContentToEncodedValue(schema, replaced.content)
-            return false
           } catch {
             return true
           }
+          return contentLosesPropertyValue(schema, replaced.content)
         })()
-        if (breaksCodec) {
+        if (unsafeToWrite) {
           result.skippedUnparseableProperty += 1
           unparseableProperties.add(schema.name)
           result.retryableSkips.push({

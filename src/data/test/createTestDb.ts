@@ -37,6 +37,7 @@ import { join } from 'node:path'
 import { PowerSyncDatabase, Schema } from '@powersync/node'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
+  CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
@@ -115,6 +116,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
   // No-op on a fresh table (CREATE carries the local columns) — mirrors the
@@ -179,6 +181,8 @@ const getTemplateFingerprint = (): string => {
   hash.update('\0')
   hash.update(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   hash.update('\0')
+  hash.update(CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL)
+  hash.update('\0')
   hash.update(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
@@ -198,16 +202,11 @@ const getTemplateFingerprint = (): string => {
   hash.update('\0')
   hash.update(CLIENT_SCHEMA_STATEMENTS.join('\0'))
   hash.update('\0')
-  // Backfills are part of the schema the template bakes in — several
-  // DROP and rebuild their table, so an edit inside a backfill body can
-  // change the resulting indexes/triggers without touching `statements`.
-  // Hashing only `statements` let such an edit reuse a stale cached
-  // template forever on any machine with a warm /tmp: the suite would
-  // run against the OLD schema and a green `pnpm run check` would prove
-  // nothing about the migration ladder. (Caught exactly that way — the
-  // `block_references` alias index was added to the rebuild and the
-  // template kept serving a DB without it.) `run.toString()` is a cheap
-  // structural fingerprint of the body.
+  // Backfills are part of the schema the template bakes in — several DROP
+  // and rebuild their table, so an edit inside a backfill body changes
+  // indexes/triggers without touching `statements`; hashing only
+  // `statements` would serve a stale cached template forever on a warm
+  // /tmp. `run.toString()` is a cheap structural fingerprint of the body.
   hash.update(JSON.stringify(localSchemaContributions.map(contribution => ({
     statements: contribution.statements ?? [],
     triggerNames: contribution.triggerNames ?? [],
@@ -320,8 +319,8 @@ const RESET_AUDIT_TABLES = ['row_events', 'command_events', 'ps_crud', 'ps_crud_
 /**
  * Truncate all test data from a `createTestDb` database and reset
  * `tx_context`, returning it to the same empty state a freshly-opened
- * harness has — ~100x cheaper than opening a new PowerSyncDatabase
- * (~2.5ms vs ~260ms). Use with one `beforeAll` open + `afterAll` close and
+ * harness has — far cheaper than opening a new PowerSyncDatabase.
+ * Use with one `beforeAll` open + `afterAll` close and
  * a `beforeEach(() => resetTestDb(h.db))`, building a fresh `Repo` per test
  * for registry/cache/handle-store isolation.
  *

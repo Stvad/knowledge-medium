@@ -63,7 +63,7 @@ export const NO_REMOTE_BLOB_STORE: BlobStore = {
  *  remote sync on; in local-only mode it behaves as {@link NO_REMOTE_BLOB_STORE} (a
  *  remote miss), so the resolver still serves local OPFS hits but never makes a
  *  Supabase request — the read-side half of the "no remote requests in local-only"
- *  contract (Codex P1). Checked PER CALL, so a re-login mode switch is respected
+ *  contract. Checked PER CALL, so a re-login mode switch is respected
  *  without rebuilding the singleton. Shared with the up-lane (assetUpload's
  *  getBlobStore) so the WRITE side gets the same per-call gate: an arm-time-only
  *  check can go stale if remote sync is toggled off while a drain lock is held. */
@@ -115,8 +115,8 @@ const resolversByUser = new Map<string, AssetResolver>()
 
 /**
  * A resolver bound to ONE user for the lifetime of a background pass, instead of
- * the ambient active account. Fixes a review finding (PR #424 P2): the down-lane
- * pass reads `repo.user.id` ONCE at its boundary (see assetDownLane.ts) for its
+ * the ambient active account. The down-lane pass reads `repo.user.id` ONCE at
+ * its boundary (see assetDownLane.ts) for its
  * lock name and its one-shot OPFS presence enumeration, but used to hand that
  * work to {@link getAssetResolver}'s singleton, whose `getUserId` — and its §6
  * materializability/CEK/K_id lookups — re-read the AMBIENT active user on every

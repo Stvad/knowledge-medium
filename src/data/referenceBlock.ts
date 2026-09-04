@@ -85,6 +85,21 @@ const RENDERABLE_BLOCK_REF_ID_RE = new RegExp(`^${BROAD_BLOCK_REF_ID_SOURCE}$`)
  *  form; parsing goes through {@link parseExactReferenceBlockContent}. */
 export const FIELD_FORM_MARKER = '::'
 
+/** The `!` embed marker — `!((id))` / `![[alias]]`. Deliberately NOT part of
+ *  {@link parseExactReferenceBlockContent}: the whole-block reading exists to
+ *  derive `reference_target_id` / `is_field_form`, and teaching it the embed
+ *  form would start stamping those columns for content that has never had
+ *  them.
+ *
+ *  It lives here anyway because the INLINE reader
+ *  (`plugins/references/referenceParser`) does recognize embeds, so a caller
+ *  asking "would this whole string be read as a reference by ANYONE" needs the
+ *  marker — and core cannot import the plugin to ask. Same reason
+ *  `blockRefSpanSource` and friends live here: one definition, each reader
+ *  anchoring it for its own job, so the two cannot drift.
+ *  See {@link isWholeContentReference}. */
+export const EMBED_MARKER = '!'
+
 const parseReferenceSpan = (
   span: string,
   fieldForm: boolean,
@@ -161,7 +176,7 @@ export const referenceBlockContentForLabel = (label: string): string =>
   `[[${label.replace(/]]/g, '] ]')}]]`
 
 /** Block-ref content addressing a block by id (`((id))`). Property field rows
- *  (PR #288 §7) point at their definition BY ID, not by name: the row's whole
+ *  (docs/properties-as-blocks-migration.html §7) point at their definition BY ID, not by name: the row's whole
  *  content is `((fieldId))`, so `reference_target_id` derives purely textually
  *  (no name→schema tier, no deferred resolution) and the human-readable name is
  *  recovered by resolving the id → definition (which owns the name). Rendering
@@ -177,7 +192,7 @@ export const referenceBlockContentForId = (id: string): string => {
   // `referenceTargetId`, then `core.deriveReferenceTarget` runs afterwards,
   // fails to parse the same text, and clears the column — leaving a property
   // child that no longer projects and an owner cell that quietly loses the
-  // key (PR #386 review).
+  // key.
   //
   // Throwing at the point of rendering turns that into a loud, local failure
   // on the write that caused it. Same instinct as `addSchema` rejecting a
@@ -195,7 +210,7 @@ export const referenceBlockContentForId = (id: string): string => {
   // UUID-looking ids to lowercase, so a case-variant clears the check above and
   // still reads back as a DIFFERENT id — the derive then stamps
   // `reference_target_id` to the lowercase spelling, pointing the child at a
-  // wrong or nonexistent block (PR #386 review). Strictly worse than the
+  // wrong or nonexistent block. Strictly worse than the
   // unparseable case, which at least resolves to nothing.
   //
   // Asked by ACTUALLY round-tripping rather than by re-stating the parser's
@@ -225,7 +240,7 @@ export const referenceBlockContentForId = (id: string): string => {
  *  `]]` renders lossy (`foo]]bar` → `foo] ]bar`) so it can't be written as a
  *  clean `[[name]]` reference. `addSchema` and the rename flow reject
  *  non-round-trippable property names as name hygiene — field rows themselves
- *  are id-addressed (`((fieldId))`, PR #288 §7) and no longer embed the
+ *  are id-addressed (`((fieldId))`, docs/properties-as-blocks-migration.html §7) and no longer embed the
  *  name. */
 export const isRoundTrippableReferenceLabel = (label: string): boolean => {
   const parsed = parseExactReferenceBlockContent(referenceBlockContentForLabel(label))
@@ -234,7 +249,7 @@ export const isRoundTrippableReferenceLabel = (label: string): boolean => {
 
 /**
  * Would `label`, written as a block's WHOLE content, read back as a
- * reference span instead of prose (PR #288 §7 name hygiene)?
+ * reference span instead of prose (docs/properties-as-blocks-migration.html §7 name hygiene)?
  *
  * Several flows mirror a human-supplied label into block content — a type
  * definition's block is titled with its label, a property-schema block with
@@ -254,6 +269,32 @@ export const isRoundTrippableReferenceLabel = (label: string): boolean => {
  */
 export const isGrammarShapedLabel = (label: string): boolean =>
   parseExactReferenceBlockContent(label) !== null
+
+/**
+ * Would this WHOLE string be read as a reference by either reader — the
+ * whole-block one here, or the inline one in the references plugin?
+ *
+ * The difference from {@link isGrammarShapedLabel} is exactly the embed
+ * marker, and the gap was a real bug: `((id))` was treated as a reference and
+ * `!((id))` as prose, though they differ by one character and the inline
+ * reader indexes both. A property value stored as `!((id))` was left verbatim
+ * and a later merge rewrote it (#688).
+ *
+ * Ask this when the question is "is this text, or is it a pointer?" — storing
+ * a value, mirroring a name. Ask `isGrammarShapedLabel` only when the question
+ * is specifically about the whole-block reading that derives the columns.
+ *
+ * Still WHOLE-content: a span embedded in surrounding prose is not this, and
+ * deliberately so — a property value that mentions a page is a live reference
+ * by design, which is a separate open question (#756).
+ */
+export const isWholeContentReference = (content: string): boolean => {
+  const trimmed = content.trim()
+  const unmarked = trimmed.startsWith(EMBED_MARKER)
+    ? trimmed.slice(EMBED_MARKER.length)
+    : trimmed
+  return isGrammarShapedLabel(unmarked)
+}
 
 /** A label a name-mirroring flow refuses to store.
  *
@@ -310,8 +351,7 @@ export class LossyLabelError extends UnwritableLabelError {
  *  reference, and `foo]]bar` is unmistakably a name while rendering
  *  lossily. Property names already ran both; type labels ran only the
  *  first, so a `]]`-bearing type label claimed an alias nothing could
- *  link to — a gap that predates the length cap and that the cap widened
- *  (Codex on PR #540). */
+ *  link to — a gap that predates the length cap and that the cap widened. */
 export const assertRoundTrippableReferenceLabel = (
   label: string,
   context: string,

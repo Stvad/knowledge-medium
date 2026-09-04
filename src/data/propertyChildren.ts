@@ -1,6 +1,6 @@
 /**
- * Pure helpers for properties-as-blocks field/value children (PR #288 §5/§9,
- * extracted from the PR #285 spike). A property on a block is a FIELD ROW —
+ * Pure helpers for properties-as-blocks field/value children
+ * (docs/properties-as-blocks-migration.html §5/§9). A property on a block is a FIELD ROW —
  * a child whose content is the MARKED field form `::((fieldId))` (§7 grammar
  * box: `::` + one whole-block reference span), mirrored into the local
  * `reference_target_id` + `is_field_form` columns — whose own
@@ -49,10 +49,12 @@ import {
 import {
   FIELD_FORM_MARKER,
   isIdCarryingReference,
+  isWholeContentReference,
   parseExactReferenceBlockContent,
   referenceBlockContentForId,
 } from '@/data/referenceBlock'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
+import { hasLoneSurrogate } from '@/utils/string'
 
 export const getPropertyFieldTargetId = (
   data: Pick<BlockData, 'referenceTargetId'> | null | undefined,
@@ -119,7 +121,7 @@ const finiteNumberFromContent = (content: string): number => {
   const trimmed = content.trim()
   // `Number('')` and `Number('   ')` are 0, not NaN, so the isFinite guard
   // below waves blank content through as a real zero — a cleared value row
-  // would silently project 0 over the cell (PR #386 review). Blank is not the
+  // would silently project 0 over the cell. Blank is not the
   // encoding of any number (`encodedValueToContent` writes `String(n)`, and
   // reserves '' for undefined), so it's unparseable: throwing preserves the
   // row's text and surfaces the count, rather than inventing a value.
@@ -153,20 +155,104 @@ const codecAcceptsNull = (schema: AnyPropertySchema): boolean => {
   }
 }
 
-/** Is `s` the literal encoded-null sentinel, or a quoted string that would
- *  collide with it one escaping level down (recursive, so `"null"` itself
- *  round-trips through an extra layer of `JSON.stringify`)? Only meaningful
- *  when the codec actually treats bare `'null'` content as the null
- *  sentinel (`codecAcceptsNull`) — otherwise there's no collision to guard
- *  against and the string should stay verbatim. Verbatim string-family
- *  codecs (`string` | `url` | `ref`) store values as raw content, so a
- *  legitimate string value equal to the sentinel — or to a JSON string
- *  literal that itself needs escaping — must be escaped via
- *  `JSON.stringify` instead of written through untouched. */
+/** The characters every reference span OPENS with. Escaping these is what
+ *  makes {@link escapeContent}'s output inert to BOTH readers of the grammar:
+ *  quoting alone only stops the whole-block parser, and the inline one
+ *  (`plugins/references/referenceParser`) scans spans anywhere in content, so
+ *  a merely-quoted `"[[Page]]"` is still an inline reference that a rename
+ *  rewrites — silently editing the value. Stated as the opener set rather than
+ *  by consulting the inline parser because core cannot import a plugin, and
+ *  because no span form in either reader can begin any other way. */
+const SPAN_OPENERS_RE = /[[(]/g
+/** The same class without `g`, for `.test`. A global regex carries `lastIndex`
+ *  across calls, so testing with one answers differently on alternate calls. */
+const SPAN_OPENER_RE = /[[(]/
+
+/** Would this text, stored VERBATIM as a value row's content, read back as
+ *  something other than itself? A whole-content reference does — one of the
+ *  two readers takes it as a pointer rather than text, EMBEDS included
+ *  (`isWholeContentReference`, not `isGrammarShapedLabel`: the latter asks
+ *  only the whole-block reader, which has no embed form, so `!((id))` was
+ *  stored verbatim and a merge then rewrote it). A lone surrogate does too —
+ *  the content column returns U+FFFD.
+ *
+ *  The ENCODER's question, and deliberately wider than
+ *  {@link contentLosesPropertyValue}'s — see there for why the two differ. */
+const verbatimContentLosesValue = (content: string): boolean =>
+  isWholeContentReference(content) || hasLoneSurrogate(content)
+
+/** Would writing this text into a value row DESTROY the property's value?
+ *  For write paths that set `content` directly rather than encoding a typed
+ *  value — find-replace is the one caller. They bypass
+ *  `encodedValueToContent`, so they cannot escape, and must refuse instead.
+ *
+ *  NARROWER than {@link verbatimContentLosesValue} on purpose: only a MARKED
+ *  span destroys anything — it stamps `is_field_form`, `isFieldValueChild`
+ *  drops the row from the value set, and the owner's key goes with it,
+ *  silently (#688). An UNMARKED span stays in the value set and decodes
+ *  right back, so `Roadmap` → `[[Roadmap]]` must keep working.
+ *
+ *  The null SENTINEL is the third destroyer: bare `null` content IS the
+ *  unset value to a codec that accepts one.
+ *
+ *  Scoped to the codecs that store content verbatim: everything else either
+ *  emits machine-formatted text that cannot take these shapes, or (`ref`) is
+ *  span-shaped by design and already refused by its own decode. */
+export const contentLosesPropertyValue = (
+  schema: AnyPropertySchema,
+  content: string,
+): boolean => {
+  if (schema.codec.type !== 'string' && schema.codec.type !== 'url') return false
+  if (codecAcceptsNull(schema) && content.trim() === 'null') return true
+  return parseExactReferenceBlockContent(content)?.fieldForm === true
+    || hasLoneSurrogate(content)
+}
+
+/** Store `s` as content that reads back as exactly `s` and as nothing else.
+ *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII
+ *  escapes); the extra opener escaping neutralizes the reference grammar.
+ *  `JSON.parse` undoes both, so the decode needs no counterpart — only
+ *  {@link isEscapedEnvelope} to know it is looking at one. */
+const escapeContent = (s: string): string =>
+  JSON.stringify(s).replace(SPAN_OPENERS_RE,
+    c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
+/** Could `trimmed` have come out of {@link escapeContent}? A JSON string
+ *  literal carrying no literal span opener — the two properties escapeContent
+ *  guarantees, and the second is what makes the shape self-identifying rather
+ *  than merely quote-shaped. Necessary, not sufficient: the caller still
+ *  confirms it parses and that the payload was worth escaping. */
+const isEscapedEnvelope = (trimmed: string): boolean =>
+  trimmed.startsWith('"') && trimmed.endsWith('"') && !SPAN_OPENER_RE.test(trimmed)
+
+/** Would `s`, written VERBATIM as a value child's content, read back as
+ *  something other than `s`? These codecs (`string` | `url`) store a value as
+ *  raw content, so any divergence is silent value loss — the projection reads
+ *  the child back and writes THAT over the owner's cell. Only strings that hit
+ *  one of the three cases are escaped; every other string stays verbatim in
+ *  the tree.
+ *   - the encoded-null SENTINEL: bare `null` content IS the null value to a
+ *     codec that accepts one. Gated on `codecAcceptsNull` — elsewhere there is
+ *     no collision, and the string stays verbatim.
+ *   - anything {@link verbatimContentLosesValue} names, which is where those
+ *     two shapes and why they lose the value are written down.
+ *
+ *  Recursive on the quoted form, or a value that is ITSELF a JSON string
+ *  literal of an escapable string would decode one level short. The recursion
+ *  is unbounded but the ESCAPE is applied once: `escapeContent`'s output opens
+ *  with `"`, carries no span opener and no raw surrogate, so it can never be
+ *  MISREAD once stored.
+ *
+ *  That is not the same as "escaping is idempotent", which it is not: fed back
+ *  in as a VALUE, an envelope escapes again (the quoted-form recursion, and
+ *  correctly so — a value that happens to look like an envelope is still a
+ *  value). Nothing double-escapes today because every re-encode path decodes
+ *  first (`runPropertyDefinitionMigrationBatch`, the materialize processor).
+ *  A future one must too; content is not a value. */
 const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
-  if (!codecAcceptsNull(schema)) return false
   const trimmed = s.trim()
-  if (trimmed === 'null') return true
+  if (codecAcceptsNull(schema) && trimmed === 'null') return true
+  if (verbatimContentLosesValue(s)) return true
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
     try {
       const parsed: unknown = JSON.parse(trimmed)
@@ -198,7 +284,7 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     // `.trim() === ''`: a whitespace-only id is a MALFORMED reference (not a
     // clear), so it must reach `referenceBlockContentForId` — which throws on a
     // whitespace/parens id — rather than silently unsetting the property here,
-    // the same silent property-loss that guard exists to prevent (Codex #386).
+    // the same silent property-loss that guard exists to prevent.
     if (encoded === '') return ''
     return referenceBlockContentForId(encoded)
   }
@@ -207,7 +293,7 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     || schema.codec.type === 'url'
   ) {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
-    return needsEscape(schema, encoded) ? JSON.stringify(encoded) : encoded
+    return needsEscape(schema, encoded) ? escapeContent(encoded) : encoded
   }
   if (schema.codec.type === 'date') {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
@@ -224,9 +310,16 @@ const contentToEncodedValue = (
   schema: AnyPropertySchema,
   content: string,
 ): unknown => {
+  // Unwrap ONLY what `escapeContent` could have produced. Quote-wrapping alone
+  // is not that signature: a person can type `"[[Page]]"` into a value row, and
+  // find-replace can turn the inside of an ordinary quoted value into a span —
+  // both then decoded to the unquoted string, silently dropping the quotes the
+  // user wrote. The discriminator is free, because escaping openers is already
+  // what makes the envelope inert: a real envelope carries NO literal `[` or
+  // `(`, so content that has one was written by someone else and is text.
   if (
     (schema.codec.type === 'string' || schema.codec.type === 'url')
-    && content.trim().startsWith('"') && content.trim().endsWith('"')
+    && isEscapedEnvelope(content.trim())
   ) {
     try {
       const parsed: unknown = JSON.parse(content.trim())
@@ -241,7 +334,7 @@ const contentToEncodedValue = (
   switch (schema.codec.type) {
     case 'ref': {
       // The gate is this content's FORM, never `reference_target_id`'s
-      // nullness (§9; PR #417 review). The column is not the "is this a ref
+      // nullness (§9). The column is not the "is this a ref
       // value" signal it looks like: `core.deriveReferenceTarget` stamps it
       // for a whole-block `[[alias]]` too, and a `[[alias]]` nothing claims
       // MINTS a seat and then resolves. So trusting any non-null target
@@ -410,7 +503,7 @@ const propertyValueFieldRow = async (
 
 /**
  * Is `row` ITSELF a recognized property field row — the `::((fieldId))`
- * child that carries a property's identity on its owner (PR #288 §9)?
+ * child that carries a property's identity on its owner (docs/properties-as-blocks-migration.html §9)?
  * The flat predicate directly: bit ∧ non-null parent ∧ shadow-tolerant
  * definition resolution (`tx.isPropertyFieldDefinition`). Not flip-gated —
  * see the module header: the backfill mints these rows before the flip, and
@@ -439,7 +532,7 @@ export const isPropertyFieldRow = async (
 
 /**
  * Is `source` a property VALUE row — the direct non-`::` child of a
- * recognized field row (PR #288 §9)? Shared write-side primitive: a value
+ * recognized field row (docs/properties-as-blocks-migration.html §9)? Shared write-side primitive: a value
  * child's content IS
  * the property's value (ref-typed as `((targetId))`, scalar-typed as its
  * codec's canonical text), so any write path that rewrites `content` without

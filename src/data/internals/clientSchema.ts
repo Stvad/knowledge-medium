@@ -127,13 +127,6 @@ export const CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL = `
 /** Trigger-maintained side index of `(workspace_id, alias) → block_id`,
  *  derived from the `alias` entry in each live block's `properties_json`.
  *
- *  The previous shape walked `json_each(properties_json, '$.alias')` per
- *  query, which scans the full workspace partition every time. With
- *  150-MB-class workspaces this is the dominant cost in alias-heavy
- *  paths (Roam import, parseReferences, autocomplete). The
- *  index gives O(log n) `(workspace_id, alias_lower?)` lookup at the
- *  cost of three triggers and one extra row per (block, alias) pair.
- *
  *  Local-only: the table is fully derivable from `blocks.properties_json`
  *  so it is not synced — PowerSync's CRUD-apply path writes through
  *  `BLOCKS_RAW_TABLE.put` (an `INSERT … ON CONFLICT DO UPDATE`) which
@@ -305,17 +298,8 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
 // signal the observer drains to materialize each change into the live `blocks`
 // table (the production sync-invalidation path).
 //
-// APPEND-ONLY LOG keyed by a monotonic `seq`, drained with a watermark
-// pattern: the observer reads rows up to MAX(seq),
-// processes them, then `DELETE … WHERE seq <= <that max>`. This is robust to
-// the two things a coalescing id-keyed table is NOT:
-//   - Drain race: a delivery that lands mid-drain gets a higher seq, so the
-//     watermark delete can't remove its signal (an id-keyed REPLACE would have
-//     overwritten the very row being processed and lost the newer change).
-//   - Partial failure: if processing throws, the delete is never reached, so
-//     the rows stay queued and retry on the next tick / next startup.
-// Coalescing still happens, in JS at drain time (latest op per id wins), so a
-// hot row is materialized once per batch, not once per delivery.
+// Append-only log keyed by `seq`; drained by the Layout B observer
+// (src/data/internals/syncObserver/observer.ts).
 //
 //   - INSERT trigger → 'upsert'. The raw put is `INSERT OR REPLACE`, and
 //     PowerSync applies a *changed* synced row as this REPLACE (a DELETE then
@@ -348,18 +332,11 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL = `
   )
 `
 
-/** Indexes the enqueue-collapse lookup in `blocks_synced_changes_insert`
- *  (`DELETE … WHERE id = NEW.id AND op = 'delete'`). The table is otherwise
- *  keyed only by the autoincrement `seq`, so without this index that per-insert
- *  delete would SCAN the entire pending queue on every staging insert — even a
- *  brand-new id with no matching 'delete'. During a bulk sync/backfill the queue
- *  grows (within one PowerSync apply tx) far faster than the observer drains, so
- *  an unindexed scan turns the apply into O(n²) — the exact large-download case
- *  this queue exists to keep cheap (the ~310K-row backfill that motivated the
- *  collapse). With the index the lookup is an O(log n) seek, including the common
- *  no-match insert. The drain still reads/deletes by `seq` (PK), so this index
- *  only serves the collapse delete; its maintenance cost on queue insert + the
- *  drain's `DELETE … WHERE seq <= ?` is O(log n) per row. */
+/** Serves the enqueue-collapse `DELETE` in `blocks_synced_changes_insert`.
+ *  Without it that per-insert delete scans the whole pending queue, and a
+ *  bulk sync fills the queue within one apply tx far faster than the observer
+ *  drains — turning the apply into O(n²). The drain reads and deletes by
+ *  `seq` (PK) and does not use this index. */
 export const CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_synced_changes_id_op
   ON blocks_synced_changes (id, op)
@@ -783,13 +760,6 @@ export const CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL = `
 // (numbers, nulls, nested objects) defensively — the codec only writes
 // strings, but stale data from earlier shapes shouldn't crash the
 // trigger.
-//
-// `json_each(NEW.properties_json, '$.alias')` returns 0 rows when the
-// `$.alias` path is missing — important because most blocks have no
-// aliases, and this is the hot path on every UPDATE OF content (which
-// fires the same trigger pattern via UPDATE OF properties_json … no
-// it doesn't; UPDATE OF columns gates the trigger on those columns
-// changing, so a content-only edit does NOT fire blocks_alias_update).
 // ============================================================================
 
 const aliasInsertSelectSql = (rowRef: 'NEW') => `
@@ -986,6 +956,34 @@ export const CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL = `
   END
 `
 
+// ============================================================================
+// One-shot markers
+// ============================================================================
+
+/** A SINGLETON one-shot marker: one fixed key in `client_schema_state`,
+ *  written once, read once per bootstrap pass.
+ *
+ *  Not `MarkerStore` (`./idleMarkerJobs.ts`), which is the extraction for the
+ *  OTHER marker family — prefixed SETS of per-workspace keys, enumerated with
+ *  `getAll` (absent from {@link ClientSchemaBootstrapDb}) and cached in memory.
+ *  A single global key read once per pass can use neither the enumeration nor
+ *  the cache. */
+export const markerDoneSql = (key: string): string => `
+  SELECT 1 FROM client_schema_state WHERE key = '${key}'
+`
+
+export const recordMarkerSql = (key: string): string => `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${key}', strftime('%s', 'now') * 1000)
+`
+
+/** Takes the SQL rather than the key so call sites keep naming their own
+ *  `SELECT_*_DONE_SQL` const, which is also what tests reach for. */
+export const isMarkerSet = async (
+  db: ClientSchemaBootstrapDb,
+  sql: string,
+): Promise<boolean> => (await db.getOptional<{1: number}>(sql)) !== null
+
 /** One-shot backfill from `blocks.properties_json`. Called after the
  *  CLIENT_SCHEMA_STATEMENTS run, gated on a `client_schema_state` row
  *  so existing installations populate the index once on the first
@@ -1007,14 +1005,9 @@ export const CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL = `
  *  the user just paid for. */
 export const ALIAS_BACKFILL_MARKER_KEY = 'block_aliases_backfill_v1'
 
-export const SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${ALIAS_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL = markerDoneSql(ALIAS_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${ALIAS_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL = recordMarkerSql(ALIAS_BACKFILL_MARKER_KEY)
 
 export const BACKFILL_BLOCK_ALIASES_SQL = `
   INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
@@ -1025,14 +1018,9 @@ export const BACKFILL_BLOCK_ALIASES_SQL = `
 
 export const BLOCK_TYPES_BACKFILL_MARKER_KEY = 'block_types_backfill_v1'
 
-export const SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_TYPES_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL = markerDoneSql(BLOCK_TYPES_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_TYPES_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL = recordMarkerSql(BLOCK_TYPES_BACKFILL_MARKER_KEY)
 
 export const BACKFILL_BLOCK_TYPES_SQL = `
   INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
@@ -1044,26 +1032,21 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
 export const BLOCKS_FTS_BACKFILL_MARKER_KEY = 'blocks_fts_backfill_v1'
 
 /** Marker for the one-shot `needs_apply` seed — see
- *  {@link ensureStagingNeedsApplyColumn} for why it is not keyed on the ALTER. */
-export const STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY = 'staging_needs_apply_seeded'
+ *  {@link ensureStagingNeedsApplyColumn} for why it is not keyed on the ALTER.
+ *
+ *  VERSIONED, and the version is the re-run mechanism: a device that recorded
+ *  the old marker would never apply a widened seed rule. Bump this whenever
+ *  the seed learns to clear something it previously could not; the stale key
+ *  is left in `client_schema_state` and costs a row. */
+export const STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY = 'staging_needs_apply_seeded_v2'
 
-export const SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY}'
-`
+export const SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL = markerDoneSql(STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY)
 
-export const RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL = recordMarkerSql(STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY)
 
-export const SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCKS_FTS_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL = markerDoneSql(BLOCKS_FTS_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCKS_FTS_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL = recordMarkerSql(BLOCKS_FTS_BACKFILL_MARKER_KEY)
 
 export const BACKFILL_BLOCKS_FTS_ROWIDS_SQL = `
   INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
@@ -1084,143 +1067,87 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
     )
 `
 
-/** Planner-stats freshness, delegated to SQLite's own staleness heuristic.
- *
- *  wa-sqlite ships without an automatic `sqlite_stat1`, so the planner falls
- *  back to row-count guesses that mis-rank join orders once a workspace is
- *  large. The sharp edge is a MISSING stat row: SQLite then assumes an equality
- *  seek on the leading column yields ~10 rows, and every hot index here leads
- *  with `workspace_id`, whose real selectivity is ~1 (a client holds one or two
- *  workspaces). That default inverts join order — the planner drives from a full
- *  scan of the index and probes the selective side once per row. Adding
- *  `idx_block_references_ws_alias` did exactly that: one grouped-backlinks leg
- *  went 6297ms → 3ms on ANALYZE alone, with no SQL change.
- *
- *  `PRAGMA optimize` is SQLite's answer to WHEN to re-run, and it is strictly
- *  better informed than anything we can compute from outside: it re-analyzes a
- *  table whose index has no `sqlite_stat1` row (the case above), and one whose
- *  recorded row count has drifted ~10x from the live one. This replaced a
- *  hand-rolled two-axis trigger — `blocks` row-count drift plus a fingerprint of
- *  (index names + which (tbl,idx) pairs have stats), stored as a marker row.
- *  Measurements, coverage table, and the reasoning are in
- *  `docs/pragma-optimize-spike/`; the short version:
- *
- *  - it covers every case the fingerprint covered, PLUS one that design
- *    documented as an accepted gap (a table EMPTY at ANALYZE time, so carrying
- *    no stat row at all, that later fills — `block_types` sat under it),
- *  - it costs 0ms on a settled 347k-block client versus a `COUNT(*)` over every
- *    row just to decide, and re-analyzes only the STALE TABLE (14-52ms) instead
- *    of every table in the file (655ms warm, 3.1s cold),
- *  - it needs no marker row, no row-count probe, and no fingerprint.
- *
- *  Two things about it are non-obvious enough to be load-bearing; both are
- *  pinned by tests. See {@link ANALYZE_ARMING_PROBES} and
- *  {@link ANALYZE_SAMPLE_LIMIT}. */
-
-/** Bound on how many rows ANALYZE samples per index.
- *
- *  Load-bearing: WITHOUT it, `PRAGMA optimize` runs an UNBOUNDED ANALYZE over
- *  whatever it found stale. 400 is SQLite's own documented recommendation for
- *  this pairing, and measured on a real 347k-block client it holds a
- *  whole-database pass to ~290ms against ~655ms unbounded.
- *
- *  Note that the scan bound is NOT where the win comes from — analyzing only the
- *  stale table is (see the module comment above). What the limit buys is a
- *  ceiling on the worst case, e.g. a fresh device where every table is stale at
- *  once.
- *
- *  It approximates only the per-column distinct-value averages; the leading row
- *  count stays EXACT either way. Verified on the live client: an unbounded pass
- *  records `225605 75202 7` for `idx_block_references_ws_alias` where a limited
- *  one records `225605 134 3`. Across the 8 hot query shapes there is zero plan
- *  divergence between the two. */
-export const ANALYZE_SAMPLE_LIMIT = 400
-
-/** `analysis_limit` is a CONNECTION setting, not a database one, so it has to be
- *  set on the same connection that runs the optimize, immediately before. */
-export const SET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=${ANALYZE_SAMPLE_LIMIT}`
-
-/** Restore the default so a later unbounded ANALYZE — {@link runAnalyzeNow},
- *  the manual escape hatch — isn't silently sampled on this connection. */
-export const CLEAR_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
+// ============================================================================
+// ANALYZE / planner stats. wa-sqlite has no automatic ANALYZE. The sharp edge
+// is a MISSING sqlite_stat1 row: SQLite then assumes ~10 rows for an equality
+// seek, and every hot index here leads with workspace_id (real selectivity ~1
+// on a client with one or two workspaces), which inverts join order. `PRAGMA
+// optimize` decides WHEN to re-analyze; one part of arming it is load-bearing
+// and pinned by tests, see {@link ANALYZE_ARMING_PROBES}. Measurements and the
+// alternatives considered: docs/pragma-optimize-spike/.
+// ============================================================================
 
 /** Dry run of what {@link ANALYZE_OPTIMIZE_SQL} is about to do, for logging.
  *
- *  Mask `0x03` is debug(`0x01`) + "analyze what might benefit"(`0x02`), which is
- *  the default mask plus the debug bit — so it reports exactly the work the real
- *  call will perform. `PRAGMA optimize(-1)` is the obvious-looking choice and is
- *  WRONG for this: it also sets `0x10000` ("analyze all tables"), so it reports
- *  work the default mask declines to do. Verified against ground truth in four
- *  states (settled / stale-and-armed / stale-and-unarmed / new index). */
+ *  Mask `0x03` is debug(`0x01`) + {@link ANALYZE_OPTIMIZE_SQL}'s `0x02` — so it
+ *  reports exactly the work the real call will perform, verified byte-identical
+ *  on the shipped build. `PRAGMA optimize(-1)` is the obvious-looking choice and
+ *  is WRONG for this: it also sets `0x10000` ("analyze all tables"), so it
+ *  reports work the real call declines to do. Keep the two masks in step. */
 export const ANALYZE_DRY_RUN_SQL = `PRAGMA optimize(0x03)`
 
-export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize`
+/** `0x02` — "analyze what might benefit" — and NOT the default mask.
+ *
+ *  Bare `PRAGMA optimize` is the obvious simplification and it silently
+ *  re-samples: the default mask `0xfffe` carries a `0x10` bit imposing SQLite's
+ *  own `SQLITE_DEFAULT_OPTIMIZE_LIMIT` of 2000, which `analysis_limit=0` does
+ *  NOT clear — reinstating the fabricated selectivity of the module comment.
+ *  Behaviour is version-dependent (confirmed on wa-sqlite 3.53.0), and `0xfffe`
+ *  means "every bit we ever add", so naming `0x02` also opts out of bits SQLite
+ *  adds later: revisit the mask on a SQLite upgrade rather than assuming. */
+export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize(0x02)`
 
-/** Planner-visible probes that ARM the staleness check. Load-bearing, and the
- *  single most surprising part of this design.
+/** ANALYZE here is UNBOUNDED, and that is load-bearing: every hot index leads
+ *  with `workspace_id` (real selectivity ~1 on a client with one or two
+ *  workspaces), so a SAMPLED pass records the sample size as the rows-per-value
+ *  estimate — inverting join order exactly as a missing `sqlite_stat1` row
+ *  does, at a magnitude that reads as plausible. No limit value avoids it: the
+ *  estimate IS the limit, so an honest one would have to exceed the
+ *  workspace's row count. See {@link ANALYZE_OPTIMIZE_SQL} for the other cap
+ *  that has to stay off.
  *
- *  `PRAGMA optimize`'s stale-stats rule only considers tables the CONNECTION has
- *  planned a query against. Measured, on a table whose stats were the degenerate
- *  `"0 0"`: doing nothing first → not repaired; `SELECT COUNT(*)` first → NOT
- *  repaired; a PK-targeted `UPDATE` first → not repaired; querying a different
- *  table → not repaired. An indexed `SELECT`, an `EXPLAIN QUERY PLAN` of one, or
- *  even a `prepare()` that is never stepped → repaired. The flag is set when the
- *  query PLANNER considers the table, not when rows are read.
+ *  `analysis_limit` is CONNECTION state, so an ANALYZE inherits whatever was set
+ *  last. Nothing in this tree sets it, so this asserts a precondition rather
+ *  than winning a race — every ANALYZE here is unbounded whatever the connection
+ *  carries. Paired with each statement in {@link analyzeUnbounded} for that
+ *  reason, not hoisted to once per pass.
  *
- *  So the check has to announce its interest. `EXPLAIN QUERY PLAN` is the right
- *  primitive: it plans without touching a single data page — all four probes
- *  measured 2ms total on a live 347k-block client.
+ *  It is NOT a race guard, and should not be mistaken for one: the agent bridge
+ *  executes arbitrary SQL on this connection outside {@link serializeAnalyze},
+ *  so a deliberate `analysis_limit=400` can land between the pair. Closing that
+ *  needs a lock across both statements, which {@link ClientSchemaBootstrapDb}'s
+ *  execute/getOptional shape cannot express without deadlocking bootstrap shims.
  *
- *  The NEW-INDEX rule needs none of this (verified on a live client: a virgin
- *  connection with no prior query re-analyzed a table whose index had just been
- *  created), and that is the rule the 6297ms regression actually needed. Arming
- *  buys the drift and `"0 0"` axes on top, for ~nothing.
- *
- *  Param-free on purpose, matching every other bootstrap statement in this file:
- *  callers pass hand-rolled shims and `LocalSchemaDb` (`src/data/facets.ts`)
- *  literally declares the params-less shape, so a bound `?` would silently bind
- *  NULL. Here that would be harmless (the plan doesn't depend on the value), but
- *  keeping it structural beats relying on that.
- *
- *  Reads only, so `guardSyncedTableWrites` passes them through — pinned below,
- *  because a future probe written as a write would fail every boot's ANALYZE. */
+ *  Tabs are not the hazard: with an OPFS VFS each opens a DEDICATED worker, so
+ *  they share the file, not a connection or its PRAGMA state. */
+export const RESET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
+
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
+/** Planner-visible probes that ARM the staleness check. Load-bearing.
+ *
+ *  `PRAGMA optimize`'s stale-stats rule only considers tables the CONNECTION
+ *  has planned a query against, so each hot table must be announced with an
+ *  `EXPLAIN QUERY PLAN` that resolves to `SEARCH … USING INDEX` — a `SCAN`
+ *  does not arm, which is why the `blocks` probe carries `deleted = 0` to
+ *  match the partial index. Get that wrong and the probe is silently inert,
+ *  so these and every contributed probe are pinned by a plan-reading test
+ *  (`src/data/localSchema.test.ts`).
+ *
+ *  Param-free by design (a bound `?` would silently bind NULL through the
+ *  hand-rolled bootstrap shims), and reads-only so `guardSyncedTableWrites`
+ *  passes them through — a probe rewritten as a write would fail every
+ *  boot's ANALYZE.
+ *
+ *  CORE tables only. A plugin's table is armed by that plugin, through
+ *  `LocalSchemaContribution.analyzeTables` — see `resolveAnalyzeArmingProbes`
+ *  in `src/data/localSchema.ts`, which is what callers should pass to
+ *  {@link runAnalyzeIfStale}. */
 export const ANALYZE_ARMING_PROBES: readonly string[] = [
   `SELECT id FROM blocks WHERE workspace_id = '' AND deleted = 0`,
-  `SELECT target_id FROM block_references WHERE workspace_id = '' AND alias = ''`,
   `SELECT block_id FROM block_types WHERE type = '' AND workspace_id = ''`,
   `SELECT block_id FROM block_aliases WHERE workspace_id = '' AND alias = ''`,
 ]
-
-/** Deliberately NOT gated on "is the sync observer still materializing?".
- *
- *  Tried and reverted (the reasoning predates the `PRAGMA optimize` switch and
- *  survives it). The worry was that on a fresh device the check fires mid-drain
- *  (PowerSync's `hasSynced` marks the DOWNLOAD; the observer fills `blocks`
- *  afterwards), baking a baseline from a half-built table. Two reasons it isn't
- *  worth gating on:
- *
- *  1. A partial baseline is FINE for what stats are for here. Join order turns
- *     on order-of-magnitude differences, and SQLite's own drift rule re-corrects
- *     anything worse than ~10x. A proportionally-low-but-present estimate is
- *     nothing like the failure this whole rule exists for — a MISSING stat row,
- *     where SQLite substitutes "~10 rows" for 75,198 and inverts the join.
- *  2. Every cheap probe for "still materializing" is wrong. The
- *     `blocks_synced_changes` queue only covers the queue-driven drain;
- *     `observer.materializeWorkspace` reads `blocks_synced` DIRECTLY and never
- *     touches the queue — and that is the BIG path (the fresh-device e2ee
- *     re-pass over a 320k workspace). And "staged rows not yet in `blocks`"
- *     stays true forever for a permanently-undecryptable workspace, which
- *     would wedge the gate shut.
- *
- *  A gate that misses the largest case while risking "this session gets no
- *  stats at all" is worse than no gate. If this is ever revisited, thread the
- *  observer's own in-flight state in rather than proxying one of its inputs,
- *  and fall through to ANALYZE on exhaustion instead of skipping.
- *
- *  Cheaper to be wrong about now than it was: a mid-drain optimize re-analyzes
- *  one table for tens of milliseconds, not the whole file for seconds. */
 
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
@@ -1290,10 +1217,7 @@ export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
 // A trigger created with `CREATE TRIGGER IF NOT EXISTS` is FROZEN on upgrade:
 // once a trigger of that name exists, SQLite keeps the old body and silently
 // ignores the new definition. So a client whose local DB was bootstrapped
-// before a trigger's body changed keeps running the stale one forever — which
-// is exactly how the pre-D-3.1 `blocks_upload_update` kept stripping
-// workspace_id from content-only PATCHes and stranding e2ee uploads behind the
-// server's ciphertext CHECK (SQLSTATE 23514).
+// before a trigger's body changed keeps running the stale one forever.
 //
 // Force every CREATE TRIGGER to re-apply from current source by prepending a
 // `DROP TRIGGER IF EXISTS <name>` before it. This is self-maintaining: any
@@ -1433,8 +1357,7 @@ interface ClientSchemaBootstrapDb {
 export const backfillBlockAliasesIfEmpty = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCK_ALIASES_SQL)
   // Record completion regardless of whether any rows were inserted —
   // an empty workspace is fully backfilled too, and we don't want to
@@ -1445,8 +1368,7 @@ export const backfillBlockAliasesIfEmpty = async (
 export const backfillBlockTypesIfEmpty = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCK_TYPES_SQL)
   await db.execute(RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL)
 }
@@ -1454,8 +1376,7 @@ export const backfillBlockTypesIfEmpty = async (
 export const backfillBlocksFtsIfEmpty = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCKS_FTS_ROWIDS_SQL)
   await db.execute(BACKFILL_BLOCKS_FTS_SQL)
   await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
@@ -1544,8 +1465,7 @@ export const ensureStagingNeedsApplyColumn = async (
   // and every staged row flagged, and a run keyed on the ALTER never seeds
   // again. That reads as a permanent gap in every workspace, so every one-way
   // pass refuses for the life of the install. The marker retries instead.
-  const done = await db.getOptional<{1: number}>(SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL)) return
   await db.execute(SEED_STAGING_NEEDS_APPLY_SQL)
   await db.execute(RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL)
 }
@@ -1614,8 +1534,11 @@ export interface AnalyzeResult {
  *  than one unarmed table, and is a mode this code has already been burned by.
  *  A probe that silently fails still shows up as an unrepaired table, which is
  *  what the tests assert on — so the guard doesn't blunt the pin. */
-const armAnalyzeProbes = async (db: ClientSchemaBootstrapDb): Promise<void> => {
-  for (const probe of ANALYZE_ARMING_PROBES) {
+const armAnalyzeProbes = async (
+  db: ClientSchemaBootstrapDb,
+  probes: readonly string[],
+): Promise<void> => {
+  for (const probe of probes) {
     try {
       await db.execute(`EXPLAIN QUERY PLAN ${probe}`)
     } catch (error) {
@@ -1639,34 +1562,23 @@ const readOptimizeRows = (result: unknown): string[] | null => {
 /** Serializes the two ANALYZE entry points against each other and against
  *  themselves.
  *
- *  `analysis_limit` is CONNECTION state, not per-statement, and each statement
- *  below is separately awaited — so without this, two overlapping callers
- *  interleave on it. There are four schedulers pointed at these functions
- *  (repoProvider's boot and first-sync checks, the Roam importer, the manual
- *  command), and the boot/first-sync pair has overlapped before. The two ways it
- *  goes wrong are mirror images: the manual path's `analysis_limit=0` landing
- *  between an automatic pass's SET and its optimize turns that pass UNBOUNDED —
- *  the multi-second park this whole mechanism exists to avoid — and an automatic
- *  SET landing between the manual clear and its ANALYZE silently samples the
- *  escape hatch whose entire point is being exact.
+ *  Four schedulers point at them (repoProvider's boot and first-sync checks, the
+ *  Roam importer, the manual command) and the boot/first-sync pair has
+ *  overlapped before. Two concurrent passes are two multi-second parks of this
+ *  tab's SQLite connection to reach one settled `sqlite_stat1`.
  *
- *  Scope, stated because it is not total: this serializes callers in ONE tab.
- *  PowerSync's shared worker owns the connection across tabs, so two tabs can
- *  still interleave, in BOTH directions — an earlier version of this comment
- *  claimed the automatic direction was self-limiting ("a pass that loses the
- *  limit is a pass with nothing to do"), which is wrong: the clobber can land
- *  after that pass's dry run has already found work, so it analyzes real work
- *  unbounded.
+ *  Scope, stated because it is not total: this is a module-level chain, so it
+ *  coordinates one TAB. Tabs do not share a connection here (each opens a
+ *  dedicated worker — see {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL}), they share
+ *  the database file, and `navigator.locks` keeps their writes apart. So two
+ *  tabs can each run a pass: duplicated work, not a wrong result.
  *
- *  Not closed, deliberately. Closing it means holding a write lock across the
- *  whole sequence, and {@link ClientSchemaBootstrapDb} is execute/getOptional
- *  only so that bootstrap shims satisfy it — threading a lock through would mean
- *  every statement here moving onto a transaction-scoped handle, where a stray
- *  `db.execute` deadlocks against the lock its own caller holds. That risk is
- *  worse than the bug: the cross-tab window is now ONE statement boundary (see
- *  the ordering in {@link runAnalyzeIfStale}), and the cost of losing the race
- *  is an unbounded single-table ANALYZE (measured 147ms vs 52ms on a 347k
- *  client) or a manual pass that comes back sampled, which re-running fixes. */
+ *  Corollary worth knowing before reasoning about staleness across connections:
+ *  writing `sqlite_stat1` does NOT bump `schema_version` on its own, so an
+ *  already-open connection would keep its old query plans for its lifetime.
+ *  `analyzeUnbounded` therefore bumps the cookie explicitly once the pass is
+ *  done — which is load-bearing now that a single tab has a reader pool, not
+ *  just other tabs, reading through connections it did not analyze on. */
 let analyzeChain: Promise<unknown> = Promise.resolve()
 const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
   // `.then(run, run)`, both arms deliberately: a throwing pass must not poison
@@ -1684,49 +1596,79 @@ const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
  *
  *  Still belongs off the first-paint critical path (deep idle / post-sync): when
  *  it DOES fire it runs a real ANALYZE on the single SQLite worker, and on a
- *  cold fresh device that can be every table at once. */
+ *  cold fresh device that can be every table at once.
+ *
+ *  Deliberately on the catch-up idle tier, which force-runs on a deadline. A
+ *  freshly created index has NO `sqlite_stat1` row, and SQLite then assumes ~10
+ *  rows for an equality seek on its leading column — the join-order inversion
+ *  this module exists to prevent. So between a release adding an index and this
+ *  pass running, plans are pathological. Bounding that at 30s is worth the
+ *  ~0.3-1.2s the pass costs; waiting for genuine idle would trade a bounded
+ *  pause for an unbounded stretch of bad plans.
+ *
+ *  `probes` defaults to the CORE tables. A caller that can reach the local-schema
+ *  contributions should pass `resolveAnalyzeArmingProbes` of them instead, so
+ *  plugin-owned tables are armed too; the default is what a bootstrap-time
+ *  caller with no runtime yet gets.
+ *
+ *  Deliberately not gated on "is the observer still materializing?" (tried and
+ *  reverted). A partial baseline is fine — join order turns on orders of
+ *  magnitude — and every cheap probe for it is wrong: `observer.materializeWorkspace`
+ *  reads `blocks_synced` directly and never touches `blocks_synced_changes`, and
+ *  "staged rows not yet in blocks" stays true forever for a permanently-
+ *  undecryptable workspace, wedging the gate shut. If revisited, thread the
+ *  observer's own in-flight state in and fall through to ANALYZE on exhaustion
+ *  rather than skipping. */
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
+  probes: readonly string[] = ANALYZE_ARMING_PROBES,
 ): Promise<AnalyzeResult> => serializeAnalyze(async () => {
-  // Arm and dry-run BEFORE setting the limit, so the limit is set immediately
-  // before the only statement that consumes it. In-tab that is redundant
-  // ({@link serializeAnalyze} already excludes other callers); across tabs it is
-  // the whole mitigation, shrinking the window in which another tab's
-  // `analysis_limit=0` can land from five statement boundaries to one.
-  //
-  // Safe because the dry run does NOT depend on the limit — it reports WHICH
-  // tables are stale, not how many rows to sample. Verified rather than assumed:
-  // the proposal set is identical with and without the limit set.
-  await armAnalyzeProbes(db)
+  await armAnalyzeProbes(db, probes)
+  // The dry run fixes `proposed` BEFORE anything analyzes, which is what makes
+  // it a report of the optimize's own decision rather than of leftover state.
   const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
-  await db.execute(SET_ANALYZE_SAMPLE_LIMIT_SQL)
-  try {
-    await db.execute(ANALYZE_OPTIMIZE_SQL)
-    return {proposed}
-  } finally {
-    // Restore the connection default even if optimize threw — leaving the limit
-    // set would silently sample the manual full ANALYZE that a user runs next.
-    await db.execute(CLEAR_ANALYZE_SAMPLE_LIMIT_SQL)
-  }
+  await analyzeUnbounded(db, ANALYZE_OPTIMIZE_SQL)
+  return {proposed}
 })
 
-/** Unconditional, UNBOUNDED `ANALYZE` for the manual command-palette command.
+/** Every ANALYZE in this module goes through here, so the reset cannot be
+ *  forgotten at a fourth site. Paired, not hoisted to the top of a pass:
+ *  {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL} is only sound adjacent to the
+ *  statement it protects. */
+const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promise<void> => {
+  await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
+  await db.execute(sql)
+
+  // Writing `sqlite_stat1` does not bump `schema_version` (see the note on
+  // `runAnalyzeIfStale`), so a connection that was already open keeps the old
+  // plans for its lifetime. That used to cost only other TABS; with a reader
+  // pool the reads of THIS tab go to a connection that would keep the
+  // pre-ANALYZE plans too — losing most of the benefit until reload, on exactly
+  // the queries ANALYZE was run for. A no-op DDL bumps the cookie, and every
+  // connection reloads `sqlite_stat1` on its next statement.
+  //
+  // Both statements are idempotent because two tabs can finish ANALYZE at the
+  // same time and interleave: `analyzeChain` serialises within a tab, not
+  // across them, so an unconditional DROP can find the table already gone and
+  // report a failure for a pass that actually succeeded. Any interleaving still
+  // moves the cookie at least once, which is all this needs.
+  await db.execute('CREATE TABLE IF NOT EXISTS __km_analyze_bump(x)')
+  await db.execute('DROP TABLE IF EXISTS __km_analyze_bump')
+}
+
+/** Unconditional `ANALYZE` for the manual command-palette command.
  *
  *  The escape hatch for the case the heuristic can't model: stats that are
- *  present and schema-current but wrong for the current query mix. Deliberately
- *  not sampled — `analysis_limit` is cleared first, so the user who reached for
- *  the manual button gets exact stats rather than the automatic path's
- *  approximation. Reports the table size so the caller can surface it.
+ *  present and schema-current but wrong for the current query mix — where the
+ *  automatic path, by design, walks away. Reports the table size so the caller
+ *  can surface it.
  *
  *  A multi-second scan holding the single SQLite worker, so it stays manual and
- *  off the render path. Shares {@link serializeAnalyze} with the automatic path:
- *  the clear and the ANALYZE are two statements, and an automatic pass setting
- *  the sample limit between them would sample this one. */
+ *  off the render path. */
 export const runAnalyzeNow = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<{count: number}> => serializeAnalyze(async () => {
   const count = await getBlocksCount(db)
-  await db.execute(CLEAR_ANALYZE_SAMPLE_LIMIT_SQL)
-  await db.execute('ANALYZE')
+  await analyzeUnbounded(db, 'ANALYZE')
   return {count}
 })

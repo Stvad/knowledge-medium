@@ -107,7 +107,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   const writeName = useCallback(async (draft: string) => {
     const next = trimIfEdited(draft, propertyName)
     if (next === propertyName) return
-    // Same invariant addSchema enforces at creation (PR #288 §7): the name
+    // Same invariant addSchema enforces at creation
+    // (docs/properties-as-blocks-migration.html §7): the name
     // must survive a `[[name]]` round-trip — field-row retitles and every
     // re-derive-by-content path bind through that form, so a lossy label
     // (e.g. one containing `]]`) would strand the schema's field rows.

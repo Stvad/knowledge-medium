@@ -1,43 +1,9 @@
 /**
- * Shared harness for the stateful kernel-mutator fuzz suites
- * (`repoMutators.fuzz.test.ts`, `splitMerge.fuzz.test.ts`,
- * `queryHandles.fuzz.test.ts`, `referencesRecompute.fuzz.test.ts`,
- * `defaultActions.fuzz.test.ts` — see docs/fuzzing.md). Extracted from
- * five near-duplicate copies during the PR #371 quality-review cleanup
- * (Batch-3 note below). Sibling of `createTestRepo.ts`; allowed to
- * import the data layer.
- *
- * Batch 3 (this pass): the op-arb/`applyOp` harness itself — `IdSel`
- * (generalized from repoMutators' two-workspace-only `{pool: 0|1; idx}`
- * to N-pool `{pool: number; idx}`), `KernelOpSpec`/`kernelOpArb`, and
- * `applyKernelOp` — is now extracted, generalized to N id pools, so an
- * upcoming two-repo convergence fuzzer can reuse the exact same op
- * vocabulary with per-device pools (excluding `undo`/`redo` via
- * `kernelOpArb`'s `exclude` option). `repoMutators.fuzz.test.ts` adopts
- * it directly (2 pools, default weights). See "kernel op harness" below.
- *
- * NOT extracted: queryHandles' trimmed op subset. Its `OpSpec` targets
- * are plain `number` indices into a single flat id array (no `IdSel`/
- * pool concept at all — it only ever runs one workspace), it drops
- * `createSiblingAbove`/`Below`/`insertChildren`/`moveVertical`/
- * `setReferences`/`undo`/`redo` entirely, and its per-field weights
- * differ from `KernelOpSpec`'s for the ops it keeps: `setContent` is
- * weight 3 there vs weight 2 here, `setAlias`/`setType` are weight 3
- * there vs weight 2 here (createChild/move/indent/outdent/deleteBlock/
- * restoreBlock/split/merge all happen to match). Forcing it onto
- * `kernelOpArb` would mean either (a) wrapping every plain-`number`
- * target in a synthetic single-pool `IdSel`, which adds an indirection
- * with no behavioral payoff for a suite that never has a second pool, or
- * (b) changing its op weights to match `KernelOpSpec`, which is a
- * behavior change to a suite this task was told not to touch. Genuinely
- * adoptable ops/shapes (createChild/move/setContent/indent/outdent/
- * deleteBlock/restoreBlock/split/merge/setAlias/setType) line up 1:1
- * with `KernelOpSpec`'s fields once wrapped in `{pool: 0, idx}`; a
- * future pass that's allowed to touch `queryHandles.fuzz.test.ts` could
- * migrate it onto `kernelOpArb(idSelArb({pools: 1}), {exclude: [...]})`
- * with custom per-op weights (not yet a parameter `kernelOpArb`
- * exposes), at the cost of re-verifying its probe-invalidation
- * properties still fire identically under the new weight distribution.
+ * Shared harness for the stateful kernel-mutator fuzz suites (see
+ * docs/fuzzing.md). Sibling of `createTestRepo.ts`; allowed to import
+ * the data layer. `queryHandles.fuzz.test.ts` deliberately keeps its own
+ * trimmed op set — its per-op weights differ, and re-tuning them would
+ * change what that suite exercises.
  */
 import { expect } from 'vitest'
 import fc from 'fast-check'
@@ -63,24 +29,12 @@ import type { Repo } from '@/data/repo'
 // ──── legal-rejection allowlist ────
 
 /**
- * Domain rejections that are LEGAL outcomes for an incoherent op/case —
- * union of the five suites' allowlists (diffed byte-for-byte before this
- * merge; the only divergences were `ParentWorkspaceMismatchError`, below,
- * and whether the caller passed a raw op object or a pre-stringified
- * description — see `assertLegalKernelRejection`'s `desc` param).
- *
- * `ParentWorkspaceMismatchError` is reachable only in repoMutators'
- * two-workspace universe (a reparent whose target parent lives in the
- * other seeded workspace — see `requireParentInWorkspace`,
- * `src/data/internals/txEngine.ts`); the other four suites run a single
- * workspace, so their op sets can never throw it. Including it in the
- * shared union for suites that can't produce it doesn't weaken their
- * no-illegal-errors oracle — an error class that can't fire simply never
- * matches `some(cls => e instanceof cls)` there; it only shrinks the set
- * of errors those suites would flag as illegal if the surrounding
- * product code ever changed to make it reachable, which is a
- * theoretical (not observed) risk, not a live weakening of a property
- * these suites currently exercise.
+ * Domain rejections that are LEGAL outcomes for an incoherent op/case. A
+ * superset of what any one suite can throw — `ParentWorkspaceMismatchError`
+ * needs two workspaces (see `requireParentInWorkspace`,
+ * `src/data/internals/txEngine.ts`), so single-workspace suites simply
+ * never match it, which is not a weakening: an unreachable class matches
+ * nothing.
  */
 const LEGAL_ERRORS = [
   BlockNotFoundError,
@@ -113,7 +67,7 @@ const LEGAL_ERRORS = [
  *    `insertChildren`'s own anchor lookup — NOT `split`; its `ix < 0`
  *    case silently falls back to `keyBetween(null, self.orderKey)`
  *    rather than throwing). Only this exact message shape — any other
- *    plain `Error` is a bug (Codex review on PR #371: the previous
+ *    plain `Error` is a bug (the previous
  *    `e.constructor === Error` branch accepted them all).
  *
  * `desc` is a caller-formatted description of the op/case that produced
@@ -151,8 +105,7 @@ export const pickNonRoot = (index: number, ids: readonly string[]): string =>
 // vocabulary repoMutators.fuzz.test.ts fuzzes the kernel mutator surface
 // with, generalized from a hardcoded two-workspace universe to N id
 // pools so a future two-repo convergence fuzzer can reuse it with
-// per-device pools. Moved verbatim from repoMutators.fuzz.test.ts except
-// where noted.
+// per-device pools.
 
 /** Which id pool an op argument resolves against, plus a raw index into
  *  that pool. Generalized from repoMutators' `{pool: 0 | 1; idx: number}`
@@ -288,9 +241,7 @@ export const resolvePos = (pos: KernelPos, pools: readonly (readonly string[])[]
  *  one pool. */
 export interface KernelCreated {id: string; pool: number}
 
-/** Applies one op; returns any newly created blocks. Verbatim from
- *  repoMutators' `applyOp`, generalized from its hardcoded `IdPools`
- *  2-tuple to an N-pool array. */
+/** Applies one op; returns any newly created blocks. */
 export const applyKernelOp = async (
   repo: Repo, op: KernelOpSpec, pools: readonly (readonly string[])[],
 ): Promise<KernelCreated[]> => {
@@ -387,11 +338,10 @@ export const applyKernelOp = async (
  *  whenever a suite's op set has no hard-delete-visible asymmetry to
  *  track (i.e. every block created during a sequence that undo can't
  *  hard-delete ends up tombstoned, hence filtered out here on both the
- *  seed and final sides equally). Moved here from splitMerge.
- *  repoMutators needs a STRICTER oracle — including tombstones, to catch
- *  undo corrupting an already-deleted row's content/properties/parent —
- *  so it keeps its own `fullSnapshotRows`/`fullSnapshot` local rather
- *  than using this. */
+ *  seed and final sides equally). repoMutators needs a STRICTER oracle —
+ *  including tombstones, to catch undo corrupting an already-deleted
+ *  row's content/properties/parent — so it keeps its own
+ *  `fullSnapshotRows`/`fullSnapshot` local rather than using this. */
 export const liveSnapshot = async (db: TestDb['db']): Promise<string> => {
   const rows = await db.getAll(
     `SELECT id, parent_id, order_key, content, properties_json, references_json
@@ -401,9 +351,8 @@ export const liveSnapshot = async (db: TestDb['db']): Promise<string> => {
 }
 
 /** Steps `fn` (an `undo()`/`redo()` call) until it reports nothing left
- *  to do, up to a safety cap. Unified from repoMutators (which returned
- *  the step count, unused by every caller) and splitMerge (void) — the
- *  void signature wins since nothing needs the count. */
+ *  to do, up to a safety cap. Returns void, not a step count — no caller
+ *  needs it. */
 export const drain = async (fn: () => Promise<boolean>): Promise<void> => {
   for (let n = 0; n < 300; n++) {
     if (!(await fn())) return
@@ -430,8 +379,7 @@ export interface StructuralSweepOptions {
   /** Query every block id in the db fresh, instead of trusting a
    *  maintained `ids` pool — for suites (defaultActions) whose op pool
    *  mints blocks the harness loop doesn't separately track, so a cycle
-   *  through a created id would otherwise escape the sweep (Codex review
-   *  on PR #371). */
+   *  through a created id would otherwise escape the sweep. */
   allRows?: boolean
 }
 
@@ -440,18 +388,11 @@ export interface StructuralSweepOptions {
  * missing/deleted parent, no order-key collision among live siblings of
  * one workspace. Used by repoMutators/splitMerge/defaultActions.
  *
- * Deliberately NOT included here (kept suite-local, differing in scope
- * per suite so not a clean fit for a single `ws` parameter):
- *  - the "no block outside the known workspace(s)" check — repoMutators
- *    checks against a two-workspace allowlist, defaultActions against
- *    one; folding both into this single-`ws` signature would either
- *    weaken repoMutators' check or force an API shape beyond what this
- *    cleanup scoped;
- *  - trigger-maintained derived-index mirrors (repoMutators'
- *    `sweepDerivedIndexes`), the `SUBTREE_SQL`-vs-JS-walk differential
- *    (repoMutators' `sweepSubtreeForWorkspace`), and the references
- *    consistency audit (referencesRecompute) — suite-specific by
- *    construction, not duplicated anywhere.
+ * Not here: the per-suite workspace-allowlist check (its scope differs
+ * per suite, so a single `ws` parameter would weaken repoMutators'), and
+ * the suite-specific sweeps (derived-index mirrors, the SUBTREE_SQL
+ * differential, the references audit) — none of them duplicated
+ * anywhere.
  */
 export const sweepStructuralInvariants = async (
   db: TestDb['db'], {ws, ids, allRows}: StructuralSweepOptions,
@@ -484,10 +425,9 @@ export const sweepStructuralInvariants = async (
 }
 
 // ──── derived-index sweep ────
-// Moved from `repoMutators.fuzz.test.ts` (Batch 3) so `twoRepoConvergence`
-// can reuse it: sync-materialization is a different write shape than kernel
-// txs and could desync a trigger-maintained index while a plain blocks-table
-// comparison stays green.
+// `twoRepoConvergence` needs this: sync-materialization is a different
+// write shape than kernel txs and could desync a trigger-maintained index
+// while a plain blocks-table comparison stays green.
 
 /** Incremental-vs-recompute differential for a trigger-maintained derived
  *  index: the table's current rows must equal re-running the trigger's own

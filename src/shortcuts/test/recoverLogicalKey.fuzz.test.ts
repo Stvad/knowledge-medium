@@ -62,8 +62,7 @@
  * (`.toLowerCase()` is idempotent), so step 3's "already correct" branch
  * fires on the second call and returns R itself.
  *
- * ──── Downstream-behavior recovery property, not the formula
- *      (PR #454 review comment 3677006799) ────
+ * ──── Downstream-behavior recovery property, not the formula ────
  *
  * A prior version of this suite's "in-scope recovery" property derived
  * its expectation with `String.fromCharCode(shape.keyCode).toLowerCase()`
@@ -71,8 +70,8 @@
  * — and then branched on `shape.key.toLowerCase() === recovered` to decide
  * whether the result should be the same event or a Proxy, mirroring
  * utils.ts:77's own branch. That's a formula-mirror, same defect as the
- * `clampSelectionToLength` property fixed alongside this one (PR #454
- * comment 3676886063) — random garbage `key`/`code` values gave no
+ * `clampSelectionToLength` property fixed alongside this one — random
+ * garbage `key`/`code` values gave no
  * independent oracle. The lesson from that fix carries a caution, not just
  * a template: replacing a formula-mirror with SOME other property isn't
  * automatically progress — that fix's own mutation test showed idempotence
@@ -101,6 +100,7 @@ import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { matchKeybindingPress, parseKeybinding } from 'tinykeys'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { utf16UnitArb } from '@/test/arbitraries/utf16'
 import { withRecoveredLetterKey } from '../utils.ts'
 
 const ASCII_A = 65
@@ -148,7 +148,8 @@ const wildKeyCodeArb: fc.Arbitrary<number> = fc.oneof(
 
 const garbageKeyArb: fc.Arbitrary<string> = fc.oneof(
   fc.string({ maxLength: 6 }),
-  fc.string({ unit: 'binary', maxLength: 6 }), // incl. unpaired surrogates
+  fc.string({ unit: 'binary', maxLength: 6 }), // whole code points, astral included
+  fc.string({ unit: utf16UnitArb, maxLength: 6 }), // ill-formed UTF-16: lone surrogates
   fc.constantFrom('', 'Escape', 'Enter', 'Tab', 'Shift', 'Unidentified', '¥', 'Ω', 'ÿ'),
 )
 const garbageCodeArb: fc.Arbitrary<string> = fc.oneof(

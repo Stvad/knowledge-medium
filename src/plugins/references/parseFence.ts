@@ -157,8 +157,8 @@ const containsNul = (text: string): boolean => text.includes('\u0000')
  * `[[alias]]` span in the workspace resolved to it. That is why callers
  * must gate this on the release path — the result is only sound there.
  *
- * KNOWN GAP, confirmed and not yet fixed (Codex on PR #484, tracked on
- * #443). "Only claimant" is read per TARGET, so it does not hold when ONE
+ * KNOWN GAP, confirmed and not yet fixed, tracked on #443. "Only claimant"
+ * is read per TARGET, so it does not hold when ONE
  * transaction releases the same alias from two co-claimants — the
  * sync-induced state of #460, where the uniqueness trigger never fired.
  * Each target then sees zero post-tx claimants, both take the release
@@ -205,7 +205,7 @@ export const wikilinkSourcesByContent = async (
     // WOULD. Rewriting a span inside stored source is not a missed
     // rewrite, it is a corrupted extension that no longer loads. The
     // exclusion is imported from the processor that owns it rather than
-    // restated, so the two cannot drift (Codex on PR #484).
+    // restated, so the two cannot drift.
     .filter(row => !isExtensionSource({properties: parsePropertiesJson(row.propertiesJson)}))
     .filter(row => parseReferences(row.content).some(mark => mark.alias === alias))
     .map(({sourceId, content}) => ({sourceId, content}))
@@ -219,7 +219,7 @@ export const wikilinkSourcesByContent = async (
  *  `order_key` still lands after every edge-leg row. Deterministic — same
  *  inputs, same output — which is all the callers need, and stated
  *  precisely because the earlier wording claimed a global sort this does
- *  not provide (Codex on PR #484). Nothing downstream may rely on
+ *  not provide. Nothing downstream may rely on
  *  cross-leg order: each source is planned independently, and both the
  *  splice and the entry swap are keyed by alias through a Map. Carrying
  *  `order_key` through just to sort would buy no observable behaviour.

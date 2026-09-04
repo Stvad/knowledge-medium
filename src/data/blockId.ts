@@ -2,51 +2,21 @@
  * The block-id shape contract (issue #456): every block this app writes has a
  * canonical lowercase-UUID id.
  *
- * Closing this hole is what makes PR #447's outline-rendering hardening
- * (control-character/`%`/`]` percent-encoding) a defensive no-op instead of
- * a load-bearing display/addressability tradeoff: a canonical UUID never
- * contains anything `encodeOutlineId` needs to escape, so it round-trips
- * trivially and can never be visually confused with another id (no bidi
- * reordering, no homoglyphs, no ASCII lookalikes — the alphabet is just hex
- * + hyphen). See the issue's final comments for the full argument.
+ * This is an invariant over the data, not a check on one caller, so it is
+ * enforced at the tx engine's insert path (`buildNewBlockRow`) that every
+ * local insert funnels through — the `Repo` owns the policy
+ * ({@link BlockIdPolicy}, `RepoOptions.blockIdPolicy`, canonical by default);
+ * the engine only carries it.
  *
- * That argument only holds if it is an INVARIANT over the data, not a check
- * on one caller — anything downstream that leans on "an id can't contain a
- * newline" is wrong the moment a single write path skips the check. So the
- * enforcement point is the tx engine's insert path (`tx.create` /
- * `tx.createOrGet` → `buildNewBlockRow`), which every local block insert
- * funnels through: the kernel mutators (`createChild`,
- * `createSiblingAbove/Below`), `createTypedChild` — the documented record
- * shape for agent-authored extensions, which takes an explicit `id` — the
- * bridge's `create-block` / `install-extension`, importers, and any write
- * path added later, without each having to remember. The `Repo` owns the
- * decision ({@link BlockIdPolicy}, `RepoOptions.blockIdPolicy`, canonical by
- * default); the engine only carries it.
+ * NOT enforced, both deliberately, because both carry an id that already
+ * exists rather than minting one:
  *
- * In practice this constrains nothing the app already does. Every id minted
- * INSIDE the app is already a canonical lowercase UUID: `crypto.randomUUID()`
- * / the `uuid` package's `v4()` (repo.ts's default `newId`), and every
- * deterministic helper built on `uuid`'s `v5()` (kernelPageBlockId,
- * dailyNoteBlockId, propertyDefinitionBlockId, pluginBlockId, the roam-import
- * / media-capture / alias-seat ids, …) — `uuid` never emits uppercase hex.
- * A survey of the owner's live data found 0 non-conforming ids across 347,244
- * blocks in 3 workspaces, so there is no grandfather path to keep.
- *
- * NOT enforced, both deliberately, and both for the same reason — they carry
- * an id that already exists rather than minting one:
- *
- *   - Rows arriving from SYNC. The Layout B observer materializes
- *     `blocks_synced` into `blocks` directly, below this engine. Rejecting a
- *     peer's row is a strictly stronger and riskier claim (it can stall the
- *     sync stream on a row the server already accepted) and issue #456 calls
- *     it out as a separate decision.
- *   - `TxImpl.applyRaw`'s restore INSERT (undo/redo replay). Gating it would
- *     not stop a foreign id from existing — it is already in the user's data
- *     by one of the routes above — it would only make UNDO fail on it, which
- *     trades a tolerated id for lost history.
- *
- * The outline-renderer hardening from #447 stays regardless: it is what
- * covers any id this guard didn't mint.
+ *   - Rows arriving from SYNC — rejecting a peer's row can stall the sync
+ *     stream on a row the server already accepted, a separate decision
+ *     (issue #456).
+ *   - `TxImpl.applyRaw`'s restore INSERT (undo/redo replay) — gating it
+ *     wouldn't stop a foreign id from existing, it would only make UNDO
+ *     fail on it.
  */
 import { UUID_RE_SOURCE } from './referenceBlock.js'
 

@@ -80,7 +80,7 @@ describe('sniffImageMime', () => {
 
 describe('resolveCaptureMime', () => {
   it('derives image MIME from bytes when File.type is missing or generic (the dedup fix)', () => {
-    // The core Codex P2 case: a typeless/octet-stream image must still store image/* so
+    // The core case: a typeless/octet-stream image must still store image/* so
     // it renders inline AND every dedup'd embed of the same bytes agrees.
     expect(resolveCaptureMime(undefined, png())).toBe('image/png')
     expect(resolveCaptureMime('', png())).toBe('image/png')

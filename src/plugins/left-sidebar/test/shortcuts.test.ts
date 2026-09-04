@@ -25,9 +25,9 @@ interface Harness {
 const createRepo = (h: TestDb): Repo => {
   // Reproduce Repo's own non-deterministic defaults (uuid ids, Date.now-seeded
   // tx-seqs) rather than the harness's deterministic-from-0 counters: the
-  // multi-Repo convergence tests construct two Repos on the same db, and the
-  // harness defaults would collide across instances on command_events.tx_id
-  // (derived from newId) and tx_seq.
+  // multi-Repo convergence tests construct two Repos on the same db, where
+  // both counters restart and collide — on the `blocks` primary key, and on
+  // the tx-seq that groups a tx's rows for upload.
   let seq = Date.now()
   const { repo } = createTestRepo({
     db: h.db,

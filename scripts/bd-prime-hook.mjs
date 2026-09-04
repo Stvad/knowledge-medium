@@ -117,5 +117,8 @@ if (isMainModule(import.meta.url)) {
   } catch (e) {
     console.error(`[bd-prime-hook] ${e?.message ?? e}`)
   }
-  process.exit(0)
+  // No `exit()`: the payload is up to 10K chars written to a piped stdout,
+  // where `exit()` drops whatever is still queued — here that is memory keys
+  // off the end of the index, lost silently. Nothing holds the loop open
+  // (spawnSync adds no handles), so the hook still ends promptly.
 }

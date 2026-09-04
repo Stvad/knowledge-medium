@@ -8,6 +8,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import {
   presetIdProp, propertyChangeScopeProp, propertyDefaultProp, propertyNameProp,
 } from '@/data/properties'
@@ -860,14 +861,18 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // the next projection publishes nothing and the backfill would run against
     // behaviour that is about to disappear.
     const {plan, id} = await mintedOrphan()
-    // RAW, so the projector never learns: the resolver stays pointed at it,
-    // which is the whole state under test.
-    await sharedDb.db.execute(
-      `UPDATE blocks SET properties_json = json_set(properties_json,
-         '$."property-schema:change-scope"', 'not-a-real-scope') WHERE id = ?`, [id])
+    // Capture the projection and FREEZE it, the way the staleness tests beside
+    // this one do. Raw SQL sends no notification of its own, but a reload an
+    // earlier tx started reads whatever is in the database when it finally
+    // runs — so leaving the real projection in place races the corruption
+    // below into it and the precondition evaporates.
     const stale = repo.propertySchemaResolverFor(WS).resolve('demo:orphan')
     expect(stale.status).toBe('resolved')
     expect(stale.status === 'resolved' && stale.schema.fieldId).toBe(id)
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json,
+         '$."property-schema:change-scope"', 'not-a-real-scope') WHERE id = ?`, [id])
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue(mockResolver(() => stale))
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -965,6 +970,43 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result).toMatchObject({created: 0, converged: 0})
     expect(result.skipped[0]!.reason).toMatch(/was deleted/)
     expect(flipBlockedBySynthesis(plan, result)).toMatch(/still have no definition/)
+  }, 30_000)
+
+  it('forgets a deleted definition even when the mint and delete share one reload', async () => {
+    // The fence above is only trustworthy because of this. Synthesis publishes
+    // the definition imperatively, ahead of any subscription delivery, and only
+    // a delivery takes it back — but when the delete lands inside the mint's own
+    // reload, that reload reads back exactly the row set last delivered and the
+    // subscription has nothing to say. The contribution then outlives its row
+    // and the resolver keeps answering for a block the database has tombstoned.
+    await repo.whenPropertyDefinitionsReady(WS)
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+
+    // Hold the definition-block reload open across BOTH writes — it READS
+    // first and settles late, which is the shape CI contention produces. A
+    // gate rather than a timer, so there is no race to lose.
+    let releaseReload = () => {}
+    const held = new Promise<void>(resolve => { releaseReload = resolve })
+    const realGetAll = sharedDb.db.getAll.bind(sharedDb.db)
+    let holding = false
+    vi.spyOn(sharedDb.db, 'getAll').mockImplementation(
+      async (sql: string, params?: unknown[]) => {
+        const rows = await realGetAll(sql, params as never)
+        if (holding && Array.isArray(params) && params[1] === PROPERTY_SCHEMA_TYPE) await held
+        return rows
+      })
+    holding = true
+
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    const id = await definitionIdFor('demo:orphan')
+    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+    await repo.tx(async tx => { await tx.delete(id) },
+                  {scope: ChangeScope.BlockDefault, description: 'delete'})
+    holding = false
+    releaseReload()
+
+    await untilKeyUnresolved('demo:orphan')
   }, 30_000)
 
   it('skips a key whose deterministic id stopped being its definition', async () => {

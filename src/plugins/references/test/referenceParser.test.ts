@@ -682,9 +682,9 @@ describe('pinned rewrites inside a [display]([[alias]]) wrapper', () => {
   // wikilink whose rendered children are `display`. Splicing the pinned
   // form into the inner span alone produced
   // `[display]([label](((uuid))))`, which the real pipeline renders as a
-  // plain markdown link — reference destroyed, stored edge moved anyway
-  // (Codex on PR #444). `remark-wikilinks.test.ts` asserts the rendered
-  // node values for both forms; these pin the rewrite itself.
+  // plain markdown link — reference destroyed, stored edge moved anyway.
+  // `remark-wikilinks.test.ts` asserts the rendered node values for both
+  // forms; these pin the rewrite itself.
   const PINNED = `[Old](((${UUID})))`
   const opts = {skipEmbeds: true, pinnedTargetId: UUID}
 

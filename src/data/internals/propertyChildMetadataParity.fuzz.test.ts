@@ -1,9 +1,9 @@
 // @vitest-environment node
 /**
- * Fuzz suite pinning commit 7a34b5120 ("child dual-write updates use real
- * metadata, not the parent's skipMetadata"): `writePropertyValueChild`
+ * Fuzz suite pinning that child dual-write updates use real
+ * metadata, not the parent's skipMetadata: `writePropertyValueChild`
  * (`src/data/internals/txEngine.ts:1298-1378`) — the eager child half of
- * `tx.setProperty`'s dual-write (PR #288 §5) — must stamp the field-row and
+ * `tx.setProperty`'s dual-write (docs/properties-as-blocks-migration.html §5) — must stamp the field-row and
  * value-child rows with REAL metadata (their own `created_at`/`created_by`/
  * `updated_at`/`user_updated_at`/`updated_by`), regardless of whether the
  * PARENT write that triggered them passed `{skipMetadata: true}`. Before the
@@ -198,7 +198,7 @@ const runCase = async ({kind, v1, v2}: {kind: Kind; v1: string; v2: string}): Pr
   // (`existing.content !== propertyFieldContent(...)`, txEngine.ts:1318)
   // NEVER fires in this suite — 7a34b5120 removed inherited skipMetadata
   // from TWO separate `update()` calls, and this suite exercised only the
-  // value child's (Codex review, comment 3672657061).
+  // value child's branch.
   await sharedDb.db.execute(
     'UPDATE blocks SET content = ? WHERE id = ?',
     ['noncanonical field content', skipField!.id],

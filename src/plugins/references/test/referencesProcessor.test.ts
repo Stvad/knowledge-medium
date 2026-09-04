@@ -32,7 +32,7 @@ import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
-import { encodedPropertyValueToChildContent, propertyFieldContent } from '@/data/propertyChildren'
+import { propertyFieldContent } from '@/data/propertyChildren'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
@@ -358,7 +358,7 @@ describe('parseReferences — extension source is not scanned for content refs',
     // aren't derived — recoverable, invisible); rejecting it scans 1.7 MB
     // of bundled JS and mints phantom pages, which is the bug this gate
     // exists to stop. Membership wins over element-wise validity on
-    // purpose (declined Codex suggestion, PR #540).
+    // purpose.
     it('honours an extension claim even in an otherwise malformed array', () => {
       expect(isExtensionSource({properties: {types: [EXTENSION_TYPE, 42]}})).toBe(true)
     })
@@ -1008,8 +1008,8 @@ describe('parseReferences — schema-swap reprojection', () => {
 
 describe('parseReferences — stale-plan guard covers references-only writers', () => {
   it('does not clobber a references-only write landing between plan build and apply', async () => {
-    // The race (Codex review on PR #371): a parse plan is built from the
-    // content edit's event row; before it applies, a references-ONLY
+    // The race: a parse plan is built from the content edit's event row;
+    // before it applies, a references-ONLY
     // writer (the ref-backfill reprojection on schema load, simulated
     // here with a raw update) adds an entry the parse cannot re-derive
     // (absent schema) but must retain (value unchanged). Pre-fix the
@@ -1206,8 +1206,8 @@ describe('parseReferences — alias claimed between plan build and apply (write-
   it('binds a LONG-FORM date mark to the block that claimed the literal alias mid-plan', async () => {
     // ensureDailyNoteTarget's internal lookup-first only rechecks the
     // ISO; the mark's literal alias ("February 3rd, 2026") is a distinct
-    // claimable name, so the write phase must recheck it per mark
-    // (Codex review on PR #371). Pre-fix this didn't strip — the seat
+    // claimable name, so the write phase must recheck it per mark.
+    // Pre-fix this didn't strip — the seat
     // mint doesn't collide — but the ref bound to the daily seat where
     // a fresh parse would bind the claimant, with nothing to re-fire.
     await env.repo.tx(async tx => {
@@ -1341,7 +1341,7 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     // block. That write must ride skipMetadata like the processor's
     // references write: bumping userUpdatedAt/updatedBy here would make
     // the target page float to the top of last-edited views because a
-    // different block mentioned it (Codex review on PR #384).
+    // different block mentioned it.
     await env.repo.tx(async tx => {
       await tx.create({id: 'iso-claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'C'})
       await tx.setProperty('iso-claimant', aliasesProp, ['2026-06-10'])
@@ -1374,8 +1374,7 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     // still indexes — so the ISO keeps resolving to this block. The
     // claim's append is decode→rewrite; on decode failure it must skip
     // rather than replace the list with just the literal, which would
-    // un-claim the ISO and re-point future [[2026-06-11]] links (Codex
-    // review on PR #384).
+    // un-claim the ISO and re-point future [[2026-06-11]] links.
     await env.repo.tx(
       tx => tx.create({id: 'legacy', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'L'}),
       {scope: ChangeScope.BlockDefault},
@@ -1413,8 +1412,7 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     // re-inserts ALL of the target's aliases (blocks_alias_update
     // deletes+re-inserts), so the PRE-EXISTING duped alias would RAISE —
     // pre-fix that rolled back the whole parse tx: references for the
-    // source were permanently dropped and re-aborted on every re-edit
-    // (adversarial review on PR #384).
+    // source were permanently dropped and re-aborted on every re-edit.
     await env.repo.tx(async tx => {
       await tx.create({id: 'older', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'O'})
       await tx.setProperty('older', aliasesProp, ['2026-06-12'])
@@ -1668,8 +1666,8 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
 
   it('keeps a seat with a live USER child in an un-flipped workspace', async () => {
     // A user note under a seat blocks the reap because collecting the seat
-    // would strand it live under a tombstone (Codex review on PR #428) — not
-    // because the workspace is un-flipped. The generated-row tolerance below
+    // would strand it live under a tombstone — not because the workspace is
+    // un-flipped. The generated-row tolerance below
     // is data-keyed, so the two cases are told apart by the `::` bit.
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[kid]]'}),
@@ -1727,50 +1725,9 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     expect(childrenAfter).toEqual([])
   })
 
-  it('does NOT reap an un-flipped seat whose children are backfilled field rows', async () => {
-    // The safe miss, chosen deliberately. Pre-flip the projection processor is
-    // dormant, so the seat's cell cannot vouch for its subtree: an edit to a
-    // generated value row leaves the cell pristine and the shape unchanged.
-    // Tolerating machine children here means enumerating every way a user
-    // could have touched them, and two review rounds found two holes in that
-    // enumeration, each a silent soft-delete of a user's edit. The seat squats
-    // until the alias is re-typed and re-dropped, and reaping resumes at the
-    // flip. Built by hand because the dual-write processors are dormant
-    // pre-flip, which is exactly why only the backfill produces this shape.
-    await env.repo.tx(
-      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[grue]]'}),
-      {scope: ChangeScope.BlockDefault},
-    )
-    await flush()
-    const seatId = aliasId('grue')
-    expect((await env.read(seatId))!.deleted).toBe(0)
-
-    const aliasesFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
-    // Projected from the seat's OWN cell, exactly as the backfill does — a
-    // hand-written value is an edited value, which the reap must refuse.
-    const seatRow = (await env.repo.load(seatId))!
-    const generatedValue = encodedPropertyValueToChildContent(
-      aliasesProp, seatRow.properties[aliasesProp.name],
-    )
-    await env.repo.tx(async tx => {
-      const fieldRowId = await tx.create({
-        workspaceId: WS, parentId: seatId, orderKey: 'a0',
-        content: propertyFieldContent(aliasesFieldId),
-        referenceTargetId: aliasesFieldId, isFieldForm: true,
-      })
-      await tx.create({
-        workspaceId: WS, parentId: fieldRowId, orderKey: 'a0', content: generatedValue,
-      })
-    }, {scope: ChangeScope.BlockDefault})
-
-    await env.repo.mutate.setContent({id: 'src', content: ''})
-    await flush(5000)
-    expect((await env.read(seatId))!.deleted).toBe(0)
-  })
-
   it('keeps a CHILD-BACKED seat whose child merely REFERENCES the aliases definition', async () => {
-    // Flipped, because that is where the tolerance runs at all — un-flipped,
-    // any child blocks the reap and the bit never gets a say.
+    // Flipped, because that is the only workspace state a seat's generated
+    // children exist in at all.
     //
     // `reference_target_id` is a bare content stamp: any whole-block ref
     // carries one, so matching on the generated id alone would read a user's
@@ -1804,12 +1761,14 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
   })
 
   it('keeps an UN-flipped seat whose generated value row the user edited', async () => {
-    // Post-flip an edit to a value child rewrites the seat's cell, so
-    // `matchesAliasSeatSeed` catches the drift. Pre-flip the projection
+    // Past the flip an edit to a value child rewrites the seat's cell, so
+    // `matchesAliasSeatSeed` catches the drift. Un-flipped the projection
     // processor is dormant: the cell stays pristine, the subtree still has the
     // accepted field-row -> one-leaf shape, and the reap would soft-delete the
-    // user's edit. The value rows are reachable pre-flip through search and
-    // recents, so this is an edit a user can actually make.
+    // user's edit. Hand-built, which is now the only way it exists un-flipped —
+    // and it is not unreachable, because `is_field_form` is stamped from
+    // CONTENT: a `::((aliases-definition))` block a user writes under a seat is
+    // this shape. The one case the flip gate is still for.
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[xyzzy]]'}),
       {scope: ChangeScope.BlockDefault},
@@ -1880,8 +1839,8 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
 
   it('keeps a seat the user ADOPTED between the orphan check and the reap tx (in-tx shape re-check)', async () => {
     // The reap gates run on committed state OUTSIDE the write tx; a user
-    // tx that adopts the seat can land in between (PR #428 adversarial
-    // review). Deterministic stand-in for that race: the MINT-TIME
+    // tx that adopts the seat can land in between. Deterministic stand-in
+    // for that race: the MINT-TIME
     // cleanup's read phase probes only referrers — no shape gates — so a
     // seat renamed before its 4s check reaches `reapSeatsInTx` exactly
     // like a seat adopted mid-race, and only the in-tx re-check
@@ -1914,8 +1873,7 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     // property VALUE child is reachable user content. The direct-children
     // gate sees only generated field rows and passes — the deep guard in
     // `reapSeatsInTx` must catch the nested comment, or the
-    // deleteSubtreeInTx sweep takes it with the machinery (PR #428
-    // adversarial review).
+    // deleteSubtreeInTx sweep takes it with the machinery.
     await sharedDb.db.execute(
       `INSERT INTO workspaces
          (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
@@ -2297,5 +2255,65 @@ describe('parseReferences — property field rows reference their definition, ne
     // ...and the root row carries a normal alias backlink/reference to it.
     const refs = JSON.parse((await env.read('root-status'))!.references_json)
     expect(refs).toEqual([{id: aliasId('status'), alias: 'status'}])
+  })
+
+  it('holds for a BACKGROUND flipped workspace, whose registry is not loaded (#779)', async () => {
+    // The no-phantom-page guarantee must not depend on registry scope: a
+    // machinery write can land in a workspace that is neither active nor the
+    // retained previous one (sync arrival, a plugin seeding a note in a target
+    // workspace), where `propertySchemaResolverFor` fails closed and NOTHING
+    // about the row can be recognized. Pinned in a second workspace rather than
+    // left implied by the active-workspace case above, because that is exactly
+    // the difference a recognition-based suppression could not survive.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const BG_WS = 'ws-bg'
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'bg', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [BG_WS],
+    )
+    const bgFieldId = propertyDefinitionBlockId(BG_WS, 'test:references/property/bg-status')
+
+    // Precondition — the fail-closed is real here, so the assertions below
+    // can't pass merely because the scenario never reached it.
+    expect(env.repo.propertySchemaResolverFor(BG_WS).resolveField(bgFieldId))
+      .toEqual({status: 'identity-unavailable', reason: 'registry-not-workspace-keyed'})
+
+    // The shape both writers produce (eager dual-write and the deferred
+    // materialize processor): field row born classified, one value child.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'bg-host', workspaceId: BG_WS, parentId: null, orderKey: 'a0', content: 'host'})
+      const fieldRowId = await tx.create({
+        id: 'bg-field',
+        workspaceId: BG_WS,
+        parentId: 'bg-host',
+        orderKey: 'a0',
+        referenceTargetId: bgFieldId,
+        isFieldForm: true,
+        content: propertyFieldContent(bgFieldId),
+      })
+      await tx.create({id: 'bg-value', workspaceId: BG_WS, parentId: fieldRowId, orderKey: 'a0', content: 'done'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush(4000)
+
+    expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
+      .not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+
+    // Nothing was minted: the workspace holds exactly the rows written. Asked
+    // as "which rows exist" rather than "is there a page named X" because the
+    // regression would mint a seat named after whatever the content decayed to.
+    const rows = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE workspace_id = ? AND deleted = 0 ORDER BY id',
+      [BG_WS],
+    )
+    expect(rows.map(r => r.id)).toEqual(['bg-field', 'bg-host', 'bg-value'])
+
+    // ...and the field row carries the same by-id definition ref it gets in the
+    // active workspace — an unloaded registry changes the reference VALUES not
+    // at all.
+    expect(JSON.parse((await env.read('bg-field'))!.references_json))
+      .toEqual([{id: bgFieldId, alias: bgFieldId}])
   })
 })

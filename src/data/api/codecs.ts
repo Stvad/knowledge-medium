@@ -1,10 +1,10 @@
-import { CodecError } from './errors'
-
 /** Bidirectional encode/decode for typed values stored in the JSON-shaped
  *  `properties_json` column. Codecs run at exactly four boundary call sites
  *  (`block.set`, `block.get`, `tx.setProperty`, `tx.getProperty`); storage
  *  and cache always hold the encoded shape. See spec §5.6 and the
  *  user-defined-properties §1a doc for the open-string `type` discriminator. */
+
+import { CodecError } from './errors'
 
 /** Scalar value compatible with `json_extract(...) = ?` parameter binding.
  *  Excludes null deliberately — typed-query callers use `null` to mean
@@ -65,13 +65,8 @@ export interface RefListCodec extends Codec<readonly string[]> {
    *  `[]` (issue #189). `decode` stays strict for the write/read boundary
    *  call sites that want shape errors surfaced.
    *
-   *  Optional because `RefListCodec` is a public, exported boundary that
-   *  predates this method: a third-party or older plugin may implement
-   *  only the original shape. Reference projection must reach it through
-   *  `decodeRefListIds`, which feature-detects this method so a legacy
-   *  codec can't throw `decodeValid is not a function` and abort the
-   *  block's whole projection. Codecs built by `codecs.refList()` always
-   *  provide it. */
+   *  Optional — always reach it through `decodeRefListIds`, never
+   *  directly. */
   decodeValid?(json: unknown): string[]
 }
 
@@ -316,9 +311,7 @@ export const decodeRefListIds = (codec: RefListCodec, value: unknown): string[] 
   return value.filter((item): item is string => typeof item === 'string')
 }
 
-/** URL codec: plain string with light validation on encode/decode.
- *  Currently accepts any non-empty string; tightening the validation
- *  (URL parser, allowed schemes) is a follow-up. */
+/** URL codec: an unvalidated string today — no scheme or parse check. */
 const validateUrlString = (value: unknown): string => {
   if (typeof value !== 'string') throw new CodecError('url', value)
   return value

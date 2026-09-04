@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * `core.deriveReferenceTarget` — same-tx derivation of the LOCAL
- * `reference_target_id` column (PR #288 slice A), exercised end-to-end
+ * `reference_target_id` column, exercised end-to-end
  * through `repo.tx`. Pins the resolution (a `((id))` block-ref textually, an
  * `[[alias]]` through the generic alias lookup — no property-name tier), the
  * clear-on-content-change rule, the create-preserve semantics for
@@ -151,7 +151,7 @@ describe('core.deriveReferenceTarget (same-tx processor)', () => {
     // `BLOCK_UPLOAD_COLUMNS`, never uploaded. Re-deriving it therefore must
     // NOT mint an upload envelope. The user's content edit ships exactly one
     // PATCH (the content); the same-tx derive amendment writes only the local
-    // column and must add no second PATCH (Decision A / PR #288 §5).
+    // column and must add no second PATCH (Decision A / docs/properties-as-blocks-migration.html §5).
     const repo = setup()
     await createBlock(repo, 'a', 'plain')
     await repo.tx(tx => tx.update('a', {content: `((${STATUS_FIELD_ID}))`}),
@@ -213,7 +213,7 @@ describe('core.deriveReferenceTarget (same-tx processor)', () => {
 
     // Undo the edit: content back to plain text — the column must CLEAR
     // even though same-tx processors are skipped on replay (the snapshot
-    // carries it; invariants index, PR #288).
+    // carries it; invariants index).
     await repo.undo(ChangeScope.BlockDefault)
     expect(await readColumn('a')).toBeNull()
 

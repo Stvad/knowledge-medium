@@ -46,7 +46,7 @@ export interface ResultRowContext {
  *  TYPES deliberately do not appear here — they render on the text line
  *  instead (see {@link resultRow}), because their visibility depends on
  *  a live registry and anything live in this gate can move the row after
- *  paint. Two review rounds found exactly that, by two different doors.
+ *  paint.
  *
  *  `crumbs?.length` is also the stale-payload fallback: `searchByContent`
  *  declares no row dependency, so a block re-parented since the query can

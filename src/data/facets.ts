@@ -1,11 +1,6 @@
 /**
  * Data-layer facets — the bridge between the kernel + plugin
  * contributions and the `Repo` lifecycle (spec §6, §8).
- *
- * Stage 1.4 ships `mutatorsFacet` only. The remaining facets
- * (`queriesFacet`, `propertyEditorOverridesFacet`,
- * `postCommitProcessorsFacet`) land in stages 1.5+ as the matching
- * machinery comes online.
  */
 
 import { defineFacet, keyedMapFacet } from '@/facets/facet'
@@ -40,11 +35,38 @@ export interface LocalSchemaBackfill {
   run: (db: LocalSchemaDb) => Promise<void>
 }
 
+/** One table a contribution owns that the ANALYZE paths have to reach.
+ *
+ *  Both pieces, because the two paths need different things and asking for them
+ *  separately is what lets them drift apart. The one-shot exact-stats repair
+ *  wants a NAME, to `ANALYZE` it. The arming probes want SQL, and a name cannot
+ *  be turned into one: measured on the shipped wa-sqlite build against
+ *  degenerate stats, every generic name-only shape (`SELECT 1 FROM t`,
+ *  `… LIMIT 1`, a covering scan, `WHERE rowid = 0`, `ORDER BY <indexed col>`)
+ *  plans to `SCAN`, and a `SCAN` does not arm. */
+export interface LocalSchemaAnalyzeTable {
+  name: string
+  /** An `EXPLAIN QUERY PLAN`-able SELECT that must plan to `SEARCH <name> USING
+   *  INDEX`. The predicate has to match a real index — including a partial
+   *  index's own `WHERE` — or the probe is silently inert: no error, just a
+   *  table that quietly stops being re-analyzed on the drift axis. Reads only,
+   *  and param-free ({@link LocalSchemaDb} declares the params-less shape, so a
+   *  bound `?` would bind NULL). All of that is pinned by tests over the
+   *  resolved set, including that the plan searches the table `name` claims. */
+  probe: string
+}
+
 export interface LocalSchemaContribution {
   id: string
   statements?: readonly string[]
   triggerNames?: readonly string[]
   backfills?: readonly LocalSchemaBackfill[]
+  /** Tables this contribution owns that core's ANALYZE paths must reach, so
+   *  core never has to name a plugin's table. Consumed by
+   *  `resolveAnalyzeArmingProbes` (`src/data/localSchema.ts`), and by the
+   *  one-shot exact-stats repair's table list — deliberately the same set, so
+   *  it is declared once here rather than twice in core. */
+  analyzeTables?: readonly LocalSchemaAnalyzeTable[]
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -52,6 +74,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(item => typeof item === 'string')
+
+const isLocalSchemaAnalyzeTable = (value: unknown): value is LocalSchemaAnalyzeTable =>
+  isRecord(value) &&
+  typeof value.name === 'string' &&
+  typeof value.probe === 'string'
 
 const isLocalSchemaBackfill = (value: unknown): value is LocalSchemaBackfill =>
   isRecord(value) &&
@@ -64,26 +91,27 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
   (value.statements === undefined || isStringArray(value.statements)) &&
   (value.triggerNames === undefined || isStringArray(value.triggerNames)) &&
   (
+    value.analyzeTables === undefined ||
+    (Array.isArray(value.analyzeTables) && value.analyzeTables.every(isLocalSchemaAnalyzeTable))
+  ) &&
+  (
     value.backfills === undefined ||
     (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))
   )
 
-/**
- * A workspace-scoped, one-shot data backfill that runs through `repo.tx` — the
- * synced-table counterpart to a `LocalSchemaContribution.backfill`.
+/** What `tryClaim` did — and in particular whether THIS call wrote the claim
+ *  row, which is the only thing that makes its caller the owner.
  *
- * A LocalSchema backfill writes via a raw `db.execute`, which leaves
- * `tx_context.source = NULL`: fine for local derived-index tables, but a write
- * to a *synced* table (blocks/workspaces/workspace_members) never fires the
- * upload trigger and silently never syncs (the daily-note:date bug; guarded by
- * `syncedTableWriteGuard`). A `WorkspaceBackfill` instead writes through
- * `repo.tx`, so its rows carry `source = 'user'` and actually upload — the
- * server, and every other client, converge.
- *
- * Completion is once per GRAPH, recorded through `BackfillCompletionClaim` —
- * not once per device. Deferred off the workspace-open critical path; see
- * `Repo.scheduleWorkspaceBackfills`.
- */
+ *  `inherited` is the trap. A live claim already named this claimant, so the
+ *  call succeeds having written nothing. Claimant ids identify a browser
+ *  PROFILE, not a tab, so that claim may belong to another TAB running the
+ *  same pass right now — indistinguishable from this device's own claim left
+ *  behind by an earlier run. A caller may RUN on an inherited claim (these
+ *  passes are idempotent per row, which is what makes the overlap tolerable)
+ *  but must never RELEASE one: deleting a live sibling's claim frees a third
+ *  device to start the same source-of-truth pass while the sibling writes. */
+export type ClaimAttempt = 'minted' | 'inherited' | 'declined'
+
 /** Decides which device runs a migration, and records that it finished — in
  *  SYNCED data, so a repair that uploads happens once per GRAPH.
  *
@@ -108,8 +136,10 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
  *   3. is a duplicate run tolerable if 1 fails? For an idempotent repair,
  *      usually yes; the cost is the stale-bag exposure, not corruption. */
 export interface BackfillCompletionClaim {
-  /** Claim the right to run this pass for this workspace. `false` means
-   *  someone else has it or it is already complete — skip, don't run.
+  /** Claim the right to run this pass for this workspace. `declined` means
+   *  someone else has it or it is already complete — skip, don't run. The
+   *  other two both mean "run", and differ only in whether you may hand the
+   *  claim back afterwards; see {@link ClaimAttempt}.
    *
    *  `reclaimCompleted` overrides only the second of those, and only the
    *  `operator` trigger passes it: a human asking for a pass that has already
@@ -121,7 +151,7 @@ export interface BackfillCompletionClaim {
     workspaceId: string,
     backfillId: string,
     opts?: {reclaimCompleted?: boolean},
-  ): Promise<boolean>
+  ): Promise<ClaimAttempt>
   /** The claimed run finished. Record completion where every device sees it. */
   markComplete(workspaceId: string, backfillId: string): Promise<void>
   /** The claimed run aborted without finishing (a transient precondition, a
@@ -146,6 +176,22 @@ export interface BackfillCompletionClaim {
  *  invisible at the call site. */
 export type WorkspaceBackfillTrigger = 'workspace-open' | 'operator'
 
+/**
+ * A workspace-scoped, one-shot data backfill that runs through `repo.tx` — the
+ * synced-table counterpart to a `LocalSchemaContribution.backfill`.
+ *
+ * A LocalSchema backfill writes via a raw `db.execute`, which leaves
+ * `tx_context.source = NULL`: fine for local derived-index tables, but a write
+ * to a *synced* table (blocks/workspaces/workspace_members) never fires the
+ * upload trigger and silently never syncs — guarded by `syncedTableWriteGuard`.
+ * A `WorkspaceBackfill` instead writes through `repo.tx`, so its rows carry
+ * `source = 'user'` and actually upload — the server, and every other client,
+ * converge.
+ *
+ * Completion is once per GRAPH, recorded through `BackfillCompletionClaim` —
+ * not once per device. Deferred off the workspace-open critical path; see
+ * `Repo.scheduleWorkspaceBackfills`.
+ */
 export interface WorkspaceBackfill {
   /** Stable id; doubles as the per-workspace completion-marker suffix. Change
    *  it to force a re-run on every workspace. */
@@ -188,12 +234,6 @@ export interface WorkspaceBackfillContext {
    *  deliberately leaves in the cell (`pnpm agent audit-properties` reports
    *  the set). */
   resolveNameSchema: (name: string) => ResolvedPropertySchema<unknown> | undefined
-  /** Resolve a property FIELD id — the other direction, for a pass that has to
-   *  reason about existing field rows rather than only about cell keys. The
-   *  cell → children pass needs it to notice a key that was DELETED: the
-   *  materializer removes a key's children when it is asked about a name the
-   *  bag no longer has, and nothing else can name it. */
-  resolveFieldSchema: (fieldId: string) => ResolvedPropertySchema<unknown> | undefined
 }
 
 const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>
@@ -224,10 +264,6 @@ const isDefinitionBlockProjector = (value: unknown): value is AnyDefinitionBlock
  *  escape); call-site dispatch (`repo.mutate.X`, `tx.run(m, args)`)
  *  recovers precise types via the `MutatorRegistry` augmentation. */
 export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.name)
-
-/** Future facets — declared empty for now so plugin authors can
- *  reference them at compile time without runtime breakage when no
- *  contributions exist. Wired up in stages 1.5+. */
 
 export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
 
@@ -428,34 +464,14 @@ export interface SearchSourceArgs {
  *  so a stale index copy can't shadow live data just because it scored
  *  higher.
  *
- *  This paragraph is the SPEC, not a description of the implementation.
- *  Decide it over the duplicate GROUP as a whole, never pairwise — a
- *  pairwise fold of "newest, else higher score" is non-associative, so the
- *  winner would depend on source registration order:
- *   - duplicates carrying a FINITE `userUpdatedAt` outrank every
- *     duplicate that does not. Among them the newest wins, ties broken by
- *     higher score, then by group order.
- *   - only when NO duplicate in the group carries one does the highest
- *     score win.
- *  Finite, not merely `typeof 'number'` — `NaN` passes typeof and then
- *  loses every comparison including against itself, which restores the
- *  order-dependence, and `Infinity` would win unconditionally.
+ *  Which duplicate's `block` payload survives is decided by
+ *  `freshestCandidatePayload` (`src/utils/linkTargetAutocomplete.ts`) — see
+ *  its doc for the rule and why it must see the whole group.
  *
- *  `BlockData.userUpdatedAt` is a required number, so a candidate without
- *  one is a bug in the contributing source; the merge point warns and
- *  keeps its score (ranking is unaffected) but will not display its copy
- *  of the block over a well-formed one. Letting one such candidate push
- *  its whole group onto the score fallback instead would let a single
- *  malformed contribution surface another source's STALE copy over live
- *  data — the failure this rule exists to prevent.
  *  A source that throws is logged and dropped so it can't take
  *  down another source's results — UNLESS every contributed source
  *  throws, in which case the merge point rethrows the first error
- *  rather than resolving to an empty result. Core registers its FTS
- *  content search under id `'core.content'` (`coreContentSearchSource`,
- *  wired in `kernelDataExtension.ts`) — with no other contributions,
- *  the merge point degenerates to exactly that source, so search
- *  behaves identically to before this facet existed. */
+ *  rather than resolving to an empty result. */
 export interface SearchSourceContribution {
   readonly id: string
   search: (repo: Repo, args: SearchSourceArgs) => Promise<readonly SearchSourceCandidate[]>

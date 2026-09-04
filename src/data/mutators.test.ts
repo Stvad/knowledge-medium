@@ -187,17 +187,10 @@ describe('core.setProperty', () => {
       tx => tx.create({id: 'p3', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    // `ro` shares the DB with `env.repo`. txId comes from `newId`; the
-    // harness gives every Repo the same `gen-<n>` counter from 0, so a
-    // second Repo on the same DB would collide on command_events.tx_id.
-    // The original `ro` used the Repo default (uuidv4); give it a distinct
-    // id space here so its tx ids don't clash with `env.repo`'s.
-    let roId = 0
     const {repo: ro} = createTestRepo({
       db: env.h.db,
       user: {id: 'user-1', name: 'Test'},
       isReadOnly: true,
-      newId: () => `ro-${++roId}`,
     })
     // BlockDefault throws ReadOnlyError; UiState and UserPrefs pass through.
     await expect(
