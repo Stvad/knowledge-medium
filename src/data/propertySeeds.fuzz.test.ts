@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Fuzz suite for the property-seed declaration layer (PR #364):
+ * Fuzz suite for the property-seed declaration layer:
  * `src/data/propertySeeds.ts` (`seedProperty` / `isPropertySeedDeclaration`),
  * `src/data/definitionSeeds.ts` (`propertyDefinitionBlockId` /
  * `canonicalPropertySeedProperties` / `isValidSeededDefinition`),

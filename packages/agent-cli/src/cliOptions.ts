@@ -1,7 +1,7 @@
-/** Normalization of CLI option values into wire-command fields.
+/* Normalization of CLI option values into wire-command fields.
  *
- *  Lives here rather than in `cli.ts` because that module self-executes
- *  (`main()` runs on import), so nothing in it can be unit-tested. */
+ * Lives here rather than in `cli.ts` because that module self-executes
+ * (`main()` runs on import), so nothing in it can be unit-tested. */
 
 /** Turn a `--workspace` option into the command's `workspaceId` field.
  *

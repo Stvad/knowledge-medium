@@ -62,8 +62,7 @@
  * (`.toLowerCase()` is idempotent), so step 3's "already correct" branch
  * fires on the second call and returns R itself.
  *
- * ──── Downstream-behavior recovery property, not the formula
- *      (PR #454 review comment 3677006799) ────
+ * ──── Downstream-behavior recovery property, not the formula ────
  *
  * A prior version of this suite's "in-scope recovery" property derived
  * its expectation with `String.fromCharCode(shape.keyCode).toLowerCase()`
@@ -71,8 +70,8 @@
  * — and then branched on `shape.key.toLowerCase() === recovered` to decide
  * whether the result should be the same event or a Proxy, mirroring
  * utils.ts:77's own branch. That's a formula-mirror, same defect as the
- * `clampSelectionToLength` property fixed alongside this one (PR #454
- * comment 3676886063) — random garbage `key`/`code` values gave no
+ * `clampSelectionToLength` property fixed alongside this one — random
+ * garbage `key`/`code` values gave no
  * independent oracle. The lesson from that fix carries a caution, not just
  * a template: replacing a formula-mirror with SOME other property isn't
  * automatically progress — that fix's own mutation test showed idempotence

@@ -2,7 +2,7 @@
 /**
  * Fuzz suite for `src/data/propertyChildren.ts`'s pure codec-boundary
  * functions — `propertyValueToChildContent` / `propertyChildContentToEncodedValue`
- * (the property-value ↔ child-content translation, PR #288 §7) across the
+ * (the property-value ↔ child-content translation, docs/properties-as-blocks-migration.html §7) across the
  * property-type zoo, plus the content-escaping guard (`needsEscape`) it
  * protects. See docs/fuzzing.md for tier mechanics;
  * `src/data/propertyChildren.test.ts` is the example-based corpus for the

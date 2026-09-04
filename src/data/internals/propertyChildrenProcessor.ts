@@ -1,6 +1,6 @@
 /**
- * Property-children convergence processors (PR #288 §5, extracted from the
- * PR #285 spike). Both are PERMANENT machinery, not migration scaffolding,
+ * Property-children convergence processors (docs/properties-as-blocks-migration.html §5).
+ * Both are PERMANENT machinery, not migration scaffolding,
  * and both are gated on the workspace flip column
  * (`workspaces.properties_migration` at or past 'children') — in an
  * un-flipped workspace neither recognizes nor writes anything (dormant).
@@ -112,11 +112,6 @@ export type ProjectableRow =
  */
 export type ProjectionMode = 'full' | 'additive'
 
-// §9 flat recognition deleted the write-side positional machinery this
-// factory used to build (the interior-ancestry walk and the prospective-
-// field-row content probe): classification is content-intrinsic via the
-// `is_field_form` bit, field/value rows materialize their own bags like
-// every other block, and the selection predicates below key on the bit.
 const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => ({
   resolveFieldSchema: (fieldId) => {
     const resolution = ctx.resolvePropertySchemaField(workspaceId, fieldId)
@@ -249,23 +244,13 @@ const reprojectParentField = async (
   // gone: unmarked rows never classify.
   const children = await tx.childrenOf(affected.parentId, undefined)
   const fieldRows = fieldRowsForSchema(children, affected.fieldId)
-  // Additive mode also declines to break a TIE. Adding the key is an
-  // unsettled write, so materialize follows it — and with two field rows for
-  // one definition that means `collapseDuplicateFieldRow`, which tombstones
-  // the loser and uploads the tombstone. A background repair has no business
-  // reaping a user's row, so this bails instead.
-  //
-  // Be clear about what the user gets, because it is not "the duplicate
-  // stays visible": post-flip BOTH rows are recognized, so both are filtered
-  // out of every `hidePropertyChildren` listing (which the outline hooks
-  // always pass), and the cell key stays unset — so the property and its
-  // rows are all invisible until something converges them. Nor does editing
-  // the OWNER help: `collectAffectedProjection` maps a changed row through
-  // its own bit or its parent's, so the owner's own edits don't reproject
-  // its field. It takes a write to that property name (setProperty →
-  // materialize → collapse) or a definition-rename migration. Nothing is
-  // lost and it does converge, but the trade is "temporarily invisible" vs
-  // "silently reaped" — not "visible" vs "reaped".
+  // Additive mode also declines to break a TIE: adding the key is unsettled,
+  // so materialize follows and `collapseDuplicateFieldRow` reaps the loser —
+  // a background repair must not reap a user's row. Accepted cost: post-flip
+  // both rows are recognized and hidden, and the key stays unset, until a
+  // write to that property name or a rename migration converges them.
+  // Editing the OWNER does not help — `collectAffectedProjection` maps a
+  // CHANGED row through its own bit or its parent's.
   if (mode === 'additive' && fieldRows.length > 1) return
   const projected = await firstProjectedFieldValue(tx, schema, fieldRows)
   const nextProperties = {...parent.properties}
@@ -348,23 +333,12 @@ export interface MaterializeOptions {
   /** Bring a name's TOMBSTONED field row back instead of minting a
    *  replacement, when the owner has exactly one and no live one (#787).
    *
-   *  Opt-in, and only the revival path opts in. NOT because owner liveness
-   *  tells a tombstone's cause apart — it does not, and an earlier version of
-   *  this comment claimed otherwise. An owner returning from a tombstone can
-   *  carry a field-row tombstone OLDER than its own delete (a peer's deletion
-   *  arrived, this device's cell has not caught up — the stale-cell state
-   *  `propertyCellBackfill` reads as history), and nothing local separates that
-   *  from a row the owner's own subtree delete took down.
-   *
-   *  What makes reviving safe for THIS caller is narrower and checkable: the
-   *  revival already re-materializes the whole restored bag, so for a name with
-   *  a stale cell key it MINTS a replacement field row today. Reviving changes
-   *  which row id carries that, not whether the property comes back — measured
-   *  both ways. The cell backfill has no such contract, and reviving there
-   *  would resurrect what the user reaped, so it stays out.
-   *
-   *  The resurrection itself is real and predates this option; it is the
-   *  revival contract's own problem, tracked separately. */
+   *  Opt-in, and only the revival path opts in. Owner liveness does NOT tell
+   *  a tombstone's cause apart, so what makes this safe is narrower: the
+   *  revival re-materializes the whole restored bag and would mint a
+   *  replacement field row anyway, so reviving changes which row id carries
+   *  the property, not whether it comes back. The cell backfill has no such
+   *  contract and would resurrect what the user reaped — declined there. */
   reviveTombstoned?: boolean
 }
 
@@ -479,7 +453,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // not `properties`) — so in a flipped workspace the junk even syncs to
       // peers. Reject the write instead — a processor throw propagates out of
       // the writeTransaction and rolls the whole tx back atomically, so the
-      // bad cell value never lands (PR #386 review, F2; Vlad).
+      // bad cell value never lands.
       //
       // Deliberately ASYMMETRIC with PROJECT, which DROPS the cell key for an
       // undecodable *child* value (see find-replace's forced-write path):
@@ -603,29 +577,15 @@ const materializePropertiesForChangedRow = async (
     await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changed)
     return
   }
-  // Revival: the diff PLUS the rest of the restored bag, which is the half a
-  // diff-driven rule misses. A key the restore patch DROPPED needs no special
-  // handling — dropping it IS a diff, so it rides `changed` into the reap
-  // branch that tombstones children a non-subtree delete left live.
+  // Revival re-materializes the diff PLUS the rest of the restored bag — a
+  // restore usually leaves the bag identical, so a diff-only rule would
+  // schedule nothing.
   //
-  // Split by WHO WROTE THE VALUE, because that is what the decode rejection is
-  // about. Both halves land in the SAME tx on real paths — restore a tombstone,
-  // then write properties on the row you just restored:
-  // `createOrRestoreTargetBlock`'s `onInsertedOrRestored` (media capture,
-  // daily-note seats) and `getOrCreateKernelPage`'s hand-rolled equivalent. A
-  // per-tx policy would let one untouched legacy value veto those restores
-  // outright — the exact stranding the exemption exists to prevent.
-  //
-  // Reachable twice per tx: MATERIALIZE opts into the issue-#402 re-run, so a
-  // later unsettled write to the owner row (DERIVE stamping a restore's content
-  // patch) re-enters this branch. For a content-only trigger `rerunBefore` hands
-  // back the same bag pair, so the split is identical and the writes below
-  // no-op; a re-run whose trigger also moved the bag re-splits, which is equally
-  // fine — the halves stay correct however the names fall.
-  // A partition rather than an overlap. Overlapping is harmless today — the
-  // first call throws before the second runs, and materialize is idempotent
-  // otherwise — but it would make the call ORDER the only thing keeping a
-  // written name's rejection, and that is not a thing to leave load-bearing.
+  // Split by WHO WROTE THE VALUE: the decode rejection may only fire on names
+  // this tx wrote, because a per-tx policy would let one untouched legacy
+  // value veto a restore-then-write tx. A PARTITION, not an overlap —
+  // overlapping is harmless only because the first call throws first, and
+  // that would leave call ORDER load-bearing.
   const written = new Set(changed)
   const untouched = Object.keys(row.after.properties).filter(name => !written.has(name))
   await materializePropertyChildrenForExistingRow(
@@ -749,7 +709,7 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
 
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME,
-  // `isFieldForm` is watched (PR #417 review): projection's classification
+  // `isFieldForm` is watched: projection's classification
   // and value-set both read the bit, so a bit-only change (arrival repair,
   // the catch-up sweep stamping existing marked rows) must re-project; bulk
   // repair paths that write the bit raw enqueue projection explicitly.

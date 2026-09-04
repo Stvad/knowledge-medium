@@ -100,7 +100,7 @@
  *     → one conflict, chord 'Cmd+K', actions ['a','b']
  *       (the exact "both survive and collide" state rule 2 forbids)
  *
- * Fixed in `applyKeybindingOverrides.ts` (commit 4cae0fc2): both sides
+ * Fixed in `applyKeybindingOverrides.ts`: both sides
  * of the `claimedByChord` index/lookup are now keyed by
  * `canonicalizeChord(chord)` instead of the raw string, the same way
  * `findKeybindingConflicts` does. Property 4 is green and now doubles

@@ -2,10 +2,9 @@ import { extensionApiCatalog } from '@/extensions/apiCatalog.js'
 
 // Worked examples are REAL SOURCE FILES under ./examples, inlined here as text
 // at build time. They used to be arrays of string literals, which nothing
-// compiled — and nine rounds of review on PR #515 found seven separate bugs
-// living inside them. As files they sit in the app tsconfig and the eslint
-// scope, so `pnpm run check` fails on a broken example instead of shipping it
-// to extension authors as guidance.
+// compiled, so bugs could live inside them undetected. As files they sit in
+// the app tsconfig and the eslint scope, so `pnpm run check` fails on a
+// broken example instead of shipping it to extension authors as guidance.
 //
 // The whole file text is the example — no slicing, no markers. What the agent
 // reads is exactly what compiled.

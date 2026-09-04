@@ -78,7 +78,7 @@ export interface TypedBlockQuery {
    *  required at the type level prevents background flows, import runs,
    *  and any code that operates on a workspace other than the
    *  currently-active one from silently mis-scoping when the user
-   *  switches workspaces mid-flight (see PR #47 review). */
+   *  switches workspaces mid-flight. */
   readonly workspaceId: string
   /** Contains any of these type ids. Empty/omitted means no type filter. */
   readonly types?: readonly string[]

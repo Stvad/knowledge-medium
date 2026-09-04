@@ -137,7 +137,7 @@ export async function createTypeBlock(
       `UserTypesService.tryBuildType silently drops a block-type block with an empty label.`,
     )
   }
-  // Name hygiene (PR #288 §7): the label is mirrored into the definition
+  // Name hygiene (docs/properties-as-blocks-migration.html §7): the label is mirrored into the definition
   // block's `content` below, AND claimed as its alias so the type doubles
   // as its `[[label]]` page. Both halves, matching the property-name path
   // — a label that can't be written as `[[label]]` and read back (`]]`

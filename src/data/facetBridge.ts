@@ -120,7 +120,7 @@ export interface FacetBridgeTarget {
     schemas: ReadonlyMap<string, AnyPropertySchema>,
   ): void
   /** Current property-definition registry snapshot — the "before" side of
-   *  the per-fieldId rename/codec diff (PR #288 §7, slice B2). */
+   *  the per-fieldId rename/codec diff (docs/properties-as-blocks-migration.html §7, slice B2). */
   getPropertyDefinitions(): PropertyDefinitionRegistrySnapshot | null
   /** Defer the rename-reproject / codec re-encode migration pass for
    *  definitions whose identity-stable metadata changed in this swap. */
@@ -425,7 +425,7 @@ export class FacetBridge {
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
           }
-          // Codec-TYPE-change migrations (PR #288 §7/§9, slice B2): diff the
+          // Codec-TYPE-change migrations (docs/properties-as-blocks-migration.html §7/§9, slice B2): diff the
           // registry snapshots by durable fieldId. RENAMES are no longer
           // scheduled here — they are re-keyed atomically in the editing tx by
           // the `core.migratePropertyRename` same-tx processor (one undoable

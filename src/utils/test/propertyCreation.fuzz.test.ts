@@ -121,7 +121,7 @@ const runCase = async (
     // the `contentChild` case and leaving the b0392a7c9 regression (hidden
     // rows, empty cell) untested — the pre-fix guard would pass this case
     // too, since it never sees a divergence between the visible and
-    // structural lists (Codex review, comment 3672657052).
+    // structural lists.
     await repo.tx(async tx => {
       await tx.create({
         id: FIELD_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a1',

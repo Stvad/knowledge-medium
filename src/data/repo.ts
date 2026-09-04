@@ -1,17 +1,7 @@
 /**
- * New `Repo` class for the data-layer redesign (spec §3, §8).
- *
- * Stage 1.4 scope: holds `db` + `cache` + `user` + the mutator registry
- * (kernel mutators registered at construction time). Exposes:
- *   - `repo.tx(fn, opts)` — primitive transactional session
- *   - `repo.mutate.X(args)` — typed-dispatch sugar (1-mutator tx wrapping)
- *   - `repo.run(name, args)` — runtime-validated dispatch (dynamic plugins)
- *   - `repo.setFacetRuntime(runtime)` — refresh mutator registry from a
- *     FacetRuntime. Minimal impl reads `mutatorsFacet` contributions.
- *
- * Stage 2 of Phase 1 (post-1.6) adds:
- *   - HandleStore + `repo.block(id)` / `repo.children(id)` / etc.
- *   - Layout B sync observer for sync-applied invalidation (design doc §9.2)
+ * `Repo`: the data-layer entry point. Owns `db` + `cache` + client context
+ * + the mutator/query/processor registries. Surface: `tx` / `mutate.X` /
+ * `run` / `query` / `block`, plus registry accessors and sync/undo control.
  */
 
 import { v4 as uuidv4 } from 'uuid'
@@ -279,10 +269,6 @@ const MAX_QUERY_COMPOSITION_DEPTH = 32
  *  colons (e.g. `roam:isa`). */
 const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
   `${workspaceId}:${name}`
-
-/** Suffix (after the `workspace_backfill:` prefix) of a per-workspace
- *  workspace-backfill completion marker — `<workspaceId>:<backfillId>`. Same
- *  shape/rationale as `reprojectionMarkerKey`. */
 
 /** Equal iff `a` and `b` have the same key set AND `eq` holds for every shared
  *  key's values. An absent map is the empty map; the default `eq` compares keys
@@ -684,6 +670,8 @@ export class Repo {
    *  processors. Subscribers are responsible for the UI side
    *  (toast routing); the data layer stays UI-agnostic. */
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
+  private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
+  private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -750,6 +738,35 @@ export class Repo {
    *  execute / writeTransaction). Populated by the metrics-wrapping
    *  proxy installed around `this.db` at construction. */
   readonly dbMetrics = new DbMetrics()
+  /** Committed transactions NOT flagged `telemetry`, and the handle fan-out
+   *  they caused. Counted HERE rather than reconstructed by a consumer from
+   *  before/after snapshots: a consumer's window spans its own awaits, so it
+   *  cannot tell its own work from anyone else's, while this pair is written in
+   *  the same synchronous block as the events it counts.
+   *
+   *  A transaction that CHANGED NO ROW is counted on neither side — rolled
+   *  back, or committed empty as an idempotent ensure does. It invalidates
+   *  nothing, so counting the write alone would deflate the ratio a reader
+   *  builds from the pair. */
+  private nonTelemetryWrites = 0
+  private readonly nonTelemetryFanout: Record<string, number> = {}
+  /** Bumped by `resetMetrics()`. A consumer holding figures from before a reset
+   *  can compare epochs instead of inferring the reset from a counter going
+   *  backwards, which is undetectable once other writes have carried it back up. */
+  private metricsEpoch = 0
+  /** Workspace active when the current counter span began — at construction, or
+   *  at the last `resetMetrics()`. The counters are page-global while the
+   *  features reading them attribute a span to ONE workspace, and a reset can
+   *  land in any of them: work done between the reset and the reader noticing it
+   *  belongs to whatever was active then, not to whatever is active by the time
+   *  it looks. Without this the reader can only start the new span empty, which
+   *  reads as "attributable to the first workspace observed after the reset". */
+  private metricsEpochWorkspaceId: string | null = null
+  /** Wall clock when the current counter span began. Starts at the page's time
+   *  origin, so before any reset it is page-load time. A consumer reporting a
+   *  duration alongside these counters needs the span's start, not the page's:
+   *  after a reset the two differ by everything that happened before it. */
+  private metricsEpochStartedAt = Date.now() - performance.now()
   /** Per-query-name resolve timings. The dispatcher records each
    *  `loader(ctx)` invocation here keyed by the query's full name. */
   readonly queryMetrics = new QueryMetrics()
@@ -798,11 +815,11 @@ export class Repo {
   /** Arms a callback for when this device is no longer behind the server
    *  (`RepoOptions.backfillSyncGate`). */
   private readonly backfillSyncGate: (cb: () => void) => () => void
-  /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
   /** `workspaceId:backfillId` of operator passes running right now. Two
    *  invocations in one Repo share a claimant, so the CLAIM cannot separate
    *  them — this can. */
   private readonly inFlightOperatorBackfills = new Set<string>()
+  /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
   private readonly backfillCompletionClaim: BackfillCompletionClaim | undefined
   /** Disposer for a gate armed but not yet opened, so a workspace switch or
    *  repo teardown doesn't leave a status listener attached. */
@@ -816,8 +833,8 @@ export class Repo {
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
-   *  (adversarial-review round 2: a durable once-ever marker permanently
-   *  missed definitions/aliases that arrived while the app was closed or
+   *  (a durable once-ever marker permanently missed definitions/aliases
+   *  that arrived while the app was closed or
    *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
    *  the first run, but the LIKE prefilter itself is an O(table) scan on
    *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
@@ -835,7 +852,7 @@ export class Repo {
    *  `awaitReferenceTargetDerive()`, same pattern. */
   private readonly referenceTargetDeriveJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** In-flight rename-reproject / codec re-encode migration passes
-   *  (PR #288 §7/§9, slice B2) — drained by
+   *  (docs/properties-as-blocks-migration.html §7/§9, slice B2) — drained by
    *  `awaitPropertyDefinitionMigrations()`, same pattern. */
   private readonly propertyDefinitionMigrationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** In-flight property-seed materialization passes (§4.3 of the schema-
@@ -1225,7 +1242,7 @@ export class Repo {
       handleStore: this.handleStore,
       deps: {
         ...policyDeps,
-        // Derive-at-arrival seam (PR #288 slice A): always attached — the
+        // Derive-at-arrival seam: always attached — the
         // LOCAL `reference_target_id` column must track content for
         // sync-applied rows on every device, e2ee included (derivation runs
         // over decrypted content). Resolution mirrors
@@ -1321,6 +1338,31 @@ export class Repo {
    *      without needing a Playwright + profiler harness. */
   metrics(): Readonly<{
     handleStore: Readonly<Record<string, number>>
+    /** The same counters, restricted to committed transactions this Repo ran
+     *  that CHANGED a row and were NOT flagged `telemetry` — the user's work,
+     *  with the app's self-measurement left out. `writes` is those
+     *  transactions; `handleStore` is the fan-out they caused, measured around
+     *  each one's own invalidation walk. A feature reporting performance
+     *  figures should read THIS rather than subtracting its own activity from
+     *  the totals above.
+     *
+     *  `handleStore` here holds only the counters that walk can ATTRIBUTE —
+     *  those bumped inside the synchronous invalidation pass. Counters bumped
+     *  later, from a loader's settle path, are absent rather than zero; see the
+     *  delta loop in `_runAndDispatch`. */
+    excludingTelemetry: Readonly<{
+      writes: number
+      handleStore: Readonly<Record<string, number>>
+    }>
+    /** Increments on every `resetMetrics()`. Compare it rather than watching a
+     *  counter for a backwards step. */
+    epoch: number
+    /** Workspace active when this span of the counters began. `null` before any
+     *  workspace has been activated. */
+    epochWorkspaceId: string | null
+    /** Wall clock when this span began — the page's time origin until the first
+     *  `resetMetrics()`. */
+    epochStartedAt: number
     /** Live-state aggregates over the registered handle set: handle
      *  count, dep-count percentiles, and the top-3 keys by dep count.
      *  Pairs with `handleStore` counters — counters describe events
@@ -1355,6 +1397,13 @@ export class Repo {
   }> {
     return Object.freeze({
       handleStore: this.handleStore.metrics.snapshot(),
+      excludingTelemetry: Object.freeze({
+        writes: this.nonTelemetryWrites,
+        handleStore: Object.freeze({...this.nonTelemetryFanout}),
+      }),
+      epoch: this.metricsEpoch,
+      epochWorkspaceId: this.metricsEpochWorkspaceId,
+      epochStartedAt: this.metricsEpochStartedAt,
       handleStoreInventory: this.handleStore.snapshotInventory(),
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
@@ -1365,11 +1414,43 @@ export class Repo {
     })
   }
 
+  /** The current counter span's identity, WITHOUT building a metrics snapshot.
+   *
+   *  `metrics()` walks and sorts every registered handle, copies and sorts each
+   *  timing reservoir and clones the transaction log — affordable for a
+   *  measurement, not for a consumer that only wants to know whether the span
+   *  it is holding is still the current one. That check runs from
+   *  `useSyncExternalStore` getters, so it happens on ordinary renders; on a
+   *  large session the snapshot cost lands on the interactive path, and a
+   *  performance monitor doing that would inflate what it reports.
+   *
+   *  The two fields are exactly what identifies a span. Keep this in step with
+   *  the same-named fields in `metrics()`; they read the same state, and
+   *  neither is derived from the other. */
+  metricsSpan(): { epoch: number; epochWorkspaceId: string | null } {
+    return { epoch: this.metricsEpoch, epochWorkspaceId: this.metricsEpochWorkspaceId }
+  }
+
   /** Zero every counter and reservoir in `repo.metrics()`. Use to
    *  mark a baseline before measuring a discrete operation (e.g. a
    *  benchmark iteration, a UI interaction in a soak test, or a
-   *  cold-start "open page → metrics" investigation). */
+   *  cold-start "open page → metrics" investigation).
+   *
+   *  Operations ALREADY IN FLIGHT settle into the new span: a query, DB call or
+   *  transaction that began before this returns records its full pre-reset
+   *  duration into the reservoir this just cleared. ACCEPTED rather than
+   *  guarded. Discarding them means capturing the epoch at the start of every
+   *  asynchronous metric and comparing it at each recording site — five sites
+   *  in this file alone, each one a thing every future metric has to remember —
+   *  to serve one caller, the devtools console hook, in a session where someone
+   *  is deliberately measuring. Take a baseline when the page is quiet, and
+   *  read `epochStartedAt` to know how far back the span reaches. */
   resetMetrics(): void {
+    this.metricsEpoch++
+    this.metricsEpochWorkspaceId = this.client.activeWorkspaceId
+    this.metricsEpochStartedAt = Date.now()
+    this.nonTelemetryWrites = 0
+    for (const k of Object.keys(this.nonTelemetryFanout)) delete this.nonTelemetryFanout[k]
     this.handleStore.metrics.reset()
     this.cache.metrics.reset()
     this.queryMetrics.reset()
@@ -1383,6 +1464,15 @@ export class Repo {
     this.reprojectionMetrics.skippedByAbsence = 0
     this.slowestTx = {description: null, ms: 0}
     this.txLog.length = 0
+    this.metricsResetListeners.notify()
+  }
+
+  /** Fires when `resetMetrics()` starts a new counter span. A consumer holding
+   *  figures from the old one has no other way to notice: the Repo, the
+   *  workspace and everything else it might compare are unchanged. Returns an
+   *  unsubscribe. */
+  onMetricsReset(listener: () => void): () => void {
+    return this.metricsResetListeners.add(listener)
   }
 
   /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
@@ -1649,7 +1739,17 @@ export class Repo {
    *  and upload regardless of this flag; only `BlockDefault` /
    *  `References` writes are rejected. */
   setReadOnly(value: boolean): void {
+    if (this.isReadOnly === value) return
     this.isReadOnly = value
+    this.readOnlyListeners.notify()
+  }
+
+  /** Fires when `isReadOnly` changes. A role change arrives from the server and
+   *  moves nothing else — not the Repo, not the workspace, not the metrics span
+   *  — so a reader with no other reason to re-read would keep reporting the
+   *  permissions the page started with. Returns an unsubscribe. */
+  onReadOnlyChange(listener: () => void): () => void {
+    return this.readOnlyListeners.add(listener)
   }
 
   /** Run a transactional session. Spec §3, §10. */
@@ -1760,46 +1860,18 @@ export class Repo {
    *  Consecutive txs opened through the facade — directly via
    *  `grouped.tx`, or indirectly via `grouped.mutate.X` / `grouped.run`
    *  — MERGE into a single undo entry at record time, so the whole
-   *  composite reverts with one cmd-Z. Helpers that take a `Repo`
-   *  parameter join the group simply by being handed the facade.
+   *  composite reverts with one cmd-Z.
    *
-   *  Wrap-site convention: name the callback parameter `repo`,
-   *  shadowing the raw repo — that way an out-of-habit `repo.tx(...)`
-   *  inside the group cannot silently open a foreign tx and split it.
+   *  Wrap-site convention: name the callback parameter `repo`, shadowing
+   *  the raw repo — that way an out-of-habit `repo.tx(...)` inside the
+   *  group cannot silently open a foreign tx and split it.
    *
-   *  Semantics to be aware of:
-   *   - Merging is top-of-stack only: a foreign tx (one opened on the
-   *     plain repo, e.g. a background write) landing mid-group SPLITS
-   *     the group into two entries rather than folding across it.
-   *   - No atomicity: each tx still commits independently. If a later
-   *     tx throws, the committed prefix stays applied and remains
-   *     covered by the (single) group entry; the error propagates.
-   *   - Nested `undoGroup` on the facade joins the OUTER group — one
-   *     user-perceived action, one entry.
-   *   - The facade must not escape the callback: its token never
-   *     expires, so a leaked reference would stamp far-future txs into
-   *     a long-dead group (see the `block` override below for the one
-   *     leak path that existed).
-   *   - Grouping covers `tx` / `mutate` / `run` and the TypeTagger
-   *     convenience writes. Two write styles deliberately do NOT join:
-   *     Block-facade sugar (`grouped.block(id).setContent(...)` routes
-   *     through `block.repo` = the real repo — a group-bound Block
-   *     would be exactly the leak the `block` override closes) and
-   *     stateful service writes (`userSchemas` / `userTypes` /
-   *     `projectors` — constructed against the real repo; a
-   *     facade-hosted twin would clobber their shared contribution
-   *     buckets). Both land as foreign txs and split the group; use
-   *     `grouped.tx` / `grouped.mutate` inside a group instead.
-   *   - Everything not overridden delegates to the real repo via the
-   *     prototype chain and therefore runs with the facade as `this` —
-   *     safe for reads and shared-object mutation, NOT safe for three
-   *     hazard classes (shared-state minting, instance-field
-   *     assignment, construction-captured collaborators), which the
-   *     overrides in {@link groupedFacade} cover — each carries its
-   *     rationale at the override. The classification rubric and the
-   *     structural enforcement live in `repoFacadeGate.test.ts`, which
-   *     fails on any Repo member that is neither overridden nor
-   *     consciously allowlisted. */
+   *  Merging is top-of-stack only: a foreign tx landing mid-group SPLITS
+   *  the group. No atomicity: each tx still commits independently. The
+   *  facade must not escape the callback — its token never expires.
+   *
+   *  Why each facade override exists: at the override, and
+   *  docs/undo-grouping.md. */
   async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
     return fn(this.groupedFacade(this.newId()))
   }
@@ -1946,7 +2018,11 @@ export class Repo {
         opts,
         user: this.user,
         isReadOnly: this.isReadOnly,
-        newTxId: this.newId,
+        // uuid, never `this.newId`: `command_events.tx_id` is a PRIMARY KEY on
+        // a database that outlives any single Repo, while `newId` is injectable
+        // and the test harness injects per-Repo counters that restart. Deriving
+        // one from the other let two Repos over one db mint the same id (#866).
+        newTxId: uuidv4,
         newTxSeq: this.newTxSeq,
         newId: this.newId,
         blockIdPolicy: this.blockIdPolicy,
@@ -2010,9 +2086,36 @@ export class Repo {
     // pendingReinvalidate / kicks off a microtask, so the caller's tx
     // resolve isn't blocked on handle re-resolution.
     if (result.snapshots.size > 0) {
+      // Counted on both sides or neither. A transaction that changed no row
+      // invalidates nothing, so counting the write alone would deflate the
+      // ratio a reader builds from the pair — and idempotent ensures commit
+      // empty routinely.
+      if (!opts.telemetry) this.nonTelemetryWrites++
+      // The fan-out delta is taken across THIS call and nothing else. The walk
+      // is synchronous, so no other transaction and no sync drain can land
+      // inside it — which is the whole reason the count lives here.
+      const before = opts.telemetry ? null : this.handleStore.metrics.snapshot()
       this.handleStore.invalidate(
         snapshotsToChangeNotification(result.snapshots, this.invalidationRules),
       )
+      if (before !== null) {
+        const after = this.handleStore.metrics.snapshot()
+        for (const [k, v] of Object.entries(after)) {
+          const delta = v - (before[k] ?? 0)
+          // A zero delta does NOT create the key. Only counters bumped inside
+          // the synchronous walk can ever move here; the settle-path ones
+          // (`notifiesFired`, `notifiesSkippedByDiff`, `reloadsAfterSettle`,
+          // and the `loaderRuns` of post-settle reloads) are bumped from a
+          // `.then` / microtask after this window closes, and no per-tx token
+          // reaches them. Writing them as 0 would report "no reloads" for a
+          // counter that is simply never measured — and this map is persisted
+          // and compared against later sessions, where a 0-vs-0 comparison
+          // reads as a clean verdict rather than as missing data. Absent says
+          // what is true.
+          if (delta === 0 && !(k in this.nonTelemetryFanout)) continue
+          this.nonTelemetryFanout[k] = (this.nonTelemetryFanout[k] ?? 0) + delta
+        }
+      }
     }
     // Step 9 of the §10 pipeline — start field-watch + explicit
     // post-commit processors. Failures are caught + logged inside the
@@ -2113,7 +2216,7 @@ export class Repo {
    *  that want the user's currently-active workspace use
    *  `queryActiveWorkspace` instead — making the workspace explicit at
    *  the call site prevents background flows / import runs from silently
-   *  mis-scoping on a workspace switch (PR #47 review). */
+   *  mis-scoping on a workspace switch. */
   async queryBlocks(query: TypedBlockQuery): Promise<BlockData[]> {
     return this.query.typedBlocks(this.resolveTypedBlockQuery(query)).load()
   }
@@ -2430,11 +2533,7 @@ export class Repo {
       //    when a non-essential plugin is toggled off, and when ?safeMode forces
       //    every non-essential off at once. Stripping on absence is what
       //    silently deleted ~10k `next-review-date` backlinks fleet-wide when
-      //    SRS was toggled off. (bd7c363a re-enabled that strip believing that,
-      //    after workspace-scoping, absence ⟺ a genuine redefine/delete — but it
-      //    reasoned only about grow-only cold-start materialization and
-      //    cross-workspace switches, never the toggle/safeMode re-resolve that
-      //    removes a plugin's schema without deleting anything.)
+      //    SRS was toggled off.
       //  - PRESENT but non-ref ⇒ scanned, but reprojection is ADD-ONLY (see the
       //    per-block loop), so this is a no-op: there is nothing new to project.
       //    A real ref→non-ref redefine's now-stale derived refs are swept lazily
@@ -2548,7 +2647,7 @@ export class Repo {
             if (devAssertionsEnabled()) {
               // L2 dev/test-only assertion (off in prod): reprojection
               // must be ADD-ONLY — prior ⊆ reconciled. A dropped ref here is the
-              // mass-strip regression 21494fdb fixed; fail it in CI, never on a
+              // mass-strip regression; fail it in CI, never on a
               // user's write. (The length-equality skip below also assumes this
               // superset, so this guards that optimization too.)
               const nextKeys = new Set(reconciled.map(derivedRefKey))
@@ -2722,30 +2821,6 @@ export class Repo {
     }
   }
 
-  /**
-   * Materialize the code-declared property seeds visible to the installed
-   * runtime into real `property-schema` blocks under the workspace's Properties
-   * page (§4.3 of the schema-unification design). This is what makes seeded
-   * definitions visible/editable in the UI and available to clients that don't
-   * have the contributing plugin loaded; the in-memory registry itself works
-   * with zero rows, so this pass never blocks correctness.
-   *
-   * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
-   * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
-   * on every seed-set change — create/restore-only + idempotent, so steady state
-   * is a single probe SELECT that short-circuits on `seed:revision`. Passes
-   * COALESCE per workspace (one pending pass at a time); the pass reads the
-   * workspace's current seed set at run time, and only if that workspace is still
-   * the active/projected one, so a coalesced set-grow is picked up and a
-   * switched-away workspace is skipped.
-   *
-   * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
-   * (for a non-freshly-created workspace) waits for the membership row before
-   * writing — a fresh device defaults a not-yet-synced role to writable, so a
-   * bare `isReadOnly` check would let a viewer enqueue ~100 RLS-rejected creates.
-   * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
-   * read-only session; the gate is the authoritative check.
-   */
   /** The current property + type seed declarations for `workspaceId`, or empty
    *  arrays when a registry is absent or pinned to a different workspace. Read
    *  live (not snapshotted) so a coalesced pass materializes the latest set. */
@@ -2770,6 +2845,30 @@ export class Repo {
     }
   }
 
+  /**
+   * Materialize the code-declared property seeds visible to the installed
+   * runtime into real `property-schema` blocks under the workspace's Properties
+   * page (§4.3 of the schema-unification design). This is what makes seeded
+   * definitions visible/editable in the UI and available to clients that don't
+   * have the contributing plugin loaded; the in-memory registry itself works
+   * with zero rows, so this pass never blocks correctness.
+   *
+   * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
+   * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
+   * on every seed-set change — create/restore-only + idempotent, so steady state
+   * is a single probe SELECT that short-circuits on `seed:revision`. Passes
+   * COALESCE per workspace (one pending pass at a time); the pass reads the
+   * workspace's current seed set at run time, and only if that workspace is still
+   * the active/projected one, so a coalesced set-grow is picked up and a
+   * switched-away workspace is skipped.
+   *
+   * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
+   * (for a non-freshly-created workspace) waits for the membership row before
+   * writing — a fresh device defaults a not-yet-synced role to writable, so a
+   * bare `isReadOnly` check would let a viewer enqueue ~100 RLS-rejected creates.
+   * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
+   * read-only session; the gate is the authoritative check.
+   */
   scheduleWorkspaceSeedMaterialization(workspaceId: string, freshlyCreated: boolean): void {
     if (this.isReadOnly || !workspaceId) return
     // Gate on EITHER registry: a type-seed-only change must still schedule a pass.
@@ -2879,9 +2978,10 @@ export class Repo {
    *  the runner can re-arm instead of writing the pass off for the session. */
   private static readonly TRANSIENT = 'backfill-precondition'
 
-  /** Preconditions every backfill transaction must still satisfy. Separate
-   *  from the scheduling gate because scheduling proves a fact at one instant
-   *  and a chunked pass writes over many. */
+  // Preconditions every backfill transaction must still satisfy. Separate
+  // from the scheduling gate because scheduling proves a fact at one instant
+  // and a chunked pass writes over many.
+
   /** Is this workspace's property registry primed?
    *
    *  `propertySchemaResolverForWorkspace` falls back to a resolver that
@@ -3139,12 +3239,6 @@ export class Repo {
         `longer active. Its writes would land under the current session's access state.`,
       ), {kind: Repo.TRANSIENT})
     }
-    // The SAME predicate the pre-claim gate takes, not a cheaper stand-in for
-    // it: a pass runs for minutes, and a row that becomes unapplicable after
-    // the gate — an evicted key, a delivery that will not decode — is deferred
-    // with its queue entry consumed, so anything that only watches work in
-    // flight reads clear again for every batch that follows.
-    //
     // Re-sampled per transaction while the write lock is held, so a drain
     // cannot commit between this check and the write. Reading through
     // `this.db` rather than the tx handle is deliberate: the drain is excluded
@@ -3647,7 +3741,7 @@ export class Repo {
 
   /**
    * One-time-per-workspace catch-up derive of the LOCAL `reference_target_id`
-   * column (PR #288 slice A). The column is derived per device and never
+   * column. The column is derived per device and never
    * synced, so rows that predate it — an upgrading device's whole DB, or a
    * fresh device's rows synced before the schema registry primed — sit at
    * NULL until this pass sweeps them; from then on the same-tx processor
@@ -3753,7 +3847,7 @@ export class Repo {
   }
 
   /** The one construction site for reference-target resolution outside a
-   *  repo.tx (PR #288 slice A): the `block_aliases` index read on `reader` —
+   *  repo.tx: the `block_aliases` index read on `reader` —
    *  the open sync-arrival write tx, or the auto-commit connection for the
    *  idle passes. Mirrors `core.deriveReferenceTarget` (a `((id))` block-ref
    *  resolves textually, `[[alias]]` through this lookup); the two must
@@ -3846,7 +3940,7 @@ export class Repo {
         }
       })
       if (snapshots.size === 0) continue
-      // Explicit fan-out (PR #288 §11 implementation note): `updated_at` is
+      // Explicit fan-out (docs/properties-as-blocks-migration.html §11 implementation note): `updated_at` is
       // deliberately unchanged, so the cache's `applyIfNewer` LWW gate would
       // reject the repair and row-version-driven invalidation sees nothing.
       // Refresh already-cached snapshots directly (never populate cold rows)
@@ -3882,8 +3976,8 @@ export class Repo {
   }
 
   /** Owner-cell re-projection for rows a raw stamp just turned into
-   *  recognized field rows (PR #288 §9 / issue #402's derivation-liveness
-   *  group). The stamp itself deliberately bypasses `repo.tx` to preserve
+   *  recognized field rows (docs/properties-as-blocks-migration.html §9 /
+   *  issue #402's derivation-liveness group). The stamp itself deliberately bypasses `repo.tx` to preserve
    *  `updated_at`, so no processor sees it — but resolving a `::[[Foo]]`
    *  row's target IS the transition that makes it a field row, and the
    *  owner's cell must gain the key at that moment rather than waiting for
@@ -3932,8 +4026,9 @@ export class Repo {
     )
   }
 
-  /** Targeted re-derive for NEWLY-ADDED property definitions (PR #288 §9's
-   *  arrival-order repair, adversarial-review fix): `[[name]]` rows written
+  /** Targeted re-derive for NEWLY-ADDED property definitions
+   *  (docs/properties-as-blocks-migration.html §9's arrival-order repair):
+   *  `[[name]]` rows written
    *  or synced BEFORE their definition existed derived to NULL, and nothing
    *  content-driven ever revisits them — the definition's later
    *  arrival/creation must enqueue this pass. Scheduled by the facet bridge
@@ -4037,8 +4132,8 @@ export class Repo {
   }
 
   /**
-   * Rename-reproject + codec re-encode migration pass (PR #288 §7/§9, slice
-   * B2). Scheduled by the facet bridge when a registry rebuild shows a
+   * Rename-reproject + codec re-encode migration pass
+   * (docs/properties-as-blocks-migration.html §7/§9, slice B2). Scheduled by the facet bridge when a registry rebuild shows a
    * definition's NAME or codec TYPE changed under its durable fieldId —
    * renames break silently without it: children survive untouched (the
    * column, not the label, is authoritative) but the cell stays keyed by the
@@ -4436,7 +4531,7 @@ export class Repo {
    *  that may legitimately observe a concurrent delete between
    *  pre-tx state and tx-start. New orchestration code should prefer
    *  `addTypeInTx` (strict) so a footgun like the Roam-isa adoption
-   *  bug (PR #47) can't be expressed. */
+   *  bug can't be expressed. */
   async addTypeInTxLenient(
     tx: Tx,
     blockId: string,
@@ -4551,6 +4646,40 @@ export class Repo {
    *  timers; fake-timer callers must advance the clock first. */
   async awaitWorkspaceBackfills(): Promise<void> {
     await this.workspaceBackfillJobs.drain()
+  }
+
+  /** Every deferred-work family at once — what a harness tearing a Repo down
+   *  needs, rather than the specific one a given test is waiting on.
+   *
+   *  A NEW family belongs in this list. Each of these schedules work that
+   *  writes to the db after the call that scheduled it returned, so one left
+   *  out can still be running when its owner is gone — which in tests means
+   *  writing into the next test's database (`testRepoScope.ts`, issue #813).
+   *  The list is deliberately complete rather than demand-driven: a family
+   *  earns its place by being ABLE to outlive its owner, so do not expect
+   *  removing one to fail a test.
+   *
+   *  Producers first, then processors. Every family above can commit a
+   *  `repo.tx`, and a tx dispatches post-commit processors — so draining all
+   *  seven together lets `awaitProcessors` observe an empty set and return
+   *  before a maintenance job's tx has queued anything. `awaitIdle` is itself a
+   *  fixed point over processors that schedule processors, which is what makes
+   *  one pass at the end enough.
+   *
+   *  NOT a fixed point across families, and NOT a cancel. Like its members it
+   *  does not advance timers: work whose deferral timer has not fired is not
+   *  pending yet, so an armed `delayMs` processor or idle callback survives
+   *  this (#892 — cancelling one needs a handle neither framework keeps). */
+  async awaitDeferredWork(): Promise<void> {
+    await Promise.all([
+      this.awaitSeedMaterialization(),
+      this.awaitReferenceTargetDerive(),
+      this.awaitPropertyDefinitionMigrations(),
+      this.awaitReconcileRescans(),
+      this.awaitReprojections(),
+      this.awaitWorkspaceBackfills(),
+    ])
+    await this.awaitProcessors()
   }
 
   /** Test-only escape hatch retained for stage-level tests that wire

@@ -260,8 +260,9 @@ describe('findReplaceDataExtension', () => {
   })
 
   // #404 item 5: `applyContentReplaceMutator` wrote straight to `content`
-  // with no codec awareness. Under properties-as-blocks (PR #288 §9), a
-  // property VALUE child's content IS its typed value — a replacement that
+  // with no codec awareness. Under properties-as-blocks
+  // (docs/properties-as-blocks-migration.html §9), a property VALUE child's
+  // content IS its typed value — a replacement that
   // leaves it unparseable used to get written anyway, and PROJECT's
   // `firstProjectedFieldValue` would silently drop the property from the
   // owner's cell with no error surfaced to the user who ran the replace.
@@ -617,10 +618,10 @@ describe('findReplaceDataExtension', () => {
       expect((await load('owner'))?.properties[noteSchema.name]).toBe('[[Roadmap]]')
     })
 
-    // Round 2 of review: the third destroyer. Bare `null` content IS the unset
-    // value to a codec that accepts one, so this cleared the property with
-    // nothing reported -- the guard checked spans and surrogates but not the
-    // sentinel the encoder itself escapes for.
+    // The third destroyer. Bare `null` content IS the unset value to a codec
+    // that accepts one, so this cleared the property with nothing reported --
+    // the guard checked spans and surrogates but not the sentinel the
+    // encoder itself escapes for.
     it('skips a replacement producing the null sentinel for a nullable property', async () => {
       const {valueId} = await seedFlippedWorkspaceWithProperty({
         fieldId: '55555555-5555-4555-8555-555555555555',

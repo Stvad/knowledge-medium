@@ -58,7 +58,10 @@ const WS = 'ws-1'
  *  object, drop the two that need an app shell. */
 const EXCLUDED_FACETS = ['core.app-mounts', 'core.app-effects']
 const readwiseDataAndActions = readwiseContributions
-  .filter(c => !EXCLUDED_FACETS.includes(c.facet.id)) as unknown as AppExtension[]
+  // `'facet' in c` also drops the nested AppExtension arrays (the dialog host),
+  // which is what this suite wants: it excludes every app mount anyway.
+  .filter(c => 'facet' in (c as object)
+    && !EXCLUDED_FACETS.includes((c as any).facet.id)) as unknown as AppExtension[]
 
 let sharedDb: TestDb
 

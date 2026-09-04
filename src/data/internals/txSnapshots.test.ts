@@ -40,8 +40,8 @@ describe('replayApplicationOrder', () => {
   })
 
   it('handles an arbitrarily deep chain without overflowing the stack', () => {
-    // Regression (Codex review on PR #371): the depth walk recursed one
-    // frame per parent hop, so undoing a delete of a very deep subtree
+    // Regression: the depth walk recursed one frame per parent hop, so
+    // undoing a delete of a very deep subtree
     // (one entry, one long chain) hit RangeError. 200k hops overflows
     // any recursive implementation; the iterative walk must not care.
     const DEPTH = 200_000
