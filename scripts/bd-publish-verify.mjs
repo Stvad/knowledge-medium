@@ -503,5 +503,7 @@ if (isMainModule(import.meta.url)) {
     // never fail: the publish already happened; a broken verifier must not
     // surface as a hook error on every gh command
   }
-  process.exit(0)
+  // No `exit()`: the echoed title tables are a queued write to a piped
+  // stdout, and `exit()` drops whatever is still queued. Nothing holds the
+  // loop open (spawnSync adds no handles), so the hook still ends promptly.
 }

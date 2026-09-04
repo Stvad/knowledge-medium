@@ -879,6 +879,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failCloseId?: string
     failFullSync?: boolean
     failPushCall?: number
+    failListCall?: number
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -906,7 +907,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         '  list)',
         `    n=$(cat "${repo}/list-count" 2>/dev/null || echo 0)`,
         `    n=$((n+1)); echo $n > "${repo}/list-count"`,
-        `    if [ -f "${repo}/list-$n.json" ]; then cat "${repo}/list-$n.json"; else cat "${repo}/list-last.json"; fi;;`,
+        `    if [ "$n" = "${opts.failListCall ?? 0}" ]; then echo "Error: list exploded";`,
+        `    elif [ -f "${repo}/list-$n.json" ]; then cat "${repo}/list-$n.json"; else cat "${repo}/list-last.json"; fi;;`,
         '  show)',
         `    m=$(cat "${repo}/show-count" 2>/dev/null || echo 0)`,
         `    m=$((m+1)); echo $m > "${repo}/show-count"`,
@@ -1309,6 +1311,22 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stderr).toContain('bd-github-sync: failed')
     expect(r.stdout).toContain('minted: km-b0 → #100')
     expect(r.stdout).toContain('minted: km-b199 → #299')
+  })
+
+  // The mapping is unrecoverable once the beads carry their refs, so a
+  // listing that cannot run has to say so rather than drop it silently.
+  it('reports a post-failure listing it could not run instead of dropping the mappings', () => {
+    const rows = Array.from({ length: 3 }, (_, i) => syncRow({ id: `km-b${i}`, external_ref: null }))
+    const { run } = makeSyncRepo({
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
+      lists: [rows, rows],
+      failPushCall: 1,
+      failListCall: 2,
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('could not re-list beads')
+    expect(r.stdout).not.toContain('minted:')
   })
 
   it('stays silent under --quiet when a converged run changed nothing', () => {
