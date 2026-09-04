@@ -28,6 +28,7 @@ import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import type {AppEffect} from '@/extensions/core.js'
 import {cadencedIdleJob, type CadencedIdleJob} from '@/utils/cadencedIdleJob.js'
 import {LAZY_DEEP_IDLE} from '@/utils/scheduleIdle.js'
+import {readDatabaseIncarnation} from './changeMarker.js'
 import {runDbMirror, type DbMirrorOutcome} from './mirror.js'
 import {withMirrorRunLock} from './runLock.js'
 import {supportsDirectoryMirroring} from './fileSystemAccess.js'
@@ -43,8 +44,8 @@ export const FAILURE_RETRY_MS = 5 * 60_000
 export const BUSY_RETRY_MS = 5 * 60_000
 
 export const PERMISSION_LOST_MESSAGE =
-  'This browser no longer has permission to write to the chosen folder. Open the mirror ' +
-  'settings to grant it again — mirroring is paused until you do.'
+  'This browser no longer has permission to write to the chosen folder, so no copies are ' +
+  'being made. Open the mirror settings to grant it again.'
 
 export type DbMirrorTickResult =
   | {kind: 'disabled'}
@@ -72,8 +73,10 @@ export interface DbMirrorSchedule {
   effect: AppEffect
   /** Run once, now, from a user gesture. Re-arms the loop from this run. */
   runNow: (repo: Repo) => Promise<DbMirrorRunReport>
-  /** Re-arm the running loop, restarting it if a lost permission stopped it.
-   *  For the settings surface: a changed setting or a fresh grant. */
+  /** Bring the running loop's next run forward. For the settings surface, where
+   *  a change the user just made — enabling it, a new folder, a shorter
+   *  interval — should not wait out a delay chosen before it existed. A no-op
+   *  when no effect is running. */
   resume: (delayMs?: number) => void
 }
 
@@ -143,6 +146,15 @@ export const createDbMirrorSchedule = ({
     // more — the skip verifies the named copy is in the folder it is looking
     // at, so a stale record makes the next run COPY rather than skip.
     const at = now()
+    // A status recorded against a DIFFERENT database says nothing about this
+    // one — an import replaced it, or the browser wiped the local store and the
+    // app rebuilt it. Withholding `lastCopy` there is what stops a fresh
+    // database inheriting the old one's marker and deciding it has nothing to
+    // copy.
+    const incarnation = await readDatabaseIncarnation(repo)
+    const describesThisDatabase =
+      incarnation !== undefined && state.status.incarnation === incarnation
+
     try {
       const outcome = await withRunLock(dbFilenameForUser(userId), () => mirror({
         repo,
@@ -150,7 +162,7 @@ export const createDbMirrorSchedule = ({
         keepCount: state.settings.keepCount,
         now: at,
         lastCopy:
-          state.status.lastMarker && state.status.lastFilename
+          describesThisDatabase && state.status.lastMarker && state.status.lastFilename
             ? {marker: state.status.lastMarker, filename: state.status.lastFilename}
             : undefined,
       }))
@@ -160,6 +172,7 @@ export const createDbMirrorSchedule = ({
       switch (outcome.kind) {
         case 'mirrored':
           await recordStatus(userId, {
+            incarnation,
             lastMarker: outcome.marker,
             lastMirrorAt: at,
             lastCheckedAt: at,
@@ -247,7 +260,26 @@ export const createDbMirrorSchedule = ({
       )
       const mine = {resume: (delayMs: number) => loop.rearmIn(delayMs)}
       live = mine
+
+      // The settings surface re-arms the tab it runs in; the store's broadcast
+      // is what carries the change to the others. Only a changed INTERVAL
+      // re-arms — every status write publishes too, and re-arming on those
+      // would restart the cadence continuously and starve the copy.
+      // The FIRST reading is a baseline, not a change: the loop has just been
+      // armed on the job's own short first delay, and re-arming it to the full
+      // interval here would push a fresh session's first copy a whole cadence
+      // out.
+      let armedFor = store.getSnapshot()?.settings.intervalMinutes
+      const stopWatching = store.subscribe(() => {
+        const minutes = store.getSnapshot()?.settings.intervalMinutes
+        if (minutes === undefined || minutes === armedFor) return
+        const baseline = armedFor === undefined
+        armedFor = minutes
+        if (!baseline) loop.rearmIn(minutes * 60_000)
+      })
+
       return () => {
+        stopWatching()
         // Only if it is still ours — a restart for another user may already have
         // replaced it.
         if (live === mine) live = null
@@ -264,9 +296,20 @@ export const createDbMirrorSchedule = ({
       // while a large copy is in flight, and this run's cadence must not
       // reschedule the loop that replaced it.
       const started = live
-      const report = await performDbMirror(repo)
-      if (started && started === live) started.resume(delayFor(report))
-      return report
+      const rearm = (delayMs: number): void => {
+        if (started && started === live) started.resume(delayMs)
+      }
+      try {
+        const report = await performDbMirror(repo)
+        rearm(delayFor(report))
+        return report
+      } catch (err) {
+        // A scheduled run that throws gets `onFailureDelayMs` from the job; a
+        // manual one has no such backstop, so without this the automatic retry
+        // stays on a timer chosen before the failure — up to a week away.
+        rearm(FAILURE_RETRY_MS)
+        throw err
+      }
     },
   }
 }

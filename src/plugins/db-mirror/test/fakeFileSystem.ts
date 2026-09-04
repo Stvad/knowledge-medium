@@ -20,9 +20,11 @@ class FakeFileHandle {
     readonly name: string,
     private readonly entry: FakeEntry,
     private readonly onWriteChunk?: (chunk: Uint8Array) => void,
+    private readonly onRead?: () => boolean,
   ) {}
 
   async getFile(): Promise<File> {
+    if (this.onRead?.()) throw new DOMException(`cannot read ${this.name}`, 'NotReadableError')
     // A fresh copy: callers read `size` off this, and the entry can be
     // rewritten afterwards.
     return new File([this.entry.bytes.slice()], this.name)
@@ -60,6 +62,9 @@ export class FakeDirectoryHandle {
   /** Set to make the next `createWritable().write()` throw, modelling a
    *  quota / IO failure partway through a copy. */
   failWrites: Error | null = null
+  /** Names whose `getFile()` rejects — an offline cloud placeholder, or an
+   *  OS-level read error on one entry of an otherwise fine folder. */
+  readonly unreadable = new Set<string>()
 
   constructor(readonly name = 'Backups') {}
 
@@ -95,9 +100,12 @@ export class FakeDirectoryHandle {
       entry = {name, bytes: new Uint8Array()}
       this.entries.set(name, entry)
     }
-    const handle = new FakeFileHandle(name, entry, () => {
-      if (this.failWrites) throw this.failWrites
-    })
+    const handle = new FakeFileHandle(
+      name,
+      entry,
+      () => { if (this.failWrites) throw this.failWrites },
+      () => this.unreadable.has(name),
+    )
     return handle as unknown as FileSystemFileHandle
   }
 
@@ -110,7 +118,12 @@ export class FakeDirectoryHandle {
 
   async *values(): AsyncGenerator<FileSystemFileHandle> {
     for (const [name, entry] of [...this.entries.entries()]) {
-      yield new FakeFileHandle(name, entry) as unknown as FileSystemFileHandle
+      yield new FakeFileHandle(
+        name,
+        entry,
+        undefined,
+        () => this.unreadable.has(name),
+      ) as unknown as FileSystemFileHandle
     }
   }
 

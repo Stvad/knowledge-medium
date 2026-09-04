@@ -69,6 +69,42 @@ const readQueueFingerprint = async (
 }
 
 /**
+ * Which DATABASE this is — an identity that survives the app's own lifetime and
+ * changes when the database is replaced.
+ *
+ * Derived rather than stored, from the oldest event the local audit log holds:
+ * `row_events` is never trimmed, so its first row is effectively the moment
+ * this database first recorded anything. Two devices do not share it, and a
+ * database that the browser wiped and PowerSync re-created gets a new one,
+ * because the re-download writes fresh events.
+ *
+ * That matters for two things this feature cannot otherwise get right. A copy
+ * on disk belongs to ONE database, so a shared or cloud-synced folder must not
+ * let one device's pruning delete another's backups; and after the OPFS loss
+ * this feature exists for, the fresh database's first copy must not evict the
+ * pre-loss copy that holds the work the loss took.
+ *
+ * `undefined` when it cannot be read or the log is empty. Callers treat that as
+ * "a database I know nothing about": copy, and prune nothing that is not
+ * plainly this run's own.
+ */
+export const readDatabaseIncarnation = async (
+  repo: Repo | ChangeMarkerSource,
+): Promise<string | undefined> => {
+  try {
+    const [row] = await (repo as ChangeMarkerSource).db.getAll<{
+      first: number | null
+      born: number | null
+    }>('SELECT MIN(id) AS first, MIN(created_at) AS born FROM row_events')
+    if (row?.born == null) return undefined
+    return `${row.first ?? 0}.${row.born}`
+  } catch (err) {
+    console.warn('[db-mirror] could not read the database identity', err)
+    return undefined
+  }
+}
+
+/**
  * The current marker, or `undefined` when the data half cannot be read.
  *
  * Undefined means "no opinion", and the caller must then mirror rather than

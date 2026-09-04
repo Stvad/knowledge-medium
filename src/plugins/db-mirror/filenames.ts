@@ -10,9 +10,14 @@
  *
  * The timestamp is a `:`-free ISO form: legal on every filesystem, readable in
  * a file browser, and ordered the same lexicographically as chronologically.
- * The random token after it makes the name unique per RUN, which is what lets
- * a failed run delete its own entry without having to prove ownership — no
- * other run can be holding a name that carries this run's token.
+ *
+ * Two short hex groups follow it. The first is the DATABASE the copy came from
+ * (see `readDatabaseIncarnation`), and it is what makes ownership a property of
+ * the file rather than of a side table: a folder shared between two devices, or
+ * one holding copies from before the browser wiped the local store, contains
+ * copies this database must never prune. The second is unique per RUN, which is
+ * what lets a failed run delete its own entry without having to prove anything
+ * — no other run can hold a name carrying this run's token.
  */
 
 /** `2026-09-04T13-45-02Z` — ISO 8601 UTC with the colons filesystems dislike
@@ -41,32 +46,55 @@ const parseMirrorTimestamp = (stamp: string): number | undefined => {
 const randomToken = (): string =>
   crypto.randomUUID().replace(/-/g, '').slice(0, 6)
 
+/** Six hex characters standing for a database identity — short enough to read in
+ *  a file listing, and it only has to tell APART the handful of databases whose
+ *  copies can share one folder, not be globally unique. */
+export const incarnationTag = (incarnation: string): string => {
+  // FNV-1a, because this needs to be stable across sessions and devices, and a
+  // random id would not survive a reload.
+  let hash = 0x811c9dc5
+  for (let i = 0; i < incarnation.length; i++) {
+    hash ^= incarnation.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(16).padStart(8, '0').slice(0, 6)
+}
+
 const baseOf = (dbFilename: string): string => dbFilename.replace(/\.db$/, '')
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-const patternFor = (dbFilename: string): RegExp =>
+const patternFor = (dbFilename: string, incarnation: string): RegExp =>
   new RegExp(
     `^${escapeRegExp(baseOf(dbFilename))}-mirror-` +
-    '(\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z)-([0-9a-f]{6})\\.db$',
+    '(\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z)-' +
+    `${incarnationTag(incarnation)}-[0-9a-f]{6}\\.db$`,
   )
 
-/** The name a mirror copy taken at `at` gets. `token` defaults to a fresh
- *  random one and exists so tests can pin a name. */
+/** The name a mirror copy of `incarnation` taken at `at` gets. `token` defaults
+ *  to a fresh random one and exists so tests can pin a name. */
 export const dbMirrorFilename = (
   dbFilename: string,
+  incarnation: string,
   at: number,
   token: string = randomToken(),
-): string => `${baseOf(dbFilename)}-mirror-${mirrorTimestamp(at)}-${token}.db`
+): string =>
+  `${baseOf(dbFilename)}-mirror-${mirrorTimestamp(at)}-${incarnationTag(incarnation)}-${token}.db`
 
-/** When `name` is one of this feature's own copies, the instant it was taken. */
+/** When `name` is a copy THIS database wrote, the instant it was taken. A copy
+ *  from another device, or from the database this one replaced, does not parse
+ *  — which is exactly what keeps the pruner off it. */
 export const parseDbMirrorFilename = (
   dbFilename: string,
+  incarnation: string,
   name: string,
 ): number | undefined => {
-  const match = patternFor(dbFilename).exec(name)
+  const match = patternFor(dbFilename, incarnation).exec(name)
   return match ? parseMirrorTimestamp(match[1]) : undefined
 }
 
-export const isDbMirrorFilename = (dbFilename: string, name: string): boolean =>
-  parseDbMirrorFilename(dbFilename, name) !== undefined
+export const isDbMirrorFilename = (
+  dbFilename: string,
+  incarnation: string,
+  name: string,
+): boolean => parseDbMirrorFilename(dbFilename, incarnation, name) !== undefined

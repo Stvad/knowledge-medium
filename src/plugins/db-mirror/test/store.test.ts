@@ -97,15 +97,17 @@ describe('db-mirror store', () => {
     expect(state.status).toEqual({})
   })
 
-  it('namespaces the record by the database, not just by the account', async () => {
-    // A PR preview and production are the same origin and the same account but
-    // deliberately different SQLite files, each with its own change marker.
+  it('keeps the opt-in reachable across a storage version bump', async () => {
+    // The database filename carries a storage version that is MEANT to change
+    // (kmp-v6 → v7). Keying the settings on it would silently return an
+    // opted-in user to off, with their chosen folder unreachable.
     await store.load(USER)
     await store.updateSettings(USER, {enabled: true})
 
     const {dbFilenameForUser} = await import('@/data/localDbStorage.js')
     const keys = await keyStringsFor()
-    expect(keys.every(k => k.startsWith(encodeURIComponent(dbFilenameForUser(USER))))).toBe(true)
+    expect(keys.some(k => k.includes(encodeURIComponent(dbFilenameForUser(USER))))).toBe(false)
+    expect(keys.every(k => k.startsWith(encodeURIComponent(USER)))).toBe(true)
   })
 
   it('keeps each account’s settings separate', async () => {

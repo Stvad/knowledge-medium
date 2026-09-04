@@ -13,12 +13,25 @@ import {beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Repo} from '@/data/repo'
 import type {AppEffectContext} from '@/extensions/core'
 import type {CadencedIdleJob} from '@/utils/cadencedIdleJob'
-import {BUSY_RETRY_MS, createDbMirrorSchedule, PERMISSION_LOST_MESSAGE} from '../schedule.js'
+import {
+  BUSY_RETRY_MS,
+  createDbMirrorSchedule,
+  FAILURE_RETRY_MS,
+  PERMISSION_LOST_MESSAGE,
+} from '../schedule.js'
 import {createDbMirrorStore, type DbMirrorStore} from '../store.js'
 import type {DbMirrorOutcome} from '../mirror.js'
 
 const USER = 'alice'
-const repo = {user: {id: USER}} as unknown as Repo
+/** The identity `readDatabaseIncarnation` derives from this repo's log. */
+const INCARNATION = '1.1700000000000'
+const repo = {
+  user: {id: USER},
+  db: {
+    getAll: async (sql: string) =>
+      sql.includes('MIN(id)') ? [{first: 1, born: 1700000000000}] : [{marker: 1}],
+  },
+} as unknown as Repo
 const NOW = Date.UTC(2026, 8, 4, 13, 45, 2)
 
 /** A stand-in for `cadencedIdleJob` that hands the loop body straight back, so
@@ -52,7 +65,7 @@ let mirror: ReturnType<typeof vi.fn>
 
 const MIRRORED: DbMirrorOutcome = {
   kind: 'mirrored',
-  filename: 'kmp-v6-alice-mirror-2026-09-04T13-45-02Z.db',
+  filename: 'kmp-v6-alice-mirror-2026-09-04T13-45-02Z-aa6070-abc123.db',
   bytes: 2048,
   marker: '42',
   pruned: [],
@@ -119,6 +132,32 @@ describe('the mirror schedule', () => {
     await job.body!()
 
     expect(mirror).not.toHaveBeenCalled()
+  })
+
+  it('does not trust a status recorded against a different database', async () => {
+    // An import replaced the database, or the browser wiped the local store and
+    // the app rebuilt it. Inheriting the old marker would have the fresh
+    // database conclude there is nothing to copy.
+    await enable()
+    await store.recordStatus(USER, {
+      incarnation: 'a-database-that-is-gone',
+      lastMarker: '42',
+      lastFilename: 'old.db',
+    })
+    const {job} = build()
+
+    await job.body!()
+
+    expect(mirror).toHaveBeenCalledWith(expect.objectContaining({lastCopy: undefined}))
+  })
+
+  it('stamps the database identity onto what it records', async () => {
+    await enable()
+    const {job} = build()
+
+    await job.body!()
+
+    expect((await store.load(USER)).status.incarnation).toBe(INCARNATION)
   })
 
   it('copies once enabled, and records what it wrote', async () => {
@@ -304,6 +343,19 @@ describe('the mirror schedule', () => {
   })
 
   describe('running now from settings', () => {
+    it('brings the retry forward when it fails, instead of leaving the old timer', async () => {
+      // A scheduled run that throws gets the job's failure delay; a manual one
+      // has no such backstop, so on a weekly cadence the automatic retry could
+      // be days away.
+      await enable()
+      outcomes = [new Error('The disk is full')]
+      const {schedule, job} = build()
+
+      await expect(schedule.runNow(repo)).rejects.toThrow('The disk is full')
+
+      expect(job.rearms).toEqual([{loop: 1, delayMs: FAILURE_RETRY_MS}])
+    })
+
     it('goes through the same path as a scheduled run', async () => {
       await enable()
       const {schedule} = build()
@@ -345,7 +397,9 @@ describe('the mirror schedule', () => {
 
       const manual = schedule.runNow(repo)
       stop?.()
-      schedule.effect.start({repo: {user: {id: 'bob'}}} as unknown as AppEffectContext)
+      schedule.effect.start({
+        repo: {...repo, user: {id: 'bob'}},
+      } as unknown as AppEffectContext)
       release()
       await manual
 
@@ -364,6 +418,42 @@ describe('the mirror schedule', () => {
     // A settings surface left open must not re-arm a torn-down effect.
     schedule.resume()
     expect(job.rearms).toEqual([])
+  })
+
+  describe('a setting changed in another tab', () => {
+    it('re-arms this tab on the new interval', async () => {
+      // The settings surface re-arms the tab it runs in; the store's broadcast
+      // is what carries the change here. Without this, shortening the cadence
+      // from weekly to half-hourly leaves other tabs dormant for a week.
+      await enable()
+      const {job} = build()
+      await vi.waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
+
+      await store.updateSettings(USER, {intervalMinutes: 30})
+
+      await vi.waitFor(() =>
+        expect(job.rearms).toContainEqual({loop: 1, delayMs: 30 * 60_000}),
+      )
+    })
+
+    it('does not re-arm on the first reading, which would delay the first copy', async () => {
+      await enable()
+      const {job} = build()
+
+      await vi.waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
+
+      expect(job.rearms).toEqual([])
+    })
+
+    it('does not re-arm for a status write, which would restart the cadence forever', async () => {
+      await enable()
+      const {job} = build()
+      await vi.waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
+
+      await store.recordStatus(USER, {lastCheckedAt: 1})
+
+      expect(job.rearms).toEqual([])
+    })
   })
 
   it('publishes the persisted state as soon as it starts', async () => {

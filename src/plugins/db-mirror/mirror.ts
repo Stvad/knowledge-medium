@@ -25,9 +25,14 @@
 import type {Repo} from '@/data/repo'
 import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import {exportRawSqliteDbToFile} from '@/utils/exportSqliteDb.js'
-import {readChangeMarker} from './changeMarker.js'
+import {readChangeMarker, readDatabaseIncarnation} from './changeMarker.js'
 import {dbMirrorFilename, parseDbMirrorFilename} from './filenames.js'
 import {queryDirectoryPermission} from './fileSystemAccess.js'
+
+/** Stands in when the database cannot be identified. A constant, so copies
+ *  taken in that state still share a namespace with each other rather than
+ *  scattering; pruning is skipped in that state regardless. */
+const UNKNOWN_INCARNATION = 'unknown'
 
 export type DbMirrorOutcome =
   | {
@@ -62,6 +67,7 @@ export interface DbMirrorRunOptions {
     handle: FileSystemFileHandle,
   ) => Promise<{filename: string; size: number}>
   readMarker?: (repo: Repo) => Promise<string | undefined>
+  readIncarnation?: (repo: Repo) => Promise<string | undefined>
 }
 
 const removeQuietly = async (
@@ -92,15 +98,30 @@ interface MirrorCopy {
 const scanMirrorCopies = async (
   directory: FileSystemDirectoryHandle,
   dbFilename: string,
+  incarnation: string,
 ): Promise<MirrorCopy[]> => {
   const copies: MirrorCopy[] = []
   for await (const entry of directory.values()) {
     if (entry.kind !== 'file') continue
-    const at = parseDbMirrorFilename(dbFilename, entry.name)
+    const at = parseDbMirrorFilename(dbFilename, incarnation, entry.name)
     if (at === undefined) continue
-    copies.push({name: entry.name, at, empty: (await entry.getFile()).size === 0})
+    copies.push({name: entry.name, at, empty: await isEmpty(entry)})
   }
   return copies
+}
+
+/** Per ENTRY, not per scan: a single unreadable file — an offline cloud
+ *  placeholder, an OS-level error — would otherwise abort the whole listing, and
+ *  a run that sees no copies both writes another one and prunes nothing, so the
+ *  folder grows without bound. An unreadable entry is reported as non-empty:
+ *  "cannot tell" must not become "delete it". */
+const isEmpty = async (entry: FileSystemFileHandle): Promise<boolean> => {
+  try {
+    return (await entry.getFile()).size === 0
+  } catch (err) {
+    console.warn(`[db-mirror] could not read ${entry.name}`, err)
+    return false
+  }
 }
 
 /**
@@ -167,9 +188,10 @@ const prune = async (
 const scanQuietly = async (
   directory: FileSystemDirectoryHandle,
   dbFilename: string,
+  incarnation: string,
 ): Promise<MirrorCopy[]> => {
   try {
-    return await scanMirrorCopies(directory, dbFilename)
+    return await scanMirrorCopies(directory, dbFilename, incarnation)
   } catch (err) {
     console.warn('[db-mirror] could not list the folder', err)
     return []
@@ -185,6 +207,7 @@ export const runDbMirror = async ({
   token,
   exportToFile = exportRawSqliteDbToFile,
   readMarker = readChangeMarker,
+  readIncarnation = readDatabaseIncarnation,
 }: DbMirrorRunOptions): Promise<DbMirrorOutcome> => {
   // Queried, never requested: a prompt outside a user gesture is denied by the
   // browser, so asking here would burn the one chance the settings surface has.
@@ -197,6 +220,12 @@ export const runDbMirror = async ({
   // copy might not contain, and that direction loses data.
   const marker = await readMarker(repo)
   const dbFilename = dbFilenameForUser(repo.user.id)
+  const incarnation = await readIncarnation(repo)
+  // Nothing to identify this database by, so nothing in the folder can be
+  // proved to belong to it. The run still copies — losing a backup is the only
+  // unacceptable outcome — but nothing is pruned, and the copy is named after
+  // an identity nothing else will match.
+  const identity = incarnation ?? UNKNOWN_INCARNATION
 
   if (marker !== undefined && marker === lastCopy?.marker) {
     // An equal marker only says the DATABASE has not moved. What the run is
@@ -204,7 +233,7 @@ export const runDbMirror = async ({
     // be there. Otherwise deleting the last mirror by hand, or changing folders
     // while a run was in flight, would leave a stored marker that skipped every
     // run for good while the status went on claiming success.
-    const scanned = await scanQuietly(directory, dbFilename)
+    const scanned = await scanQuietly(directory, dbFilename, identity)
     const present = scanned.some(copy => copy.name === lastCopy.filename && !copy.empty)
     // Housekeeping is about the folder, not about the copy, so it runs here
     // too: otherwise lowering the keep count never takes effect while the
@@ -215,12 +244,14 @@ export const runDbMirror = async ({
         marker,
         // The copy the marker points at is the current one here, and the same
         // clock skew that could delete a freshly written copy could delete this.
-        pruned: await prune(directory, scanned, keepCount, lastCopy.filename),
+        pruned: incarnation === undefined
+          ? []
+          : await prune(directory, scanned, keepCount, lastCopy.filename),
       }
     }
   }
 
-  const filename = dbMirrorFilename(dbFilename, now, token)
+  const filename = dbMirrorFilename(dbFilename, identity, now, token)
   const handle = await directory.getFileHandle(filename, {create: true})
 
   let bytes: number
@@ -245,6 +276,13 @@ export const runDbMirror = async ({
     filename,
     bytes,
     marker,
-    pruned: await prune(directory, await scanQuietly(directory, dbFilename), keepCount, filename),
+    pruned: incarnation === undefined
+      ? []
+      : await prune(
+          directory,
+          await scanQuietly(directory, dbFilename, identity),
+          keepCount,
+          filename,
+        ),
   }
 }

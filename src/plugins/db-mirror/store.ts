@@ -11,15 +11,21 @@
  * The handle lives under its own key, so the settings record stays plain JSON:
  * a browser that fails to clone the handle loses the folder, not the settings.
  *
- * Records are namespaced by the DATABASE FILENAME rather than by the user id,
- * because that is what the state describes. A PR preview and production are the
- * same origin and the same account but deliberately different SQLite files
- * (`dbFilenameForUser`), each with its own `row_events` counter — keyed by user
- * alone they would overwrite each other's change marker, and one of them would
- * skip a run it needed to make.
+ * Records are namespaced by the DEPLOYMENT and the account — a PR preview and
+ * production share an origin but must not share a folder or an opt-in — and
+ * deliberately NOT by the database filename, which carries a storage version
+ * (`kmp-v6-…`) that is meant to change. Keying on it would have the next VFS
+ * bump silently return an opted-in user to off, with their chosen folder
+ * unreachable.
+ *
+ * What IS per-database is the status, so it carries the identity of the
+ * database it describes and is disregarded when that no longer matches. That
+ * one field is what keeps a replaced database — an import, or a browser wipe
+ * the app recovered from — from inheriting the previous one's change marker and
+ * concluding there is nothing to copy.
  */
 import {IdbKeyedStore, idbRecordId, promisifyRequest} from '@/utils/idbKeyedStore.js'
-import {dbFilenameForUser} from '@/data/localDbStorage.js'
+import {previewDbId} from '@/data/localDbStorage.js'
 import {CallbackSet} from '@/utils/callbackSet.js'
 
 export interface DbMirrorSettings {
@@ -40,9 +46,14 @@ export interface DbMirrorStatus {
   lastCheckedAt?: number
   lastFilename?: string
   lastBytes?: number
-  /** The folder grant lapsed. Only a user gesture can clear this, so the
-   *  scheduled runs stop until the settings surface asks again. */
+  /** The folder grant lapsed. Runs keep checking on the ordinary cadence and
+   *  clear this by themselves once it is back; only the settings surface can
+   *  ASK for it again. */
   permissionLost?: boolean
+  /** Which database the fields above describe (see `readDatabaseIncarnation`).
+   *  A status whose incarnation is not the current one says nothing about the
+   *  database now in front of us. */
+  incarnation?: string
   lastError?: string
   lastErrorAt?: number
 }
@@ -90,6 +101,7 @@ const normalizeStatus = (value: unknown): DbMirrorStatus => {
     lastMarker: typeof raw.lastMarker === 'string' ? raw.lastMarker : undefined,
     lastMirrorAt: typeof raw.lastMirrorAt === 'number' ? raw.lastMirrorAt : undefined,
     lastCheckedAt: typeof raw.lastCheckedAt === 'number' ? raw.lastCheckedAt : undefined,
+    incarnation: typeof raw.incarnation === 'string' ? raw.incarnation : undefined,
     lastFilename: typeof raw.lastFilename === 'string' ? raw.lastFilename : undefined,
     lastBytes: typeof raw.lastBytes === 'number' ? raw.lastBytes : undefined,
     permissionLost: typeof raw.permissionLost === 'boolean' ? raw.permissionLost : undefined,
@@ -106,9 +118,11 @@ const dropUndefined = <T extends object>(value: T): T =>
 const SETTINGS_KEY = 'settings'
 const DIRECTORY_KEY = 'directory'
 
-/** Record ids for the database this user has ON THIS DEPLOYMENT. */
+/** Record ids for this account on this deployment. Stable across a storage
+ *  version bump, distinct between a PR preview and production. */
 const keysFor = (userId: string) => {
-  const namespace = dbFilenameForUser(userId)
+  const previewId = previewDbId(import.meta.env.BASE_URL)
+  const namespace = previewId ? `~${previewId}~${userId}` : userId
   return {
     settings: idbRecordId(namespace, SETTINGS_KEY),
     directory: idbRecordId(namespace, DIRECTORY_KEY),
