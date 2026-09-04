@@ -6,11 +6,15 @@ import 'fake-indexeddb/auto'
 import {IDBFactory} from 'fake-indexeddb'
 
 import {beforeEach, describe, expect, it} from 'vitest'
+import {IdbKeyedStore} from '@/utils/idbKeyedStore.js'
 import {
   DB_MIRROR_DEFAULTS,
   createDbMirrorStore,
   type DbMirrorStore,
 } from '../store.js'
+
+const storedKeys = () =>
+  new IdbKeyedStore('km-db-mirror', 'mirror').tx('readonly', s => s.getAllKeys())
 
 const USER = 'alice'
 
@@ -35,6 +39,13 @@ describe('db-mirror store', () => {
       directory: undefined,
     })
     expect(DB_MIRROR_DEFAULTS.enabled).toBe(false)
+  })
+
+  it('writes nothing for a user who has never opted in', async () => {
+    // The scheduled loop reads this on every tick; a read that wrote back would
+    // churn storage forever for someone who never turned the feature on.
+    await store.load(USER)
+    expect(await storedKeys()).toEqual([])
   })
 
   it('persists settings across a reload', async () => {

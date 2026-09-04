@@ -155,16 +155,21 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
   }
 
   /** Serialised read-modify-write. `mutate` sees storage as it stands, not the
-   *  snapshot — another tab writes the same records. */
+   *  snapshot — another tab writes the same records.
+   *
+   *  `persist` is off for a plain read. The scheduled loop reads this on every
+   *  tick, and writing the record back each time would both churn storage and
+   *  mint a record for a user who never opted in. */
   const update = (
     userId: string,
     mutate: (state: DbMirrorState) => Promise<DbMirrorState> | DbMirrorState,
+    persist = true,
   ): Promise<DbMirrorState> => {
     const next = queue.then(async () => {
       const current = await readState(userId)
       const updated = await mutate(current)
       try {
-        await writeRecord(userId, updated)
+        if (persist) await writeRecord(userId, updated)
       } catch (err) {
         console.warn('[db-mirror] could not save settings', err)
       }
@@ -184,7 +189,7 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         snapshotUserId = userId
         listeners.notify()
       }
-      return update(userId, state => state)
+      return update(userId, state => state, false)
     },
     updateSettings: (userId, patch) =>
       update(userId, state => ({
