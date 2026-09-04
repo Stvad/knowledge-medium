@@ -545,7 +545,10 @@ type BackfillClaimRefusal =
  *  neither is this device's to run, and the claim seam does not tell them
  *  apart. */
 type BackfillClaimAttempt =
-  | {readonly status: 'claimed'}
+  /** `minted` is false when a live claim already named this claimant — which,
+   *  claimant ids being per browser PROFILE, may be a sibling TAB's. Run on
+   *  it; never release it. */
+  | {readonly status: 'claimed'; readonly minted: boolean}
   | {readonly status: 'not-ours'}
   | {readonly status: 'refused'; readonly refusal: BackfillClaimRefusal}
 
@@ -3341,7 +3344,9 @@ export class Repo {
     const won = await claim.tryClaim(workspaceId, backfill.id, {
       reclaimCompleted: backfill.trigger === 'operator',
     })
-    return won ? {status: 'claimed'} : {status: 'not-ours'}
+    return won === 'declined'
+      ? {status: 'not-ours'}
+      : {status: 'claimed', minted: won === 'minted'}
   }
 
   /**
@@ -3497,16 +3502,29 @@ export class Repo {
         // no longer running anything blocks the pass for the whole graph until
         // a human deletes the block.
         //
+        // Only one this call MINTED, though. An inherited claim already named
+        // this claimant, and claimant ids are per browser PROFILE — so it may
+        // be a sibling TAB's, running right now. `releaseClaim` decides
+        // ownership by claimant and would delete it, freeing a third device to
+        // start the same source-of-truth pass while the sibling writes. The
+        // claim we then fail to hand back is the milder outcome: it strands,
+        // and deleting the block is the documented recovery.
+        //
         // Swallowed: the body has already told the operator what happened, and
-        // a release that failed is a stranded claim with a documented recovery
-        // — not a reason to replace that report with an exception.
-        await claim.releaseClaim(workspaceId, backfill.id).catch((err: unknown) => {
-          console.error(
-            `[workspaceBackfills] could not release the claim on "${backfill.id}" for ` +
-            `workspace ${workspaceId} — delete the claim block on the Migrations page to ` +
-            `let this pass run again:`, err,
-          )
-        })
+        // a release that failed is a stranded claim with that same recovery —
+        // not a reason to replace that report with an exception.
+        // A conditional, never an early `return` — a `return` in a `finally`
+        // REPLACES the value the `try` produced, which here would hand every
+        // caller `undefined` in place of its outcome.
+        if (attempt.minted) {
+          await claim.releaseClaim(workspaceId, backfill.id).catch((err: unknown) => {
+            console.error(
+              `[workspaceBackfills] could not release the claim on "${backfill.id}" for ` +
+              `workspace ${workspaceId} — delete the claim block on the Migrations page to ` +
+              `let this pass run again:`, err,
+            )
+          })
+        }
       }
     } finally {
       this.inFlightOperatorBackfills.delete(flightKey)
@@ -3709,11 +3727,13 @@ export class Repo {
         completed.add(backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
-        // Claimed but didn't finish — hand it back either way, or this pass is
-        // blocked for the whole graph by one device's bad moment. Unless the
-        // caller owns it: then its `finally` is the single release, and this
-        // one would free the claim while the gesture is still running.
-        if (!claimHeldByCaller) {
+        // Claimed but didn't finish — hand it back, or this pass is blocked
+        // for the whole graph by one device's bad moment. Two exceptions, and
+        // both are about not releasing what is not ours to release: a claim
+        // the CALLER holds (its `finally` is the single release, and this one
+        // would free it mid-gesture), and one this run only INHERITED, which
+        // may be a sibling tab's live claim.
+        if (!claimHeldByCaller && attempt.minted) {
           await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
         }
         if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {

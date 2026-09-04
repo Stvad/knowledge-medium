@@ -444,7 +444,7 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
-        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -479,7 +479,11 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
-        tryClaim: async (_ws, id) => { if (claimed.has(id)) return false; claimed.add(id); return true },
+        tryClaim: async (_ws, id) => {
+          if (claimed.has(id)) return 'declined' as const
+          claimed.add(id)
+          return 'minted' as const
+        },
         markComplete: async () => {},
         releaseClaim: async (_ws, id) => {
           if (!claimed.has(id)) { unheldReleases.push(id); return }
@@ -743,7 +747,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       user: {id: 'user-1'},
       backfillSyncGate: neverSettles,
       backfillCompletionClaim: {
-        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -774,7 +778,7 @@ describe('workspace backfill runner — operator outcomes', () => {
 
   // Records attempts so these can assert the runner never reached the claim.
   const recordingClaim = (attempts: string[]) => ({
-    tryClaim: async (_ws: string, id: string) => { attempts.push(id); return true },
+    tryClaim: async (_ws: string, id: string) => { attempts.push(id); return 'minted' as const },
     markComplete: async () => {},
     releaseClaim: async () => {},
   })
@@ -863,7 +867,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
-        tryClaim: async () => true,
+        tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -899,7 +903,7 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
-        tryClaim: async () => true,
+        tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -937,7 +941,9 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
   /** Records the claim seam's calls in order, so a test can assert the claim
    *  came before the body rather than merely that both happened. */
   const spyClaim = (events: string[], {won = true}: {won?: boolean} = {}) => ({
-    tryClaim: async () => { events.push('tryClaim'); return won },
+    // A win MINTS. `inherited` is a separate axis with its own test below —
+    // folding it in here would silence every release assertion at once.
+    tryClaim: async () => { events.push('tryClaim'); return won ? 'minted' as const : 'declined' as const },
     markComplete: async () => { events.push('markComplete') },
     releaseClaim: async () => { events.push('releaseClaim') },
   })
@@ -1029,6 +1035,62 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
 
     expect(outcome).toEqual({claimed: true, value: undefined})
     expect(events).toEqual(['tryClaim', 'releaseClaim'])
+  })
+
+  it('never releases a claim it only inherited from a sibling tab', async () => {
+    // Two tabs of one browser profile share a claimant id, and the
+    // single-flight set is per-Repo — so the second tab's `tryClaim` reads the
+    // first tab's LIVE claim as its own and succeeds without writing. Released
+    // on the way out, that deletes a claim the sibling is still writing under,
+    // and a third device is then free to start the same source-of-truth pass.
+    // Running on it is the accepted overlap; releasing it is not.
+    const events: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
+        markComplete: async () => { events.push('markComplete') },
+        releaseClaim: async () => { events.push('releaseClaim') },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+
+    // A body that refuses and returns early — the shape that reaches the
+    // `finally` without the pass having recorded anything.
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {})
+
+    expect(outcome).toEqual({claimed: true, value: undefined})
+    expect(events).toEqual(['tryClaim'])
+    expect(events).not.toContain('releaseClaim')
+  })
+
+  it('still runs the pass on an inherited claim — the overlap is tolerated, the delete is not', async () => {
+    // The other half: inheriting must not turn into a refusal. These passes
+    // are idempotent per row, which is what makes a two-tab overlap
+    // acceptable; only the release is the hazard.
+    const events: string[] = []
+    const runs: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
+        markComplete: async () => { events.push('markComplete') },
+        releaseClaim: async () => { events.push('releaseClaim') },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass(runs)])
+    await seedTarget(repo)
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'gesture-v1')
+
+    expect(result.outcome).toBe('ran')
+    expect(runs).toEqual([WS])
+    expect(events).not.toContain('releaseClaim')
   })
 
   it('does not let a failing pass hand back the claim the gesture still holds', async () => {

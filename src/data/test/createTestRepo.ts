@@ -149,11 +149,18 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
       // stops an unattended pass, never a human who asked for one. A stub that
       // ignored it made every operator re-run read as "already done", which is
       // the behaviour under test for anything the pass can miss.
+      // `minted` rather than `inherited` for every win: this stand-in writes a
+      // marker row on `markComplete` and has no notion of a claim it could
+      // inherit, so a caller that gated its release on `minted` would never
+      // release under it. The inherit path is the real claim's, and
+      // `graphBackfillClaim.test.ts` covers it.
       tryClaim: async (ws: string, id: string, claimOpts?: {reclaimCompleted?: boolean}) =>
         claimOpts?.reclaimCompleted === true
         || (await opts.db.getOptional<{key: string}>(
           'SELECT key FROM client_schema_state WHERE key = ?', [`workspace_backfill:${ws}:${id}`],
-        )) === null,
+        )) === null
+          ? 'minted' as const
+          : 'declined' as const,
       markComplete: async (ws: string, id: string) => {
         // `client_schema_state` is (key, completed_at) — there is no `value`
         // column, and writing one threw on every call. It went unnoticed

@@ -68,7 +68,39 @@ describe('a claim that arrives between the read and the transaction', () => {
       ensureHome: async () => undefined,
     } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
 
-    expect(await claim.tryClaim('ws', 'race-v1')).toBe(false)
+    expect(await claim.tryClaim('ws', 'race-v1')).toBe('declined')
+  })
+})
+
+describe('a live claim that already names this claimant', () => {
+  it('is INHERITED, not minted — the caller may run on it but must not release it', async () => {
+    // The distinction the return type exists for. `claimantId` is a browser
+    // PROFILE, so this row may be a sibling TAB's claim for a pass running
+    // right now; a caller that read this as "I own it" would delete a live
+    // claim on its way out and free a third device to start the same
+    // source-of-truth pass. Nothing is written here either — asserted, because
+    // "wrote nothing" is what makes the row somebody else's.
+    const updates: string[] = []
+    const claim = createGraphBackfillClaim({
+      db: {getOptional: async () => ({
+        id: 'c', workspace_id: 'ws', deleted: 0,
+        properties_json: JSON.stringify({
+          'migration:claimant': 'device-a', 'migration:claimed-at': 1000,
+        }),
+      })},
+      tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+        get: async () => ({workspaceId: 'ws', deleted: false, properties: {}}),
+        create: async () => { updates.push('create'); return 'unused' },
+        update: async () => { updates.push('update') },
+        delete: async () => { updates.push('delete') },
+        restore: async () => { updates.push('restore') },
+      } as never),
+      claimantId: 'device-a',
+      ensureHome: async () => undefined,
+    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+
+    expect(await claim.tryClaim('ws', 'pass-v1')).toBe('inherited')
+    expect(updates).toEqual([])
   })
 })
 
@@ -115,7 +147,7 @@ describe('an operator reclaiming a completed pass', () => {
     // claim rather than the test-repo stub, which cannot model this.
     const {claim, updates} = claimWith(completed)
 
-    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(true)
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe('minted')
     expect(updates).toHaveLength(1)
     expect(updates[0]!['migration:claimant']).toBe('device-a')
     expect(updates[0]!['migration:completed-at']).toBeUndefined()
@@ -127,7 +159,7 @@ describe('an operator reclaiming a completed pass', () => {
     // writer.
     const {claim, updates} = claimWith(running)
 
-    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(false)
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe('declined')
     expect(updates).toEqual([])
   })
 
@@ -140,14 +172,14 @@ describe('an operator reclaiming a completed pass', () => {
     // pre-read already sees the running claim and backs off outside the tx.
     const {claim, updates} = claimWith(completed, running)
 
-    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(false)
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe('declined')
     expect(updates).toEqual([])
   })
 
   it('leaves a completed pass alone when nobody asked to re-run it', async () => {
     const {claim} = claimWith(completed)
 
-    expect(await claim.tryClaim('ws', 'pass-v1')).toBe(false)
+    expect(await claim.tryClaim('ws', 'pass-v1')).toBe('declined')
   })
 })
 

@@ -99,6 +99,19 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
     (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))
   )
 
+/** What `tryClaim` did — and in particular whether THIS call wrote the claim
+ *  row, which is the only thing that makes its caller the owner.
+ *
+ *  `inherited` is the trap. A live claim already named this claimant, so the
+ *  call succeeds having written nothing. Claimant ids identify a browser
+ *  PROFILE, not a tab, so that claim may belong to another TAB running the
+ *  same pass right now — indistinguishable from this device's own claim left
+ *  behind by an earlier run. A caller may RUN on an inherited claim (these
+ *  passes are idempotent per row, which is what makes the overlap tolerable)
+ *  but must never RELEASE one: deleting a live sibling's claim frees a third
+ *  device to start the same source-of-truth pass while the sibling writes. */
+export type ClaimAttempt = 'minted' | 'inherited' | 'declined'
+
 /** Decides which device runs a migration, and records that it finished — in
  *  SYNCED data, so a repair that uploads happens once per GRAPH.
  *
@@ -123,8 +136,10 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
  *   3. is a duplicate run tolerable if 1 fails? For an idempotent repair,
  *      usually yes; the cost is the stale-bag exposure, not corruption. */
 export interface BackfillCompletionClaim {
-  /** Claim the right to run this pass for this workspace. `false` means
-   *  someone else has it or it is already complete — skip, don't run.
+  /** Claim the right to run this pass for this workspace. `declined` means
+   *  someone else has it or it is already complete — skip, don't run. The
+   *  other two both mean "run", and differ only in whether you may hand the
+   *  claim back afterwards; see {@link ClaimAttempt}.
    *
    *  `reclaimCompleted` overrides only the second of those, and only the
    *  `operator` trigger passes it: a human asking for a pass that has already
@@ -136,7 +151,7 @@ export interface BackfillCompletionClaim {
     workspaceId: string,
     backfillId: string,
     opts?: {reclaimCompleted?: boolean},
-  ): Promise<boolean>
+  ): Promise<ClaimAttempt>
   /** The claimed run finished. Record completion where every device sees it. */
   markComplete(workspaceId: string, backfillId: string): Promise<void>
   /** The claimed run aborted without finishing (a transient precondition, a
