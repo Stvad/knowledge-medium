@@ -25,14 +25,14 @@
 import type {Repo} from '@/data/repo'
 import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import {exportRawSqliteDbToFile} from '@/utils/exportSqliteDb.js'
-import {readChangeMarker, readDatabaseIncarnation} from './changeMarker.js'
+import {readChangeMarker} from './changeMarker.js'
 import {dbMirrorFilename, parseDbMirrorFilename} from './filenames.js'
 import {queryDirectoryPermission} from './fileSystemAccess.js'
 
-/** Stands in when the database cannot be identified. A constant, so copies
- *  taken in that state still share a namespace with each other rather than
- *  scattering; pruning is skipped in that state regardless. */
-const UNKNOWN_INCARNATION = 'unknown'
+/** Stands in when the copy's origin cannot be established. A constant, so
+ *  copies taken in that state still share a namespace rather than scattering;
+ *  pruning is skipped in that state regardless. */
+const UNKNOWN_ORIGIN = 'unknown'
 
 export type DbMirrorOutcome =
   | {
@@ -56,7 +56,7 @@ export interface DbMirrorRunOptions {
    *  filename travel TOGETHER because the skip needs both: the marker says the
    *  database has not moved, and only the file's presence in THIS folder says
    *  a copy of it is actually there. */
-  lastCopy?: {marker: string; filename: string}
+  lastCopy?: {marker: string; filename: string; bytes?: number}
   /** Per-run token in the copy's name; defaults to a fresh random one. Pinned
    *  by tests so they can state the expected filename rather than reading it
    *  back from the run, which would assert nothing about the naming. */
@@ -67,7 +67,9 @@ export interface DbMirrorRunOptions {
     handle: FileSystemFileHandle,
   ) => Promise<{filename: string; size: number}>
   readMarker?: (repo: Repo) => Promise<string | undefined>
-  readIncarnation?: (repo: Repo) => Promise<string | undefined>
+  /** Where a copy this run writes comes from — this install holding this
+   *  database. Undefined when either half is unknown, which forbids pruning. */
+  origin?: string
 }
 
 const removeQuietly = async (
@@ -89,6 +91,8 @@ interface MirrorCopy {
   /** The instant in the name; see `filenames.ts` on why that is the ordering. */
   at: number
   empty: boolean
+  /** Undefined when the entry could not be read; see {@link measure}. */
+  size?: number
 }
 
 /** Every copy this feature wrote that is currently in the folder, and NOTHING
@@ -105,7 +109,8 @@ const scanMirrorCopies = async (
     if (entry.kind !== 'file') continue
     const at = parseDbMirrorFilename(dbFilename, incarnation, entry.name)
     if (at === undefined) continue
-    copies.push({name: entry.name, at, empty: await isEmpty(entry)})
+    const size = await measure(entry)
+    copies.push({name: entry.name, at, empty: size === 0, size})
   }
   return copies
 }
@@ -113,14 +118,14 @@ const scanMirrorCopies = async (
 /** Per ENTRY, not per scan: a single unreadable file — an offline cloud
  *  placeholder, an OS-level error — would otherwise abort the whole listing, and
  *  a run that sees no copies both writes another one and prunes nothing, so the
- *  folder grows without bound. An unreadable entry is reported as non-empty:
- *  "cannot tell" must not become "delete it". */
-const isEmpty = async (entry: FileSystemFileHandle): Promise<boolean> => {
+ *  folder grows without bound. Undefined means "cannot tell", which must never
+ *  become "empty, delete it". */
+const measure = async (entry: FileSystemFileHandle): Promise<number | undefined> => {
   try {
-    return (await entry.getFile()).size === 0
+    return (await entry.getFile()).size
   } catch (err) {
     console.warn(`[db-mirror] could not read ${entry.name}`, err)
-    return false
+    return undefined
   }
 }
 
@@ -205,9 +210,9 @@ export const runDbMirror = async ({
   now,
   lastCopy,
   token,
+  origin,
   exportToFile = exportRawSqliteDbToFile,
   readMarker = readChangeMarker,
-  readIncarnation = readDatabaseIncarnation,
 }: DbMirrorRunOptions): Promise<DbMirrorOutcome> => {
   // Queried, never requested: a prompt outside a user gesture is denied by the
   // browser, so asking here would burn the one chance the settings surface has.
@@ -220,12 +225,10 @@ export const runDbMirror = async ({
   // copy might not contain, and that direction loses data.
   const marker = await readMarker(repo)
   const dbFilename = dbFilenameForUser(repo.user.id)
-  const incarnation = await readIncarnation(repo)
-  // Nothing to identify this database by, so nothing in the folder can be
-  // proved to belong to it. The run still copies — losing a backup is the only
-  // unacceptable outcome — but nothing is pruned, and the copy is named after
-  // an identity nothing else will match.
-  const identity = incarnation ?? UNKNOWN_INCARNATION
+  // Nothing to establish where a copy came from, so nothing in the folder can
+  // be proved to belong here. The run still copies — losing a backup is the
+  // only unacceptable outcome — but nothing is pruned.
+  const identity = origin ?? UNKNOWN_ORIGIN
 
   if (marker !== undefined && marker === lastCopy?.marker) {
     // An equal marker only says the DATABASE has not moved. What the run is
@@ -234,7 +237,15 @@ export const runDbMirror = async ({
     // while a run was in flight, would leave a stored marker that skipped every
     // run for good while the status went on claiming success.
     const scanned = await scanQuietly(directory, dbFilename, identity)
-    const present = scanned.some(copy => copy.name === lastCopy.filename && !copy.empty)
+    // Size, not merely non-empty: an interrupted cloud sync can truncate a copy
+    // to something plausible, and calling that present would protect the
+    // damaged file while pruning the intact older ones behind it.
+    const present = scanned.some(
+      copy =>
+        copy.name === lastCopy.filename &&
+        !copy.empty &&
+        (lastCopy.bytes === undefined || copy.size === lastCopy.bytes),
+    )
     // Housekeeping is about the folder, not about the copy, so it runs here
     // too: otherwise lowering the keep count never takes effect while the
     // database sits unchanged, and a pruning failure is never retried.
@@ -244,7 +255,7 @@ export const runDbMirror = async ({
         marker,
         // The copy the marker points at is the current one here, and the same
         // clock skew that could delete a freshly written copy could delete this.
-        pruned: incarnation === undefined
+        pruned: origin === undefined
           ? []
           : await prune(directory, scanned, keepCount, lastCopy.filename),
       }
@@ -276,7 +287,7 @@ export const runDbMirror = async ({
     filename,
     bytes,
     marker,
-    pruned: incarnation === undefined
+    pruned: origin === undefined
       ? []
       : await prune(
           directory,

@@ -72,34 +72,34 @@ const readQueueFingerprint = async (
  * Which DATABASE this is — an identity that survives the app's own lifetime and
  * changes when the database is replaced.
  *
- * Derived rather than stored, from the oldest event the local audit log holds:
- * `row_events` is never trimmed, so its first row is effectively the moment
- * this database first recorded anything. Two devices do not share it, and a
+ * Derived rather than stored, from the FIRST row the local audit log holds:
+ * `row_events` is never trimmed and its id is an autoincrement, so row 1 is the
+ * first thing this database ever recorded, and its timestamp never moves. A
  * database that the browser wiped and PowerSync re-created gets a new one,
  * because the re-download writes fresh events.
  *
- * That matters for two things this feature cannot otherwise get right. A copy
- * on disk belongs to ONE database, so a shared or cloud-synced folder must not
- * let one device's pruning delete another's backups; and after the OPFS loss
- * this feature exists for, the fresh database's first copy must not evict the
- * pre-loss copy that holds the work the loss took.
+ * That is what stops the fresh database's first copy, after the OPFS loss this
+ * feature exists for, from evicting the pre-loss copy that holds the work the
+ * loss took. It does NOT identify a DEVICE — restoring a mirror copies the log
+ * along with everything else, so two installs can hold the same incarnation.
+ * The install id it is combined with is what separates those; see
+ * `mirrorOrigin`.
  *
  * `undefined` when it cannot be read or the log is empty. Callers treat that as
- * "a database I know nothing about": copy, and prune nothing that is not
- * plainly this run's own.
+ * "a database I know nothing about": copy, and prune nothing.
  *
- * ONE aggregate, deliberately. `MIN(created_at)` alone is a SEARCH against
- * `idx_row_events_created` — the constant-time minimum lookup. Pairing it with
- * a second aggregate in the same statement costs a full covering-index SCAN
- * (measured against a live database), and the obvious companion, `MIN(id)`,
- * would carry no information anyway: the log is never trimmed, so it is 1.
+ * Ordering by id rather than taking `MIN(created_at)`: a clock that jumps
+ * backwards gives a LATER row an earlier timestamp, which would move an
+ * identity that is supposed to be fixed — and every copy already in the folder
+ * would stop parsing as this database's, falling outside retention for good.
+ * The lookup is a rowid seek either way.
  */
 export const readDatabaseIncarnation = async (
   repo: Repo | ChangeMarkerSource,
 ): Promise<string | undefined> => {
   try {
     const [row] = await (repo as ChangeMarkerSource).db.getAll<{born: number | null}>(
-      'SELECT MIN(created_at) AS born FROM row_events',
+      'SELECT created_at AS born FROM row_events ORDER BY id LIMIT 1',
     )
     if (row?.born == null) return undefined
     return String(row.born)

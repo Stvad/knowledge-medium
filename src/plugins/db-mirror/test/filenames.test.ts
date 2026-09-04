@@ -1,17 +1,18 @@
 import {describe, expect, it} from 'vitest'
 import {
   dbMirrorFilename,
-  incarnationTag,
   isDbMirrorFilename,
+  mirrorOrigin,
+  originTag,
   parseDbMirrorFilename,
 } from '../filenames.js'
 
 const DB = 'kmp-v6-alice.db'
 const AT = Date.UTC(2026, 8, 4, 13, 45, 2)
-/** Identity of the database whose copies these are. */
-const DB1 = '1700000000000'
-const DB2 = '1700000000001'
-const TAG = incarnationTag(DB1)
+/** Where the copies came from: this install's database, and another's. */
+const DB1 = mirrorOrigin('install-a', '1700000000000')
+const DB2 = mirrorOrigin('install-b', '1700000000000')
+const TAG = originTag(DB1)
 
 describe('dbMirrorFilename', () => {
   it('names a copy after the database it came from plus a sortable timestamp', () => {
@@ -61,10 +62,10 @@ describe('isDbMirrorFilename', () => {
     expect(isDbMirrorFilename(DB, DB1, name)).toBe(false)
   })
 
-  it('does not claim a copy another database wrote', () => {
-    // A folder shared between two devices, or holding copies from before the
-    // browser wiped the local store, contains copies this database must never
-    // prune. Ownership is a property of the FILE, not of a side table.
+  it('does not claim a copy another origin wrote', () => {
+    // Two installs holding the SAME database — which is what restoring a mirror
+    // onto a second machine produces — still write distinguishable copies,
+    // because the install id is minted locally and never travels in the data.
     const theirs = dbMirrorFilename(DB, DB2, AT, 'abc123')
     expect(isDbMirrorFilename(DB, DB1, theirs)).toBe(false)
     expect(isDbMirrorFilename(DB, DB2, theirs)).toBe(true)

@@ -13,6 +13,7 @@ import {beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Repo} from '@/data/repo'
 import type {AppEffectContext} from '@/extensions/core'
 import type {CadencedIdleJob} from '@/utils/cadencedIdleJob'
+import {LAZY_DEEP_IDLE} from '@/utils/scheduleIdle.js'
 import {
   BUSY_RETRY_MS,
   createDbMirrorSchedule,
@@ -29,7 +30,7 @@ const repo = {
   user: {id: USER},
   db: {
     getAll: async (sql: string) =>
-      sql.includes('MIN(created_at)') ? [{born: 1700000000000}] : [{marker: 1}],
+      sql.includes('ORDER BY id LIMIT 1') ? [{born: 1700000000000}] : [{marker: 1}],
   },
 } as unknown as Repo
 const NOW = Date.UTC(2026, 8, 4, 13, 45, 2)
@@ -37,7 +38,12 @@ const NOW = Date.UTC(2026, 8, 4, 13, 45, 2)
 /** A stand-in for `cadencedIdleJob` that hands the loop body straight back, so
  *  the tests drive runs instead of idle windows and timers. */
 const fakeJob = () => {
-  const state = {
+  const state: {
+    body: (() => Promise<number | void>) | null
+    stopped: number
+    rearms: Array<{loop: number; delayMs: number}>
+    starts: number
+  } = {
     body: null as (() => Promise<number | void>) | null,
     stopped: 0,
     /** Which loop got re-armed, and with what — the effect can restart, and a
@@ -151,6 +157,31 @@ describe('the mirror schedule', () => {
     expect(mirror).toHaveBeenCalledWith(expect.objectContaining({lastCopy: undefined}))
   })
 
+  it('withholds the origin until BOTH halves are known', async () => {
+    // An install id alone cannot tell two databases apart, and an incarnation
+    // alone is copied wholesale onto a second machine by a restore. Without a
+    // whole origin the run still copies, but it must prune nothing.
+    await enable()
+    const withoutInstallId: DbMirrorStore = {
+      ...store,
+      load: async (userId) => ({...(await store.load(userId)), installId: undefined}),
+    }
+    const {job: jobHandle, state} = fakeJob()
+    const schedule = createDbMirrorSchedule({
+      store: withoutInstallId,
+      job: jobHandle,
+      now: () => NOW,
+      supported: () => true,
+      mirror: mirror as never,
+      withRunLock: (async <T,>(_db: string, body: () => Promise<T>) => body()),
+    })
+    schedule.effect.start({repo} as unknown as AppEffectContext)
+
+    await state.body!()
+
+    expect(mirror).toHaveBeenCalledWith(expect.objectContaining({origin: undefined}))
+  })
+
   it('stamps the database identity onto what it records', async () => {
     await enable()
     const {job} = build()
@@ -176,7 +207,7 @@ describe('the mirror schedule', () => {
     })
   })
 
-  it('passes the last copy — marker AND filename — to the next run', async () => {
+  it('passes the last copy — marker, filename AND size — to the next run', async () => {
     await enable()
     const {job} = build()
     await job.body!()
@@ -184,10 +215,13 @@ describe('the mirror schedule', () => {
     outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: []}]
     await job.body!()
 
-    // Both, because the skip needs both: the marker says the database has not
-    // moved, and only the filename lets the run check a copy is really there.
+    // All three, because the skip needs all three: the marker says the database
+    // has not moved, the filename lets the run look for the copy, and the size
+    // tells an intact file from one an interrupted sync truncated.
     expect(mirror).toHaveBeenLastCalledWith(
-      expect.objectContaining({lastCopy: {marker: '42', filename: MIRRORED.filename}}),
+      expect.objectContaining({
+        lastCopy: {marker: '42', filename: MIRRORED.filename, bytes: MIRRORED.bytes},
+      }),
     )
     // A skipped run is still a completed check, and it leaves the copy on disk
     // as the last successful mirror.
@@ -452,6 +486,43 @@ describe('the mirror schedule', () => {
 
       await store.recordStatus(USER, {lastCheckedAt: 1})
 
+      expect(job.rearms).toEqual([])
+    })
+  })
+
+  describe('restarting for a workspace change', () => {
+    it('picks up where the last completed run left off', async () => {
+      // The reconciler restarts every effect when the workspace changes, and
+      // this feature is per-database rather than per-workspace — so a fresh
+      // first delay each time would let someone who switches often postpone
+      // mirroring for good.
+      await enable()
+      await store.recordStatus(USER, {lastCheckedAt: NOW - 30 * 60_000})
+      store = createDbMirrorStore()
+      const {job} = build()
+
+      // 120-minute cadence, 30 minutes elapsed: 90 left, not a fresh start.
+      await vi.waitFor(() =>
+        expect(job.rearms).toContainEqual({loop: 1, delayMs: 90 * 60_000}),
+      )
+    })
+
+    it('never comes due sooner than the job\u2019s own floor', async () => {
+      await enable()
+      await store.recordStatus(USER, {lastCheckedAt: NOW - 10 * 60 * 60_000})
+      store = createDbMirrorStore()
+      const {job} = build()
+
+      await vi.waitFor(() => expect(job.rearms.length).toBeGreaterThan(0))
+      expect(job.rearms[0].delayMs).toBe(LAZY_DEEP_IDLE.minDelayMs)
+    })
+
+    it('leaves a first-ever run on the job\u2019s own first delay', async () => {
+      await enable()
+      store = createDbMirrorStore()
+      const {job} = build()
+
+      await vi.waitFor(() => expect(store.getSnapshot()).not.toBeNull())
       expect(job.rearms).toEqual([])
     })
   })

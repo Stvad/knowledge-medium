@@ -15,7 +15,7 @@ const source = (
         ? answers.rejected ?? answers.queue
         : sql.includes('ps_crud')
           ? answers.queue
-          : sql.includes('MIN(created_at)')
+          : sql.includes('ORDER BY id LIMIT 1')
             ? answers.born
             : answers.blocks
       if (answer instanceof Error) throw answer
@@ -79,7 +79,7 @@ describe('readChangeMarker', () => {
 })
 
 describe('readDatabaseIncarnation', () => {
-  it('identifies the database by when its log first recorded anything', async () => {
+  it('identifies the database by its FIRST logged event, not the earliest stamp', async () => {
     expect(await readDatabaseIncarnation(source({born: [{born: 1700000000000}]}))).toBe(
       '1700000000000',
     )
@@ -91,6 +91,16 @@ describe('readDatabaseIncarnation', () => {
     const before = await readDatabaseIncarnation(source({born: [{born: 1700000000000}]}))
     const rebuilt = await readDatabaseIncarnation(source({born: [{born: 1788558892401}]}))
     expect(rebuilt).not.toBe(before)
+  })
+
+  it('does not move when the clock jumps backwards', async () => {
+    // A later row can carry an earlier timestamp after a clock correction. Read
+    // as a minimum, that would change an identity meant to be fixed — and every
+    // copy already in the folder would stop parsing as this database's.
+    const source1 = source({born: [{born: 1700000000000}]})
+    expect(await readDatabaseIncarnation(source1)).toBe('1700000000000')
+    // The row ordered first is unchanged; only a MIN over all rows would move.
+    expect(await readDatabaseIncarnation(source1)).toBe('1700000000000')
   })
 
   it('has no answer for an empty log, rather than inventing one', async () => {

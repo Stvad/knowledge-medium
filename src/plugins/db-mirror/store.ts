@@ -45,6 +45,8 @@ export interface DbMirrorStatus {
    *  changed since the last copy" apart from "the mirror has stalled". */
   lastCheckedAt?: number
   lastFilename?: string
+  /** How many bytes that copy has, so a later run can tell an intact file from
+   *  one an interrupted sync truncated. */
   lastBytes?: number
   /** The folder grant lapsed. Runs keep checking on the ordinary cadence and
    *  clear this by themselves once it is back; only the settings surface can
@@ -62,6 +64,14 @@ export interface DbMirrorState {
   settings: DbMirrorSettings
   status: DbMirrorStatus
   directory?: FileSystemDirectoryHandle
+  /** This INSTALL, minted on the first write and never copied.
+   *
+   *  Deliberately outside the database: restoring a mirror onto a second device
+   *  copies the database wholesale, so anything stored inside it identifies the
+   *  data rather than the machine holding it. Two installs sharing a cloud
+   *  folder must not prune each other's copies, and this is what tells them
+   *  apart. Undefined until something has been saved. */
+  installId?: string
 }
 
 export const DB_MIRROR_DEFAULTS: DbMirrorSettings = {
@@ -184,19 +194,28 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
     const keys = keysFor(userId)
     return idb
       .runTransaction(persist ? 'readwrite' : 'readonly', async store => {
-        const record = (await promisifyRequest(store.get(keys.settings))) as
-          | {settings?: unknown; status?: unknown}
-          | undefined
+        const record = await promisifyRequest(store.get(keys.settings))
         const directory = (await promisifyRequest(store.get(keys.directory))) as
           | FileSystemDirectoryHandle
           | undefined
+        const stored = record as
+          | {settings?: unknown; status?: unknown; installId?: unknown}
+          | undefined
+        const known = typeof stored?.installId === 'string' ? stored.installId : undefined
         const updated = mutate({
-          settings: normalizeSettings(record?.settings),
-          status: normalizeStatus(record?.status),
+          settings: normalizeSettings(stored?.settings),
+          status: normalizeStatus(stored?.status),
           directory: directory ?? undefined,
+          // Minted on the first write, never afterwards. A read must not mint
+          // one: the loop reads on every tick, and the id has to be the same
+          // one the copies already in the folder were named for.
+          installId: known ?? (persist ? crypto.randomUUID().replace(/-/g, '').slice(0, 8) : undefined),
         })
         if (persist) {
-          store.put({settings: updated.settings, status: updated.status}, keys.settings)
+          store.put(
+            {settings: updated.settings, status: updated.status, installId: updated.installId},
+            keys.settings,
+          )
           if (updated.directory) store.put(updated.directory, keys.directory)
           else store.delete(keys.directory)
         }

@@ -29,6 +29,7 @@ import type {AppEffect} from '@/extensions/core.js'
 import {cadencedIdleJob, type CadencedIdleJob} from '@/utils/cadencedIdleJob.js'
 import {LAZY_DEEP_IDLE} from '@/utils/scheduleIdle.js'
 import {readDatabaseIncarnation} from './changeMarker.js'
+import {mirrorOrigin} from './filenames.js'
 import {runDbMirror, type DbMirrorOutcome} from './mirror.js'
 import {withMirrorRunLock} from './runLock.js'
 import {supportsDirectoryMirroring} from './fileSystemAccess.js'
@@ -154,6 +155,13 @@ export const createDbMirrorSchedule = ({
     const incarnation = await readDatabaseIncarnation(repo)
     const describesThisDatabase =
       incarnation !== undefined && state.status.incarnation === incarnation
+    // Both halves, or no origin at all: an install id alone cannot tell two
+    // databases apart, and an incarnation alone is copied wholesale by a
+    // restore onto a second machine.
+    const origin =
+      incarnation !== undefined && state.installId !== undefined
+        ? mirrorOrigin(state.installId, incarnation)
+        : undefined
 
     try {
       const outcome = await withRunLock(dbFilenameForUser(userId), () => mirror({
@@ -161,9 +169,14 @@ export const createDbMirrorSchedule = ({
         directory,
         keepCount: state.settings.keepCount,
         now: at,
+        origin,
         lastCopy:
           describesThisDatabase && state.status.lastMarker && state.status.lastFilename
-            ? {marker: state.status.lastMarker, filename: state.status.lastFilename}
+            ? {
+                marker: state.status.lastMarker,
+                filename: state.status.lastFilename,
+                bytes: state.status.lastBytes,
+              }
             : undefined,
       }))
       // Another tab holds the run lock. Nothing to record: that tab is
@@ -250,14 +263,28 @@ export const createDbMirrorSchedule = ({
       // permission or disk failure recorded in a previous session would stay
       // invisible until the first scheduled run — which waits for a genuinely
       // idle main thread and may never come in a busy session.
-      store.load(repo.user.id).catch((err: unknown) => {
-        console.warn('[db-mirror] could not read the mirror state at startup', err)
-      })
-
       const loop = job.start(
         async () => delayFor(await performDbMirror(repo)),
         {onFailureDelayMs: FAILURE_RETRY_MS},
       )
+
+      store
+        .load(repo.user.id)
+        .then(state => {
+          // The reconciler restarts every effect when the WORKSPACE changes,
+          // and this feature is per-database rather than per-workspace — so a
+          // fresh first delay each time would let someone who switches
+          // workspaces often postpone mirroring for good. Pick up where the
+          // last completed run left off instead, never sooner than the job's
+          // own floor, which exists to stay clear of boot.
+          const {lastCheckedAt} = state.status
+          if (lastCheckedAt === undefined) return
+          const due = lastCheckedAt + state.settings.intervalMinutes * 60_000 - now()
+          loop.rearmIn(Math.max(LAZY_DEEP_IDLE.minDelayMs, due))
+        })
+        .catch((err: unknown) => {
+          console.warn('[db-mirror] could not read the mirror state at startup', err)
+        })
       const mine = {resume: (delayMs: number) => loop.rearmIn(delayMs)}
       live = mine
 

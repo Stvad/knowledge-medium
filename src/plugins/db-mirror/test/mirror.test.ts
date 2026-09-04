@@ -13,9 +13,9 @@ const HOUR = 3_600_000
 /** A pinned run token, so a test can name the file a run will write. */
 const TOKEN = 'aaaaaa'
 
-/** This database's identity, and another device's sharing the same folder. */
-const DB1 = '1700000000000'
-const DB2 = '1700000000001'
+/** Where copies came from: this install, and another sharing the same folder. */
+const DB1 = 'install-a:1700000000000'
+const DB2 = 'install-b:1700000000000'
 
 /** A repo stub: the mirror only reads `user.id` and the three marker queries. */
 const stubRepo = (marker: number | null = 42, queue = {n: 0, last: null}): Repo =>
@@ -24,8 +24,7 @@ const stubRepo = (marker: number | null = 42, queue = {n: 0, last: null}): Repo 
     db: {
       getAll: async (sql: string) => {
         if (sql.includes('ps_crud')) return [queue]
-        if (sql.includes('MIN(created_at)')) return [{born: 1700000000000}]
-        return [{marker}]
+                return [{marker}]
       },
     },
   } as unknown as Repo)
@@ -50,6 +49,7 @@ const run = (over: Partial<Parameters<typeof runDbMirror>[0]> = {}) =>
     keepCount: 3,
     now: AT,
     token: TOKEN,
+    origin: DB1,
     exportToFile: fakeExport(1024),
     ...over,
   })
@@ -101,6 +101,22 @@ describe('runDbMirror', () => {
       expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, DB1, AT, TOKEN)})
     })
 
+    it('treats a copy truncated to a plausible size as gone', async () => {
+      // An interrupted cloud sync leaves something that is not empty and not
+      // the backup. Calling it present would protect the damaged file while
+      // pruning the intact older ones behind it, and report success forever.
+      const dir = new FakeDirectoryHandle()
+      const previous = dbMirrorFilename(DB, DB1, AT - HOUR, TOKEN)
+      dir.seed(previous, 4)
+
+      const outcome = await run({
+        directory: dir.asHandle(),
+        lastCopy: {marker: MARKER, filename: previous, bytes: 512},
+      })
+
+      expect(outcome).toMatchObject({kind: 'mirrored'})
+    })
+
     it('treats a zero-length leftover as gone rather than as the copy', async () => {
       const dir = new FakeDirectoryHandle()
       const previous = dbMirrorFilename(DB, DB1, AT - HOUR, TOKEN)
@@ -142,11 +158,11 @@ describe('runDbMirror', () => {
       user: {id: USER},
       db: {getAll: async () => { throw new Error('no such table: row_events') }},
     } as unknown as Repo
-    // With no readable log there is also no database identity, so the copy is
-    // named for the unknown one.
+    // With no readable log there is also no origin, so the copy is named for
+    // the unknown one.
     const unnamed = dbMirrorFilename(DB, 'unknown', AT, TOKEN)
 
-    const outcome = await run({repo, directory: dir.asHandle(), lastCopy: {marker: MARKER, filename: dbMirrorFilename(DB, DB1, AT - HOUR, TOKEN)}})
+    const outcome = await run({repo, directory: dir.asHandle(), origin: undefined, lastCopy: {marker: MARKER, filename: dbMirrorFilename(DB, DB1, AT - HOUR, TOKEN)}})
 
     expect(outcome).toMatchObject({kind: 'mirrored', marker: undefined})
     expect(dir.names()).toEqual([unnamed])
@@ -314,11 +330,12 @@ describe('runDbMirror', () => {
       expect(dir.names().sort()).toEqual([dbMirrorFilename(DB, DB1, AT, TOKEN), older[1]].sort())
     })
 
-    it('never touches copies another device wrote into a shared folder', async () => {
-      // Same account, one cloud-synced folder, two machines. Their Web Locks
-      // cannot reach each other, so with keepCount 1 a routine run here would
-      // otherwise delete the only copy holding the OTHER machine's unsynced
-      // work.
+    it('never touches copies another install wrote into a shared folder', async () => {
+      // Same account, one cloud-synced folder, two machines — including the
+      // case where the second was seeded by RESTORING this mirror, so both hold
+      // the same database. Their Web Locks cannot reach each other, so with
+      // keepCount 1 a routine run here would otherwise delete the only copy
+      // holding the OTHER machine's unsynced work.
       const dir = new FakeDirectoryHandle()
       const theirs = [1, 2].map(n => dbMirrorFilename(DB, DB2, AT - n * HOUR, 'bbbbbb'))
       theirs.forEach(name => dir.seed(name, 512))

@@ -122,8 +122,9 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
       .then(async directory => {
         if (!directory) return
         if (!(await saving(dbMirrorStore.setDirectory(userId, directory)))) return
-        // The store clears the previous folder's failure; this restarts the
-        // loop that failure had stopped.
+        // The store clears the previous folder's recorded failure; this brings
+        // the next run forward so the new folder gets a copy without waiting
+        // out a delay chosen before it was chosen.
         dbMirrorSchedule.resume()
       })
   }

@@ -51,6 +51,40 @@ describe('db-mirror store', () => {
     expect(await storedKeys()).toEqual([])
   })
 
+  describe('the install id', () => {
+    it('is minted on the first write and never changes', async () => {
+      await store.load(USER)
+      const minted = (await store.updateSettings(USER, {enabled: true})).installId
+      expect(minted).toEqual(expect.any(String))
+
+      await store.recordStatus(USER, {lastMarker: '1'})
+
+      expect((await createDbMirrorStore().load(USER)).installId).toBe(minted)
+    })
+
+    it('is not minted by a read, which the loop does on every tick', async () => {
+      // It has to be the same id the copies already in the folder were named
+      // for, so a read that minted one would rename this install every session.
+      expect((await store.load(USER)).installId).toBeUndefined()
+      expect(await storedKeys()).toEqual([])
+    })
+
+    it('is not in the mirrored database, so a restore cannot clone it', async () => {
+      // Restoring a mirror onto a second machine copies the database wholesale.
+      // Anything stored inside it identifies the DATA, not the machine — which
+      // is why this lives in IndexedDB beside the folder handle.
+      await store.load(USER)
+      const first = (await store.updateSettings(USER, {enabled: true})).installId
+      globalThis.indexedDB = new IDBFactory()
+      const elsewhere = createDbMirrorStore()
+      await elsewhere.load(USER)
+
+      const second = (await elsewhere.updateSettings(USER, {enabled: true})).installId
+
+      expect(second).not.toBe(first)
+    })
+  })
+
   it('persists settings across a reload', async () => {
     await store.load(USER)
     await store.updateSettings(USER, {enabled: true, keepCount: 5})
