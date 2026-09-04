@@ -3,10 +3,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { workspaceBackfillsFacet, type WorkspaceBackfill } from '@/data/facets'
-import { Repo } from '@/data/repo'
+import { Repo, type OperatorBackfillResult } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 
 /** Properties of the shared `WorkspaceBackfill` runner, independent of any one
  *  backfill: when it is allowed to run, and what its writes are allowed to do
@@ -443,7 +444,7 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
-        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -478,7 +479,11 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
-        tryClaim: async (_ws, id) => { if (claimed.has(id)) return false; claimed.add(id); return true },
+        tryClaim: async (_ws, id) => {
+          if (claimed.has(id)) return 'declined' as const
+          claimed.add(id)
+          return 'minted' as const
+        },
         markComplete: async () => {},
         releaseClaim: async (_ws, id) => {
           if (!claimed.has(id)) { unheldReleases.push(id); return }
@@ -742,7 +747,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       user: {id: 'user-1'},
       backfillSyncGate: neverSettles,
       backfillCompletionClaim: {
-        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -773,7 +778,7 @@ describe('workspace backfill runner — operator outcomes', () => {
 
   // Records attempts so these can assert the runner never reached the claim.
   const recordingClaim = (attempts: string[]) => ({
-    tryClaim: async (_ws: string, id: string) => { attempts.push(id); return true },
+    tryClaim: async (_ws: string, id: string) => { attempts.push(id); return 'minted' as const },
     markComplete: async () => {},
     releaseClaim: async () => {},
   })
@@ -862,7 +867,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
-        tryClaim: async () => true,
+        tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -898,7 +903,7 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
-        tryClaim: async () => true,
+        tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -923,5 +928,323 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
 
     release()
     expect((await first).outcome).toBe('ran')
+  })
+})
+
+/**
+ * `withOperatorBackfillClaim` — a gesture whose steps BEFORE the pass also
+ * write source-of-truth rows (the properties migration synthesizes definition
+ * blocks and flips the workspace), so it has to hold the graph-wide claim
+ * across all of them rather than take it inside the pass.
+ */
+describe('workspace backfill runner — a claim held across a gesture', () => {
+  /** Records the claim seam's calls in order, so a test can assert the claim
+   *  came before the body rather than merely that both happened. */
+  const spyClaim = (events: string[], {won = true}: {won?: boolean} = {}) => ({
+    // A win MINTS. `inherited` is a separate axis with its own test below —
+    // folding it in here would silence every release assertion at once.
+    tryClaim: async () => { events.push('tryClaim'); return won ? 'minted' as const : 'declined' as const },
+    markComplete: async () => { events.push('markComplete') },
+    releaseClaim: async () => { events.push('releaseClaim') },
+  })
+
+  const gestureRepo = (events: string[], backfill: WorkspaceBackfill, won = true): Repo => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: spyClaim(events, {won}),
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [backfill])
+    return repo
+  }
+
+  const noopPass = (runs: string[] = []): WorkspaceBackfill => ({
+    id: 'gesture-v1',
+    trigger: 'operator' as const,
+    run: async ({workspaceId}) => { runs.push(workspaceId) },
+  })
+
+  it('takes the claim before the body writes anything, and hands it back after', async () => {
+    const events: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async pass => {
+      events.push('body-writes')
+      await pass.run()
+    })
+
+    expect(outcome).toEqual({claimed: true})
+    // The pass re-asks: a peer's claim can sync in during the body, and
+    // `tryClaim` on a claim we still hold is a read that answers `proceed`
+    // without writing. What matters here is the FIRST one, before the body.
+    expect(events).toEqual([
+      'tryClaim', 'body-writes', 'tryClaim', 'markComplete', 'releaseClaim',
+    ])
+  })
+
+  it('does not let the body run at all when a peer holds the claim', async () => {
+    // The regression this method exists for. Told "held by a peer" AFTER
+    // synthesizing, a device has already published its own definitions.
+    const events: string[] = []
+    const bodies: string[] = []
+    const repo = gestureRepo(events, noopPass(), false)
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    expect(outcome).toEqual({
+      claimed: false,
+      result: {outcome: 'held-by-peer', undoHistoryCleared: false},
+    })
+    // Nothing to hand back — releasing a claim this device never won would
+    // take it from the peer that does hold it.
+    expect(events).toEqual(['tryClaim'])
+  })
+
+  it('hands the claim back when the body throws', async () => {
+    // A body that dies partway has to release, or one device's bad moment
+    // blocks the pass for the whole graph until a human deletes the block.
+    const events: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+
+    await expect(repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      throw new Error('synthesis exploded')
+    })).rejects.toThrow(/synthesis exploded/)
+
+    expect(events).toEqual(['tryClaim', 'releaseClaim'])
+  })
+
+  it('still reports `claimed` for a body that refused and never ran the pass', async () => {
+    // The migration's own shape: several branches report their own refusal and
+    // return before reaching `pass.run()` — a flip the server declined, a
+    // definition that could not be minted. Those are still CLAIMED runs, and
+    // the caller keys its own reporting off that: `claimed: false` would have
+    // the action print a second, contradictory outcome over the one the body
+    // just showed.
+    const events: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {})
+
+    expect(outcome).toEqual({claimed: true, value: undefined})
+    expect(events).toEqual(['tryClaim', 'releaseClaim'])
+  })
+
+  it('never releases a claim it only inherited from a sibling tab', async () => {
+    // Two tabs of one browser profile share a claimant id, and the
+    // single-flight set is per-Repo — so the second tab's `tryClaim` reads the
+    // first tab's LIVE claim as its own and succeeds without writing. Released
+    // on the way out, that deletes a claim the sibling is still writing under,
+    // and a third device is then free to start the same source-of-truth pass.
+    // Running on it is the accepted overlap; releasing it is not.
+    const events: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
+        markComplete: async () => { events.push('markComplete') },
+        releaseClaim: async () => { events.push('releaseClaim') },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+
+    // A body that refuses and returns early — the shape that reaches the
+    // `finally` without the pass having recorded anything.
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {})
+
+    expect(outcome).toEqual({claimed: true, value: undefined})
+    expect(events).toEqual(['tryClaim'])
+    expect(events).not.toContain('releaseClaim')
+  })
+
+  it('still runs the pass on an inherited claim — the overlap is tolerated, the delete is not', async () => {
+    // The other half: inheriting must not turn into a refusal. These passes
+    // are idempotent per row, which is what makes a two-tab overlap
+    // acceptable; only the release is the hazard.
+    const events: string[] = []
+    const runs: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
+        markComplete: async () => { events.push('markComplete') },
+        releaseClaim: async () => { events.push('releaseClaim') },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass(runs)])
+    await seedTarget(repo)
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'gesture-v1')
+
+    expect(result.outcome).toBe('ran')
+    expect(runs).toEqual([WS])
+    expect(events).not.toContain('releaseClaim')
+  })
+
+  it('does not let a failing pass hand back the claim the gesture still holds', async () => {
+    // The pass releases on its own failure paths — correct when the pass IS
+    // the gesture, wrong here: the body keeps running after `pass.run()`
+    // returns, and a release from inside it would leave those steps unclaimed.
+    // One owner, one release.
+    const events: string[] = []
+    const repo = gestureRepo(events, {
+      id: 'gesture-v1',
+      trigger: 'operator' as const,
+      run: async () => { throw new Error('pass exploded') },
+    })
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    let outcome: OperatorBackfillResult | null = null
+    await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async pass => {
+      outcome = await pass.run()
+      events.push('body-continues')
+    })
+
+    expect(outcome).toMatchObject({outcome: 'failed'})
+    // Exactly one release, and it lands AFTER the body is done.
+    expect(events).toEqual(['tryClaim', 'tryClaim', 'body-continues', 'releaseClaim'])
+  })
+
+  it('does not claim, or run the body, while this device is behind the server', async () => {
+    // `tryClaim` WRITES. The gate that protected the pass has to protect the
+    // gesture too, or the claim moves in front of it.
+    const events: string[] = []
+    const bodies: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: () => () => {},
+      backfillCompletionClaim: spyClaim(events),
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    expect(events).toEqual([])
+    expect(outcome).toEqual({
+      claimed: false,
+      result: {
+        outcome: 'deferred',
+        undoHistoryCleared: false,
+        retryable: true,
+        reason: 'this device is not caught up with the server '
+          + '(still downloading, disconnected, or a download error)',
+      },
+    })
+  })
+
+  it('does not tell the operator to wait out a claim error that waiting cannot clear', async () => {
+    // A foreign block parked at the deterministic claim id needs someone to
+    // move it. Reported as retryable, the palette says "try again shortly"
+    // and the operator retries a gesture that will refuse identically forever.
+    const bodies: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => {
+          throw new DeterministicIdCrossWorkspaceError('claim-id', 'ws-other', WS)
+        },
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    expect(outcome).toMatchObject({claimed: false, result: {retryable: false}})
+  })
+
+  it('single-flights the whole gesture, not just the pass', async () => {
+    // Two invocations in one Repo share a claimant, so the claim reads the
+    // second as the same owner. Stopped only at the pass, the second would
+    // have synthesized and flipped first.
+    const events: string[] = []
+    const bodies: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+    let release!: () => void
+
+    const first = repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('first')
+      await new Promise<void>(resolve => { release = resolve })
+    })
+    await vi.waitFor(() => { expect(bodies).toHaveLength(1) })
+
+    expect(await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('second')
+    })).toEqual({
+      claimed: false,
+      result: {outcome: 'already-running', undoHistoryCleared: false},
+    })
+    expect(bodies).toEqual(['first'])
+
+    release()
+    await first
+  })
+
+  it('defers without releasing when the claim write throws, rather than running the body', async () => {
+    const events: string[] = []
+    const bodies: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        tryClaim: async () => { throw new Error('claim write failed') },
+        markComplete: async () => {},
+        releaseClaim: async () => { events.push('releaseClaim') },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    // NOT released. A throw does not prove the row is unwritten, but
+    // `releaseClaim` cannot tell this device's half-written claim from a
+    // SIBLING TAB's live one — `claimantId` is per browser profile, so both
+    // name this claimant. Deleting a live claim frees a second device to start
+    // an uploading pass while the first tab is still writing; a claim this
+    // device may have stranded is recoverable by deleting the block.
+    expect(events).toEqual([])
+    // `deferred`, not `failed`: nothing started, and "stopped partway" would
+    // send an operator looking for half-migrated data.
+    expect(outcome).toEqual({
+      claimed: false,
+      result: {
+        outcome: 'deferred', undoHistoryCleared: false,
+        reason: 'claim write failed', retryable: true,
+      },
+    })
   })
 })
