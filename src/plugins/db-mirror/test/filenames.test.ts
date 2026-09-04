@@ -10,7 +10,9 @@ const AT = Date.UTC(2026, 8, 4, 13, 45, 2)
 
 describe('dbMirrorFilename', () => {
   it('names a copy after the database it came from plus a sortable timestamp', () => {
-    expect(dbMirrorFilename(DB, AT)).toBe('kmp-v6-alice-mirror-2026-09-04T13-45-02Z.db')
+    expect(dbMirrorFilename(DB, AT, 'abc123')).toBe(
+      'kmp-v6-alice-mirror-2026-09-04T13-45-02Z-abc123.db',
+    )
   })
 
   it('round-trips through the parser', () => {
@@ -18,9 +20,16 @@ describe('dbMirrorFilename', () => {
   })
 
   it('sorts lexicographically in the same order as chronologically', () => {
-    const earlier = dbMirrorFilename(DB, AT)
-    const later = dbMirrorFilename(DB, AT + 60_000)
+    const earlier = dbMirrorFilename(DB, AT, 'aaaaaa')
+    const later = dbMirrorFilename(DB, AT + 60_000, 'aaaaaa')
     expect([later, earlier].sort()).toEqual([earlier, later])
+  })
+
+  it('gives two runs in the same second different names', () => {
+    // The name is what makes a failed run's cleanup provably its own entry:
+    // no other run can be holding a name carrying this run's token.
+    const names = new Set(Array.from({length: 200}, () => dbMirrorFilename(DB, AT)))
+    expect(names.size).toBe(200)
   })
 })
 
@@ -34,10 +43,15 @@ describe('isDbMirrorFilename', () => {
     ['a write-ahead sidecar', 'kmp-v6-alice.db-wa0'],
     ['a manual export', 'kmp-v6-alice-export-1757000000000.db'],
     ['a recovery archive', 'kmp-v6-alice-recovery-1757000000000.zip'],
-    ['another user’s mirror', 'kmp-v6-bob-mirror-2026-09-04T13-45-02Z.db'],
+    ['another user’s mirror', 'kmp-v6-bob-mirror-2026-09-04T13-45-02Z-abc123.db'],
     ['an unrelated file the user keeps in the folder', 'taxes-2026.db'],
     ['a similar name with a different timestamp shape', 'kmp-v6-alice-mirror-nightly.db'],
-    ['a name that merely starts like one', 'kmp-v6-alice-mirror-2026-09-04T13-45-02Z.db.bak'],
+    ['a name that merely starts like one', 'kmp-v6-alice-mirror-2026-09-04T13-45-02Z-abc123.db.bak'],
+    ['one with no run token', 'kmp-v6-alice-mirror-2026-09-04T13-45-02Z.db'],
+    // `Date.parse` turns this into March 3rd rather than rejecting it, so
+    // without the round-trip check the pruner would adopt a file it never wrote.
+    ['a calendar-invalid date the writer could never produce', 'kmp-v6-alice-mirror-2026-02-31T13-45-02Z-abc123.db'],
+    ['an impossible hour', 'kmp-v6-alice-mirror-2026-09-04T25-45-02Z-abc123.db'],
   ])('rejects %s', (_label, name) => {
     expect(isDbMirrorFilename(DB, name)).toBe(false)
   })
@@ -47,6 +61,6 @@ describe('isDbMirrorFilename', () => {
     // user id is regex-special today, but the pattern must not depend on that.
     const db = 'kmp-v6-~pr-9~a.b.db'
     expect(isDbMirrorFilename(db, dbMirrorFilename(db, AT))).toBe(true)
-    expect(isDbMirrorFilename(db, 'kmp-v6-XprX9Xa.b-mirror-2026-09-04T13-45-02Z.db')).toBe(false)
+    expect(isDbMirrorFilename(db, 'kmp-v6-XprX9Xa.b-mirror-2026-09-04T13-45-02Z-abc123.db')).toBe(false)
   })
 })

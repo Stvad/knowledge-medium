@@ -7,15 +7,20 @@
  * so what lands on disk is a complete `.db` and no sidecars need to travel
  * with it.
  *
- * WHY EACH RUN WRITES A NEW TIMESTAMPED FILE, rather than a temp file renamed
- * over a fixed one: an interrupted run must leave the previous copy intact, and
- * a run that never opens the previous copy cannot damage it. The remaining
- * hazard is the run's OWN entry — `getFileHandle(…, {create: true})` creates it
- * empty, well before any bytes arrive — so a failure removes it, and the
- * pruner discards any zero-length copy a hard crash left behind. (Rename would
- * be `FileSystemFileHandle.move()`, which is not a standardised method; the
- * bytes themselves are already committed atomically, since a writable stream
- * only updates the entry when it CLOSES.)
+ * WHY EACH RUN WRITES A NEW UNIQUELY NAMED FILE, rather than a temp file
+ * renamed over a fixed one: an interrupted run must leave the previous copy
+ * intact, and a run that never opens the previous copy cannot damage it. The
+ * remaining hazard is the run's OWN entry — `getFileHandle(…, {create: true})`
+ * creates it empty, well before any bytes arrive — so a failure removes it, and
+ * the pruner discards any zero-length copy a hard crash left behind. The run
+ * token in the name is what makes both of those provably the run's own entry.
+ * (Rename would be `FileSystemFileHandle.move()`, which is not a standardised
+ * method; the bytes themselves are already committed atomically, since a
+ * writable stream only updates the entry when it CLOSES.)
+ *
+ * Runs do not overlap — `schedule.ts` holds a cross-tab lock — which is what
+ * lets the pruner read an empty copy as crash residue rather than as another
+ * run's destination that has not been filled yet.
  */
 import type {Repo} from '@/data/repo'
 import {dbFilenameForUser} from '@/data/localDbStorage.js'
@@ -33,7 +38,7 @@ export type DbMirrorOutcome =
       marker: string | undefined
       pruned: readonly string[]
     }
-  | {kind: 'skipped-unchanged'; marker: string}
+  | {kind: 'skipped-unchanged'; marker: string; pruned: readonly string[]}
   | {kind: 'permission-lost'; permission: PermissionState}
 
 export interface DbMirrorRunOptions {
@@ -44,6 +49,10 @@ export interface DbMirrorRunOptions {
   now: number
   /** The marker recorded by the last successful run, if any. */
   lastMarker?: string
+  /** Per-run token in the copy's name; defaults to a fresh random one. Pinned
+   *  by tests so they can state the expected filename rather than reading it
+   *  back from the run, which would assert nothing about the naming. */
+  token?: string
   /** Seams for tests; production uses the real checkpointed export. */
   exportToFile?: (
     repo: Repo,
@@ -68,9 +77,17 @@ const removeQuietly = async (
 
 /**
  * Delete the copies this feature wrote that are no longer wanted, and NOTHING
- * else: every candidate has to parse as one of
- * {@link dbMirrorFilename}'s names for this user's database, so another account's mirrors, manual exports, recovery
- * archives and the user's own files in the folder are all invisible here.
+ * else: every candidate has to parse as one of {@link dbMirrorFilename}'s names
+ * for this user's database, so another account's mirrors, manual exports,
+ * recovery archives and the user's own files in the folder are all invisible
+ * here.
+ *
+ * `protectedName` is the copy the calling run just wrote. It is kept whatever
+ * the timestamps say and takes one of the keep slots: ordering by the stamp in
+ * the name is only as good as the clock that wrote it, and a clock that jumped
+ * backwards — or copies left by one that ran fast — would otherwise rank the
+ * new copy last and delete it, while the run still reported success and stored
+ * its marker, so later runs would skip with nothing on disk to show for it.
  *
  * Zero-length copies go first and unconditionally — a complete mirror is never
  * empty, so an empty one is the entry a crashed run created and never filled,
@@ -80,16 +97,19 @@ export const pruneDbMirrorCopies = async (
   directory: FileSystemDirectoryHandle,
   dbFilename: string,
   keepCount: number,
+  protectedName?: string,
 ): Promise<readonly string[]> => {
   const copies: Array<{name: string; at: number; empty: boolean}> = []
   for await (const entry of directory.values()) {
     if (entry.kind !== 'file') continue
+    if (entry.name === protectedName) continue
     const at = parseDbMirrorFilename(dbFilename, entry.name)
     if (at === undefined) continue
     copies.push({name: entry.name, at, empty: (await entry.getFile()).size === 0})
   }
 
-  const keep = Math.max(1, Math.trunc(keepCount))
+  // The protected copy occupies one of the slots, so only the rest compete.
+  const keep = Math.max(0, Math.max(1, Math.trunc(keepCount)) - (protectedName ? 1 : 0))
   const doomed = [
     ...copies.filter(copy => copy.empty),
     ...copies
@@ -105,12 +125,29 @@ export const pruneDbMirrorCopies = async (
   return removed
 }
 
+/** Pruning never fails a run: the copy is on disk and good, and failing over
+ *  housekeeping would discard that. The next run retries the same files. */
+const prune = async (
+  directory: FileSystemDirectoryHandle,
+  dbFilename: string,
+  keepCount: number,
+  protectedName?: string,
+): Promise<readonly string[]> => {
+  try {
+    return await pruneDbMirrorCopies(directory, dbFilename, keepCount, protectedName)
+  } catch (err) {
+    console.warn('[db-mirror] could not prune older copies', err)
+    return []
+  }
+}
+
 export const runDbMirror = async ({
   repo,
   directory,
   keepCount,
   now,
   lastMarker,
+  token,
   exportToFile = exportRawSqliteDbToFile,
   readMarker = readChangeMarker,
 }: DbMirrorRunOptions): Promise<DbMirrorOutcome> => {
@@ -124,10 +161,15 @@ export const runDbMirror = async ({
   // one redundant run later; reading after would store a marker for changes the
   // copy might not contain, and that direction loses data.
   const marker = await readMarker(repo)
-  if (marker !== undefined && marker === lastMarker) return {kind: 'skipped-unchanged', marker}
-
   const dbFilename = dbFilenameForUser(repo.user.id)
-  const filename = dbMirrorFilename(dbFilename, now)
+  // Housekeeping is about the FOLDER, not about the copy, so it also runs on
+  // the skipped path: otherwise lowering the keep count never takes effect
+  // while the database sits unchanged, and a pruning failure is never retried.
+  if (marker !== undefined && marker === lastMarker) {
+    return {kind: 'skipped-unchanged', marker, pruned: await prune(directory, dbFilename, keepCount)}
+  }
+
+  const filename = dbMirrorFilename(dbFilename, now, token)
   const handle = await directory.getFileHandle(filename, {create: true})
 
   let bytes: number
@@ -147,14 +189,11 @@ export const runDbMirror = async ({
     throw err
   }
 
-  let pruned: readonly string[] = []
-  try {
-    pruned = await pruneDbMirrorCopies(directory, dbFilename, keepCount)
-  } catch (err) {
-    // The copy is on disk and good. Failing the run over housekeeping would
-    // discard that, and the next run prunes the same files again anyway.
-    console.warn('[db-mirror] could not prune older copies', err)
+  return {
+    kind: 'mirrored',
+    filename,
+    bytes,
+    marker,
+    pruned: await prune(directory, dbFilename, keepCount, filename),
   }
-
-  return {kind: 'mirrored', filename, bytes, marker, pruned}
 }

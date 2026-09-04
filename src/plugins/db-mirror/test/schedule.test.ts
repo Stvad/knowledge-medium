@@ -67,7 +67,7 @@ beforeEach(() => {
   })
 })
 
-const build = (over: {supported?: () => boolean} = {}) => {
+const build = (over: {supported?: () => boolean; lockHeldElsewhere?: boolean} = {}) => {
   const {job, state} = fakeJob()
   const schedule = createDbMirrorSchedule({
     store,
@@ -75,6 +75,7 @@ const build = (over: {supported?: () => boolean} = {}) => {
     now: () => NOW,
     supported: over.supported ?? (() => true),
     mirror: mirror as never,
+    withRunLock: over.lockHeldElsewhere ? async () => null : async body => body(),
   })
   const stop = schedule.effect.start({repo} as unknown as AppEffectContext) as
     | (() => void)
@@ -137,7 +138,7 @@ describe('the mirror schedule', () => {
     const {job} = build()
     await job.body!()
 
-    outcomes = [{kind: 'skipped-unchanged', marker: '42'}]
+    outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: []}]
     await job.body!()
 
     expect(mirror).toHaveBeenLastCalledWith(expect.objectContaining({lastMarker: '42'}))
@@ -206,6 +207,48 @@ describe('the mirror schedule', () => {
       lastError: 'The disk is full',
       lastErrorAt: NOW,
     })
+  })
+
+  describe('another tab already mirroring', () => {
+    it('stands down instead of copying alongside it', async () => {
+      await enable()
+      const {job} = build({lockHeldElsewhere: true})
+
+      const next = await job.body!()
+
+      expect(next).toBe(120 * 60_000)
+      // Nothing recorded: the tab holding the lock is writing the same status.
+      expect((await store.load(USER)).status).toEqual({})
+    })
+
+    it('reports it from "Mirror now" without claiming a copy was made', async () => {
+      await enable()
+      const {schedule} = build({lockHeldElsewhere: true})
+
+      const report = await schedule.runNow(repo)
+
+      expect(report.outcome).toEqual({kind: 'busy-elsewhere'})
+    })
+  })
+
+  it('does not hand a newly signed-in user the previous user’s run', async () => {
+    // Local-only sign-out swaps the repo without a reload, so a large export
+    // for the previous user can still be running when the new one arrives.
+    await enable()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    mirror.mockImplementationOnce(async () => { await held; return MIRRORED })
+    const {schedule, job} = build()
+
+    const previousUser = job.body!()
+    const other = {user: {id: 'bob'}} as unknown as Repo
+    const bobsReport = await schedule.runNow(other)
+    release()
+    await previousUser
+
+    // Bob has no settings of his own, so his run is a no-op — but it is HIS
+    // no-op, not alice's mirrored copy.
+    expect(bobsReport.outcome).toEqual({kind: 'disabled'})
   })
 
   it('joins a run already in flight rather than taking a second copy', async () => {

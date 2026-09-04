@@ -3,12 +3,15 @@ import type {Repo} from '@/data/repo'
 import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import {runDbMirror} from '../mirror.js'
 import {dbMirrorFilename} from '../filenames.js'
+
 import {FakeDirectoryHandle} from './fakeFileSystem.js'
 
 const USER = 'alice'
 const DB = dbFilenameForUser(USER)
 const AT = Date.UTC(2026, 8, 4, 13, 45, 2)
 const HOUR = 3_600_000
+/** A pinned run token, so a test can name the file a run will write. */
+const TOKEN = 'aaaaaa'
 
 /** A repo stub: the mirror only reads `user.id` and the change-marker query. */
 const stubRepo = (marker: number | null = 42): Repo =>
@@ -32,6 +35,7 @@ const run = (over: Partial<Parameters<typeof runDbMirror>[0]> = {}) =>
     directory: new FakeDirectoryHandle().asHandle(),
     keepCount: 3,
     now: AT,
+    token: TOKEN,
     exportToFile: fakeExport(1024),
     ...over,
   })
@@ -43,12 +47,12 @@ describe('runDbMirror', () => {
 
     expect(outcome).toMatchObject({
       kind: 'mirrored',
-      filename: dbMirrorFilename(DB, AT),
+      filename: dbMirrorFilename(DB, AT, TOKEN),
       bytes: 1024,
       marker: '42',
     })
-    expect(dir.names()).toEqual([dbMirrorFilename(DB, AT)])
-    expect(dir.entries.get(dbMirrorFilename(DB, AT))?.bytes.byteLength).toBe(1024)
+    expect(dir.names()).toEqual([dbMirrorFilename(DB, AT, TOKEN)])
+    expect(dir.entries.get(dbMirrorFilename(DB, AT, TOKEN))?.bytes.byteLength).toBe(1024)
   })
 
   it('skips the copy when the change marker equals the last mirrored one', async () => {
@@ -57,7 +61,7 @@ describe('runDbMirror', () => {
 
     const outcome = await run({directory: dir.asHandle(), lastMarker: '42', exportToFile})
 
-    expect(outcome).toEqual({kind: 'skipped-unchanged', marker: '42'})
+    expect(outcome).toEqual({kind: 'skipped-unchanged', marker: '42', pruned: []})
     expect(exportToFile).not.toHaveBeenCalled()
     expect(dir.names()).toEqual([])
   })
@@ -78,7 +82,7 @@ describe('runDbMirror', () => {
     const outcome = await run({repo, directory: dir.asHandle(), lastMarker: '42'})
 
     expect(outcome).toMatchObject({kind: 'mirrored', marker: undefined})
-    expect(dir.names()).toEqual([dbMirrorFilename(DB, AT)])
+    expect(dir.names()).toEqual([dbMirrorFilename(DB, AT, TOKEN)])
   })
 
   it('does not touch the directory when the folder permission is gone', async () => {
@@ -106,7 +110,7 @@ describe('runDbMirror', () => {
   describe('an interrupted run', () => {
     it('leaves the previous copy intact and removes its own empty entry', async () => {
       const dir = new FakeDirectoryHandle()
-      const previous = dbMirrorFilename(DB, AT - HOUR)
+      const previous = dbMirrorFilename(DB, AT - HOUR, TOKEN)
       dir.seed(previous, new Uint8Array([1, 2, 3, 4]))
       dir.failWrites = new DOMException('quota', 'QuotaExceededError')
 
@@ -134,14 +138,14 @@ describe('runDbMirror', () => {
   describe('pruning', () => {
     it('keeps the newest N copies, counting the one just written', async () => {
       const dir = new FakeDirectoryHandle()
-      const older = [3, 2, 1].map(n => dbMirrorFilename(DB, AT - n * HOUR))
+      const older = [3, 2, 1].map(n => dbMirrorFilename(DB, AT - n * HOUR, TOKEN))
       older.forEach(name => dir.seed(name, 512))
 
       const outcome = await run({directory: dir.asHandle(), keepCount: 2})
 
       expect(outcome).toMatchObject({kind: 'mirrored', pruned: expect.any(Array)})
       expect(dir.names().sort()).toEqual(
-        [dbMirrorFilename(DB, AT), older[2]].sort(),
+        [dbMirrorFilename(DB, AT, TOKEN), older[2]].sort(),
       )
     })
 
@@ -155,18 +159,18 @@ describe('runDbMirror', () => {
         'family-photos.db',
       ]
       bystanders.forEach(name => dir.seed(name, 4096))
-      dir.seed(dbMirrorFilename(DB, AT - HOUR), 512)
+      dir.seed(dbMirrorFilename(DB, AT - HOUR, TOKEN), 512)
 
       await run({directory: dir.asHandle(), keepCount: 1})
 
-      expect(dir.names()).toEqual([...bystanders, dbMirrorFilename(DB, AT)].sort())
-      expect(dir.removed).toEqual([dbMirrorFilename(DB, AT - HOUR)])
+      expect(dir.names()).toEqual([...bystanders, dbMirrorFilename(DB, AT, TOKEN)].sort())
+      expect(dir.removed).toEqual([dbMirrorFilename(DB, AT - HOUR, TOKEN)])
     })
 
     it('discards an empty copy left behind by a crashed run before counting', async () => {
       const dir = new FakeDirectoryHandle()
-      const good = dbMirrorFilename(DB, AT - 2 * HOUR)
-      const crashed = dbMirrorFilename(DB, AT - HOUR)
+      const good = dbMirrorFilename(DB, AT - 2 * HOUR, TOKEN)
+      const crashed = dbMirrorFilename(DB, AT - HOUR, TOKEN)
       dir.seed(good, 512)
       dir.seed(crashed, 0)
 
@@ -174,17 +178,56 @@ describe('runDbMirror', () => {
 
       // The crashed run's 0-byte file is gone, and it did not push the older
       // GOOD copy out of the two keep slots.
-      expect(dir.names().sort()).toEqual([good, dbMirrorFilename(DB, AT)].sort())
+      expect(dir.names().sort()).toEqual([good, dbMirrorFilename(DB, AT, TOKEN)].sort())
+    })
+
+    it('still prunes when the database has not changed', async () => {
+      // Housekeeping is about the folder, not the copy: lowering the keep count
+      // has to take effect even while the database sits unchanged, and a
+      // pruning failure has to get retried.
+      const dir = new FakeDirectoryHandle()
+      const older = [3, 2, 1].map(n => dbMirrorFilename(DB, AT - n * HOUR, TOKEN))
+      older.forEach(name => dir.seed(name, 512))
+
+      const outcome = await run({directory: dir.asHandle(), lastMarker: '42', keepCount: 1})
+
+      expect(outcome).toMatchObject({kind: 'skipped-unchanged', pruned: [older[1], older[0]]})
+      expect(dir.names()).toEqual([older[2]])
+    })
+
+    it('keeps the copy this run just wrote even when the clock jumped backwards', async () => {
+      // Ordering by the stamp in the name is only as good as the clock that
+      // wrote it. Ranked purely by timestamp, a copy written "in the past"
+      // would be pruned immediately — while the run still reported success and
+      // stored its marker, so later runs would skip with nothing on disk.
+      const dir = new FakeDirectoryHandle()
+      const fromTheFuture = [1, 2].map(n => dbMirrorFilename(DB, AT + n * HOUR, TOKEN))
+      fromTheFuture.forEach(name => dir.seed(name, 512))
+
+      const outcome = await run({directory: dir.asHandle(), keepCount: 2})
+
+      expect(dir.names()).toContain(dbMirrorFilename(DB, AT, TOKEN))
+      expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, AT, TOKEN)})
+    })
+
+    it('counts the copy it just wrote against the keep budget', async () => {
+      const dir = new FakeDirectoryHandle()
+      const older = [2, 1].map(n => dbMirrorFilename(DB, AT - n * HOUR, TOKEN))
+      older.forEach(name => dir.seed(name, 512))
+
+      await run({directory: dir.asHandle(), keepCount: 2})
+
+      expect(dir.names().sort()).toEqual([dbMirrorFilename(DB, AT, TOKEN), older[1]].sort())
     })
 
     it('reports a pruning failure without failing the copy that succeeded', async () => {
       const dir = new FakeDirectoryHandle()
-      dir.seed(dbMirrorFilename(DB, AT - HOUR), 512)
+      dir.seed(dbMirrorFilename(DB, AT - HOUR, TOKEN), 512)
       vi.spyOn(dir, 'removeEntry').mockRejectedValue(new Error('file is locked'))
 
       const outcome = await run({directory: dir.asHandle(), keepCount: 1})
 
-      expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, AT)})
+      expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, AT, TOKEN)})
     })
   })
 })

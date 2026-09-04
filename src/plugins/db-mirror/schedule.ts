@@ -16,6 +16,7 @@ import type {AppEffect} from '@/extensions/core.js'
 import {cadencedIdleJob, type CadencedIdleJob, type LoopHandle} from '@/utils/cadencedIdleJob.js'
 import {LAZY_DEEP_IDLE} from '@/utils/scheduleIdle.js'
 import {runDbMirror, type DbMirrorOutcome} from './mirror.js'
+import {withMirrorRunLock} from './runLock.js'
 import {supportsDirectoryMirroring} from './fileSystemAccess.js'
 import {DB_MIRROR_DEFAULTS, dbMirrorStore, type DbMirrorStore} from './store.js'
 
@@ -30,6 +31,8 @@ export const PERMISSION_LOST_MESSAGE =
 export type DbMirrorTickResult =
   | {kind: 'disabled'}
   | {kind: 'no-folder'}
+  /** Another tab of the app is mirroring right now. */
+  | {kind: 'busy-elsewhere'}
   | DbMirrorOutcome
 
 export interface DbMirrorRunReport {
@@ -41,6 +44,7 @@ export interface DbMirrorRunReport {
 export interface DbMirrorScheduleDeps {
   store?: DbMirrorStore
   mirror?: typeof runDbMirror
+  withRunLock?: typeof withMirrorRunLock
   job?: CadencedIdleJob
   supported?: () => boolean
   now?: () => number
@@ -61,6 +65,7 @@ const describeError = (err: unknown): string =>
 export const createDbMirrorSchedule = ({
   store = dbMirrorStore,
   mirror = runDbMirror,
+  withRunLock = withMirrorRunLock,
   job = cadencedIdleJob({
     firstDelayMs: LAZY_DEEP_IDLE.minDelayMs,
     repeatDelayMs: DB_MIRROR_DEFAULTS.intervalMinutes * 60_000,
@@ -71,11 +76,13 @@ export const createDbMirrorSchedule = ({
 }: DbMirrorScheduleDeps = {}): DbMirrorSchedule => {
   /** The running effect's controls, or null while no effect is started. */
   let live: {resume: (delayMs: number) => void} | null = null
-  /** ONE copy at a time. The loop cannot overlap itself, but "Mirror now" can
-   *  land in the middle of a scheduled run — and two copies would take the
-   *  database's write lock in turn, write two files a second apart, and prune
-   *  against each other. A second caller joins the run already going instead. */
-  let inFlight: Promise<DbMirrorRunReport> | null = null
+  /** ONE copy at a time IN THIS TAB. The loop cannot overlap itself, but
+   *  "Mirror now" can land in the middle of a scheduled run, so a second caller
+   *  joins the run already going. Keyed by user: signing out in local-only mode
+   *  swaps the repo without a reload, and joining across that would hand the new
+   *  user the previous one's report for a copy of a database that is no longer
+   *  theirs. Other TABS are excluded by `withMirrorRunLock`. */
+  let inFlight: {userId: string; run: Promise<DbMirrorRunReport>} | null = null
 
   const mirrorOnce = async (repo: Repo): Promise<DbMirrorRunReport> => {
     const userId = repo.user.id
@@ -84,19 +91,23 @@ export const createDbMirrorSchedule = ({
     const state = await store.load(userId)
     const intervalMs = state.settings.intervalMinutes * 60_000
     if (!state.settings.enabled) return {outcome: {kind: 'disabled'}, intervalMs}
-    if (!state.directory) return {outcome: {kind: 'no-folder'}, intervalMs}
+    const directory = state.directory
+    if (!directory) return {outcome: {kind: 'no-folder'}, intervalMs}
 
     // One reading for the whole run, so "checked" and "mirrored" can't come
     // out a millisecond apart on the same copy.
     const at = now()
     try {
-      const outcome = await mirror({
+      const outcome = await withRunLock(() => mirror({
         repo,
-        directory: state.directory,
+        directory,
         keepCount: state.settings.keepCount,
         now: at,
         lastMarker: state.status.lastMarker,
-      })
+      }))
+      // Another tab holds the run lock. Nothing to record: that tab is
+      // recording its own run into the same storage.
+      if (outcome === null) return {outcome: {kind: 'busy-elsewhere'}, intervalMs}
       switch (outcome.kind) {
         case 'mirrored':
           await store.recordStatus(userId, {
@@ -136,16 +147,19 @@ export const createDbMirrorSchedule = ({
   }
 
   const performDbMirror = (repo: Repo): Promise<DbMirrorRunReport> => {
-    if (inFlight) return inFlight
-    const run = (async () => {
+    if (inFlight?.userId === repo.user.id) return inFlight.run
+    const entry = {userId: repo.user.id} as {userId: string; run: Promise<DbMirrorRunReport>}
+    entry.run = (async () => {
       try {
         return await mirrorOnce(repo)
       } finally {
-        inFlight = null
+        // Only if it is still OURS: a run for a different user may have
+        // replaced it while this one was in flight.
+        if (inFlight === entry) inFlight = null
       }
     })()
-    inFlight = run
-    return run
+    inFlight = entry
+    return entry.run
   }
 
   const effect: AppEffect = {

@@ -16,6 +16,9 @@ import {
 const storedKeys = () =>
   new IdbKeyedStore('km-db-mirror', 'mirror').tx('readonly', s => s.getAllKeys())
 
+/** The record ids the store uses, so a test can assert what namespaces them. */
+const keyStringsFor = async () => (await storedKeys()).map(String)
+
 const USER = 'alice'
 
 let store: DbMirrorStore
@@ -76,23 +79,33 @@ describe('db-mirror store', () => {
     expect((await createDbMirrorStore().load(USER)).directory).toBeUndefined()
   })
 
-  it('clears a folder failure when the folder changes', async () => {
+  it('forgets everything the previous folder’s copies said', async () => {
+    // The change marker especially: carried across, the next run would report
+    // "nothing changed" while the newly chosen folder stayed empty.
     await store.load(USER)
-    await store.recordStatus(USER, {permissionLost: true, lastError: 'the grant lapsed', lastErrorAt: 1})
+    await store.recordStatus(USER, {
+      lastMarker: '42',
+      lastMirrorAt: 100,
+      lastFilename: 'copy.db',
+      permissionLost: true,
+      lastError: 'the grant lapsed',
+      lastErrorAt: 1,
+    })
 
     const state = await store.setDirectory(USER, fakeDirectory('Elsewhere'))
 
-    expect(state.status.permissionLost).toBeUndefined()
-    expect(state.status.lastError).toBeUndefined()
+    expect(state.status).toEqual({})
   })
 
-  it('keeps the last successful mirror on record when the folder changes', async () => {
+  it('namespaces the record by the database, not just by the account', async () => {
+    // A PR preview and production are the same origin and the same account but
+    // deliberately different SQLite files, each with its own change marker.
     await store.load(USER)
-    await store.recordStatus(USER, {lastMirrorAt: 100, lastFilename: 'copy.db'})
+    await store.updateSettings(USER, {enabled: true})
 
-    const state = await store.setDirectory(USER, fakeDirectory('Elsewhere'))
-
-    expect(state.status).toMatchObject({lastMirrorAt: 100, lastFilename: 'copy.db'})
+    const {dbFilenameForUser} = await import('@/data/localDbStorage.js')
+    const keys = await keyStringsFor()
+    expect(keys.every(k => k.startsWith(encodeURIComponent(dbFilenameForUser(USER))))).toBe(true)
   })
 
   it('keeps each account’s settings separate', async () => {
@@ -138,6 +151,24 @@ describe('db-mirror store', () => {
     const state = await store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 200})
 
     expect(state.status).toMatchObject({lastMirrorAt: 100, lastMarker: '42', lastError: 'quota'})
+  })
+
+  it('does not let a second tab’s write revert this one’s', async () => {
+    // Two stores against the same IndexedDB model two tabs: each holds its own
+    // in-realm state, so only doing the read and the write in ONE transaction
+    // keeps the pair from interleaving and clobbering each other.
+    const tabA = createDbMirrorStore()
+    const tabB = createDbMirrorStore()
+    await tabA.load(USER)
+
+    await Promise.all([
+      tabA.updateSettings(USER, {enabled: true}),
+      tabB.recordStatus(USER, {lastMarker: '42'}),
+    ])
+
+    const reopened = await createDbMirrorStore().load(USER)
+    expect(reopened.settings.enabled).toBe(true)
+    expect(reopened.status.lastMarker).toBe('42')
   })
 
   it('notifies subscribers and hands them a new snapshot only on a change', async () => {

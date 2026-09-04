@@ -10,8 +10,16 @@
  *
  * The handle lives under its own key, so the settings record stays plain JSON:
  * a browser that fails to clone the handle loses the folder, not the settings.
+ *
+ * Records are namespaced by the DATABASE FILENAME rather than by the user id,
+ * because that is what the state describes. A PR preview and production are the
+ * same origin and the same account but deliberately different SQLite files
+ * (`dbFilenameForUser`), each with its own `row_events` counter — keyed by user
+ * alone they would overwrite each other's change marker, and one of them would
+ * skip a run it needed to make.
  */
-import {IdbKeyedStore, idbRecordId} from '@/utils/idbKeyedStore.js'
+import {IdbKeyedStore, idbRecordId, promisifyRequest} from '@/utils/idbKeyedStore.js'
+import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import {CallbackSet} from '@/utils/callbackSet.js'
 
 export interface DbMirrorSettings {
@@ -98,6 +106,15 @@ const dropUndefined = <T extends object>(value: T): T =>
 const SETTINGS_KEY = 'settings'
 const DIRECTORY_KEY = 'directory'
 
+/** Record ids for the database this user has ON THIS DEPLOYMENT. */
+const keysFor = (userId: string) => {
+  const namespace = dbFilenameForUser(userId)
+  return {
+    settings: idbRecordId(namespace, SETTINGS_KEY),
+    directory: idbRecordId(namespace, DIRECTORY_KEY),
+  }
+}
+
 export interface DbMirrorStore {
   /** Read this user's state from storage into the snapshot. */
   load: (userId: string) => Promise<DbMirrorState>
@@ -115,10 +132,6 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
   const listeners = new CallbackSet('db-mirror-store')
   let snapshot: DbMirrorState | null = null
   let snapshotUserId: string | null = null
-  // Every write is a read-modify-write of the same two records, so they run one
-  // at a time: two overlapping updates would otherwise each persist their own
-  // view of the record and the later one would drop the earlier's field.
-  let queue: Promise<unknown> = Promise.resolve()
 
   const publish = (userId: string, state: DbMirrorState): DbMirrorState => {
     snapshot = state
@@ -127,56 +140,51 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
     return state
   }
 
-  const readState = async (userId: string): Promise<DbMirrorState> => {
-    try {
-      const [record, directory] = await Promise.all([
-        idb.tx('readonly', store => store.get(idbRecordId(userId, SETTINGS_KEY))),
-        idb.tx('readonly', store => store.get(idbRecordId(userId, DIRECTORY_KEY))),
-      ])
-      const stored = record as {settings?: unknown; status?: unknown} | undefined
-      return {
-        settings: normalizeSettings(stored?.settings),
-        status: normalizeStatus(stored?.status),
-        directory: (directory as FileSystemDirectoryHandle | undefined) ?? undefined,
-      }
-    } catch (err) {
-      // Blocked or absent storage (a private window, a browser with site data
-      // off). Answering with the defaults keeps the app working; mirroring is
-      // simply off, which is what "no stored opt-in" means anyway.
-      console.warn('[db-mirror] could not read settings; using defaults', err)
-      return {settings: {...DB_MIRROR_DEFAULTS}, status: {}, directory: undefined}
-    }
-  }
-
-  const writeRecord = async (userId: string, state: DbMirrorState): Promise<void> => {
-    await idb.tx('readwrite', store =>
-      store.put({settings: state.settings, status: state.status}, idbRecordId(userId, SETTINGS_KEY)),
-    )
-  }
-
-  /** Serialised read-modify-write. `mutate` sees storage as it stands, not the
-   *  snapshot — another tab writes the same records.
+  /**
+   * Read the stored state, apply `mutate`, and write it back — all inside ONE
+   * IndexedDB transaction, which is what makes it safe against a second tab.
+   * A read and a write in separate transactions can interleave with another
+   * tab's pair, and the later whole-record write then silently reverts the
+   * settings change the user just made in the other tab.
    *
-   *  `persist` is off for a plain read. The scheduled loop reads this on every
-   *  tick, and writing the record back each time would both churn storage and
-   *  mint a record for a user who never opted in. */
+   * `mutate` is therefore SYNCHRONOUS: an await inside it would yield to a
+   * later task and the transaction would auto-commit out from under it (see the
+   * activeness contract in `idbKeyedStore`).
+   */
   const update = (
     userId: string,
-    mutate: (state: DbMirrorState) => Promise<DbMirrorState> | DbMirrorState,
+    mutate: (state: DbMirrorState) => DbMirrorState,
     persist = true,
   ): Promise<DbMirrorState> => {
-    const next = queue.then(async () => {
-      const current = await readState(userId)
-      const updated = await mutate(current)
-      try {
-        if (persist) await writeRecord(userId, updated)
-      } catch (err) {
-        console.warn('[db-mirror] could not save settings', err)
-      }
-      return publish(userId, updated)
-    })
-    queue = next.catch(() => {})
-    return next
+    const keys = keysFor(userId)
+    return idb
+      .runTransaction(persist ? 'readwrite' : 'readonly', async store => {
+        const record = (await promisifyRequest(store.get(keys.settings))) as
+          | {settings?: unknown; status?: unknown}
+          | undefined
+        const directory = (await promisifyRequest(store.get(keys.directory))) as
+          | FileSystemDirectoryHandle
+          | undefined
+        const updated = mutate({
+          settings: normalizeSettings(record?.settings),
+          status: normalizeStatus(record?.status),
+          directory: directory ?? undefined,
+        })
+        if (persist) {
+          store.put({settings: updated.settings, status: updated.status}, keys.settings)
+          if (updated.directory) store.put(updated.directory, keys.directory)
+          else store.delete(keys.directory)
+        }
+        return updated
+      })
+      .then(updated => publish(userId, updated))
+      .catch((err: unknown) => {
+        // Blocked or absent storage (a private window, a browser with site data
+        // off). Answering with the defaults keeps the app working; mirroring is
+        // simply off, which is what "no stored opt-in" means anyway.
+        console.warn('[db-mirror] could not read or save settings', err)
+        return publish(userId, {settings: {...DB_MIRROR_DEFAULTS}, status: {}, directory: undefined})
+      })
   }
 
   return {
@@ -189,6 +197,9 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         snapshotUserId = userId
         listeners.notify()
       }
+      // Read-only: the scheduled loop reads this on every tick, and writing the
+      // record back each time would churn storage and mint a record for a user
+      // who never opted in.
       return update(userId, state => state, false)
     },
     updateSettings: (userId, patch) =>
@@ -202,31 +213,16 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         status: normalizeStatus({...state.status, ...patch}),
       })),
     setDirectory: (userId, directory) =>
-      update(userId, async state => {
-        const key = idbRecordId(userId, DIRECTORY_KEY)
-        try {
-          if (directory) await idb.tx('readwrite', store => store.put(directory, key))
-          else await idb.tx('readwrite', store => store.delete(key))
-        } catch (err) {
-          console.warn('[db-mirror] could not save the chosen folder', err)
-        }
-        return {
-          ...state,
-          directory,
-          // A freshly picked folder arrives with its own grant, and a folder
-          // that has been forgotten cannot be the one whose grant lapsed —
-          // either way the recorded failure describes a folder this device is
-          // no longer writing to. Cleared HERE so no caller has to remember:
-          // otherwise a re-pick leaves the loop halted and the status chip
-          // still reporting a mirror that is paused.
-          status: normalizeStatus({
-            ...state.status,
-            permissionLost: undefined,
-            lastError: undefined,
-            lastErrorAt: undefined,
-          }),
-        }
-      }),
+      update(userId, state => ({
+        ...state,
+        directory,
+        // The whole status describes copies in the folder being replaced: its
+        // change marker, its last filename, its failure. Carrying the MARKER
+        // across in particular would have the next run report
+        // "skipped-unchanged" while the newly chosen folder stayed empty and the
+        // status chip called the mirror healthy.
+        status: {},
+      })),
     getSnapshot: () => snapshot,
     subscribe: (listener) => listeners.add(listener),
   }

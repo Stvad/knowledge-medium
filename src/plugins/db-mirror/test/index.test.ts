@@ -23,7 +23,11 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, 'showDirectoryPicker')
 })
 
-describe('the db-mirror plugin', () => {
+// Each case re-evaluates the whole plugin module graph (`vi.resetModules()`
+// then a fresh import), which pulls in the settings dialog and React. Measured
+// at ~6s cold on this machine, so the 5000ms default is not survivable under a
+// loaded gate.
+describe('the db-mirror plugin', {timeout: 40_000}, () => {
   it('contributes nothing where the browser has no directory picker', async () => {
     // Not "an option that does nothing" — Firefox and Safari users should not
     // see a setting they cannot take.
