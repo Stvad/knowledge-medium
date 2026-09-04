@@ -1,2 +1,0 @@
-import{defineFacet as e,isFunction as t}from"../facets/facet.js";var n=(e,t)=>{let n=[],r=[],i={};for(let a of e){let e=a(t);e&&(e.remarkPlugins&&n.push(...e.remarkPlugins),e.rehypePlugins&&r.push(...e.rehypePlugins),e.components&&Object.assign(i,e.components))}return{remarkPlugins:n,rehypePlugins:r,components:i}},r=e({id:`core.markdown-extensions`,combine:e=>t=>n(e,t),empty:()=>()=>({remarkPlugins:[],rehypePlugins:[],components:{}}),validate:t});export{r as markdownExtensionsFacet,n as resolveMarkdownRenderConfig};
-//# sourceMappingURL=extensions.js.map
