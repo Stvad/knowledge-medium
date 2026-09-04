@@ -1,2 +1,2 @@
-var e=`km-db-mirror-run`,t=()=>globalThis.navigator?.locks,n=async n=>{let r=t();return r?r.request(e,{ifAvailable:!0},async e=>e?n():null):n()};export{n as withMirrorRunLock};
+var e=e=>`km-db-mirror-run:${e}`,t=()=>globalThis.navigator?.locks,n=async(n,r)=>{let i=t();return i?i.request(e(n),{ifAvailable:!0},async e=>e?r():null):r()};export{n as withMirrorRunLock};
 //# sourceMappingURL=runLock.js.map
