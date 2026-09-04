@@ -71,8 +71,13 @@ export const createDbMirrorSchedule = ({
 }: DbMirrorScheduleDeps = {}): DbMirrorSchedule => {
   /** The running effect's controls, or null while no effect is started. */
   let live: {resume: (delayMs: number) => void} | null = null
+  /** ONE copy at a time. The loop cannot overlap itself, but "Mirror now" can
+   *  land in the middle of a scheduled run — and two copies would take the
+   *  database's write lock in turn, write two files a second apart, and prune
+   *  against each other. A second caller joins the run already going instead. */
+  let inFlight: Promise<DbMirrorRunReport> | null = null
 
-  const performDbMirror = async (repo: Repo): Promise<DbMirrorRunReport> => {
+  const mirrorOnce = async (repo: Repo): Promise<DbMirrorRunReport> => {
     const userId = repo.user.id
     // Read storage, not a cached snapshot: the settings surface writes between
     // runs, and a second tab writes the same records.
@@ -81,46 +86,66 @@ export const createDbMirrorSchedule = ({
     if (!state.settings.enabled) return {outcome: {kind: 'disabled'}, intervalMs}
     if (!state.directory) return {outcome: {kind: 'no-folder'}, intervalMs}
 
+    // One reading for the whole run, so "checked" and "mirrored" can't come
+    // out a millisecond apart on the same copy.
+    const at = now()
     try {
       const outcome = await mirror({
         repo,
         directory: state.directory,
         keepCount: state.settings.keepCount,
-        now: now(),
+        now: at,
         lastMarker: state.status.lastMarker,
       })
-      if (outcome.kind === 'mirrored') {
-        await store.recordStatus(userId, {
-          lastMarker: outcome.marker,
-          lastMirrorAt: now(),
-          lastCheckedAt: now(),
-          lastFilename: outcome.filename,
-          lastBytes: outcome.bytes,
-          permissionLost: false,
-          lastError: undefined,
-          lastErrorAt: undefined,
-        })
-      } else if (outcome.kind === 'skipped-unchanged') {
-        await store.recordStatus(userId, {lastCheckedAt: now()})
-      } else {
-        await store.recordStatus(userId, {
-          permissionLost: true,
-          lastCheckedAt: now(),
-          lastError: PERMISSION_LOST_MESSAGE,
-          lastErrorAt: now(),
-        })
+      switch (outcome.kind) {
+        case 'mirrored':
+          await store.recordStatus(userId, {
+            lastMarker: outcome.marker,
+            lastMirrorAt: at,
+            lastCheckedAt: at,
+            lastFilename: outcome.filename,
+            lastBytes: outcome.bytes,
+            permissionLost: false,
+            lastError: undefined,
+            lastErrorAt: undefined,
+          })
+          break
+        case 'skipped-unchanged':
+          await store.recordStatus(userId, {lastCheckedAt: at})
+          break
+        case 'permission-lost':
+          await store.recordStatus(userId, {
+            permissionLost: true,
+            lastCheckedAt: at,
+            lastError: PERMISSION_LOST_MESSAGE,
+            lastErrorAt: at,
+          })
+          break
       }
       return {outcome, intervalMs}
     } catch (err) {
       await store.recordStatus(userId, {
-        lastCheckedAt: now(),
+        lastCheckedAt: at,
         lastError: describeError(err),
-        lastErrorAt: now(),
+        lastErrorAt: at,
       })
       // Rethrown so the job logs it and takes `onFailureDelayMs` rather than
       // the full cadence; the status above is what the user sees.
       throw err
     }
+  }
+
+  const performDbMirror = (repo: Repo): Promise<DbMirrorRunReport> => {
+    if (inFlight) return inFlight
+    const run = (async () => {
+      try {
+        return await mirrorOnce(repo)
+      } finally {
+        inFlight = null
+      }
+    })()
+    inFlight = run
+    return run
   }
 
   const effect: AppEffect = {

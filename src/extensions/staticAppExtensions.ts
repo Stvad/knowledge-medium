@@ -56,6 +56,7 @@ import { storagePersistencePlugin } from '@/plugins/storage-persistence'
 import { searchHealthExtension } from '@/plugins/search-health'
 import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
+import { dbMirrorPlugin } from '@/plugins/db-mirror'
 import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { interactionMetricsPlugin } from '@/plugins/interaction-metrics'
@@ -157,6 +158,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   searchHealthExtension,
   dataIntegrityPlugin({repo}),
   dbMaintenancePlugin({repo}),
+  dbMirrorPlugin,
   propertiesMigrationPlugin({repo}),
   startupMetricsPlugin,
   interactionMetricsPlugin,

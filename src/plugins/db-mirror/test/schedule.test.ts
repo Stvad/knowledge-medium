@@ -208,6 +208,22 @@ describe('the mirror schedule', () => {
     })
   })
 
+  it('joins a run already in flight rather than taking a second copy', async () => {
+    await enable()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    mirror.mockImplementationOnce(async () => { await held; return MIRRORED })
+    const {schedule, job} = build()
+
+    const scheduled = job.body!()
+    const manual = schedule.runNow(repo)
+    release()
+    const [, report] = await Promise.all([scheduled, manual])
+
+    expect(mirror).toHaveBeenCalledTimes(1)
+    expect(report.outcome).toEqual(MIRRORED)
+  })
+
   describe('running now from settings', () => {
     it('goes through the same path as a scheduled run', async () => {
       await enable()
