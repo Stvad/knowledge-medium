@@ -33,7 +33,7 @@
  * check too, since it lives in the same module and shares the `!ts` guard
  * shape — cheap insurance against the same class of regression.
  *
- * ──── `formatAbsoluteDateTime`'s truthy path (PR #454 comment 3677245801) ────
+ * ──── `formatAbsoluteDateTime`'s truthy path ────
  *
  * The zero-guard property originally only asserted the FALSY half of its
  * own title ("returns '' only for a falsy ts") — the truthy path was
@@ -136,9 +136,8 @@ const expectedAbsoluteDate = (ts: number): string =>
  *  unrecognized string (including `''`) as "absolute date" (rank 4) — a
  *  formatter that returned `''` for every input would satisfy monotonicity
  *  (both sides rank 4) and this suite's other two properties too, going
- *  fully green against completely broken output (Codex P2, PR #454
- *  comment 3677006795). Throwing here — rather than returning some
- *  sentinel rank — surfaces the ACTUAL unrecognized label in the failure
+ *  fully green against completely broken output. Throwing here — rather
+ *  than returning some sentinel rank — surfaces the ACTUAL unrecognized label in the failure
  *  message instead of a generic assertion mismatch. */
 const classify = (label: string, ts: number): Bucket => {
   if (label === 'just now') return { rank: 0, n: null }
@@ -231,10 +230,7 @@ describe('formatAbsoluteDateTime — totality + zero guard (relativeTime.ts:31-4
           // but under a process locale using native numerals (e.g. `ar-EG`,
           // `fa-IR`, `my-MM`) `toLocaleString` legitimately renders the
           // year/day/hour/minute in that script's OWN digit characters —
-          // `\d` would reject a perfectly valid label on such a machine
-          // (PR #454 comment 3677334224; found the hard way immediately
-          // after the previous "locale-independent" claim on this same
-          // property turned out not to be, comment 3677245801).
+          // `\d` would reject a perfectly valid label on such a machine.
           expect(label).toMatch(/\p{N}/u)
           // Empirically checked across 20 diverse locales/calendars — Latin,
           // CJK, Arabic, Hebrew, Devanagari, Thai, Cyrillic, Ethiopic,

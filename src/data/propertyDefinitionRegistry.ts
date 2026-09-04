@@ -79,10 +79,6 @@ export const buildUnboundPropertySchemas = (
   return schemas
 }
 
-/** Build one immutable-by-replacement workspace snapshot. Source precedence is
- * explicit during the cutover: block-built behavior replaces transitional
- * direct registrations, then a unique local declaration replaces its block
- * fallback. B2 adds name-winner filtering before boundary use. */
 /**
  * The name a definition row answers to — the ONE spelling of this rule.
  *
@@ -108,6 +104,10 @@ export const effectivePropertyDefinitionName = (
   return declared?.name ?? row.name
 }
 
+/** Build one immutable-by-replacement workspace snapshot. Source precedence is
+ * explicit during the cutover: block-built behavior replaces transitional
+ * direct registrations, then a unique local declaration replaces its block
+ * fallback. B2 adds name-winner filtering before boundary use. */
 export const buildPropertyDefinitionRegistry = (
   args: BuildPropertyDefinitionRegistryArgs,
 ): PropertyDefinitionRegistrySnapshot => {

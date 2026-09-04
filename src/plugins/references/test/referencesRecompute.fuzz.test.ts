@@ -120,7 +120,7 @@ const refSchemasFor = (
 // exempt from orphan cleanup — the daily branch, referencesProcessor.ts:146-172).
 // 'January 5th, 2026' is the LONG-FORM daily title: its literal alias is a
 // distinct claimable name from the ISO the daily seat claims, covering the
-// per-mark write-phase recheck in applySourcePlan (Codex round 3).
+// per-mark write-phase recheck in applySourcePlan.
 const ALIAS_POOL = ['ax', 'ay', 'Inbox', '2026-01-05', 'January 5th, 2026'] as const
 
 // Bracket shrapnel: content the parser must treat as inert (or not —
@@ -528,8 +528,8 @@ describe('references pipeline sequences', () => {
   }, fuzzTestTimeout())
 
   // Non-vacuity canary for the `reviewerScope`/`relatedScope` axis
-  // (#435 item 6, cedcb65c2; Codex review, comment 3672657045). At
-  // fuzzParams(8) with the fixed smoke seed, none of the 8 generated
+  // (#435 item 6). At fuzzParams(8) with the fixed smoke seed, none of
+  // the 8 generated
   // cases happens to bind a non-BlockDefault reviewer/related value on
   // a block a later valid `merge` retargets — the sequences containing
   // `merge` either lack a prior scoped property write or target only

@@ -130,20 +130,13 @@ export interface Tx {
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void>
 
   /** Stamp the LOCAL derived columns — `reference_target_id` and
-   *  `is_field_form`, and ONLY those — without advancing `updated_at`. This
-   *  is the write mode for `core.deriveReferenceTarget`'s same-tx amendment:
-   *  both columns are per-device reflections of `content` (never in
-   *  `BLOCK_UPLOAD_COLUMNS`, never uploaded), so re-deriving them is not a
-   *  synced edit and must not mint an upload PATCH. Because the UPDATE
-   *  touches no upload column and leaves `updated_at` untouched,
-   *  `blocks_upload_update`'s diff predicate stays false and nothing is
-   *  enqueued — whereas `update(..., {skipMetadata})` still bumps
-   *  `updated_at` (an upload column) and ships a redundant PATCH (PR #288
-   *  §5, Decision A). Same-tab reactivity still fires (the write records a
-   *  `referenceTargetId`/`isFieldForm`-changed snapshot); cross-tab rides
-   *  the accompanying content edit's row_event. No-op when both columns
-   *  already match. Not for content-bundled retargets — those change a
-   *  synced column and go through `update`, which correctly uploads. */
+   *  `is_field_form` — and ONLY those, without advancing `updated_at`.
+   *  Both are per-device reflections of `content` and are never
+   *  uploaded, so re-deriving them (in `core.deriveReferenceTarget`'s
+   *  same-tx amendment) must not mint an upload PATCH; `update(...,
+   *  {skipMetadata})` would, because it still bumps `updated_at`. No-op
+   *  when both already match. NOT for content-bundled retargets — those
+   *  change a synced column and go through `update`. */
   stampReferenceTarget(id: string, targetId: string | null, isFieldForm: boolean): Promise<void>
 
   // ──── Tree moves (structural) ────
@@ -250,7 +243,7 @@ export interface Tx {
    *  the tx-start registry snapshot. */
   isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean
 
-  /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
+  /** The one properties-as-blocks predicate (docs/properties-as-blocks-migration.html §6): is `workspaceId`
    *  flipped to child-backed properties (`workspaces.properties_migration`
    *  at or past 'children' — never an equality test)? It governs the
    *  read/write DIRECTION — the dual-write gate, the projection processors,
@@ -332,7 +325,7 @@ export interface Tx {
    *  This is the structural view: the actual tree, no hidden rows, so a
    *  traversal can never silently miss machinery it needs to carry (delete
    *  cascade, copy, merge). The display-visible view — which excludes
-   *  recognized property field rows (PR #288 §9) — is opt-IN via
+   *  recognized property field rows (docs/properties-as-blocks-migration.html §9) — is opt-IN via
    *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
    *  flip-gated, so it prunes in every workspace: the cell→children backfill
    *  mints field rows while the workspace still reads cells.

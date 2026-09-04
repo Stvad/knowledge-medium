@@ -1,4 +1,4 @@
-/**
+/*
  * Shared scaffolding for the app's keyed, single-object-store IndexedDB stores.
  *
  * Several stores follow the same shape: one named DB holding one object store,

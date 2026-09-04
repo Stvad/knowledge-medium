@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * Derive-at-arrival for the LOCAL `reference_target_id` column (PR #288
- * slice A): sync-applied rows never pass through `repo.tx`, so the
+ * Derive-at-arrival for the LOCAL `reference_target_id` column:
+ * sync-applied rows never pass through `repo.tx`, so the
  * materializer stamps the column for content-changed arrivals — inside the
  * Phase-2 write tx, before the invalidation fan-out — and preserves it on
  * content-unchanged arrivals (the UPSERT never touches local columns).

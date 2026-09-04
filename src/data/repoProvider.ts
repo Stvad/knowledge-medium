@@ -1,6 +1,5 @@
 /**
- * Production bootstrap for the new data layer (replaces
- * `src/data/repoInstance.ts`).
+ * Production bootstrap for the new data layer.
  *
  * Per-user PowerSync database — the database itself is the user
  * isolation boundary (no shared CRUD queue, no shared cache, no risk
@@ -19,14 +18,6 @@
  *     command_events, core side indexes, and triggers), then static
  *     data-plugin local schema contributions
  *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
- *
- * What this does NOT do (vs. legacy):
- *   - No `block_event_context` / `block_events` tables (replaced by
- *     `tx_context` + `row_events` from clientSchema.ts)
- *   - No legacy CRUD-routing triggers (replaced by the 5 audit/upload
- *     triggers in clientSchema.ts that key on `tx_context.source`)
- *   - No `UndoRedoManager` (undo lands in a future stage; engine
- *     doesn't depend on it)
  */
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
@@ -438,7 +429,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // the CLIENT_SCHEMA_STATEMENTS loop below — the recreated row_events
   // trigger bodies reference the column (SQLite accepts a CREATE TRIGGER
   // against a missing column and only fails at fire time). `blocks_synced`
-  // deliberately does NOT get it (never synced; PR #288 §11 slice A). The
+  // deliberately does NOT get it (never synced; docs/properties-as-blocks-migration.html §11 slice A). The
   // index is created after so it exists on upgrading devices too.
   await ensureBlockLocalColumns(powerSyncDb)
   await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
@@ -466,7 +457,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
   // above is a no-op when the table already exists). §7 / e2ee-design.
   await ensureWorkspaceE2eeColumns(powerSyncDb)
-  // Properties-as-blocks rollout lever (PR #288 §6) — nullable; absence
+  // Properties-as-blocks rollout lever (docs/properties-as-blocks-migration.html §6) — nullable; absence
   // reads as 'cell' (dormant) via parseWorkspaceRow.
   await ensureWorkspacePropertiesMigrationColumn(powerSyncDb)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)

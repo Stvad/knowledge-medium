@@ -1,6 +1,3 @@
-import { nearestScrollableAncestor } from '@/utils/dom.js'
-import type { FocusedBlockLocation } from '@/data/properties.js'
-
 /**
  * Restore a panel's scroll position by putting its CURSOR back where it was,
  * rather than replaying a pixel offset.
@@ -24,6 +21,8 @@ import type { FocusedBlockLocation } from '@/data/properties.js'
  *     slides it back down. So the alignment is re-applied for a short window
  *     rather than once.
  */
+import { nearestScrollableAncestor } from '@/utils/dom.js'
+import type { FocusedBlockLocation } from '@/data/properties.js'
 
 /** Give up waiting for the anchor row after this. Long enough for a cold load
  *  (rows arrive as their data hydrates), short enough that a row which will

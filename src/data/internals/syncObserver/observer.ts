@@ -11,15 +11,10 @@
  * the queue in bounded seq-ordered windows ({@link DEFAULT_DRAIN_CHUNK}) until
  * it's empty — a large initial sync or a long observer-down backlog can queue
  * hundreds of thousands of changes, and one unbounded pass would build the whole
- * working set in memory and wrap every write in a single transaction. Per window:
- *   1. read the next <= chunk changes (ORDER BY seq LIMIT chunk),
- *   2. dedup per id (latest op wins — a hot row materializes once per window),
- *   3. `materializeStagingRows` (decrypt/copy/defer/skip/delete) +
- *      `applySyncInvalidation` (cache + handles, one LWW gate),
- *   4. `DELETE … WHERE seq <= <that window's max>`.
- * A delivery that lands mid-drain gets a higher seq, so step 4 can't drop it —
- * it's picked up by a later window. If any step throws, that window's delete is
- * skipped (prior committed windows survive) and the rows retry next tick.
+ * working set in memory and wrap every write in a single transaction.
+ * A delivery that lands mid-drain gets a higher seq, so the window's delete can't
+ * drop it — it's picked up by a later window. If any step throws, that window's
+ * delete is skipped (prior committed windows survive) and the rows retry next tick.
  *
  * Drains serialize on a single promise chain, so two never overlap (duplicate
  * invalidations) and `flush()` is a real settle barrier for tests. A barrier
@@ -41,9 +36,6 @@
  * {@link RematerializeScope}: `unapplied` re-runs the drain over exactly those
  * rows, which is an operator's remedy for a refusal rather than a full pass
  * over the workspace (`Repo.rematerializeWorkspace`).
- *
- * The §4.7 cycle-scan telemetry that lived in rowEventsTail is relocated here
- * (`runCycleScan`), so the observer fully subsumes the tail's responsibilities.
  */
 
 import type { CycleDetectedEvent } from '@/data/api'
@@ -63,8 +55,8 @@ import {
 } from './invalidate.js'
 import { WORKSPACE_UNAPPLIED_IDS_SQL } from './reconcile.js'
 
-/** Drain-throttle window (ms). Matches the row_events tail default — coalesces
- *  sync-burst arrivals into one batched drain. */
+/** Drain-throttle window (ms) — coalesces sync-burst arrivals into one batched
+ *  drain. */
 const DEFAULT_THROTTLE_MS = 100
 
 /** Max queued changes materialized per drain window. Draining a large backlog in
@@ -83,8 +75,8 @@ export interface BlocksSyncedObserverArgs {
    *  after the observer starts). */
   readonly getInvalidationRules?: () => readonly InvalidationRule[]
   /** §4.7 cycle-detection telemetry. Fired (with a console.warn) when a
-   *  sync-applied parent_id change closes a loop — relocated from
-   *  rowEventsTail. txIdsInvolved is always empty (sync writes carry no tx_id). */
+   *  sync-applied parent_id change closes a loop. txIdsInvolved is always
+   *  empty (sync writes carry no tx_id). */
   readonly onCycleDetected?: (event: CycleDetectedEvent) => void
   readonly throttleMs?: number
   /** Max changes materialized per drain window (default {@link DEFAULT_DRAIN_CHUNK}).
@@ -203,7 +195,7 @@ const isDisposedMidDrain = (err: unknown): boolean =>
  * The §4.7 cycle-scan starting set: ids whose parent_id actually moved while
  * the row stayed live (a fresh insert or a delete can't close a loop on its
  * own; a content edit doesn't change reachability), grouped by the row's
- * current workspace. Relocated from rowEventsTail's inline selection.
+ * current workspace.
  */
 export const cycleScanCandidatesByWorkspace = (
   snapshots: ReadonlyMap<string, SyncSnapshot>,
@@ -244,7 +236,7 @@ export const startBlocksSyncedObserver = (
 
   /** §4.7 detection-only telemetry. One bounded, truncation-safe scan per
    *  workspace whose parent_id mutations might have closed a loop. A scan
-   *  failure is reported but never aborts the drain (matches rowEventsTail). */
+   *  failure is reported but never aborts the drain. */
   const runCycleScan = async (snapshots: ReadonlyMap<string, SyncSnapshot>): Promise<void> => {
     if (!onCycleDetected) return
     for (const [workspaceId, ids] of cycleScanCandidatesByWorkspace(snapshots)) {
@@ -284,10 +276,6 @@ export const startBlocksSyncedObserver = (
   }
 
   const drainQueueOnce = async (): Promise<void> => {
-    // Loop over the queue in bounded seq-ordered windows until it's empty, so a
-    // large backlog never builds the whole working set in one in-memory pass /
-    // one transaction. Each window commits independently (step 4), so the next
-    // window — and any retry after a throw — resumes from the last consumed seq.
     for (;;) {
       if (disposed) throw disposedMidDrain()
       const rows = await db.getAll<QueueRow>(
@@ -338,15 +326,8 @@ export const startBlocksSyncedObserver = (
     const totals = {
       applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, resolved: 0, reflagged: 0,
     }
-    // Materialize in the same bounded windows as drainQueueOnce. A workspace
-    // that synced while still unpinned (fresh-device initial sync: every row
-    // defers and drainQueueOnce consumes its queue signal) can strand hundreds
-    // of thousands of staged rows that only this re-pass recovers. Doing it in
-    // one materializeStagingRows call would build the whole working set in
-    // memory and wrap every upsert in a single transaction — the freeze a real
-    // client hit on a 320k workspace, which then rolled back ALL progress when
-    // interrupted. Independently-committed windows keep memory flat and let a
-    // re-invocation resume (already-materialized rows LWW-skip next pass).
+    // Same bounded windows as the queue drain; a re-invocation resumes because
+    // already-materialized rows LWW-skip.
     for (let i = 0; i < ids.length; i += drainChunk) {
       if (disposed) throw disposedMidDrain()
       const outcome = await applyWindow(ids.slice(i, i + drainChunk), [])

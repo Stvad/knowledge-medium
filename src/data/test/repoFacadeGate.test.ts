@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * Structural gate for the `repo.undoGroup` facade contract (PR #308
- * follow-up; docs/undo-grouping.md).
+ * Structural gate for the `repo.undoGroup` facade contract
+ * (docs/undo-grouping.md).
  *
  * The facade built by `groupedFacade` delegates everything it does not
  * explicitly override to the real Repo via the prototype chain — which
@@ -81,6 +81,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   undoManager: 'getter; delegates to undoManagerFor (see its entry for the mint)',
   valuePresetCores: 'getter read',
   metrics: 'read-only snapshot of counters',
+  metricsSpan: 'read-only span identity (same fields as metrics(), no snapshot cost)',
   exists: 'read',
   countBlocksUsingProperty: 'read',
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
@@ -107,12 +108,15 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   awaitPropertyDefinitionMigrations: 'drains a shared job object',
   awaitReferenceTargetDerive: 'drains a shared job object',
   awaitWorkspaceBackfills: 'drains a shared job object',
+  awaitDeferredWork: 'awaits the drainers above; assigns no Repo fields',
   drainSyncWorkspace: 'reads this.syncObserver through the chain; never assigns it',
   rematerializeWorkspace: 'reads this.syncObserver + two queries; assigns no Repo fields',
   workspaceUnappliedCount: 'read — one query; assigns no Repo fields',
   workspaceUnappliedExactCount: 'read — one query; assigns no Repo fields',
   flushSyncObserver: 'reads this.syncObserver through the chain; never assigns it',
   onUserError: 'adds the caller listener to a shared CallbackSet; no this-capture',
+  onReadOnlyChange: 'adds the caller listener to a shared CallbackSet; no this-capture',
+  onMetricsReset: 'adds the caller listener to a shared CallbackSet; no this-capture',
   onPropertyEditorOverridesChange: 'delegates to constructor-bound facetBridge',
   onPropertySchemasChange: 'delegates to constructor-bound facetBridge',
   onTypesChange: 'delegates to constructor-bound facetBridge',
@@ -235,6 +239,8 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   typeTagger: 'collaborator constructor-bound to the real repo — facade hosts its own for addType & co.',
   undoManagers: 'shared map (values capture no repo)',
   userErrorListeners: 'shared CallbackSet',
+  readOnlyListeners: 'shared CallbackSet',
+  metricsResetListeners: 'shared CallbackSet',
   userSchemas: 'stateful service constructor-bound to the real repo — documented group-escaping',
   userTypes: 'stateful service constructor-bound to the real repo — documented group-escaping',
   workspaceBackfillJobs: 'shared job queue (facade never enqueues — schedule* overrides)',

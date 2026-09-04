@@ -3,17 +3,11 @@
  *
  * `Repo` runs three one-time-per-workspace maintenance passes off the
  * cold-start critical path — ref-typed-property reprojection, workspace
- * backfills, and the reconcile rescan. Each one hand-rolled the same two
- * mechanisms: an idle-deferred scheduler tracking its in-flight promises in
- * a pending set (so tests can drain it), and a lazy in-memory mirror of its
- * completion markers in `client_schema_state`.
- *
- * This module owns both mechanisms once:
+ * backfills, and the reconcile rescan. This module gives them one
+ * drain-barrier scheduler and one completion-marker store to share:
  *   - `PendingIdleJobs` — a pending-set drain barrier over an injectable
- *     idle scheduler (defaults to `scheduleIdle`; the data-layer callers all
- *     inject `scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE)` so the catch-ups run on
- *     genuine idle off the cold-start window). One instance per job kind so
- *     each `await*` test helper drains only its own work.
+ *     idle scheduler. One instance per job kind so each `await*` test
+ *     helper drains only its own work.
  *   - `MarkerStore` — the lazy prefixed-key set: load once, then `has` /
  *     `set` / `clear` in memory + write-through to `client_schema_state`.
  */
@@ -29,13 +23,10 @@ export interface MarkerDb {
 }
 
 /** Tracks idle-deferred jobs so deterministic tests can wait for them.
- *  `schedule` defers `task` via the configured scheduler — `scheduleIdle`
- *  by default (next idle frame in the browser, task tick under Node/jsdom),
- *  or a `scheduleDeepIdle` wrapper for work that must stay out of the
- *  cold-start window. The task's promise is added to the pending set when
- *  the deferred callback fires and removed on settle. `drain` awaits
- *  everything whose timer has already fired — it does NOT advance timers,
- *  so fake-timer callers must bump the clock first. */
+ *  The task's promise is added to the pending set when the deferred
+ *  callback fires and removed on settle. `drain` awaits everything whose
+ *  timer has already fired — it does NOT advance timers, so fake-timer
+ *  callers must bump the clock first. */
 export class PendingIdleJobs {
   private readonly pending = new Set<Promise<void>>()
 
@@ -47,7 +38,7 @@ export class PendingIdleJobs {
 
   /** Defer `task` off the critical path. Fire-and-forget: the caller's path
    *  is not blocked. The promise enters the pending set only once the
-   *  deferred callback runs (mirroring the historical hand-rolled behavior). */
+   *  deferred callback runs. */
   schedule(task: () => Promise<void>): void {
     this.scheduler(() => {
       const p = task().finally(() => { this.pending.delete(p) })

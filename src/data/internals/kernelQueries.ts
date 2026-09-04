@@ -5,16 +5,12 @@
  *
  * Surface: SQL constants up top (used by tests, kept stable for plugin
  * authors who want the same queries without going through the facet),
- * then `KERNEL_QUERIES` (Phase 4 chunk B) — the bundle that the kernel
- * data extension and the Repo's construction-time registration consume.
- * Each `defineQuery` wraps a SQL constant and re-declares the same
- * dependencies the legacy `repo.X(id)` factories on `Repo` did.
+ * then `KERNEL_QUERIES` — the bundle that the kernel data extension and
+ * the Repo's construction-time registration consume.
  *
- * Property-shape note: the new `BlockData.properties` is flat
- * `{name: encodedValue}`, NOT the legacy `{name: {name, type, value}}`
- * record. So `json_extract(properties_json, '$.alias')` returns the
- * encoded value directly (string[] for alias, string for type, etc.).
- * The legacy `'$.alias.value'` paths don't exist anymore.
+ * `BlockData.properties` is flat `{name: encodedValue}`, so
+ * `json_extract(properties_json, '$.alias')` yields the encoded value
+ * directly (string[] for alias, string for type, etc.).
  */
 
 import { z } from 'zod'
@@ -324,39 +320,20 @@ export const SELECT_USER_PAGE_IDS_SQL = `
  *  activity view (Recents), where a panel row or a preferences block is
  *  noise, not an edit.
  *
- *  Three exclusions, and the structural one carries the weight: every
- *  per-user state row (panels, layout sessions, per-plugin prefs and
- *  ui-state, and whatever records a plugin files under them) descends
- *  from one of that user's two state roots, so walking DOWN from those
- *  roots — a set bounded by the UI surface, not by document size — drops
- *  all of it without the kernel knowing any plugin's type ids.
- *
- *  The walk starts at the ROOTS, not at the user page above them: a user
- *  page is an ordinary navigable page, and a note authored directly on it
- *  is content. Only `ui-state` / `user-prefs` and their descendants are
- *  app-owned (`USER_STATE_ROOT_PATHS`).
- *
- *  Then `SYSTEM_BLOCK_TYPES` covers app-owned rows that live at the
- *  workspace root instead, and a `seed:key` property marks a block as a
- *  materialized CODE seed. The seed-key test is what lets the type list
- *  stay narrow: a property-schema or block-type block a user created is
- *  authored content and stays, while the kernel's own definition blocks —
- *  rewritten en masse on a seed revision bump — do not.
+ *  The walk starts at the state ROOTS, not the user page above them: a
+ *  user page is an ordinary navigable page, and a note authored
+ *  directly on it is content. The seed-key test keeps the type list
+ *  narrow — a user-created property-schema block is authored content
+ *  and stays.
  *
  *  All of it sits inside the statement, before the LIMIT: filtering a
  *  fetched window instead would hand back a page short by whatever it
- *  dropped, and a run of ineligible rows would empty it.
+ *  dropped.
  *
- *  The walk deliberately does NOT filter `deleted = 0`, for the same
- *  reason `IS_DESCENDANT_OF_SQL` doesn't: descent is a structural fact
- *  about `parent_id`, independent of soft-delete. Sync-apply permits a
- *  live child under a tombstoned parent (`blocks_parent_not_deleted_check_*`
- *  is skipped for `source IS NULL` writes), so stopping at a tombstone
- *  would leak that live state row into the feed as user activity. The
- *  outer query still filters deleted rows out of the RESULT.
- *
- *  Params: stateRootIdsJson, workspaceId, ...SYSTEM_BLOCK_TYPES, limit —
- *  see `recentUserBlocksParams`. */
+ *  The walk deliberately does NOT filter `deleted = 0` — sync-apply
+ *  permits a live child under a tombstoned parent, so stopping at a
+ *  tombstone would leak a state row into the feed. The outer query
+ *  still filters deleted rows out of the result. */
 export const SELECT_RECENT_USER_BLOCKS_SQL = `
   WITH RECURSIVE user_state(id) AS (
     SELECT value FROM json_each(?)
@@ -583,15 +560,8 @@ export interface AliasClaimantCount {
   claimants: number
 }
 
-// ════════════════════════════════════════════════════════════════════
-// Phase 4 chunk B — kernel queries as `queriesFacet` contributions
-// ════════════════════════════════════════════════════════════════════
-//
-// Each query mirrors the dep declarations from the corresponding
-// `repo.X(id)` factory on `Repo` (which Phase 1 / 2 already wrote
-// correctly). Once chunk C lands, those factories become thin shims —
-// then deleted entirely — and `repo.query.X(...)` is the only surface.
-//
+// ──── Kernel queries as `queriesFacet` contributions ────
+
 /** Local cast: `BlockRow` has typed fields; `QueryCtx.hydrateBlocks`
  *  takes the looser `Record<string, unknown>` shape so the api module
  *  doesn't depend on the row schema. The cast is safe — `hydrateBlocks`
@@ -606,8 +576,8 @@ const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string
 //
 // Instead, ship typed pass-through schemas that satisfy `Schema<T>`
 // (`{parse(input): T}`) without runtime validation. The TypeScript
-// surface from QueryRegistry stays precise (reviewer P2: kernel
-// queries no longer return Promise<unknown>), while the runtime cost
+// surface from QueryRegistry stays precise (kernel queries no longer
+// return Promise<unknown>), while the runtime cost
 // is zero. Plugin authors with strict typing needs supply their own
 // zod schema and pay the validation cost knowingly.
 const blockDataArraySchema: Schema<BlockData[]> = {
@@ -631,13 +601,12 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
 /** Subtree rooted at `id`, includeRoot=true (spec §11). Returns
  *  {@link SubtreeRow}s — each block plus its `depth` relative to the root —
  *  in pre-order, siblings by `(order_key, id)`. Identity-stable via the
- *  dispatcher's handle-store key. Dep declaration mirrors the legacy
- *  `repo.subtree(id)` factory in `repo.ts`.
+ *  dispatcher's handle-store key.
  *
  *  Returns the FULL subtree by default (property field/value machinery
  *  included) — the structural view, so a consumer never silently misses
  *  machinery. The display-visible view — excluding recognized machinery
- *  (PR #288 §9 — data-keyed, not flip-gated, since the backfill mints field
+ *  (docs/properties-as-blocks-migration.html §9 — data-keyed, not flip-gated, since the backfill mints field
  *  rows pre-flip; prunes at every recognized `::` field row, see
  *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `hidePropertyChildren:
  *  true`, the same option `core.children` / `tx.childrenOf` take. The
@@ -741,12 +710,6 @@ export const manyAncestorsQuery = defineQuery<
   },
 })
 
-/** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
- *  by default (property field rows included) — the structural view. The
- *  display-visible view — excluding recognized field rows (PR #288 §9;
- *  data-keyed, not flip-gated) — is opt-in via
- *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
- *  `tx.childrenOf` takes. */
 /** The registry half of the visible-children predicate (#389 item 7): the
  *  seed-definition ids the REGISTRY knows, which `block_types` may not carry
  *  yet, plus the workspace they belong to.
@@ -757,15 +720,11 @@ export const manyAncestorsQuery = defineQuery<
  *  block on a warm device, and the SQL view showed a row the tx-layer
  *  recognizer hid.
  *
- *  MEMOIZED on snapshot identity, and not as a micro-optimisation: these SQL
- *  constants back `core.children` / `childIds` / `subtree`, which the outline
- *  resolves once per rendered block, and the set is ~100 SHA-1 hashes plus a
- *  multi-KB JSON string. Recomputing it per resolve cost tens of
- *  milliseconds per page render for a value that only changes when the
- *  registry is REPLACED — which is exactly what a WeakMap key expresses.
- *
- *  Returns `['[]', '']` when no registry is primed, which is precisely the
- *  pre-existing `block_types`-only behaviour. */
+ *  MEMOIZED on snapshot identity, not as a micro-optimisation: these
+ *  constants back `core.children` / `childIds` / `subtree`, which the
+ *  outline resolves once per rendered block, and the value only
+ *  changes when the registry is REPLACED — which is exactly what a
+ *  WeakMap key expresses. */
 const seedParamsBySnapshot = new WeakMap<object, readonly [string, string]>()
 
 export const registrySeedParams = (repo: Repo): readonly [string, string] => {
@@ -782,6 +741,12 @@ export const registrySeedParams = (repo: Repo): readonly [string, string] => {
   return params
 }
 
+/** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
+ *  by default (property field rows included) — the structural view. The
+ *  display-visible view — excluding recognized field rows
+ *  (docs/properties-as-blocks-migration.html §9; data-keyed, not flip-gated) — is opt-in via
+ *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
+ *  `tx.childrenOf` takes. */
 export const childrenQuery = defineQuery<
   {id: string; hidePropertyChildren?: boolean},
   BlockData[]
@@ -1426,6 +1391,87 @@ const recentActivityResultSchema: Schema<RecentActivityEntry[]> = {
   parse: (input) => input as RecentActivityEntry[],
 }
 
+/** The rows + dep declaration both user-authored recents queries share, so
+ *  "what counts as authored" and "what wakes this" cannot drift between the
+ *  one that returns chains and the one that does not. */
+const resolveRecentUserBlocks = async (
+  workspaceId: string,
+  limit: number,
+  ctx: Parameters<Parameters<typeof defineQuery>[0]['resolve']>[1],
+): Promise<BlockData[]> => {
+  // Same dep policy as `recentBlocks` — `kernel.content` covers content
+  // edits and live-set membership, and we accept lightly stale recency
+  // ordering between content events rather than waking on every
+  // `updated_at` bump (which every UiState write causes).
+  //
+  // TYPE TAGS are the one filtering axis with no dep, accepted rather
+  // than missed: a block acquires a system type at the moment it is
+  // minted (a create, which fires this channel), and the one gesture
+  // that adds a type to a live block — `#type` — rewrites its content
+  // in the same breath. Tagging an already-listed row `panel` out of
+  // nowhere is not a flow that exists.
+  ctx.depend({
+    kind: 'plugin',
+    channel: KERNEL_CONTENT_CHANNEL,
+    key: kernelContentKey(workspaceId),
+  })
+  const rows = await ctx.db.getAll<BlockRow>(
+    SELECT_RECENT_USER_BLOCKS_SQL,
+    recentUserBlocksParams(await userStateRootIds(ctx, workspaceId), workspaceId, limit),
+  )
+  const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+  // A parent change is what moves a row ACROSS this query's exclusion, and
+  // `kernel.content` does not carry it: reparented under a state root, a row
+  // should leave these results, and it would otherwise go on being offered in a
+  // picker as something to link to until an unrelated content edit.
+  //
+  // Per returned row, which is how the channel is keyed. NOT covered, and
+  // accepted: a move of some ANCESTOR of a returned row, and a row moving OUT
+  // of a state root into authored content. Both would need deps on blocks this
+  // query does not have — the ancestry it deliberately does not walk, and rows
+  // it by definition did not return — and `core.recentActivity` has the second
+  // gap for the same reason. Both settle on the next content event in the
+  // workspace, the channel these results already ride.
+  for (const block of blocks) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+      key: typedBlocksStructureKey(workspaceId, block.id),
+    })
+  }
+  return blocks
+}
+
+const recentUserBlocksResultSchema: Schema<BlockData[]> = {
+  parse: (input) => input as BlockData[],
+}
+
+/** Recently edited USER-AUTHORED blocks, WITHOUT ancestor chains — for callers
+ *  that show a block and nothing about where it lives.
+ *
+ *  Separate from `core.recentActivity` rather than a flag on it: the chain
+ *  costs a second recursive query over every candidate's ancestry plus a
+ *  structure dep per ancestor, which an interactive path (the `((` picker)
+ *  pays on every open for something it never reads. The drift hazard that
+ *  makes `recentActivity` resolve both together does not apply here — it is
+ *  about a consumer needing rows and chains to correspond, and this one has
+ *  no chains to disagree with. */
+export const recentUserBlocksQuery = defineQuery<
+  {workspaceId: string; limit?: number},
+  BlockData[]
+>({
+  name: 'core.recentUserBlocks',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    limit: z.number().optional(),
+  }),
+  resultSchema: recentUserBlocksResultSchema,
+  resolve: async ({workspaceId, limit = 50}, ctx) => {
+    if (!workspaceId) return []
+    return resolveRecentUserBlocks(workspaceId, limit, ctx)
+  },
+})
+
 /** Recently edited USER-AUTHORED blocks, each with its ancestor chain —
  *  what an activity feed needs to fold an edited tree back into one entry
  *  and to name the page an edit happened on.
@@ -1452,30 +1498,10 @@ export const recentActivityQuery = defineQuery<
   resultSchema: recentActivityResultSchema,
   resolve: async ({workspaceId, limit = 50}, ctx) => {
     if (!workspaceId) return []
-    // Same dep policy as `recentBlocks` — `kernel.content` covers content
-    // edits and live-set membership, and we accept lightly stale recency
-    // ordering between content events rather than waking on every
-    // `updated_at` bump (which every UiState write causes).
-    //
-    // TYPE TAGS are the one filtering axis with no dep, accepted rather
-    // than missed: a block acquires a system type at the moment it is
-    // minted (a create, which fires this channel), and the one gesture
-    // that adds a type to a live block — `#type` — rewrites its content
-    // in the same breath. Tagging an already-listed row `panel` out of
-    // nowhere is not a flow that exists.
-    //
+    // Rows + dep policy are shared; the chains below are what this query adds.
     // Ancestors skip per-row deps: what a reader sees of an ancestor is
-    // its CONTENT (the entry's title), and a rename fires this channel.
-    ctx.depend({
-      kind: 'plugin',
-      channel: KERNEL_CONTENT_CHANNEL,
-      key: kernelContentKey(workspaceId),
-    })
-    const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_RECENT_USER_BLOCKS_SQL,
-      recentUserBlocksParams(await userStateRootIds(ctx, workspaceId), workspaceId, limit),
-    )
-    const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+    // its CONTENT (the entry's title), and a rename fires that channel.
+    const blocks = await resolveRecentUserBlocks(workspaceId, limit, ctx)
     if (blocks.length === 0) return []
 
     type ChainRow = BlockRow & {chain_start_id: string}
@@ -1492,17 +1518,15 @@ export const recentActivityQuery = defineQuery<
       const ancestors = ctx.hydrateBlocks(
         asBlockRows(chainsByStart.get(block.id) ?? []), {declareRowDeps: false},
       )
-      // A parent change is the one edit that changes what this entry SAYS
-      // without touching any content: moved to another page, the entry
-      // keeps naming the old one; moved under a state root, it should
-      // have left the feed entirely. `kernel.content` doesn't carry it,
-      // so declare it per block — on the ancestors too, since a page
-      // moved out from under a row re-homes that row's entry without the
-      // row itself moving. Narrow on purpose: this channel is keyed per
-      // block and fires only on a `parent_id` change, so it costs a wake
-      // exactly when the answer changed, unlike a row dep (which every
-      // UiState property write would trip).
-      for (const shown of [block, ...ancestors]) {
+      // The ANCESTORS only: the rows themselves are declared by the shared
+      // resolver, which needs the same channel for the same reason. A page
+      // moved out from under a row re-homes that row's entry without the row
+      // itself moving, so what this entry SAYS changes with no content edit
+      // anywhere. Narrow on purpose: this channel is keyed per block and fires
+      // only on a `parent_id` change, so it costs a wake exactly when the
+      // answer changed, unlike a row dep (which every UiState property write
+      // would trip).
+      for (const shown of ancestors) {
         ctx.depend({
           kind: 'plugin',
           channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
@@ -1675,18 +1699,14 @@ export const aliasMatchesFuzzyQuery = defineQuery<
  *  Reads `properties_json.$.types` directly rather than that index,
  *  because the index cannot answer this question faithfully: its
  *  PRIMARY KEY is `(block_id, type)`, so it hands rows back
- *  type-ascending and the block's own ordering is gone. Consumers show
- *  the FIRST type, and `searchAliasLabels`' other path reads the
- *  property array — so an index read made the hint change (`Author` →
- *  `Person`) as soon as the user typed a character. Both are an
- *  `id IN (...)` seek; this one just keeps `je.key` (the array index)
- *  to sort by, and applies the same `typeof(je.value) = 'text'`
- *  tolerance the `block_types` trigger does, so the two paths agree on
- *  malformed values too. Measured at 20k pages / 50 ids it costs what
- *  the index read did — 0.277ms vs 0.284ms, best-of-60 — so the
- *  correctness is free. Folding it into one row per block with
- *  `json_extract(...,'$.types')` is NOT free (4.3ms, ~15x worse);
- *  don't "optimize" it into that shape.
+ *  type-ascending and the block's own declared order is gone, and
+ *  consumers show the FIRST type. Both are an `id IN (...)` seek; this
+ *  one just keeps `je.key` (the array index) to sort by, and applies
+ *  the same `typeof(je.value) = 'text'` tolerance the `block_types`
+ *  trigger does, so the two paths agree on malformed values too. This
+ *  read costs the same as the index read; folding it into one row per
+ *  block with `json_extract(...,'$.types')` costs an order of
+ *  magnitude more — don't "optimize" it into that shape.
  *
  *  Per-id row deps (not just per returned row): a block that has no
  *  types yet returns nothing, and tagging it later has to invalidate
@@ -1886,6 +1906,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   typedBlockCountQuery,
   searchByContentQuery,
   recentBlocksQuery,
+  recentUserBlocksQuery,
   recentActivityQuery,
   firstChildByContentQuery,
   aliasesInWorkspaceQuery,
@@ -1917,6 +1938,7 @@ declare module '@/data/api' {
     'core.typedBlockCount': typeof typedBlockCountQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.recentBlocks': typeof recentBlocksQuery
+    'core.recentUserBlocks': typeof recentUserBlocksQuery
     'core.recentActivity': typeof recentActivityQuery
     'core.firstChildByContent': typeof firstChildByContentQuery
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery

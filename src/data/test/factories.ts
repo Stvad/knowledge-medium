@@ -1,7 +1,5 @@
-/** Test factories for the data layer. Concrete `createTestRepo` lands
- *  alongside the new `Repo` in stage 1.3 of the data-layer redesign;
- *  this file currently exports tiny shape helpers used by 1.1 / 1.2
- *  unit tests. */
+/** Shape helpers for data-layer unit tests. For a wired `Repo` over a
+ *  real db, use `createTestRepo`. */
 
 import type { BlockData, BlockReference } from '@/data/api'
 
@@ -11,8 +9,7 @@ interface BlockDataOverrides extends Partial<BlockData> {
 }
 
 /** Build a domain-shape `BlockData` with sensible defaults. Pass any
- *  override to set a specific field; the helper is used by snapshot
- *  tests, cache tests, and the migration-shape unit tests. */
+ *  override to set a specific field. */
 export const makeBlockData = (overrides: BlockDataOverrides): BlockData => ({
   parentId: null,
   orderKey: 'a0',

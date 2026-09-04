@@ -1232,6 +1232,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 // PreToolUse(Bash) hook mode
 // ---------------------------------------------------------------------------
 
+// These stay `process.exit`: control-flow escapes from a nested call stack,
+// with PreToolUse reading the code. Safe because truncation is a size
+// question, not a stream one — measured on Linux node 26, one console.error
+// survives to ~1200 lines, and a deny message is two orders under that. The
+// sync path, which relays a whole run's mappings, is the one that converted.
 const allow = () => process.exit(0)
 
 // A path whose text this hook can actually read. A directory or an
@@ -1458,10 +1463,11 @@ if (isMainModule(import.meta.url)) {
       runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') })
     } catch (e) {
       console.error(`bd-github-sync: failed — ${e.message ?? e}`)
-      // exitCode, never process.exit(): a write to a piped stdout is queued,
-      // and exit() drops the queue. This path has just printed the km→#N
-      // mappings a partial push minted, which nothing recovers once the beads
-      // carry their refs (#881).
+      // `exitCode`, never `exit()`: a failed push may still have minted issues,
+      // and the km→#N mappings printed above are this run's only record of
+      // them, but `exit()` drops whatever is still queued on a piped stdout.
+      // Nothing holds the loop open here (spawnSync adds no handles), so the
+      // process still ends promptly.
       process.exitCode = 1
     }
   }

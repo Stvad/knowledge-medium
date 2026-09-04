@@ -4,16 +4,6 @@
  * object remains the typed, workspace-agnostic handle passed to block.get/set.
  * Per-definition editor overrides for the rare property that needs one live
  * separately under `propertyEditorOverridesFacet` during the B3 cutover.
- *
- * Migration note (1.6): legacy creator helpers (`stringProperty`,
- * `boolProp`, `objectProperty`, etc.) returned a record-shape
- * `{name, type, value}` that doubled as schema AND value. The new
- * shape is flat — `block.set(schema, value)` / `block.get(schema)`
- * encode/decode through the codec; storage holds the encoded value
- * directly. Helpers like `aliasProp(['x','y'])` (which embedded a
- * default value into the descriptor) are gone — the handle's
- * `defaultValue` is the single source of truth, callers pass values
- * via `block.set(schema, value)`.
  */
 import type { Block } from './block'
 import type { BlockData, ChangedRow } from '@/data/api'
@@ -474,17 +464,6 @@ export const userIdProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Alias list stored on alias-target / daily-note blocks (§7). The
- *  encoded shape in `properties_json` is `string[]`; the codec is the
- *  list-of-strings combinator.
- *
- *  This is the schema `parseReferences` writes when a tx inserts a
- *  target block (e.g. `[[Inbox]]` produces a target with
- *  `aliases: ['Inbox']`), and the same schema alias-lookup queries
- *  consult to resolve `[[alias]]` to a target id. */
-// The shared string-list core exposes readonly values, while its decoder
-// returns a fresh mutable array. Preserve aliasesProp's historical string[]
-// handle contract without widening the public seedProperty overloads.
 /** Fields of a `per-graph` backfill claim (see
  *  `internals/graphBackfillClaim.ts`). Declared as seeds rather than written
  *  as raw keys because an unregistered key is exactly what property
@@ -517,6 +496,17 @@ export const migrationCompletedAtProp = seedProperty({
   hidden: true,
 })
 
+/** Alias list stored on alias-target / daily-note blocks (§7). The
+ *  encoded shape in `properties_json` is `string[]`; the codec is the
+ *  list-of-strings combinator.
+ *
+ *  This is the schema `parseReferences` writes when a tx inserts a
+ *  target block (e.g. `[[Inbox]]` produces a target with
+ *  `aliases: ['Inbox']`), and the same schema alias-lookup queries
+ *  consult to resolve `[[alias]]` to a target id. */
+// The shared string-list core exposes readonly values, while its decoder
+// returns a fresh mutable array. Preserve aliasesProp's historical string[]
+// handle contract without widening the public seedProperty overloads.
 export const aliasesProp = seedProperty({
   seedKey: 'system:kernel-data/property/alias',
   revision: 1,

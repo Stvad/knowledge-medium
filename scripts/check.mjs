@@ -148,11 +148,12 @@ const abortFromSignal = signal => {
 process.once('SIGINT', () => abortFromSignal('SIGINT'))
 process.once('SIGTERM', () => abortFromSignal('SIGTERM'))
 
-// Returns the exit code rather than calling process.exit: printResult has just
-// replayed a failed task's whole buffered output, a write to a piped stdout is
-// queued, and exit() drops the tail — which is how a CI failure arrives with
-// vitest's file list but not its error block, the one part anyone needed (#881).
-const main = async () => {
+// Returns the exit code rather than taking it: every failure path here has
+// just relayed a failing task's entire output, and `process.exit()` drops what
+// is still queued on a piped stdout once the writes outrun the reader, which a
+// failing task's output does comfortably. Nothing is still running when any of
+// these returns, so the loop drains and ends.
+const runGate = async () => {
   const startedAt = performance.now()
   const installResult = await runTask(installTask)
   if (installResult.code !== 0) return installResult.code ?? 1
@@ -173,7 +174,7 @@ const main = async () => {
   return 0
 }
 
-const code = await main()
-// abortFromSignal may already have set a code; a run canceled mid-flight
-// reports no failing task, so an unguarded assignment would call it a pass.
-if (!process.exitCode) process.exitCode = code
+const code = await runGate()
+// Assigned only on failure: a signal leaves through abortFromSignal, which
+// already set 130/143, and cancels every task so no firstFailure is reported.
+if (code !== 0) process.exitCode = code

@@ -134,4 +134,26 @@ describe('metrics().excludingTelemetry', () => {
     expect(after.epochWorkspaceId).toBe(WS)
     expect(after.epochStartedAt).toBeGreaterThanOrEqual(before.epochStartedAt)
   })
+
+  // `metricsSpan()` exists so a span check costs nothing on a render path, and
+  // it reads the same two fields independently rather than deriving them. Two
+  // readings of one state can only be kept in step by saying so — and a check
+  // that silently disagreed with the snapshot would accept a retired span.
+  it('reports the same span as the full snapshot, across a reset', async () => {
+    await write(false)
+    expect(repo.metricsSpan()).toEqual({
+      epoch: repo.metrics().epoch,
+      epochWorkspaceId: repo.metrics().epochWorkspaceId,
+    })
+
+    repo.resetMetrics()
+
+    // After the bump too: agreeing only at zero would pass with either field
+    // hard-coded.
+    expect(repo.metricsSpan().epoch).toBeGreaterThan(0)
+    expect(repo.metricsSpan()).toEqual({
+      epoch: repo.metrics().epoch,
+      epochWorkspaceId: repo.metrics().epochWorkspaceId,
+    })
+  })
 })

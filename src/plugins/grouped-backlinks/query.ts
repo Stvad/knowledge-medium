@@ -125,9 +125,9 @@ const resolveBacklinkSourceIds = async (
     exclude: filter?.exclude,
     order: 'created-desc',
   })).filter(sourceId => sourceId !== id)
-  // Same property-machinery exclusion `backlinks.forBlock` applies (PR #386
-  // review): grouped backlinks resolve their own sources rather than routing
-  // through that query, so without this a hidden value row's `[[Target]]`
+  // Same property-machinery exclusion `backlinks.forBlock` applies: grouped
+  // backlinks resolve their own sources rather than routing through that
+  // query, so without this a hidden value row's `[[Target]]`
   // disappears from Linked References and the inline count but still shows up
   // here — duplicating the owner's projected property backlink on the one
   // surface that didn't filter. Un-gated for the reason given there: the

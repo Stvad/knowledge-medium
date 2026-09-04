@@ -47,8 +47,9 @@ export const writeBlockTypeLabel = async (
   next: string,
 ): Promise<void> => {
   if (next === currentLabel && next === currentContent) return
-  // Name hygiene (PR #288 §7): the label is mirrored into `content` below,
-  // so a grammar-shaped label would silently turn this type's own block into
+  // Name hygiene (docs/properties-as-blocks-migration.html §7): the label
+  // is mirrored into `content` below, so a grammar-shaped label would
+  // silently turn this type's own block into
   // a reference span. Refuse rather than mirror; the caller reverts the
   // draft. (Blanking the label is a real operation — see the release path
   // below — so only a non-empty one is checked.)

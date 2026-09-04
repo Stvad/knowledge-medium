@@ -1,11 +1,11 @@
-/**
+/*
  * Single source of truth for WHERE an attachment object lives in Supabase Storage
  * and HOW to address it (design §10). Both consumers derive from here so they can't
  * drift apart:
  *   - the up-lane / resolver go through storage-js (`from(bucket).upload/download`),
- *     which builds the object path internally — they pass it {@link attachmentObjectPath};
+ *     which builds the object path internally — they pass it attachmentObjectPath;
  *   - the off-path ciphertext audit needs a Range header storage-js doesn't expose,
- *     so it hand-builds the request URL via {@link authenticatedObjectUrl} — kept HERE,
+ *     so it hand-builds the request URL via authenticatedObjectUrl — kept HERE,
  *     matching storage-js's own shape, so a future storage-js bump can't silently
  *     leave the audit hitting a different (404-ing) endpoint than the app's reads.
  */

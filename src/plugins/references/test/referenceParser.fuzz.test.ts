@@ -134,8 +134,8 @@ describe('wikilink parsing', () => {
     )
   })
 
-  // Three ways this scanner has been made quadratic, each found on PR #548
-  // and each fixed by moving work out of the per-close path. Kept together
+  // Three ways this scanner has been made quadratic, each fixed by moving
+  // work out of the per-close path. Kept together
   // because they assert ONE property — the parse stays linear on adversarial
   // bracket soup — and arbitrary pasted or imported block content reaches all
   // three, on the render and post-commit paths.
