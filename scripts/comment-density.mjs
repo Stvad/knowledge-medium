@@ -31,6 +31,9 @@ export const classifyLines = text => {
       if (!line.includes('*/')) inBlock = true
       return 'comment'
     }
+    // A block opened after code stays code on this line but comments the lines that follow.
+    const opener = line.lastIndexOf('/*')
+    if (opener !== -1 && !line.includes('*/', opener + 2)) inBlock = true
     return 'code'
   })
 }

@@ -57,6 +57,8 @@ const noInvisibleJsdoc = {
             context.report({loc: c.loc, messageId: 'shadowed'})
             continue
           }
+          // Before an ordinary statement (`return`, `if`, a call) a `/**` is attached to that
+          // statement and shadows nothing — a style slip, not a lost doc, and not flagged.
           if (!next || next.value === '}' || next.value === ')' || next.value === ']' || next.value === ';') {
             // `{/** … */}` in JSX is a comment inside an expression container, not a doc.
             const host = src.getNodeByRangeIndex(c.range[0])?.type
@@ -94,7 +96,8 @@ const noReviewProvenance = {
   create(context) {
     const src = context.sourceCode
     const reviewers = context.options[0]?.reviewers ?? DEFAULT_REVIEWERS
-    const reviewerRe = reviewers.length ? new RegExp(`\\b(?:${reviewers.join('|')})\\b`) : null
+    const escaped = reviewers.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    const reviewerRe = reviewers.length ? new RegExp(`(?<![\\w./:-])(?:${escaped.join('|')})(?![\\w./:-])`, 'i') : null
     return {
       Program() {
         for (const c of src.getAllComments()) {

@@ -25,6 +25,8 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `interface I {\n  /** a */\n  a: string\n}` },
       { code: `const f = (\n  /** the id */ id: string,\n) => id` },
       { code: `const el = <div>{/** jsx note */}</div>`, filename: 'x.tsx' },
+      // Accepted: a `/**` before an ordinary statement is a style slip, not an invisible doc.
+      { code: `function f() { /** note */ return 1 }` },
       // Standalone JSDoc declarations stack legitimately.
       { code: `/** @typedef {string} Id */\n/** @callback Cb */\n/** the doc */\nexport const x = 1` },
       { code: `/** @import { T } from './t' */\n/** @overload\n * @param {string} a */\n/** @overload\n * @param {number} a */\nfunction f(a) { return a }` },
@@ -82,6 +84,9 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `// each review round increments the SRS review count\nconst x = 1` },
       // Where the reviewer's name is a product name, the path opts out of the name check only.
       { code: `// Codex only exposes that network toggle for workspace-write\nconst x = 1`, options: [{ reviewers: [] }] },
+      // A name inside a longer identifier is not the reviewer.
+      { code: `// the codex-runner subprocess\nconst x = 1` },
+      { code: `// .codex/worktrees hold full repo copies\nconst x = 1` },
       // The escape hatch: the directive itself is never scanned, and it suppresses the line below.
       { code: `// eslint-disable-next-line rule-to-test/no-review-provenance -- the PR is the only spec\n// see PR #12 for the shape\nconst x = 1` },
     ],
@@ -96,6 +101,9 @@ describe('comment-hygiene ESLint rules', () => {
       { code: `// see pull request #123\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// re-arm on paste (Codex P1)\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       { code: `// the gap Codex flagged: paste bypassed the verb\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
+      { code: `// codex asked for this\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
+      // A configured name is a literal, metacharacters included.
+      { code: `// github-actions[bot] flagged this\nconst x = 1`, options: [{ reviewers: ['github-actions[bot]'] }], errors: [{ messageId: 'provenance' }] },
       { code: `// review comment #3676752542 asked for this\nconst x = 1`, errors: [{ messageId: 'provenance' }] },
       // A directive for another rule is scanned like any comment.
       { code: `// @ts-expect-error fixed in PR #123\nconst x: number = 'a'`, errors: [{ messageId: 'provenance' }] },

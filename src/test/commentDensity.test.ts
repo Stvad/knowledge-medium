@@ -24,6 +24,10 @@ describe('countLines', () => {
     expect(classifyLines('<div>\n  {/* one */}\n  {/* two\n     lines */}\n</div>')).toEqual(['code', 'comment', 'comment', 'comment', 'code'])
   })
 
+  it('a block opened after code comments the lines that follow', () => {
+    expect(classifyLines('const x = 1 /* rationale\n * continues\n */\nconst y = 2 /* inline */ + 1')).toEqual(['code', 'comment', 'comment', 'code'])
+  })
+
   it('classifies per line', () => {
     expect(classifyLines('/**\n * doc\n */\n\nconst x = 1')).toEqual(['comment', 'comment', 'comment', 'blank', 'code'])
   })
