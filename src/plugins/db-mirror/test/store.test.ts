@@ -214,15 +214,38 @@ describe('db-mirror store', () => {
     unsubscribe()
   })
 
-  it('survives a storage failure by answering with the defaults', async () => {
-    const broken = createDbMirrorStore('km-db-mirror-broken')
-    // No IndexedDB at all — the private-window / blocked-storage shape.
-    const indexedDb = globalThis.indexedDB
-    Reflect.deleteProperty(globalThis, 'indexedDB')
-    try {
-      expect((await broken.load(USER)).settings).toEqual(DB_MIRROR_DEFAULTS)
-    } finally {
-      globalThis.indexedDB = indexedDb
+  describe('when storage is unavailable', () => {
+    /** No IndexedDB at all — the private-window / blocked-storage shape. */
+    const withoutStorage = async (body: () => Promise<void>) => {
+      const indexedDb = globalThis.indexedDB
+      Reflect.deleteProperty(globalThis, 'indexedDB')
+      try { await body() } finally { globalThis.indexedDB = indexedDb }
     }
+
+    it('rejects rather than answering "off, no folder"', async () => {
+      // Answering with the defaults is the worst possible lie here: the
+      // schedule would read an opted-in mirror as disabled and quietly stop.
+      const broken = createDbMirrorStore('km-db-mirror-broken')
+      await withoutStorage(async () => {
+        await expect(broken.load(USER)).rejects.toBeDefined()
+      })
+    })
+
+    it('leaves the snapshot it already had on screen', async () => {
+      await store.load(USER)
+      await store.updateSettings(USER, {enabled: true, keepCount: 5})
+      const known = store.getSnapshot()
+      // A store with a warm connection keeps working when the factory goes
+      // away, so the failure is injected at the transaction itself — which is
+      // the boundary a full disk or a closing connection breaks anyway.
+      vi.spyOn(IdbKeyedStore.prototype, 'runTransaction').mockRejectedValueOnce(
+        new DOMException('quota', 'QuotaExceededError'),
+      )
+
+      await expect(store.updateSettings(USER, {keepCount: 9})).rejects.toBeDefined()
+
+      expect(store.getSnapshot()).toBe(known)
+      expect(store.getSnapshot()?.settings.enabled).toBe(true)
+    })
   })
 })

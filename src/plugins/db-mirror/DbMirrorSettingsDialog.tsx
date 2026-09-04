@@ -72,7 +72,9 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
   const [granting, setGranting] = useState(false)
 
   useEffect(() => {
-    void dbMirrorStore.load(userId)
+    dbMirrorStore
+      .load(userId)
+      .catch(err => showError(`Could not read the mirror settings: ${describeError(err)}`))
   }, [userId])
 
   const reportChooseFailure = (err: unknown): void => {
@@ -80,43 +82,54 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
     showError(`Could not choose a folder: ${describeError(err)}`)
   }
 
+  /** Storage can refuse a write (a private window, site data off). The store
+   *  rejects rather than pretending it saved, so every write says so. */
+  const saving = <T,>(write: Promise<T>): Promise<T | undefined> =>
+    write.catch(err => {
+      showError(`Could not save the mirror settings: ${describeError(err)}`)
+      return undefined
+    })
+
   // Not async: the no-folder branch calls `chooseMirrorDirectory()` with
   // nothing awaited ahead of it, so the picker still sees the checkbox
   // click's own user gesture.
   const handleToggle = (checked: boolean): void => {
     if (!checked) {
-      void dbMirrorStore.updateSettings(userId, {enabled: false})
+      void saving(dbMirrorStore.updateSettings(userId, {enabled: false}))
       return
     }
     if (state?.directory) {
-      void dbMirrorStore.updateSettings(userId, {enabled: true}).then(() => dbMirrorSchedule.resume())
+      void saving(dbMirrorStore.updateSettings(userId, {enabled: true}))
+        .then(saved => { if (saved) dbMirrorSchedule.resume() })
       return
     }
     chooseMirrorDirectory()
+      .catch(err => { reportChooseFailure(err); return undefined })
       .then(async directory => {
         if (!directory) return
-        await dbMirrorStore.setDirectory(userId, directory)
-        await dbMirrorStore.updateSettings(userId, {enabled: true})
+        // Past the picker: store failures are reported as saves, not as a
+        // folder that could not be chosen.
+        if (!(await saving(dbMirrorStore.setDirectory(userId, directory)))) return
+        if (!(await saving(dbMirrorStore.updateSettings(userId, {enabled: true})))) return
         dbMirrorSchedule.resume()
       })
-      .catch(reportChooseFailure)
   }
 
   // Not async, for the same reason as `handleToggle`.
   const handleChooseFolder = (): void => {
     chooseMirrorDirectory()
+      .catch(err => { reportChooseFailure(err); return undefined })
       .then(async directory => {
         if (!directory) return
-        await dbMirrorStore.setDirectory(userId, directory)
+        if (!(await saving(dbMirrorStore.setDirectory(userId, directory)))) return
         // The store clears the previous folder's failure; this restarts the
         // loop that failure had stopped.
         dbMirrorSchedule.resume()
       })
-      .catch(reportChooseFailure)
   }
 
   const handleForgetFolder = (): void => {
-    void dbMirrorStore.setDirectory(userId, undefined)
+    void saving(dbMirrorStore.setDirectory(userId, undefined))
   }
 
   const handleKeepCountChange = (value: string): void => {
@@ -125,7 +138,7 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
     if (value.trim() === '') return
     const parsed = Number(value)
     if (!Number.isFinite(parsed)) return
-    void dbMirrorStore.updateSettings(userId, {keepCount: parsed})
+    void saving(dbMirrorStore.updateSettings(userId, {keepCount: parsed}))
   }
 
   const handleIntervalChange = (value: string): void => {
@@ -134,9 +147,8 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
     // Re-arm, don't just save: the loop is sitting on a delay chosen before this
     // change existed, so going from 24 hours to 30 minutes would otherwise still
     // leave the next copy a day away.
-    void dbMirrorStore
-      .updateSettings(userId, {intervalMinutes: parsed})
-      .then(() => dbMirrorSchedule.resume(parsed * 60_000))
+    void saving(dbMirrorStore.updateSettings(userId, {intervalMinutes: parsed}))
+      .then(saved => { if (saved) dbMirrorSchedule.resume(parsed * 60_000) })
   }
 
   // Not async: `requestDirectoryPermission` is called directly, with nothing
@@ -148,12 +160,12 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
     requestDirectoryPermission(directory)
       .then(async result => {
         if (result === 'granted') {
-          await dbMirrorStore.recordStatus(userId, {
+          const cleared = await saving(dbMirrorStore.recordStatus(userId, {
             permissionLost: false,
             lastError: undefined,
             lastErrorAt: undefined,
-          })
-          dbMirrorSchedule.resume()
+          }))
+          if (cleared) dbMirrorSchedule.resume()
         } else {
           showError('The browser refused to grant access to the folder again.')
         }

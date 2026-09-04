@@ -48,6 +48,15 @@ describe('the mirror diagnostic', () => {
     })
   })
 
+  it('does not call it healthy before the first copy exists', () => {
+    // Runs wait for a genuinely idle main thread with no deadline, so this can
+    // hold for a whole busy session after the user turns it on.
+    const snapshot = dbMirrorDiagnostic(state())
+    expect(snapshot).toMatchObject({severity: 'warning'})
+    // No ambient dot: it is the ordinary state for the first few minutes.
+    expect(snapshot?.nudge).toBeUndefined()
+  })
+
   it('reports a healthy mirror without a nudge', () => {
     const snapshot = dbMirrorDiagnostic(state({status: {lastMirrorAt: Date.now()}}))
     expect(snapshot).toMatchObject({severity: 'ok'})

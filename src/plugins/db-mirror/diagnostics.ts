@@ -59,6 +59,19 @@ export const dbMirrorDiagnostic = (state: DbMirrorState | null): DiagnosticSnaps
       ...openSettings,
     }
   }
+  if (!state.status.lastMirrorAt) {
+    // Turned on, folder chosen, nothing copied yet. Runs wait for a genuinely
+    // idle main thread with no deadline, so this can hold for a whole busy
+    // session — reporting it as healthy would claim a backup that does not
+    // exist. No nudge: it is the ordinary state for the first minutes after
+    // turning it on, and an ambient dot for that would be crying wolf.
+    return {
+      severity: 'warning',
+      summary: 'Database mirror has not copied yet',
+      detail: 'Waiting for a quiet moment to write the first copy to the chosen folder.',
+      ...openSettings,
+    }
+  }
   return {
     severity: 'ok',
     summary: 'Database mirror is on',

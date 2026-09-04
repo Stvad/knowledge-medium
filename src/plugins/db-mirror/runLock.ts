@@ -15,7 +15,11 @@
  * a true and useful thing to report.
  */
 
-const LOCK_NAME = 'km-db-mirror-run'
+/** Per DATABASE, not per origin: a PR preview and production share an origin
+ *  but deliberately have separate database files, and a single name would let
+ *  one environment's multi-gigabyte copy defer the other's run — including its
+ *  manual one — for a whole cadence. */
+const lockNameFor = (dbFilename: string): string => `km-db-mirror-run:${dbFilename}`
 
 /** Present in every browser with the File System Access API; the fallback path
  *  exists for jsdom and for a worker without it, where a single realm makes the
@@ -26,10 +30,13 @@ const locks = (): LockManager | undefined => globalThis.navigator?.locks
  * Run `body` while holding the mirror lock, or return `null` at once if
  * another tab holds it.
  */
-export const withMirrorRunLock = async <T,>(body: () => Promise<T>): Promise<T | null> => {
+export const withMirrorRunLock = async <T,>(
+  dbFilename: string,
+  body: () => Promise<T>,
+): Promise<T | null> => {
   const manager = locks()
   if (!manager) return body()
-  return manager.request(LOCK_NAME, {ifAvailable: true}, async lock =>
+  return manager.request(lockNameFor(dbFilename), {ifAvailable: true}, async lock =>
     lock ? body() : null,
   )
 }

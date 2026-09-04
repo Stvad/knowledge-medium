@@ -14,11 +14,18 @@ const HOUR = 3_600_000
 const TOKEN = 'aaaaaa'
 
 /** A repo stub: the mirror only reads `user.id` and the change-marker query. */
-const stubRepo = (marker: number | null = 42): Repo =>
+const stubRepo = (marker: number | null = 42, queue = {n: 0, last: null}): Repo =>
   ({
     user: {id: USER},
-    db: {getAll: async () => [{marker}]},
+    db: {
+      getAll: async (sql: string) =>
+        sql.includes('ps_crud') ? [queue] : [{marker}],
+    },
   } as unknown as Repo)
+
+/** What `readChangeMarker` produces for the stub above — tests state the marker
+ *  they expect rather than reading it back off the thing under test. */
+const MARKER = '42/0.0'
 
 /** Stands in for `exportRawSqliteDbToFile`: writes `bytes` of payload through
  *  the handle exactly as the real checkpointed export does. */
@@ -49,7 +56,7 @@ describe('runDbMirror', () => {
       kind: 'mirrored',
       filename: dbMirrorFilename(DB, AT, TOKEN),
       bytes: 1024,
-      marker: '42',
+      marker: MARKER,
     })
     expect(dir.names()).toEqual([dbMirrorFilename(DB, AT, TOKEN)])
     expect(dir.entries.get(dbMirrorFilename(DB, AT, TOKEN))?.bytes.byteLength).toBe(1024)
@@ -63,11 +70,11 @@ describe('runDbMirror', () => {
 
     const outcome = await run({
       directory: dir.asHandle(),
-      lastCopy: {marker: '42', filename: previous},
+      lastCopy: {marker: MARKER, filename: previous},
       exportToFile,
     })
 
-    expect(outcome).toEqual({kind: 'skipped-unchanged', marker: '42', pruned: []})
+    expect(outcome).toEqual({kind: 'skipped-unchanged', marker: MARKER, pruned: []})
     expect(exportToFile).not.toHaveBeenCalled()
     expect(dir.names()).toEqual([previous])
   })
@@ -81,7 +88,7 @@ describe('runDbMirror', () => {
 
       const outcome = await run({
         directory: dir.asHandle(),
-        lastCopy: {marker: '42', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)},
+        lastCopy: {marker: MARKER, filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)},
       })
 
       expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, AT, TOKEN)})
@@ -94,7 +101,7 @@ describe('runDbMirror', () => {
 
       const outcome = await run({
         directory: dir.asHandle(),
-        lastCopy: {marker: '42', filename: previous},
+        lastCopy: {marker: MARKER, filename: previous},
       })
 
       expect(outcome).toMatchObject({kind: 'mirrored'})
@@ -108,7 +115,7 @@ describe('runDbMirror', () => {
 
       const outcome = await run({
         directory: elsewhere.asHandle(),
-        lastCopy: {marker: '42', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)},
+        lastCopy: {marker: MARKER, filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)},
       })
 
       expect(outcome).toMatchObject({kind: 'mirrored'})
@@ -118,7 +125,7 @@ describe('runDbMirror', () => {
 
   it('copies again once the marker has moved', async () => {
     const dir = new FakeDirectoryHandle()
-    const outcome = await run({directory: dir.asHandle(), lastCopy: {marker: '41', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)}})
+    const outcome = await run({directory: dir.asHandle(), lastCopy: {marker: '41/0.0', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)}})
     expect(outcome).toMatchObject({kind: 'mirrored'})
   })
 
@@ -129,7 +136,7 @@ describe('runDbMirror', () => {
       db: {getAll: async () => { throw new Error('no such table: row_events') }},
     } as unknown as Repo
 
-    const outcome = await run({repo, directory: dir.asHandle(), lastCopy: {marker: '42', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)}})
+    const outcome = await run({repo, directory: dir.asHandle(), lastCopy: {marker: MARKER, filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)}})
 
     expect(outcome).toMatchObject({kind: 'mirrored', marker: undefined})
     expect(dir.names()).toEqual([dbMirrorFilename(DB, AT, TOKEN)])
@@ -241,7 +248,7 @@ describe('runDbMirror', () => {
 
       const outcome = await run({
         directory: dir.asHandle(),
-        lastCopy: {marker: '42', filename: older[2]},
+        lastCopy: {marker: MARKER, filename: older[2]},
         keepCount: 1,
       })
 

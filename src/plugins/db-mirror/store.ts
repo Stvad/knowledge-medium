@@ -193,16 +193,23 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         return publish(userId, updated)
       })
       .catch((err: unknown) => {
-        // Blocked or absent storage (a private window, a browser with site data
-        // off). Answering with the defaults keeps the app working; mirroring is
-        // simply off, which is what "no stored opt-in" means anyway.
+        // NOT swallowed into the defaults. Answering "off, no folder" for a
+        // storage hiccup is the worst possible lie for this feature: the
+        // schedule would read an opted-in mirror as disabled and quietly stop
+        // copying, a failed save would look like it committed, and the
+        // published defaults would replace a perfectly good snapshot on screen.
+        // Callers surface it — the loop retries on its short failure delay, the
+        // settings dialog says the save did not stick.
         console.warn('[db-mirror] could not read or save settings', err)
-        return publish(userId, {settings: {...DB_MIRROR_DEFAULTS}, status: {}, directory: undefined})
+        throw err
       })
   }
 
   const reload = (): void => {
-    if (snapshotUserId !== null) void update(snapshotUserId, state => state, false)
+    if (snapshotUserId === null) return
+    // A broadcast is a nudge, not a request: a failed re-read leaves the
+    // snapshot as it stands and the next one tries again.
+    update(snapshotUserId, state => state, false).catch(() => {})
   }
   if (channel) channel.onmessage = (event) => { if (event.data === snapshotUserId) reload() }
 

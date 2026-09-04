@@ -12,6 +12,7 @@
  * a check the scheduled one makes, or record its result differently.
  */
 import type {Repo} from '@/data/repo'
+import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import type {AppEffect} from '@/extensions/core.js'
 import {cadencedIdleJob, type CadencedIdleJob, type LoopHandle} from '@/utils/cadencedIdleJob.js'
 import {LAZY_DEEP_IDLE} from '@/utils/scheduleIdle.js'
@@ -62,6 +63,23 @@ export interface DbMirrorSchedule {
 const describeError = (err: unknown): string =>
   err instanceof Error ? err.message : String(err)
 
+/** Best effort, like pruning. A status write is bookkeeping ABOUT the run: it
+ *  must not turn a finished copy into a failure, and on the error path it must
+ *  not replace the error the caller is about to see with its own. A dropped
+ *  write costs one redundant copy next run, since the marker went unrecorded —
+ *  the safe direction. */
+const recordStatusQuietly = async (
+  store: DbMirrorStore,
+  userId: string,
+  patch: Parameters<DbMirrorStore['recordStatus']>[1],
+): Promise<void> => {
+  try {
+    await store.recordStatus(userId, patch)
+  } catch (err) {
+    console.warn('[db-mirror] could not record the run status', err)
+  }
+}
+
 export const createDbMirrorSchedule = ({
   store = dbMirrorStore,
   mirror = runDbMirror,
@@ -84,6 +102,11 @@ export const createDbMirrorSchedule = ({
    *  theirs. Other TABS are excluded by `withMirrorRunLock`. */
   let inFlight: {userId: string; run: Promise<DbMirrorRunReport>} | null = null
 
+  const recordStatus = (
+    userId: string,
+    patch: Parameters<DbMirrorStore['recordStatus']>[1],
+  ): Promise<void> => recordStatusQuietly(store, userId, patch)
+
   const mirrorOnce = async (repo: Repo): Promise<DbMirrorRunReport> => {
     const userId = repo.user.id
     // Read storage, not a cached snapshot: the settings surface writes between
@@ -104,7 +127,7 @@ export const createDbMirrorSchedule = ({
     // at, so a stale record makes the next run COPY rather than skip.
     const at = now()
     try {
-      const outcome = await withRunLock(() => mirror({
+      const outcome = await withRunLock(dbFilenameForUser(userId), () => mirror({
         repo,
         directory,
         keepCount: state.settings.keepCount,
@@ -119,7 +142,7 @@ export const createDbMirrorSchedule = ({
       if (outcome === null) return {outcome: {kind: 'busy-elsewhere'}, intervalMs}
       switch (outcome.kind) {
         case 'mirrored':
-          await store.recordStatus(userId, {
+          await recordStatus(userId, {
             lastMarker: outcome.marker,
             lastMirrorAt: at,
             lastCheckedAt: at,
@@ -131,10 +154,18 @@ export const createDbMirrorSchedule = ({
           })
           break
         case 'skipped-unchanged':
-          await store.recordStatus(userId, {lastCheckedAt: at})
+          // Reaching here means the permission held and the folder was read, so
+          // any recorded failure describes a state that is over — leaving it
+          // would have the chip report a paused mirror that is running fine.
+          await recordStatus(userId, {
+            lastCheckedAt: at,
+            permissionLost: false,
+            lastError: undefined,
+            lastErrorAt: undefined,
+          })
           break
         case 'permission-lost':
-          await store.recordStatus(userId, {
+          await recordStatus(userId, {
             permissionLost: true,
             lastCheckedAt: at,
             lastError: PERMISSION_LOST_MESSAGE,
@@ -144,7 +175,7 @@ export const createDbMirrorSchedule = ({
       }
       return {outcome, intervalMs}
     } catch (err) {
-      await store.recordStatus(userId, {
+      await recordStatus(userId, {
         lastCheckedAt: at,
         lastError: describeError(err),
         lastErrorAt: at,

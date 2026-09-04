@@ -75,7 +75,9 @@ const build = (over: {supported?: () => boolean; lockHeldElsewhere?: boolean} = 
     now: () => NOW,
     supported: over.supported ?? (() => true),
     mirror: mirror as never,
-    withRunLock: over.lockHeldElsewhere ? async () => null : async body => body(),
+    withRunLock: over.lockHeldElsewhere
+      ? async () => null
+      : (async <T,>(_dbFilename: string, body: () => Promise<T>) => body()),
   })
   const stop = schedule.effect.start({repo} as unknown as AppEffectContext) as
     | (() => void)
@@ -182,6 +184,26 @@ describe('the mirror schedule', () => {
         lastFilename: MIRRORED.filename,
         permissionLost: true,
       })
+    })
+
+    it('is forgotten once a run gets through, even one that copied nothing', async () => {
+      // Access can come back outside the dialog — the user restores it in
+      // browser site settings. Reaching an unchanged check at all means the
+      // permission held and the folder was read, so leaving the warning up
+      // would have the chip report a paused mirror that is running fine.
+      await enable()
+      outcomes = [{kind: 'permission-lost', permission: 'prompt'}]
+      const {schedule, job} = build()
+      await job.body!()
+      expect((await store.load(USER)).status.permissionLost).toBe(true)
+
+      outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: []}]
+      schedule.resume()
+      await job.body!()
+
+      const {status} = await store.load(USER)
+      expect(status.permissionLost).toBe(false)
+      expect(status.lastError).toBeUndefined()
     })
 
     it('starts running again only once settings re-grants it', async () => {
