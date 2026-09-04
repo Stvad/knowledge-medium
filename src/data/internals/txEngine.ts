@@ -197,10 +197,10 @@ export const assertNoSeedDefinitionWrites = (
  *  pipeline picks these up post-commit; rollback discards them. */
 export interface AfterCommitJob {
   processorName: string
+  /** Validated at enqueue (per spec §5.7) so the dispatcher doesn't have
+   *  to re-parse. */
   args: unknown
   delayMs?: number
-  /** Validation done at enqueue (per spec §5.7). Pre-validated args
-   *  saved here so the dispatcher doesn't have to re-parse. */
 }
 
 /** A single mutator call captured during the tx — pushed by `tx.run`
@@ -353,7 +353,7 @@ export class TxImpl implements Tx {
    *  per `repo.tx`), so it never leaks across transactions. */
   private readonly systemMintedIds = new Set<string>()
 
-  /** Per-tx cache of the properties-as-blocks flip predicate (PR #288 §6):
+  /** Per-tx cache of the properties-as-blocks flip predicate (docs/properties-as-blocks-migration.html §6):
    *  workspaceId → `properties_migration` at or past 'children'. One
    *  `workspaces` read per workspace per tx; the column is synced-only
    *  (never written through this engine), so within-tx staleness cannot
@@ -780,7 +780,7 @@ export class TxImpl implements Tx {
       : valueOrUpdater
     const encoded = resolvedSchema.codec.encode(value)
     if (jsonValuesEqual(stored, encoded)) return
-    // Dual-write (PR #288 §5): in a flipped workspace every property write is
+    // Dual-write (docs/properties-as-blocks-migration.html §5): in a flipped workspace every property write is
     // child-backed — the field/value children land in the SAME tx as the cell
     // so readers stay synchronous against the cell while the children are the
     // truth that crosses sync. Requires resolved identity (the fieldId names
@@ -1244,7 +1244,7 @@ export class TxImpl implements Tx {
         // Undo replay must restore the local derived columns too: same-tx
         // processors are skipped on replay (`isReplay`), so nothing
         // re-derives them — the snapshot is the only source (invariants
-        // index, PR #288: "undo restores what processors won't re-derive").
+        // index: "undo restores what processors won't re-derive").
         target.referenceTargetId ?? null,
         target.isFieldForm ? 1 : null,
         target.orderKey,
@@ -1405,9 +1405,8 @@ export class TxImpl implements Tx {
    *  value child (scalar-first), updating stale content and soft-deleting
    *  duplicates deterministically (`ORDER BY order_key, id` picks the same
    *  survivor on every replica — load-bearing for the processor pair's
-   *  convergence, see propertyChildrenProcessor.ts). Ported from the PR #285
-   *  spike; identity comes from the resolved schema (never a synthetic
-   *  name-derived id).
+   *  convergence, see propertyChildrenProcessor.ts). Identity comes from
+   *  the resolved schema (never a synthetic name-derived id).
    *
    *  Field/value rows are synced data — created and updated with REAL
    *  metadata, never the parent write's {skipMetadata}, so the eager

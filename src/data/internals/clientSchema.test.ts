@@ -266,7 +266,7 @@ describe('client schema bootstrap', () => {
   })
 })
 
-// The body a client bootstrapped before D-3.1 (commit b3b1bc52) still carries:
+// The body a client bootstrapped before D-3.1 still carries:
 // workspace_id is CHANGE-GATED, so a content-only edit drops it from the upload
 // envelope. That strands e2ee PATCH uploads — the encrypt-on-upload hook routes
 // on payload.workspace_id, so without it the plaintext content reaches the

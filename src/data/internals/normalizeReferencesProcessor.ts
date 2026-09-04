@@ -66,7 +66,7 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
 // both passes. Block-type typeify runs FIRST: its bag
 // amendments (page type, label, aliases) are raw/setProperty cell writes,
 // and in a child-backed workspace those must still be ahead of materialize
-// or the value children go stale until an unrelated edit (PR #386 review).
+// or the value children go stale until an unrelated edit.
 // The residual trade: a transition-into-block-type written by PROJECT
 // itself (hand-editing a hidden `types` VALUE row) no longer re-fires
 // typeify this tx — machinery-row surgery, self-heals on the next bag

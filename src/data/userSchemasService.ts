@@ -46,7 +46,7 @@ import {createChild as createChildMutator} from '@/data/mutators'
  *  ask `isRegistrablePropertyName`. Kept as one function so a new rule cannot
  *  land on the throwing path while the predicate keeps saying yes.
  *
- *  Both rules are name hygiene (PR #288 §7). A name must survive the
+ *  Both rules are name hygiene (docs/properties-as-blocks-migration.html §7). A name must survive the
  *  `[[wikilink]]` round trip — `]]` is lossy there — and must not itself BE a
  *  reference span: the definition keeps its name in a property rather than
  *  its content, so it mints nothing on its own, but the name is written as

@@ -576,8 +576,8 @@ const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string
 //
 // Instead, ship typed pass-through schemas that satisfy `Schema<T>`
 // (`{parse(input): T}`) without runtime validation. The TypeScript
-// surface from QueryRegistry stays precise (reviewer P2: kernel
-// queries no longer return Promise<unknown>), while the runtime cost
+// surface from QueryRegistry stays precise (kernel queries no longer
+// return Promise<unknown>), while the runtime cost
 // is zero. Plugin authors with strict typing needs supply their own
 // zod schema and pay the validation cost knowingly.
 const blockDataArraySchema: Schema<BlockData[]> = {
@@ -606,7 +606,7 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
  *  Returns the FULL subtree by default (property field/value machinery
  *  included) — the structural view, so a consumer never silently misses
  *  machinery. The display-visible view — excluding recognized machinery
- *  (PR #288 §9 — data-keyed, not flip-gated, since the backfill mints field
+ *  (docs/properties-as-blocks-migration.html §9 — data-keyed, not flip-gated, since the backfill mints field
  *  rows pre-flip; prunes at every recognized `::` field row, see
  *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `hidePropertyChildren:
  *  true`, the same option `core.children` / `tx.childrenOf` take. The
@@ -710,12 +710,6 @@ export const manyAncestorsQuery = defineQuery<
   },
 })
 
-/** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
- *  by default (property field rows included) — the structural view. The
- *  display-visible view — excluding recognized field rows (PR #288 §9;
- *  data-keyed, not flip-gated) — is opt-in via
- *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
- *  `tx.childrenOf` takes. */
 /** The registry half of the visible-children predicate (#389 item 7): the
  *  seed-definition ids the REGISTRY knows, which `block_types` may not carry
  *  yet, plus the workspace they belong to.
@@ -747,6 +741,12 @@ export const registrySeedParams = (repo: Repo): readonly [string, string] => {
   return params
 }
 
+/** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
+ *  by default (property field rows included) — the structural view. The
+ *  display-visible view — excluding recognized field rows
+ *  (docs/properties-as-blocks-migration.html §9; data-keyed, not flip-gated) — is opt-in via
+ *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
+ *  `tx.childrenOf` takes. */
 export const childrenQuery = defineQuery<
   {id: string; hidePropertyChildren?: boolean},
   BlockData[]

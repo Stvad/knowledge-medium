@@ -14,7 +14,7 @@ const fixture: BlockData = {
   parentId: 'b0',
   // Set explicitly (rather than left undefined) so `toEqual` against
   // `parseBlockRow`'s output below matches: parseBlockRow always normalizes
-  // this LOCAL-only column to `null` (PR #288 slice A), never `undefined`.
+  // this LOCAL-only column to `null`, never `undefined`.
   referenceTargetId: null,
   // Same normalize-always contract for the field-form bit (false, never
   // undefined).

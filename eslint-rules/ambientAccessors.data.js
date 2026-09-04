@@ -1,7 +1,7 @@
 // Table of ambient-accessor restrictions consumed by
 // eslint-rules/ambient-accessors.js. Each entry bans one import / member
 // read / literal outside an explicit allowlist. This is the generic
-// mechanism the DI-lens audit (PR #357 / PR #424) promised as a follow-up:
+// mechanism the DI-lens audit promised as a follow-up:
 // replace one-off eslint.config.js entries (a new no-restricted-imports
 // path or no-restricted-syntax selector per ambient global) with a single
 // rule driven by this table, so adding a restriction is a table edit — or,
@@ -15,8 +15,8 @@
 //     scripts/gen-ambient-accessors.ts for the tag grammar. Example: tag
 //     `getActiveUserId` in src/data/repoProvider.ts and the generator
 //     regenerates its entry here — no eslint.config.js edit, no new rule
-//     instance. (The un-merged getLayoutSessionId follow-up from PR #425
-//     is exactly this: tag the export, regenerate, done — see
+//     instance. (The un-merged getLayoutSessionId follow-up is exactly
+//     this: tag the export, regenerate, done — see
 //     src/data/repoProvider.ts's comment on getActiveUserId for the
 //     pattern to copy.)
 //

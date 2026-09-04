@@ -275,10 +275,6 @@ const MAX_QUERY_COMPOSITION_DEPTH = 32
 const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
   `${workspaceId}:${name}`
 
-/** Suffix (after the `workspace_backfill:` prefix) of a per-workspace
- *  workspace-backfill completion marker — `<workspaceId>:<backfillId>`. Same
- *  shape/rationale as `reprojectionMarkerKey`. */
-
 /** Equal iff `a` and `b` have the same key set AND `eq` holds for every shared
  *  key's values. An absent map is the empty map; the default `eq` compares keys
  *  only. `b.has(key)` gates the `b.get(key)!`, so a legitimately-undefined value
@@ -745,11 +741,11 @@ export class Repo {
   /** Arms a callback for when this device is no longer behind the server
    *  (`RepoOptions.backfillSyncGate`). */
   private readonly backfillSyncGate: (cb: () => void) => () => void
-  /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
   /** `workspaceId:backfillId` of operator passes running right now. Two
    *  invocations in one Repo share a claimant, so the CLAIM cannot separate
    *  them — this can. */
   private readonly inFlightOperatorBackfills = new Set<string>()
+  /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
   private readonly backfillCompletionClaim: BackfillCompletionClaim | undefined
   /** Disposer for a gate armed but not yet opened, so a workspace switch or
    *  repo teardown doesn't leave a status listener attached. */
@@ -763,8 +759,8 @@ export class Repo {
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
-   *  (adversarial-review round 2: a durable once-ever marker permanently
-   *  missed definitions/aliases that arrived while the app was closed or
+   *  (a durable once-ever marker permanently missed definitions/aliases
+   *  that arrived while the app was closed or
    *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
    *  the first run, but the LIKE prefilter itself is an O(table) scan on
    *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
@@ -782,7 +778,7 @@ export class Repo {
    *  `awaitReferenceTargetDerive()`, same pattern. */
   private readonly referenceTargetDeriveJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** In-flight rename-reproject / codec re-encode migration passes
-   *  (PR #288 §7/§9, slice B2) — drained by
+   *  (docs/properties-as-blocks-migration.html §7/§9, slice B2) — drained by
    *  `awaitPropertyDefinitionMigrations()`, same pattern. */
   private readonly propertyDefinitionMigrationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** One serial chain, so a rebuild's fold lands before the next rebuild reads
@@ -1181,7 +1177,7 @@ export class Repo {
       handleStore: this.handleStore,
       deps: {
         ...policyDeps,
-        // Derive-at-arrival seam (PR #288 slice A): always attached — the
+        // Derive-at-arrival seam: always attached — the
         // LOCAL `reference_target_id` column must track content for
         // sync-applied rows on every device, e2ee included (derivation runs
         // over decrypted content). Resolution mirrors
@@ -1351,6 +1347,23 @@ export class Repo {
       txLog: Object.freeze(this.txLog.map(entry => Object.freeze({...entry}))),
       reprojection: Object.freeze({...this.reprojectionMetrics}),
     })
+  }
+
+  /** The current counter span's identity, WITHOUT building a metrics snapshot.
+   *
+   *  `metrics()` walks and sorts every registered handle, copies and sorts each
+   *  timing reservoir and clones the transaction log — affordable for a
+   *  measurement, not for a consumer that only wants to know whether the span
+   *  it is holding is still the current one. That check runs from
+   *  `useSyncExternalStore` getters, so it happens on ordinary renders; on a
+   *  large session the snapshot cost lands on the interactive path, and a
+   *  performance monitor doing that would inflate what it reports.
+   *
+   *  The two fields are exactly what identifies a span. Keep this in step with
+   *  the same-named fields in `metrics()`; they read the same state, and
+   *  neither is derived from the other. */
+  metricsSpan(): { epoch: number; epochWorkspaceId: string | null } {
+    return { epoch: this.metricsEpoch, epochWorkspaceId: this.metricsEpochWorkspaceId }
   }
 
   /** Zero every counter and reservoir in `repo.metrics()`. Use to
@@ -2138,7 +2151,7 @@ export class Repo {
    *  that want the user's currently-active workspace use
    *  `queryActiveWorkspace` instead — making the workspace explicit at
    *  the call site prevents background flows / import runs from silently
-   *  mis-scoping on a workspace switch (PR #47 review). */
+   *  mis-scoping on a workspace switch. */
   async queryBlocks(query: TypedBlockQuery): Promise<BlockData[]> {
     return this.query.typedBlocks(this.resolveTypedBlockQuery(query)).load()
   }
@@ -2455,11 +2468,7 @@ export class Repo {
       //    when a non-essential plugin is toggled off, and when ?safeMode forces
       //    every non-essential off at once. Stripping on absence is what
       //    silently deleted ~10k `next-review-date` backlinks fleet-wide when
-      //    SRS was toggled off. (bd7c363a re-enabled that strip believing that,
-      //    after workspace-scoping, absence ⟺ a genuine redefine/delete — but it
-      //    reasoned only about grow-only cold-start materialization and
-      //    cross-workspace switches, never the toggle/safeMode re-resolve that
-      //    removes a plugin's schema without deleting anything.)
+      //    SRS was toggled off.
       //  - PRESENT but non-ref ⇒ scanned, but reprojection is ADD-ONLY (see the
       //    per-block loop), so this is a no-op: there is nothing new to project.
       //    A real ref→non-ref redefine's now-stale derived refs are swept lazily
@@ -2573,7 +2582,7 @@ export class Repo {
             if (devAssertionsEnabled()) {
               // L2 dev/test-only assertion (off in prod): reprojection
               // must be ADD-ONLY — prior ⊆ reconciled. A dropped ref here is the
-              // mass-strip regression 21494fdb fixed; fail it in CI, never on a
+              // mass-strip regression; fail it in CI, never on a
               // user's write. (The length-equality skip below also assumes this
               // superset, so this guards that optimization too.)
               const nextKeys = new Set(reconciled.map(derivedRefKey))
@@ -2747,30 +2756,6 @@ export class Repo {
     }
   }
 
-  /**
-   * Materialize the code-declared property seeds visible to the installed
-   * runtime into real `property-schema` blocks under the workspace's Properties
-   * page (§4.3 of the schema-unification design). This is what makes seeded
-   * definitions visible/editable in the UI and available to clients that don't
-   * have the contributing plugin loaded; the in-memory registry itself works
-   * with zero rows, so this pass never blocks correctness.
-   *
-   * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
-   * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
-   * on every seed-set change — create/restore-only + idempotent, so steady state
-   * is a single probe SELECT that short-circuits on `seed:revision`. Passes
-   * COALESCE per workspace (one pending pass at a time); the pass reads the
-   * workspace's current seed set at run time, and only if that workspace is still
-   * the active/projected one, so a coalesced set-grow is picked up and a
-   * switched-away workspace is skipped.
-   *
-   * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
-   * (for a non-freshly-created workspace) waits for the membership row before
-   * writing — a fresh device defaults a not-yet-synced role to writable, so a
-   * bare `isReadOnly` check would let a viewer enqueue ~100 RLS-rejected creates.
-   * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
-   * read-only session; the gate is the authoritative check.
-   */
   /** The current property + type seed declarations for `workspaceId`, or empty
    *  arrays when a registry is absent or pinned to a different workspace. Read
    *  live (not snapshotted) so a coalesced pass materializes the latest set. */
@@ -2795,6 +2780,30 @@ export class Repo {
     }
   }
 
+  /**
+   * Materialize the code-declared property seeds visible to the installed
+   * runtime into real `property-schema` blocks under the workspace's Properties
+   * page (§4.3 of the schema-unification design). This is what makes seeded
+   * definitions visible/editable in the UI and available to clients that don't
+   * have the contributing plugin loaded; the in-memory registry itself works
+   * with zero rows, so this pass never blocks correctness.
+   *
+   * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
+   * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
+   * on every seed-set change — create/restore-only + idempotent, so steady state
+   * is a single probe SELECT that short-circuits on `seed:revision`. Passes
+   * COALESCE per workspace (one pending pass at a time); the pass reads the
+   * workspace's current seed set at run time, and only if that workspace is still
+   * the active/projected one, so a coalesced set-grow is picked up and a
+   * switched-away workspace is skipped.
+   *
+   * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
+   * (for a non-freshly-created workspace) waits for the membership row before
+   * writing — a fresh device defaults a not-yet-synced role to writable, so a
+   * bare `isReadOnly` check would let a viewer enqueue ~100 RLS-rejected creates.
+   * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
+   * read-only session; the gate is the authoritative check.
+   */
   scheduleWorkspaceSeedMaterialization(workspaceId: string, freshlyCreated: boolean): void {
     if (this.isReadOnly || !workspaceId) return
     // Gate on EITHER registry: a type-seed-only change must still schedule a pass.
@@ -2904,9 +2913,10 @@ export class Repo {
    *  the runner can re-arm instead of writing the pass off for the session. */
   private static readonly TRANSIENT = 'backfill-precondition'
 
-  /** Preconditions every backfill transaction must still satisfy. Separate
-   *  from the scheduling gate because scheduling proves a fact at one instant
-   *  and a chunked pass writes over many. */
+  // Preconditions every backfill transaction must still satisfy. Separate
+  // from the scheduling gate because scheduling proves a fact at one instant
+  // and a chunked pass writes over many.
+
   /** Is this workspace's property registry primed?
    *
    *  `propertySchemaResolverForWorkspace` falls back to a resolver that
@@ -3486,7 +3496,7 @@ export class Repo {
 
   /**
    * One-time-per-workspace catch-up derive of the LOCAL `reference_target_id`
-   * column (PR #288 slice A). The column is derived per device and never
+   * column. The column is derived per device and never
    * synced, so rows that predate it — an upgrading device's whole DB, or a
    * fresh device's rows synced before the schema registry primed — sit at
    * NULL until this pass sweeps them; from then on the same-tx processor
@@ -3592,7 +3602,7 @@ export class Repo {
   }
 
   /** The one construction site for reference-target resolution outside a
-   *  repo.tx (PR #288 slice A): the `block_aliases` index read on `reader` —
+   *  repo.tx: the `block_aliases` index read on `reader` —
    *  the open sync-arrival write tx, or the auto-commit connection for the
    *  idle passes. Mirrors `core.deriveReferenceTarget` (a `((id))` block-ref
    *  resolves textually, `[[alias]]` through this lookup); the two must
@@ -3685,7 +3695,7 @@ export class Repo {
         }
       })
       if (snapshots.size === 0) continue
-      // Explicit fan-out (PR #288 §11 implementation note): `updated_at` is
+      // Explicit fan-out (docs/properties-as-blocks-migration.html §11 implementation note): `updated_at` is
       // deliberately unchanged, so the cache's `applyIfNewer` LWW gate would
       // reject the repair and row-version-driven invalidation sees nothing.
       // Refresh already-cached snapshots directly (never populate cold rows)
@@ -3721,8 +3731,8 @@ export class Repo {
   }
 
   /** Owner-cell re-projection for rows a raw stamp just turned into
-   *  recognized field rows (PR #288 §9 / issue #402's derivation-liveness
-   *  group). The stamp itself deliberately bypasses `repo.tx` to preserve
+   *  recognized field rows (docs/properties-as-blocks-migration.html §9 /
+   *  issue #402's derivation-liveness group). The stamp itself deliberately bypasses `repo.tx` to preserve
    *  `updated_at`, so no processor sees it — but resolving a `::[[Foo]]`
    *  row's target IS the transition that makes it a field row, and the
    *  owner's cell must gain the key at that moment rather than waiting for
@@ -3771,8 +3781,9 @@ export class Repo {
     )
   }
 
-  /** Targeted re-derive for NEWLY-ADDED property definitions (PR #288 §9's
-   *  arrival-order repair, adversarial-review fix): `[[name]]` rows written
+  /** Targeted re-derive for NEWLY-ADDED property definitions
+   *  (docs/properties-as-blocks-migration.html §9's arrival-order repair):
+   *  `[[name]]` rows written
    *  or synced BEFORE their definition existed derived to NULL, and nothing
    *  content-driven ever revisits them — the definition's later
    *  arrival/creation must enqueue this pass. Scheduled by the facet bridge
@@ -3876,8 +3887,8 @@ export class Repo {
   }
 
   /**
-   * Rename-reproject + codec re-encode migration pass (PR #288 §7/§9, slice
-   * B2). Scheduled by the facet bridge when a registry rebuild shows a
+   * Rename-reproject + codec re-encode migration pass
+   * (docs/properties-as-blocks-migration.html §7/§9, slice B2). Scheduled by the facet bridge when a registry rebuild shows a
    * definition's NAME or codec TYPE changed under its durable fieldId —
    * renames break silently without it: children survive untouched (the
    * column, not the label, is authoritative) but the cell stays keyed by the
@@ -4374,7 +4385,7 @@ export class Repo {
    *  that may legitimately observe a concurrent delete between
    *  pre-tx state and tx-start. New orchestration code should prefer
    *  `addTypeInTx` (strict) so a footgun like the Roam-isa adoption
-   *  bug (PR #47) can't be expressed. */
+   *  bug can't be expressed. */
   async addTypeInTxLenient(
     tx: Tx,
     blockId: string,

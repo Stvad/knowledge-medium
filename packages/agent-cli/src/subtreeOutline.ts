@@ -1,4 +1,4 @@
-/**
+/*
  * Renders the flat `get-subtree` result as a depth-indented outline for
  * the `kmagent subtree` CLI default.
  *
@@ -62,25 +62,19 @@ const MAX_OUTLINE_DEPTH = 100
  *    outside both ASCII ranges but are still read as a line break by many
  *    parsers (and left un-escaped by `JSON.stringify`).
  *  - Every codepoint the Unicode `Bidi_Control` PROPERTY covers — matched
- *    via `\p{Bidi_Control}`, not an enumerated range of codepoints. PR
- *    #447 review comment 3677343389 (the "Trojan Source" class,
- *    CVE-2021-42574): a bidi override/isolate inside content is rendered
- *    unchanged by a bidi-aware terminal or text viewer, which can
- *    visually REORDER the `[id]` token, its closing delimiter, and
- *    adjacent text — defeating the "id comes first, unambiguously" claim
- *    this module exists to make, even though not a single BYTE of the
- *    underlying string moved. That fix originally hand-enumerated the
- *    property's membership — LRM/RLM (U+200E/U+200F), the embedding/
- *    override pair-formers LRE/RLE/PDF/LRO/RLO (U+202A–U+202E), and the
- *    isolate formers LRI/RLI/FSI/PDI (U+2066–U+2069) — the same way the
- *    id-side fix (below) originally did before ITS switch to the
- *    categorical `\p{C}` boundary. PR #447 review comment 3677564794
- *    found that hand-copy had independently omitted U+061C ARABIC LETTER
- *    MARK, a `Bidi_Control` member exactly as reordering-capable as the
- *    eleven that were listed — matching the property directly instead of
- *    a transcription of its membership closes that class of gap by
- *    construction: the transcription can drift from the standard,
- *    `\p{Bidi_Control}` cannot.
+ *    via `\p{Bidi_Control}`, not an enumerated range of codepoints. This is
+ *    the "Trojan Source" class (CVE-2021-42574): a bidi override/isolate
+ *    inside content is rendered unchanged by a bidi-aware terminal or text
+ *    viewer, which can visually REORDER the `[id]` token, its closing
+ *    delimiter, and adjacent text — defeating the "id comes first,
+ *    unambiguously" claim this module exists to make, even though not a
+ *    single BYTE of the underlying string moved. Matching the property
+ *    directly, rather than a hand-enumerated transcription of its members
+ *    (LRM/RLM, the embedding/override pair-formers LRE/RLE/PDF/LRO/RLO,
+ *    the isolate formers LRI/RLI/FSI/PDI, ARABIC LETTER MARK, …), closes
+ *    that class of gap by construction: a transcription can silently omit
+ *    a member exactly as reordering-capable as the rest — `\p{Bidi_Control}`
+ *    cannot.
  *
  * DELIBERATELY NOT neutralized here: ZERO WIDTH JOINER (U+200D) and ZERO
  * WIDTH NON-JOINER (U+200C). Both are Unicode category Cf (format), same
@@ -107,31 +101,20 @@ const MAX_OUTLINE_DEPTH = 100
  *
  * INVARIANT: no character that can forge a line break or REORDER
  * displayed text reaches the terminal (or an LLM reading the raw outline
- * text) through CONTENT or PROPERTIES. This invariant used to be a
- * character-by-character (or, for one round, character-PROPERTY-member-
- * by-member) deny-list end to end, widened six times now as each round's
- * fix revealed the next character, character CLASS, or — this round —
- * missed MEMBER of a class already thought closed: first LF/CR/VT/FF,
- * then ESC plus the C0 information separators (FS/GS/RS/US), then the
- * rest of the C1 range, then backspace (U+0008: PR #447 review comment
- * 3676752551 — enough backspaces walk the terminal cursor back over the
- * real `- [id] ` prefix and overwrite it), then the bidi-reordering set
- * as a hand-enumerated range (PR #447 review comment 3677343389), and now
- * — PR #447 review comment 3677564794 — that hand-enumerated bidi range
- * itself replaced by the semantic `\p{Bidi_Control}` property after it
- * turned out to already be missing a member (U+061C) on day one.
- * Enumerating hostile characters, OR hostile PROPERTY MEMBERS, one at a
- * time is a losing game: there is always one more nobody thought to name
- * — which is why the bidi hazard class now matches the Unicode property
- * that defines it rather than a transcription of that property's current
- * membership. The C0/C1/DEL/line-separator portion of this space remains
- * a hand-enumerated range: unlike the bidi set, none of those has a
- * single built-in Unicode property matching exactly this module's
- * TAB-excluded, Zl/Zp-inclusive boundary (see the TAB paragraph below,
- * and `ID_ENCODE_REGEX`'s doc comment for why U+2028/U+2029 need listing
- * explicitly even under `id`'s categorical approach), so there's no
- * equivalent categorical swap available for that portion the way there
- * was for bidi.
+ * text) through CONTENT or PROPERTIES. Enumerating hostile characters, or
+ * hostile PROPERTY MEMBERS, one at a time is a losing game — there is
+ * always one more nobody thought to name (backspace, U+0008, is one:
+ * enough of them walk the terminal cursor back over the real
+ * `- [id] ` prefix and overwrite it). That is why the bidi-reordering
+ * hazard is matched as a Unicode property rather than a hand-enumerated
+ * transcription of its membership (see above). The C0/C1/DEL/
+ * line-separator portion of this space remains a hand-enumerated range:
+ * unlike the bidi set, none of those has a single built-in Unicode
+ * property matching exactly this module's TAB-excluded, Zl/Zp-inclusive
+ * boundary (see the TAB paragraph below, and `ID_ENCODE_REGEX`'s doc
+ * comment for why U+2028/U+2029 need listing explicitly even under `id`'s
+ * categorical approach), so there's no equivalent categorical swap
+ * available for that portion the way there was for bidi.
  *
  * TAB (U+0009) is the one deliberate exclusion from the control-character
  * portion of this space. Unlike every other character in it, a
@@ -164,33 +147,28 @@ const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u
  *  acceptable — if lossy — way to guarantee one block renders as exactly
  *  one line with no reordering. `id` does NOT go through this function;
  *  see `encodeOutlineId` below for why a lossy collapse is wrong for
- *  identifiers (PR #447 review comment 3676752546). */
+ *  identifiers. */
 const neutralizeOutlineField = (text: string): string =>
   text.replace(CONTROL_CHAR_RUN_REGEX, ' ⏎ ')
 
 /**
  * `id`'s hostile-character boundary — DELIBERATELY NOT the same regex as
- * `CONTROL_CHAR_RUN_REGEX` above, and not another enumerated range. PR
- * #447 review comment 3677343389: this module's control-character deny-
- * list had already been widened four times (LF/CR/VT/FF, then ESC/C0
- * separators, then the rest of C1, then backspace) before a reviewer
- * found that Unicode BIDI FORMATTING CONTROLS — category Cf, a category
- * this deny-list never covered — can reorder the displayed `[id]` token
- * without changing a single byte. Naming that one more range would just
- * be a FIFTH deny-list entry, with a sixth, seventh, ... still findable
- * by the next reviewer who thinks of the next rendering-relevant Unicode
- * category. `id` gets a categorical fix instead: percent-encode
- * `\p{C}` — EVERY codepoint in Unicode General_Category "Other"
- * (Cc control, Cf format, Cs surrogate, Co private-use, Cn unassigned) —
- * plus the two characters outside `\p{C}` that are still hostile to an
- * id specifically: `%` (for the encoding itself to be injective — see
- * `encodeOutlineId` below) and `]` (for the surrounding OUTLINE GRAMMAR
- * — `- [<id>] <content>` — to stay unambiguous; PR #447 review comment
- * 3677029933) and the two Unicode line/paragraph separators U+2028/
- * U+2029 (category Zl/Zp, NOT part of `\p{C}` — General_Category "Other"
- * and "Separator" are siblings, not overlapping, so these must be listed
- * explicitly or this module's round-2 line-separator fix would silently
- * regress for `id` specifically).
+ * `CONTROL_CHAR_RUN_REGEX` above, and not another enumerated range.
+ * Enumerating hostile characters one at a time is a losing game — there
+ * is always one more rendering-relevant Unicode category nobody thought
+ * of yet (Unicode BIDI FORMATTING CONTROLS, category Cf, is one: it can
+ * reorder the displayed `[id]` token without changing a single byte).
+ * `id` gets a categorical fix instead: percent-encode `\p{C}` — EVERY
+ * codepoint in Unicode General_Category "Other" (Cc control, Cf format,
+ * Cs surrogate, Co private-use, Cn unassigned) — plus the two characters
+ * outside `\p{C}` that are still hostile to an id specifically: `%` (for
+ * the encoding itself to be injective — see `encodeOutlineId` below) and
+ * `]` (for the surrounding OUTLINE GRAMMAR — `- [<id>] <content>` — to
+ * stay unambiguous) and the two Unicode line/paragraph separators
+ * U+2028/U+2029 (category Zl/Zp, NOT part of `\p{C}` — General_Category
+ * "Other" and "Separator" are siblings, not overlapping, so these must be
+ * listed explicitly or this module's line-separator handling would
+ * silently regress for `id` specifically).
  *
  * This makes the id invariant "no character outside printable content
  * survives" — a category BOUNDARY, not a list of specific codepoints.
@@ -199,16 +177,7 @@ const neutralizeOutlineField = (text: string): string =>
  * character it is, so there is no reason to carve out an exception for
  * TAB the way there is for prose — keeping the category boundary total
  * (no exceptions) is simpler and can't be defeated by naming a character
- * that "should have" been exempt but wasn't. Whether this categorical
- * boundary genuinely closes the class for `id` — vs. content, whose
- * bidi-reordering hazard is now ALSO categorical (`\p{Bidi_Control}`, see
- * `CONTROL_CHAR_RUN_REGEX`'s doc comment above) but whose C0/C1/DEL/
- * line-separator range is still a hand-enumerated residual — is exactly
- * the question a reviewer should keep pressure-testing (see this module's
- * git history for the six rounds it took to get even this far); the
- * honest answer as of this fix is "it closes every rendering- or
- * terminal-relevant Unicode category we could find," which is a narrower
- * claim than "it closes the class forever." */
+ * that "should have" been exempt but wasn't. */
 const ID_ENCODE_REGEX = /\p{C}|[\u2028\u2029%\]]/gu
 
 /**
@@ -217,7 +186,7 @@ const ID_ENCODE_REGEX = /\p{C}|[\u2028\u2029%\]]/gu
  * the token a CLI user or an MCP-connected agent copies back out of the
  * outline to address the SAME block via `get-block`/`update-block`/
  * `delete-block`. Collapsing it lossily (the previous behavior) broke that
- * in two distinct ways (PR #447 review comment 3676752546):
+ * in two distinct ways:
  *
  *  - `a\nb` rendered as `a ⏎ b`, which is not `a\nb` — copying it back out
  *    no longer addresses the original block at all.
@@ -240,7 +209,7 @@ const ID_ENCODE_REGEX = /\p{C}|[\u2028\u2029%\]]/gu
  * of this function ALONE doesn't make the surrounding OUTLINE GRAMMAR
  * unambiguous. `renderSubtreeOutline` embeds the encoded id as
  * `- [<id>] <content>`, so a raw `]` inside the id is indistinguishable
- * from the delimiter that closes it — PR #447 review comment 3677029933:
+ * from the delimiter that closes it:
  * `id: "a] b", content: "c"` and `id: "a", content: "b] c"` both used to
  * render `- [a] b] c`, so a consumer had no way to tell where the id
  * token ends, and therefore no way to even extract the right substring
@@ -316,8 +285,8 @@ const encodeOutlineId = (id: string): string =>
  *  common case.
  *
  *  Exported as the documented inverse for anyone parsing the TEXT outline
- *  back into ids — but as of PR #447 review comment 3677190043, it has NO
- *  in-tree caller. `kmagent subtree`'s default output and the `subtree`
+ *  back into ids — but it has NO in-tree caller. `kmagent subtree`'s
+ *  default output and the `subtree`
  *  MCP tool both only ever DISPLAY this text; neither they nor the CLI's
  *  `get-block`/`update-block`/`delete-block` commands or the MCP
  *  `get_block`/`update_block`/`delete_block` tools call this — those
@@ -355,10 +324,10 @@ export const decodeOutlineId = (encoded: string): string => {
  * never push it off the line or forge a second id-shaped token where the
  * real id is expected; content (for reading) follows. EVERY field is
  * neutralized before interpolation, so a block can't spill into id-less
- * lines that masquerade as child bullets, forge a fake id, or (PR #447
- * review comment 3677343389) visually REORDER the id/delimiter/content
- * via a bidi control: line count == block count AND display order ==
- * byte order. `id` is just as attacker-reachable as content (e.g. an
+ * lines that masquerade as child bullets, forge a fake id, or visually
+ * REORDER the id/delimiter/content via a bidi control: line count ==
+ * block count AND display order == byte order. `id` is just as
+ * attacker-reachable as content (e.g. an
  * explicit `id` forwarded through `createBlock`), but since it's an
  * IDENTIFIER rather than prose it goes through `encodeOutlineId` (a
  * reversible, injective, CATEGORICAL percent-encoding — `\p{C}` plus
@@ -367,8 +336,8 @@ export const decodeOutlineId = (encoded: string): string => {
  * see `encodeOutlineId`'s doc comment for why that distinction matters
  * and `ID_ENCODE_REGEX`'s for why `id` gets the categorical treatment.
  *
- * ADDRESSABILITY (PR #447 review comment 3677190043): this text outline
- * is a DISPLAY surface, hardened against forgery by everything above —
+ * ADDRESSABILITY: this text outline is a DISPLAY surface, hardened
+ * against forgery by everything above —
  * it is NOT wired up to be addressable. Nothing at the CLI/MCP command
  * boundaries decodes an `[id]` token copied out of it, so for a block
  * whose id needed encoding, that token cannot be pasted into

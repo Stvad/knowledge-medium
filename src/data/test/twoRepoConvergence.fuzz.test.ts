@@ -34,8 +34,8 @@
  *
  * Oracles:
  *  1. CONVERGENCE — after quiescing (upload both, deliver+drain both, ×3
- *     rounds: round 1 drains uploads, round 2 delivers the resulting
- *     echoes, round 3 proves a fixpoint), `blocks` on A == `blocks` on B
+ *     rounds: the first drains uploads, the second delivers the resulting
+ *     echoes, the third proves a fixpoint), `blocks` on A == `blocks` on B
  *     == the server's rows, all 13 columns, ordered by id. Also both
  *     `ps_crud` queues empty, both change queues empty, both delivery
  *     cursors at the server version.

@@ -32,7 +32,7 @@ import { canRenderAsWikilink } from '@/plugins/references/referenceParser'
  *  exactly `MAX_ALIAS_LENGTH` ending in `]` emits an alias one character
  *  OVER the cap. Comparing `trimmed.length` would wave it through.
  *  Parsing what the renderer actually emits is the only form of this
- *  check that cannot drift from the renderer (Codex on PR #540). */
+ *  check that cannot drift from the renderer. */
 export const isValidTagName = (name: string): boolean =>
   tagNameIssue(name) === null
 
@@ -41,7 +41,7 @@ export const isValidTagName = (name: string): boolean =>
  *  the only rule; the length rule made that message a lie for an input
  *  containing neither delimiter — the control went disabled with an
  *  error naming characters that weren't there and no hint that
- *  shortening would fix it (Codex on PR #540). A reason code rather than
+ *  shortening would fix it. A reason code rather than
  *  a string so each surface keeps its own markup for the delimiters. */
 export type TagNameIssue = 'empty' | 'delimiters' | 'too-long'
 
@@ -65,7 +65,7 @@ export const normalizeBlockTagsConfig = (value: unknown): string[] =>
  *  clicking it a silent no-op — the submit path bails on
  *  `isValidTagName` and the picker's error line is derived from the
  *  TYPED QUERY, which is usually empty, so the user got neither a tag nor
- *  a reason (Codex on PR #540).
+ *  a reason.
  *
  *  For the PICKER only. The config editor deliberately shows every stored
  *  tag, valid or not — it is where an unusable one gets removed, and

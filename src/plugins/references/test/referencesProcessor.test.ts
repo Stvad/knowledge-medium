@@ -358,7 +358,7 @@ describe('parseReferences — extension source is not scanned for content refs',
     // aren't derived — recoverable, invisible); rejecting it scans 1.7 MB
     // of bundled JS and mints phantom pages, which is the bug this gate
     // exists to stop. Membership wins over element-wise validity on
-    // purpose (declined Codex suggestion, PR #540).
+    // purpose.
     it('honours an extension claim even in an otherwise malformed array', () => {
       expect(isExtensionSource({properties: {types: [EXTENSION_TYPE, 42]}})).toBe(true)
     })
@@ -1008,8 +1008,8 @@ describe('parseReferences — schema-swap reprojection', () => {
 
 describe('parseReferences — stale-plan guard covers references-only writers', () => {
   it('does not clobber a references-only write landing between plan build and apply', async () => {
-    // The race (Codex review on PR #371): a parse plan is built from the
-    // content edit's event row; before it applies, a references-ONLY
+    // The race: a parse plan is built from the content edit's event row;
+    // before it applies, a references-ONLY
     // writer (the ref-backfill reprojection on schema load, simulated
     // here with a raw update) adds an entry the parse cannot re-derive
     // (absent schema) but must retain (value unchanged). Pre-fix the
@@ -1206,8 +1206,8 @@ describe('parseReferences — alias claimed between plan build and apply (write-
   it('binds a LONG-FORM date mark to the block that claimed the literal alias mid-plan', async () => {
     // ensureDailyNoteTarget's internal lookup-first only rechecks the
     // ISO; the mark's literal alias ("February 3rd, 2026") is a distinct
-    // claimable name, so the write phase must recheck it per mark
-    // (Codex review on PR #371). Pre-fix this didn't strip — the seat
+    // claimable name, so the write phase must recheck it per mark.
+    // Pre-fix this didn't strip — the seat
     // mint doesn't collide — but the ref bound to the daily seat where
     // a fresh parse would bind the claimant, with nothing to re-fire.
     await env.repo.tx(async tx => {
@@ -1341,7 +1341,7 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     // block. That write must ride skipMetadata like the processor's
     // references write: bumping userUpdatedAt/updatedBy here would make
     // the target page float to the top of last-edited views because a
-    // different block mentioned it (Codex review on PR #384).
+    // different block mentioned it.
     await env.repo.tx(async tx => {
       await tx.create({id: 'iso-claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'C'})
       await tx.setProperty('iso-claimant', aliasesProp, ['2026-06-10'])
@@ -1374,8 +1374,7 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     // still indexes — so the ISO keeps resolving to this block. The
     // claim's append is decode→rewrite; on decode failure it must skip
     // rather than replace the list with just the literal, which would
-    // un-claim the ISO and re-point future [[2026-06-11]] links (Codex
-    // review on PR #384).
+    // un-claim the ISO and re-point future [[2026-06-11]] links.
     await env.repo.tx(
       tx => tx.create({id: 'legacy', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'L'}),
       {scope: ChangeScope.BlockDefault},
@@ -1413,8 +1412,7 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     // re-inserts ALL of the target's aliases (blocks_alias_update
     // deletes+re-inserts), so the PRE-EXISTING duped alias would RAISE —
     // pre-fix that rolled back the whole parse tx: references for the
-    // source were permanently dropped and re-aborted on every re-edit
-    // (adversarial review on PR #384).
+    // source were permanently dropped and re-aborted on every re-edit.
     await env.repo.tx(async tx => {
       await tx.create({id: 'older', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'O'})
       await tx.setProperty('older', aliasesProp, ['2026-06-12'])
@@ -1668,8 +1666,8 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
 
   it('keeps a seat with a live USER child in an un-flipped workspace', async () => {
     // A user note under a seat blocks the reap because collecting the seat
-    // would strand it live under a tombstone (Codex review on PR #428) — not
-    // because the workspace is un-flipped. The generated-row tolerance below
+    // would strand it live under a tombstone — not because the workspace is
+    // un-flipped. The generated-row tolerance below
     // is data-keyed, so the two cases are told apart by the `::` bit.
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[kid]]'}),
@@ -1841,8 +1839,8 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
 
   it('keeps a seat the user ADOPTED between the orphan check and the reap tx (in-tx shape re-check)', async () => {
     // The reap gates run on committed state OUTSIDE the write tx; a user
-    // tx that adopts the seat can land in between (PR #428 adversarial
-    // review). Deterministic stand-in for that race: the MINT-TIME
+    // tx that adopts the seat can land in between. Deterministic stand-in
+    // for that race: the MINT-TIME
     // cleanup's read phase probes only referrers — no shape gates — so a
     // seat renamed before its 4s check reaches `reapSeatsInTx` exactly
     // like a seat adopted mid-race, and only the in-tx re-check
@@ -1875,8 +1873,7 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     // property VALUE child is reachable user content. The direct-children
     // gate sees only generated field rows and passes — the deep guard in
     // `reapSeatsInTx` must catch the nested comment, or the
-    // deleteSubtreeInTx sweep takes it with the machinery (PR #428
-    // adversarial review).
+    // deleteSubtreeInTx sweep takes it with the machinery.
     await sharedDb.db.execute(
       `INSERT INTO workspaces
          (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)

@@ -206,7 +206,8 @@ export const applyContentReplaceMutator = defineMutator<
       // VALUE rows get the codec skip — see below — because a broken value
       // fails SILENTLY: the key drops from the owner's cell with no error.)
       //
-      // #404 item 5: under properties-as-blocks (PR #288 §9), a property
+      // #404 item 5: under properties-as-blocks
+      // (docs/properties-as-blocks-migration.html §9), a property
       // VALUE child's `content` IS its typed value — writing straight
       // through here can leave it unparseable under its codec (a
       // `number`/`date`/`boolean` value in particular), and PROJECT's

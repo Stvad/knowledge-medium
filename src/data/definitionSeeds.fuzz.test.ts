@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Stateful fuzz suite for property-seed materialization + the tx-layer
- * seed-definition write guard (PR #364, schema-unification §5.1).
+ * seed-definition write guard (docs/schema-unification.html §5.1).
  *
  * Random interleavings of `materializePropertySeeds`, user-scope tamper
  * attempts, system-scope (Automation) lifecycle writes, deterministic-id

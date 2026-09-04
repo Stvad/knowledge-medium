@@ -122,10 +122,10 @@ const insertAtCaretForMisplacedDiff = Prec.highest(
  *  completion writes a span the parser reads no reference from, so it
  *  renders as literal text and gains no backlink, with nothing on screen
  *  saying why. Reachable today — a workspace can already hold over-cap
- *  aliases (this PR's phantom pages are exactly that, and several begin
+ *  aliases (phantom pages are exactly that, and several begin
  *  `import {`, so typing `[[import ` surfaces them). Filtering is also the
  *  right end state: those names cannot be linked to at all, so listing
- *  them offers a broken choice (Codex on PR #540).
+ *  them offers a broken choice.
  *
  *  Split out and exported so the filter is testable — inside the
  *  `getAliases` closure it is reachable only through a live CodeMirror

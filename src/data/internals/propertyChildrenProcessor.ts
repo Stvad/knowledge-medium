@@ -1,6 +1,6 @@
 /**
- * Property-children convergence processors (PR #288 §5, extracted from the
- * PR #285 spike). Both are PERMANENT machinery, not migration scaffolding,
+ * Property-children convergence processors (docs/properties-as-blocks-migration.html §5).
+ * Both are PERMANENT machinery, not migration scaffolding,
  * and both are gated on the workspace flip column
  * (`workspaces.properties_migration` at or past 'children') — in an
  * un-flipped workspace neither recognizes nor writes anything (dormant).
@@ -453,7 +453,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // not `properties`) — so in a flipped workspace the junk even syncs to
       // peers. Reject the write instead — a processor throw propagates out of
       // the writeTransaction and rolls the whole tx back atomically, so the
-      // bad cell value never lands (PR #386 review, F2; Vlad).
+      // bad cell value never lands.
       //
       // Deliberately ASYMMETRIC with PROJECT, which DROPS the cell key for an
       // undecodable *child* value (see find-replace's forced-write path):
@@ -709,7 +709,7 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
 
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME,
-  // `isFieldForm` is watched (PR #417 review): projection's classification
+  // `isFieldForm` is watched: projection's classification
   // and value-set both read the bit, so a bit-only change (arrival repair,
   // the catch-up sweep stamping existing marked rows) must re-project; bulk
   // repair paths that write the bit raw enqueue projection explicitly.

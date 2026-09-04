@@ -122,7 +122,7 @@ export interface FacetBridgeTarget {
     schemas: ReadonlyMap<string, AnyPropertySchema>,
   ): void
   /** Current property-definition registry snapshot — the "before" side of
-   *  the per-fieldId rename/codec diff (PR #288 §7, slice B2). */
+   *  the per-fieldId rename/codec diff (docs/properties-as-blocks-migration.html §7, slice B2). */
   getPropertyDefinitions(): PropertyDefinitionRegistrySnapshot | null
   /** Defer the rename-reproject / codec re-encode migration pass for
    *  definitions whose identity-stable metadata changed in this swap. */
@@ -438,9 +438,10 @@ export class FacetBridge {
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
           }
-          // Definition-change migrations (PR #288 §7/§9, slice B2). ONE
-          // decision: a same-workspace build is diffed in memory, a PRIME
-          // against the durable baseline (`propertyDefinitionBaseline.ts`).
+          // Definition-change migrations (slice B2,
+          // docs/properties-as-blocks-migration.html §7/§9). ONE decision: a
+          // same-workspace build is diffed in memory, a PRIME against the
+          // durable baseline (`propertyDefinitionBaseline.ts`).
           if (propertyDefinitions) {
             const previous = previousPropertyDefinitions
             // Defence in depth: pinning a workspace rebuilds before its

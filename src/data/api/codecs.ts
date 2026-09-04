@@ -1,10 +1,10 @@
-import { CodecError } from './errors'
-
 /** Bidirectional encode/decode for typed values stored in the JSON-shaped
  *  `properties_json` column. Codecs run at exactly four boundary call sites
  *  (`block.set`, `block.get`, `tx.setProperty`, `tx.getProperty`); storage
  *  and cache always hold the encoded shape. See spec §5.6 and the
  *  user-defined-properties §1a doc for the open-string `type` discriminator. */
+
+import { CodecError } from './errors'
 
 /** Scalar value compatible with `json_extract(...) = ?` parameter binding.
  *  Excludes null deliberately — typed-query callers use `null` to mean

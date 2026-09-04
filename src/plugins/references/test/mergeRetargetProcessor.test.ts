@@ -103,7 +103,7 @@ describe('references.retargetMergedBlockReferences', () => {
     ]))
   })
 
-  // Regression (PR #386 review): `core.deriveReferenceTarget` runs earlier
+  // Regression: `core.deriveReferenceTarget` runs earlier
   // in the same-tx processor pass (kernel processors precede plugin ones)
   // and stamps `referenceTargetId` from the PRE-retarget content. Without
   // recomputing it here, a whole-block `((old))` row would keep
@@ -419,9 +419,9 @@ describe('references.retargetMergedBlockReferences', () => {
       // self-reference on the merged-away block. `into` has no stored
       // reference entry for fromId yet, so entry-driven collection
       // can't see the field, and the follow-up parse would project a
-      // backlink to the tombstoned merge source (Codex review on
-      // PR #371). The merge target is now always a retarget candidate
-      // and eligible fields are collected from the bag too.
+      // backlink to the tombstoned merge source. The merge target is now
+      // always a retarget candidate and eligible fields are collected
+      // from the bag too.
       await resetTestDb(sharedDb.db)
       const {repo} = createTestRepo({
         db: sharedDb.db,
@@ -463,8 +463,7 @@ describe('references.retargetMergedBlockReferences', () => {
       // fromId, no pending parse event): rewriteRefValue reports no
       // change, but the ENTRY must still be retargeted — otherwise the
       // merge leaves a backlink to a tombstone in exactly the stale
-      // states this processor exists to clean up (Codex review on
-      // PR #371).
+      // states this processor exists to clean up.
       await resetTestDb(sharedDb.db)
       const {repo} = createTestRepo({
         db: sharedDb.db,
@@ -517,7 +516,7 @@ describe('references.retargetMergedBlockReferences', () => {
       // retargets. The write lands under the merge's BlockDefault scope, so
       // the retarget is undoable with the merge (undoing the merge restores
       // the pointer). Overriding the field's default scope is exactly right
-      // for a merge (Vlad, PR #386 F7 — reversing the earlier PR #371 skip).
+      // for a merge.
       const pinnedProp = refTestSeed('pinned-view', 'ref', ChangeScope.UiState)
       await resetTestDb(sharedDb.db)
       const {repo, cache} = createTestRepo({
@@ -562,8 +561,8 @@ describe('references.retargetMergedBlockReferences', () => {
     })
   })
 
-  // PR #386 review raised this as a gap: the properties patch updates the
-  // owner's CELL, but the value child under the field row would keep
+  // A gap: the properties patch updates the owner's CELL, but the value
+  // child under the field row would keep
   // `((fromId))` — and the child is PROJECT's truth, so the tombstoned id
   // would come back. It doesn't happen, and the reason is worth pinning:
   // removing the parse-level machinery suppression put value rows in
@@ -626,8 +625,7 @@ describe('retargetReferences — entry mapping', () => {
     // Retargeting it announces a backlink the content does not support;
     // keeping it alongside the retargeted one (which this used to do)
     // announces both, one of them onto the tombstoned merge source. Drop
-    // it — the drop is itself what re-fires the parse that can decide
-    // (PR #444 round 7, P2).
+    // it — the drop is itself what re-fires the parse that can decide.
     expect(retargetReferences(
       [{id: 'source', alias: 'Partial'}], 'source', INTO,
       new Map([['Partial', pinnedSpanReplacement('Partial', INTO)]]),

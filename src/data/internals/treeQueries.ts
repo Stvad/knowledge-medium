@@ -1,4 +1,4 @@
-/**
+/*
  * Recursive CTEs for tree operations against the v2 blocks schema (§11
  * of the data-layer redesign). Two guards on every recursion:
  *
@@ -211,7 +211,7 @@ export const cycleScanSql = (idCount: number): string => {
 /** Direct children of a parent, ordered `(order_key, id)`, filtered
  *  `deleted = 0`. Machinery form: property field rows INCLUDED — copy,
  *  export, delete-cascade, and the property-children processors must see
- *  them (PR #288 §9). */
+ *  them (docs/properties-as-blocks-migration.html §9). */
 export const CHILDREN_SQL = `
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0

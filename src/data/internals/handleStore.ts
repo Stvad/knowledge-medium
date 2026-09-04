@@ -1169,6 +1169,16 @@ export const handleKey = (name: string, args?: unknown): string =>
  *  internals dependencies). */
 export type { ChangeSnapshot } from '@/data/invalidation.js'
 
+/** Did either column §9 recognition keys on move? Defined once because the
+ *  two parent-edge branches below MUST ask the identical question — the
+ *  visible-membership edge and the row's own `children(id)` edge are the two
+ *  halves of one recognition flip, and a version that checked only the
+ *  target would silently miss every `::` add/remove (which leaves the target
+ *  untouched) in exactly one of them. */
+const recognitionColumnsChanged = (entry: ChangeSnapshot): boolean =>
+  (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
+  || (entry.before?.isFieldForm ?? false) !== (entry.after?.isFieldForm ?? false)
+
 /** Compute a `ChangeNotification` from a tx's per-id snapshots map.
  *  Used by the TxEngine fast path (§9.3): post-commit, the engine
  *  passes its snapshots map here and feeds the result into
@@ -1198,16 +1208,6 @@ export type { ChangeSnapshot } from '@/data/invalidation.js'
  *  `handleStore.invalidate({tables: [...]})` directly, or (better)
  *  contribute an `InvalidationRule` that emits a narrow plugin channel.
  */
-/** Did either column §9 recognition keys on move? Defined once because the
- *  two parent-edge branches below MUST ask the identical question — the
- *  visible-membership edge and the row's own `children(id)` edge are the two
- *  halves of one recognition flip, and a version that checked only the
- *  target would silently miss every `::` add/remove (which leaves the target
- *  untouched) in exactly one of them. */
-const recognitionColumnsChanged = (entry: ChangeSnapshot): boolean =>
-  (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
-  || (entry.before?.isFieldForm ?? false) !== (entry.after?.isFieldForm ?? false)
-
 export const snapshotsToChangeNotification = (
   snapshots: ReadonlyMap<string, ChangeSnapshot>,
   invalidationRules: readonly InvalidationRule[] = [],
@@ -1256,7 +1256,7 @@ export const snapshotsToChangeNotification = (
     // Field-row recognition flipped in place (live both sides, same
     // parent, either recognition column changed): in a child-backed
     // workspace the VISIBLE child set default-excludes recognized field
-    // rows (PR #288 §9), so a row becoming/ceasing to be a field row
+    // rows (docs/properties-as-blocks-migration.html §9), so a row becoming/ceasing to be a field row
     // changes the parent's visible membership even though the tree edge
     // didn't. Un-flipped workspaces get a rare spurious re-resolve (content
     // edits to/from whole-block references) — harmless.

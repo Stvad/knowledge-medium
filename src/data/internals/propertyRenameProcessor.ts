@@ -1,5 +1,5 @@
 /**
- * Same-tx property-definition RENAME (PR #288 §7/§9, PR #386 follow-up).
+ * Same-tx property-definition RENAME (docs/properties-as-blocks-migration.html §7/§9).
  *
  * A rename re-keys every consuming parent's cell (drop the old name, project
  * the new name from the field row's value) ATOMICALLY in the same tx that

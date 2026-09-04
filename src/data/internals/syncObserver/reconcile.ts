@@ -159,7 +159,7 @@ export const decideStagingRow = (
     // holds. The one deliberate skip — a stale in-flight server read carrying
     // different content under the same ms-stamp would otherwise clobber a local
     // edit on disk and resurface after reload (the in-memory cache gate can't
-    // guard the persistent write). See commit 429fd4b2.
+    // guard the persistent write).
     return { kind: 'skip-stale' }
   }
 

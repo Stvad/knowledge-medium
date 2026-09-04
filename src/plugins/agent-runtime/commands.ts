@@ -648,8 +648,8 @@ const createRuntimeBlock = async (
   const explicitId = input.data?.id as string | undefined
   // Caller-supplied ids must be canonical UUIDs (issue #456): a non-UUID id
   // from an agent/CLI caller can render ambiguously in the outline (control
-  // characters, bidi reordering, homoglyphs — see PR #447's history) in a
-  // way no render-time filter alone can fully rule out.
+  // characters, bidi reordering, homoglyphs) in a way no render-time filter
+  // alone can fully rule out.
   //
   // NOT the enforcement point — `tx.create` is (see @/data/blockId), and it
   // would reject this id a few frames later regardless. This check is here
@@ -1798,7 +1798,7 @@ export const createAgentRuntimeContext = ({
     // agent-dispatch's prompt render) already surface each row's property BAG,
     // so emitting field/value rows too would show the same properties a second
     // time as `((fieldId))` blocks pretending to be user content. Agents that
-    // genuinely want raw storage have `sql` (PR #386 review).
+    // genuinely want raw storage have `sql`.
     getSubtree: async rootId =>
       await repo.query.subtree({id: rootId, hidePropertyChildren: true}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
