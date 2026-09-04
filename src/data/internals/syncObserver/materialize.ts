@@ -131,7 +131,7 @@ export interface MaterializeDeps {
    *  batched, CAS-safe re-derive over NULL-column rows) lives on Repo;
    *  the materializer only reports names. Optional (harness tests skip). */
   readonly onAliasTargetsAdded?: (workspaceId: string, aliases: readonly string[]) => void
-  /** Derive-at-arrival seam (PR #288 slice A): build the reference-target
+  /** Derive-at-arrival seam: build the reference-target
    *  lookups bound to this write tx. Sync-applied rows never pass through
    *  `repo.tx`, so `core.deriveReferenceTarget` can't stamp the LOCAL
    *  `reference_target_id` column for them — the materializer re-derives it
@@ -522,7 +522,7 @@ export const materializeStagingRows = async (
     // upserts above), and INSIDE this write tx — strictly before
     // `applyOutcome`'s invalidation fan-out, so readers never see a content
     // change whose derived column lags. `deriveReferenceTargetArrivalProcessor`
-    // (PR #288 slice A) is currently the seam's only registered member.
+    // is currently the seam's only registered member.
     await runArrivalProcessors(tx, snapshots, deps, ARRIVAL_PROCESSORS)
 
     const removedBeforeById = await readBlocksByIds(tx, change.removed, readChunkSize)
@@ -584,7 +584,7 @@ export const materializeStagingRows = async (
     }
   })
 
-  // §9 arrival-order repair, alias half (adversarial-review rounds 1+2): a
+  // §9 arrival-order repair, alias half: a
   // `[[alias]]` row that arrived BEFORE its target derived to NULL, and
   // later content-unchanged deliveries preserve that NULL forever. When an
   // arrival GAINS an alias, hand the alias names to the repair queue —

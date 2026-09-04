@@ -67,7 +67,7 @@ const LEGAL_ERRORS = [
  *    `insertChildren`'s own anchor lookup — NOT `split`; its `ix < 0`
  *    case silently falls back to `keyBetween(null, self.orderKey)`
  *    rather than throwing). Only this exact message shape — any other
- *    plain `Error` is a bug (Codex review on PR #371: the previous
+ *    plain `Error` is a bug (the previous
  *    `e.constructor === Error` branch accepted them all).
  *
  * `desc` is a caller-formatted description of the op/case that produced
@@ -379,8 +379,7 @@ export interface StructuralSweepOptions {
   /** Query every block id in the db fresh, instead of trusting a
    *  maintained `ids` pool — for suites (defaultActions) whose op pool
    *  mints blocks the harness loop doesn't separately track, so a cycle
-   *  through a created id would otherwise escape the sweep (Codex review
-   *  on PR #371). */
+   *  through a created id would otherwise escape the sweep. */
   allRows?: boolean
 }
 

@@ -429,7 +429,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // the CLIENT_SCHEMA_STATEMENTS loop below — the recreated row_events
   // trigger bodies reference the column (SQLite accepts a CREATE TRIGGER
   // against a missing column and only fails at fire time). `blocks_synced`
-  // deliberately does NOT get it (never synced; PR #288 §11 slice A). The
+  // deliberately does NOT get it (never synced; docs/properties-as-blocks-migration.html §11 slice A). The
   // index is created after so it exists on upgrading devices too.
   await ensureBlockLocalColumns(powerSyncDb)
   await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
@@ -457,7 +457,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
   // above is a no-op when the table already exists). §7 / e2ee-design.
   await ensureWorkspaceE2eeColumns(powerSyncDb)
-  // Properties-as-blocks rollout lever (PR #288 §6) — nullable; absence
+  // Properties-as-blocks rollout lever (docs/properties-as-blocks-migration.html §6) — nullable; absence
   // reads as 'cell' (dormant) via parseWorkspaceRow.
   await ensureWorkspacePropertiesMigrationColumn(powerSyncDb)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)

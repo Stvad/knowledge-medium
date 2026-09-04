@@ -1,4 +1,4 @@
-/**
+/*
  * Every file SQLite or the VFS derives from the main `.db` name.
  *
  * Read this before merging the two lists back together. Inventory and backup

@@ -810,8 +810,7 @@ describe('what a completed run tells the operator', () => {
 })
 
 describe('every outcome says whether the history is gone', () => {
-  // Four branches were each found missing this sentence, one review round at a
-  // time. It is appended once at the wrapper now, so this walks the whole
+  // The sentence is appended once at the wrapper, so this walks the whole
   // outcome union rather than the branch that happened to be reported.
   const outcomes: OperatorBackfillResult[] = [
     RAN,

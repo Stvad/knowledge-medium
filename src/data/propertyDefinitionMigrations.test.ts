@@ -1,11 +1,11 @@
 // @vitest-environment node
 /**
- * Slice B2 (PR #288 §7/§9): rename-reproject + codec-change re-encode.
+ * Slice B2 (docs/properties-as-blocks-migration.html §7/§9): rename-reproject + codec-change re-encode.
  * A definition rename or codec change under a durable fieldId triggers a
  * child-indexed migration — cell re-key, value re-encode, with unconvertible
  * values reported — both flip-gated (dormant in a 'cell' workspace).
  *
- * The two triggers now run on DIFFERENT paths (PR #386 follow-up): a RENAME
+ * The two triggers now run on DIFFERENT paths: a RENAME
  * is a same-tx processor (`MIGRATE_PROPERTY_RENAME_PROCESSOR`,
  * `internals/propertyRenameProcessor.ts`) — it fires inside the same
  * `repo.tx` that edits the definition block's name, so the rename and its
@@ -259,9 +259,9 @@ describe('rename migration (flipped workspace)', () => {
   })
 
   // The deferred-path "workspace moves on twice before the idle drain" repro
-  // (PR #386 review defect: `propertySchemaResolverFor`'s one-deep active/
-  // previous-workspace retention going stale before a deferred deep-idle job
-  // fired) was removed here. A same-tx rename has no deferred plan that can
+  // (`propertySchemaResolverFor`'s one-deep active/previous-workspace
+  // retention going stale before a deferred deep-idle job fired) was removed
+  // here. A same-tx rename has no deferred plan that can
   // go stale — it runs inside the SAME tx that edits the definition block,
   // so there is no idle-drain window left for this staleness to occur in.
 

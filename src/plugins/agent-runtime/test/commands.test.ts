@@ -397,9 +397,9 @@ describe('agent runtime commands', () => {
   })
 
   // SQLite lets a WITH clause prefix DML, so `WITH … UPDATE blocks` is a real
-  // raw write whose first token is `WITH` — it used to sail past the guard
-  // (PR #386 review). Recursive-CTE READS are the bridge's bread and butter,
-  // so they must keep working.
+  // raw write whose first token is `WITH` — it used to sail past the guard.
+  // Recursive-CTE READS are the bridge's bread and butter, so they must keep
+  // working.
   it('sql refuses a CTE-prefixed write but still allows a CTE-prefixed read', async () => {
     await env.repo.tx(
       async tx => {
@@ -969,8 +969,8 @@ describe('mutating verbs refuse a target outside the active workspace (#790)', (
   // `run-action` is the widest route to a kernel mutator — it turns
   // caller-supplied ids into Block facades and hands them to a handler that
   // may call `Block.delete()`. Guarding only the typed verbs would leave the
-  // corruption reachable through here (Codex, PR #803 review). The refusal has
-  // to land before `invokeAction`, because once a handler runs, its writes are
+  // corruption reachable through here. The refusal has to land before
+  // `invokeAction`, because once a handler runs, its writes are
   // outside our reach — so these assert the handler never ran, not merely that
   // the command rejected.
   describe('run-action', () => {
@@ -1029,8 +1029,8 @@ describe('mutating verbs refuse a target outside the active workspace (#790)', (
 
     // The back-compat top-level `blockId` is IGNORED when `dependencies.blockId`
     // is present, so validating it too refused requests whose effective
-    // dependencies were entirely local (Codex, PR #803 review). Precedence is
-    // decided once now, and the guard reads the chosen id.
+    // dependencies were entirely local. Precedence is decided once now, and
+    // the guard reads the chosen id.
     it('ignores a foreign id in a field the fallback chain does not select', async () => {
       await seedBackground()
       const context = withProbeAction()

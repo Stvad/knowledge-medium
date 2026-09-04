@@ -36,10 +36,10 @@ interface Seed {
   order_key?: string
   workspace_id?: string
   deleted?: 0 | 1
-  /** Skip the workspace-invariant trigger by leaving tx_context.source NULL.
-   *  Sync-applied seeds (default for tests) bypass parent-validation per §4.1.1. */
 }
 
+/** Skip the workspace-invariant trigger by leaving tx_context.source NULL.
+ *  Sync-applied seeds (default for tests) bypass parent-validation per §4.1.1. */
 const insertOne = async (db: TestDb['db'], seed: Seed): Promise<void> => {
   await db.execute(
     `INSERT INTO blocks

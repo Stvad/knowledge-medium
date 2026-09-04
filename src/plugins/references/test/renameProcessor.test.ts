@@ -138,9 +138,7 @@ const derivedColumns = async (id: string) =>
  *  bit, a non-null parent, a flipped workspace, and a target that resolves
  *  to a definition. Seeding only the marker (the shape `seedSource`
  *  produces, at `parentId: null`, in an unflipped workspace) builds a row
- *  that is NOT a field row — which is what the first version of these
- *  tests did, so they asserted the marked tier on rows that should never
- *  have reached it (Codex on PR #484). */
+ *  that is NOT a field row. */
 const flipWorkspaceWithDefinition = async (fieldId: string): Promise<void> => {
   await env.h.db.execute(
     `UPDATE workspaces SET properties_migration = 'children' WHERE id = ?`, [WS])
@@ -710,8 +708,8 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
   })
 
   it('falls back to a scan when the alias holds a NUL byte, instead of throwing', async () => {
-    // Codex on PR #484, and reachable end-to-end: nothing rejects a NUL in an
-    // alias — `parseReferences` accepts it, `setProperty` stores it,
+    // Reachable end-to-end: nothing rejects a NUL in an alias —
+    // `parseReferences` accepts it, `setProperty` stores it,
     // `block_aliases` indexes it. FTS5 reads its query as a C string, so
     // `MATCH '"[[a<NUL>b]]"'` raises `unterminated string`. This runs INSIDE
     // the user's transaction, so the throw would roll their whole rename back
@@ -735,8 +733,8 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
   })
 
   it("never rewrites an installed extension's source code", async () => {
-    // Codex on PR #484, P1. `references.parseReferences` deliberately does not
-    // run the wikilink grammar over extension source (code hands it `[[`
+    // `references.parseReferences` deliberately does not run the wikilink
+    // grammar over extension source (code hands it `[[`
     // openers for free — one real extension minted three phantom pages before
     // that gate). So extension blocks have NO edge, which is exactly why the
     // edge-keyed leg never reached them and the content leg would. Rewriting a
@@ -920,8 +918,8 @@ describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)
   })
 
   it('a PADDED alias cannot reach the marked tier at all — the derive trims first', async () => {
-    // Codex on PR #484 flagged that `isMarkedNameRowFor` compared against the
-    // whole-block parser's TRIMMED alias while the edge carries the raw one.
+    // `isMarkedNameRowFor` used to compare against the whole-block parser's
+    // TRIMMED alias while the edge carries the raw one.
     // That inconsistency was real and is fixed (the comparison now uses the
     // raw span), but it turns out to change no behaviour, and saying so is
     // worth more than a test implying otherwise.
@@ -1054,8 +1052,7 @@ describe('rename — post-tx claimant (§11 group 2)', () => {
     // A machine seat used to get an EXEMPTION here: post-commit, a
     // re-derive could mint an α-seat in the read→write gap and claim the
     // released name, so the pass had to recognize "a seat my own window
-    // produced" and rewrite past it. That recognition was a timestamp
-    // heuristic, and every review round found another way to fool it.
+    // produced" and rewrite past it.
     //
     // Same-tx removes the case rather than the guard. Seats are minted by
     // the post-commit `parseReferences`, which runs strictly AFTER this

@@ -362,12 +362,12 @@ describe('describeRuntime', () => {
     // `brief` jsdoc in authoringCatalog.ts).
     //
     // 41k -> 46k, measured 44,194. This is a real raise and worth stating
-    // why: the two examples PR #515 rewrote referenced `bookIdProp`,
+    // why: the two rewritten examples referenced `bookIdProp`,
     // `progressProp`, `libraryType`, `highlightType` and `noteProp` without
     // ever declaring them — which is exactly why they could not compile.
     // Declaring them is ~3KB that the string version got to omit by being
     // broken. Comments were trimmed twice to claw back what was claw-backable;
-    // what is left is the warnings each review round proved load-bearing.
+    // what is left is the warnings that proved load-bearing.
     expect(JSON.stringify(description).length).toBeLessThan(46_000)
   })
 

@@ -3,7 +3,7 @@ import type { BlockData, Tx } from '@/data/api'
 /**
  * The visible / outline view of a parent's children. Named counterpart to
  * the raw `tx.childrenOf`, whose default returns EVERY child — the
- * structural everything-view (PR #288/#386).
+ * structural everything-view.
  *
  * Today this filters EVERY recognized property row, not only hidden-tier
  * ones — an accepted interim until the tier-aware predicate lands. Read an

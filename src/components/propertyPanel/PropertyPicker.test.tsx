@@ -51,7 +51,7 @@ beforeEach(() => {
 })
 
 describe('PropertyPicker', () => {
-  // Guards the regression Codex flagged: the picker stays mounted after submit()
+  // Guards a regression: the picker stays mounted after submit()
   // (BlockTypeBlockRenderer), so reset() must clear the listbox's activeIndex —
   // otherwise the next property's suggestions open on a stale highlight.
   it('resets the highlighted suggestion after submit so the next session starts at the top', async () => {

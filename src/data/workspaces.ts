@@ -43,7 +43,7 @@ type RpcWorkspaceRow = {
   // the domain Workspace so the optimistic prime preserves the canary.
   encryption_mode: string
   wk_canary: string | null
-  // Properties-as-blocks rollout lever (PR #288 §6). Optional: RPCs
+  // Properties-as-blocks rollout lever (docs/properties-as-blocks-migration.html §6). Optional: RPCs
   // deployed before the column exist return rows without it; absence
   // parses as 'cell' (dormant).
   properties_migration?: string | null

@@ -62,7 +62,7 @@
  *    `>= date`, so this property holds in every timezone. This FILE pins
  *    `process.env.TZ` to a DST-observing zone below — on a UTC CI runner
  *    the pre-fix bug was invisible, so without the pin this regression
- *    pin was decorative (adversarial review on PR #384).
+ *    pin was decorative.
  * 2b. FIXED (was a fuzz find of this suite, red at the smoke seed): a
  *    NEGATIVE starting interval — codec-legal, concretely reachable via
  *    the Roam-memo importer's unchecked parseFloat — survived every

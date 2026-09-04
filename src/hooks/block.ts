@@ -110,7 +110,7 @@ export function useHandle<T, S = T | undefined>(
   // written by the post-commit useEffect below — so an abandoned render
   // (concurrent mode) can never pollute it. This is the structural
   // replacement for the previous useState-bag-mutated-during-render
-  // shape (reviewer P3).
+  // shape.
   const committedRef = useRef<CommittedSelection<S>>({
     hasValue: false,
     value: undefined as S,
@@ -123,7 +123,7 @@ export function useHandle<T, S = T | undefined>(
   // observed state — selectors that allocate (e.g. `data => data.map(…)`)
   // would otherwise return a new array on each call.
   //
-  // Why this is safe under concurrent mode (reviewer P3): the `let`
+  // Why this is safe under concurrent mode: the `let`
   // bindings are scoped to the closure useMemo returned. They never
   // appear on a shared object — an abandoned render that calls
   // getSelection only mutates locals on that render's closure (and only
@@ -435,8 +435,7 @@ export const useSubtree = (block: Block): Block[] => {
  *  passed query — pass `repo.activeWorkspaceId` explicitly when you
  *  really do want the user's currently-active workspace. Requiring the
  *  field at the type level prevents background flows / import surfaces
- *  from silently mis-scoping when the user switches workspaces mid-flight
- *  (PR #47 review). */
+ *  from silently mis-scoping when the user switches workspaces mid-flight. */
 export const useBlockQuery = (query: TypedBlockQuery): BlockData[] => {
   const repo = useRepo()
   return useHandle(repo.query.typedBlocks(query), {

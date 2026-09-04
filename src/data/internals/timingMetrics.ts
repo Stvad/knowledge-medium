@@ -1,4 +1,4 @@
-/**
+/*
  * Timing-based metrics: bounded reservoir + DB / query wrappers.
  *
  * Counterpart to the simple-counter metrics on HandleStore / BlockCache.

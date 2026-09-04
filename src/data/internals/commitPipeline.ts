@@ -184,7 +184,7 @@ const jsonEq = (a: unknown, b: unknown): boolean =>
  *  against the net `after` iff it changed since TX START **or** since
  *  the processor's WATERMARK — and never when its last writer was a
  *  `settledWrites` processor. Two baselines because each alone hides a
- *  real case (both found on PR #428):
+ *  real case:
  *   - tx-start alone: a later processor restoring a field to its
  *     tx-start value after the derivation ran on the intermediate value
  *     nets to zero — invisible to an apply that diffs field content
@@ -255,7 +255,7 @@ const rerunBefore = (
   return merged
 }
 
-/** Per-same-tx-processor timing sample for one tx (PR #288 §12: the
+/** Per-same-tx-processor timing sample for one tx (docs/properties-as-blocks-migration.html §12: the
  *  property-children processors add write amplification at parents —
  *  this is the counter that watches it). Collected only for processors
  *  that matched rows (or whose collect scan itself cost ≥1ms). */
@@ -358,7 +358,7 @@ export interface TxResult<R> {
   /** Merged property-schema registry snapshot paired with `processors`. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
   /** Same-tx step timings for diagnostics (write-amplification watch —
-   *  PR #288 §12). Internal callers attribute slow writeTransactions
+   *  docs/properties-as-blocks-migration.html §12). Internal callers attribute slow writeTransactions
    *  without changing tx semantics. */
   timing: Readonly<TxTimingDiagnostics>
 }
@@ -421,9 +421,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // processor can restore a field to its tx-start value after the
   // derivation ran on the intermediate value, and a tx-start baseline
   // makes that restore invisible to an apply that diffs field content
-  // internally (MATERIALIZE's changedPropertyNames — Codex review on PR
-  // #428: pass two fired on the dirty row but computed no changed names,
-  // leaving value children synced to the intermediate bag). Entries hold
+  // internally (MATERIALIZE's changedPropertyNames: pass two fired on
+  // the dirty row but computed no changed names, leaving value children
+  // synced to the intermediate bag). Entries hold
   // references to the same `after` objects the primitives built — no
   // copying.
   const rowWriteLog = new Map<string, Array<{gen: number, after: BlockData | null}>>()

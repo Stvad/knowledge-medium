@@ -28,7 +28,7 @@ export const referencesDataExtension: AppExtension = [
   // references plugin and placing it by hand in every composition root —
   // which also lifts it out of the plugin's `systemToggle` boundary, so
   // disabling References would leave the rewriter running with
-  // `parseReferences` gone (Codex on PR #444). See the ORDERING note in
+  // `parseReferences` gone. See the ORDERING note in
   // `renameProcessor.ts`.
   renameSameTxProcessors.map(processor =>
     sameTxProcessorsFacet.of(processor, {

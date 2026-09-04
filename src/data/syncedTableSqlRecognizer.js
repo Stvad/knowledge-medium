@@ -1,4 +1,4 @@
-/**
+/*
  * The synced-table SQL recognizer — the single source of truth for "does this
  * SQL text write `blocks` / `workspaces` / `workspace_members` anywhere?".
  *
@@ -23,8 +23,8 @@
  * ── What this recognizer is, and what it deliberately is not ──
  *
  * It answers ONE question: *does this SQL text write a synced table anywhere?*
- * Not "what does statement N write" — that framing is what leaked. Successive
- * review rounds each found a different way for a real write to hide from a
+ * Not "what does statement N write" — that framing is what leaked. There are
+ * several different ways for a real write to hide from a
  * leading-verb check: a `WITH …` CTE prefix, a schema qualifier
  * (`main.blocks`), a second statement after a harmless first, a comment
  * between keywords (`UPDATE /*x*\/ blocks`), and DML nested inside a

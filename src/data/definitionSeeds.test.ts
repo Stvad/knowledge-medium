@@ -469,7 +469,7 @@ describe('materializePropertySeeds', () => {
 
   it('ensures its own Properties page when it does not exist yet (self-sufficient before bootstrap)', async () => {
     // Mirrors the analogous TYPE-seed test below (added when that ordering fix
-    // landed — commit 1228828d2 / "C3d") but was missing on the property side.
+    // landed — "C3d") but was missing on the property side.
     // A `setActiveWorkspaceId`-driven reschedule (or any caller that races ahead
     // of bootstrap's `ensureSystemPages`) can fire the property pass before the
     // Properties page exists; without the pass ensuring its own parent,
@@ -1034,7 +1034,7 @@ describe('seed definition write guard (tx layer)', () => {
 
   it('rejects a user-scope createOrGet insert of a provenance-valid seed row', async () => {
     // createOrGet's insert path builds the same row shape as create — the
-    // old per-primitive guard covered only create (Codex review). The
+    // old per-primitive guard covered only create. The
     // commit-time check sees the insert's snapshot like any other write.
     const id = propertyDefinitionBlockId(WS, seed.seedKey)
     await expect(repo.tx(async tx => {
@@ -1053,7 +1053,7 @@ describe('seed definition write guard (tx layer)', () => {
   it('rejects a user-scope restore patch that makes a tombstoned occupant provenance-valid', async () => {
     // The dual of restore-tamper: the tombstone is a PLAIN occupant of the
     // deterministic id, and the patch writes the canonical bag in — the
-    // resulting row, not the before row, is what forges (Codex review).
+    // resulting row, not the before row, is what forges.
     const id = propertyDefinitionBlockId(WS, seed.seedKey)
     await repo.tx(async tx => {
       await tx.create({

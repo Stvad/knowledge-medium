@@ -194,7 +194,7 @@ describe('applyKeybindingOverrides', () => {
   })
 
   it('installs a `+` override as the `+` key, not the bare modifier', () => {
-    // Regression pin (Codex, PR #427): rule 1 now installs through
+    // Regression pin: rule 1 now installs through
     // `normalizeChordSequence`, and the settings capture path records
     // pressing `+` as 'Shift++'. A `+`-split that dropped empty tokens
     // would install 'Shift' — rebinding the action to Shift alone, and

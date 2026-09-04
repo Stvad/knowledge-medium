@@ -59,8 +59,8 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
 })
 
-/** The fields `isUsableInteractionRecord` and the comparison dereference. */
-/** Spread at WRITE time via `mine()`: the client id is minted per test, and
+/** The fields `isUsableInteractionRecord` and the comparison dereference.
+ *  Spread at WRITE time via `mine()`: the client id is minted per test, and
  *  the series query admits only this client's rows. */
 const RECORD = {
   startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'set-per-test',

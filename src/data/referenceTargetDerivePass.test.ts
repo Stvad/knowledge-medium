@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * One-time-per-workspace catch-up derive of the LOCAL `reference_target_id`
- * column (PR #288 slice A): rows that predate the column (upgrading device /
+ * column: rows that predate the column (upgrading device /
  * pre-registry sync) get stamped once, marker-gated, without advancing
  * `updated_at` (the LWW row-version) and without enqueueing uploads.
  */
@@ -168,8 +168,8 @@ describe('reference-target initial derive pass', () => {
     expect(await readColumn('late-row')).toBeNull()
 
     // A new open (new Repo) sweeps again — definitions/aliases that arrived
-    // while the app was closed are repaired at the next open (adversarial-
-    // review round 2: a durable once-ever marker missed them forever).
+    // while the app was closed are repaired at the next open (a durable
+    // once-ever marker missed them forever).
     const repo2 = setup()
     await runPass(repo2)
     expect(await readColumn('late-row')).toBe('late-target')

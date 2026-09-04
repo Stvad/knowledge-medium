@@ -1,6 +1,6 @@
 /**
- * Pure helpers for properties-as-blocks field/value children (PR #288 §5/§9,
- * extracted from the PR #285 spike). A property on a block is a FIELD ROW —
+ * Pure helpers for properties-as-blocks field/value children
+ * (docs/properties-as-blocks-migration.html §5/§9). A property on a block is a FIELD ROW —
  * a child whose content is the MARKED field form `::((fieldId))` (§7 grammar
  * box: `::` + one whole-block reference span), mirrored into the local
  * `reference_target_id` + `is_field_form` columns — whose own
@@ -121,7 +121,7 @@ const finiteNumberFromContent = (content: string): number => {
   const trimmed = content.trim()
   // `Number('')` and `Number('   ')` are 0, not NaN, so the isFinite guard
   // below waves blank content through as a real zero — a cleared value row
-  // would silently project 0 over the cell (PR #386 review). Blank is not the
+  // would silently project 0 over the cell. Blank is not the
   // encoding of any number (`encodedValueToContent` writes `String(n)`, and
   // reserves '' for undefined), so it's unparseable: throwing preserves the
   // row's text and surfaces the count, rather than inventing a value.
@@ -284,7 +284,7 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     // `.trim() === ''`: a whitespace-only id is a MALFORMED reference (not a
     // clear), so it must reach `referenceBlockContentForId` — which throws on a
     // whitespace/parens id — rather than silently unsetting the property here,
-    // the same silent property-loss that guard exists to prevent (Codex #386).
+    // the same silent property-loss that guard exists to prevent.
     if (encoded === '') return ''
     return referenceBlockContentForId(encoded)
   }
@@ -334,7 +334,7 @@ const contentToEncodedValue = (
   switch (schema.codec.type) {
     case 'ref': {
       // The gate is this content's FORM, never `reference_target_id`'s
-      // nullness (§9; PR #417 review). The column is not the "is this a ref
+      // nullness (§9). The column is not the "is this a ref
       // value" signal it looks like: `core.deriveReferenceTarget` stamps it
       // for a whole-block `[[alias]]` too, and a `[[alias]]` nothing claims
       // MINTS a seat and then resolves. So trusting any non-null target
@@ -503,7 +503,7 @@ const propertyValueFieldRow = async (
 
 /**
  * Is `row` ITSELF a recognized property field row — the `::((fieldId))`
- * child that carries a property's identity on its owner (PR #288 §9)?
+ * child that carries a property's identity on its owner (docs/properties-as-blocks-migration.html §9)?
  * The flat predicate directly: bit ∧ non-null parent ∧ shadow-tolerant
  * definition resolution (`tx.isPropertyFieldDefinition`). Not flip-gated —
  * see the module header: the backfill mints these rows before the flip, and
@@ -532,7 +532,7 @@ export const isPropertyFieldRow = async (
 
 /**
  * Is `source` a property VALUE row — the direct non-`::` child of a
- * recognized field row (PR #288 §9)? Shared write-side primitive: a value
+ * recognized field row (docs/properties-as-blocks-migration.html §9)? Shared write-side primitive: a value
  * child's content IS
  * the property's value (ref-typed as `((targetId))`, scalar-typed as its
  * codec's canonical text), so any write path that rewrites `content` without

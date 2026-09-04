@@ -938,8 +938,9 @@ export const deletePanelRow = async (
     const nextActivePanelId = deletingActivePanel
       ? nextActivePanelAfterClose(row, parent, rowsBeforeDelete)
       : undefined
-    // Subtree deletes (PR #288 §9): panel rows are UiState property hosts —
-    // in a flipped workspace their bags materialize as hidden field/value
+    // Subtree deletes (docs/properties-as-blocks-migration.html §9): panel
+    // rows are UiState property hosts — in a flipped workspace their bags
+    // materialize as hidden field/value
     // children, and a bare tx.delete would strand those live under the
     // tombstone (still indexed/uploaded).
     await deleteLayoutRowSubtreeInTx(tx, panelId)

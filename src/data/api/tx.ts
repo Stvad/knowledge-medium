@@ -243,7 +243,7 @@ export interface Tx {
    *  the tx-start registry snapshot. */
   isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean
 
-  /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
+  /** The one properties-as-blocks predicate (docs/properties-as-blocks-migration.html §6): is `workspaceId`
    *  flipped to child-backed properties (`workspaces.properties_migration`
    *  at or past 'children' — never an equality test)? It governs the
    *  read/write DIRECTION — the dual-write gate, the projection processors,
@@ -325,7 +325,7 @@ export interface Tx {
    *  This is the structural view: the actual tree, no hidden rows, so a
    *  traversal can never silently miss machinery it needs to carry (delete
    *  cascade, copy, merge). The display-visible view — which excludes
-   *  recognized property field rows (PR #288 §9) — is opt-IN via
+   *  recognized property field rows (docs/properties-as-blocks-migration.html §9) — is opt-IN via
    *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
    *  flip-gated, so it prunes in every workspace: the cell→children backfill
    *  mints field rows while the workspace still reads cells.
