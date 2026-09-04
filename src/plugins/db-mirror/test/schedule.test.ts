@@ -13,7 +13,7 @@ import {beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Repo} from '@/data/repo'
 import type {AppEffectContext} from '@/extensions/core'
 import type {CadencedIdleJob} from '@/utils/cadencedIdleJob'
-import {createDbMirrorSchedule, PERMISSION_LOST_MESSAGE} from '../schedule.js'
+import {BUSY_RETRY_MS, createDbMirrorSchedule, PERMISSION_LOST_MESSAGE} from '../schedule.js'
 import {createDbMirrorStore, type DbMirrorStore} from '../store.js'
 import type {DbMirrorOutcome} from '../mirror.js'
 
@@ -27,17 +27,19 @@ const fakeJob = () => {
   const state = {
     body: null as (() => Promise<number | void>) | null,
     stopped: 0,
-    rearms: [] as number[],
+    /** Which loop got re-armed, and with what — the effect can restart, and a
+     *  run in flight across that must not reschedule its successor. */
+    rearms: [] as Array<{loop: number; delayMs: number}>,
     starts: 0,
   }
   const job: CadencedIdleJob = {
     drain: async () => {},
     start: (body) => {
-      state.starts += 1
+      const loop = ++state.starts
       state.body = body
       return {
         stop: () => { state.stopped += 1; state.body = null },
-        rearmIn: (delayMs) => state.rearms.push(delayMs),
+        rearmIn: (delayMs) => state.rearms.push({loop, delayMs}),
       }
     },
   }
@@ -156,15 +158,18 @@ describe('the mirror schedule', () => {
   })
 
   describe('a lost folder permission', () => {
-    it('stops the loop and says so, rather than retrying every idle tick', async () => {
+    it('says so and keeps checking on the ordinary cadence', async () => {
+      // NOT halted. A tick cannot prompt — it only queries the standing grant —
+      // so there is nothing to protect the user from by stopping, and a stopped
+      // loop is what left other tabs dark after a re-grant elsewhere.
       await enable()
       outcomes = [{kind: 'permission-lost', permission: 'prompt'}]
       const {job} = build()
 
       const next = await job.body!()
 
-      expect(next).toBeUndefined()
-      expect(job.stopped).toBe(1)
+      expect(next).toBe(120 * 60_000)
+      expect(job.stopped).toBe(0)
       expect((await store.load(USER)).status).toMatchObject({
         permissionLost: true,
         lastError: PERMISSION_LOST_MESSAGE,
@@ -186,6 +191,25 @@ describe('the mirror schedule', () => {
       })
     })
 
+    it('recovers by itself once the grant is back — no wake-up needed', async () => {
+      // The grant can come back in ANOTHER tab, or through browser settings.
+      // This tab hears about neither, so recovery has to be something its own
+      // next tick discovers.
+      await enable()
+      outcomes = [{kind: 'permission-lost', permission: 'prompt'}]
+      const {job} = build()
+      await job.body!()
+
+      outcomes = [MIRRORED]
+      await job.body!()
+
+      expect(mirror).toHaveBeenCalledTimes(2)
+      expect((await store.load(USER)).status).toMatchObject({
+        permissionLost: false,
+        lastFilename: MIRRORED.filename,
+      })
+    })
+
     it('is forgotten once a run gets through, even one that copied nothing', async () => {
       // Access can come back outside the dialog — the user restores it in
       // browser site settings. Reaching an unchanged check at all means the
@@ -193,32 +217,16 @@ describe('the mirror schedule', () => {
       // would have the chip report a paused mirror that is running fine.
       await enable()
       outcomes = [{kind: 'permission-lost', permission: 'prompt'}]
-      const {schedule, job} = build()
+      const {job} = build()
       await job.body!()
       expect((await store.load(USER)).status.permissionLost).toBe(true)
 
       outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: []}]
-      schedule.resume()
       await job.body!()
 
       const {status} = await store.load(USER)
       expect(status.permissionLost).toBe(false)
       expect(status.lastError).toBeUndefined()
-    })
-
-    it('starts running again only once settings re-grants it', async () => {
-      await enable()
-      outcomes = [{kind: 'permission-lost', permission: 'prompt'}]
-      const {schedule, job} = build()
-      await job.body!()
-      expect(job.body).toBeNull()
-
-      outcomes = [MIRRORED]
-      schedule.resume()
-
-      expect(job.starts).toBe(2)
-      await job.body!()
-      expect(mirror).toHaveBeenCalledTimes(2)
     })
   })
 
@@ -236,13 +244,15 @@ describe('the mirror schedule', () => {
   })
 
   describe('another tab already mirroring', () => {
-    it('stands down instead of copying alongside it', async () => {
+    it('stands down, and comes back well before the full cadence', async () => {
+      // The holder may be mid-copy — or may have crashed, closed, or failed. On
+      // a weekly cadence, waiting it out would leave the survivor idle for days.
       await enable()
       const {job} = build({lockHeldElsewhere: true})
 
       const next = await job.body!()
 
-      expect(next).toBe(120 * 60_000)
+      expect(next).toBe(BUSY_RETRY_MS)
       // Nothing recorded: the tab holding the lock is writing the same status.
       expect((await store.load(USER)).status).toEqual({})
     })
@@ -310,18 +320,37 @@ describe('the mirror schedule', () => {
 
       await schedule.runNow(repo)
 
-      expect(job.rearms).toEqual([120 * 60_000])
+      expect(job.rearms).toEqual([{loop: 1, delayMs: 120 * 60_000}])
     })
 
-    it('reports the folder being off-limits without restarting the loop', async () => {
+    it('reports the folder being off-limits', async () => {
       await enable()
       outcomes = [{kind: 'permission-lost', permission: 'denied'}]
-      const {schedule, job} = build()
+      const {schedule} = build()
 
       const report = await schedule.runNow(repo)
 
       expect(report.outcome).toMatchObject({kind: 'permission-lost'})
-      expect(job.rearms).toEqual([])
+    })
+
+    it('does not reschedule the loop that replaced the one it started against', async () => {
+      // Local-only sign-out swaps the repo mid-copy. ONE schedule whose effect
+      // restarts — which is what production has — so the stale continuation is
+      // holding a handle to a loop that is gone.
+      await enable()
+      let release!: () => void
+      const held = new Promise<void>(resolve => { release = resolve })
+      mirror.mockImplementationOnce(async () => { await held; return MIRRORED })
+      const {schedule, job, stop} = build()
+
+      const manual = schedule.runNow(repo)
+      stop?.()
+      schedule.effect.start({repo: {user: {id: 'bob'}}} as unknown as AppEffectContext)
+      release()
+      await manual
+
+      expect(job.starts).toBe(2)
+      expect(job.rearms.filter(r => r.loop === 2)).toEqual([])
     })
   })
 
@@ -332,8 +361,19 @@ describe('the mirror schedule', () => {
     stop?.()
 
     expect(job.stopped).toBe(1)
-    // A settings surface left open must not revive a torn-down effect.
+    // A settings surface left open must not re-arm a torn-down effect.
     schedule.resume()
-    expect(job.starts).toBe(1)
+    expect(job.rearms).toEqual([])
+  })
+
+  it('publishes the persisted state as soon as it starts', async () => {
+    // Otherwise the health chip has nothing to show until the first scheduled
+    // run, which waits for a genuinely idle main thread and may never come.
+    await enable()
+    await store.recordStatus(USER, {permissionLost: true, lastError: 'the grant lapsed', lastErrorAt: 1})
+    store = createDbMirrorStore()
+    build()
+
+    await vi.waitFor(() => expect(store.getSnapshot()?.status.permissionLost).toBe(true))
   })
 })

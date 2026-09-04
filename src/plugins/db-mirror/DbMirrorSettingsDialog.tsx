@@ -195,6 +195,16 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
         case 'no-folder':
           showError('No folder has been chosen yet.')
           break
+        case 'busy-elsewhere':
+          showInfo('Another tab of this app is already making a copy — this one left it to that tab.')
+          break
+        default: {
+          // Exhaustiveness: a new outcome kind is a compile error here rather
+          // than a button press that silently reports nothing, which is how
+          // `busy-elsewhere` went unhandled when it was added.
+          const unhandled: never = outcome
+          showError(`The mirror reported something unexpected: ${JSON.stringify(unhandled)}`)
+        }
       }
     } catch (err) {
       showError(describeError(err))

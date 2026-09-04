@@ -122,7 +122,7 @@ const pruneScanned = async (
   directory: FileSystemDirectoryHandle,
   scanned: readonly MirrorCopy[],
   keepCount: number,
-  protectedName?: string,
+  protectedName: string | undefined,
 ): Promise<readonly string[]> => {
   const copies = scanned.filter(copy => copy.name !== protectedName)
   // The protected copy occupies one of the slots, so only the rest compete.
@@ -142,21 +142,17 @@ const pruneScanned = async (
   return removed
 }
 
-export const pruneDbMirrorCopies = async (
-  directory: FileSystemDirectoryHandle,
-  dbFilename: string,
-  keepCount: number,
-  protectedName?: string,
-): Promise<readonly string[]> =>
-  pruneScanned(directory, await scanMirrorCopies(directory, dbFilename), keepCount, protectedName)
-
 /** Pruning never fails a run: the copy is on disk and good, and failing over
  *  housekeeping would discard that. The next run retries the same files. */
 const prune = async (
   directory: FileSystemDirectoryHandle,
   scanned: readonly MirrorCopy[],
   keepCount: number,
-  protectedName?: string,
+  /** REQUIRED, not optional: every caller knows which copy is the current one —
+   *  the one it just wrote, or the one the stored marker refers to — and an
+   *  omitted argument silently reintroduces the clock-skew deletion this
+   *  protects against. Pass `undefined` only when there genuinely is none. */
+  protectedName: string | undefined,
 ): Promise<readonly string[]> => {
   try {
     return await pruneScanned(directory, scanned, keepCount, protectedName)
@@ -214,7 +210,13 @@ export const runDbMirror = async ({
     // too: otherwise lowering the keep count never takes effect while the
     // database sits unchanged, and a pruning failure is never retried.
     if (present) {
-      return {kind: 'skipped-unchanged', marker, pruned: await prune(directory, scanned, keepCount)}
+      return {
+        kind: 'skipped-unchanged',
+        marker,
+        // The copy the marker points at is the current one here, and the same
+        // clock skew that could delete a freshly written copy could delete this.
+        pruned: await prune(directory, scanned, keepCount, lastCopy.filename),
+      }
     }
   }
 

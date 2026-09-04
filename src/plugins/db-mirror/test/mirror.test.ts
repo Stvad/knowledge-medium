@@ -25,7 +25,7 @@ const stubRepo = (marker: number | null = 42, queue = {n: 0, last: null}): Repo 
 
 /** What `readChangeMarker` produces for the stub above — tests state the marker
  *  they expect rather than reading it back off the thing under test. */
-const MARKER = '42/0.0'
+const MARKER = '42/0.0/0.0'
 
 /** Stands in for `exportRawSqliteDbToFile`: writes `bytes` of payload through
  *  the handle exactly as the real checkpointed export does. */
@@ -125,7 +125,7 @@ describe('runDbMirror', () => {
 
   it('copies again once the marker has moved', async () => {
     const dir = new FakeDirectoryHandle()
-    const outcome = await run({directory: dir.asHandle(), lastCopy: {marker: '41/0.0', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)}})
+    const outcome = await run({directory: dir.asHandle(), lastCopy: {marker: '41/0.0/0.0', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)}})
     expect(outcome).toMatchObject({kind: 'mirrored'})
   })
 
@@ -254,6 +254,27 @@ describe('runDbMirror', () => {
 
       expect(outcome).toMatchObject({kind: 'skipped-unchanged', pruned: [older[1], older[0]]})
       expect(dir.names()).toEqual([older[2]])
+    })
+
+    it('keeps the copy the marker points at when the clock jumped backwards', async () => {
+      // Same rule as for a freshly written copy, at the other call site: the
+      // unchanged path prunes too, and ranking by the stamp in the name would
+      // otherwise delete the newest real backup in favour of future-stamped
+      // ones — leaving the status pointing at a file that is gone.
+      const dir = new FakeDirectoryHandle()
+      const current = dbMirrorFilename(DB, AT - HOUR, TOKEN)
+      const fromTheFuture = [1, 2].map(n => dbMirrorFilename(DB, AT + n * HOUR, TOKEN))
+      dir.seed(current, 512)
+      fromTheFuture.forEach(name => dir.seed(name, 512))
+
+      const outcome = await run({
+        directory: dir.asHandle(),
+        lastCopy: {marker: MARKER, filename: current},
+        keepCount: 2,
+      })
+
+      expect(outcome).toMatchObject({kind: 'skipped-unchanged'})
+      expect(dir.names()).toContain(current)
     })
 
     it('keeps the copy this run just wrote even when the clock jumped backwards', async () => {

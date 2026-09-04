@@ -10,14 +10,29 @@
  * matters because the alternative is copying multiple gigabytes to discover
  * nothing changed.
  *
- * `ps_crud` is the pending-upload queue, and it is in here for a restore-safety
- * reason rather than a data one. Draining the queue writes nothing to `blocks`,
- * so on the `row_events` reading alone a mirror taken while an upload was still
- * pending would keep that pending entry FOREVER once the user stops editing.
- * Restoring it replays the patch — and patches are column-LWW, so a value
- * another device has since changed gets overwritten by the stale one. Sampling
- * the queue costs one small query and converges the newest copy on a drained
- * queue, at the price of roughly one extra copy per editing session.
+ * The other two are the upload queues, and they are in here for a
+ * restore-safety reason rather than a data one. THE RULE, so the next reader
+ * knows where the line is: the marker tracks the data, plus every local table
+ * whose stale contents can cause a WRITE TO THE SERVER when the copy is
+ * restored. It deliberately does not track local tables whose staleness is
+ * merely cosmetic — undo history, recents, the event log — because being
+ * as-of-that-moment is what restoring a snapshot MEANS, and fingerprinting the
+ * whole database would leave nothing for the skip to skip.
+ *
+ * `ps_crud` is the pending-upload queue. Draining it writes nothing to
+ * `blocks`, so on the `row_events` reading alone a mirror taken while an upload
+ * was still pending would keep that pending entry FOREVER once the user stops
+ * editing. Restoring it replays the patch — and patches are column-LWW, so a
+ * value another device has since changed gets overwritten by the stale one.
+ *
+ * `ps_crud_rejected` is the quarantine for uploads the server refused, and it
+ * qualifies under the same rule because the rejection dialog's Retry button
+ * puts a row straight back into `ps_crud`. A restore that resurrects a
+ * rejection the user had dismissed offers them one click to upload a patch that
+ * is now stale.
+ *
+ * Sampling both costs two small queries and converges the newest copy on drained
+ * queues, at the price of roughly one extra copy per editing session.
  *
  * Rejected alternative for the first part: PowerSync's `ps_sync_state`
  * checkpoint. It advances on SYNC, so a device working offline all day would
@@ -36,16 +51,19 @@ export interface ChangeMarkerSource {
  *  answer when the queue is unknowable. */
 const QUEUE_UNKNOWN = '?'
 
-const readQueueFingerprint = async (repo: ChangeMarkerSource): Promise<string> => {
+const readQueueFingerprint = async (
+  repo: ChangeMarkerSource,
+  table: 'ps_crud' | 'ps_crud_rejected',
+): Promise<string> => {
   try {
     const [row] = await repo.db.getAll<{n: number; last: number | null}>(
-      'SELECT COUNT(*) AS n, MAX(id) AS last FROM ps_crud',
+      `SELECT COUNT(*) AS n, MAX(id) AS last FROM ${table}`,
     )
     // Both, because either alone is blind to a case: the count misses a queue
     // that gained and drained an entry between runs, and the id misses a drain.
     return `${row?.n ?? 0}.${row?.last ?? 0}`
   } catch (err) {
-    console.warn('[db-mirror] could not read the upload queue', err)
+    console.warn(`[db-mirror] could not read ${table}`, err)
     return QUEUE_UNKNOWN
   }
 }
@@ -70,5 +88,9 @@ export const readChangeMarker = async (
     console.warn('[db-mirror] could not read the change marker; mirroring anyway', err)
     return undefined
   }
-  return `${blocks}/${await readQueueFingerprint(source)}`
+  const [queued, rejected] = await Promise.all([
+    readQueueFingerprint(source, 'ps_crud'),
+    readQueueFingerprint(source, 'ps_crud_rejected'),
+  ])
+  return `${blocks}/${queued}/${rejected}`
 }

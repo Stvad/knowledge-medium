@@ -261,6 +261,18 @@ describe('DbMirrorSettingsDialog', () => {
     expect(store.getSnapshot()?.status.permissionLost).toBe(true)
   })
 
+  it('"Mirror now" says another tab is copying rather than reporting nothing at all', async () => {
+    mocks.runNow.mockResolvedValue({ outcome: { kind: 'busy-elsewhere' }, intervalMs: 60_000 })
+    renderDialog()
+    await waitForLoaded()
+
+    await userEvent.click(mirrorNowButton())
+
+    await waitFor(() =>
+      expect(mocks.showInfo).toHaveBeenCalledWith(expect.stringMatching(/another tab/i)),
+    )
+  })
+
   it('"Mirror now" reports a skipped-unchanged outcome as nothing changed, not as a success or a failure', async () => {
     mocks.runNow.mockResolvedValue({
       outcome: { kind: 'skipped-unchanged', marker: '42' },

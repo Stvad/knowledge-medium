@@ -10,11 +10,23 @@
  * One entry point — `runNow` (the settings surface's "Mirror now") and the
  * scheduled tick both go through `performDbMirror`, so a manual run cannot skip
  * a check the scheduled one makes, or record its result differently.
+ *
+ * The loop NEVER stops once started, and that is a deliberate simplification of
+ * an earlier design that halted it on a lost folder permission. Halting was
+ * solving a problem that did not exist: the requirement is that a lost
+ * permission is asked about ONCE rather than on every idle tick, and a tick
+ * cannot ask at all — it calls `queryPermission`, which never prompts, and only
+ * the settings surface ever calls `requestPermission`. What halting did cost was
+ * real: every tab that met the lost permission stopped independently, so a
+ * re-grant in one tab left the others halted while displaying a healthy mirror,
+ * and reviving them needed a cross-tab wake-up that a running loop does not.
+ * A permission-lost run now just takes the ordinary cadence and recovers by
+ * itself in every tab.
  */
 import type {Repo} from '@/data/repo'
 import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import type {AppEffect} from '@/extensions/core.js'
-import {cadencedIdleJob, type CadencedIdleJob, type LoopHandle} from '@/utils/cadencedIdleJob.js'
+import {cadencedIdleJob, type CadencedIdleJob} from '@/utils/cadencedIdleJob.js'
 import {LAZY_DEEP_IDLE} from '@/utils/scheduleIdle.js'
 import {runDbMirror, type DbMirrorOutcome} from './mirror.js'
 import {withMirrorRunLock} from './runLock.js'
@@ -24,6 +36,11 @@ import {DB_MIRROR_DEFAULTS, dbMirrorStore, type DbMirrorStore} from './store.js'
 /** A run that threw. Short enough that a transient failure (the folder's drive
  *  briefly unmounted) doesn't cost a whole cadence. */
 export const FAILURE_RETRY_MS = 5 * 60_000
+
+/** Another tab held the run lock. It may be mid-copy — or it may have crashed,
+ *  closed, or failed — so this comes back well before the full cadence, which
+ *  on a weekly setting would otherwise leave the survivor idle for days. */
+export const BUSY_RETRY_MS = 5 * 60_000
 
 export const PERMISSION_LOST_MESSAGE =
   'This browser no longer has permission to write to the chosen folder. Open the mirror ' +
@@ -202,44 +219,39 @@ export const createDbMirrorSchedule = ({
     return entry.run
   }
 
+  /** How long before the next scheduled run, given what this one found. */
+  const delayFor = (report: DbMirrorRunReport): number =>
+    report.outcome.kind === 'busy-elsewhere'
+      ? Math.min(BUSY_RETRY_MS, report.intervalMs)
+      : report.intervalMs
+
   const effect: AppEffect = {
     id: 'db-mirror.schedule',
     start: ({repo}) => {
       // No picker, no feature: there is no way for the user to have chosen a
       // folder, and nothing to re-check later in the same session.
       if (!supported()) return
-      let loop: LoopHandle | null = null
-      let disposed = false
 
-      const halt = (): void => {
-        loop?.stop()
-        loop = null
-      }
-      const arm = (delayMs?: number): void => {
-        if (disposed) return
-        if (!loop) loop = job.start(tick, {onFailureDelayMs: FAILURE_RETRY_MS})
-        if (delayMs !== undefined) loop.rearmIn(delayMs)
-      }
+      // Publish the persisted state at once. Until something loads it the
+      // snapshot is null and the health chip has nothing to show, so a
+      // permission or disk failure recorded in a previous session would stay
+      // invisible until the first scheduled run — which waits for a genuinely
+      // idle main thread and may never come in a busy session.
+      store.load(repo.user.id).catch((err: unknown) => {
+        console.warn('[db-mirror] could not read the mirror state at startup', err)
+      })
 
-      async function tick(): Promise<number | void> {
-        const {outcome, intervalMs} = await performDbMirror(repo)
-        if (outcome.kind === 'permission-lost') {
-          // Stop, rather than retry on a cadence. Only `requestPermission` from
-          // a user gesture can restore the grant and a tick has none, so every
-          // further run would fail identically. The settings surface asks once
-          // and calls `resume`.
-          halt()
-          return
-        }
-        return intervalMs
-      }
-
-      arm()
-      live = {resume: arm}
+      const loop = job.start(
+        async () => delayFor(await performDbMirror(repo)),
+        {onFailureDelayMs: FAILURE_RETRY_MS},
+      )
+      const mine = {resume: (delayMs: number) => loop.rearmIn(delayMs)}
+      live = mine
       return () => {
-        disposed = true
-        live = null
-        halt()
+        // Only if it is still ours — a restart for another user may already have
+        // replaced it.
+        if (live === mine) live = null
+        loop.stop()
       }
     },
   }
@@ -248,10 +260,12 @@ export const createDbMirrorSchedule = ({
     effect,
     resume: (delayMs = 0) => live?.resume(delayMs),
     runNow: async (repo) => {
+      // Captured before the await: the effect can restart for a different user
+      // while a large copy is in flight, and this run's cadence must not
+      // reschedule the loop that replaced it.
+      const started = live
       const report = await performDbMirror(repo)
-      // Measure the next scheduled run from this one, and restart a loop that a
-      // lost permission had stopped — the run just proved the grant is back.
-      if (report.outcome.kind !== 'permission-lost') live?.resume(report.intervalMs)
+      if (started && started === live) started.resume(delayFor(report))
       return report
     },
   }
