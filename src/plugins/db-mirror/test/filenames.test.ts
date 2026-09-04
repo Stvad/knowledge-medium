@@ -9,8 +9,8 @@ import {
 const DB = 'kmp-v6-alice.db'
 const AT = Date.UTC(2026, 8, 4, 13, 45, 2)
 /** Identity of the database whose copies these are. */
-const DB1 = '1.1700000000000'
-const DB2 = '1.1700000000001'
+const DB1 = '1700000000000'
+const DB2 = '1700000000001'
 const TAG = incarnationTag(DB1)
 
 describe('dbMirrorFilename', () => {

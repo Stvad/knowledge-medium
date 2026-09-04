@@ -14,8 +14,8 @@ const HOUR = 3_600_000
 const TOKEN = 'aaaaaa'
 
 /** This database's identity, and another device's sharing the same folder. */
-const DB1 = '1.1700000000000'
-const DB2 = '1.1700000000001'
+const DB1 = '1700000000000'
+const DB2 = '1700000000001'
 
 /** A repo stub: the mirror only reads `user.id` and the three marker queries. */
 const stubRepo = (marker: number | null = 42, queue = {n: 0, last: null}): Repo =>
@@ -24,7 +24,7 @@ const stubRepo = (marker: number | null = 42, queue = {n: 0, last: null}): Repo 
     db: {
       getAll: async (sql: string) => {
         if (sql.includes('ps_crud')) return [queue]
-        if (sql.includes('MIN(id)')) return [{first: 1, born: 1700000000000}]
+        if (sql.includes('MIN(created_at)')) return [{born: 1700000000000}]
         return [{marker}]
       },
     },
@@ -353,7 +353,7 @@ describe('runDbMirror', () => {
         user: {id: USER},
         db: {
           getAll: async (sql: string) => {
-            if (sql.includes('MIN(id)')) return [{first: null, born: null}]
+            if (sql.includes('MIN(created_at)')) return [{born: null}]
             if (sql.includes('ps_crud')) return [{n: 0, last: null}]
             return [{marker: 42}]
           },

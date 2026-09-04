@@ -87,17 +87,22 @@ const readQueueFingerprint = async (
  * `undefined` when it cannot be read or the log is empty. Callers treat that as
  * "a database I know nothing about": copy, and prune nothing that is not
  * plainly this run's own.
+ *
+ * ONE aggregate, deliberately. `MIN(created_at)` alone is a SEARCH against
+ * `idx_row_events_created` — the constant-time minimum lookup. Pairing it with
+ * a second aggregate in the same statement costs a full covering-index SCAN
+ * (measured against a live database), and the obvious companion, `MIN(id)`,
+ * would carry no information anyway: the log is never trimmed, so it is 1.
  */
 export const readDatabaseIncarnation = async (
   repo: Repo | ChangeMarkerSource,
 ): Promise<string | undefined> => {
   try {
-    const [row] = await (repo as ChangeMarkerSource).db.getAll<{
-      first: number | null
-      born: number | null
-    }>('SELECT MIN(id) AS first, MIN(created_at) AS born FROM row_events')
+    const [row] = await (repo as ChangeMarkerSource).db.getAll<{born: number | null}>(
+      'SELECT MIN(created_at) AS born FROM row_events',
+    )
     if (row?.born == null) return undefined
-    return `${row.first ?? 0}.${row.born}`
+    return String(row.born)
   } catch (err) {
     console.warn('[db-mirror] could not read the database identity', err)
     return undefined

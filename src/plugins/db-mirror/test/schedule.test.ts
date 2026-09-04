@@ -24,12 +24,12 @@ import type {DbMirrorOutcome} from '../mirror.js'
 
 const USER = 'alice'
 /** The identity `readDatabaseIncarnation` derives from this repo's log. */
-const INCARNATION = '1.1700000000000'
+const INCARNATION = '1700000000000'
 const repo = {
   user: {id: USER},
   db: {
     getAll: async (sql: string) =>
-      sql.includes('MIN(id)') ? [{first: 1, born: 1700000000000}] : [{marker: 1}],
+      sql.includes('MIN(created_at)') ? [{born: 1700000000000}] : [{marker: 1}],
   },
 } as unknown as Repo
 const NOW = Date.UTC(2026, 8, 4, 13, 45, 2)
