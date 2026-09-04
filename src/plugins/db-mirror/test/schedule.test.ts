@@ -133,7 +133,7 @@ describe('the mirror schedule', () => {
     })
   })
 
-  it('passes the last mirrored marker to the next run, so an unchanged database is skipped', async () => {
+  it('passes the last copy — marker AND filename — to the next run', async () => {
     await enable()
     const {job} = build()
     await job.body!()
@@ -141,7 +141,11 @@ describe('the mirror schedule', () => {
     outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: []}]
     await job.body!()
 
-    expect(mirror).toHaveBeenLastCalledWith(expect.objectContaining({lastMarker: '42'}))
+    // Both, because the skip needs both: the marker says the database has not
+    // moved, and only the filename lets the run check a copy is really there.
+    expect(mirror).toHaveBeenLastCalledWith(
+      expect.objectContaining({lastCopy: {marker: '42', filename: MIRRORED.filename}}),
+    )
     // A skipped run is still a completed check, and it leaves the copy on disk
     // as the last successful mirror.
     const {status} = await store.load(USER)

@@ -34,7 +34,7 @@ export type DbMirrorOutcome =
       kind: 'mirrored'
       filename: string
       bytes: number
-      /** Stored as the next run's `lastMarker`; undefined when unreadable. */
+      /** Stored as part of the next run's `lastCopy`; undefined when unreadable. */
       marker: string | undefined
       pruned: readonly string[]
     }
@@ -47,8 +47,11 @@ export interface DbMirrorRunOptions {
   /** How many copies survive, counting the one this run writes. */
   keepCount: number
   now: number
-  /** The marker recorded by the last successful run, if any. */
-  lastMarker?: string
+  /** What the last successful run left behind, if anything. The marker and the
+   *  filename travel TOGETHER because the skip needs both: the marker says the
+   *  database has not moved, and only the file's presence in THIS folder says
+   *  a copy of it is actually there. */
+  lastCopy?: {marker: string; filename: string}
   /** Per-run token in the copy's name; defaults to a fresh random one. Pinned
    *  by tests so they can state the expected filename rather than reading it
    *  back from the run, which would assert nothing about the naming. */
@@ -75,39 +78,53 @@ const removeQuietly = async (
   }
 }
 
+interface MirrorCopy {
+  name: string
+  /** The instant in the name; see `filenames.ts` on why that is the ordering. */
+  at: number
+  empty: boolean
+}
+
+/** Every copy this feature wrote that is currently in the folder, and NOTHING
+ *  else: a name has to parse as one of {@link dbMirrorFilename}'s for this
+ *  user's database, so another account's mirrors, manual exports, recovery
+ *  archives and the user's own files are all invisible to everything below. */
+const scanMirrorCopies = async (
+  directory: FileSystemDirectoryHandle,
+  dbFilename: string,
+): Promise<MirrorCopy[]> => {
+  const copies: MirrorCopy[] = []
+  for await (const entry of directory.values()) {
+    if (entry.kind !== 'file') continue
+    const at = parseDbMirrorFilename(dbFilename, entry.name)
+    if (at === undefined) continue
+    copies.push({name: entry.name, at, empty: (await entry.getFile()).size === 0})
+  }
+  return copies
+}
+
 /**
- * Delete the copies this feature wrote that are no longer wanted, and NOTHING
- * else: every candidate has to parse as one of {@link dbMirrorFilename}'s names
- * for this user's database, so another account's mirrors, manual exports,
- * recovery archives and the user's own files in the folder are all invisible
- * here.
+ * Delete the copies that are no longer wanted.
  *
  * `protectedName` is the copy the calling run just wrote. It is kept whatever
  * the timestamps say and takes one of the keep slots: ordering by the stamp in
  * the name is only as good as the clock that wrote it, and a clock that jumped
  * backwards — or copies left by one that ran fast — would otherwise rank the
  * new copy last and delete it, while the run still reported success and stored
- * its marker, so later runs would skip with nothing on disk to show for it.
+ * its marker.
  *
  * Zero-length copies go first and unconditionally — a complete mirror is never
- * empty, so an empty one is the entry a crashed run created and never filled,
- * and letting it occupy a keep slot would push out a copy that has real bytes.
+ * empty, so an empty one is the entry a crashed run created and never filled
+ * (runs do not overlap; see the header), and letting it occupy a keep slot
+ * would push out a copy that has real bytes.
  */
-export const pruneDbMirrorCopies = async (
+const pruneScanned = async (
   directory: FileSystemDirectoryHandle,
-  dbFilename: string,
+  scanned: readonly MirrorCopy[],
   keepCount: number,
   protectedName?: string,
 ): Promise<readonly string[]> => {
-  const copies: Array<{name: string; at: number; empty: boolean}> = []
-  for await (const entry of directory.values()) {
-    if (entry.kind !== 'file') continue
-    if (entry.name === protectedName) continue
-    const at = parseDbMirrorFilename(dbFilename, entry.name)
-    if (at === undefined) continue
-    copies.push({name: entry.name, at, empty: (await entry.getFile()).size === 0})
-  }
-
+  const copies = scanned.filter(copy => copy.name !== protectedName)
   // The protected copy occupies one of the slots, so only the rest compete.
   const keep = Math.max(0, Math.max(1, Math.trunc(keepCount)) - (protectedName ? 1 : 0))
   const doomed = [
@@ -125,18 +142,40 @@ export const pruneDbMirrorCopies = async (
   return removed
 }
 
-/** Pruning never fails a run: the copy is on disk and good, and failing over
- *  housekeeping would discard that. The next run retries the same files. */
-const prune = async (
+export const pruneDbMirrorCopies = async (
   directory: FileSystemDirectoryHandle,
   dbFilename: string,
   keepCount: number,
   protectedName?: string,
+): Promise<readonly string[]> =>
+  pruneScanned(directory, await scanMirrorCopies(directory, dbFilename), keepCount, protectedName)
+
+/** Pruning never fails a run: the copy is on disk and good, and failing over
+ *  housekeeping would discard that. The next run retries the same files. */
+const prune = async (
+  directory: FileSystemDirectoryHandle,
+  scanned: readonly MirrorCopy[],
+  keepCount: number,
+  protectedName?: string,
 ): Promise<readonly string[]> => {
   try {
-    return await pruneDbMirrorCopies(directory, dbFilename, keepCount, protectedName)
+    return await pruneScanned(directory, scanned, keepCount, protectedName)
   } catch (err) {
     console.warn('[db-mirror] could not prune older copies', err)
+    return []
+  }
+}
+
+/** Best-effort listing: a folder that cannot be read is not a reason to skip
+ *  the copy, so the caller proceeds with nothing found. */
+const scanQuietly = async (
+  directory: FileSystemDirectoryHandle,
+  dbFilename: string,
+): Promise<MirrorCopy[]> => {
+  try {
+    return await scanMirrorCopies(directory, dbFilename)
+  } catch (err) {
+    console.warn('[db-mirror] could not list the folder', err)
     return []
   }
 }
@@ -146,7 +185,7 @@ export const runDbMirror = async ({
   directory,
   keepCount,
   now,
-  lastMarker,
+  lastCopy,
   token,
   exportToFile = exportRawSqliteDbToFile,
   readMarker = readChangeMarker,
@@ -162,11 +201,21 @@ export const runDbMirror = async ({
   // copy might not contain, and that direction loses data.
   const marker = await readMarker(repo)
   const dbFilename = dbFilenameForUser(repo.user.id)
-  // Housekeeping is about the FOLDER, not about the copy, so it also runs on
-  // the skipped path: otherwise lowering the keep count never takes effect
-  // while the database sits unchanged, and a pruning failure is never retried.
-  if (marker !== undefined && marker === lastMarker) {
-    return {kind: 'skipped-unchanged', marker, pruned: await prune(directory, dbFilename, keepCount)}
+
+  if (marker !== undefined && marker === lastCopy?.marker) {
+    // An equal marker only says the DATABASE has not moved. What the run is
+    // deciding is whether a copy of it is in THIS folder — so the copy has to
+    // be there. Otherwise deleting the last mirror by hand, or changing folders
+    // while a run was in flight, would leave a stored marker that skipped every
+    // run for good while the status went on claiming success.
+    const scanned = await scanQuietly(directory, dbFilename)
+    const present = scanned.some(copy => copy.name === lastCopy.filename && !copy.empty)
+    // Housekeeping is about the folder, not about the copy, so it runs here
+    // too: otherwise lowering the keep count never takes effect while the
+    // database sits unchanged, and a pruning failure is never retried.
+    if (present) {
+      return {kind: 'skipped-unchanged', marker, pruned: await prune(directory, scanned, keepCount)}
+    }
   }
 
   const filename = dbMirrorFilename(dbFilename, now, token)
@@ -194,6 +243,6 @@ export const runDbMirror = async ({
     filename,
     bytes,
     marker,
-    pruned: await prune(directory, dbFilename, keepCount, filename),
+    pruned: await prune(directory, await scanQuietly(directory, dbFilename), keepCount, filename),
   }
 }

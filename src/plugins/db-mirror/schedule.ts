@@ -96,6 +96,12 @@ export const createDbMirrorSchedule = ({
 
     // One reading for the whole run, so "checked" and "mirrored" can't come
     // out a millisecond apart on the same copy.
+    //
+    // ACCEPTED, not guarded: changing the folder while a copy is in flight
+    // leaves this run recording the previous folder's filename against the new
+    // one. It costs a wrong line of status until the next run, and nothing
+    // more — the skip verifies the named copy is in the folder it is looking
+    // at, so a stale record makes the next run COPY rather than skip.
     const at = now()
     try {
       const outcome = await withRunLock(() => mirror({
@@ -103,7 +109,10 @@ export const createDbMirrorSchedule = ({
         directory,
         keepCount: state.settings.keepCount,
         now: at,
-        lastMarker: state.status.lastMarker,
+        lastCopy:
+          state.status.lastMarker && state.status.lastFilename
+            ? {marker: state.status.lastMarker, filename: state.status.lastFilename}
+            : undefined,
       }))
       // Another tab holds the run lock. Nothing to record: that tab is
       // recording its own run into the same storage.

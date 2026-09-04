@@ -132,10 +132,21 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
   const listeners = new CallbackSet('db-mirror-store')
   let snapshot: DbMirrorState | null = null
   let snapshotUserId: string | null = null
+  // Other tabs write the same records and nothing in IndexedDB says so. Without
+  // this a settings dialog left open, and the status chip, would go on showing
+  // a healthy mirror after a background tab recorded a failure — which is the
+  // exact thing this feature exists to report.
+  const channel =
+    typeof BroadcastChannel === 'function' ? new BroadcastChannel(`${dbName}:changed`) : null
 
   const publish = (userId: string, state: DbMirrorState): DbMirrorState => {
+    // A late-finishing operation for a user who has since been replaced —
+    // local-only sign-out swaps accounts without a reload — must not put the
+    // previous account's folder and history back on screen. The already-mounted
+    // dialog would never reload it: its effect keys on the CURRENT user id,
+    // which has not changed since it mounted.
+    if (snapshotUserId !== userId) return state
     snapshot = state
-    snapshotUserId = userId
     listeners.notify()
     return state
   }
@@ -177,7 +188,10 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         }
         return updated
       })
-      .then(updated => publish(userId, updated))
+      .then(updated => {
+        if (persist) channel?.postMessage(userId)
+        return publish(userId, updated)
+      })
       .catch((err: unknown) => {
         // Blocked or absent storage (a private window, a browser with site data
         // off). Answering with the defaults keeps the app working; mirroring is
@@ -186,6 +200,11 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         return publish(userId, {settings: {...DB_MIRROR_DEFAULTS}, status: {}, directory: undefined})
       })
   }
+
+  const reload = (): void => {
+    if (snapshotUserId !== null) void update(snapshotUserId, state => state, false)
+  }
+  if (channel) channel.onmessage = (event) => { if (event.data === snapshotUserId) reload() }
 
   return {
     load: (userId) => {

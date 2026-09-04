@@ -55,20 +55,70 @@ describe('runDbMirror', () => {
     expect(dir.entries.get(dbMirrorFilename(DB, AT, TOKEN))?.bytes.byteLength).toBe(1024)
   })
 
-  it('skips the copy when the change marker equals the last mirrored one', async () => {
+  it('skips the copy when the change marker equals the last one AND that copy is still there', async () => {
     const dir = new FakeDirectoryHandle()
+    const previous = dbMirrorFilename(DB, AT - HOUR, TOKEN)
+    dir.seed(previous, 512)
     const exportToFile = fakeExport(1024)
 
-    const outcome = await run({directory: dir.asHandle(), lastMarker: '42', exportToFile})
+    const outcome = await run({
+      directory: dir.asHandle(),
+      lastCopy: {marker: '42', filename: previous},
+      exportToFile,
+    })
 
     expect(outcome).toEqual({kind: 'skipped-unchanged', marker: '42', pruned: []})
     expect(exportToFile).not.toHaveBeenCalled()
-    expect(dir.names()).toEqual([])
+    expect(dir.names()).toEqual([previous])
+  })
+
+  describe('when the copy the marker refers to is gone', () => {
+    it('copies again even though the database has not changed', async () => {
+      // Deleting the last mirror by hand would otherwise leave a stored marker
+      // that skipped every run for good, while the status went on reporting a
+      // healthy backup that no longer existed.
+      const dir = new FakeDirectoryHandle()
+
+      const outcome = await run({
+        directory: dir.asHandle(),
+        lastCopy: {marker: '42', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)},
+      })
+
+      expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, AT, TOKEN)})
+    })
+
+    it('treats a zero-length leftover as gone rather than as the copy', async () => {
+      const dir = new FakeDirectoryHandle()
+      const previous = dbMirrorFilename(DB, AT - HOUR, TOKEN)
+      dir.seed(previous, 0)
+
+      const outcome = await run({
+        directory: dir.asHandle(),
+        lastCopy: {marker: '42', filename: previous},
+      })
+
+      expect(outcome).toMatchObject({kind: 'mirrored'})
+    })
+
+    it('copies into a folder the user switched to mid-run, rather than trusting the old record', async () => {
+      // The status can name a file in the PREVIOUS folder — a run in flight
+      // when the folder changed records it. The new folder does not have it, so
+      // the next run copies instead of skipping.
+      const elsewhere = new FakeDirectoryHandle('Elsewhere')
+
+      const outcome = await run({
+        directory: elsewhere.asHandle(),
+        lastCopy: {marker: '42', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)},
+      })
+
+      expect(outcome).toMatchObject({kind: 'mirrored'})
+      expect(elsewhere.names()).toEqual([dbMirrorFilename(DB, AT, TOKEN)])
+    })
   })
 
   it('copies again once the marker has moved', async () => {
     const dir = new FakeDirectoryHandle()
-    const outcome = await run({directory: dir.asHandle(), lastMarker: '41'})
+    const outcome = await run({directory: dir.asHandle(), lastCopy: {marker: '41', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)}})
     expect(outcome).toMatchObject({kind: 'mirrored'})
   })
 
@@ -79,7 +129,7 @@ describe('runDbMirror', () => {
       db: {getAll: async () => { throw new Error('no such table: row_events') }},
     } as unknown as Repo
 
-    const outcome = await run({repo, directory: dir.asHandle(), lastMarker: '42'})
+    const outcome = await run({repo, directory: dir.asHandle(), lastCopy: {marker: '42', filename: dbMirrorFilename(DB, AT - HOUR, TOKEN)}})
 
     expect(outcome).toMatchObject({kind: 'mirrored', marker: undefined})
     expect(dir.names()).toEqual([dbMirrorFilename(DB, AT, TOKEN)])
@@ -189,7 +239,11 @@ describe('runDbMirror', () => {
       const older = [3, 2, 1].map(n => dbMirrorFilename(DB, AT - n * HOUR, TOKEN))
       older.forEach(name => dir.seed(name, 512))
 
-      const outcome = await run({directory: dir.asHandle(), lastMarker: '42', keepCount: 1})
+      const outcome = await run({
+        directory: dir.asHandle(),
+        lastCopy: {marker: '42', filename: older[2]},
+        keepCount: 1,
+      })
 
       expect(outcome).toMatchObject({kind: 'skipped-unchanged', pruned: [older[1], older[0]]})
       expect(dir.names()).toEqual([older[2]])

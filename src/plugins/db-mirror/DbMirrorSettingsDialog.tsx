@@ -131,7 +131,12 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
   const handleIntervalChange = (value: string): void => {
     const parsed = Number(value)
     if (!Number.isFinite(parsed)) return
-    void dbMirrorStore.updateSettings(userId, {intervalMinutes: parsed})
+    // Re-arm, don't just save: the loop is sitting on a delay chosen before this
+    // change existed, so going from 24 hours to 30 minutes would otherwise still
+    // leave the next copy a day away.
+    void dbMirrorStore
+      .updateSettings(userId, {intervalMinutes: parsed})
+      .then(() => dbMirrorSchedule.resume(parsed * 60_000))
   }
 
   // Not async: `requestDirectoryPermission` is called directly, with nothing

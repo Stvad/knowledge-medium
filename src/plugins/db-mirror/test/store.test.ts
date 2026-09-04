@@ -5,7 +5,7 @@
 import 'fake-indexeddb/auto'
 import {IDBFactory} from 'fake-indexeddb'
 
-import {beforeEach, describe, expect, it} from 'vitest'
+import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {IdbKeyedStore} from '@/utils/idbKeyedStore.js'
 import {
   DB_MIRROR_DEFAULTS,
@@ -169,6 +169,35 @@ describe('db-mirror store', () => {
     const reopened = await createDbMirrorStore().load(USER)
     expect(reopened.settings.enabled).toBe(true)
     expect(reopened.status.lastMarker).toBe('42')
+  })
+
+  it('refuses to publish an operation for a user who is no longer signed in', async () => {
+    // Local-only sign-out swaps accounts without a reload, so an operation for
+    // the previous user can still land afterwards. Published, it would put that
+    // account's folder and history back on screen — and the mounted dialog
+    // would never reload it, since its effect keys on the current user id.
+    await store.load('bob')
+    const bobs = store.getSnapshot()
+
+    await store.recordStatus('alice', {lastMarker: '42', lastFilename: 'alices-copy.db'})
+
+    expect(store.getSnapshot()).toBe(bobs)
+    expect(store.getSnapshot()?.status.lastMarker).toBeUndefined()
+  })
+
+  it('picks up a change another tab made', async () => {
+    // Every tab owns its own in-memory listeners, and an IndexedDB write
+    // notifies nobody — so without a broadcast, a settings dialog left open and
+    // the status chip go on reporting a healthy mirror after a background tab
+    // has recorded a failure.
+    const tabA = createDbMirrorStore()
+    const tabB = createDbMirrorStore()
+    await tabA.load(USER)
+    await tabB.load(USER)
+
+    await tabB.recordStatus(USER, {lastError: 'the disk is full', lastErrorAt: 1})
+
+    await vi.waitFor(() => expect(tabA.getSnapshot()?.status.lastError).toBe('the disk is full'))
   })
 
   it('notifies subscribers and hands them a new snapshot only on a change', async () => {

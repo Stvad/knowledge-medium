@@ -206,6 +206,15 @@ describe('DbMirrorSettingsDialog', () => {
     await waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(360))
   })
 
+  it('re-arms the loop on the new interval instead of leaving it on the old delay', async () => {
+    renderDialog()
+    await waitForLoaded()
+
+    fireEvent.change(screen.getByLabelText(/how often/i), { target: { value: '30' } })
+
+    await waitFor(() => expect(mocks.resume).toHaveBeenCalledWith(30 * 60_000))
+  })
+
   it('a lost permission shows the message and a re-grant button; granting clears the flag and resumes', async () => {
     const directory = fakeDirectory('Backups')
     await store.setDirectory(USER, directory)
