@@ -31,7 +31,16 @@ import{defineQuery as e}from"../../data/api/query.js";import{array as t,object a
         refs.target_id AS context_id,
         'ref' AS context_kind
       FROM ancestor_chain
-      JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id
+      -- CROSS JOIN pins the join ORDER (results are identical either way).
+      -- Here refs is constrained only by workspace_id -- no target_id, unlike
+      -- the sibling statements -- so idx_block_references_ws_alias looks usable
+      -- on its leading column, and a recursive CTE carries no cardinality
+      -- estimate for the planner to weigh against it. It therefore drove from
+      -- every edge in the workspace and built a throwaway index on the chain,
+      -- instead of probing the (source_id, ...) primary key once per chain row.
+      -- ANALYZE does not fix this: the table stats are already right, it is the
+      -- CTE's size that is unknown.
+      CROSS JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id
       WHERE refs.workspace_id = ?
         AND (refs.source_field = '' OR refs.target_id != ?)
       UNION
