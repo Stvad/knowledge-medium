@@ -76,6 +76,25 @@ describe('db-mirror store', () => {
     expect((await createDbMirrorStore().load(USER)).directory).toBeUndefined()
   })
 
+  it('clears a folder failure when the folder changes', async () => {
+    await store.load(USER)
+    await store.recordStatus(USER, {permissionLost: true, lastError: 'the grant lapsed', lastErrorAt: 1})
+
+    const state = await store.setDirectory(USER, fakeDirectory('Elsewhere'))
+
+    expect(state.status.permissionLost).toBeUndefined()
+    expect(state.status.lastError).toBeUndefined()
+  })
+
+  it('keeps the last successful mirror on record when the folder changes', async () => {
+    await store.load(USER)
+    await store.recordStatus(USER, {lastMirrorAt: 100, lastFilename: 'copy.db'})
+
+    const state = await store.setDirectory(USER, fakeDirectory('Elsewhere'))
+
+    expect(state.status).toMatchObject({lastMirrorAt: 100, lastFilename: 'copy.db'})
+  })
+
   it('keeps each account’s settings separate', async () => {
     await store.load(USER)
     await store.updateSettings(USER, {enabled: true})

@@ -210,7 +210,22 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         } catch (err) {
           console.warn('[db-mirror] could not save the chosen folder', err)
         }
-        return {...state, directory}
+        return {
+          ...state,
+          directory,
+          // A freshly picked folder arrives with its own grant, and a folder
+          // that has been forgotten cannot be the one whose grant lapsed —
+          // either way the recorded failure describes a folder this device is
+          // no longer writing to. Cleared HERE so no caller has to remember:
+          // otherwise a re-pick leaves the loop halted and the status chip
+          // still reporting a mirror that is paused.
+          status: normalizeStatus({
+            ...state.status,
+            permissionLost: undefined,
+            lastError: undefined,
+            lastErrorAt: undefined,
+          }),
+        }
       }),
     getSnapshot: () => snapshot,
     subscribe: (listener) => listeners.add(listener),
