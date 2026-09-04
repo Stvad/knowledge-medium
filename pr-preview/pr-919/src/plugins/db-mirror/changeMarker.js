@@ -1,0 +1,2 @@
+var e=async e=>{try{let t=await e.db.getAll(`SELECT MAX(id) AS marker FROM row_events`);return String(t[0]?.marker??0)}catch(e){console.warn(`[db-mirror] could not read the change marker; mirroring anyway`,e);return}};export{e as readChangeMarker};
+//# sourceMappingURL=changeMarker.js.map

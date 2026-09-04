@@ -1,0 +1,2 @@
+var e=`app-runtime-update`,t=()=>{window.dispatchEvent(new CustomEvent(e,{detail:new Date().toISOString()}))};export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};
+//# sourceMappingURL=runtimeEvents.js.map

@@ -1,0 +1,2 @@
+var e=()=>typeof globalThis.showDirectoryPicker==`function`,t=async()=>{let e=globalThis.showDirectoryPicker;if(e)return e({id:`km-db-mirror`,mode:`readwrite`})},n=async e=>{let t=e.queryPermission;return typeof t==`function`?t.call(e,{mode:`readwrite`}):`granted`},r=async e=>{let t=e.requestPermission;return typeof t==`function`?t.call(e,{mode:`readwrite`}):`granted`};export{t as chooseMirrorDirectory,n as queryDirectoryPermission,r as requestDirectoryPermission,e as supportsDirectoryMirroring};
+//# sourceMappingURL=fileSystemAccess.js.map
