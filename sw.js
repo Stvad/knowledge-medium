@@ -35,28 +35,6 @@
 	var isCacheableAsset = (destination, pathname, sameOrigin) => sameOrigin && (ASSET_DESTINATIONS.has(destination) || ASSET_EXTENSION.test(pathname));
 	//#endregion
 	//#region src/data/dbFileSiblings.ts
-	/**
-	* Every file SQLite or the VFS derives from the main `.db` name.
-	*
-	* Read this before merging the two lists back together. Inventory and backup
-	* want all of them, but the DELETING paths must not treat them alike, and the
-	* two halves need OPPOSITE orders:
-	*
-	*  - `SQLITE_JOURNAL_SUFFIXES` go BEFORE the main file. Left beside a fresh
-	*    database of the same name, SQLite replays them onto it.
-	*  - `WRITE_AHEAD_SIDECAR_SUFFIXES` go AFTER it, best-effort — deleting a log
-	*    while its `.db` survives strips committed frames from a database the
-	*    caller is then told was left intact. A log that outlives its database is
-	*    harmless instead: `OPFSWriteAheadVFS` truncates both sidecars when it
-	*    opens a `.db` that does not exist.
-	*
-	* Import is the exception that proves it: it writes a new `.db` afterwards, so
-	* everything must be gone first, and the old database goes first of all.
-	*
-	* Its own module, with NO imports, so the service worker's stale-preview sweep
-	* can share it: that build has no path alias and must not pull in the app's
-	* module graph.
-	*/
 	/** `OPFSWriteAheadVFS`'s write-ahead log — two files, alternated WAL2-style. */
 	var WRITE_AHEAD_SIDECAR_SUFFIXES = ["-wa0", "-wa1"];
 	/**
@@ -527,7 +505,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "9dd0ddb1f65d",
+		buildId: "844e800fa7a2",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
