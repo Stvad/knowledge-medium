@@ -27,12 +27,7 @@ import type {Repo} from '@/data/repo'
 import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import {exportRawSqliteDbToFile} from '@/utils/exportSqliteDb.js'
 import {readChangeMarker} from './changeMarker.js'
-import {
-  UNKNOWN_INCARNATION,
-  dbMirrorFilename,
-  incarnationTagOf,
-  parseDbMirrorFilename,
-} from './filenames.js'
+import {dbMirrorFilename, incarnationTagOf, parseDbMirrorFilename} from './filenames.js'
 import {queryDirectoryPermission} from './fileSystemAccess.js'
 
 /** What the export's deadline should say when it is a BACKGROUND copy that ran
@@ -75,8 +70,9 @@ export interface DbMirrorRunOptions {
   /** This install. Always known when a run can happen: it is minted by the same
    *  persisting write that records the opt-in. */
   installId: string
-  /** The database in front of us, or {@link UNKNOWN_INCARNATION} when the log it
-   *  derives from could not be read. */
+  /** Which database this is. REQUIRED, and there is deliberately no stand-in
+   *  for "could not tell": see `governedBy`. A caller that cannot establish one
+   *  must not call this. */
   incarnation: string
   /** What the last successful run left behind, if anything. The marker and the
    *  filename travel TOGETHER because the skip needs both: the marker says the
@@ -154,28 +150,22 @@ const measure = async (entry: FileSystemFileHandle): Promise<number | undefined>
 
 /**
  * Which copies THIS run is allowed to delete: the ones this install wrote for
- * the database in front of it, plus the ones it wrote while it could not
- * identify that database.
+ * the database in front of it.
  *
  * Another install's copies are never governed — a folder shared between two
  * machines, or synced by a cloud client, holds copies that are the only backup
  * some other device has. Neither are our own copies of a database we replaced:
  * that is the pre-wipe history this whole feature exists to keep.
  *
- * The unknown-incarnation copies ARE governed, and that is the point of tagging
- * them with the install at all. They compete for the same keep slots as the
- * current database's, ordered by time like everything else, so a degraded
- * window costs a few slots rather than leaking files nothing will ever reclaim.
- * When the current incarnation is itself unknown the two clauses coincide, so a
- * run that cannot identify its database still touches only its own degraded
- * copies and leaves every identified one alone.
+ * There is deliberately no third case for a copy taken while the database could
+ * not name itself. A stand-in incarnation was tried and is wrong: an absent
+ * identity is not an identity, so two copies carrying the stand-in can hold two
+ * different databases, and ranking them together deletes one believing it has
+ * the other. A run with no incarnation writes nothing instead.
  */
-const governedBy = (installId: string, currentTag: string) => {
-  const unknownTag = incarnationTagOf(UNKNOWN_INCARNATION)
-  return (copy: MirrorCopy): boolean =>
-    copy.installId === installId &&
-    (copy.incarnation === currentTag || copy.incarnation === unknownTag)
-}
+const governedBy = (installId: string, currentTag: string) =>
+  (copy: MirrorCopy): boolean =>
+    copy.installId === installId && copy.incarnation === currentTag
 
 /**
  * Delete the copies that are no longer wanted.
@@ -218,7 +208,9 @@ const prune = async (
     const doomed = [
       ...copies.filter(isResidue),
       ...copies
-        .filter(copy => !isResidue(copy))
+        .filter(copy => !isResidue(copy) && !isUnreadable(copy))
+        // The tiebreak is determinism, not policy: two copies can share a
+        // second, and enumeration order is not specified.
         .sort((a, b) => b.at - a.at || b.name.localeCompare(a.name))
         .slice(keep),
     ]
@@ -235,6 +227,14 @@ const prune = async (
  *  bytes. Not a truncation test — see {@link SQLITE_HEADER_BYTES}. */
 const isResidue = (copy: MirrorCopy): boolean =>
   copy.size !== undefined && copy.size < SQLITE_HEADER_BYTES
+
+/** An entry we could not open — an offline cloud placeholder, an OS-level read
+ *  error. It is neither deleted (we cannot tell it is residue) nor counted
+ *  against the keep budget (we cannot tell it is a backup). Counting it was the
+ *  worse half: on a cloud folder the newest entries are the ones most likely to
+ *  be cold, so they took every keep slot and the copies actually openable on
+ *  this device were the ones pruned. */
+const isUnreadable = (copy: MirrorCopy): boolean => copy.size === undefined
 
 /** The copy `lastCopy` names, actually on disk and actually whole.
  *
@@ -314,13 +314,18 @@ export const runDbMirror = async ({
   const marker = await readChangeMarker(repo)
   const dbFilename = dbFilenameForUser(repo.user.id)
   const mine = governedBy(installId, incarnationTagOf(incarnation))
-  const partition = (scanned: readonly MirrorCopy[]) => ({
-    governed: scanned.filter(mine),
-    // Copies of this database that this run must not touch: another install's,
-    // or our own from a database we replaced. Reported rather than ignored, so
-    // the folder growing beyond `keepCount` has a visible reason.
-    unmanaged: scanned.filter(copy => !mine(copy)).length,
-  })
+  const partition = (scanned: readonly MirrorCopy[]) => {
+    const governed = scanned.filter(mine)
+    return {
+      governed,
+      // Every reason the folder can hold more than `keepCount` says it should:
+      // another install's copies, our own from a database we replaced, and ours
+      // that this device cannot open. Reported rather than ignored, so the
+      // number the user set and the number of files they see can be reconciled.
+      unmanaged:
+        scanned.filter(copy => !mine(copy)).length + governed.filter(isUnreadable).length,
+    }
+  }
 
   if (marker !== undefined && marker === lastCopy?.marker) {
     // An equal marker only says the DATABASE has not moved. What the run is
@@ -353,18 +358,25 @@ export const runDbMirror = async ({
   let bytes: number
   try {
     const {size} = await exportToFile(repo, handle)
-    const written = (await handle.getFile()).size
-    if (written !== size) {
-      throw new Error(
-        `The mirrored copy is the wrong size — ${written} bytes on disk against ${size} expected. ` +
-        'The copy was discarded; earlier copies are untouched.',
-      )
-    }
     bytes = size
   } catch (err) {
     // Ours to clean up: `claimFreshEntry` proved the name was free.
     await removeQuietly(directory, filename)
     throw err
+  }
+
+  // Verified AFTER the cleanup boundary, and a failure to read the size back is
+  // not a reason to delete: the bytes are committed, and a copy that exists but
+  // could not be measured is worth more than no copy. Only a size we actually
+  // read and that disagrees condemns it — the next run re-checks anyway, since
+  // the stored byte count is part of the skip's presence test.
+  const written = await measure(handle)
+  if (written !== undefined && written !== bytes) {
+    await removeQuietly(directory, filename)
+    throw new Error(
+      `The mirrored copy is the wrong size — ${written} bytes on disk against ${bytes} expected. ` +
+      'The copy was discarded; earlier copies are untouched.',
+    )
   }
 
   const {governed, unmanaged} = partition(await scanQuietly(directory, dbFilename))

@@ -1,6 +1,5 @@
 import {describe, expect, it} from 'vitest'
 import {
-  UNKNOWN_INCARNATION,
   dbMirrorFilename,
   incarnationTagOf,
   parseDbMirrorFilename,
@@ -69,23 +68,9 @@ describe('the two identity groups', () => {
     expect(mine(beforeTheLoss) && mine(afterTheLoss)).toBe(true)
     expect(parse(beforeTheLoss)?.incarnation).not.toBe(parse(afterTheLoss)?.incarnation)
   })
-
-  it('gives a copy taken with no readable identity a group of its own, still owned by its install', () => {
-    // Not a nameless namespace shared with every other install: this is what
-    // lets the install that wrote it reclaim it later, instead of leaving a
-    // file nothing will ever prune.
-    const degraded = dbMirrorFilename(DB, INSTALL_A, UNKNOWN_INCARNATION, AT, 'abc123')
-    expect(mine(degraded)).toBe(true)
-    expect(parse(degraded)?.incarnation).toBe(incarnationTagOf(UNKNOWN_INCARNATION))
-    expect(parse(degraded)?.incarnation).not.toBe(TAG)
-  })
 })
 
 describe('parseDbMirrorFilename', () => {
-  it('accepts what this feature writes', () => {
-    expect(parse(dbMirrorFilename(DB, INSTALL_A, BEFORE, AT))).toBeDefined()
-  })
-
   it.each([
     ['the live database itself', 'kmp-v6-alice.db'],
     ['a write-ahead sidecar', 'kmp-v6-alice.db-wa0'],

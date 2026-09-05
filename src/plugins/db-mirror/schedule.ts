@@ -22,7 +22,6 @@ import type {AppEffect} from '@/extensions/core.js'
 import {cadencedIdleJob, type CadencedIdleJob, type LoopHandle} from '@/utils/cadencedIdleJob.js'
 import {LAZY_DEEP_IDLE} from '@/utils/scheduleIdle.js'
 import {readDatabaseIncarnation} from './changeMarker.js'
-import {UNKNOWN_INCARNATION} from './filenames.js'
 import {runDbMirror, type DbMirrorOutcome} from './mirror.js'
 import {dbMirrorRuntimeHealth} from './runtimeHealth.js'
 import {withMirrorRunLock} from './runLock.js'
@@ -65,6 +64,8 @@ export type DbMirrorTickResult =
   | {kind: 'busy-elsewhere'}
   /** A run on this device already covered this interval. */
   | {kind: 'too-soon'; dueInMs: number}
+  /** The database could not say which database it is, so nothing was written. */
+  | {kind: 'no-identity'}
   | DbMirrorOutcome
 
 export interface DbMirrorRunReport {
@@ -184,8 +185,15 @@ export const createDbMirrorSchedule = ({
     // database inheriting the old one's marker and deciding it has nothing to
     // copy.
     const incarnation = await readDatabaseIncarnation(repo)
-    const describesThisDatabase =
-      incarnation !== undefined && state.status.incarnation === incarnation
+    // No copy at all rather than one under a stand-in identity. A copy nothing
+    // can place among the others is worse than a missing one: the pruner would
+    // eventually rank it against copies of a different database. The two ways
+    // to get here both argue for waiting — an empty log means no local writes
+    // yet, so there is nothing this feature protects, and an unreadable log on
+    // a database we are about to checkpoint and copy under a write lock is not
+    // a database the copy was likely to succeed against either.
+    if (incarnation === undefined) return {outcome: {kind: 'no-identity'}, intervalMs}
+    const describesThisDatabase = state.status.incarnation === incarnation
 
     // The interval belongs to the DEVICE, not to this tab's timer. Every tab
     // runs its own loop against the same folder, so without this each one takes
@@ -212,9 +220,7 @@ export const createDbMirrorSchedule = ({
         keepCount: state.settings.keepCount,
         now: at,
         installId,
-        // The copy is still worth taking when the database cannot name itself;
-        // it is tagged so that this install can still recognise and reclaim it.
-        incarnation: incarnation ?? UNKNOWN_INCARNATION,
+        incarnation,
         lastCopy:
           describesThisDatabase && state.status.lastMarker && state.status.lastFilename
             ? {
@@ -257,7 +263,6 @@ export const createDbMirrorSchedule = ({
         case 'permission-lost':
           await recordStatus(userId, {
             permissionLost: true,
-            lastCheckedAt: at,
             lastError: PERMISSION_LOST_MESSAGE,
             lastErrorAt: at,
           })
@@ -266,7 +271,6 @@ export const createDbMirrorSchedule = ({
       return {outcome, intervalMs}
     } catch (err) {
       await recordStatus(userId, {
-        lastCheckedAt: at,
         // The permission check happens before the copy and returns rather than
         // throwing, so a throw here is some OTHER failure — a full disk, a
         // vanished drive. Leaving a stale permission flag set would have the

@@ -41,8 +41,16 @@ export interface DbMirrorStatus {
   /** Change marker of the last copy written, for the skip-when-unchanged test. */
   lastMarker?: string
   lastMirrorAt?: number
-  /** When a run last COMPLETED, mirrored or skipped. Tells "nothing has
-   *  changed since the last copy" apart from "the mirror has stalled". */
+  /** When a run last COMPLETED — mirrored, or skipped because the copy it
+   *  named was verified present. Tells "nothing has changed since the last
+   *  copy" apart from "the mirror has stalled", and it is what the device-wide
+   *  cadence gate reads.
+   *
+   *  ONLY those two outcomes may write it. A run that threw, lost the folder
+   *  permission, or could not identify the database completed no check, and
+   *  stamping it there makes the gate cancel the retry that run just asked
+   *  for — which silently flattens the failure backoff and defers a re-granted
+   *  folder for a whole interval. */
   lastCheckedAt?: number
   lastFilename?: string
   /** How many bytes that copy has, so a later run can tell an intact file from

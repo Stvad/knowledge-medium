@@ -22,12 +22,15 @@
  *   - the DATABASE incarnation, hashed. It separates the database this install
  *     holds now from one it replaced, which is what stops the copies taken
  *     after a browser wipe from evicting the copies that hold what the wipe
- *     took. Unlike the install id it CAN be unknown — the log it derives from
- *     may be empty or unreadable — and {@link UNKNOWN_INCARNATION} stands in
- *     for that, so a degraded-state copy is still recognisably ours.
+ *     took.
  *
- * A single combined tag could not express that split: an unknown half poisoned
- * the whole tag, so the run could neither prune nor be pruned.
+ * A single combined tag over both could not express that split: an unknown half
+ * poisoned the whole tag, so the run could neither prune nor be pruned. A stand-in
+ * value for the unknown half is no better, and is the reason there isn't one — an
+ * absent identity is not an identity, so two copies sharing it can hold two
+ * different databases, and a pruner that ranks them together will delete one
+ * believing it has another. A run with no incarnation writes no copy at all;
+ * see `mirror.ts`.
  *
  * The final group is unique per RUN, which is what lets a failed run delete its
  * own entry without having to prove anything — no other run holds a name
@@ -61,14 +64,11 @@ const parseMirrorTimestamp = (stamp: string): number | undefined => {
 const randomToken = (): string =>
   crypto.randomUUID().replace(/-/g, '').slice(0, 6)
 
-/** Stands in for the database identity when the log it derives from cannot be
- *  read. A copy taken in that state is still tagged with the install that wrote
- *  it, so it stays prunable by its owner and by nobody else. */
-export const UNKNOWN_INCARNATION = 'unknown'
-
-/** The full 32 bits, zero-padded. Truncating it was saving two characters at
- *  the cost of 8 bits of collision resistance, and a collision here means one
- *  install's copies parse as another's. */
+/** The full 32 bits, ZERO-PADDED — FNV-1a hex drops leading zeroes, so about one
+ *  incarnation in sixteen would otherwise be too short to match the group at all,
+ *  and its copies would be unrecognisable to the install that wrote them. The
+ *  full width also keeps a collision — which would make one database's copies
+ *  parse as another's — at 2^-32 rather than 2^-24. */
 export const incarnationTagOf = (incarnation: string): string =>
   fnv1a32Hex(incarnation).padStart(8, '0')
 

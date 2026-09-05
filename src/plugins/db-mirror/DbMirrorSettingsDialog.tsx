@@ -204,6 +204,12 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
         case 'busy-elsewhere':
           showInfo('Another tab of this app is already making a copy — this one left it to that tab.')
           break
+        case 'no-identity':
+          showError(
+            'This device could not tell which database it is holding, so no copy was written. ' +
+            'If the app has just rebuilt its local database, try again once it has finished syncing.',
+          )
+          break
         case 'too-soon':
           // "Mirror now" asks for the copy rather than for the cadence, so it
           // runs forced and only reaches this by joining a scheduled run that
@@ -288,7 +294,7 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
               <p className="text-xs text-muted-foreground">
                 Copies kept in the folder. Only ones this device wrote for the database it holds
                 now are deleted — copies from another device, or from a database this one replaced,
-                are always left alone.
+                are always left alone, as are any this device cannot open.
               </p>
             </div>
 
@@ -331,8 +337,9 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
                 <div className="text-xs text-muted-foreground">
                   Plus {state.status.unmanagedCopies}{' '}
                   {state.status.unmanagedCopies === 1 ? 'copy' : 'copies'} this device does not
-                  manage — from another device, or from a database this one replaced. They are kept
-                  whatever the number above says; delete them yourself when you no longer want them.
+                  manage — from another device, from a database this one replaced, or that it could
+                  not open. They are kept whatever the number above says; delete them yourself when
+                  you no longer want them.
                 </div>
               )}
               {state.status.lastError && (

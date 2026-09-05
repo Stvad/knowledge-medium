@@ -20,7 +20,6 @@ import {
   FAILURE_RETRY_MS,
   PERMISSION_LOST_MESSAGE,
 } from '../schedule.js'
-import {UNKNOWN_INCARNATION} from '../filenames.js'
 import {dbMirrorRuntimeHealth} from '../runtimeHealth.js'
 import {createDbMirrorStore, type DbMirrorStore} from '../store.js'
 import type {DbMirrorOutcome} from '../mirror.js'
@@ -209,18 +208,32 @@ describe('the mirror schedule', () => {
     expect(mirror).toHaveBeenCalledWith(expect.objectContaining({installId: expected}))
   })
 
-  it('tags a copy it cannot identify the database for, rather than leaving it anonymous', async () => {
-    // The copy is still worth taking — losing a backup is the unacceptable
-    // outcome — but it has to carry this install, or no later run can reclaim
-    // it and the folder grows by one database-sized file per read failure.
+  it('writes nothing at all when the database cannot say which database it is', async () => {
+    // A copy under a stand-in identity is worse than no copy: nothing can place
+    // it among the others, so the pruner eventually ranks it against copies of
+    // a DIFFERENT database and deletes one believing it has the other. Both
+    // ways of getting here argue for waiting — an empty log means no local
+    // writes yet, and an unreadable one means a database the copy was unlikely
+    // to succeed against.
+    await enable()
+    const {job} = build({identifiable: false})
+
+    const next = await job.body!()
+
+    expect(mirror).not.toHaveBeenCalled()
+    expect(next).toBe(INTERVAL_MS)
+  })
+
+  it('does not record a completed check when it could not identify the database', async () => {
+    // `lastCheckedAt` is what the cadence gate reads. Stamping it here would
+    // defer the retry for a whole interval on a condition that clears itself
+    // the moment sync writes the log's first event.
     await enable()
     const {job} = build({identifiable: false})
 
     await job.body!()
 
-    expect(mirror).toHaveBeenCalledWith(
-      expect.objectContaining({incarnation: UNKNOWN_INCARNATION}),
-    )
+    expect((await store.load(USER)).status.lastCheckedAt).toBeUndefined()
   })
 
   describe('the cadence belongs to the device, not to this tab', () => {
@@ -567,19 +580,19 @@ describe('the mirror schedule', () => {
   })
 
   it('backs off while a failure keeps repeating, and recovers the cadence after a success', async () => {
-    // A destination too slow to finish inside the export's deadline fails
-    // AFTER holding PowerSync's write lock for its full three minutes. On a
-    // flat five-minute retry that is over a third of the session with every
-    // write blocked, forever — so the retry has to widen, and cap at the
-    // cadence the user asked for.
+    // Driven by the delay the loop ACTUALLY returns, not by a fixed advance:
+    // the previous version stepped the clock a whole interval between ticks, a
+    // sequence production never produces, and so it passed while the ladder was
+    // unreachable — every retry was being cancelled by the cadence gate.
     await enable()
     outcomes = [new Error('the copy did not finish in time')]
     const {job} = build()
 
-    const delays: Array<number | void> = []
+    const delays: number[] = []
     for (let i = 0; i < 6; i += 1) {
-      clock += INTERVAL_MS
-      delays.push(await job.body!())
+      const next = await job.body!()
+      delays.push(next as number)
+      clock += next as number
     }
 
     expect(delays).toEqual([
@@ -591,6 +604,7 @@ describe('the mirror schedule', () => {
       // Capped: a mirror that never succeeds costs no more than one that always does.
       INTERVAL_MS,
     ])
+    expect(mirror).toHaveBeenCalledTimes(6)
 
     outcomes = [MIRRORED]
     clock += INTERVAL_MS
@@ -602,6 +616,42 @@ describe('the mirror schedule', () => {
     outcomes = [new Error('a passing hiccup')]
     clock += INTERVAL_MS
     expect(await job.body!()).toBe(FAILURE_RETRY_MS)
+  })
+
+  it('does not let a failed run defer the retry it just asked for', async () => {
+    // `lastCheckedAt` is the cadence gate's input and means "a run COMPLETED".
+    // A run that threw completed nothing; stamping it there made the 5-minute
+    // retry land, get gated, and come back as most of an interval.
+    await enable()
+    const {job} = build()
+    await job.body!()
+
+    clock += INTERVAL_MS
+    outcomes = [new Error('The disk is full')]
+    expect(await job.body!()).toBe(FAILURE_RETRY_MS)
+
+    clock += FAILURE_RETRY_MS
+    await job.body!()
+
+    expect(mirror).toHaveBeenCalledTimes(3)
+  })
+
+  it('copies once the folder permission is granted again, rather than waiting out the cadence', async () => {
+    // The re-grant clears `permissionLost`, but the ticks that recorded it must
+    // not have advanced the cadence — otherwise a user who fixes the folder on
+    // a weekly schedule gets no copy for nearly a week, while the chip reports
+    // a healthy mirror because nothing looks stale.
+    await enable()
+    outcomes = [{kind: 'permission-lost', permission: 'prompt'}]
+    const {job} = build()
+    await job.body!()
+    expect((await store.load(USER)).status.lastCheckedAt).toBeUndefined()
+
+    outcomes = [MIRRORED]
+    clock += 2 * 60_000
+    await job.body!()
+
+    expect(mirror).toHaveBeenCalledTimes(2)
   })
 
   it('does not report a full disk as a lost folder permission', async () => {
