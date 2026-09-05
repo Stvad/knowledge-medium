@@ -53,6 +53,8 @@ export type DbMirrorTickResult =
   | {kind: 'no-folder'}
   /** Another tab of the app is mirroring right now. */
   | {kind: 'busy-elsewhere'}
+  /** A run on this device already covered this interval. */
+  | {kind: 'too-soon'; dueInMs: number}
   | DbMirrorOutcome
 
 export interface DbMirrorRunReport {
@@ -128,7 +130,12 @@ export const createDbMirrorSchedule = ({
     patch: Parameters<DbMirrorStore['recordStatus']>[1],
   ): Promise<void> => recordStatusQuietly(store, userId, patch)
 
-  const mirrorOnce = async (repo: Repo): Promise<DbMirrorRunReport> => {
+  /**
+   * @param force take the copy even if a run already covered this interval.
+   *   For "Mirror now", where the user is asking for a copy rather than for
+   *   the cadence to be honoured.
+   */
+  const mirrorOnce = async (repo: Repo, force: boolean): Promise<DbMirrorRunReport> => {
     const userId = repo.user.id
     // Read storage, not a cached snapshot: the settings surface writes between
     // runs, and a second tab writes the same records.
@@ -164,6 +171,24 @@ export const createDbMirrorSchedule = ({
     const incarnation = await readDatabaseIncarnation(repo)
     const describesThisDatabase =
       incarnation !== undefined && state.status.incarnation === incarnation
+
+    // The interval belongs to the DEVICE, not to this tab's timer. Every tab
+    // runs its own loop against the same folder, so without this each one takes
+    // its own full copy per interval: N tabs meant N copies, N holds of
+    // PowerSync's write lock, and a keep count that spanned 1/N of the history
+    // the user asked for. The winner of the run lock records `lastCheckedAt`,
+    // and this is where the others read it.
+    //
+    // Only for a status that describes THIS database — one recorded before an
+    // import or a wipe says nothing about the copy that is due now — and only
+    // forwards, so a clock that jumped backwards defers nothing.
+    const sinceLastRun =
+      describesThisDatabase && state.status.lastCheckedAt !== undefined
+        ? at - state.status.lastCheckedAt
+        : undefined
+    if (!force && sinceLastRun !== undefined && sinceLastRun >= 0 && sinceLastRun < intervalMs) {
+      return {outcome: {kind: 'too-soon', dueInMs: intervalMs - sinceLastRun}, intervalMs}
+    }
 
     try {
       const outcome = await withRunLock(dbFilenameForUser(userId), () => mirror({
@@ -240,12 +265,12 @@ export const createDbMirrorSchedule = ({
     }
   }
 
-  const performDbMirror = (repo: Repo): Promise<DbMirrorRunReport> => {
+  const performDbMirror = (repo: Repo, force = false): Promise<DbMirrorRunReport> => {
     if (inFlight?.userId === repo.user.id) return inFlight.run
     const entry = {userId: repo.user.id} as {userId: string; run: Promise<DbMirrorRunReport>}
     entry.run = (async () => {
       try {
-        return await mirrorOnce(repo)
+        return await mirrorOnce(repo, force)
       } finally {
         // Only if it is still OURS: a run for a different user may have
         // replaced it while this one was in flight.
@@ -257,10 +282,18 @@ export const createDbMirrorSchedule = ({
   }
 
   /** How long before the next scheduled run, given what this one found. */
-  const delayFor = (report: DbMirrorRunReport): number =>
-    report.outcome.kind === 'busy-elsewhere'
-      ? Math.min(BUSY_RETRY_MS, report.intervalMs)
-      : report.intervalMs
+  const delayFor = (report: DbMirrorRunReport): number => {
+    switch (report.outcome.kind) {
+      case 'busy-elsewhere':
+        return Math.min(BUSY_RETRY_MS, report.intervalMs)
+      // Come back when the copy another tab took actually ages out, rather than
+      // on a fixed retry that would land early and take a second copy.
+      case 'too-soon':
+        return report.outcome.dueInMs
+      default:
+        return report.intervalMs
+    }
+  }
 
   const effect: AppEffect = {
     id: 'db-mirror.schedule',
@@ -338,7 +371,12 @@ export const createDbMirrorSchedule = ({
         if (started && started === live) started.resume(delayMs)
       }
       try {
-        const report = await performDbMirror(repo)
+        let report = await performDbMirror(repo, true)
+        // A manual run can join a scheduled one that was already in flight and
+        // gated itself on the cadence. That answers a question the user did not
+        // ask, so take the copy. The join has settled by the time this reads,
+        // so the retry is a fresh forced run and one is enough.
+        if (report.outcome.kind === 'too-soon') report = await performDbMirror(repo, true)
         rearm(delayFor(report))
         return report
       } catch (err) {

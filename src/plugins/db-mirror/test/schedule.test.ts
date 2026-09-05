@@ -43,6 +43,11 @@ const unidentifiableRepo = {
   },
 } as unknown as Repo
 const NOW = Date.UTC(2026, 8, 4, 13, 45, 2)
+/** The enabled interval in `enable()`, so a test can say "a cadence later". */
+const INTERVAL_MS = 120 * 60_000
+/** Movable, because the cadence gate reads the clock: two runs at the same
+ *  instant are one run as far as the device is concerned. */
+let clock = NOW
 
 /** A stand-in for `cadencedIdleJob` that hands the loop body straight back, so
  *  the tests drive runs instead of idle windows and timers. */
@@ -88,6 +93,7 @@ const MIRRORED: DbMirrorOutcome = {
 }
 
 beforeEach(() => {
+  clock = NOW
   globalThis.indexedDB = new IDBFactory()
   store = createDbMirrorStore()
   outcomes = [MIRRORED]
@@ -105,7 +111,7 @@ const build = (
   const schedule = createDbMirrorSchedule({
     store,
     job,
-    now: () => NOW,
+    now: () => clock,
     supported: over.supported ?? (() => true),
     mirror: mirror as never,
     withRunLock: over.lockHeldElsewhere
@@ -214,6 +220,97 @@ describe('the mirror schedule', () => {
     )
   })
 
+  describe('the cadence belongs to the device, not to this tab', () => {
+    // Every tab runs its own loop against the same folder. Before this, two
+    // tabs took two full copies per interval — two holds of PowerSync's write
+    // lock, and a keep count spanning half the history the user asked for.
+
+    it('leaves the copy alone when a run on this device already covered the interval', async () => {
+      await enable()
+      const {job} = build()
+      await job.body!()
+      expect(mirror).toHaveBeenCalledTimes(1)
+
+      clock = NOW + 5 * 60_000
+      const next = await job.body!()
+
+      expect(mirror).toHaveBeenCalledTimes(1)
+      // And it comes back when the copy is actually due, rather than on a fixed
+      // retry that would land early and take a second copy anyway.
+      expect(next).toBe(INTERVAL_MS - 5 * 60_000)
+    })
+
+    it('copies once the interval has actually elapsed', async () => {
+      await enable()
+      const {job} = build()
+      await job.body!()
+
+      clock = NOW + INTERVAL_MS
+      await job.body!()
+
+      expect(mirror).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not defer on a run recorded against a different database', async () => {
+      // A wipe rebuilt the database moments after the last run. That run says
+      // nothing about whether the database in front of us has been copied.
+      await enable()
+      await store.recordStatus(USER, {
+        incarnation: 'a-database-that-is-gone',
+        lastCheckedAt: NOW,
+      })
+      const {job} = build()
+
+      await job.body!()
+
+      expect(mirror).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not defer when the clock jumped backwards', async () => {
+      // A negative age would otherwise read as "inside the interval" and defer
+      // for as long as the skew lasts.
+      await enable()
+      const {job} = build()
+      await job.body!()
+
+      clock = NOW - 24 * 60 * 60_000
+      await job.body!()
+
+      expect(mirror).toHaveBeenCalledTimes(2)
+    })
+
+    it('takes the copy even when it joins a scheduled run that gated itself', async () => {
+      // "Mirror now" pressed in the same instant a scheduled tick starts joins
+      // that tick rather than starting a second one — the two must not overlap.
+      // If the tick then defers on the cadence, the join would hand the user
+      // the tick's answer to a question they did not ask.
+      await enable()
+      const {schedule, job} = build()
+      await job.body!()
+
+      clock = NOW + 60_000
+      const scheduled = job.body!()
+      const manual = schedule.runNow(repo)
+
+      expect(await scheduled).toBe(INTERVAL_MS - 60_000)
+      expect((await manual).outcome).toMatchObject({kind: 'mirrored'})
+      expect(mirror).toHaveBeenCalledTimes(2)
+    })
+
+    it('takes the copy anyway when the user asks for one by hand', async () => {
+      // "Mirror now" asks for a copy, not for the cadence to be honoured.
+      await enable()
+      const {schedule, job} = build()
+      await job.body!()
+
+      clock = NOW + 60_000
+      const {outcome} = await schedule.runNow(repo)
+
+      expect(mirror).toHaveBeenCalledTimes(2)
+      expect(outcome).toMatchObject({kind: 'mirrored'})
+    })
+  })
+
   it('stamps the database identity onto what it records', async () => {
     await enable()
     const {job} = build()
@@ -245,6 +342,7 @@ describe('the mirror schedule', () => {
     await job.body!()
 
     outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: [], unmanaged: 0}]
+    clock = NOW + INTERVAL_MS
     await job.body!()
 
     // All three, because the skip needs all three: the marker says the database
@@ -258,7 +356,7 @@ describe('the mirror schedule', () => {
     // A skipped run is still a completed check, and it leaves the copy on disk
     // as the last successful mirror.
     const {status} = await store.load(USER)
-    expect(status.lastCheckedAt).toBe(NOW)
+    expect(status.lastCheckedAt).toBe(NOW + INTERVAL_MS)
     expect(status.lastMirrorAt).toBe(NOW)
   })
 
@@ -287,6 +385,7 @@ describe('the mirror schedule', () => {
       await job.body!()
 
       outcomes = [{kind: 'permission-lost', permission: 'denied'}]
+      clock = NOW + INTERVAL_MS
       await job.body!()
 
       expect((await store.load(USER)).status).toMatchObject({

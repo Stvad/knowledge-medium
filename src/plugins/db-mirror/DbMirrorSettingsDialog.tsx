@@ -207,6 +207,12 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
         case 'busy-elsewhere':
           showInfo('Another tab of this app is already making a copy — this one left it to that tab.')
           break
+        case 'too-soon':
+          // "Mirror now" asks for the copy rather than for the cadence, so it
+          // runs forced and only reaches this by joining a scheduled run that
+          // gated itself in the same instant.
+          showInfo('A copy was taken moments ago on this device, so none was written.')
+          break
         default: {
           // Exhaustiveness: a new outcome kind is a compile error here rather
           // than a button press that silently reports nothing, which is how
