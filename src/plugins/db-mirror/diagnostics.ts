@@ -60,7 +60,8 @@ export const isMirrorStalled = (state: DbMirrorState, now: number): boolean =>
 
 export const dbMirrorDiagnostic = (
   state: DbMirrorState | null,
-  /** The current session's failure, when the store could not record one. */
+  /** What this session's last tick threw, if anything — including the failures
+   *  the store was too broken to record, which is why it exists. */
   runtimeFailure: string | undefined,
   stalled: boolean,
 ): DiagnosticSnapshot | null => {

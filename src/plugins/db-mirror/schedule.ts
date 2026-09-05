@@ -43,10 +43,11 @@ export const FAILURE_RETRY_MS = 5 * 60_000
  * write lock for its full three minutes, and at a fixed five-minute retry that
  * is well over a third of the session spent with every write blocked, forever.
  * Capping at the interval means a mirror that never succeeds costs no more
- * than one that always does.
+ * than one that always does — and a runaway exponent reaches `Infinity`, which
+ * the cap answers correctly, so it needs no clamp of its own.
  */
-export const failureDelay = (consecutive: number, intervalMs: number): number =>
-  Math.min(intervalMs, FAILURE_RETRY_MS * 2 ** Math.min(Math.max(consecutive, 1) - 1, 10))
+const failureDelay = (consecutive: number, intervalMs: number): number =>
+  Math.min(intervalMs, FAILURE_RETRY_MS * 2 ** (consecutive - 1))
 
 /** Another tab held the run lock. It may be mid-copy — or it may have crashed,
  *  closed, or failed — so this comes back well before the full cadence, which
@@ -94,25 +95,8 @@ export interface DbMirrorSchedule {
   resume: (delayMs?: number) => void
 }
 
-const describeError = (err: unknown): string =>
+export const describeError = (err: unknown): string =>
   err instanceof Error ? err.message : String(err)
-
-/** Best effort, like pruning. A status write is bookkeeping ABOUT the run: it
- *  must not turn a finished copy into a failure, and on the error path it must
- *  not replace the error the caller is about to see with its own. A dropped
- *  write costs one redundant copy next run, since the marker went unrecorded —
- *  the safe direction. */
-const recordStatusQuietly = async (
-  store: DbMirrorStore,
-  userId: string,
-  patch: Parameters<DbMirrorStore['recordStatus']>[1],
-): Promise<void> => {
-  try {
-    await store.recordStatus(userId, patch)
-  } catch (err) {
-    console.warn('[db-mirror] could not record the run status', err)
-  }
-}
 
 export const createDbMirrorSchedule = ({
   store = dbMirrorStore,
@@ -143,10 +127,21 @@ export const createDbMirrorSchedule = ({
    *  default it fell back to could be longer than the interval the user chose. */
   let lastKnownIntervalMs = DB_MIRROR_DEFAULTS.intervalMinutes * 60_000
 
-  const recordStatus = (
+  /** Best effort, like pruning. A status write is bookkeeping ABOUT the run: it
+   *  must not turn a finished copy into a failure, and on the error path it
+   *  must not replace the error the caller is about to see with its own. A
+   *  dropped write costs one redundant copy next run, since the marker went
+   *  unrecorded — the safe direction. */
+  const recordStatus = async (
     userId: string,
     patch: Parameters<DbMirrorStore['recordStatus']>[1],
-  ): Promise<void> => recordStatusQuietly(store, userId, patch)
+  ): Promise<void> => {
+    try {
+      await store.recordStatus(userId, patch)
+    } catch (err) {
+      console.warn('[db-mirror] could not record the run status', err)
+    }
+  }
 
   /**
    * @param force take the copy even if a run already covered this interval.
@@ -201,12 +196,10 @@ export const createDbMirrorSchedule = ({
     if (incarnation === undefined) return {outcome: {kind: 'no-identity'}, intervalMs}
     const describesThisDatabase = state.status.incarnation === incarnation
 
-    // The interval belongs to the DEVICE, not to this tab's timer. Every tab
-    // runs its own loop against the same folder, so without this each one takes
-    // its own full copy per interval: N tabs meant N copies, N holds of
-    // PowerSync's write lock, and a keep count that spanned 1/N of the history
-    // the user asked for. The winner of the run lock records `lastCheckedAt`,
-    // and this is where the others read it.
+    // The interval belongs to the DEVICE, not to this tab's timer: every tab
+    // runs its own loop against the same folder, so N tabs otherwise take N
+    // copies per interval. The run-lock winner records `lastCheckedAt`; this is
+    // where the others read it.
     //
     // Only for a status that describes THIS database — one recorded before an
     // import or a wipe says nothing about the copy that is due now — and only
@@ -294,19 +287,14 @@ export const createDbMirrorSchedule = ({
 
   const performDbMirror = (repo: Repo, force = false): Promise<DbMirrorRunReport> => {
     if (inFlight?.userId === repo.user.id) return inFlight.run
-    const entry = {userId: repo.user.id} as {userId: string; run: Promise<DbMirrorRunReport>}
-    entry.run = (async () => {
-      try {
-        return await mirrorOnce(repo, force)
-      } finally {
-        // Only if it is still OURS. DEFENCE IN DEPTH and unpinned: the effect
-        // reconciler stops an effect before starting its replacement, so a
-        // second user's run cannot begin while this one is in flight.
-        if (inFlight === entry) inFlight = null
-      }
-    })()
-    inFlight = entry
-    return entry.run
+    const run: Promise<DbMirrorRunReport> = mirrorOnce(repo, force).finally(() => {
+      // Only if it is still OURS. DEFENCE IN DEPTH and unpinned: the effect
+      // reconciler stops an effect before starting its replacement, so a second
+      // user's run cannot begin while this one is in flight.
+      if (inFlight?.run === run) inFlight = null
+    })
+    inFlight = {userId: repo.user.id, run}
+    return run
   }
 
   /** How long before the next scheduled run, given what this one found. */
@@ -325,52 +313,6 @@ export const createDbMirrorSchedule = ({
       default:
         return report.intervalMs
     }
-  }
-
-  const effect: AppEffect = {
-    id: 'db-mirror.schedule',
-    start: ({repo}) => {
-      // No picker, no feature: there is no way for the user to have chosen a
-      // folder, and nothing to re-check later in the same session.
-      if (!supported()) return
-
-      // Reporting the tick's own outcome, not just the run's: `mirrorOnce`
-      // records a failure to the store, but a failure to READ the store cannot
-      // be recorded there at all, and that is the one that would otherwise
-      // leave the chip claiming a healthy mirror forever.
-      let consecutiveFailures = 0
-      const loop = job.start(
-        async () => {
-          try {
-            const report = await performDbMirror(repo)
-            consecutiveFailures = 0
-            dbMirrorRuntimeHealth.report(undefined)
-            return delayFor(report)
-          } catch (err) {
-            consecutiveFailures += 1
-            dbMirrorRuntimeHealth.report(describeError(err))
-            // Handled rather than rethrown, because the backoff is a function
-            // of how many times this has failed and the job's own
-            // `onFailureDelayMs` is a constant. The warning it would have
-            // logged is logged here instead.
-            console.warn('[db-mirror] run failed', err)
-            return failureDelay(consecutiveFailures, lastKnownIntervalMs)
-          }
-        },
-        {onFailureDelayMs: FAILURE_RETRY_MS},
-      )
-
-      // Everything below can throw before the disposer exists — the effect
-      // runtime records `cleanup: undefined` for a `start` that threw, so the
-      // loop would be armed with nothing able to stop it, ticking against a
-      // repo that may since have been replaced.
-      try {
-        return startWatching(repo, loop)
-      } catch (err) {
-        loop.stop()
-        throw err
-      }
-    },
   }
 
   /** The part of `start` that has a loop to tear down if it fails. */
@@ -427,6 +369,52 @@ export const createDbMirrorSchedule = ({
       if (live === mine) live = null
       loop.stop()
     }
+  }
+
+  const effect: AppEffect = {
+    id: 'db-mirror.schedule',
+    start: ({repo}) => {
+      // No picker, no feature: there is no way for the user to have chosen a
+      // folder, and nothing to re-check later in the same session.
+      if (!supported()) return
+
+      // Reporting the tick's own outcome, not just the run's: `mirrorOnce`
+      // records a failure to the store, but a failure to READ the store cannot
+      // be recorded there at all, and that is the one that would otherwise
+      // leave the chip claiming a healthy mirror forever.
+      let consecutiveFailures = 0
+      const loop = job.start(
+        async () => {
+          try {
+            const report = await performDbMirror(repo)
+            consecutiveFailures = 0
+            dbMirrorRuntimeHealth.report(undefined)
+            return delayFor(report)
+          } catch (err) {
+            consecutiveFailures += 1
+            dbMirrorRuntimeHealth.report(describeError(err))
+            // Handled rather than rethrown, because the backoff is a function
+            // of how many times this has failed and the job's own
+            // `onFailureDelayMs` is a constant. The warning it would have
+            // logged is logged here instead.
+            console.warn('[db-mirror] run failed', err)
+            return failureDelay(consecutiveFailures, lastKnownIntervalMs)
+          }
+        },
+        {onFailureDelayMs: FAILURE_RETRY_MS},
+      )
+
+      // Everything below can throw before the disposer exists — the effect
+      // runtime records `cleanup: undefined` for a `start` that threw, so the
+      // loop would be armed with nothing able to stop it, ticking against a
+      // repo that may since have been replaced.
+      try {
+        return startWatching(repo, loop)
+      } catch (err) {
+        loop.stop()
+        throw err
+      }
+    },
   }
 
   return {

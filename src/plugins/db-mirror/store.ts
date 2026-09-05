@@ -120,10 +120,8 @@ export const normalizeSettings = (value: unknown): DbMirrorSettings => {
 }
 
 /** Same job as {@link normalizeSettings}, and the same rule about finiteness:
- *  this is the only place a stored value becomes a status, so `NaN` has to stop
- *  here. Left to the readers they disagreed — the health chip read a `NaN`
- *  timestamp as "no copy taken yet" while the settings dialog read it as a copy
- *  at an unknown time. */
+ *  this is the only place a stored value becomes a status, so `NaN` stops here
+ *  rather than reaching readers that each answer it differently. */
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value)
 
@@ -172,8 +170,10 @@ export interface DbMirrorStore {
   updateSettings: (userId: string, patch: Partial<DbMirrorSettings>) => Promise<DbMirrorState>
   setDirectory: (userId: string, directory: FileSystemDirectoryHandle | undefined) => Promise<DbMirrorState>
   recordStatus: (userId: string, patch: DbMirrorStatus) => Promise<DbMirrorState>
-  /** The last loaded state, or null before the first load. Referentially
-   *  stable while unchanged, for `useSyncExternalStore`. */
+  /** The last loaded state, or null before the first load. Stable BETWEEN
+   *  writes, which is what `useSyncExternalStore` needs; a re-read publishes a
+   *  freshly built object even when storage has not changed, and at one read
+   *  per tick that is not worth de-duplicating. */
   getSnapshot: () => DbMirrorState | null
   subscribe: (listener: () => void) => () => void
 }

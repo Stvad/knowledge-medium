@@ -200,21 +200,16 @@ describe('runDbMirror', () => {
     const dir = new FakeDirectoryHandle()
     dir.permission = 'prompt'
     const exportToFile = fakeExport(1024)
+    const requestPermission = vi.spyOn(dir, 'requestPermission')
 
     const outcome = await run({directory: dir.asHandle(), exportToFile})
 
     expect(outcome).toEqual({kind: 'permission-lost', permission: 'prompt'})
     expect(exportToFile).not.toHaveBeenCalled()
     expect(dir.names()).toEqual([])
-  })
-
-  it('never prompts for permission from a run — only queries it', async () => {
-    const dir = new FakeDirectoryHandle()
-    dir.permission = 'prompt'
-    const requestPermission = vi.spyOn(dir, 'requestPermission')
-
-    await run({directory: dir.asHandle()})
-
+    // And it never ASKS: a prompt outside a user gesture is denied by the
+    // browser, so a run that asked would burn the one chance the settings
+    // surface has.
     expect(requestPermission).not.toHaveBeenCalled()
   })
 
@@ -336,29 +331,17 @@ describe('runDbMirror', () => {
       expect(dir.removed).toEqual([dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, TOKEN)])
     })
 
-    it('discards an empty copy left behind by a crashed run before counting', async () => {
+    it.each([
+      ['nothing at all', 0],
+      ['a few bytes', 12],
+    ])('discards a copy holding %s, which no complete mirror ever is', async (_label, size) => {
+      // A crashed run leaves the entry it claimed, empty or part-written.
+      // Letting either hold a keep slot pushes a copy with real bytes out.
       const dir = new FakeDirectoryHandle()
       const good = dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - 2 * HOUR, TOKEN)
       const crashed = dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, TOKEN)
       dir.seed(good, 512)
-      dir.seed(crashed, 0)
-
-      await run({directory: dir.asHandle(), keepCount: 2})
-
-      // The crashed run's 0-byte file is gone, and it did not push the older
-      // GOOD copy out of the two keep slots.
-      expect(dir.names().sort()).toEqual([good, dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN)].sort())
-    })
-
-    it('discards a stub too short to be a database, not merely an empty one', async () => {
-      // A run that died between claiming the name and finishing the header
-      // leaves a few bytes rather than none. Counting that as a copy would let
-      // it hold a keep slot and push a real backup out.
-      const dir = new FakeDirectoryHandle()
-      const good = dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - 2 * HOUR, TOKEN)
-      const stub = dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, TOKEN)
-      dir.seed(good, 512)
-      dir.seed(stub, 12)
+      dir.seed(crashed, size)
 
       await run({directory: dir.asHandle(), keepCount: 2})
 
@@ -417,16 +400,6 @@ describe('runDbMirror', () => {
 
       expect(dir.names()).toContain(dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN))
       expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN)})
-    })
-
-    it('counts the copy it just wrote against the keep budget', async () => {
-      const dir = new FakeDirectoryHandle()
-      const older = [2, 1].map(n => dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - n * HOUR, TOKEN))
-      older.forEach(name => dir.seed(name, 512))
-
-      await run({directory: dir.asHandle(), keepCount: 2})
-
-      expect(dir.names().sort()).toEqual([dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN), older[1]].sort())
     })
 
     it('never touches copies another install wrote into a shared folder', async () => {

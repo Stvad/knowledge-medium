@@ -39,7 +39,7 @@ import {
   MIN_INTERVAL_MINUTES,
   MIN_KEEP_COUNT,
 } from './store.js'
-import {dbMirrorSchedule, PERMISSION_LOST_MESSAGE} from './schedule.js'
+import {dbMirrorSchedule, describeError, PERMISSION_LOST_MESSAGE} from './schedule.js'
 import {chooseMirrorDirectory, requestDirectoryPermission} from './fileSystemAccess.js'
 
 const INTERVAL_OPTIONS = (
@@ -56,8 +56,6 @@ const MIB = 1024 * 1024
 const formatMiB = (bytes: number): string => `${(bytes / MIB).toFixed(1)} MiB`
 
 const formatTime = (at: number): string => new Date(at).toLocaleString()
-
-const describeError = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** A dismissed `showDirectoryPicker()` — not a failure worth reporting. */
 const isAbort = (err: unknown): boolean => err instanceof DOMException && err.name === 'AbortError'
@@ -211,9 +209,8 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
           )
           break
         case 'too-soon':
-          // "Mirror now" asks for the copy rather than for the cadence, so it
-          // runs forced and only reaches this by joining a scheduled run that
-          // gated itself in the same instant.
+          // "Mirror now" runs forced and retries once, so reaching this needs
+          // two consecutive joins of scheduled runs that both gated themselves.
           showInfo('A copy was taken moments ago on this device, so none was written.')
           break
         default: {
@@ -293,8 +290,7 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
               />
               <p className="text-xs text-muted-foreground">
                 Copies kept in the folder. Only ones this device wrote for the database it holds
-                now are deleted — copies from another device, or from a database this one replaced,
-                are always left alone, as are any this device cannot open.
+                now are ever deleted.
               </p>
             </div>
 

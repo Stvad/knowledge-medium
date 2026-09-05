@@ -27,7 +27,12 @@ import type {Repo} from '@/data/repo'
 import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import {exportRawSqliteDbToFile} from '@/utils/exportSqliteDb.js'
 import {readChangeMarker} from './changeMarker.js'
-import {dbMirrorFilename, incarnationTagOf, parseDbMirrorFilename} from './filenames.js'
+import {
+  type MirrorCopyName,
+  dbMirrorFilename,
+  incarnationTagOf,
+  parseDbMirrorFilename,
+} from './filenames.js'
 import {queryDirectoryPermission} from './fileSystemAccess.js'
 
 /** What the export's deadline should say when it is a BACKGROUND copy that ran
@@ -105,13 +110,8 @@ const removeQuietly = async (
   }
 }
 
-interface MirrorCopy {
+interface MirrorCopy extends MirrorCopyName {
   name: string
-  /** The instant in the name; see `filenames.ts` on why that is the ordering. */
-  at: number
-  installId: string
-  /** The hashed incarnation the name carries. */
-  incarnation: string
   /** Undefined when the entry could not be read; see {@link measure}. */
   size?: number
 }
@@ -192,20 +192,19 @@ const prune = async (
   directory: FileSystemDirectoryHandle,
   governed: readonly MirrorCopy[],
   keepCount: number,
-  /** REQUIRED, not optional: every caller knows which copy is the current one,
-   *  and an omitted argument silently reintroduces the clock-skew deletion this
-   *  protects against. */
-  protectedName: string | undefined,
+  /** The current copy — the one just written, or the one the stored marker
+   *  names. Not optional: every caller has one, and an omitted argument would
+   *  silently reintroduce the clock-skew deletion this protects against. */
+  protectedName: string,
 ): Promise<readonly string[]> => {
   const removed: string[] = []
   try {
     const copies = governed.filter(copy => copy.name !== protectedName)
     // The protected copy occupies one of the slots, so only the rest compete.
-    // Non-finite inputs already land somewhere safe and need no separate clamp:
-    // NaN falls through to `slice(0)`, which keeps the protected copy and
-    // nothing else — the same as the minimum legal count — and Infinity keeps
-    // everything. `normalizeSettings` makes both unreachable anyway.
-    const keep = Math.max(0, Math.max(1, Math.trunc(keepCount)) - (protectedName ? 1 : 0))
+    // No clamp for a non-finite count: NaN slices to 0, keeping the protected
+    // copy alone, and Infinity keeps everything. `normalizeSettings` makes both
+    // unreachable.
+    const keep = Math.max(0, Math.max(1, Math.trunc(keepCount)) - 1)
     const doomed = [
       ...copies.filter(isResidue),
       ...copies
@@ -225,7 +224,9 @@ const prune = async (
 }
 
 /** Residue from a run that died between claiming the name and writing the
- *  bytes. Not a truncation test — see {@link SQLITE_HEADER_BYTES}. */
+ *  bytes. Not a truncation test — see {@link SQLITE_HEADER_BYTES}. The
+ *  `undefined` check is narrowing only; an unreadable entry is excluded by
+ *  {@link isUnreadable} before it can reach a delete. */
 const isResidue = (copy: MirrorCopy): boolean =>
   copy.size !== undefined && copy.size < SQLITE_HEADER_BYTES
 

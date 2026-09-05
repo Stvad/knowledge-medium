@@ -107,11 +107,17 @@ beforeEach(() => {
 })
 
 const build = (
-  over: {supported?: () => boolean; lockHeldElsewhere?: boolean; identifiable?: boolean} = {},
+  over: {
+    supported?: () => boolean
+    lockHeldElsewhere?: boolean
+    identifiable?: boolean
+    /** A stand-in store, for the tests about a store that misbehaves. */
+    store?: DbMirrorStore
+  } = {},
 ) => {
   const {job, state} = fakeJob()
   const schedule = createDbMirrorSchedule({
-    store,
+    store: over.store ?? store,
     job,
     now: () => clock,
     supported: over.supported ?? (() => true),
@@ -188,22 +194,14 @@ describe('the mirror schedule', () => {
     await enable()
     const expected = (await store.load(USER)).installId
     expect(expected).toBeDefined()
-    const withoutInstallId: DbMirrorStore = {
-      ...store,
-      load: async (userId) => ({...(await store.load(userId)), installId: undefined}),
-    }
-    const {job: jobHandle, state} = fakeJob()
-    const schedule = createDbMirrorSchedule({
-      store: withoutInstallId,
-      job: jobHandle,
-      now: () => NOW,
-      supported: () => true,
-      mirror: mirror as never,
-      withRunLock: (async <T,>(_db: string, body: () => Promise<T>) => body()),
+    const {job} = build({
+      store: {
+        ...store,
+        load: async (userId) => ({...(await store.load(userId)), installId: undefined}),
+      },
     })
-    schedule.effect.start({repo} as unknown as AppEffectContext)
 
-    await state.body!()
+    await job.body!()
 
     expect(mirror).toHaveBeenCalledWith(expect.objectContaining({installId: expected}))
   })
@@ -333,34 +331,20 @@ describe('the mirror schedule', () => {
     // write goes through the same store. Without an in-memory channel the last
     // good record stands and the chip reports a healthy mirror forever.
 
-    const withBrokenStore = () => {
-      const broken: DbMirrorStore = {
-        ...store,
-        load: async () => { throw new Error('IndexedDB is gone') },
-      }
-      const {job: jobHandle, state} = fakeJob()
-      createDbMirrorSchedule({
-        store: broken,
-        job: jobHandle,
-        now: () => clock,
-        supported: () => true,
-        mirror: mirror as never,
-        withRunLock: (async <T,>(_db: string, body: () => Promise<T>) => body()),
-      }).effect.start({repo} as unknown as AppEffectContext)
-      return state
-    }
+    const withBrokenStore = () =>
+      build({store: {...store, load: async () => { throw new Error('IndexedDB is gone') }}}).job
 
     it('reports it somewhere the chip can still see', async () => {
-      const state = withBrokenStore()
+      const job = withBrokenStore()
 
-      await state.body!()
+      await job.body!()
 
       expect(dbMirrorRuntimeHealth.getSnapshot()).toBe('IndexedDB is gone')
     })
 
     it('forgets it once a run gets through', async () => {
-      const state = withBrokenStore()
-      await state.body!()
+      const broken = withBrokenStore()
+      await broken.body!()
 
       await enable()
       const {job} = build()
@@ -407,23 +391,13 @@ describe('the mirror schedule', () => {
     // failure, and on the error path it must not replace the error the caller
     // is about to see with its own.
 
-    const withFailingStatusWrites = () => {
-      const failing: DbMirrorStore = {
-        ...store,
-        recordStatus: async () => { throw new Error('the status write failed') },
-      }
-      const {job: jobHandle, state} = fakeJob()
-      const schedule = createDbMirrorSchedule({
-        store: failing,
-        job: jobHandle,
-        now: () => clock,
-        supported: () => true,
-        mirror: mirror as never,
-        withRunLock: (async <T,>(_db: string, body: () => Promise<T>) => body()),
+    const withFailingStatusWrites = () =>
+      build({
+        store: {
+          ...store,
+          recordStatus: async () => { throw new Error('the status write failed') },
+        },
       })
-      schedule.effect.start({repo} as unknown as AppEffectContext)
-      return {schedule, state}
-    }
 
     it('does not turn a finished copy into a failure', async () => {
       await enable()
