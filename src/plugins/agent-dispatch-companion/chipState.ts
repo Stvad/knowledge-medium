@@ -17,6 +17,10 @@ export const AGENT_PROPS = {
   updatedAt: 'agent:updated-at',
   attempts: 'agent:attempts',
   error: 'agent:error',
+  /** Epoch-ms a deferred (`queued`) task is due to be re-attempted at; 0
+   *  when cleared. Set when a run failed for a retryable infrastructure
+   *  reason — out of credits, expired login, rate limit, network. */
+  retryAfter: 'agent:retry-after',
   reply: 'agent:reply',
   /** Transient "what the run is doing now" label; empty/absent when idle. */
   activity: 'agent:activity',
@@ -36,8 +40,12 @@ export interface ChipState {
   /** Status-transition timestamp (claim/done/error), ms — null if absent. */
   updatedAtMs: number | null
   attempts: number
-  /** Error message for kind 'error' (may be empty). */
+  /** Failure reason — for kind 'error', and for a 'queued' task the
+   *  daemon deferred (where it says what it is waiting out). May be empty. */
   errorMessage: string
+  /** When a deferred task is due to be re-attempted (epoch ms), or null
+   *  when this isn't a deferral. Only meaningful for kind 'queued'. */
+  retryAfterMs: number | null
   /** "What the run is doing now" — empty when absent/non-string. */
   activity: string
   /** True while a running task has a pending `agent:cancel` the daemon
@@ -69,6 +77,7 @@ export const chipStateFor = (properties: Properties): ChipState | null => {
   const error = properties?.[AGENT_PROPS.error]
   const activity = properties?.[AGENT_PROPS.activity]
   const cancel = properties?.[AGENT_PROPS.cancel]
+  const retryAfter = properties?.[AGENT_PROPS.retryAfter]
   return {
     kind: status,
     executor,
@@ -78,13 +87,28 @@ export const chipStateFor = (properties: Properties): ChipState | null => {
     errorMessage: typeof error === 'string' ? error : '',
     activity: typeof activity === 'string' ? activity : '',
     cancelling: status === 'running' && Boolean(cancel),
+    retryAfterMs:
+      status === 'queued' && typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter
+        : null,
   }
 }
+
+/** True when the daemon parked this task waiting out an infrastructure
+ *  outage, rather than the task simply being new in the queue. Drives both
+ *  the chip's wording and its Stop/Retry affordances. */
+export const isDeferredRetry = (chip: ChipState): boolean =>
+  chip.kind === 'queued' && chip.retryAfterMs !== null
 
 export const chipTitle = (chip: ChipState): string => {
   switch (chip.kind) {
     case 'queued':
-      return `Queued for ${chip.executorLabel}`
+      if (!isDeferredRetry(chip)) return `Queued for ${chip.executorLabel}`
+      // A deferral says WHY it's waiting: the run never happened, so
+      // "queued" alone would read as a daemon that's merely slow.
+      return chip.errorMessage
+        ? `${chip.executorLabel} could not run — ${chip.errorMessage}`
+        : `${chip.executorLabel} could not run — waiting to retry`
     case 'running': {
       const base = chip.attempts > 1
         ? `${chip.executorLabel} is working (attempt ${chip.attempts})`

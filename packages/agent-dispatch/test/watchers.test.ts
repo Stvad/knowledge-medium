@@ -5,6 +5,7 @@ import {
   findThreadSession,
   MAX_ATTEMPTS,
   MAX_CURSOR_IDS,
+  OWNER_LEASE_MS,
   STALE_RUNNING_MS,
   type BlockView,
 } from '../src/watchers'
@@ -41,9 +42,39 @@ describe('decidePending', () => {
       .toEqual({pending: true, reason: 'pending'})
   })
 
-  it.each(['queued', 'done', 'error'] as const)('skips blocks already claimed with status=%s', status => {
+  it.each(['done', 'error'] as const)('skips blocks already claimed with status=%s', status => {
     const source = block({properties: {[PROPS.status]: status}})
     expect(decidePending({source, nowMs: NOW}).pending).toBe(false)
+  })
+
+  describe('queued = deferred after a retryable infrastructure failure', () => {
+    it('holds the task until agent:retry-after comes due, then re-fires it', () => {
+      const waiting = block({properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: NOW + 30_000}})
+      expect(decidePending({source: waiting, nowMs: NOW}))
+        .toEqual({pending: false, reason: 'retry-waiting'})
+
+      const due = block({properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: NOW}})
+      expect(decidePending({source: due, nowMs: NOW}))
+        .toEqual({pending: true, reason: 'retry-due'})
+    })
+
+    it('re-fires a queued task with no readable retry-after rather than stranding it', () => {
+      // Nothing else moves a `queued` block, so "can't tell when" must mean
+      // "now" — the opposite choice wedges the task forever.
+      for (const retryAfter of [undefined, 0, 'soon', Number.NaN]) {
+        const source = block({properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: retryAfter}})
+        expect(decidePending({source, nowMs: NOW})).toEqual({pending: true, reason: 'retry-due'})
+      }
+    })
+
+    it('ignores the quiet and baseline gates — the task was already claimed once', () => {
+      const source = block({
+        properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: NOW},
+        editedAtMs: NOW - 1_000,
+      })
+      expect(decidePending({source, nowMs: NOW, quietMs: 60_000, baselineMs: NOW + 1_000}))
+        .toEqual({pending: true, reason: 'retry-due'})
+    })
   })
 
   it('skips a fresh running block but re-queues a stale one (crashed run)', () => {
@@ -209,5 +240,58 @@ describe('diffQueryRows', () => {
     const diff = diffQueryRows([{id: 'a'}, {name: 'no-id'}, 42], [])
     expect(diff.newRows).toEqual([{id: 'a'}])
     expect(diff.invalidRows).toBe(2)
+  })
+})
+
+describe('a claimed task is its owner\'s, on a lease', () => {
+  const NOW = 1_000_000
+  const deferred = (owner: string, claimedAt: number) => ({
+    id: 'b-1',
+    properties: {
+      [PROPS.status]: 'queued', [PROPS.retryAfter]: 0,
+      [PROPS.watcher]: owner, [PROPS.updatedAt]: claimedAt,
+    },
+  })
+
+  it('refuses a due deferral to a DIFFERENT watcher while the lease holds', () => {
+    // Its prompt, its executor, its allowedTools. A task begun by a narrow
+    // watcher must not resume under a broad one.
+    expect(decidePending({
+      source: deferred('claude-mentions', NOW - 60_000), nowMs: NOW,
+      watcherName: 'codex-mentions',
+    })).toMatchObject({pending: false, reason: 'other-watcher'})
+  })
+
+  it('still fires it for its own watcher, lease or not', () => {
+    expect(decidePending({
+      source: deferred('claude-mentions', NOW - 60_000), nowMs: NOW,
+      watcherName: 'claude-mentions',
+    })).toMatchObject({pending: true, reason: 'retry-due'})
+  })
+
+  it('releases it once the owner has had its chance and not taken it', () => {
+    // Covers every reason an owner stops scanning a block — renamed,
+    // deleted, or still named the same with a different target — without
+    // having to tell them apart, which from here is not possible.
+    expect(decidePending({
+      source: deferred('retired-watcher', NOW - OWNER_LEASE_MS - 1), nowMs: NOW,
+      watcherName: 'codex-mentions',
+    })).toMatchObject({pending: true, reason: 'retry-due'})
+  })
+
+  it('releases one with no claim stamp rather than holding it for ever', () => {
+    expect(decidePending({
+      source: {id: 'b-1', properties: {
+        [PROPS.status]: 'queued', [PROPS.retryAfter]: 0, [PROPS.watcher]: 'gone',
+      }},
+      nowMs: NOW, watcherName: 'codex-mentions',
+    })).toMatchObject({pending: true, reason: 'retry-due'})
+  })
+
+  it('leaves an UNCLAIMED block racy, as designed', () => {
+    expect(decidePending({
+      source: {id: 'b-1', editedAtMs: NOW},
+      nowMs: NOW, watcherName: 'codex-mentions',
+    })).toMatchObject({pending: true})
   })
 })

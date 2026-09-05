@@ -26,6 +26,14 @@ export interface PendingDecision {
     | 'stale-running'
     | 'attempts-exhausted'
     | 'pre-baseline'
+    /** A retryable infrastructure failure deferred this task and its
+     *  `agent:retry-after` has come due. */
+    | 'retry-due'
+    /** Claimed by a DIFFERENT watcher whose lease has not lapsed — its
+     *  run, its prompt, its permissions. */
+    | 'other-watcher'
+    /** Deferred, but still inside its `agent:retry-after` window. */
+    | 'retry-waiting'
 }
 
 const prop = (block: BlockView | undefined, key: string): unknown =>
@@ -54,6 +62,12 @@ export const STALE_RUNNING_MS = 30 * 60_000
  *  crashing or the ambient channel session keeps dropping the event. */
 export const MAX_ATTEMPTS = 3
 
+/** How long a claimed task stays its owner's alone. Past this the owner has
+ *  demonstrably not taken it — whatever the reason — and any watcher that
+ *  can see it may. Same constant as the stale-`running` sweep, which is the
+ *  same judgement: this has been sitting long enough to be abandoned. */
+export const OWNER_LEASE_MS = STALE_RUNNING_MS
+
 export interface PendingArgs {
   source: BlockView
   nowMs: number
@@ -66,6 +80,9 @@ export interface PendingArgs {
    *  the user leave the block, or its settle window elapsed) — skip the
    *  clock-based still-typing gate. Baseline/status gates still apply. */
   quietExempt?: boolean
+  /** The watcher asking. A claimed task is its owner's to re-claim, for a
+   *  while — see `OWNER_LEASE_MS`. */
+  watcherName?: string
 }
 
 /**
@@ -74,14 +91,44 @@ export interface PendingArgs {
  *   NESTED under a reply are user-authored follow-ups and DO fire — loop
  *   safety comes from replies themselves being marked plus the MCP write
  *   tools refusing watcher-target links/ids, not from a blanket subtree ban;
+ * - re-fire a `queued` task once its `agent:retry-after` is due. That's the
+ *   deferral state a retryable infrastructure failure leaves behind, so it
+ *   is pending-with-a-clock, NOT processed;
  * - skip anything already claimed, except a stale `running` (crashed or
  *   dropped run) which re-queues until MAX_ATTEMPTS, then parks;
  * - skip unclaimed blocks that predate the watcher baseline — pointing a
  *   watcher at an established page must not claim (and bill) its history;
  * - wait out the quiet period so half-typed requests aren't claimed.
  */
-export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExempt = false}: PendingArgs): PendingDecision => {
+export const decidePending = (
+  {source, nowMs, quietMs = 0, baselineMs, quietExempt = false, watcherName}: PendingArgs,
+): PendingDecision => {
   if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
+
+  // A claimed task is its owner's to re-claim, but as a LEASE rather than a
+  // lock. A block can be visible to several watchers, and a re-claim — a due
+  // deferral, or a stale `running` — would otherwise go to whichever scanned
+  // first and run under a different prompt, executor and allowedTools than
+  // the work began with; a task started by a narrow watcher must not resume
+  // under a broad one.
+  //
+  // The lease EXPIRES because there are many ways an owner stops scanning a
+  // block and no way to tell them apart from here: renamed, deleted, or
+  // still named the same with a different target or kind. Asking "does that
+  // name still exist" answered only the first, and left the others queued
+  // for good. Waiting instead asks the question that actually matters — has
+  // the owner had a fair chance and not taken it — which is the same
+  // question, and the same constant, the stale-`running` sweep already uses.
+  //
+  // Unclaimed blocks are untouched: two watchers racing for a fresh mention
+  // is by design, and claim-verify settles it. An explicit Retry clears
+  // `agent:watcher` for deliberate reassignment.
+  const owner = prop(source, PROPS.watcher)
+  if (watcherName && typeof owner === 'string' && owner && owner !== watcherName) {
+    const updatedAt = prop(source, PROPS.updatedAt)
+    const heldFor = typeof updatedAt === 'number' ? nowMs - updatedAt : Number.POSITIVE_INFINITY
+    if (heldFor < OWNER_LEASE_MS) return {pending: false, reason: 'other-watcher'}
+  }
 
   const status = taskStatus(source)
   if (status === 'running') {
@@ -90,6 +137,16 @@ export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExem
     if (age < STALE_RUNNING_MS) return {pending: false, reason: 'already-processed'}
     if (taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
     return {pending: true, reason: 'stale-running'}
+  }
+  if (status === 'queued') {
+    // A deferred task, waiting out an infrastructure outage. Missing/
+    // unreadable retry-after counts as DUE: the alternative is a task
+    // stuck in `queued` with nothing that will ever move it.
+    const retryAfter = prop(source, PROPS.retryAfter)
+    if (typeof retryAfter === 'number' && Number.isFinite(retryAfter) && nowMs < retryAfter) {
+      return {pending: false, reason: 'retry-waiting'}
+    }
+    return {pending: true, reason: 'retry-due'}
   }
   if (status) return {pending: false, reason: 'already-processed'}
 
