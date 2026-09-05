@@ -50,6 +50,27 @@ const typeSeedKeyForRow = (row: BlockData): string | undefined => {
   return key !== undefined && isTypeSeedKey(key) ? key : undefined
 }
 
+/** The §9 membership token a row's type would be tagged under, claim rule only —
+ * no `block-type`/label gate. A `block-type:type-id` differing from the block's
+ * own id is honored only with valid `/type/` seed provenance; everything else
+ * (user rows, demoted claims, malformed claims) tags under the block id.
+ *
+ * Split out of `parseTypeDefinitionMetadata` so the merge-retarget processor
+ * (`mergeTypeMembershipProcessor`) can ask "what token does membership in THIS
+ * row's type mean" without inheriting the parse's null cases: it must answer for
+ * a merge survivor that isn't a well-formed type row at all (a label-less type
+ * block, or a plain page), where the answer is still the block id and the
+ * alternative is silently dropping the members' membership. One source of truth
+ * for the rule keeps the tag a merge writes byte-equal to the tag the registry
+ * publishes. */
+export const typeMembershipTokenFor = (row: BlockData): string => {
+  const seedKey = typeSeedKeyForRow(row)
+  const claimedTypeId = safeDecodeRowProperty(row, blockTypeTypeIdProp)
+  return claimedTypeId.length > 0 && claimedTypeId !== row.id && seedKey !== undefined
+    ? claimedTypeId
+    : row.id
+}
+
 /** Parse a `block-type` definition row into codec-less identity/display facts.
  * A deleted, non-block-type, or (after degrading a malformed label to empty)
  * label-less row returns null; malformed DISPLAY fields (color, hide flags,
@@ -84,10 +105,7 @@ export const parseTypeDefinitionMetadata = (
     const hideFromCompletion = safeDecodeRowProperty(row, blockTypeHideFromCompletionProp)
 
     const seedKey = typeSeedKeyForRow(row)
-    const claimedTypeId = safeDecodeRowProperty(row, blockTypeTypeIdProp)
-    const typeId = claimedTypeId.length > 0 && claimedTypeId !== row.id && seedKey !== undefined
-      ? claimedTypeId
-      : row.id
+    const typeId = typeMembershipTokenFor(row)
 
     const base: TypeDefinitionMetadata = {
       typeId,
