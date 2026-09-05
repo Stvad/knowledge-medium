@@ -191,36 +191,62 @@ const governedBy = (installId: string, currentTag: string) => {
  * than a SQLite header, so a stub is the entry a crashed run created and never
  * filled (runs do not overlap; see the header), and letting it occupy a keep
  * slot would push out a copy that has real bytes.
+ *
+ * Never fails the run. DEFENCE IN DEPTH and unpinned — the only fallible step
+ * is `removeQuietly`, which already catches everything — but the copy is on
+ * disk and good by the time this runs, and discarding that over housekeeping
+ * is not a trade worth leaving open to a future edit.
  */
-const pruneGoverned = async (
+const prune = async (
   directory: FileSystemDirectoryHandle,
   governed: readonly MirrorCopy[],
   keepCount: number,
+  /** REQUIRED, not optional: every caller knows which copy is the current one,
+   *  and an omitted argument silently reintroduces the clock-skew deletion this
+   *  protects against. */
   protectedName: string | undefined,
 ): Promise<readonly string[]> => {
-  const copies = governed.filter(copy => copy.name !== protectedName)
-  const isResidue = (copy: MirrorCopy): boolean =>
-    copy.size !== undefined && copy.size < SQLITE_HEADER_BYTES
-  // The protected copy occupies one of the slots, so only the rest compete.
-  // Non-finite inputs already land somewhere safe and need no separate clamp:
-  // NaN falls through to `slice(0)`, which keeps the protected copy and
-  // nothing else — the same as the minimum legal count — and Infinity keeps
-  // everything. `normalizeSettings` makes both unreachable anyway.
-  const keep = Math.max(0, Math.max(1, Math.trunc(keepCount)) - (protectedName ? 1 : 0))
-  const doomed = [
-    ...copies.filter(isResidue),
-    ...copies
-      .filter(copy => !isResidue(copy))
-      .sort((a, b) => b.at - a.at || b.name.localeCompare(a.name))
-      .slice(keep),
-  ]
-
   const removed: string[] = []
-  for (const copy of doomed) {
-    if (await removeQuietly(directory, copy.name)) removed.push(copy.name)
+  try {
+    const copies = governed.filter(copy => copy.name !== protectedName)
+    // The protected copy occupies one of the slots, so only the rest compete.
+    // Non-finite inputs already land somewhere safe and need no separate clamp:
+    // NaN falls through to `slice(0)`, which keeps the protected copy and
+    // nothing else — the same as the minimum legal count — and Infinity keeps
+    // everything. `normalizeSettings` makes both unreachable anyway.
+    const keep = Math.max(0, Math.max(1, Math.trunc(keepCount)) - (protectedName ? 1 : 0))
+    const doomed = [
+      ...copies.filter(isResidue),
+      ...copies
+        .filter(copy => !isResidue(copy))
+        .sort((a, b) => b.at - a.at || b.name.localeCompare(a.name))
+        .slice(keep),
+    ]
+    for (const copy of doomed) {
+      if (await removeQuietly(directory, copy.name)) removed.push(copy.name)
+    }
+  } catch (err) {
+    console.warn('[db-mirror] could not prune older copies', err)
   }
   return removed
 }
+
+/** Residue from a run that died between claiming the name and writing the
+ *  bytes. Not a truncation test — see {@link SQLITE_HEADER_BYTES}. */
+const isResidue = (copy: MirrorCopy): boolean =>
+  copy.size !== undefined && copy.size < SQLITE_HEADER_BYTES
+
+/** The copy `lastCopy` names, actually on disk and actually whole.
+ *
+ *  A size we could READ, because an unreadable entry — an offline cloud
+ *  placeholder — is not evidence a usable copy is there, and accepting one
+ *  would protect it while pruning the readable copies behind it. And the size
+ *  it was written with, because an interrupted sync can truncate a copy to
+ *  something plausible. Neither deleted nor believed. */
+const isIntactCopy = (copy: MirrorCopy, expectedBytes: number | undefined): boolean =>
+  copy.size !== undefined &&
+  copy.size >= SQLITE_HEADER_BYTES &&
+  (expectedBytes === undefined || copy.size === expectedBytes)
 
 /** Best-effort listing: a folder that cannot be read is not a reason to skip
  *  the copy, so the caller proceeds with nothing found. */
@@ -304,17 +330,7 @@ export const runDbMirror = async ({
     // run for good while the status went on claiming success.
     const {governed, unmanaged} = partition(await scanQuietly(directory, dbFilename))
     const present = governed.some(
-      copy =>
-        copy.name === lastCopy.filename &&
-        // A size we could actually READ. An unreadable entry — an offline cloud
-        // placeholder — is not evidence a usable copy is there, and accepting
-        // it would protect the unreadable file while pruning the readable ones
-        // behind it. Neither deleted nor believed.
-        copy.size !== undefined &&
-        copy.size >= SQLITE_HEADER_BYTES &&
-        // And the size it was written with, since an interrupted sync can
-        // truncate a copy to something plausible.
-        (lastCopy.bytes === undefined || copy.size === lastCopy.bytes),
+      copy => copy.name === lastCopy.filename && isIntactCopy(copy, lastCopy.bytes),
     )
     // Housekeeping is about the folder, not about the copy, so it runs here
     // too: otherwise lowering the keep count never takes effect while the
@@ -359,29 +375,5 @@ export const runDbMirror = async ({
     marker,
     unmanaged,
     pruned: await prune(directory, governed, keepCount, filename),
-  }
-}
-
-/** Pruning never fails a run: the copy is on disk and good, and failing over
- *  housekeeping would discard that. The next run retries the same files.
- *
- *  DEFENCE IN DEPTH, and unpinned: `pruneGoverned`'s only fallible step is
- *  `removeQuietly`, which already catches everything and answers with a
- *  boolean. Kept because the alternative to a redundant catch here is a run
- *  that throws away a good copy over housekeeping. */
-const prune = async (
-  directory: FileSystemDirectoryHandle,
-  governed: readonly MirrorCopy[],
-  keepCount: number,
-  /** REQUIRED, not optional: every caller knows which copy is the current one,
-   *  and an omitted argument silently reintroduces the clock-skew deletion this
-   *  protects against. */
-  protectedName: string | undefined,
-): Promise<readonly string[]> => {
-  try {
-    return await pruneGoverned(directory, governed, keepCount, protectedName)
-  } catch (err) {
-    console.warn('[db-mirror] could not prune older copies', err)
-    return []
   }
 }

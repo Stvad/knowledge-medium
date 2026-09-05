@@ -35,6 +35,9 @@ describe('the mirror diagnostic', () => {
     expect(snapshot).toMatchObject({
       severity: 'warning',
       nudge: true,
+      // The actionable message wins over the failure text recorded by the same
+      // run, which would otherwise say the same thing less usefully.
+      summary: 'Database mirror is paused',
       detail: 'the grant lapsed',
       actionId: 'open_db_mirror_settings',
     })
@@ -105,13 +108,5 @@ describe('the mirror diagnostic', () => {
     expect(diagnose(state(), {stalled: true})?.summary).toBe(
       'Database mirror has not copied yet',
     )
-  })
-
-  it('prefers the paused message over a stale failure from the same run', () => {
-    // A lapsed grant records BOTH flags; only the actionable one should show.
-    const snapshot = diagnose(
-      state({status: {permissionLost: true, lastError: 'permission text'}}),
-    )
-    expect(snapshot?.summary).toBe('Database mirror is paused')
   })
 })

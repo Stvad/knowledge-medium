@@ -19,20 +19,10 @@
  * as-of-that-moment is what restoring a snapshot MEANS, and fingerprinting the
  * whole database would leave nothing for the skip to skip.
  *
- * `ps_crud` is the pending-upload queue. Draining it writes nothing to
- * `blocks`, so on the `row_events` reading alone a mirror taken while an upload
- * was still pending would keep that pending entry FOREVER once the user stops
- * editing. Restoring it replays the patch — and patches are column-LWW, so a
- * value another device has since changed gets overwritten by the stale one.
- *
- * `ps_crud_rejected` is the quarantine for uploads the server refused, and it
- * qualifies under the same rule because the rejection dialog's Retry button
- * puts a row straight back into `ps_crud`. A restore that resurrects a
- * rejection the user had dismissed offers them one click to upload a patch that
- * is now stale.
- *
- * Sampling both costs two small queries and converges the newest copy on drained
- * queues, at the price of roughly one extra copy per editing session.
+ * `ps_crud` is the pending-upload queue: restoring a stale one replays its
+ * patches, which are column-LWW and so overwrite values another device has
+ * since changed. `ps_crud_rejected` qualifies under the same rule because the
+ * rejection dialog's Retry button puts a row straight back into `ps_crud`.
  *
  * Rejected alternative for the first part: PowerSync's `ps_sync_state`
  * checkpoint. It advances on SYNC, so a device working offline all day would
@@ -78,12 +68,9 @@ const readQueueFingerprint = async (
  * database that the browser wiped and PowerSync re-created gets a new one,
  * because the re-download writes fresh events.
  *
- * That is what stops the fresh database's first copy, after the OPFS loss this
- * feature exists for, from evicting the pre-loss copy that holds the work the
- * loss took. It does NOT identify a DEVICE — restoring a mirror copies the log
- * along with everything else, so two installs can hold the same incarnation.
- * The install id it is combined with is what separates those; see
- * `mirrorOrigin`.
+ * It does NOT identify a DEVICE — restoring a mirror copies the log along with
+ * everything else, so two installs can hold the same incarnation. The install
+ * id it is paired with in the filename is what separates those.
  *
  * `undefined` when it cannot be read or the log is empty. Callers treat that as
  * "a database I know nothing about": copy, and prune nothing.

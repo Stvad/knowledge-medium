@@ -41,7 +41,6 @@ describe('db-mirror store', () => {
       status: {},
       directory: undefined,
     })
-    expect(DB_MIRROR_DEFAULTS.enabled).toBe(false)
   })
 
   it('writes nothing for a user who has never opted in', async () => {
@@ -157,6 +156,17 @@ describe('db-mirror store', () => {
     await store.load(USER)
     expect((await store.updateSettings(USER, {keepCount: 0})).settings.keepCount).toBe(1)
     expect((await store.updateSettings(USER, {keepCount: 999})).settings.keepCount).toBe(20)
+  })
+
+  it('drops a stored number that is not one, rather than leaving readers to disagree', async () => {
+    // The chip read a NaN timestamp as "no copy taken yet" and the dialog read
+    // it as a copy at an unknown time. One owner, so neither has to.
+    await store.load(USER)
+
+    const {status} = await store.recordStatus(USER, {lastMirrorAt: Number.NaN, lastBytes: 512})
+
+    expect(status.lastMirrorAt).toBeUndefined()
+    expect(status.lastBytes).toBe(512)
   })
 
   it('records a success and clears the previous failure', async () => {

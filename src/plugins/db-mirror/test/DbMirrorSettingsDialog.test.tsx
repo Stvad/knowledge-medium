@@ -230,18 +230,9 @@ describe('DbMirrorSettingsDialog', () => {
     expect(Number(options.at(-1)?.value)).toBe(MAX_INTERVAL_MINUTES)
   })
 
-  it('changing the keep count and the interval persists through the store', async () => {
-    renderDialog()
-    await waitForLoaded()
-
-    fireEvent.change(screen.getByLabelText(/^keep$/i), { target: { value: '7' } })
-    await waitFor(() => expect(store.getSnapshot()?.settings.keepCount).toBe(7))
-
-    fireEvent.change(screen.getByLabelText(/how often/i), { target: { value: '360' } })
-    await waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(360))
-  })
-
   it('re-arms the loop on the new interval instead of leaving it on the old delay', async () => {
+    // Also the one place a changed INTERVAL is shown to persist; the keep
+    // count's own persistence is covered twice above.
     renderDialog()
     await waitForLoaded()
 

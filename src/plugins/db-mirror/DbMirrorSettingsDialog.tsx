@@ -55,10 +55,7 @@ const INTERVAL_OPTIONS = (
 const MIB = 1024 * 1024
 const formatMiB = (bytes: number): string => `${(bytes / MIB).toFixed(1)} MiB`
 
-const formatTime = (at: number): string => {
-  const d = new Date(at)
-  return Number.isNaN(d.getTime()) ? 'unknown time' : d.toLocaleString()
-}
+const formatTime = (at: number): string => new Date(at).toLocaleString()
 
 const describeError = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 

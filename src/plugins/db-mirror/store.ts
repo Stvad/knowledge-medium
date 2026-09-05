@@ -110,19 +110,27 @@ export const normalizeSettings = (value: unknown): DbMirrorSettings => {
   }
 }
 
+/** Same job as {@link normalizeSettings}, and the same rule about finiteness:
+ *  this is the only place a stored value becomes a status, so `NaN` has to stop
+ *  here. Left to the readers they disagreed — the health chip read a `NaN`
+ *  timestamp as "no copy taken yet" while the settings dialog read it as a copy
+ *  at an unknown time. */
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value)
+
 const normalizeStatus = (value: unknown): DbMirrorStatus => {
   const raw = (typeof value === 'object' && value !== null ? value : {}) as DbMirrorStatus
   return dropUndefined({
     lastMarker: typeof raw.lastMarker === 'string' ? raw.lastMarker : undefined,
-    lastMirrorAt: typeof raw.lastMirrorAt === 'number' ? raw.lastMirrorAt : undefined,
-    lastCheckedAt: typeof raw.lastCheckedAt === 'number' ? raw.lastCheckedAt : undefined,
+    lastMirrorAt: isFiniteNumber(raw.lastMirrorAt) ? raw.lastMirrorAt : undefined,
+    lastCheckedAt: isFiniteNumber(raw.lastCheckedAt) ? raw.lastCheckedAt : undefined,
     incarnation: typeof raw.incarnation === 'string' ? raw.incarnation : undefined,
     lastFilename: typeof raw.lastFilename === 'string' ? raw.lastFilename : undefined,
-    lastBytes: typeof raw.lastBytes === 'number' ? raw.lastBytes : undefined,
-    unmanagedCopies: typeof raw.unmanagedCopies === 'number' ? raw.unmanagedCopies : undefined,
+    lastBytes: isFiniteNumber(raw.lastBytes) ? raw.lastBytes : undefined,
+    unmanagedCopies: isFiniteNumber(raw.unmanagedCopies) ? raw.unmanagedCopies : undefined,
     permissionLost: typeof raw.permissionLost === 'boolean' ? raw.permissionLost : undefined,
     lastError: typeof raw.lastError === 'string' ? raw.lastError : undefined,
-    lastErrorAt: typeof raw.lastErrorAt === 'number' ? raw.lastErrorAt : undefined,
+    lastErrorAt: isFiniteNumber(raw.lastErrorAt) ? raw.lastErrorAt : undefined,
   })
 }
 

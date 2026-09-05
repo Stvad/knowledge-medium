@@ -11,17 +11,10 @@
  * scheduled tick both go through `performDbMirror`, so a manual run cannot skip
  * a check the scheduled one makes, or record its result differently.
  *
- * The loop NEVER stops once started, and that is a deliberate simplification of
- * an earlier design that halted it on a lost folder permission. Halting was
- * solving a problem that did not exist: the requirement is that a lost
- * permission is asked about ONCE rather than on every idle tick, and a tick
- * cannot ask at all — it calls `queryPermission`, which never prompts, and only
- * the settings surface ever calls `requestPermission`. What halting did cost was
- * real: every tab that met the lost permission stopped independently, so a
- * re-grant in one tab left the others halted while displaying a healthy mirror,
- * and reviving them needed a cross-tab wake-up that a running loop does not.
- * A permission-lost run now just takes the ordinary cadence and recovers by
- * itself in every tab.
+ * The loop NEVER stops once started. Halting it on a lost folder permission was
+ * considered and rejected: a tick only calls `queryPermission`, which never
+ * prompts, so halting buys nothing — and it strands every other tab after a
+ * re-grant made in one of them.
  */
 import type {Repo} from '@/data/repo'
 import {dbFilenameForUser} from '@/data/localDbStorage.js'
