@@ -8,8 +8,9 @@
  * instead of at the next reload.
  *
  * One entry point — `runNow` (the settings surface's "Mirror now") and the
- * scheduled tick both go through `performDbMirror`, so a manual run cannot skip
- * a check the scheduled one makes, or record its result differently.
+ * scheduled tick both go through `performDbMirror`, so the two cannot drift
+ * apart or record their results differently. A manual run does deliberately
+ * bypass the two cadence gates; see `force`.
  *
  * The loop NEVER stops once started. Halting it on a lost folder permission was
  * considered and rejected: a tick only calls `queryPermission`, which never
@@ -145,16 +146,33 @@ export const createDbMirrorSchedule = ({
     }
   }
 
-  /** Every terminal outcome goes through here, so the chip can report what the
-   *  run concluded rather than inferring it from the copy fields — which is how
-   *  a mirror that refuses every run came to look like one waiting for its
-   *  first idle moment. */
+  /** Records what a run CONCLUDED about the database and the folder, so the chip
+   *  can report that rather than infer it from the copy fields.
+   *
+   *  The outcomes that decide nothing about either — mirroring off, no folder
+   *  chosen, another tab holding the lock, this one inside the cadence — do not
+   *  come through here, and deliberately: they would overwrite a verdict that is
+   *  still the most recent thing known about the mirror itself. */
   const conclude = async (
     userId: string,
     at: number,
     kind: DbMirrorVerdict,
     patch: Parameters<DbMirrorStore['recordStatus']>[1] = {},
-  ): Promise<void> => recordStatus(userId, {...patch, lastOutcome: kind, lastOutcomeAt: at})
+  ): Promise<void> =>
+    recordStatus(userId, {
+      // A run that reached a verdict at all got past the permission check and
+      // the folder, so any failure on the record describes a state that is
+      // over. Cleared by DEFAULT rather than per-branch: leaving it to each
+      // caller is how a week-old "the disk is full" came to shadow a current
+      // verdict on the chip, which is the inference recording verdicts was
+      // meant to replace. The two branches that ARE reporting a failure put it
+      // back in their own patch.
+      lastError: undefined,
+      lastErrorAt: undefined,
+      ...patch,
+      lastOutcome: kind,
+      lastOutcomeAt: at,
+    })
 
   /**
    * @param force take the copy even if a run already covered this interval.
@@ -199,28 +217,24 @@ export const createDbMirrorSchedule = ({
     // database inheriting the old one's marker and deciding it has nothing to
     // copy.
     const reading = await readDatabaseIncarnation(repo)
-    // An EMPTY log is a positive fact and the one case that warrants no copy:
-    // the `row_events` triggers fire on every `blocks` write, so an empty log
-    // means no local writes and therefore nothing in the upload queue either —
-    // which is the whole of what this feature protects.
-    if (reading.kind === 'empty') {
-      await conclude(userId, at, 'no-identity')
-      return {outcome: {kind: 'no-identity'}, intervalMs}
-    }
-    // An UNREADABLE log is not: it says nothing about whether the FILE copies,
-    // since the export streams raw bytes and runs no query but the checkpoint,
-    // and a partly damaged database is exactly when a byte copy is worth most.
-    // The copy is taken under a name no run can claim — see `governedBy`.
     const incarnation = reading.kind === 'known' ? reading.id : undefined
-    // The recorded copy describes a database that is no longer here — an import
-    // replaced it, or the browser wiped the local store and the app rebuilt it.
+    // Whether the record in front of us describes the database in front of us.
+    // An EMPTY log settles it in the negative rather than leaving it unknown:
+    // `row_events` is never trimmed, so a database with recorded history cannot
+    // have an empty log, and a status carrying one therefore belongs to a
+    // database this device no longer holds. An UNREADABLE log settles nothing,
+    // so the record is left as it stands.
+    const describesThisDatabase =
+      incarnation !== undefined && state.status.incarnation === incarnation
+    const knownStale = reading.kind === 'empty' || (reading.kind === 'known' && !describesThisDatabase)
     // CLEARED here rather than filtered by each reader: the chip and the
     // settings surface both rendered the previous database's last copy as this
     // one's, and a record that is only true if you remember to check a
-    // neighbouring field is a record that will be read wrong.
-    const describesThisDatabase =
-      incarnation !== undefined && state.status.incarnation === incarnation
-    if (!describesThisDatabase && state.status.lastOutcome !== undefined) {
+    // neighbouring field is a record that will be read wrong. Before the
+    // empty-log return below, because that is the post-wipe window itself — a
+    // rebuilt database has an empty log until sync repopulates it, which is
+    // exactly when the stale record is on screen.
+    if (knownStale && state.status.lastOutcome !== undefined) {
       await recordStatus(userId, {
         incarnation,
         lastMarker: undefined,
@@ -230,6 +244,15 @@ export const createDbMirrorSchedule = ({
         lastBytes: undefined,
         unmanagedCopies: undefined,
       })
+    }
+    // An empty log is the one case that warrants no copy at all: the
+    // `row_events` triggers fire on every `blocks` write, so no local writes
+    // means nothing in the upload queue either — the whole of what this
+    // protects. An unreadable log is different, and `governedBy` owns why: the
+    // copy is taken under a name no run can claim.
+    if (reading.kind === 'empty') {
+      await conclude(userId, at, 'no-identity')
+      return {outcome: {kind: 'no-identity'}, intervalMs}
     }
 
     // The interval belongs to the DEVICE, not to this tab's timer: every tab
@@ -300,8 +323,6 @@ export const createDbMirrorSchedule = ({
             incarnation,
             unmanagedCopies: outcome.unmanaged,
             permissionLost: false,
-            lastError: undefined,
-            lastErrorAt: undefined,
             // Only a copy we read back is recorded AS the copy. An unverified
             // one is probably fine, but claiming it would have the chip assert
             // a backup nothing has seen for a whole interval — a week at the
@@ -327,8 +348,6 @@ export const createDbMirrorSchedule = ({
             lastCheckedAt: at,
             unmanagedCopies: outcome.unmanaged,
             permissionLost: false,
-            lastError: undefined,
-            lastErrorAt: undefined,
           })
           break
         case 'permission-lost':
@@ -367,9 +386,12 @@ export const createDbMirrorSchedule = ({
   const performDbMirror = (repo: Repo, force = false): Promise<DbMirrorRunReport> => {
     if (inFlight?.userId === repo.user.id) return inFlight.run
     const run: Promise<DbMirrorRunReport> = mirrorOnce(repo, force).finally(() => {
-      // Only if it is still OURS. DEFENCE IN DEPTH and unpinned: the effect
-      // reconciler stops an effect before starting its replacement, so a second
-      // user's run cannot begin while this one is in flight.
+      // Only if it is still OURS, and that is load-bearing rather than a
+      // formality. Stopping an effect does NOT recall a run already in flight —
+      // `loop.stop` cancels a pending timer and nothing more — so a copy can
+      // outlast the replacement effect's first tick. Clearing unconditionally
+      // would drop the new user's entry while their run is still going, and the
+      // next caller would start a second one overlapping it in this same tab.
       if (inFlight?.run === run) inFlight = null
     })
     inFlight = {userId: repo.user.id, run}
@@ -412,8 +434,15 @@ export const createDbMirrorSchedule = ({
         // own floor, which exists to stay clear of boot.
         const {lastCheckedAt} = state.status
         if (lastCheckedAt === undefined) return
-        const due = lastCheckedAt + state.settings.intervalMinutes * 60_000 - now()
-        loop.rearmIn(Math.max(LAZY_DEEP_IDLE.minDelayMs, due))
+        const intervalMs = state.settings.intervalMinutes * 60_000
+        // Clamped at BOTH ends. A `lastCheckedAt` written while the device
+        // clock was fast makes `due` arbitrarily large, and the loop would then
+        // sit past it — across reloads, since every restart re-reads the same
+        // record — while nothing looked wrong: the cadence gate and
+        // `isMirrorStalled` both read a negative age as "recent". Never longer
+        // than one interval is the same answer a fresh session would give.
+        const due = lastCheckedAt + intervalMs - now()
+        loop.rearmIn(Math.min(intervalMs, Math.max(LAZY_DEEP_IDLE.minDelayMs, due)))
       })
       .catch((err: unknown) => {
         console.warn('[db-mirror] could not read the mirror state at startup', err)
@@ -482,6 +511,8 @@ export const createDbMirrorSchedule = ({
             return failureDelay(consecutiveFailures, lastKnownIntervalMs)
           }
         },
+        // A backstop only: the body above handles its own failure and returns a
+        // delay, so nothing on the remaining path can throw.
         {onFailureDelayMs: FAILURE_RETRY_MS},
       )
 

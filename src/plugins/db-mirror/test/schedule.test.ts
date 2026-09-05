@@ -25,6 +25,7 @@ import {createDbMirrorStore, type DbMirrorStore} from '../store.js'
 import type {DbMirrorOutcome} from '../mirror.js'
 
 const USER = 'alice'
+const BOB = 'bob'
 /** The identity `readDatabaseIncarnation` derives from this repo's log. */
 const INCARNATION = '1700000000000'
 const repo = {
@@ -221,7 +222,61 @@ describe('the mirror schedule', () => {
     expect(mirror).toHaveBeenCalledWith(expect.objectContaining({incarnation: undefined}))
   })
 
-  it('records what every run concluded, including the ones that wrote nothing', async () => {
+  it('clears the previous database’s copy even when the new one has no log yet', async () => {
+    // THE post-wipe window. A rebuilt database has an empty `row_events` until
+    // sync repopulates it, so the run that refuses to copy is the one on screen
+    // while the user is looking for their backup — and it was leaving the
+    // pre-wipe copy on the record, so the settings surface named a file that
+    // describes a database that is gone.
+    await enable()
+    await store.recordStatus(USER, {
+      incarnation: 'a-database-that-is-gone',
+      lastOutcome: 'mirrored',
+      lastMirrorAt: NOW - 3_600_000,
+      lastFilename: 'old.db',
+    })
+    const {job} = build({identifiable: false})
+
+    await job.body!()
+
+    const {status} = await store.load(USER)
+    expect(status.lastMirrorAt).toBeUndefined()
+    expect(status.lastFilename).toBeUndefined()
+    expect(status.incarnation).toBeUndefined()
+    expect(status.lastOutcome).toBe('no-identity')
+  })
+
+  it('does not let a failure from last week shadow what this run concluded', async () => {
+    // Only two verdicts used to clear `lastError`, so the chip went on
+    // reporting "Last database mirror failed" with a stale message over a run
+    // that had reached a perfectly good verdict — the inference that recording
+    // verdicts was introduced to replace.
+    await enable()
+    await store.recordStatus(USER, {lastError: 'the disk was full last week', lastErrorAt: 1})
+    const {job} = build({identifiable: false})
+
+    await job.body!()
+
+    const {status} = await store.load(USER)
+    expect(status.lastError).toBeUndefined()
+    expect(status.lastOutcome).toBe('no-identity')
+  })
+
+  it('does not park the loop past the cadence when the clock was fast', async () => {
+    // A `lastCheckedAt` from a fast clock made `due` arbitrarily large, and
+    // every reload re-read the same record and re-armed just as far out, with
+    // nothing looking wrong — the gate and the staleness test both read a
+    // negative age as recent.
+    await enable()
+    await store.recordStatus(USER, {lastCheckedAt: NOW + 4 * 365 * 24 * 3_600_000})
+
+    const {job} = build()
+
+    await vi.waitFor(() => expect(job.rearms.length).toBeGreaterThan(0))
+    expect(job.rearms.at(-1)?.delayMs).toBeLessThanOrEqual(INTERVAL_MS)
+  })
+
+  it('records the verdict of a run that wrote nothing, not just of one that copied', async () => {
     await enable()
     const {job} = build({identifiable: false})
 
@@ -293,12 +348,10 @@ describe('the mirror schedule', () => {
   })
 
   it('writes nothing at all when the database cannot say which database it is', async () => {
-    // A copy under a stand-in identity is worse than no copy: nothing can place
-    // it among the others, so the pruner eventually ranks it against copies of
-    // a DIFFERENT database and deletes one believing it has the other. Both
-    // ways of getting here argue for waiting — an empty log means no local
-    // writes yet, and an unreadable one means a database the copy was unlikely
-    // to succeed against.
+    // An EMPTY log only. It is a fact about the database — `row_events` is never
+    // trimmed, so no local writes have happened and there is nothing in the
+    // upload queue either. An UNREADABLE log is the other case and does take a
+    // copy; the test below pins that.
     await enable()
     const {job} = build({identifiable: false})
 
@@ -680,6 +733,75 @@ describe('the mirror schedule', () => {
     outcomes = [new Error('a passing hiccup')]
     clock += INTERVAL_MS
     expect(await job.body!()).toBe(FAILURE_RETRY_MS)
+  })
+
+  it('does not record a copy it could not read back as the copy to skip against', async () => {
+    // The bytes are committed, so the file is kept — but nothing here saw it.
+    // Recording it would have the chip assert a backup for a whole interval and
+    // let the next run skip against a file it never confirmed.
+    await enable()
+    outcomes = [{...MIRRORED, verified: false}]
+    const {job} = build()
+
+    await job.body!()
+
+    const {status} = await store.load(USER)
+    expect(status.lastOutcome).toBe('mirrored')
+    expect(status.lastFilename).toBeUndefined()
+    expect(status.lastMarker).toBeUndefined()
+    expect(status.lastMirrorAt).toBeUndefined()
+  })
+
+  it('does not defer a retry because the clock jumped backwards after a failure', async () => {
+    // Same rule as the cadence gate one line up, and it was the untested copy
+    // of it: a negative age would otherwise read as "inside the window".
+    await enable()
+    const {job} = build()
+    outcomes = [new Error('the drive is full')]
+    await job.body!()
+    expect(mirror).toHaveBeenCalledTimes(1)
+
+    clock -= 24 * 3_600_000
+    await job.body!()
+
+    expect(mirror).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let a run outlive its effect and clear a newer one’s slot', async () => {
+    // Stopping an effect does not recall a run already in flight — `loop.stop`
+    // only cancels a pending timer — and a copy can outlast the 60s before the
+    // replacement's first tick. Without the identity check the stale run's
+    // cleanup clears the NEW user's in-flight entry, and the next caller then
+    // starts a second run overlapping it in the same tab.
+    await enable()
+    await store.load(BOB)
+    await store.updateSettings(BOB, {enabled: true, intervalMinutes: 120})
+    await store.setDirectory(BOB, {kind: 'directory', name: 'Backups'} as never)
+
+    const held: Array<() => void> = []
+    mirror.mockImplementation(async () => {
+      await new Promise<void>(resolve => held.push(resolve))
+      return MIRRORED
+    })
+    const {schedule, stop} = build()
+
+    const alice = schedule.runNow(repo)
+    stop?.()
+    const other = {...repo, user: {id: BOB}} as unknown as Repo
+    const bobFirst = schedule.runNow(other)
+    await vi.waitFor(() => expect(mirror).toHaveBeenCalledTimes(2))
+
+    // Alice's run settles while bob's is still in flight.
+    held[0]!()
+    await alice
+
+    // Joins bob's run rather than starting a third one beside it.
+    const bobSecond = schedule.runNow(other)
+    await Promise.resolve()
+    expect(mirror).toHaveBeenCalledTimes(2)
+
+    held.forEach(release => release())
+    await Promise.all([bobFirst, bobSecond])
   })
 
   it('does not let a failed run defer the retry it just asked for', async () => {

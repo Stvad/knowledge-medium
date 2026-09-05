@@ -219,8 +219,9 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
           )
           break
         case 'too-soon':
-          // "Mirror now" runs forced and retries once, so reaching this needs
-          // two consecutive joins of scheduled runs that both gated themselves.
+          // Not reachable today — "Mirror now" runs forced, and the retry after
+          // a join is forced too — but the exhaustive switch wants every kind
+          // answered, and this is the honest answer if it ever is.
           showInfo('A copy was taken moments ago on this device, so none was written.')
           break
         default: {
@@ -344,9 +345,9 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
                 <div className="text-xs text-muted-foreground">
                   Plus {state.status.unmanagedCopies}{' '}
                   {state.status.unmanagedCopies === 1 ? 'copy' : 'copies'} this device does not
-                  manage — from another device, from a database this one replaced, or that it could
-                  not open. They are kept whatever the number above says; delete them yourself when
-                  you no longer want them.
+                  manage — from another device, from a database this one replaced, that it could not
+                  open, or taken while it could not identify the database. They are kept whatever the
+                  number above says; delete them yourself when you no longer want them.
                 </div>
               )}
               {state.status.lastError && (

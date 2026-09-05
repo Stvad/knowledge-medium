@@ -4,8 +4,9 @@
  *
  * The app's data lives in OPFS, which a browser can delete wholesale with no
  * app-side cause. Everything already uploaded comes back from the server; what
- * does not is local-only state — undo history, the local event log — and any
- * edit that had not uploaded yet.
+ * does not is what only this device holds — the `row_events` change log with
+ * its before/after rows, `command_events`, and any edit still sitting unsent in
+ * the upload queue.
  *
  * Nothing is contributed at all where the File System Access API is missing
  * (Firefox, Safari, mobile): there is no way for the user to choose a folder,

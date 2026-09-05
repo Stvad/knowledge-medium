@@ -191,13 +191,27 @@ describe('runDbMirror', () => {
   })
 
   it('copies again once the marker has moved', async () => {
+    // The previous copy is SEEDED, so the presence test cannot be what sends
+    // this down the copy path — without it the marker comparison itself was
+    // doing no work, and deleting it entirely left every test green while the
+    // run skipped forever.
     const dir = new FakeDirectoryHandle()
-    const outcome = await run({directory: dir.asHandle(), lastCopy: {marker: '41/0.0/0.0', filename: dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, TOKEN)}})
+    const previous = dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, TOKEN)
+    dir.seed(previous, 512)
+
+    const outcome = await run({
+      directory: dir.asHandle(),
+      lastCopy: {marker: '41/0.0/0.0', filename: previous, bytes: 512},
+    })
+
     expect(outcome).toMatchObject({kind: 'mirrored'})
   })
 
   it('copies when the marker cannot be read at all, rather than skipping blind', async () => {
+    // Seeded for the same reason as above: an absent copy would send this down
+    // the copy path whatever the marker said.
     const dir = new FakeDirectoryHandle()
+    dir.seed(dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, TOKEN), 512)
     const repo = {
       user: {id: USER},
       db: {getAll: async () => { throw new Error('no such table: row_events') }},
@@ -210,7 +224,7 @@ describe('runDbMirror', () => {
     })
 
     expect(outcome).toMatchObject({kind: 'mirrored', marker: undefined})
-    expect(dir.names()).toEqual([dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN)])
+    expect(dir.names()).toContain(dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN))
   })
 
   it('takes an unclaimable copy when the database cannot be identified, and never prunes one', async () => {

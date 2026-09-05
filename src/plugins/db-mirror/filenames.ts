@@ -17,8 +17,7 @@
  *   - the INSTALL id, verbatim. It is minted on the first persisting write and
  *     lives outside the database, so it is known whenever a run can happen at
  *     all. Every copy this install writes therefore carries a group this
- *     install recognises — there is no state in which a copy of ours is
- *     unownable, and so no state in which one is immortal.
+ *     install recognises.
  *   - the DATABASE incarnation, hashed. It separates the database this install
  *     holds now from one it replaced, which is what stops the copies taken
  *     after a browser wipe from evicting the copies that hold what the wipe
@@ -30,9 +29,9 @@
  * taken while the database could not be identified; `governedBy` in `mirror.ts`
  * owns the reason it exists.
  *
- * The final group is unique per RUN, which is what lets a failed run delete its
- * own entry without having to prove anything — no other run holds a name
- * carrying this run's token.
+ * The final group is unique per RUN, so a failed run's cleanup targets a name no
+ * other run holds. That the name was free in the first place is proved
+ * separately, by the probe in `claimFreshEntry`.
  */
 import {fnv1a32Hex} from '@/utils/fnv1a.js'
 
@@ -57,16 +56,19 @@ const parseMirrorTimestamp = (stamp: string): number | undefined => {
   return mirrorTimestamp(at) === stamp ? at : undefined
 }
 
-/** Per-run suffix; see the file header. Six hex characters, from the same CSPRNG
- *  as `randomUUID`, is far more than enough to separate runs that share a second. */
+/** Per-run suffix. Six hex characters, from the same CSPRNG as `randomUUID`, is
+ *  far more than enough to separate runs that share a second. It is what makes
+ *  a failed run's cleanup target a name no other run holds — but it is NOT what
+ *  proves the name was free to begin with; see `claimFreshEntry` in `mirror.ts`
+ *  for the probe that does. */
 const randomToken = (): string =>
   crypto.randomUUID().replace(/-/g, '').slice(0, 6)
 
 /** The full 32 bits, ZERO-PADDED — FNV-1a hex drops leading zeroes, so about one
- *  incarnation in sixteen would otherwise be too short to match the group at all,
- *  and its copies would be unrecognisable to the install that wrote them. The
- *  full width also keeps a collision — which would make one database's copies
- *  parse as another's — at 2^-32 rather than 2^-24. */
+ *  incarnation in sixteen would otherwise be too short to match the group at
+ *  all, and its copies would be unrecognisable to the install that wrote them.
+ *  A collision here would make one database's copies parse as another's, which
+ *  the full width keeps at 2^-32. */
 export const incarnationTagOf = (incarnation: string): string =>
   fnv1a32Hex(incarnation).padStart(8, '0')
 

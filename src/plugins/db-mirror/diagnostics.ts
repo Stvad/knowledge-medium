@@ -8,10 +8,10 @@
  *
  * Health is read from THREE places, because no one of them can answer on its
  * own. The persisted status carries what previous sessions found and survives a
- * reload. The in-memory runtime signal carries what the current session found
- * when the store itself is what failed, which the persisted status cannot
- * record. And the CLOCK carries the rest: every way the loop can stop producing
- * runs without producing an error looks identical in both of the others.
+ * reload. The in-memory runtime signal carries what this session's ticks threw,
+ * including the failures the store was too broken to record — which is the case
+ * it exists for. And the CLOCK carries the rest: every way the loop can stop
+ * producing runs without producing an error looks identical in both others.
  *
  * Reports nothing at all while mirroring is off, which is the default: a
  * feature the user has not asked for is not a health signal.
@@ -84,8 +84,9 @@ export const dbMirrorDiagnostic = (
       ...openSettings,
     }
   }
-  // The stored one first: it has a timestamp behind it and outlived a reload,
-  // so it is the better of the two whenever both describe the same failure.
+  // The stored one first: it has a timestamp behind it and outlived a reload.
+  // It cannot be stale relative to the run — every verdict clears it unless it
+  // is the one reporting a failure.
   const failure = state.status.lastError ?? runtimeFailure
   if (failure) {
     return {
@@ -146,8 +147,9 @@ export const dbMirrorDiagnostic = (
       summary: 'Database mirror folder is filling up',
       detail:
         `${state.status.unmanagedCopies ?? 0} copies in the folder are not managed by this ` +
-        'device — from another device, from a database this one replaced, or ones it cannot ' +
-        'open. They are never deleted automatically.',
+        'device — from another device, from a database this one replaced, ones it cannot open, ' +
+        'or ones taken while it could not identify the database. They are never deleted ' +
+        'automatically.',
       nudge: true,
       ...openSettings,
     }
