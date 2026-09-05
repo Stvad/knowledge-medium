@@ -36,9 +36,25 @@ import {withMirrorRunLock} from './runLock.js'
 import {supportsDirectoryMirroring} from './fileSystemAccess.js'
 import {DB_MIRROR_DEFAULTS, dbMirrorStore, type DbMirrorStore} from './store.js'
 
-/** A run that threw. Short enough that a transient failure (the folder's drive
- *  briefly unmounted) doesn't cost a whole cadence. */
+/** The FIRST retry after a run that threw. Short enough that a transient
+ *  failure — the folder's drive briefly unmounted — doesn't cost a whole
+ *  cadence. Each further consecutive failure doubles it; see
+ *  {@link failureDelay}. */
 export const FAILURE_RETRY_MS = 5 * 60_000
+
+/**
+ * How long to wait after `consecutive` failures in a row.
+ *
+ * Doubling, capped at the user's own interval. A flat retry is right for a
+ * transient failure and badly wrong for a permanent one: a destination that
+ * cannot finish inside the export's deadline fails after holding PowerSync's
+ * write lock for its full three minutes, and at a fixed five-minute retry that
+ * is well over a third of the session spent with every write blocked, forever.
+ * Capping at the interval means a mirror that never succeeds costs no more
+ * than one that always does.
+ */
+export const failureDelay = (consecutive: number, intervalMs: number): number =>
+  Math.min(intervalMs, FAILURE_RETRY_MS * 2 ** Math.min(Math.max(consecutive, 1) - 1, 10))
 
 /** Another tab held the run lock. It may be mid-copy — or it may have crashed,
  *  closed, or failed — so this comes back well before the full cadence, which
@@ -125,6 +141,11 @@ export const createDbMirrorSchedule = ({
    *  user the previous one's report for a copy of a database that is no longer
    *  theirs. Other TABS are excluded by `withMirrorRunLock`. */
   let inFlight: {userId: string; run: Promise<DbMirrorRunReport>} | null = null
+
+  /** The interval as last read, for the failure path — which has no report to
+   *  take one from, and must not read storage that may be what failed. */
+  const currentIntervalMs = (): number =>
+    (store.getSnapshot()?.settings.intervalMinutes ?? DB_MIRROR_DEFAULTS.intervalMinutes) * 60_000
 
   const recordStatus = (
     userId: string,
@@ -307,15 +328,23 @@ export const createDbMirrorSchedule = ({
       // records a failure to the store, but a failure to READ the store cannot
       // be recorded there at all, and that is the one that would otherwise
       // leave the chip claiming a healthy mirror forever.
+      let consecutiveFailures = 0
       const loop = job.start(
         async () => {
           try {
-            const delay = delayFor(await performDbMirror(repo))
+            const report = await performDbMirror(repo)
+            consecutiveFailures = 0
             dbMirrorRuntimeHealth.report(undefined)
-            return delay
+            return delayFor(report)
           } catch (err) {
+            consecutiveFailures += 1
             dbMirrorRuntimeHealth.report(describeError(err))
-            throw err
+            // Handled rather than rethrown, because the backoff is a function
+            // of how many times this has failed and the job's own
+            // `onFailureDelayMs` is a constant. The warning it would have
+            // logged is logged here instead.
+            console.warn('[db-mirror] run failed', err)
+            return failureDelay(consecutiveFailures, currentIntervalMs())
           }
         },
         {onFailureDelayMs: FAILURE_RETRY_MS},

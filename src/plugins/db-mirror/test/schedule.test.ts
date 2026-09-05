@@ -340,14 +340,14 @@ describe('the mirror schedule', () => {
     it('reports it somewhere the chip can still see', async () => {
       const state = withBrokenStore()
 
-      await expect(state.body!()).rejects.toThrow(/IndexedDB is gone/)
+      await state.body!()
 
       expect(dbMirrorRuntimeHealth.getSnapshot()).toBe('IndexedDB is gone')
     })
 
     it('forgets it once a run gets through', async () => {
       const state = withBrokenStore()
-      await expect(state.body!()).rejects.toThrow()
+      await state.body!()
 
       await enable()
       const {job} = build()
@@ -499,17 +499,55 @@ describe('the mirror schedule', () => {
     })
   })
 
-  it('records a failed run and lets the job take the short retry', async () => {
+  it('records a failed run and comes back on the short retry', async () => {
     await enable()
     outcomes = [new Error('The disk is full')]
     const {job} = build()
 
-    await expect(job.body!()).rejects.toThrow('The disk is full')
+    expect(await job.body!()).toBe(FAILURE_RETRY_MS)
 
     expect((await store.load(USER)).status).toMatchObject({
       lastError: 'The disk is full',
       lastErrorAt: NOW,
     })
+  })
+
+  it('backs off while a failure keeps repeating, and recovers the cadence after a success', async () => {
+    // A destination too slow to finish inside the export's deadline fails
+    // AFTER holding PowerSync's write lock for its full three minutes. On a
+    // flat five-minute retry that is over a third of the session with every
+    // write blocked, forever — so the retry has to widen, and cap at the
+    // cadence the user asked for.
+    await enable()
+    outcomes = [new Error('the copy did not finish in time')]
+    const {job} = build()
+
+    const delays: Array<number | void> = []
+    for (let i = 0; i < 6; i += 1) {
+      clock += INTERVAL_MS
+      delays.push(await job.body!())
+    }
+
+    expect(delays).toEqual([
+      FAILURE_RETRY_MS,
+      2 * FAILURE_RETRY_MS,
+      4 * FAILURE_RETRY_MS,
+      8 * FAILURE_RETRY_MS,
+      16 * FAILURE_RETRY_MS,
+      // Capped: a mirror that never succeeds costs no more than one that always does.
+      INTERVAL_MS,
+    ])
+
+    outcomes = [MIRRORED]
+    clock += INTERVAL_MS
+    expect(await job.body!()).toBe(INTERVAL_MS)
+
+    // And the widening starts over, rather than resuming where the last streak
+    // left off — a single transient failure after a healthy week should cost
+    // five minutes, not the cadence.
+    outcomes = [new Error('a passing hiccup')]
+    clock += INTERVAL_MS
+    expect(await job.body!()).toBe(FAILURE_RETRY_MS)
   })
 
   it('does not report a full disk as a lost folder permission', async () => {
@@ -523,7 +561,8 @@ describe('the mirror schedule', () => {
     expect((await store.load(USER)).status.permissionLost).toBe(true)
 
     outcomes = [new Error('The disk is full')]
-    await expect(job.body!()).rejects.toThrow('The disk is full')
+    clock = NOW + INTERVAL_MS
+    await job.body!()
 
     const {status} = await store.load(USER)
     expect(status.permissionLost).toBe(false)

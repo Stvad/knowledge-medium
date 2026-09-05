@@ -35,6 +35,17 @@ import {
 } from './filenames.js'
 import {queryDirectoryPermission} from './fileSystemAccess.js'
 
+/** What the export's deadline should say when it is a BACKGROUND copy that ran
+ *  out of time. The interactive export's message tells the user to close the
+ *  other tabs and reload, which is the wrong advice for the cause a scheduled
+ *  copy actually hits: a destination too slow to finish inside the window a
+ *  background job may hold the database. The deadline itself is deliberately
+ *  not extended — a copy that freezes the app for longer is worse, not better. */
+const COPY_TIMEOUT_MESSAGE =
+  'Copying the database into the chosen folder did not finish within the time a background copy ' +
+  'may hold the database, so nothing was written and earlier copies are untouched. A folder on a ' +
+  'slow or cloud-synced drive is the usual cause; one on this device\'s own disk will be faster.'
+
 /** A SQLite file begins with a 100-byte header. Anything shorter cannot be a
  *  database whatever else it is, so it is residue from a run that died between
  *  claiming the name and writing the bytes. This does NOT catch a copy
@@ -262,7 +273,8 @@ export const runDbMirror = async ({
   incarnation,
   lastCopy,
   token,
-  exportToFile = exportRawSqliteDbToFile,
+  exportToFile = (repo, handle) =>
+    exportRawSqliteDbToFile(repo, handle, {timeoutMessage: COPY_TIMEOUT_MESSAGE}),
 }: DbMirrorRunOptions): Promise<DbMirrorOutcome> => {
   // Queried, never requested: a prompt outside a user gesture is denied by the
   // browser, so asking here would burn the one chance the settings surface has.
