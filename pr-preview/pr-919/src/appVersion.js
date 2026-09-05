@@ -1,2 +1,2 @@
-var e={display:`2026.09.05-1344`,sha:`1eee09d5`,timestamp:1788615894e3,commitUrl:`https://github.com/Stvad/knowledge-medium/commit/1eee09d5`};export{e as appVersion};
+var e={display:`2026.09.05-1351`,sha:`c74385b5`,timestamp:17886163e5,commitUrl:`https://github.com/Stvad/knowledge-medium/commit/c74385b5`};export{e as appVersion};
 //# sourceMappingURL=appVersion.js.map
