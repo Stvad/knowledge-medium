@@ -26,11 +26,12 @@
 import type {Repo} from '@/data/repo'
 import {dbFilenameForUser} from '@/data/localDbStorage.js'
 import type {AppEffect} from '@/extensions/core.js'
-import {cadencedIdleJob, type CadencedIdleJob} from '@/utils/cadencedIdleJob.js'
+import {cadencedIdleJob, type CadencedIdleJob, type LoopHandle} from '@/utils/cadencedIdleJob.js'
 import {LAZY_DEEP_IDLE} from '@/utils/scheduleIdle.js'
 import {readDatabaseIncarnation} from './changeMarker.js'
 import {UNKNOWN_INCARNATION} from './filenames.js'
 import {runDbMirror, type DbMirrorOutcome} from './mirror.js'
+import {dbMirrorRuntimeHealth} from './runtimeHealth.js'
 import {withMirrorRunLock} from './runLock.js'
 import {supportsDirectoryMirroring} from './fileSystemAccess.js'
 import {DB_MIRROR_DEFAULTS, dbMirrorStore, type DbMirrorStore} from './store.js'
@@ -302,61 +303,88 @@ export const createDbMirrorSchedule = ({
       // folder, and nothing to re-check later in the same session.
       if (!supported()) return
 
-      // Publish the persisted state at once. Until something loads it the
-      // snapshot is null and the health chip has nothing to show, so a
-      // permission or disk failure recorded in a previous session would stay
-      // invisible until the first scheduled run — which waits for a genuinely
-      // idle main thread and may never come in a busy session.
+      // Reporting the tick's own outcome, not just the run's: `mirrorOnce`
+      // records a failure to the store, but a failure to READ the store cannot
+      // be recorded there at all, and that is the one that would otherwise
+      // leave the chip claiming a healthy mirror forever.
       const loop = job.start(
-        async () => delayFor(await performDbMirror(repo)),
+        async () => {
+          try {
+            const delay = delayFor(await performDbMirror(repo))
+            dbMirrorRuntimeHealth.report(undefined)
+            return delay
+          } catch (err) {
+            dbMirrorRuntimeHealth.report(describeError(err))
+            throw err
+          }
+        },
         {onFailureDelayMs: FAILURE_RETRY_MS},
       )
 
-      store
-        .load(repo.user.id)
-        .then(state => {
-          // The reconciler restarts every effect when the WORKSPACE changes,
-          // and this feature is per-database rather than per-workspace — so a
-          // fresh first delay each time would let someone who switches
-          // workspaces often postpone mirroring for good. Pick up where the
-          // last completed run left off instead, never sooner than the job's
-          // own floor, which exists to stay clear of boot.
-          const {lastCheckedAt} = state.status
-          if (lastCheckedAt === undefined) return
-          const due = lastCheckedAt + state.settings.intervalMinutes * 60_000 - now()
-          loop.rearmIn(Math.max(LAZY_DEEP_IDLE.minDelayMs, due))
-        })
-        .catch((err: unknown) => {
-          console.warn('[db-mirror] could not read the mirror state at startup', err)
-        })
-      const mine = {resume: (delayMs: number) => loop.rearmIn(delayMs)}
-      live = mine
-
-      // The settings surface re-arms the tab it runs in; the store's broadcast
-      // is what carries the change to the others. Only a changed INTERVAL
-      // re-arms — every status write publishes too, and re-arming on those
-      // would restart the cadence continuously and starve the copy.
-      // The FIRST reading is a baseline, not a change: the loop has just been
-      // armed on the job's own short first delay, and re-arming it to the full
-      // interval here would push a fresh session's first copy a whole cadence
-      // out.
-      let armedFor = store.getSnapshot()?.settings.intervalMinutes
-      const stopWatching = store.subscribe(() => {
-        const minutes = store.getSnapshot()?.settings.intervalMinutes
-        if (minutes === undefined || minutes === armedFor) return
-        const baseline = armedFor === undefined
-        armedFor = minutes
-        if (!baseline) loop.rearmIn(minutes * 60_000)
-      })
-
-      return () => {
-        stopWatching()
-        // Only if it is still ours — a restart for another user may already have
-        // replaced it.
-        if (live === mine) live = null
+      // Everything below can throw before the disposer exists — the effect
+      // runtime records `cleanup: undefined` for a `start` that threw, so the
+      // loop would be armed with nothing able to stop it, ticking against a
+      // repo that may since have been replaced.
+      try {
+        return startWatching(repo, loop)
+      } catch (err) {
         loop.stop()
+        throw err
       }
     },
+  }
+
+  /** The part of `start` that has a loop to tear down if it fails. */
+  const startWatching = (repo: Repo, loop: LoopHandle): (() => void) => {
+    // Publish the persisted state at once. Until something loads it the
+    // snapshot is null and the health chip has nothing to show, so a
+    // permission or disk failure recorded in a previous session would stay
+    // invisible until the first scheduled run — which waits for a genuinely
+    // idle main thread and may never come in a busy session.
+    store
+      .load(repo.user.id)
+      .then(state => {
+        // The reconciler restarts every effect when the WORKSPACE changes,
+        // and this feature is per-database rather than per-workspace — so a
+        // fresh first delay each time would let someone who switches
+        // workspaces often postpone mirroring for good. Pick up where the
+        // last completed run left off instead, never sooner than the job's
+        // own floor, which exists to stay clear of boot.
+        const {lastCheckedAt} = state.status
+        if (lastCheckedAt === undefined) return
+        const due = lastCheckedAt + state.settings.intervalMinutes * 60_000 - now()
+        loop.rearmIn(Math.max(LAZY_DEEP_IDLE.minDelayMs, due))
+      })
+      .catch((err: unknown) => {
+        console.warn('[db-mirror] could not read the mirror state at startup', err)
+      })
+    const mine = {resume: (delayMs: number) => loop.rearmIn(delayMs)}
+    live = mine
+
+    // The settings surface re-arms the tab it runs in; the store's broadcast
+    // is what carries the change to the others. Only a changed INTERVAL
+    // re-arms — every status write publishes too, and re-arming on those
+    // would restart the cadence continuously and starve the copy.
+    // The FIRST reading is a baseline, not a change: the loop has just been
+    // armed on the job's own short first delay, and re-arming it to the full
+    // interval here would push a fresh session's first copy a whole cadence
+    // out.
+    let armedFor = store.getSnapshot()?.settings.intervalMinutes
+    const stopWatching = store.subscribe(() => {
+      const minutes = store.getSnapshot()?.settings.intervalMinutes
+      if (minutes === undefined || minutes === armedFor) return
+      const baseline = armedFor === undefined
+      armedFor = minutes
+      if (!baseline) loop.rearmIn(minutes * 60_000)
+    })
+
+    return () => {
+      stopWatching()
+      // Only if it is still ours — a restart for another user may already have
+      // replaced it.
+      if (live === mine) live = null
+      loop.stop()
+    }
   }
 
   return {

@@ -6,6 +6,13 @@
  * would stop the copies with nothing to notice. The chip is where the app
  * already says "look here".
  *
+ * Health is read from THREE places, because no one of them can answer on its
+ * own. The persisted status carries what previous sessions found and survives a
+ * reload. The in-memory runtime signal carries what the current session found
+ * when the store itself is what failed, which the persisted status cannot
+ * record. And the CLOCK carries the rest: every way the loop can stop producing
+ * runs without producing an error looks identical in both of the others.
+ *
  * Reports nothing at all while mirroring is off, which is the default: a
  * feature the user has not asked for is not a health signal.
  */
@@ -13,6 +20,8 @@ import type {
   DiagnosticSnapshot,
   DiagnosticSourceContribution,
 } from '@/plugins/diagnostics/facet.js'
+import {CallbackSet} from '@/utils/callbackSet.js'
+import {dbMirrorRuntimeHealth} from './runtimeHealth.js'
 import {dbMirrorStore, type DbMirrorState} from './store.js'
 
 /** Declared here rather than beside the action so this module — which every
@@ -25,12 +34,32 @@ const openSettings = {
   actionLabel: 'Settings',
 } as const
 
+/** Intervals that may pass with no completed run before the chip stops calling
+ *  the mirror healthy. Three rather than one: a run waits for a genuinely idle
+ *  main thread with no deadline, so overshooting a single interval is ordinary
+ *  and saying so would be crying wolf. */
+const STALE_INTERVALS = 3
+
+/** How often the clock is re-consulted while the chip is on screen. The loop's
+ *  own ticks cannot serve as the heartbeat here — a session that never goes
+ *  idle produces no ticks, and that is precisely the case being detected. */
+const STALE_CHECK_MS = 5 * 60_000
+
 const describeLastCopy = (state: DbMirrorState): string =>
   state.status.lastMirrorAt
     ? `Last copy ${new Date(state.status.lastMirrorAt).toLocaleString()}`
     : 'No copy taken yet'
 
-export const dbMirrorDiagnostic = (state: DbMirrorState | null): DiagnosticSnapshot | null => {
+const isStalled = (state: DbMirrorState, now: number): boolean =>
+  state.status.lastCheckedAt !== undefined &&
+  now - state.status.lastCheckedAt > STALE_INTERVALS * state.settings.intervalMinutes * 60_000
+
+export const dbMirrorDiagnostic = (
+  state: DbMirrorState | null,
+  /** The current session's failure, when the store could not record one. */
+  runtimeFailure: string | undefined,
+  stalled: boolean,
+): DiagnosticSnapshot | null => {
   if (!state || !state.settings.enabled) return null
   if (state.status.permissionLost) {
     return {
@@ -50,11 +79,14 @@ export const dbMirrorDiagnostic = (state: DbMirrorState | null): DiagnosticSnaps
       ...openSettings,
     }
   }
-  if (state.status.lastError) {
+  // The stored one first: it has a timestamp behind it and outlived a reload,
+  // so it is the better of the two whenever both describe the same failure.
+  const failure = state.status.lastError ?? runtimeFailure
+  if (failure) {
     return {
       severity: 'warning',
       summary: 'Last database mirror failed',
-      detail: state.status.lastError,
+      detail: failure,
       nudge: true,
       ...openSettings,
     }
@@ -72,6 +104,18 @@ export const dbMirrorDiagnostic = (state: DbMirrorState | null): DiagnosticSnaps
       ...openSettings,
     }
   }
+  if (stalled) {
+    // No error and no run: the tab has not been idle long enough to copy since
+    // well before the cadence asked it to. Nothing else here can see that —
+    // every field still holds the last good run's values.
+    return {
+      severity: 'warning',
+      summary: 'Database mirror has not run recently',
+      detail: `${describeLastCopy(state)}. The app has not been idle long enough to take another.`,
+      nudge: true,
+      ...openSettings,
+    }
+  }
   return {
     severity: 'ok',
     summary: 'Database mirror is on',
@@ -81,19 +125,56 @@ export const dbMirrorDiagnostic = (state: DbMirrorState | null): DiagnosticSnaps
 }
 
 /** The chip re-reads through `useSyncExternalStore`, which compares by
- *  identity — so one snapshot per store state, cached. */
+ *  identity — so one snapshot per (state, failure, staleness), cached. The
+ *  staleness term is what makes the cache key more than the store state: it
+ *  changes with the clock and nothing else would notice. */
 let cachedFrom: DbMirrorState | null = null
+let cachedFailure: string | undefined
+let cachedStalled = false
 let cached: DiagnosticSnapshot | null = null
+
+const staleness = new CallbackSet('db-mirror-staleness')
+let watchers = 0
+let ticker: ReturnType<typeof setInterval> | undefined
+
+const currentlyStalled = (): boolean => {
+  const state = dbMirrorStore.getSnapshot()
+  return state !== null && isStalled(state, Date.now())
+}
 
 export const dbMirrorDiagnosticSource: DiagnosticSourceContribution = {
   id: 'db-mirror',
   label: 'Database mirror',
-  subscribe: (listener) => dbMirrorStore.subscribe(listener),
+  subscribe: (listener) => {
+    const offStore = dbMirrorStore.subscribe(listener)
+    const offRuntime = dbMirrorRuntimeHealth.subscribe(listener)
+    const offStale = staleness.add(listener)
+    watchers += 1
+    // Only while something is watching, and only one timer however many are:
+    // this exists to move a boolean, not to keep a tab awake.
+    ticker ??= setInterval(() => {
+      if (currentlyStalled() !== cachedStalled) staleness.notify()
+    }, STALE_CHECK_MS)
+    return () => {
+      offStore()
+      offRuntime()
+      offStale()
+      watchers -= 1
+      if (watchers === 0 && ticker !== undefined) {
+        clearInterval(ticker)
+        ticker = undefined
+      }
+    }
+  },
   getSnapshot: () => {
     const state = dbMirrorStore.getSnapshot()
-    if (state !== cachedFrom) {
+    const failure = dbMirrorRuntimeHealth.getSnapshot()
+    const stalled = currentlyStalled()
+    if (state !== cachedFrom || failure !== cachedFailure || stalled !== cachedStalled) {
       cachedFrom = state
-      cached = dbMirrorDiagnostic(state)
+      cachedFailure = failure
+      cachedStalled = stalled
+      cached = dbMirrorDiagnostic(state, failure, stalled)
     }
     return cached
   },

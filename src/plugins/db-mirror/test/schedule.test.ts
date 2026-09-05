@@ -21,6 +21,7 @@ import {
   PERMISSION_LOST_MESSAGE,
 } from '../schedule.js'
 import {UNKNOWN_INCARNATION} from '../filenames.js'
+import {dbMirrorRuntimeHealth} from '../runtimeHealth.js'
 import {createDbMirrorStore, type DbMirrorStore} from '../store.js'
 import type {DbMirrorOutcome} from '../mirror.js'
 
@@ -94,6 +95,8 @@ const MIRRORED: DbMirrorOutcome = {
 
 beforeEach(() => {
   clock = NOW
+  // Module state, and a failure from a previous test is not this test's.
+  dbMirrorRuntimeHealth.report(undefined)
   globalThis.indexedDB = new IDBFactory()
   store = createDbMirrorStore()
   outcomes = [MIRRORED]
@@ -309,6 +312,68 @@ describe('the mirror schedule', () => {
       expect(mirror).toHaveBeenCalledTimes(2)
       expect(outcome).toMatchObject({kind: 'mirrored'})
     })
+  })
+
+  describe('a failure the store is too broken to record', () => {
+    // `store.load` deliberately rejects rather than answering with defaults, so
+    // a run that cannot read its settings cannot write that it could not — the
+    // write goes through the same store. Without an in-memory channel the last
+    // good record stands and the chip reports a healthy mirror forever.
+
+    const withBrokenStore = () => {
+      const broken: DbMirrorStore = {
+        ...store,
+        load: async () => { throw new Error('IndexedDB is gone') },
+      }
+      const {job: jobHandle, state} = fakeJob()
+      createDbMirrorSchedule({
+        store: broken,
+        job: jobHandle,
+        now: () => clock,
+        supported: () => true,
+        mirror: mirror as never,
+        withRunLock: (async <T,>(_db: string, body: () => Promise<T>) => body()),
+      }).effect.start({repo} as unknown as AppEffectContext)
+      return state
+    }
+
+    it('reports it somewhere the chip can still see', async () => {
+      const state = withBrokenStore()
+
+      await expect(state.body!()).rejects.toThrow(/IndexedDB is gone/)
+
+      expect(dbMirrorRuntimeHealth.getSnapshot()).toBe('IndexedDB is gone')
+    })
+
+    it('forgets it once a run gets through', async () => {
+      const state = withBrokenStore()
+      await expect(state.body!()).rejects.toThrow()
+
+      await enable()
+      const {job} = build()
+      await job.body!()
+
+      expect(dbMirrorRuntimeHealth.getSnapshot()).toBeUndefined()
+    })
+  })
+
+  it('does not leave an armed loop behind when starting throws', async () => {
+    // The effect runtime records `cleanup: undefined` for a `start` that threw,
+    // so a loop armed before the throw would tick forever against a repo that
+    // may since have been replaced, with nothing able to stop it.
+    await enable()
+    const {job: jobHandle, state} = fakeJob()
+    const schedule = createDbMirrorSchedule({
+      store: {...store, subscribe: () => { throw new Error('subscribe blew up') }},
+      job: jobHandle,
+      now: () => clock,
+      supported: () => true,
+      mirror: mirror as never,
+      withRunLock: (async <T,>(_db: string, body: () => Promise<T>) => body()),
+    })
+
+    expect(() => schedule.effect.start({repo} as unknown as AppEffectContext)).toThrow(/subscribe/)
+    expect(state.stopped).toBe(1)
   })
 
   it('stamps the database identity onto what it records', async () => {
