@@ -29,10 +29,22 @@ import {dbMirrorStore, type DbMirrorState} from './store.js'
  *  with it. Same arrangement as `storage-persistence`. */
 export const OPEN_DB_MIRROR_SETTINGS_ACTION_ID = 'open_db_mirror_settings'
 
-const openSettings = {
+/** Every branch below is the same snapshot but for its words: a warning that
+ *  points at the settings. `nudge` is OMITTED rather than set false when it is
+ *  off, because the chip reads it for truthiness and an explicit false would
+ *  read as a deliberate suppression. */
+const warn = (
+  summary: string,
+  detail: string | undefined,
+  {nudge}: {nudge: boolean} = {nudge: true},
+): DiagnosticSnapshot => ({
+  severity: 'warning',
+  summary,
+  detail,
+  ...(nudge ? {nudge: true} : {}),
   actionId: OPEN_DB_MIRROR_SETTINGS_ACTION_ID,
   actionLabel: 'Settings',
-} as const
+})
 
 /** Intervals that may pass with no completed run before the chip stops calling
  *  the mirror healthy. Three rather than one: a run waits for a genuinely idle
@@ -67,50 +79,26 @@ export const dbMirrorDiagnostic = (
 ): DiagnosticSnapshot | null => {
   if (!state || !state.settings.enabled) return null
   if (state.status.permissionLost) {
-    return {
-      severity: 'warning',
-      summary: 'Database mirror is paused',
-      detail: state.status.lastError,
-      nudge: true,
-      ...openSettings,
-    }
+    return warn('Database mirror is paused', state.status.lastError)
   }
   if (!state.directory) {
-    return {
-      severity: 'warning',
-      summary: 'Database mirror has no folder',
-      detail: 'Mirroring is on but no folder is chosen on this device, so nothing is being copied.',
-      nudge: true,
-      ...openSettings,
-    }
+    return warn('Database mirror has no folder', 'Mirroring is on but no folder is chosen on this device, so nothing is being copied.')
   }
   // The stored one first: it has a timestamp behind it and outlived a reload.
   // It cannot be stale relative to the run — every verdict clears it unless it
   // is the one reporting a failure.
   const failure = state.status.lastError ?? runtimeFailure
   if (failure) {
-    return {
-      severity: 'warning',
-      summary: 'Last database mirror failed',
-      detail: failure,
-      nudge: true,
-      ...openSettings,
-    }
+    return warn('Last database mirror failed', failure)
   }
   // The run's OWN verdict, before any inference from the copy fields. A mirror
   // that refuses every run — because the database cannot name itself — is
   // otherwise indistinguishable from one waiting for its first idle moment, and
   // stays that way for as long as the condition lasts.
   if (state.status.lastOutcome === 'no-identity') {
-    return {
-      severity: 'warning',
-      summary: 'Database mirror cannot identify this database',
-      detail:
+    return warn('Database mirror cannot identify this database',
         'No copy is being written. If the app has just rebuilt its local database, this clears ' +
-        'itself once it has finished syncing.',
-      nudge: true,
-      ...openSettings,
-    }
+        'itself once it has finished syncing.')
   }
   if (!state.status.lastMirrorAt) {
     // Turned on, folder chosen, nothing copied yet. Runs wait for a genuinely
@@ -118,41 +106,24 @@ export const dbMirrorDiagnostic = (
     // session — reporting it as healthy would claim a backup that does not
     // exist. No nudge: it is the ordinary state for the first minutes after
     // turning it on, and an ambient dot for that would be crying wolf.
-    return {
-      severity: 'warning',
-      summary: 'Database mirror has not copied yet',
-      detail: 'Waiting for a quiet moment to write the first copy to the chosen folder.',
-      ...openSettings,
-    }
+    return warn('Database mirror has not copied yet', 'Waiting for a quiet moment to write the first copy to the chosen folder.', {nudge: false})
   }
   if (stalled) {
     // No error and no run: the tab has not been idle long enough to copy since
     // well before the cadence asked it to. Nothing else here can see that —
     // every field still holds the last good run's values.
-    return {
-      severity: 'warning',
-      summary: 'Database mirror has not run recently',
-      detail: `${describeLastCopy(state)}. The app has not been idle long enough to take another.`,
-      nudge: true,
-      ...openSettings,
-    }
+    return warn('Database mirror has not run recently', `${describeLastCopy(state)}. The app has not been idle long enough to take another.`)
   }
   if (unmanagedIsPilingUp(state)) {
     // Copies the keep count does not govern have no ceiling of their own, and
     // the commonest source — entries this device cannot open, on a cloud folder
     // that evicts older files — grows by one per run with nothing pruned. The
     // folder is the user's, so this reports rather than deletes.
-    return {
-      severity: 'warning',
-      summary: 'Database mirror folder is filling up',
-      detail:
+    return warn('Database mirror folder is filling up',
         `${state.status.unmanagedCopies ?? 0} copies in the folder are not managed by this ` +
         'device — from another device, from a database this one replaced, ones it cannot open, ' +
         'or ones taken while it could not identify the database. They are never deleted ' +
-        'automatically.',
-      nudge: true,
-      ...openSettings,
-    }
+        'automatically.')
   }
   // Nothing to say. The shared chip shows only what is not `ok`, and both
   // sibling sources answer null when healthy.

@@ -44,6 +44,21 @@ export interface DbMirrorSettings {
   intervalMinutes: number
 }
 
+/** What a run concluded about the database and the folder. Narrow rather than
+ *  `string`, so a reader branching on a literal — `schedule.ts` on `'failed'`,
+ *  `diagnostics.ts` on `'no-identity'` — is a compile error when it mistypes
+ *  one, instead of a branch that silently never runs. */
+export type DbMirrorVerdict =
+  | 'mirrored'
+  | 'skipped-unchanged'
+  | 'permission-lost'
+  | 'no-identity'
+  | 'failed'
+
+const VERDICTS = new Set<string>([
+  'mirrored', 'skipped-unchanged', 'permission-lost', 'no-identity', 'failed',
+])
+
 export interface DbMirrorStatus {
   /** Change marker of the last copy written, for the skip-when-unchanged test. */
   lastMarker?: string
@@ -78,7 +93,7 @@ export interface DbMirrorStatus {
    *  the run's own verdict instead of inferring one from the fields below —
    *  inference is how a mirror that refuses every run came to look identical
    *  to one waiting for its first idle moment. */
-  lastOutcome?: string
+  lastOutcome?: DbMirrorVerdict
   lastOutcomeAt?: number
   /** Which database the fields above describe (see `readDatabaseIncarnation`).
    *  A status whose incarnation is not the current one says nothing about the
@@ -156,7 +171,10 @@ const normalizeStatus = (value: unknown): DbMirrorStatus => {
     lastFilename: typeof raw.lastFilename === 'string' ? raw.lastFilename : undefined,
     lastBytes: isFiniteNumber(raw.lastBytes) ? raw.lastBytes : undefined,
     unmanagedCopies: isFiniteNumber(raw.unmanagedCopies) ? raw.unmanagedCopies : undefined,
-    lastOutcome: typeof raw.lastOutcome === 'string' ? raw.lastOutcome : undefined,
+    lastOutcome:
+      typeof raw.lastOutcome === 'string' && VERDICTS.has(raw.lastOutcome)
+        ? raw.lastOutcome
+        : undefined,
     lastOutcomeAt: isFiniteNumber(raw.lastOutcomeAt) ? raw.lastOutcomeAt : undefined,
     permissionLost: typeof raw.permissionLost === 'boolean' ? raw.permissionLost : undefined,
     lastError: typeof raw.lastError === 'string' ? raw.lastError : undefined,
@@ -314,6 +332,8 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
     // snapshot as it stands and the next one tries again.
     update(snapshotUserId, state => state, false).catch(() => {})
   }
+  // The id check is de-duplication, not correctness: `reload` re-reads for
+  // whoever the snapshot currently describes either way.
   if (channel) channel.onmessage = (event) => { if (event.data === snapshotUserId) reload() }
 
   return {

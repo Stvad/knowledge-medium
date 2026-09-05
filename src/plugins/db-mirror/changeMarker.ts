@@ -28,8 +28,6 @@
  * checkpoint. It advances on SYNC, so a device working offline all day would
  * mirror nothing — precisely the unsynced local work this feature protects.
  */
-import type {Repo} from '@/data/repo'
-
 /** Which database this is, or which of the two ways of not knowing applies. */
 export type DatabaseIncarnation =
   | {kind: 'known'; id: string}
@@ -38,7 +36,8 @@ export type DatabaseIncarnation =
   /** The log could not be read; the database itself may be perfectly copyable. */
   | {kind: 'unreadable'}
 
-/** Just enough of `Repo` to read the marker. */
+/** Just enough of `Repo` to read these — and `Repo` satisfies it structurally,
+ *  so callers pass one directly and no cast is involved. */
 export interface ChangeMarkerSource {
   db: {getAll: <T>(sql: string) => Promise<T[]>}
 }
@@ -98,10 +97,10 @@ const readQueueFingerprint = async (
  * The lookup is a rowid seek either way.
  */
 export const readDatabaseIncarnation = async (
-  repo: Repo | ChangeMarkerSource,
+  repo: ChangeMarkerSource,
 ): Promise<DatabaseIncarnation> => {
   try {
-    const [row] = await (repo as ChangeMarkerSource).db.getAll<{born: number | null}>(
+    const [row] = await repo.db.getAll<{born: number | null}>(
       'SELECT created_at AS born FROM row_events ORDER BY id LIMIT 1',
     )
     return row?.born == null ? {kind: 'empty'} : {kind: 'known', id: String(row.born)}
@@ -118,12 +117,11 @@ export const readDatabaseIncarnation = async (
  * skip: a missing reading is not evidence that nothing changed.
  */
 export const readChangeMarker = async (
-  repo: Repo | ChangeMarkerSource,
+  repo: ChangeMarkerSource,
 ): Promise<string | undefined> => {
-  const source = repo as ChangeMarkerSource
   let blocks: string
   try {
-    const rows = await source.db.getAll<{marker: number | null}>(
+    const rows = await repo.db.getAll<{marker: number | null}>(
       'SELECT MAX(id) AS marker FROM row_events',
     )
     blocks = String(rows[0]?.marker ?? 0)
@@ -132,8 +130,8 @@ export const readChangeMarker = async (
     return undefined
   }
   const [queued, rejected] = await Promise.all([
-    readQueueFingerprint(source, 'ps_crud'),
-    readQueueFingerprint(source, 'ps_crud_rejected'),
+    readQueueFingerprint(repo, 'ps_crud'),
+    readQueueFingerprint(repo, 'ps_crud_rejected'),
   ])
   return `${blocks}/${queued}/${rejected}`
 }

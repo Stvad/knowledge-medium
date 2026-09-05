@@ -37,9 +37,11 @@ export const chooseMirrorDirectory = async (): Promise<FileSystemDirectoryHandle
 
 /** The standing grant on a stored handle. Never prompts.
  *
- *  A handle from a browser without the permission methods can only have come
- *  from a picker in this same session, so "granted" is the honest answer there;
- *  a real write failure surfaces on its own. */
+ *  The `typeof` fallback is DEFENCE IN DEPTH and unpinned, and it fails OPEN on
+ *  purpose: a handle from a browser without the permission methods can only
+ *  have come from a picker in this same session, so "granted" is the honest
+ *  answer, and a real write failure surfaces on its own. Failing closed would
+ *  turn a browser that merely lacks the query into one that can never mirror. */
 export const queryDirectoryPermission = async (
   directory: FileSystemDirectoryHandle,
 ): Promise<PermissionState> => {

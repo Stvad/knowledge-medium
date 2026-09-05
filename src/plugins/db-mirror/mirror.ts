@@ -11,10 +11,11 @@
  * WHY EACH RUN WRITES A NEW UNIQUELY NAMED FILE, rather than a temp file
  * renamed over a fixed one: an interrupted run must leave the previous copy
  * intact, and a run that never opens the previous copy cannot damage it. The
- * remaining hazard is the run's OWN entry, which a failure removes — so the run
- * claims a name that did not exist a moment ago rather than trusting
- * `{create: true}`, which adopts an existing file silently. The pruner discards
- * any too-small copy a hard crash left behind.
+ * remaining hazard is the run's OWN entry, which a failure removes — see
+ * `claimFreshEntry` for how that entry is proved to be its own. The pruner
+ * discards any too-small copy a hard crash left behind — though not Chrome's
+ * sibling `.crswap` from the writable stream, which does not end in `.db` and
+ * is therefore invisible to everything here.
  * (Rename would be `FileSystemFileHandle.move()`, which is not a standardised
  * method; the bytes themselves are already committed atomically, since a
  * writable stream only updates the entry when it CLOSES.)
@@ -133,6 +134,9 @@ const scanMirrorCopies = async (
 ): Promise<MirrorCopy[]> => {
   const copies: MirrorCopy[] = []
   for await (const entry of directory.values()) {
+    // DEFENCE IN DEPTH and unpinned: a directory that somehow matched the
+    // pattern would fail `measure` anyway and land in `isUnreadable`, which
+    // never deletes. Kept because "list files" is what this means.
     if (entry.kind !== 'file') continue
     const parsed = parseDbMirrorFilename(dbFilename, entry.name)
     if (parsed === undefined) continue

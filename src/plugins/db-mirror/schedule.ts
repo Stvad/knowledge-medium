@@ -26,7 +26,12 @@ import {readDatabaseIncarnation} from './changeMarker.js'
 import {runDbMirror, type DbMirrorOutcome} from './mirror.js'
 import {dbMirrorRuntimeHealth} from './runtimeHealth.js'
 import {withMirrorRunLock} from './runLock.js'
-import {DB_MIRROR_DEFAULTS, dbMirrorStore, type DbMirrorStore} from './store.js'
+import {
+  DB_MIRROR_DEFAULTS,
+  dbMirrorStore,
+  type DbMirrorStore,
+  type DbMirrorVerdict,
+} from './store.js'
 
 /** The FIRST retry after a run that threw. Short enough that a transient
  *  failure — the folder's drive briefly unmounted — doesn't cost a whole
@@ -54,10 +59,12 @@ const failureDelay = (consecutive: number, intervalMs: number): number =>
  *  on a weekly setting would otherwise leave the survivor idle for days. */
 export const BUSY_RETRY_MS = 5 * 60_000
 
-/** What a run concluded. Every `DbMirrorTickResult` kind, plus `failed` for a
- *  run that threw — which has no outcome of its own but is the verdict the user
- *  most needs to see. */
-export type DbMirrorVerdict = DbMirrorTickResult['kind'] | 'failed'
+/** How long is left of `window`, or undefined when it has passed — or when
+ *  `elapsed` is negative, so a clock that jumped backwards defers nothing. The
+ *  two cadence gates are the same question asked of different clocks, and this
+ *  is the one place the "only forwards" rule is written. */
+const remainingIn = (elapsed: number | undefined, window: number): number | undefined =>
+  elapsed !== undefined && elapsed >= 0 && elapsed < window ? window - elapsed : undefined
 
 export const PERMISSION_LOST_MESSAGE =
   'This browser no longer has permission to write to the chosen folder, so no copies are ' +
@@ -249,11 +256,8 @@ export const createDbMirrorSchedule = ({
         unmanagedCopies: undefined,
       })
     }
-    // An empty log is the one case that warrants no copy at all: the
-    // `row_events` triggers fire on every `blocks` write, so no local writes
-    // means nothing in the upload queue either — the whole of what this
-    // protects. An unreadable log is different, and `governedBy` owns why: the
-    // copy is taken under a name no run can claim.
+    // An empty log is the one case that warrants no copy at all; an unreadable
+    // one still takes a copy. `readDatabaseIncarnation` owns why they differ.
     if (reading.kind === 'empty') {
       await conclude(userId, at, 'no-identity')
       return {outcome: {kind: 'no-identity'}, intervalMs}
@@ -271,9 +275,6 @@ export const createDbMirrorSchedule = ({
       describesThisDatabase && state.status.lastCheckedAt !== undefined
         ? at - state.status.lastCheckedAt
         : undefined
-    if (!force && sinceLastRun !== undefined && sinceLastRun >= 0 && sinceLastRun < intervalMs) {
-      return {outcome: {kind: 'too-soon', dueInMs: intervalMs - sinceLastRun}, intervalMs}
-    }
     // A run that THREW holds the device off too, but only for the first retry
     // step rather than the whole interval — long enough that an effect restart
     // (every workspace change) or a second tab does not immediately repeat an
@@ -289,17 +290,10 @@ export const createDbMirrorSchedule = ({
       state.status.lastOutcomeAt !== undefined && state.status.lastOutcome === 'failed'
         ? at - state.status.lastOutcomeAt
         : undefined
-    if (
-      !force &&
-      sinceLastAttempt !== undefined &&
-      sinceLastAttempt >= 0 &&
-      sinceLastAttempt < FAILURE_RETRY_MS
-    ) {
-      return {
-        outcome: {kind: 'too-soon', dueInMs: FAILURE_RETRY_MS - sinceLastAttempt},
-        intervalMs,
-      }
-    }
+    const dueInMs = force
+      ? undefined
+      : remainingIn(sinceLastRun, intervalMs) ?? remainingIn(sinceLastAttempt, FAILURE_RETRY_MS)
+    if (dueInMs !== undefined) return {outcome: {kind: 'too-soon', dueInMs}, intervalMs}
 
     try {
       const outcome = await withRunLock(dbFilenameForUser(userId), () => mirror({
