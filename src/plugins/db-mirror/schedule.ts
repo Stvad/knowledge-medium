@@ -243,6 +243,7 @@ export const createDbMirrorSchedule = ({
             lastCheckedAt: at,
             lastFilename: outcome.filename,
             lastBytes: outcome.bytes,
+            unmanagedCopies: outcome.unmanaged,
             permissionLost: false,
             lastError: undefined,
             lastErrorAt: undefined,
@@ -254,6 +255,7 @@ export const createDbMirrorSchedule = ({
           // would have the chip report a paused mirror that is running fine.
           await recordStatus(userId, {
             lastCheckedAt: at,
+            unmanagedCopies: outcome.unmanaged,
             permissionLost: false,
             lastError: undefined,
             lastErrorAt: undefined,

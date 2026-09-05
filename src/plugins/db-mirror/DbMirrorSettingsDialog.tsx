@@ -289,7 +289,9 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
                 onBlur={() => setKeepDraft(null)}
               />
               <p className="text-xs text-muted-foreground">
-                Copies kept in the folder; older ones this app wrote are deleted.
+                Copies kept in the folder. Only ones this device wrote for the database it holds
+                now are deleted — copies from another device, or from a database this one replaced,
+                are always left alone.
               </p>
             </div>
 
@@ -328,6 +330,14 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
                     Last checked: {formatTime(state.status.lastCheckedAt)}
                   </div>
                 )}
+              {state.status.unmanagedCopies !== undefined && state.status.unmanagedCopies > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  Plus {state.status.unmanagedCopies}{' '}
+                  {state.status.unmanagedCopies === 1 ? 'copy' : 'copies'} this device does not
+                  manage — from another device, or from a database this one replaced. They are kept
+                  whatever the number above says; delete them yourself when you no longer want them.
+                </div>
+              )}
               {state.status.lastError && (
                 <div className="font-medium text-destructive">{state.status.lastError}</div>
               )}
@@ -341,6 +351,17 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
             <Button type="button" onClick={() => void handleMirrorNow()} disabled={running}>
               {running ? 'Mirroring…' : 'Mirror now'}
             </Button>
+
+            <p className="text-xs text-muted-foreground">
+              <span className="font-medium">To use a copy:</span> run the{' '}
+              <span className="font-medium">
+                Replace database with an uploaded SQLite file or recovery archive
+              </span>{' '}
+              command and pick the file. Take the newest one whose name matches the copies listed
+              above — after a browser wipes its storage the folder can hold copies of more than one
+              database, and the newest file overall may be from the empty one the app rebuilt rather
+              than the one holding your work.
+            </p>
           </div>
         )}
       </DialogContent>

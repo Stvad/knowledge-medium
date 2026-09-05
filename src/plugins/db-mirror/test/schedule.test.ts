@@ -376,6 +376,19 @@ describe('the mirror schedule', () => {
     expect(state.stopped).toBe(1)
   })
 
+  it('records how many copies it may not touch, so the folder can explain itself', async () => {
+    // The keep count does not govern another device's copies or those of a
+    // database this one replaced, so a folder holding six copies under a keep
+    // count of three is correct and looks broken. Nothing else can say why.
+    await enable()
+    outcomes = [{...MIRRORED, unmanaged: 2}]
+    const {job} = build()
+
+    await job.body!()
+
+    expect((await store.load(USER)).status.unmanagedCopies).toBe(2)
+  })
+
   it('stamps the database identity onto what it records', async () => {
     await enable()
     const {job} = build()

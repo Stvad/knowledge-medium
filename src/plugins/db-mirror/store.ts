@@ -52,6 +52,11 @@ export interface DbMirrorStatus {
    *  clear this by themselves once it is back; only the settings surface can
    *  ASK for it again. */
   permissionLost?: boolean
+  /** Copies of this database in the folder that this device's runs may not
+   *  delete — another install's, or its own from a database it replaced. The
+   *  keep count does not govern them, so the folder can sit above it for a
+   *  reason the user is otherwise given no way to see. */
+  unmanagedCopies?: number
   /** Which database the fields above describe (see `readDatabaseIncarnation`).
    *  A status whose incarnation is not the current one says nothing about the
    *  database now in front of us. */
@@ -114,6 +119,7 @@ const normalizeStatus = (value: unknown): DbMirrorStatus => {
     incarnation: typeof raw.incarnation === 'string' ? raw.incarnation : undefined,
     lastFilename: typeof raw.lastFilename === 'string' ? raw.lastFilename : undefined,
     lastBytes: typeof raw.lastBytes === 'number' ? raw.lastBytes : undefined,
+    unmanagedCopies: typeof raw.unmanagedCopies === 'number' ? raw.unmanagedCopies : undefined,
     permissionLost: typeof raw.permissionLost === 'boolean' ? raw.permissionLost : undefined,
     lastError: typeof raw.lastError === 'string' ? raw.lastError : undefined,
     lastErrorAt: typeof raw.lastErrorAt === 'number' ? raw.lastErrorAt : undefined,
