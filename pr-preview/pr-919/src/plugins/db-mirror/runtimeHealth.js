@@ -1,0 +1,2 @@
+import{CallbackSet as e}from"../../utils/callbackSet.js";var t,n=new e(`db-mirror-runtime`),r={getSnapshot:()=>t,subscribe:e=>n.add(e),report:e=>{t!==e&&(t=e,n.notify())}};export{r as dbMirrorRuntimeHealth};
+//# sourceMappingURL=runtimeHealth.js.map
