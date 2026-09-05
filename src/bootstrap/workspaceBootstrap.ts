@@ -234,7 +234,13 @@ export const bootstrapWorkspace = async ({
   // to exist first. That's why this is serialized ahead of the layout chain
   // rather than racing it the way these kernel pages used to (each is
   // idempotent + deterministic-id, so on a warm start it's just a cached read).
-  await repo.ensureSystemPages(workspaceId)
+  //
+  // `freshlyCreated` is passed because it decides whether a failure here is
+  // survivable: on an existing workspace one missing page degrades its own
+  // feature, but on a new one the seed below would publish `[[reserved alias]]`
+  // links with nothing holding those names, minting a permanent rival for each.
+  // See `Repo.ensureSystemPages`.
+  await repo.ensureSystemPages(workspaceId, {freshlyCreated})
 
   // Materialize the code-declared property seeds into block-backed definitions
   // for this workspace (schema-unification §4.3). At bootstrap the installed
