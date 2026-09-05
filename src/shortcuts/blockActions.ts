@@ -2,7 +2,7 @@ import { ArrowDown, ArrowUp, ChevronsDownUp, ClipboardCopy, Copy, IndentDecrease
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
-import { copyBlockToClipboard } from '@/utils/copy.js'
+import { copyBlockToClipboard, writeTextToClipboardBestEffort } from '@/utils/copy.js'
 import { absoluteAppUrl, buildAppHash } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { withRowSlide } from '@/utils/flipSlide.js'
@@ -73,15 +73,6 @@ export const bindBlockActionContext = <T extends ActionContextType>(
   context,
   handler: action.handler as ActionConfig<T>['handler'],
 })
-
-/** Write to the system clipboard if the platform exposes the async API.
- *  Used by the block-level "copy *" actions; safe to call in non-browser
- *  contexts (jsdom, Node) — the no-clipboard branch silently no-ops so
- *  unit tests can invoke handlers without setting up a clipboard mock. */
-const writeToClipboard = (text: string): void => {
-  if (typeof navigator === 'undefined' || !navigator.clipboard) return
-  void navigator.clipboard.writeText(text)
-}
 
 /** Move `block` one step up (-1) or down (+1) in the visible outline,
  *  crossing parent boundaries Roam/org-style and bounded by the
@@ -383,7 +374,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Copy block reference',
     icon: Link2,
     handler: ({block}: BlockShortcutDependencies) => {
-      writeToClipboard(`((${block.id}))`)
+      writeTextToClipboardBestEffort(`((${block.id}))`)
     },
     defaultBinding: {
       // `y r` ("yank reference") is the `y`-prefixed copy-family form;
@@ -402,7 +393,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Copy block embed',
     icon: ClipboardCopy,
     handler: ({block}: BlockShortcutDependencies) => {
-      writeToClipboard(`!((${block.id}))`)
+      writeTextToClipboardBestEffort(`!((${block.id}))`)
     },
     defaultBinding: {
       // `y e` ("yank embed") is the `y`-prefixed copy-family form;
@@ -420,7 +411,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     // indented markdown; this is the single-line counterpart.
     handler: async ({block}: BlockShortcutDependencies) => {
       const data = block.peek() ?? await block.load()
-      writeToClipboard(data?.content ?? '')
+      writeTextToClipboardBestEffort(data?.content ?? '')
     },
     defaultBinding: {
       keys: 'y c',
@@ -440,7 +431,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: ({block}: BlockShortcutDependencies) => {
       const workspaceId = repo.activeWorkspaceId
       if (!workspaceId) return
-      writeToClipboard(absoluteAppUrl(buildAppHash(workspaceId, block.id)))
+      writeTextToClipboardBestEffort(absoluteAppUrl(buildAppHash(workspaceId, block.id)))
     },
     defaultBinding: {
       keys: 'y l',
