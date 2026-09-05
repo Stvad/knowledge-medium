@@ -29,7 +29,7 @@ import type {AppEffect} from '@/extensions/core.js'
 import {cadencedIdleJob, type CadencedIdleJob} from '@/utils/cadencedIdleJob.js'
 import {LAZY_DEEP_IDLE} from '@/utils/scheduleIdle.js'
 import {readDatabaseIncarnation} from './changeMarker.js'
-import {mirrorOrigin} from './filenames.js'
+import {UNKNOWN_INCARNATION} from './filenames.js'
 import {runDbMirror, type DbMirrorOutcome} from './mirror.js'
 import {withMirrorRunLock} from './runLock.js'
 import {supportsDirectoryMirroring} from './fileSystemAccess.js'
@@ -147,6 +147,15 @@ export const createDbMirrorSchedule = ({
     // more — the skip verifies the named copy is in the folder it is looking
     // at, so a stale record makes the next run COPY rather than skip.
     const at = now()
+    // Every path that turns mirroring on is a persisting write, and those mint
+    // the install id — so reaching here without one means a half-written
+    // record. Minting it now rather than carrying an "install unknown" state
+    // through the run is what keeps ownership decidable: a copy whose install
+    // group we do not recognise is a copy nothing can ever reclaim.
+    const installId = state.installId ?? (await store.recordStatus(userId, {})).installId
+    if (installId === undefined) {
+      throw new Error('The mirror could not establish an id for this install, so no copy was taken.')
+    }
     // A status recorded against a DIFFERENT database says nothing about this
     // one — an import replaced it, or the browser wiped the local store and the
     // app rebuilt it. Withholding `lastCopy` there is what stops a fresh
@@ -155,13 +164,6 @@ export const createDbMirrorSchedule = ({
     const incarnation = await readDatabaseIncarnation(repo)
     const describesThisDatabase =
       incarnation !== undefined && state.status.incarnation === incarnation
-    // Both halves, or no origin at all: an install id alone cannot tell two
-    // databases apart, and an incarnation alone is copied wholesale by a
-    // restore onto a second machine.
-    const origin =
-      incarnation !== undefined && state.installId !== undefined
-        ? mirrorOrigin(state.installId, incarnation)
-        : undefined
 
     try {
       const outcome = await withRunLock(dbFilenameForUser(userId), () => mirror({
@@ -169,7 +171,10 @@ export const createDbMirrorSchedule = ({
         directory,
         keepCount: state.settings.keepCount,
         now: at,
-        origin,
+        installId,
+        // The copy is still worth taking when the database cannot name itself;
+        // it is tagged so that this install can still recognise and reclaim it.
+        incarnation: incarnation ?? UNKNOWN_INCARNATION,
         lastCopy:
           describesThisDatabase && state.status.lastMarker && state.status.lastFilename
             ? {

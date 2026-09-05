@@ -1,47 +1,88 @@
 import {describe, expect, it} from 'vitest'
 import {
+  UNKNOWN_INCARNATION,
   dbMirrorFilename,
-  isDbMirrorFilename,
-  mirrorOrigin,
-  originTag,
+  incarnationTagOf,
   parseDbMirrorFilename,
 } from '../filenames.js'
 
 const DB = 'kmp-v6-alice.db'
 const AT = Date.UTC(2026, 8, 4, 13, 45, 2)
-/** Where the copies came from: this install's database, and another's. */
-const DB1 = mirrorOrigin('install-a', '1700000000000')
-const DB2 = mirrorOrigin('install-b', '1700000000000')
-const TAG = originTag(DB1)
+/** Two installs, and two databases one of them held in turn. */
+const INSTALL_A = 'a1b2c3d4'
+const INSTALL_B = 'e5f6a7b8'
+const BEFORE = '1700000000000'
+const AFTER = '1799000000000'
+const TAG = incarnationTagOf(BEFORE)
+
+/** What the parser says about a name, or undefined when it did not write it. */
+const parse = (name: string) => parseDbMirrorFilename(DB, name)
+const mine = (name: string) => parse(name)?.installId === INSTALL_A
 
 describe('dbMirrorFilename', () => {
-  it('names a copy after the database it came from plus a sortable timestamp', () => {
-    expect(dbMirrorFilename(DB, DB1, AT, 'abc123')).toBe(
-      `kmp-v6-alice-mirror-2026-09-04T13-45-02Z-${TAG}-abc123.db`,
+  it('names a copy after the database, a sortable timestamp, its install and its incarnation', () => {
+    expect(dbMirrorFilename(DB, INSTALL_A, BEFORE, AT, 'abc123')).toBe(
+      `kmp-v6-alice-mirror-2026-09-04T13-45-02Z-${INSTALL_A}-${TAG}-abc123.db`,
     )
   })
 
   it('round-trips through the parser', () => {
-    expect(parseDbMirrorFilename(DB, DB1, dbMirrorFilename(DB, DB1, AT))).toBe(AT)
+    expect(parse(dbMirrorFilename(DB, INSTALL_A, BEFORE, AT))).toEqual({
+      at: AT,
+      installId: INSTALL_A,
+      incarnation: TAG,
+    })
   })
 
   it('sorts lexicographically in the same order as chronologically', () => {
-    const earlier = dbMirrorFilename(DB, DB1, AT, 'aaaaaa')
-    const later = dbMirrorFilename(DB, DB1, AT + 60_000, 'aaaaaa')
+    const earlier = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT, 'aaaaaa')
+    const later = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT + 60_000, 'aaaaaa')
     expect([later, earlier].sort()).toEqual([earlier, later])
   })
 
   it('gives two runs in the same second different names', () => {
     // The name is what makes a failed run's cleanup provably its own entry:
     // no other run can be holding a name carrying this run's token.
-    const names = new Set(Array.from({length: 200}, () => dbMirrorFilename(DB, DB1, AT)))
+    const names = new Set(Array.from({length: 200}, () => dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)))
     expect(names.size).toBe(200)
   })
 })
 
-describe('isDbMirrorFilename', () => {
+describe('the two identity groups', () => {
+  it('separates two installs holding the same database', () => {
+    // Restoring a mirror onto a second machine copies the database wholesale,
+    // incarnation and all — so only the locally minted install id can tell the
+    // two machines apart, and it is what keeps each off the other's copies.
+    const theirs = dbMirrorFilename(DB, INSTALL_B, BEFORE, AT, 'abc123')
+    expect(parse(theirs)).toMatchObject({installId: INSTALL_B, incarnation: TAG})
+    expect(mine(theirs)).toBe(false)
+  })
+
+  it('separates two databases one install held in turn', () => {
+    // The axis this whole feature turns on: after the browser wipes the local
+    // store the app rebuilds a DIFFERENT database, and the copies holding what
+    // the wipe took must not look like copies of the new one.
+    const beforeTheLoss = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT, 'abc123')
+    const afterTheLoss = dbMirrorFilename(DB, INSTALL_A, AFTER, AT, 'abc123')
+    expect(beforeTheLoss).not.toBe(afterTheLoss)
+    expect(mine(beforeTheLoss) && mine(afterTheLoss)).toBe(true)
+    expect(parse(beforeTheLoss)?.incarnation).not.toBe(parse(afterTheLoss)?.incarnation)
+  })
+
+  it('gives a copy taken with no readable identity a group of its own, still owned by its install', () => {
+    // Not a nameless namespace shared with every other install: this is what
+    // lets the install that wrote it reclaim it later, instead of leaving a
+    // file nothing will ever prune.
+    const degraded = dbMirrorFilename(DB, INSTALL_A, UNKNOWN_INCARNATION, AT, 'abc123')
+    expect(mine(degraded)).toBe(true)
+    expect(parse(degraded)?.incarnation).toBe(incarnationTagOf(UNKNOWN_INCARNATION))
+    expect(parse(degraded)?.incarnation).not.toBe(TAG)
+  })
+})
+
+describe('parseDbMirrorFilename', () => {
   it('accepts what this feature writes', () => {
-    expect(isDbMirrorFilename(DB, DB1, dbMirrorFilename(DB, DB1, AT))).toBe(true)
+    expect(parse(dbMirrorFilename(DB, INSTALL_A, BEFORE, AT))).toBeDefined()
   })
 
   it.each([
@@ -49,35 +90,35 @@ describe('isDbMirrorFilename', () => {
     ['a write-ahead sidecar', 'kmp-v6-alice.db-wa0'],
     ['a manual export', 'kmp-v6-alice-export-1757000000000.db'],
     ['a recovery archive', 'kmp-v6-alice-recovery-1757000000000.zip'],
-    ['another user’s mirror', `kmp-v6-bob-mirror-2026-09-04T13-45-02Z-${TAG}-abc123.db`],
+    ['another user’s mirror', `kmp-v6-bob-mirror-2026-09-04T13-45-02Z-${INSTALL_A}-${TAG}-abc123.db`],
     ['an unrelated file the user keeps in the folder', 'taxes-2026.db'],
     ['a similar name with a different timestamp shape', 'kmp-v6-alice-mirror-nightly.db'],
-    ['a name that merely starts like one', `kmp-v6-alice-mirror-2026-09-04T13-45-02Z-${TAG}-abc123.db.bak`],
-    ['one with no run token', `kmp-v6-alice-mirror-2026-09-04T13-45-02Z-${TAG}.db`],
+    ['a name that merely starts like one', `kmp-v6-alice-mirror-2026-09-04T13-45-02Z-${INSTALL_A}-${TAG}-abc123.db.bak`],
+    ['one with no run token', `kmp-v6-alice-mirror-2026-09-04T13-45-02Z-${INSTALL_A}-${TAG}.db`],
+    ['one with no incarnation group', `kmp-v6-alice-mirror-2026-09-04T13-45-02Z-${INSTALL_A}-abc123.db`],
+    ['a group that is not hex', `kmp-v6-alice-mirror-2026-09-04T13-45-02Z-zzzzzzzz-${TAG}-abc123.db`],
     // `Date.parse` turns this into March 3rd rather than rejecting it, so
     // without the round-trip check the pruner would adopt a file it never wrote.
-    ['a calendar-invalid date the writer could never produce', `kmp-v6-alice-mirror-2026-02-31T13-45-02Z-${TAG}-abc123.db`],
-    ['an impossible hour', `kmp-v6-alice-mirror-2026-09-04T25-45-02Z-${TAG}-abc123.db`],
+    ['a calendar-invalid date the writer could never produce', `kmp-v6-alice-mirror-2026-02-31T13-45-02Z-${INSTALL_A}-${TAG}-abc123.db`],
+    ['an impossible hour', `kmp-v6-alice-mirror-2026-09-04T25-45-02Z-${INSTALL_A}-${TAG}-abc123.db`],
   ])('rejects %s', (_label, name) => {
-    expect(isDbMirrorFilename(DB, DB1, name)).toBe(false)
-  })
-
-  it('does not claim a copy another origin wrote', () => {
-    // Two installs holding the SAME database — which is what restoring a mirror
-    // onto a second machine produces — still write distinguishable copies,
-    // because the install id is minted locally and never travels in the data.
-    const theirs = dbMirrorFilename(DB, DB2, AT, 'abc123')
-    expect(isDbMirrorFilename(DB, DB1, theirs)).toBe(false)
-    expect(isDbMirrorFilename(DB, DB2, theirs)).toBe(true)
+    expect(parse(name)).toBeUndefined()
   })
 
   it('is not fooled by a database name containing regex metacharacters', () => {
     // Preview deploys namespace the filename with `~`; nothing in a sanitized
-    // user id is regex-special today, but the pattern must not depend on that.
+    // user id is regex-special today, and the pattern no longer interpolates
+    // the base at all, but a neighbouring database must still not match.
     const db = 'kmp-v6-~pr-9~a.b.db'
-    expect(isDbMirrorFilename(db, DB1, dbMirrorFilename(db, DB1, AT))).toBe(true)
+    expect(parseDbMirrorFilename(db, dbMirrorFilename(db, INSTALL_A, BEFORE, AT))).toBeDefined()
     expect(
-      isDbMirrorFilename(db, DB1, `kmp-v6-XprX9Xa.b-mirror-2026-09-04T13-45-02Z-${TAG}-abc123.db`),
-    ).toBe(false)
+      parseDbMirrorFilename(db, `kmp-v6-XprX9Xa.b-mirror-2026-09-04T13-45-02Z-${INSTALL_A}-${TAG}-abc123.db`),
+    ).toBeUndefined()
+  })
+
+  it('does not mistake a longer database name for this one', () => {
+    // `alice2`'s copies start with `alice`'s base, and the anchor after it is
+    // the only thing keeping one account's pruner off the other's files.
+    expect(parse(dbMirrorFilename('kmp-v6-alice2.db', INSTALL_A, BEFORE, AT))).toBeUndefined()
   })
 })

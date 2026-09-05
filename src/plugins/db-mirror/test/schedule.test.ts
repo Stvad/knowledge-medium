@@ -20,6 +20,7 @@ import {
   FAILURE_RETRY_MS,
   PERMISSION_LOST_MESSAGE,
 } from '../schedule.js'
+import {UNKNOWN_INCARNATION} from '../filenames.js'
 import {createDbMirrorStore, type DbMirrorStore} from '../store.js'
 import type {DbMirrorOutcome} from '../mirror.js'
 
@@ -31,6 +32,14 @@ const repo = {
   db: {
     getAll: async (sql: string) =>
       sql.includes('ORDER BY id LIMIT 1') ? [{born: 1700000000000}] : [{marker: 1}],
+  },
+} as unknown as Repo
+/** Same repo, but with an empty log — the database cannot name itself. */
+const unidentifiableRepo = {
+  user: {id: USER},
+  db: {
+    getAll: async (sql: string) =>
+      sql.includes('ORDER BY id LIMIT 1') ? [{born: null}] : [{marker: 1}],
   },
 } as unknown as Repo
 const NOW = Date.UTC(2026, 8, 4, 13, 45, 2)
@@ -71,10 +80,11 @@ let mirror: ReturnType<typeof vi.fn>
 
 const MIRRORED: DbMirrorOutcome = {
   kind: 'mirrored',
-  filename: 'kmp-v6-alice-mirror-2026-09-04T13-45-02Z-aa6070-abc123.db',
+  filename: 'kmp-v6-alice-mirror-2026-09-04T13-45-02Z-a1b2c3d4-0aa60701-abc123.db',
   bytes: 2048,
   marker: '42',
   pruned: [],
+  unmanaged: 0,
 }
 
 beforeEach(() => {
@@ -88,7 +98,9 @@ beforeEach(() => {
   })
 })
 
-const build = (over: {supported?: () => boolean; lockHeldElsewhere?: boolean} = {}) => {
+const build = (
+  over: {supported?: () => boolean; lockHeldElsewhere?: boolean; identifiable?: boolean} = {},
+) => {
   const {job, state} = fakeJob()
   const schedule = createDbMirrorSchedule({
     store,
@@ -100,7 +112,9 @@ const build = (over: {supported?: () => boolean; lockHeldElsewhere?: boolean} = 
       ? async () => null
       : (async <T,>(_dbFilename: string, body: () => Promise<T>) => body()),
   })
-  const stop = schedule.effect.start({repo} as unknown as AppEffectContext) as
+  const stop = schedule.effect.start({
+    repo: over.identifiable === false ? unidentifiableRepo : repo,
+  } as unknown as AppEffectContext) as
     | (() => void)
     | undefined
   return {schedule, job: state, stop}
@@ -157,11 +171,15 @@ describe('the mirror schedule', () => {
     expect(mirror).toHaveBeenCalledWith(expect.objectContaining({lastCopy: undefined}))
   })
 
-  it('withholds the origin until BOTH halves are known', async () => {
-    // An install id alone cannot tell two databases apart, and an incarnation
-    // alone is copied wholesale onto a second machine by a restore. Without a
-    // whole origin the run still copies, but it must prune nothing.
+  it('mints an install id rather than running without an owner', async () => {
+    // A run with no install group writes a copy no scan will ever match again,
+    // so nothing can prune it and nothing can prove it is ours. Minting is the
+    // only answer that keeps ownership decidable; refusing to copy would trade
+    // a leaked file for a missing backup, and carrying an "unknown install"
+    // through the run is what produced immortal copies before.
     await enable()
+    const expected = (await store.load(USER)).installId
+    expect(expected).toBeDefined()
     const withoutInstallId: DbMirrorStore = {
       ...store,
       load: async (userId) => ({...(await store.load(userId)), installId: undefined}),
@@ -179,7 +197,21 @@ describe('the mirror schedule', () => {
 
     await state.body!()
 
-    expect(mirror).toHaveBeenCalledWith(expect.objectContaining({origin: undefined}))
+    expect(mirror).toHaveBeenCalledWith(expect.objectContaining({installId: expected}))
+  })
+
+  it('tags a copy it cannot identify the database for, rather than leaving it anonymous', async () => {
+    // The copy is still worth taking — losing a backup is the unacceptable
+    // outcome — but it has to carry this install, or no later run can reclaim
+    // it and the folder grows by one database-sized file per read failure.
+    await enable()
+    const {job} = build({identifiable: false})
+
+    await job.body!()
+
+    expect(mirror).toHaveBeenCalledWith(
+      expect.objectContaining({incarnation: UNKNOWN_INCARNATION}),
+    )
   })
 
   it('stamps the database identity onto what it records', async () => {
@@ -212,7 +244,7 @@ describe('the mirror schedule', () => {
     const {job} = build()
     await job.body!()
 
-    outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: []}]
+    outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: [], unmanaged: 0}]
     await job.body!()
 
     // All three, because the skip needs all three: the marker says the database
@@ -294,7 +326,7 @@ describe('the mirror schedule', () => {
       await job.body!()
       expect((await store.load(USER)).status.permissionLost).toBe(true)
 
-      outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: []}]
+      outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: [], unmanaged: 0}]
       await job.body!()
 
       const {status} = await store.load(USER)
