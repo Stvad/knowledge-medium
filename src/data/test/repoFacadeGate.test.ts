@@ -106,6 +106,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   awaitReprojections: 'drains a shared job object',
   awaitSeedMaterialization: 'drains a shared job object',
   awaitPropertyDefinitionMigrations: 'drains a shared job object',
+  awaitPropertyDefinitionBaselines: 'drains a shared promise chain',
   awaitReferenceTargetDerive: 'drains a shared job object',
   awaitWorkspaceBackfills: 'drains a shared job object',
   awaitDeferredWork: 'awaits the drainers above; assigns no Repo fields',
@@ -160,6 +161,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
   schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
+  syncPropertyDefinitionBaseline: 'invoked by constructor-bound facetBridge',
   scheduleReferenceTargetNameRederive: 'invoked by constructor-bound facetBridge',
   stampReferenceTargets: 'private; raw source-NULL writes via schedule-driven jobs',
   reprojectOwnersOfStampedFieldRows: 'private; reached only from stampReferenceTargets (schedule-driven jobs)',
@@ -256,6 +258,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   pendingNameRederives: 'shared Map (session bookkeeping)',
   nameRederiveDrainScheduled: 'shared Set (session bookkeeping)',
   propertyDefinitionMigrationJobs: 'shared job queue (enqueued via constructor-bound facetBridge)',
+  propertyDefinitionBaselineWork: 'data field — a promise the chain replaces; captures no repo beyond the constructor-bound facetBridge path that appends to it',
 }
 
 let sharedDb: TestDb
