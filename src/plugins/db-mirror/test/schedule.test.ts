@@ -332,18 +332,32 @@ describe('the mirror schedule', () => {
     // good record stands and the chip reports a healthy mirror forever.
 
     const withBrokenStore = () =>
-      build({store: {...store, load: async () => { throw new Error('IndexedDB is gone') }}}).job
+      build({store: {...store, load: async () => { throw new Error('IndexedDB is gone') }}})
 
     it('reports it somewhere the chip can still see', async () => {
-      const job = withBrokenStore()
+      const {job} = withBrokenStore()
 
       await job.body!()
 
       expect(dbMirrorRuntimeHealth.getSnapshot()).toBe('IndexedDB is gone')
     })
 
+    it('does not carry across a teardown to whatever starts next', async () => {
+      // Module state with no owner: local-only sign-out swaps the repo without
+      // a reload, so a failure left set is shown against the NEXT account's
+      // mirror until a tick clears it — and the first tick waits for a
+      // genuinely idle main thread, which a busy session may never give.
+      const {job, stop} = withBrokenStore()
+      await job.body!()
+      expect(dbMirrorRuntimeHealth.getSnapshot()).toBeDefined()
+
+      stop?.()
+
+      expect(dbMirrorRuntimeHealth.getSnapshot()).toBeUndefined()
+    })
+
     it('forgets it once a run gets through', async () => {
-      const broken = withBrokenStore()
+      const {job: broken} = withBrokenStore()
       await broken.body!()
 
       await enable()

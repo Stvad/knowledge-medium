@@ -368,6 +368,12 @@ export const createDbMirrorSchedule = ({
       // replaced it.
       if (live === mine) live = null
       loop.stop()
+      // The signal is module-global and says nothing about WHOSE run failed.
+      // Local-only sign-out swaps the repo without a reload, so leaving it set
+      // shows the previous account's failure against the new account's mirror
+      // until a tick clears it — and the first tick waits for a genuinely idle
+      // main thread, which a busy session may never give.
+      dbMirrorRuntimeHealth.report(undefined)
     }
   }
 
