@@ -96,6 +96,7 @@ export async function chooseRawSqliteExportFile(
 export async function exportRawSqliteDbToFile(
   repo: Repo,
   destinationHandle: FileSystemFileHandle,
+  options: {timeoutMessage?: string} = {},
 ): Promise<RawSqliteDbFileExport> {
   const userId = repo.user.id
   const dbFilename = dbFilenameForUser(userId)
@@ -107,7 +108,7 @@ export async function exportRawSqliteDbToFile(
     const sourceFile = await fileHandle.getFile()
     await pipeBlobToFileHandle(sourceFile, destinationHandle, signal)
     return sourceFile.size
-  })
+  }, options.timeoutMessage)
 
   return {filename, size}
 }
@@ -742,6 +743,10 @@ export async function importRawSqliteDb(
 
 const EXPORT_LOCK_TIMEOUT_MS = 180_000
 
+const DEFAULT_LOCK_TIMEOUT_MESSAGE =
+  'Timed out preparing this device\'s database for backup. Another tab of the app is probably ' +
+  'holding it — close the other tabs, reload, and try again.'
+
 /**
  * On expiry: abort, WAIT for the abort to settle, then reject.
  *
@@ -840,6 +845,12 @@ const checkpointDrained = (result: unknown): boolean => {
 const withCheckpointedDbLock = async <T,>(
   repo: Repo,
   callback: (signal: AbortSignal) => Promise<T>,
+  /** What to tell the user when the deadline wins. The default is written for
+   *  someone who just clicked Export and is waiting; a caller copying in the
+   *  BACKGROUND needs different advice, because "close the other tabs and
+   *  reload" is wrong for the cause it actually hits — a destination too slow
+   *  to finish inside the window a background copy may hold the database. */
+  timeoutMessage: string = DEFAULT_LOCK_TIMEOUT_MESSAGE,
 ): Promise<T> => {
   const maybeDb = repo.db as unknown as Partial<PowerSyncWriteLockDb>
   if (typeof maybeDb.writeLock !== 'function') {
@@ -880,10 +891,7 @@ const withCheckpointedDbLock = async <T,>(
     // deadline, and the copy writes to the caller's chosen destination.
     if (signal.aborted) throw new Error('Export abandoned before the copy began.')
     return callback(signal)
-  }), EXPORT_LOCK_TIMEOUT_MS,
-    'Timed out preparing this device\'s database for backup. Another tab of the app is probably ' +
-    'holding it — close the other tabs, reload, and try again.',
-  )
+  }), EXPORT_LOCK_TIMEOUT_MS, timeoutMessage)
 }
 
 const pipeBlobToFileHandle = async (
