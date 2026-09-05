@@ -56,6 +56,7 @@ vi.mock('../schedule.js', () => ({
     resume: (...args: unknown[]) => mocks.resume(...args),
   },
   PERMISSION_LOST_MESSAGE: 'permission was lost; open settings to grant it again',
+  describeError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
 }))
 
 vi.mock('@/utils/toast.js', () => ({
@@ -200,8 +201,31 @@ describe('DbMirrorSettingsDialog', () => {
     expect(write).not.toHaveBeenCalled()
 
     fireEvent.change(field(), {target: {value: '5'}})
+    // Still not saved — the field is a draft until the user leaves it.
+    expect(store.getSnapshot()?.settings.keepCount).toBe(DB_MIRROR_DEFAULTS.keepCount)
+
+    fireEvent.blur(field())
+
     await waitFor(() => expect(store.getSnapshot()?.settings.keepCount).toBe(5))
     expect(field().value).toBe('5')
+  })
+
+  it('does not save the values the field passes through on the way', async () => {
+    // Going from 3 to 12 types "1" first. Saved per keystroke that is a real
+    // setting, and a run in any tab reading the record in that instant prunes
+    // the folder down to one copy.
+    renderDialog()
+    await waitForLoaded()
+    const field = () => screen.getByLabelText(/^keep$/i) as HTMLInputElement
+
+    fireEvent.change(field(), {target: {value: '1'}})
+    fireEvent.change(field(), {target: {value: '12'}})
+
+    expect(store.getSnapshot()?.settings.keepCount).toBe(DB_MIRROR_DEFAULTS.keepCount)
+
+    fireEvent.keyDown(field(), {key: 'Enter'})
+
+    await waitFor(() => expect(store.getSnapshot()?.settings.keepCount).toBe(12))
   })
 
   it('shows the stored value again once the field is left', async () => {
@@ -212,11 +236,11 @@ describe('DbMirrorSettingsDialog', () => {
     const field = () => screen.getByLabelText(/^keep$/i) as HTMLInputElement
 
     fireEvent.change(field(), {target: {value: '999'}})
-    await waitFor(() => expect(store.getSnapshot()?.settings.keepCount).toBe(MAX_KEEP_COUNT))
     expect(field().value).toBe('999')
 
     fireEvent.blur(field())
 
+    await waitFor(() => expect(store.getSnapshot()?.settings.keepCount).toBe(MAX_KEEP_COUNT))
     expect(field().value).toBe(String(MAX_KEEP_COUNT))
   })
 
@@ -269,6 +293,23 @@ describe('DbMirrorSettingsDialog', () => {
     await waitFor(() => expect(screen.queryByText(/no longer has permission/i)).toBeNull())
     expect(screen.queryByRole('button', { name: /grant access again/i })).toBeNull()
     expect(mocks.resume).toHaveBeenCalled()
+  })
+
+  it('does not turn mirroring on when the folder did not save', async () => {
+    // The picker succeeded but the write did not, so there is no folder to
+    // mirror to. Flipping the switch anyway leaves the loop armed against a
+    // folder the store does not have, and the chip reporting a mirror with
+    // nowhere to write.
+    renderDialog()
+    await waitForLoaded()
+    mocks.chooseMirrorDirectory.mockResolvedValue(fakeDirectory('Backups'))
+    vi.spyOn(store, 'setDirectory').mockRejectedValue(new Error('IndexedDB is gone'))
+
+    fireEvent.click(enableCheckbox())
+
+    await waitFor(() => expect(mocks.showError).toHaveBeenCalled())
+    expect(store.getSnapshot()?.settings.enabled).toBe(false)
+    expect(mocks.resume).not.toHaveBeenCalled()
   })
 
   it('a re-grant the browser refuses leaves the flag set', async () => {

@@ -39,7 +39,7 @@ import {
   MIN_INTERVAL_MINUTES,
   MIN_KEEP_COUNT,
 } from './store.js'
-import {dbMirrorSchedule, describeError, PERMISSION_LOST_MESSAGE} from './schedule.js'
+import {dbMirrorSchedule, describeError} from './schedule.js'
 import {chooseMirrorDirectory, requestDirectoryPermission} from './fileSystemAccess.js'
 
 const INTERVAL_OPTIONS = (
@@ -134,14 +134,22 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
     void saving(dbMirrorStore.setDirectory(userId, undefined))
   }
 
-  const handleKeepCountChange = (value: string): void => {
-    setKeepDraft(value)
-    // An emptied or half-typed field is not a request for the minimum, so it is
-    // shown but not saved. Whatever IS a number gets saved as it is typed; the
-    // store clamps it, and the draft keeps that clamp off the screen until the
-    // user leaves the field.
-    const parsed = Number(value)
-    if (value.trim() === '' || !Number.isFinite(parsed)) return
+  /** Typed, not saved. Saving per keystroke made every intermediate value a
+   *  real setting: going from 3 to 12 commits "1" on the way, and a run in this
+   *  or any other tab that reads the record in that instant prunes the folder
+   *  down to a single copy. The draft is what the field shows; the store only
+   *  hears about it when the user is finished. */
+  const handleKeepCountChange = (value: string): void => setKeepDraft(value)
+
+  const commitKeepCount = (): void => {
+    const draft = keepDraft
+    setKeepDraft(null)
+    if (draft === null) return
+    // An emptied or half-typed field is not a request for the minimum, so it
+    // reverts to the stored value rather than saving something the user did not
+    // mean. The store clamps what IS a number.
+    const parsed = Number(draft)
+    if (draft.trim() === '' || !Number.isFinite(parsed)) return
     void saving(dbMirrorStore.updateSettings(userId, {keepCount: parsed}))
   }
 
@@ -191,7 +199,10 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
           showInfo('Nothing has changed since the last copy, so none was written.')
           break
         case 'permission-lost':
-          showError(PERMISSION_LOST_MESSAGE)
+          // Short, because the full sentence is already on screen: the same run
+          // stored it as `lastError`, which renders a few lines below next to
+          // the button that fixes it.
+          showError('The folder is no longer writable — see below.')
           break
         case 'disabled':
           showError('Mirroring is turned off.')
@@ -286,7 +297,8 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
                 inputMode="numeric"
                 value={keepDraft ?? String(state.settings.keepCount)}
                 onChange={event => handleKeepCountChange(event.target.value)}
-                onBlur={() => setKeepDraft(null)}
+                onBlur={commitKeepCount}
+                onKeyDown={event => { if (event.key === 'Enter') commitKeepCount() }}
               />
               <p className="text-xs text-muted-foreground">
                 Copies kept in the folder. Only ones this device wrote for the database it holds
@@ -351,6 +363,13 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
             <Button type="button" onClick={() => void handleMirrorNow()} disabled={running}>
               {running ? 'Mirroring…' : 'Mirror now'}
             </Button>
+
+            <p className="text-xs text-muted-foreground">
+              This setting and the folder you pick live in the same browser storage as the
+              database. A browser that clears all of it takes them too — mirroring comes back off,
+              and the copies already in the folder are left untouched but unmanaged. Turn it back
+              on and pick the folder again.
+            </p>
 
             <p className="text-xs text-muted-foreground">
               <span className="font-medium">To use a copy:</span> run the{' '}

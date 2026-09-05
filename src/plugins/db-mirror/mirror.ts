@@ -63,6 +63,11 @@ export type DbMirrorOutcome =
       marker: string | undefined
       pruned: readonly string[]
       unmanaged: number
+      /** Whether the bytes on disk were read back and matched. False when the
+       *  entry could not be opened afterwards — the copy is probably fine, but
+       *  nothing here saw it, so the caller must not record it as the copy the
+       *  next skip will look for. */
+      verified: boolean
     }
   | {kind: 'skipped-unchanged'; marker: string; pruned: readonly string[]; unmanaged: number}
   | {kind: 'permission-lost'; permission: PermissionState}
@@ -227,9 +232,13 @@ const prune = async (
 }
 
 /** Residue from a run that died between claiming the name and writing the
- *  bytes. Not a truncation test — see {@link SQLITE_HEADER_BYTES}. The
- *  `undefined` check is narrowing only; an unreadable entry is excluded by
- *  {@link isUnreadable} before it can reach a delete. */
+ *  bytes. Not a truncation test — see {@link SQLITE_HEADER_BYTES}.
+ *
+ *  The `undefined` check is what keeps an unreadable entry out of this, and it
+ *  is load-bearing HERE even though it reads as narrowing: residue is deleted
+ *  without competing for a keep slot, so unlike the second branch it is not
+ *  also filtered by {@link isUnreadable}. Rewriting it as `(copy.size ?? 0) <
+ *  …` would start deleting offline cloud placeholders. */
 const isResidue = (copy: MirrorCopy): boolean =>
   copy.size !== undefined && copy.size < SQLITE_HEADER_BYTES
 
@@ -376,8 +385,7 @@ export const runDbMirror = async ({
   // Verified AFTER the cleanup boundary, and a failure to read the size back is
   // not a reason to delete: the bytes are committed, and a copy that exists but
   // could not be measured is worth more than no copy. Only a size we actually
-  // read and that disagrees condemns it — the next run re-checks anyway, since
-  // the stored byte count is part of the skip's presence test.
+  // read and that disagrees condemns it.
   const written = await measure(handle)
   if (written !== undefined && written !== bytes) {
     await removeQuietly(directory, filename)
@@ -394,6 +402,7 @@ export const runDbMirror = async ({
     bytes,
     marker,
     unmanaged,
+    verified: written !== undefined,
     pruned: await prune(directory, governed, keepCount, filename),
   }
 }

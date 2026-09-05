@@ -302,18 +302,25 @@ export const createDbMirrorSchedule = ({
         case 'mirrored':
           await conclude(userId, at, 'mirrored', {
             incarnation,
-            // Nothing to skip against next time when the copy is unclaimable:
-            // withholding the marker makes the next run copy rather than trust
-            // a record it cannot tie to a file it can find.
-            lastMarker: outcome.marker,
-            lastMirrorAt: at,
-            lastCheckedAt: at,
-            lastFilename: outcome.filename,
-            lastBytes: outcome.bytes,
             unmanagedCopies: outcome.unmanaged,
             permissionLost: false,
             lastError: undefined,
             lastErrorAt: undefined,
+            // Only a copy we read back is recorded AS the copy. An unverified
+            // one is probably fine, but claiming it would have the chip assert
+            // a backup nothing has seen for a whole interval — a week at the
+            // longest cadence — and would let the next run skip against a file
+            // it never confirmed. Withholding the marker makes that run copy
+            // again instead, which is the cheap direction.
+            ...(outcome.verified
+              ? {
+                  lastMarker: outcome.marker,
+                  lastMirrorAt: at,
+                  lastCheckedAt: at,
+                  lastFilename: outcome.filename,
+                  lastBytes: outcome.bytes,
+                }
+              : {}),
           })
           break
         case 'skipped-unchanged':
@@ -335,6 +342,13 @@ export const createDbMirrorSchedule = ({
             lastErrorAt: at,
           })
           break
+        default: {
+          // Exhaustiveness: a new outcome kind is a compile error here rather
+          // than a run that silently records nothing. The dialog's switch
+          // carries the same guard, and its comment records why.
+          const unhandled: never = outcome
+          console.warn('[db-mirror] unhandled run outcome', unhandled)
+        }
       }
       return {outcome, intervalMs}
     } catch (err) {

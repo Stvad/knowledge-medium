@@ -173,6 +173,23 @@ describe('runDbMirror', () => {
     })
   })
 
+  it('does not enter the skip path at all when there is no marker to compare', async () => {
+    // The marker read and the identity read are separate statements, so the
+    // marker can be unreadable while the database names itself. Without the
+    // guard the skip is entered with no `lastCopy` at all and the presence test
+    // dereferences it — which only stays hidden while the folder is empty.
+    const dir = new FakeDirectoryHandle()
+    dir.seed(dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, 'bbbbbb'), 4096)
+    const repo = {
+      user: {id: USER},
+      db: {getAll: async () => { throw new Error('no such table: row_events') }},
+    } as unknown as Repo
+
+    const outcome = await run({repo, directory: dir.asHandle(), lastCopy: undefined})
+
+    expect(outcome).toMatchObject({kind: 'mirrored', marker: undefined})
+  })
+
   it('copies again once the marker has moved', async () => {
     const dir = new FakeDirectoryHandle()
     const outcome = await run({directory: dir.asHandle(), lastCopy: {marker: '41/0.0/0.0', filename: dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, TOKEN)}})
@@ -306,7 +323,9 @@ describe('runDbMirror', () => {
 
       const outcome = await run({directory: dir.asHandle(), exportToFile})
 
-      expect(outcome).toMatchObject({kind: 'mirrored', bytes: 1024})
+      // Kept, but not CLAIMED: the caller must not record a copy nothing has
+      // seen as the one the next skip will look for.
+      expect(outcome).toMatchObject({kind: 'mirrored', bytes: 1024, verified: false})
       expect(dir.names()).toContain(written)
       expect(dir.removed).toEqual([])
     })

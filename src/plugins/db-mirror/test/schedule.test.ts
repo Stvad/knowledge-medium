@@ -102,6 +102,7 @@ const MIRRORED: DbMirrorOutcome = {
   marker: '42',
   pruned: [],
   unmanaged: 0,
+  verified: true,
 }
 
 beforeEach(() => {

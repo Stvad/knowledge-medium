@@ -1,13 +1,15 @@
 /*
  * What the RUNNING loop knows about itself, in memory.
  *
- * The persisted status cannot answer "is this device still mirroring?" in the
- * one case that matters most: when the thing that failed is the store. A run
- * that cannot read its own settings cannot record that it could not — the
- * write goes through the same broken store — so the last good record stands
- * and the health chip goes on reporting a mirror that stopped. That is exactly
- * the silent failure the chip exists to prevent, so it needs a channel that
- * does not depend on storage.
+ * The persisted status cannot answer "is this device still mirroring?" when the
+ * thing that failed is the store: a run that cannot read its own settings
+ * cannot record that it could not, because the write goes through the same
+ * broken store, so the last good record stands and the chip reports a mirror
+ * that stopped.
+ *
+ * It covers a store that breaks AFTER a successful load, not one broken from
+ * boot — with no snapshot the chip cannot know whether the user ever opted in,
+ * and warning them about a feature they never turned on is worse than silence.
  *
  * Deliberately NOT persisted: a reload starts clean, because a failure no run
  * has met since is not a failure. The persisted `lastError` is the one that
