@@ -389,6 +389,47 @@ describe('the mirror schedule', () => {
     expect((await store.load(USER)).status.unmanagedCopies).toBe(2)
   })
 
+  describe('a status write that fails', () => {
+    // Bookkeeping ABOUT the run. It must not turn a finished copy into a
+    // failure, and on the error path it must not replace the error the caller
+    // is about to see with its own.
+
+    const withFailingStatusWrites = () => {
+      const failing: DbMirrorStore = {
+        ...store,
+        recordStatus: async () => { throw new Error('the status write failed') },
+      }
+      const {job: jobHandle, state} = fakeJob()
+      const schedule = createDbMirrorSchedule({
+        store: failing,
+        job: jobHandle,
+        now: () => clock,
+        supported: () => true,
+        mirror: mirror as never,
+        withRunLock: (async <T,>(_db: string, body: () => Promise<T>) => body()),
+      })
+      schedule.effect.start({repo} as unknown as AppEffectContext)
+      return {schedule, state}
+    }
+
+    it('does not turn a finished copy into a failure', async () => {
+      await enable()
+      const {schedule} = withFailingStatusWrites()
+
+      const report = await schedule.runNow(repo)
+
+      expect(report.outcome).toMatchObject({kind: 'mirrored'})
+    })
+
+    it('does not replace the error the caller is about to see', async () => {
+      await enable()
+      outcomes = [new Error('The disk is full')]
+      const {schedule} = withFailingStatusWrites()
+
+      await expect(schedule.runNow(repo)).rejects.toThrow('The disk is full')
+    })
+  })
+
   it('stamps the database identity onto what it records', async () => {
     await enable()
     const {job} = build()
@@ -704,7 +745,10 @@ describe('the mirror schedule', () => {
       await manual
 
       expect(job.starts).toBe(2)
-      expect(job.rearms.filter(r => r.loop === 2)).toEqual([])
+      // The WHOLE array. Filtering to loop 2 could never have caught this: the
+      // stale continuation holds loop 1's handle, so a leaked re-arm is
+      // recorded against loop 1 and the filter never sees it.
+      expect(job.rearms).toEqual([])
     })
   })
 
@@ -738,6 +782,13 @@ describe('the mirror schedule', () => {
 
     it('does not re-arm on the first reading, which would delay the first copy', async () => {
       await enable()
+      // A FRESH store, so its snapshot is null when the effect starts and the
+      // subscriber's first reading really is its first. Against the store
+      // `enable()` used, the interval is already published before `build()`
+      // runs, so the subscriber returns early on equality and the baseline
+      // branch is never reached — the assertion below then holds with the
+      // branch deleted.
+      store = createDbMirrorStore()
       const {job} = build()
 
       await vi.waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))

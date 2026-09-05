@@ -24,6 +24,19 @@ const source = (
   },
 })
 
+/** A log with real rows in id order, so the two candidate queries give
+ *  DIFFERENT answers — which is the only way a test can say which one the
+ *  identity is read with. */
+const logSource = (rows: number[]): ChangeMarkerSource => ({
+  db: {
+    getAll: (async (sql: string) => {
+      if (sql.includes('MIN(created_at)')) return [{born: Math.min(...rows)}]
+      if (sql.includes('ORDER BY id LIMIT 1')) return [{born: rows[0]}]
+      return []
+    }) as ChangeMarkerSource['db']['getAll'],
+  },
+})
+
 describe('readChangeMarker', () => {
   it('moves when a block changes', async () => {
     const before = await readChangeMarker(source({blocks: [{marker: 10}], queue: [{n: 0, last: null}]}))
@@ -80,27 +93,21 @@ describe('readChangeMarker', () => {
 
 describe('readDatabaseIncarnation', () => {
   it('identifies the database by its FIRST logged event, not the earliest stamp', async () => {
-    expect(await readDatabaseIncarnation(source({born: [{born: 1700000000000}]}))).toBe(
-      '1700000000000',
-    )
+    // Row 2 carries an EARLIER stamp than row 1, which is what a clock
+    // correction leaves behind. Read as a minimum the identity would move —
+    // and every copy already in the folder would stop parsing as this
+    // database's, falling outside retention for good.
+    const afterACorrection = [1700000000000, 1600000000000]
+
+    expect(await readDatabaseIncarnation(logSource(afterACorrection))).toBe('1700000000000')
   })
 
   it('differs for a database the app rebuilt after the browser wiped the store', async () => {
     // The re-download writes fresh events, so the rebuilt database's log starts
     // at the moment of the rebuild rather than inheriting the old one's.
-    const before = await readDatabaseIncarnation(source({born: [{born: 1700000000000}]}))
-    const rebuilt = await readDatabaseIncarnation(source({born: [{born: 1788558892401}]}))
+    const before = await readDatabaseIncarnation(logSource([1700000000000]))
+    const rebuilt = await readDatabaseIncarnation(logSource([1788558892401]))
     expect(rebuilt).not.toBe(before)
-  })
-
-  it('does not move when the clock jumps backwards', async () => {
-    // A later row can carry an earlier timestamp after a clock correction. Read
-    // as a minimum, that would change an identity meant to be fixed — and every
-    // copy already in the folder would stop parsing as this database's.
-    const source1 = source({born: [{born: 1700000000000}]})
-    expect(await readDatabaseIncarnation(source1)).toBe('1700000000000')
-    // The row ordered first is unchanged; only a MIN over all rows would move.
-    expect(await readDatabaseIncarnation(source1)).toBe('1700000000000')
   })
 
   it('has no answer for an empty log, rather than inventing one', async () => {
