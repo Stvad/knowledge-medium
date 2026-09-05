@@ -1,6 +1,6 @@
 // @vitest-environment node
-import {describe, expect, it} from 'vitest'
-import {dbMirrorDiagnostic} from '../diagnostics.js'
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
+import {dbMirrorDiagnostic, dbMirrorDiagnosticSource, isMirrorStalled} from '../diagnostics.js'
 import {DB_MIRROR_DEFAULTS, type DbMirrorState} from '../store.js'
 
 const directory = {kind: 'directory', name: 'Backups'} as unknown as FileSystemDirectoryHandle
@@ -108,5 +108,75 @@ describe('the mirror diagnostic', () => {
     expect(diagnose(state(), {stalled: true})?.summary).toBe(
       'Database mirror has not copied yet',
     )
+  })
+})
+
+describe('when a mirror counts as stalled', () => {
+  const NOW = Date.UTC(2026, 8, 4, 12, 0, 0)
+  const hourly = (over: Partial<DbMirrorState['status']>) =>
+    state({settings: {...DB_MIRROR_DEFAULTS, enabled: true, intervalMinutes: 60}, status: over})
+
+  it('tolerates overshooting the interval, because a run waits for a genuinely idle thread', () => {
+    expect(isMirrorStalled(hourly({lastCheckedAt: NOW - 2 * 60 * 60_000}), NOW)).toBe(false)
+  })
+
+  it('gives up after several intervals', () => {
+    expect(isMirrorStalled(hourly({lastCheckedAt: NOW - 4 * 60 * 60_000}), NOW)).toBe(true)
+  })
+
+  it('scales with the interval the user chose, not a fixed span', () => {
+    // A day without a copy is a stall on an hourly cadence and unremarkable on
+    // a weekly one.
+    const weekly = state({
+      settings: {...DB_MIRROR_DEFAULTS, enabled: true, intervalMinutes: 7 * 24 * 60},
+      status: {lastCheckedAt: NOW - 24 * 60 * 60_000},
+    })
+    expect(isMirrorStalled(weekly, NOW)).toBe(false)
+  })
+
+  it('has no opinion before any run has completed', () => {
+    expect(isMirrorStalled(hourly({}), NOW)).toBe(false)
+  })
+})
+
+describe('the diagnostic source', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  const armedTimers = () => vi.getTimerCount()
+
+  it('runs one clock timer however many things are watching, and none when nothing is', () => {
+    // The loop's own ticks cannot serve as the heartbeat for staleness — a
+    // session that never goes idle produces none, which is the case being
+    // detected — so a timer is the only signal. It must not outlive its
+    // watchers.
+    const offA = dbMirrorDiagnosticSource.subscribe(() => {})
+    const offB = dbMirrorDiagnosticSource.subscribe(() => {})
+    expect(armedTimers()).toBe(1)
+
+    offA()
+    expect(armedTimers()).toBe(1)
+    offB()
+    expect(armedTimers()).toBe(0)
+  })
+
+  it('survives a disposer called twice', () => {
+    // Every disposer it wraps is idempotent by contract, so a composite that
+    // counted its own subscribers would go negative here and never reach zero
+    // again — stranding the timer for the life of the tab.
+    const off = dbMirrorDiagnosticSource.subscribe(() => {})
+    off()
+    off()
+
+    const again = dbMirrorDiagnosticSource.subscribe(() => {})
+    expect(armedTimers()).toBe(1)
+    again()
+    expect(armedTimers()).toBe(0)
+  })
+
+  it('answers the same snapshot object until something it depends on changes', () => {
+    // `useSyncExternalStore` compares by identity; a fresh object per call is
+    // an infinite render loop.
+    expect(dbMirrorDiagnosticSource.getSnapshot()).toBe(dbMirrorDiagnosticSource.getSnapshot())
   })
 })

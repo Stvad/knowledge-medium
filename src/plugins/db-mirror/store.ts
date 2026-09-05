@@ -25,6 +25,7 @@
  * concluding there is nothing to copy.
  */
 import {IdbKeyedStore, idbRecordId, promisifyRequest} from '@/utils/idbKeyedStore.js'
+import {INSTALL_ID_PATTERN} from './filenames.js'
 import {previewDbId} from '@/data/localDbStorage.js'
 import {CallbackSet} from '@/utils/callbackSet.js'
 
@@ -147,6 +148,10 @@ const normalizeStatus = (value: unknown): DbMirrorStatus => {
 const dropUndefined = <T extends object>(value: T): T =>
   Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T
 
+/** Eight lowercase hex, which is what {@link INSTALL_ID_PATTERN} accepts —
+ *  `randomUUID` is already that alphabet. */
+const mintInstallId = (): string => crypto.randomUUID().replace(/-/g, '').slice(0, 8)
+
 const SETTINGS_KEY = 'settings'
 const DIRECTORY_KEY = 'directory'
 
@@ -223,7 +228,14 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         const stored = record as
           | {settings?: unknown; status?: unknown; installId?: unknown}
           | undefined
-        const known = typeof stored?.installId === 'string' ? stored.installId : undefined
+        // Validated, not merely typed: the id goes into the copy's NAME, and
+        // one that cannot appear there produces files the parser never matches
+        // — so nothing prunes them and the skip never finds the last one. A
+        // stored id that fails is replaced rather than trusted.
+        const known =
+          typeof stored?.installId === 'string' && INSTALL_ID_PATTERN.test(stored.installId)
+            ? stored.installId
+            : undefined
         const updated = mutate({
           settings: normalizeSettings(stored?.settings),
           status: normalizeStatus(stored?.status),
@@ -231,7 +243,7 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
           // Minted on the first write, never afterwards. A read must not mint
           // one: the loop reads on every tick, and the id has to be the same
           // one the copies already in the folder were named for.
-          installId: known ?? (persist ? crypto.randomUUID().replace(/-/g, '').slice(0, 8) : undefined),
+          installId: known ?? (persist ? mintInstallId() : undefined),
         })
         if (persist) {
           store.put(

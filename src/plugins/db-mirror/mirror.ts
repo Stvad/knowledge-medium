@@ -39,7 +39,8 @@ import {queryDirectoryPermission} from './fileSystemAccess.js'
 const COPY_TIMEOUT_MESSAGE =
   'Copying the database into the chosen folder did not finish within the time a background copy ' +
   'may hold the database, so nothing was written and earlier copies are untouched. A folder on a ' +
-  'slow or cloud-synced drive is the usual cause; one on this device\'s own disk will be faster.'
+  'slow or cloud-synced drive is the usual cause; one on this device\'s own disk will be faster. ' +
+  'If the app itself now feels stuck, another tab is holding the database — reload to free it.'
 
 /** A SQLite file begins with a 100-byte header. Anything shorter cannot be a
  *  database whatever else it is, so it is residue from a run that died between

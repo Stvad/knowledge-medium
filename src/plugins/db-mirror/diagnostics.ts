@@ -50,7 +50,11 @@ const describeLastCopy = (state: DbMirrorState): string =>
     ? `Last copy ${new Date(state.status.lastMirrorAt).toLocaleString()}`
     : 'No copy taken yet'
 
-const isStalled = (state: DbMirrorState, now: number): boolean =>
+/** Exported for its own test: the constant, the scaling by the user's interval
+ *  and the direction of the comparison are the whole of this rule, and none of
+ *  them is visible through {@link dbMirrorDiagnostic}, which takes the answer
+ *  as a parameter. */
+export const isMirrorStalled = (state: DbMirrorState, now: number): boolean =>
   state.status.lastCheckedAt !== undefined &&
   now - state.status.lastCheckedAt > STALE_INTERVALS * state.settings.intervalMinutes * 60_000
 
@@ -134,12 +138,11 @@ let cachedStalled = false
 let cached: DiagnosticSnapshot | null = null
 
 const staleness = new CallbackSet('db-mirror-staleness')
-let watchers = 0
 let ticker: ReturnType<typeof setInterval> | undefined
 
 const currentlyStalled = (): boolean => {
   const state = dbMirrorStore.getSnapshot()
-  return state !== null && isStalled(state, Date.now())
+  return state !== null && isMirrorStalled(state, Date.now())
 }
 
 export const dbMirrorDiagnosticSource: DiagnosticSourceContribution = {
@@ -149,7 +152,6 @@ export const dbMirrorDiagnosticSource: DiagnosticSourceContribution = {
     const offStore = dbMirrorStore.subscribe(listener)
     const offRuntime = dbMirrorRuntimeHealth.subscribe(listener)
     const offStale = staleness.add(listener)
-    watchers += 1
     // Only while something is watching, and only one timer however many are:
     // this exists to move a boolean, not to keep a tab awake.
     ticker ??= setInterval(() => {
@@ -159,8 +161,11 @@ export const dbMirrorDiagnosticSource: DiagnosticSourceContribution = {
       offStore()
       offRuntime()
       offStale()
-      watchers -= 1
-      if (watchers === 0 && ticker !== undefined) {
+      // Counted from the SET, not from a counter of our own. Every disposer
+      // above is idempotent by contract, so a composite that decremented would
+      // go negative on a double-call and then never reach zero again — leaving
+      // this timer armed with nothing watching, for the life of the tab.
+      if (staleness.size === 0 && ticker !== undefined) {
         clearInterval(ticker)
         ticker = undefined
       }

@@ -136,10 +136,12 @@ export const createDbMirrorSchedule = ({
    *  theirs. Other TABS are excluded by `withMirrorRunLock`. */
   let inFlight: {userId: string; run: Promise<DbMirrorRunReport>} | null = null
 
-  /** The interval as last read, for the failure path — which has no report to
-   *  take one from, and must not read storage that may be what failed. */
-  const currentIntervalMs = (): number =>
-    (store.getSnapshot()?.settings.intervalMinutes ?? DB_MIRROR_DEFAULTS.intervalMinutes) * 60_000
+  /** The interval this schedule last actually READ, for the failure path —
+   *  which has no report to take one from, and must not go back to storage that
+   *  may be what failed. Remembered rather than re-derived from the snapshot,
+   *  because the snapshot is null in exactly the case this exists for, and the
+   *  default it fell back to could be longer than the interval the user chose. */
+  let lastKnownIntervalMs = DB_MIRROR_DEFAULTS.intervalMinutes * 60_000
 
   const recordStatus = (
     userId: string,
@@ -157,6 +159,7 @@ export const createDbMirrorSchedule = ({
     // runs, and a second tab writes the same records.
     const state = await store.load(userId)
     const intervalMs = state.settings.intervalMinutes * 60_000
+    lastKnownIntervalMs = intervalMs
     if (!state.settings.enabled) return {outcome: {kind: 'disabled'}, intervalMs}
     const directory = state.directory
     if (!directory) return {outcome: {kind: 'no-folder'}, intervalMs}
@@ -176,6 +179,9 @@ export const createDbMirrorSchedule = ({
     // through the run is what keeps ownership decidable: a copy whose install
     // group we do not recognise is a copy nothing can ever reclaim.
     const installId = state.installId ?? (await store.recordStatus(userId, {})).installId
+    // Unreachable through the real store, which mints on every persisting
+    // write; this is the narrowing, and a loud answer for an injected store
+    // that does not.
     if (installId === undefined) {
       throw new Error('The mirror could not establish an id for this install, so no copy was taken.')
     }
@@ -293,8 +299,9 @@ export const createDbMirrorSchedule = ({
       try {
         return await mirrorOnce(repo, force)
       } finally {
-        // Only if it is still OURS: a run for a different user may have
-        // replaced it while this one was in flight.
+        // Only if it is still OURS. DEFENCE IN DEPTH and unpinned: the effect
+        // reconciler stops an effect before starting its replacement, so a
+        // second user's run cannot begin while this one is in flight.
         if (inFlight === entry) inFlight = null
       }
     })()
@@ -306,6 +313,10 @@ export const createDbMirrorSchedule = ({
   const delayFor = (report: DbMirrorRunReport): number => {
     switch (report.outcome.kind) {
       case 'busy-elsewhere':
+        // The `min` cannot bind while `MIN_INTERVAL_MINUTES` is 15 and this is
+        // 5 — it is there so a shorter minimum interval later cannot make the
+        // busy retry slower than the cadence itself. Unpinned, and it is meant
+        // to stay that way.
         return Math.min(BUSY_RETRY_MS, report.intervalMs)
       // Come back when the copy another tab took actually ages out, rather than
       // on a fixed retry that would land early and take a second copy.
@@ -343,7 +354,7 @@ export const createDbMirrorSchedule = ({
             // `onFailureDelayMs` is a constant. The warning it would have
             // logged is logged here instead.
             console.warn('[db-mirror] run failed', err)
-            return failureDelay(consecutiveFailures, currentIntervalMs())
+            return failureDelay(consecutiveFailures, lastKnownIntervalMs)
           }
         },
         {onFailureDelayMs: FAILURE_RETRY_MS},
@@ -386,9 +397,6 @@ export const createDbMirrorSchedule = ({
       .catch((err: unknown) => {
         console.warn('[db-mirror] could not read the mirror state at startup', err)
       })
-    const mine = {resume: (delayMs: number) => loop.rearmIn(delayMs)}
-    live = mine
-
     // The settings surface re-arms the tab it runs in; the store's broadcast
     // is what carries the change to the others. Only a changed INTERVAL
     // re-arms — every status write publishes too, and re-arming on those
@@ -405,6 +413,12 @@ export const createDbMirrorSchedule = ({
       armedFor = minutes
       if (!baseline) loop.rearmIn(minutes * 60_000)
     })
+
+    // LAST, after everything above that can throw: a `start` that throws has no
+    // disposer recorded, so a `live` published before the throw would outlive
+    // the loop it points at and contradict its own declaration.
+    const mine = {resume: (delayMs: number) => loop.rearmIn(delayMs)}
+    live = mine
 
     return () => {
       stopWatching()

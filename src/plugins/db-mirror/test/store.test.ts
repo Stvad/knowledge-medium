@@ -68,6 +68,25 @@ describe('db-mirror store', () => {
       expect(await storedKeys()).toEqual([])
     })
 
+    it('replaces a stored id that could never appear in a copy’s name', async () => {
+      // The id goes into the filename, where the parser accepts eight lowercase
+      // hex and nothing else. Trusting a stored value outside that shape
+      // produces copies no scan ever matches — so nothing prunes them and the
+      // skip never finds the last one, which is the immortal-copy failure
+      // arriving through the other half of the name.
+      await store.load(USER)
+      await store.updateSettings(USER, {enabled: true})
+      const [key] = (await storedKeys()).filter(k => String(k).includes('settings'))
+      const idb = new IdbKeyedStore('km-db-mirror', 'mirror')
+      const record = await idb.tx('readonly', s => s.get(key))
+      await idb.tx('readwrite', s => s.put({...record, installId: 'NOT-HEX!'}, key))
+
+      const reopened = createDbMirrorStore()
+
+      expect((await reopened.load(USER)).installId).toBeUndefined()
+      expect((await reopened.updateSettings(USER, {})).installId).toMatch(/^[0-9a-f]{8}$/)
+    })
+
     it('is not in the mirrored database, so a restore cannot clone it', async () => {
       // Restoring a mirror onto a second machine copies the database wholesale.
       // Anything stored inside it identifies the DATA, not the machine — which

@@ -23,8 +23,9 @@ export const dbMirrorRuntimeHealth = {
   getSnapshot: (): string | undefined => failure,
   subscribe: (listener: () => void): (() => void) => listeners.add(listener),
   /** Every tick reports: the message when it threw, `undefined` when it did
-   *  not. Reporting the unchanged value notifies nobody, so a loop that fails
-   *  the same way every five minutes does not re-render the chip. */
+   *  not. The equality check is de-duplication only — it changes what listeners
+   *  see, never what `getSnapshot` answers — so that a loop failing the same
+   *  way every five minutes does not re-render the chip. */
   report: (message: string | undefined): void => {
     if (failure === message) return
     failure = message

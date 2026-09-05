@@ -91,6 +91,12 @@ export const dbMirrorFilename = (
 ): string =>
   `${baseOf(dbFilename)}-mirror-${mirrorTimestamp(at)}-${installId}-${incarnationTagOf(incarnation)}-${token}.db`
 
+/** The shape the install group must have to appear in a name at all. Exported
+ *  so the mint and the parser cannot drift: an id outside it produces names
+ *  this module will never match, which makes the copies unrecognisable to the
+ *  very install that wrote them. */
+export const INSTALL_ID_PATTERN = /^[0-9a-f]{8}$/
+
 export interface MirrorCopyName {
   /** The instant in the name. */
   at: number

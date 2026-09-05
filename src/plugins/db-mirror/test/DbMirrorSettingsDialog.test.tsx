@@ -259,10 +259,16 @@ describe('DbMirrorSettingsDialog', () => {
     await userEvent.click(grantButton)
 
     await waitFor(() => expect(mocks.requestDirectoryPermission).toHaveBeenCalledWith(directory))
-    await waitFor(() => expect(screen.queryByRole('button', { name: /grant access again/i })).toBeNull())
-    expect(screen.queryByText(/no longer has permission/i)).toBeNull()
+    // Fence on the STORE, not on the button going away: the button is
+    // relabelled to "Requesting…" while the grant is in flight, so waiting for
+    // its old name to disappear is satisfied by the label change alone — and
+    // the absence assertions below then race the write that actually clears the
+    // flag. Losing that race also let this test's pending chain run past the
+    // next test's mock reset, so both failed together.
+    await waitFor(() => expect(store.getSnapshot()?.status.permissionLost).toBe(false))
+    await waitFor(() => expect(screen.queryByText(/no longer has permission/i)).toBeNull())
+    expect(screen.queryByRole('button', { name: /grant access again/i })).toBeNull()
     expect(mocks.resume).toHaveBeenCalled()
-    expect(store.getSnapshot()?.status.permissionLost).toBe(false)
   })
 
   it('a re-grant the browser refuses leaves the flag set', async () => {
