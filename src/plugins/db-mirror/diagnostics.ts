@@ -96,6 +96,21 @@ export const dbMirrorDiagnostic = (
       ...openSettings,
     }
   }
+  // The run's OWN verdict, before any inference from the copy fields. A mirror
+  // that refuses every run — because the database cannot name itself — is
+  // otherwise indistinguishable from one waiting for its first idle moment, and
+  // stays that way for as long as the condition lasts.
+  if (state.status.lastOutcome === 'no-identity') {
+    return {
+      severity: 'warning',
+      summary: 'Database mirror cannot identify this database',
+      detail:
+        'No copy is being written. If the app has just rebuilt its local database, this clears ' +
+        'itself once it has finished syncing.',
+      nudge: true,
+      ...openSettings,
+    }
+  }
   if (!state.status.lastMirrorAt) {
     // Turned on, folder chosen, nothing copied yet. Runs wait for a genuinely
     // idle main thread with no deadline, so this can hold for a whole busy
@@ -121,13 +136,31 @@ export const dbMirrorDiagnostic = (
       ...openSettings,
     }
   }
-  return {
-    severity: 'ok',
-    summary: 'Database mirror is on',
-    detail: describeLastCopy(state),
-    ...openSettings,
+  if (unmanagedIsPilingUp(state)) {
+    // Copies the keep count does not govern have no ceiling of their own, and
+    // the commonest source — entries this device cannot open, on a cloud folder
+    // that evicts older files — grows by one per run with nothing pruned. The
+    // folder is the user's, so this reports rather than deletes.
+    return {
+      severity: 'warning',
+      summary: 'Database mirror folder is filling up',
+      detail:
+        `${state.status.unmanagedCopies ?? 0} copies in the folder are not managed by this ` +
+        'device — from another device, from a database this one replaced, or ones it cannot ' +
+        'open. They are never deleted automatically.',
+      nudge: true,
+      ...openSettings,
+    }
   }
+  // Nothing to say. The shared chip shows only what is not `ok`, and both
+  // sibling sources answer null when healthy.
+  return null
 }
+
+/** Well past what a shared folder or a replaced database explains, so the only
+ *  remaining explanation is a folder that is accumulating without a ceiling. */
+const unmanagedIsPilingUp = (state: DbMirrorState): boolean =>
+  (state.status.unmanagedCopies ?? 0) > 3 * state.settings.keepCount
 
 /** The chip re-reads through `useSyncExternalStore`, which compares by
  *  identity — so one snapshot per (state, failure, staleness), cached. The

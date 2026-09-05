@@ -72,24 +72,40 @@ const randomToken = (): string =>
 export const incarnationTagOf = (incarnation: string): string =>
   fnv1a32Hex(incarnation).padStart(8, '0')
 
+/** The incarnation group for a copy taken while the log could not be read.
+ *  Deliberately OUTSIDE the hex alphabet, so {@link incarnationTagOf} can never
+ *  produce it and no run can ever claim such a copy as its own generation: it
+ *  parses to `incarnation: undefined`, which equals no current tag, so the
+ *  pruner leaves it alone forever. That is the point — an absent identity is
+ *  not an identity, and ranking two such copies together would delete one
+ *  believing it has the other. */
+export const UNCLAIMABLE_INCARNATION = 'xxxxxxxx'
+
 const baseOf = (dbFilename: string): string => dbFilename.replace(/\.db$/, '')
 
 /** Everything after the database's own base name. Anchored at both ends and
  *  matched against the REMAINDER of the name, so the database base needs no
  *  regex escaping — it is compared with `startsWith`, not interpolated. */
 const SUFFIX =
-  /^-mirror-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)-([0-9a-f]{8})-([0-9a-f]{8})-[0-9a-f]{6}\.db$/
+  /^-mirror-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)-([0-9a-f]{8})-([0-9a-f]{8}|xxxxxxxx)-[0-9a-f]{6}\.db$/
+
+/** The group a copy's name carries for `incarnation` — the hash, or the
+ *  unclaimable literal when the database could not be identified. The single
+ *  place the two forms are decided, so the writer and the parser cannot
+ *  disagree about which is which. */
+export const incarnationGroup = (incarnation: string | undefined): string =>
+  incarnation === undefined ? UNCLAIMABLE_INCARNATION : incarnationTagOf(incarnation)
 
 /** The name a copy taken by `installId`, holding `incarnation`, at `at` gets.
  *  `token` defaults to a fresh random one and exists so tests can pin a name. */
 export const dbMirrorFilename = (
   dbFilename: string,
   installId: string,
-  incarnation: string,
+  incarnation: string | undefined,
   at: number,
   token: string = randomToken(),
 ): string =>
-  `${baseOf(dbFilename)}-mirror-${mirrorTimestamp(at)}-${installId}-${incarnationTagOf(incarnation)}-${token}.db`
+  `${baseOf(dbFilename)}-mirror-${mirrorTimestamp(at)}-${installId}-${incarnationGroup(incarnation)}-${token}.db`
 
 /** The shape the install group must have to appear in a name at all. Exported
  *  so the mint and the parser cannot drift: an id outside it produces names
@@ -102,10 +118,12 @@ export interface MirrorCopyName {
   at: number
   /** Which install wrote it — compare against your own to decide ownership. */
   installId: string
-  /** The HASHED incarnation, which is what the name carries. Compare against
+  /** The HASHED incarnation the name carries. Compare against
    *  {@link incarnationTagOf} of the identity you hold, never against the
-   *  identity itself. */
-  incarnation: string
+   *  identity itself. `undefined` for a copy taken while the database could not
+   *  be identified, which therefore matches no current tag and is never
+   *  pruned — see {@link UNCLAIMABLE_INCARNATION}. */
+  incarnation: string | undefined
 }
 
 /** What `name` says about itself, or undefined when this feature did not write
@@ -121,5 +139,7 @@ export const parseDbMirrorFilename = (
   const match = SUFFIX.exec(name.slice(base.length))
   if (!match) return undefined
   const at = parseMirrorTimestamp(match[1])
-  return at === undefined ? undefined : {at, installId: match[2], incarnation: match[3]}
+  if (at === undefined) return undefined
+  const incarnation = match[3] === UNCLAIMABLE_INCARNATION ? undefined : match[3]
+  return {at, installId: match[2], incarnation}
 }

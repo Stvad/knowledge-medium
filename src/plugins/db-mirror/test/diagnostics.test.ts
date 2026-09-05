@@ -67,10 +67,34 @@ describe('the mirror diagnostic', () => {
     expect(snapshot?.nudge).toBeUndefined()
   })
 
-  it('reports a healthy mirror without a nudge', () => {
-    const snapshot = diagnose(state({status: {lastMirrorAt: Date.now()}}))
-    expect(snapshot).toMatchObject({severity: 'ok'})
-    expect(snapshot?.nudge).toBeUndefined()
+  it('says nothing at all about a healthy mirror', () => {
+    // The shared chip renders only what is not `ok`, so an `ok` snapshot was
+    // unreachable — and both sibling diagnostic sources answer null here.
+    expect(diagnose(state({status: {lastMirrorAt: Date.now()}}))).toBeNull()
+  })
+
+  it('reports a mirror that refuses every run, which otherwise looks like one waiting to start', () => {
+    const snapshot = diagnose(state({status: {lastOutcome: 'no-identity'}}))
+    expect(snapshot).toMatchObject({severity: 'warning', nudge: true})
+    expect(snapshot?.summary).toBe('Database mirror cannot identify this database')
+  })
+
+  it('reports a folder accumulating copies nothing will ever prune', () => {
+    // Unmanaged copies have no ceiling of their own; the commonest source is a
+    // cloud folder evicting older entries, which adds one per run forever.
+    const piling = state({
+      settings: {...DB_MIRROR_DEFAULTS, enabled: true, keepCount: 3},
+      status: {lastMirrorAt: Date.now(), unmanagedCopies: 10},
+    })
+    expect(diagnose(piling)).toMatchObject({severity: 'warning', nudge: true})
+  })
+
+  it('does not call a shared folder or one replaced database a problem', () => {
+    const ordinary = state({
+      settings: {...DB_MIRROR_DEFAULTS, enabled: true, keepCount: 3},
+      status: {lastMirrorAt: Date.now(), unmanagedCopies: 6},
+    })
+    expect(diagnose(ordinary)).toBeNull()
   })
 
   it('reports a failure the store itself was too broken to record', () => {

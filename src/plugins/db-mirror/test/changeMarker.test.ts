@@ -99,7 +99,10 @@ describe('readDatabaseIncarnation', () => {
     // database's, falling outside retention for good.
     const afterACorrection = [1700000000000, 1600000000000]
 
-    expect(await readDatabaseIncarnation(logSource(afterACorrection))).toBe('1700000000000')
+    expect(await readDatabaseIncarnation(logSource(afterACorrection))).toEqual({
+      kind: 'known',
+      id: '1700000000000',
+    })
   })
 
   it('differs for a database the app rebuilt after the browser wiped the store', async () => {
@@ -107,15 +110,23 @@ describe('readDatabaseIncarnation', () => {
     // at the moment of the rebuild rather than inheriting the old one's.
     const before = await readDatabaseIncarnation(logSource([1700000000000]))
     const rebuilt = await readDatabaseIncarnation(logSource([1788558892401]))
-    expect(rebuilt).not.toBe(before)
+    expect(rebuilt).not.toEqual(before)
   })
 
-  it('has no answer for an empty log, rather than inventing one', async () => {
-    expect(await readDatabaseIncarnation(source({born: [{born: null}]}))).toBeUndefined()
+  it('calls an empty log EMPTY, which is a fact about the database', async () => {
+    // The `row_events` triggers fire on every `blocks` write, so an empty log
+    // means no local writes — and therefore nothing in the upload queue. That
+    // is the whole of what this feature protects, so there is nothing to copy.
+    expect(await readDatabaseIncarnation(source({born: [{born: null}]}))).toEqual({kind: 'empty'})
   })
 
-  it('has no answer when the log cannot be read', async () => {
+  it('keeps an unreadable log apart from an empty one, because they call for opposites', async () => {
+    // An unreadable log says nothing about whether the FILE copies — the export
+    // streams raw bytes and runs no query but the checkpoint — so this case
+    // still takes a copy, under a name no run can claim.
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(await readDatabaseIncarnation(source({born: new Error('no such table')}))).toBeUndefined()
+    expect(await readDatabaseIncarnation(source({born: new Error('no such table')}))).toEqual({
+      kind: 'unreadable',
+    })
   })
 })

@@ -1,12 +1,18 @@
 /*
  * Device-local settings and status for the database mirror.
  *
- * IndexedDB, not a block: the folder is a `FileSystemDirectoryHandle`, a
- * host object that only means anything on the machine that granted it, and
- * IndexedDB is what SURVIVED the OPFS wipe this feature exists for. The rest of
- * the state sits beside it for the same reason — a mirror's cadence and history
- * describe one device's copy on one disk, and syncing them would have a phone
- * that cannot mirror at all reporting a laptop's last run.
+ * IndexedDB, not a block: the folder is a `FileSystemDirectoryHandle`, a host
+ * object that only means anything on the machine that granted it. The rest of
+ * the state sits beside it because a mirror's cadence and history describe one
+ * device's copy on one disk, and syncing them would have a phone that cannot
+ * mirror at all reporting a laptop's last run.
+ *
+ * This survives the OPFS-only wipe, which is the common shape. It does NOT
+ * survive an eviction of the whole origin bucket — IndexedDB, OPFS and the
+ * Cache API share one (see `docs/storage-persistence.md`) — and there is no
+ * signal left afterwards to recover from in-app: mirroring comes back off, with
+ * the folder unchosen, and every copy already written becomes unmanaged. The
+ * settings surface says so rather than pretending otherwise.
  *
  * The handle lives under its own key, so the settings record stays plain JSON:
  * a browser that fails to clone the handle loses the folder, not the settings.
@@ -61,11 +67,19 @@ export interface DbMirrorStatus {
    *  clear this by themselves once it is back; only the settings surface can
    *  ASK for it again. */
   permissionLost?: boolean
-  /** Copies of this database in the folder that this device's runs may not
-   *  delete — another install's, or its own from a database it replaced. The
-   *  keep count does not govern them, so the folder can sit above it for a
-   *  reason the user is otherwise given no way to see. */
+  /** Copies in the folder that the keep count does not govern — see `survey`
+   *  in `mirror.ts` for which those are. Recorded so a folder holding more
+   *  files than the user asked for has a reason they can see. */
   unmanagedCopies?: number
+  /** What the last run that reached a conclusion concluded, and when.
+   *
+   *  Unlike {@link lastCheckedAt} this is written by EVERY terminal outcome,
+   *  including the ones that produced no copy. It is what lets the chip report
+   *  the run's own verdict instead of inferring one from the fields below —
+   *  inference is how a mirror that refuses every run came to look identical
+   *  to one waiting for its first idle moment. */
+  lastOutcome?: string
+  lastOutcomeAt?: number
   /** Which database the fields above describe (see `readDatabaseIncarnation`).
    *  A status whose incarnation is not the current one says nothing about the
    *  database now in front of us. */
@@ -135,6 +149,8 @@ const normalizeStatus = (value: unknown): DbMirrorStatus => {
     lastFilename: typeof raw.lastFilename === 'string' ? raw.lastFilename : undefined,
     lastBytes: isFiniteNumber(raw.lastBytes) ? raw.lastBytes : undefined,
     unmanagedCopies: isFiniteNumber(raw.unmanagedCopies) ? raw.unmanagedCopies : undefined,
+    lastOutcome: typeof raw.lastOutcome === 'string' ? raw.lastOutcome : undefined,
+    lastOutcomeAt: isFiniteNumber(raw.lastOutcomeAt) ? raw.lastOutcomeAt : undefined,
     permissionLost: typeof raw.permissionLost === 'boolean' ? raw.permissionLost : undefined,
     lastError: typeof raw.lastError === 'string' ? raw.lastError : undefined,
     lastErrorAt: isFiniteNumber(raw.lastErrorAt) ? raw.lastErrorAt : undefined,

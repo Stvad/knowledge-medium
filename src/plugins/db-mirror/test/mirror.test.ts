@@ -196,6 +196,35 @@ describe('runDbMirror', () => {
     expect(dir.names()).toEqual([dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN)])
   })
 
+  it('takes an unclaimable copy when the database cannot be identified, and never prunes one', async () => {
+    // An unreadable log says nothing about whether the FILE copies, and a
+    // partly damaged database is exactly when a byte copy is worth most. The
+    // name carries a group no hash can produce, so no run — including this one
+    // — ever ranks it against copies of a database it may not be.
+    const dir = new FakeDirectoryHandle()
+    const earlier = dbMirrorFilename(DB, INSTALL_A, undefined, AT - HOUR, 'bbbbbb')
+    dir.seed(earlier, 4096)
+
+    const outcome = await run({directory: dir.asHandle(), incarnation: undefined, keepCount: 1})
+
+    expect(outcome).toMatchObject({kind: 'mirrored', pruned: [], unmanaged: 1})
+    expect(dir.names()).toContain(earlier)
+    expect(dir.names()).toContain(dbMirrorFilename(DB, INSTALL_A, undefined, AT, TOKEN))
+  })
+
+  it('leaves an unclaimable copy alone once the database can name itself again', async () => {
+    // It may hold a database this one replaced; nothing can prove otherwise, so
+    // "never pruned" is the price of "never wrongly pruned".
+    const dir = new FakeDirectoryHandle()
+    const unclaimable = dbMirrorFilename(DB, INSTALL_A, undefined, AT - HOUR, 'bbbbbb')
+    dir.seed(unclaimable, 4096)
+
+    const outcome = await run({directory: dir.asHandle(), keepCount: 1})
+
+    expect(outcome).toMatchObject({kind: 'mirrored', pruned: [], unmanaged: 1})
+    expect(dir.names()).toContain(unclaimable)
+  })
+
   it('does not touch the directory when the folder permission is gone', async () => {
     const dir = new FakeDirectoryHandle()
     dir.permission = 'prompt'

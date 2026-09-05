@@ -54,6 +54,11 @@ const failureDelay = (consecutive: number, intervalMs: number): number =>
  *  on a weekly setting would otherwise leave the survivor idle for days. */
 export const BUSY_RETRY_MS = 5 * 60_000
 
+/** What a run concluded. Every `DbMirrorTickResult` kind, plus `failed` for a
+ *  run that threw — which has no outcome of its own but is the verdict the user
+ *  most needs to see. */
+export type DbMirrorVerdict = DbMirrorTickResult['kind'] | 'failed'
+
 export const PERMISSION_LOST_MESSAGE =
   'This browser no longer has permission to write to the chosen folder, so no copies are ' +
   'being made. Open the mirror settings to grant it again.'
@@ -143,6 +148,17 @@ export const createDbMirrorSchedule = ({
     }
   }
 
+  /** Every terminal outcome goes through here, so the chip can report what the
+   *  run concluded rather than inferring it from the copy fields — which is how
+   *  a mirror that refuses every run came to look like one waiting for its
+   *  first idle moment. */
+  const conclude = async (
+    userId: string,
+    at: number,
+    kind: DbMirrorVerdict,
+    patch: Parameters<DbMirrorStore['recordStatus']>[1] = {},
+  ): Promise<void> => recordStatus(userId, {...patch, lastOutcome: kind, lastOutcomeAt: at})
+
   /**
    * @param force take the copy even if a run already covered this interval.
    *   For "Mirror now", where the user is asking for a copy rather than for
@@ -185,16 +201,40 @@ export const createDbMirrorSchedule = ({
     // app rebuilt it. Withholding `lastCopy` there is what stops a fresh
     // database inheriting the old one's marker and deciding it has nothing to
     // copy.
-    const incarnation = await readDatabaseIncarnation(repo)
-    // No copy at all rather than one under a stand-in identity. A copy nothing
-    // can place among the others is worse than a missing one: the pruner would
-    // eventually rank it against copies of a different database. The two ways
-    // to get here both argue for waiting — an empty log means no local writes
-    // yet, so there is nothing this feature protects, and an unreadable log on
-    // a database we are about to checkpoint and copy under a write lock is not
-    // a database the copy was likely to succeed against either.
-    if (incarnation === undefined) return {outcome: {kind: 'no-identity'}, intervalMs}
-    const describesThisDatabase = state.status.incarnation === incarnation
+    const reading = await readDatabaseIncarnation(repo)
+    // An EMPTY log is a positive fact and the one case that warrants no copy:
+    // the `row_events` triggers fire on every `blocks` write, so an empty log
+    // means no local writes and therefore nothing in the upload queue either —
+    // which is the whole of what this feature protects.
+    if (reading.kind === 'empty') {
+      await conclude(userId, at, 'no-identity')
+      return {outcome: {kind: 'no-identity'}, intervalMs}
+    }
+    // An UNREADABLE log is not. It says nothing about whether the FILE copies,
+    // since the export streams raw bytes and runs no query but the checkpoint,
+    // and a partly damaged database is exactly when a byte copy is worth most.
+    // The copy is taken under a name no run can claim, so it is never ranked
+    // against copies of a database it may not be.
+    const incarnation = reading.kind === 'known' ? reading.id : undefined
+    // The recorded copy describes a database that is no longer here — an import
+    // replaced it, or the browser wiped the local store and the app rebuilt it.
+    // CLEARED here rather than filtered by each reader: the chip and the
+    // settings surface both rendered the previous database's last copy as this
+    // one's, and a record that is only true if you remember to check a
+    // neighbouring field is a record that will be read wrong.
+    const describesThisDatabase =
+      incarnation !== undefined && state.status.incarnation === incarnation
+    if (!describesThisDatabase && state.status.lastOutcome !== undefined) {
+      await recordStatus(userId, {
+        incarnation,
+        lastMarker: undefined,
+        lastMirrorAt: undefined,
+        lastCheckedAt: undefined,
+        lastFilename: undefined,
+        lastBytes: undefined,
+        unmanagedCopies: undefined,
+      })
+    }
 
     // The interval belongs to the DEVICE, not to this tab's timer: every tab
     // runs its own loop against the same folder, so N tabs otherwise take N
@@ -210,6 +250,32 @@ export const createDbMirrorSchedule = ({
         : undefined
     if (!force && sinceLastRun !== undefined && sinceLastRun >= 0 && sinceLastRun < intervalMs) {
       return {outcome: {kind: 'too-soon', dueInMs: intervalMs - sinceLastRun}, intervalMs}
+    }
+    // A run that THREW holds the device off too, but only for the first retry
+    // step rather than the whole interval — long enough that an effect restart
+    // (every workspace change) or a second tab does not immediately repeat an
+    // attempt that holds PowerSync's write lock for its full deadline, and
+    // short enough that it never defers the retry the failing tab itself asked
+    // for, which is what stamping `lastCheckedAt` here used to do.
+    //
+    // Only a throw. The other verdicts that produce no copy are cheap — a
+    // permission check that never prompts, one indexed row lookup — so there is
+    // nothing to protect against repeating, and gating them would make a user
+    // who has just re-granted the folder wait out a retry step for nothing.
+    const sinceLastAttempt =
+      state.status.lastOutcomeAt !== undefined && state.status.lastOutcome === 'failed'
+        ? at - state.status.lastOutcomeAt
+        : undefined
+    if (
+      !force &&
+      sinceLastAttempt !== undefined &&
+      sinceLastAttempt >= 0 &&
+      sinceLastAttempt < FAILURE_RETRY_MS
+    ) {
+      return {
+        outcome: {kind: 'too-soon', dueInMs: FAILURE_RETRY_MS - sinceLastAttempt},
+        intervalMs,
+      }
     }
 
     try {
@@ -234,8 +300,11 @@ export const createDbMirrorSchedule = ({
       if (outcome === null) return {outcome: {kind: 'busy-elsewhere'}, intervalMs}
       switch (outcome.kind) {
         case 'mirrored':
-          await recordStatus(userId, {
+          await conclude(userId, at, 'mirrored', {
             incarnation,
+            // Nothing to skip against next time when the copy is unclaimable:
+            // withholding the marker makes the next run copy rather than trust
+            // a record it cannot tie to a file it can find.
             lastMarker: outcome.marker,
             lastMirrorAt: at,
             lastCheckedAt: at,
@@ -251,7 +320,7 @@ export const createDbMirrorSchedule = ({
           // Reaching here means the permission held and the folder was read, so
           // any recorded failure describes a state that is over — leaving it
           // would have the chip report a paused mirror that is running fine.
-          await recordStatus(userId, {
+          await conclude(userId, at, 'skipped-unchanged', {
             lastCheckedAt: at,
             unmanagedCopies: outcome.unmanaged,
             permissionLost: false,
@@ -260,7 +329,7 @@ export const createDbMirrorSchedule = ({
           })
           break
         case 'permission-lost':
-          await recordStatus(userId, {
+          await conclude(userId, at, 'permission-lost', {
             permissionLost: true,
             lastError: PERMISSION_LOST_MESSAGE,
             lastErrorAt: at,
@@ -269,7 +338,7 @@ export const createDbMirrorSchedule = ({
       }
       return {outcome, intervalMs}
     } catch (err) {
-      await recordStatus(userId, {
+      await conclude(userId, at, 'failed', {
         // The permission check happens before the copy and returns rather than
         // throwing, so a throw here is some OTHER failure — a full disk, a
         // vanished drive. Leaving a stale permission flag set would have the

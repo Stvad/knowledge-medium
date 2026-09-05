@@ -34,6 +34,18 @@ const repo = {
       sql.includes('ORDER BY id LIMIT 1') ? [{born: 1700000000000}] : [{marker: 1}],
   },
 } as unknown as Repo
+/** Same repo, but with a log that cannot be READ — a different case from an
+ *  empty one, and it still warrants a copy. */
+const unreadableLogRepo = {
+  user: {id: USER},
+  db: {
+    getAll: async (sql: string) => {
+      if (sql.includes('ORDER BY id LIMIT 1')) throw new Error('no such table: row_events')
+      return [{marker: 1}]
+    },
+  },
+} as unknown as Repo
+
 /** Same repo, but with an empty log — the database cannot name itself. */
 const unidentifiableRepo = {
   user: {id: USER},
@@ -111,6 +123,8 @@ const build = (
     supported?: () => boolean
     lockHeldElsewhere?: boolean
     identifiable?: boolean
+    /** A log that throws rather than one that is empty. */
+    readableLog?: boolean
     /** A stand-in store, for the tests about a store that misbehaves. */
     store?: DbMirrorStore
   } = {},
@@ -127,7 +141,9 @@ const build = (
       : (async <T,>(_dbFilename: string, body: () => Promise<T>) => body()),
   })
   const stop = schedule.effect.start({
-    repo: over.identifiable === false ? unidentifiableRepo : repo,
+    repo: over.readableLog === false
+      ? unreadableLogRepo
+      : over.identifiable === false ? unidentifiableRepo : repo,
   } as unknown as AppEffectContext) as
     | (() => void)
     | undefined
@@ -166,6 +182,83 @@ describe('the mirror schedule', () => {
     await job.body!()
 
     expect(mirror).not.toHaveBeenCalled()
+  })
+
+  it('clears a status that describes a database this device no longer holds', async () => {
+    // Withholding it from the RUN is not enough: the health chip and the
+    // settings surface read the same record and rendered the previous
+    // database's last copy as this one's — so after the wipe this feature
+    // exists for, the chip said "Database mirror is on" naming a copy of a
+    // database that was gone. Cleared at the source, so no reader needs to
+    // remember to check a neighbouring field.
+    await enable()
+    await store.recordStatus(USER, {
+      incarnation: 'a-database-that-is-gone',
+      lastOutcome: 'mirrored',
+      lastMirrorAt: NOW - 3_600_000,
+      lastCheckedAt: NOW - 3_600_000,
+      lastFilename: 'old.db',
+      lastBytes: 4096,
+      lastMarker: '42',
+    })
+    outcomes = [{kind: 'permission-lost', permission: 'prompt'}]
+    const {job} = build()
+
+    await job.body!()
+
+    const {status} = await store.load(USER)
+    expect(status.incarnation).toBe(INCARNATION)
+    expect(status.lastMirrorAt).toBeUndefined()
+    expect(status.lastFilename).toBeUndefined()
+    expect(status.lastBytes).toBeUndefined()
+    expect(status.lastMarker).toBeUndefined()
+    expect(status.lastCheckedAt).toBeUndefined()
+  })
+
+  it('still copies when the log cannot be READ, which is not the same as empty', async () => {
+    // An empty log is a fact about the database and means there is nothing to
+    // protect. An unreadable one says nothing about whether the FILE copies —
+    // the export streams raw bytes — and a partly damaged database is exactly
+    // when a byte copy is worth most.
+    await enable()
+    const {job} = build({readableLog: false})
+
+    await job.body!()
+
+    expect(mirror).toHaveBeenCalledWith(expect.objectContaining({incarnation: undefined}))
+  })
+
+  it('records what every run concluded, including the ones that wrote nothing', async () => {
+    await enable()
+    const {job} = build({identifiable: false})
+
+    await job.body!()
+
+    expect((await store.load(USER)).status).toMatchObject({
+      lastOutcome: 'no-identity',
+      lastOutcomeAt: NOW,
+    })
+  })
+
+  it('holds the device off briefly after a run that threw, but not after one that merely refused', async () => {
+    // A failed export can have held PowerSync's write lock for its full
+    // deadline, and the effect restarts on every workspace change — so without
+    // a floor a restart repeats it at once, and N tabs each do. The cheap
+    // verdicts have nothing to protect against repeating.
+    await enable()
+    const {job} = build()
+    await job.body!()
+    clock += INTERVAL_MS
+    outcomes = [new Error('the drive is full')]
+    await job.body!()
+    expect(mirror).toHaveBeenCalledTimes(2)
+
+    // A fresh loop, as an effect restart gives it.
+    clock += 60_000
+    const restarted = build()
+    await restarted.job.body!()
+
+    expect(mirror).toHaveBeenCalledTimes(2)
   })
 
   it('does not trust a status recorded against a different database', async () => {

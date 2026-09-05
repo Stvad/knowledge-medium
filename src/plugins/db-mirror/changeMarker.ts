@@ -30,6 +30,14 @@
  */
 import type {Repo} from '@/data/repo'
 
+/** Which database this is, or which of the two ways of not knowing applies. */
+export type DatabaseIncarnation =
+  | {kind: 'known'; id: string}
+  /** No local writes yet, so nothing this feature protects exists. */
+  | {kind: 'empty'}
+  /** The log could not be read; the database itself may be perfectly copyable. */
+  | {kind: 'unreadable'}
+
 /** Just enough of `Repo` to read the marker. */
 export interface ChangeMarkerSource {
   db: {getAll: <T>(sql: string) => Promise<T[]>}
@@ -72,8 +80,16 @@ const readQueueFingerprint = async (
  * everything else, so two installs can hold the same incarnation. The install
  * id it is paired with in the filename is what separates those.
  *
- * `undefined` when it cannot be read or the log is empty. Callers treat that as
- * "a database I know nothing about": copy, and prune nothing.
+ * The two ways of having no answer are kept APART because they call for
+ * opposite things. An EMPTY log is a positive fact: the triggers fire on every
+ * `blocks` write, local and sync-applied alike, so an empty log means no local
+ * writes — and therefore nothing in the upload queue either, which is the whole
+ * of what this feature protects. There is nothing to copy, so no copy is taken.
+ * An UNREADABLE log says nothing about the database; in particular it says
+ * nothing about whether the FILE copies, since the export streams raw bytes and
+ * runs no query but the checkpoint. A partly damaged database is exactly when a
+ * byte copy is worth most, so that copy is taken — under a name no run can ever
+ * claim, so it is never ranked against copies of a database it may not be.
  *
  * Ordering by id rather than taking `MIN(created_at)`: a clock that jumps
  * backwards gives a LATER row an earlier timestamp, which would move an
@@ -83,16 +99,15 @@ const readQueueFingerprint = async (
  */
 export const readDatabaseIncarnation = async (
   repo: Repo | ChangeMarkerSource,
-): Promise<string | undefined> => {
+): Promise<DatabaseIncarnation> => {
   try {
     const [row] = await (repo as ChangeMarkerSource).db.getAll<{born: number | null}>(
       'SELECT created_at AS born FROM row_events ORDER BY id LIMIT 1',
     )
-    if (row?.born == null) return undefined
-    return String(row.born)
+    return row?.born == null ? {kind: 'empty'} : {kind: 'known', id: String(row.born)}
   } catch (err) {
     console.warn('[db-mirror] could not read the database identity', err)
-    return undefined
+    return {kind: 'unreadable'}
   }
 }
 

@@ -30,7 +30,7 @@ import {readChangeMarker} from './changeMarker.js'
 import {
   type MirrorCopyName,
   dbMirrorFilename,
-  incarnationTagOf,
+  incarnationGroup,
   parseDbMirrorFilename,
 } from './filenames.js'
 import {queryDirectoryPermission} from './fileSystemAccess.js'
@@ -76,10 +76,11 @@ export interface DbMirrorRunOptions {
   /** This install. Always known when a run can happen: it is minted by the same
    *  persisting write that records the opt-in. */
   installId: string
-  /** Which database this is. REQUIRED, and there is deliberately no stand-in
-   *  for "could not tell": see `governedBy`. A caller that cannot establish one
-   *  must not call this. */
-  incarnation: string
+  /** Which database this is, or `undefined` when the log could not be read.
+   *  The copy is still taken in that case, under a name no run can claim — see
+   *  `governedBy`. A caller whose log is merely EMPTY must not call this at
+   *  all: there is nothing to protect. */
+  incarnation: string | undefined
   /** What the last successful run left behind, if anything. The marker and the
    *  filename travel TOGETHER because the skip needs both: the marker says the
    *  database has not moved, and only the file's presence in THIS folder says
@@ -158,11 +159,13 @@ const measure = async (entry: FileSystemFileHandle): Promise<number | undefined>
  * some other device has. Neither are our own copies of a database we replaced:
  * that is the pre-wipe history this whole feature exists to keep.
  *
- * There is deliberately no third case for a copy taken while the database could
- * not name itself. A stand-in incarnation was tried and is wrong: an absent
- * identity is not an identity, so two copies carrying the stand-in can hold two
- * different databases, and ranking them together deletes one believing it has
- * the other. A run with no incarnation writes nothing instead.
+ * A copy taken while the database could not be identified is governed by
+ * NOBODY, including the run that wrote it: its name carries a group no hash can
+ * produce, so it matches no current tag. An absent identity is not an identity,
+ * and ranking two such copies together would delete one believing it has the
+ * other — which, after a wipe, is the only remaining copy of the work the wipe
+ * took. Never pruned is the price of never wrongly pruned; the count reaches
+ * the user through `unmanaged`.
  */
 const governedBy = (installId: string, currentTag: string) =>
   (copy: MirrorCopy): boolean =>
@@ -315,17 +318,20 @@ export const runDbMirror = async ({
   // copy might not contain, and that direction loses data.
   const marker = await readChangeMarker(repo)
   const dbFilename = dbFilenameForUser(repo.user.id)
-  const mine = governedBy(installId, incarnationTagOf(incarnation))
-  const partition = (scanned: readonly MirrorCopy[]) => {
-    const governed = scanned.filter(mine)
+  const mine = governedBy(installId, incarnationGroup(incarnation))
+  /** Split the folder into what this run may prune and what it may not, with
+   *  the run's OWN copy left out of the second count — the user is told about
+   *  that one directly, and listing it as unmanaged reads as a stray file. */
+  const partition = (scanned: readonly MirrorCopy[], ownName: string) => {
+    const others = scanned.filter(copy => copy.name !== ownName)
     return {
-      governed,
+      governed: scanned.filter(mine),
       // Every reason the folder can hold more than `keepCount` says it should:
-      // another install's copies, our own from a database we replaced, and ours
-      // that this device cannot open. Reported rather than ignored, so the
-      // number the user set and the number of files they see can be reconciled.
-      unmanaged:
-        scanned.filter(copy => !mine(copy)).length + governed.filter(isUnreadable).length,
+      // another install's copies, our own from a database we replaced, ours
+      // taken while the database could not be identified, and ours this device
+      // cannot open. Reported rather than ignored, so the number the user set
+      // and the number of files they see can be reconciled.
+      unmanaged: others.filter(copy => !mine(copy) || isUnreadable(copy)).length,
     }
   }
 
@@ -335,7 +341,7 @@ export const runDbMirror = async ({
     // be there. Otherwise deleting the last mirror by hand, or changing folders
     // while a run was in flight, would leave a stored marker that skipped every
     // run for good while the status went on claiming success.
-    const {governed, unmanaged} = partition(await scanQuietly(directory, dbFilename))
+    const {governed, unmanaged} = partition(await scanQuietly(directory, dbFilename), lastCopy.filename)
     const present = governed.some(
       copy => copy.name === lastCopy.filename && isIntactCopy(copy, lastCopy.bytes),
     )
@@ -381,7 +387,7 @@ export const runDbMirror = async ({
     )
   }
 
-  const {governed, unmanaged} = partition(await scanQuietly(directory, dbFilename))
+  const {governed, unmanaged} = partition(await scanQuietly(directory, dbFilename), filename)
   return {
     kind: 'mirrored',
     filename,
