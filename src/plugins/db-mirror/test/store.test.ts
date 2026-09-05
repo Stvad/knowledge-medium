@@ -265,7 +265,7 @@ describe('db-mirror store', () => {
     await vi.waitFor(() => expect(tabA.getSnapshot()?.status.lastError).toBe('the disk is full'))
   })
 
-  it('notifies subscribers and hands them a new snapshot only on a change', async () => {
+  it('notifies subscribers and hands them a fresh snapshot on every publish', async () => {
     const seen: unknown[] = []
     const unsubscribe = store.subscribe(() => seen.push(store.getSnapshot()))
 

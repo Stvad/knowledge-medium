@@ -121,7 +121,6 @@ beforeEach(() => {
 
 const build = (
   over: {
-    supported?: () => boolean
     lockHeldElsewhere?: boolean
     identifiable?: boolean
     /** A log that throws rather than one that is empty. */
@@ -135,7 +134,6 @@ const build = (
     store: over.store ?? store,
     job,
     now: () => clock,
-    supported: over.supported ?? (() => true),
     mirror: mirror as never,
     withRunLock: over.lockHeldElsewhere
       ? async () => null
@@ -160,12 +158,6 @@ const enable = async (over: {directory?: boolean} = {}) => {
 }
 
 describe('the mirror schedule', () => {
-  it('arms nothing in a browser with no directory picker', () => {
-    const {job, stop} = build({supported: () => false})
-    expect(job.starts).toBe(0)
-    expect(stop).toBeUndefined()
-  })
-
   it('does not copy while the setting is off', async () => {
     await store.load(USER)
     await store.setDirectory(USER, {kind: 'directory', name: 'Backups'} as never)
@@ -472,7 +464,6 @@ describe('the mirror schedule', () => {
       store: {...store, subscribe: () => { throw new Error('subscribe blew up') }},
       job: jobHandle,
       now: () => clock,
-      supported: () => true,
       mirror: mirror as never,
       withRunLock: (async <T,>(_db: string, body: () => Promise<T>) => body()),
     })
@@ -523,15 +514,6 @@ describe('the mirror schedule', () => {
 
       await expect(schedule.runNow(repo)).rejects.toThrow('The disk is full')
     })
-  })
-
-  it('stamps the database identity onto what it records', async () => {
-    await enable()
-    const {job} = build()
-
-    await job.body!()
-
-    expect((await store.load(USER)).status.incarnation).toBe(INCARNATION)
   })
 
   it('copies once enabled, and records what it wrote', async () => {

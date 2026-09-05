@@ -198,9 +198,11 @@ describe('the diagnostic source', () => {
     expect(armedTimers()).toBe(0)
   })
 
-  it('answers the same snapshot object until something it depends on changes', () => {
-    // `useSyncExternalStore` compares by identity; a fresh object per call is
-    // an infinite render loop.
+  it('answers the same snapshot object on repeated reads', () => {
+    // `useSyncExternalStore` compares by identity, so a fresh object per call
+    // is an infinite render loop. That the cache also NOTICES a changed input
+    // is pinned by `dbMirrorDiagnostic`'s own cases above — it cannot be shown
+    // here, because with no store snapshot the answer is null either way.
     expect(dbMirrorDiagnosticSource.getSnapshot()).toBe(dbMirrorDiagnosticSource.getSnapshot())
   })
 })

@@ -25,12 +25,10 @@
  *     took.
  *
  * A single combined tag over both could not express that split: an unknown half
- * poisoned the whole tag, so the run could neither prune nor be pruned. A stand-in
- * value for the unknown half is no better, and is the reason there isn't one — an
- * absent identity is not an identity, so two copies sharing it can hold two
- * different databases, and a pruner that ranks them together will delete one
- * believing it has another. A run with no incarnation writes no copy at all;
- * see `mirror.ts`.
+ * poisoned the whole tag, so the run could neither prune nor be pruned. The
+ * incarnation has one further form, {@link UNCLAIMABLE_INCARNATION}, for a copy
+ * taken while the database could not be identified; `governedBy` in `mirror.ts`
+ * owns the reason it exists.
  *
  * The final group is unique per RUN, which is what lets a failed run delete its
  * own entry without having to prove anything — no other run holds a name
@@ -74,11 +72,9 @@ export const incarnationTagOf = (incarnation: string): string =>
 
 /** The incarnation group for a copy taken while the log could not be read.
  *  Deliberately OUTSIDE the hex alphabet, so {@link incarnationTagOf} can never
- *  produce it and no run can ever claim such a copy as its own generation: it
- *  parses to `incarnation: undefined`, which equals no current tag, so the
- *  pruner leaves it alone forever. That is the point — an absent identity is
- *  not an identity, and ranking two such copies together would delete one
- *  believing it has the other. */
+ *  produce it: such a copy parses to `incarnation: undefined`, which matches no
+ *  current tag, so no run ever claims it. See `governedBy` in `mirror.ts` for
+ *  why that is the wanted outcome. */
 export const UNCLAIMABLE_INCARNATION = 'xxxxxxxx'
 
 const baseOf = (dbFilename: string): string => dbFilename.replace(/\.db$/, '')

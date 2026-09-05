@@ -104,6 +104,17 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
         .then(saved => { if (saved) dbMirrorSchedule.resume() })
       return
     }
+    chooseFolder({andEnable: true})
+  }
+
+  /** Pick a folder, save it, and bring the next run forward — the store clears
+   *  the previous folder's recorded failure, and without the re-arm the new
+   *  folder would wait out a delay chosen before it was chosen.
+   *
+   *  NOT async, for the same reason as `handleToggle`: `chooseMirrorDirectory`
+   *  is called with nothing awaited ahead of it, so it still runs inside the
+   *  click's own user gesture. */
+  const chooseFolder = ({andEnable}: {andEnable: boolean}): void => {
     chooseMirrorDirectory()
       .catch(err => { reportChooseFailure(err); return undefined })
       .then(async directory => {
@@ -111,24 +122,12 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
         // Past the picker: store failures are reported as saves, not as a
         // folder that could not be chosen.
         if (!(await saving(dbMirrorStore.setDirectory(userId, directory)))) return
-        if (!(await saving(dbMirrorStore.updateSettings(userId, {enabled: true})))) return
+        if (andEnable && !(await saving(dbMirrorStore.updateSettings(userId, {enabled: true})))) return
         dbMirrorSchedule.resume()
       })
   }
 
-  // Not async, for the same reason as `handleToggle`.
-  const handleChooseFolder = (): void => {
-    chooseMirrorDirectory()
-      .catch(err => { reportChooseFailure(err); return undefined })
-      .then(async directory => {
-        if (!directory) return
-        if (!(await saving(dbMirrorStore.setDirectory(userId, directory)))) return
-        // The store clears the previous folder's recorded failure; this brings
-        // the next run forward so the new folder gets a copy without waiting
-        // out a delay chosen before it was chosen.
-        dbMirrorSchedule.resume()
-      })
-  }
+  const handleChooseFolder = (): void => chooseFolder({andEnable: false})
 
   const handleForgetFolder = (): void => {
     void saving(dbMirrorStore.setDirectory(userId, undefined))

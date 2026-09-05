@@ -353,7 +353,7 @@ describe('runDbMirror', () => {
 
       const outcome = await run({directory: dir.asHandle(), keepCount: 2})
 
-      expect(outcome).toMatchObject({kind: 'mirrored', pruned: expect.any(Array)})
+      expect(outcome).toMatchObject({kind: 'mirrored', pruned: [older[1], older[0]]})
       expect(dir.names().sort()).toEqual(
         [dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN), older[2]].sort(),
       )
@@ -447,7 +447,10 @@ describe('runDbMirror', () => {
       const outcome = await run({directory: dir.asHandle(), keepCount: 2})
 
       expect(dir.names()).toContain(dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN))
-      expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN)})
+      expect(outcome).toMatchObject({
+        kind: 'mirrored',
+        filename: dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN),
+      })
     })
 
     it('never touches copies another install wrote into a shared folder', async () => {
@@ -531,14 +534,19 @@ describe('runDbMirror', () => {
       expect(outcome).toMatchObject({kind: 'mirrored', unmanaged: 2})
     })
 
-    it('reports a pruning failure without failing the copy that succeeded', async () => {
+    it('swallows a pruning failure rather than failing the copy that succeeded', async () => {
       const dir = new FakeDirectoryHandle()
       dir.seed(dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, TOKEN), 512)
       vi.spyOn(dir, 'removeEntry').mockRejectedValue(new Error('file is locked'))
 
       const outcome = await run({directory: dir.asHandle(), keepCount: 1})
 
-      expect(outcome).toMatchObject({kind: 'mirrored', filename: dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN)})
+      // Swallowed, not reported: nothing in the outcome says a delete failed.
+      expect(outcome).toMatchObject({
+        kind: 'mirrored',
+        filename: dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN),
+        pruned: [],
+      })
     })
   })
 })

@@ -25,7 +25,6 @@ import {readDatabaseIncarnation} from './changeMarker.js'
 import {runDbMirror, type DbMirrorOutcome} from './mirror.js'
 import {dbMirrorRuntimeHealth} from './runtimeHealth.js'
 import {withMirrorRunLock} from './runLock.js'
-import {supportsDirectoryMirroring} from './fileSystemAccess.js'
 import {DB_MIRROR_DEFAULTS, dbMirrorStore, type DbMirrorStore} from './store.js'
 
 /** The FIRST retry after a run that threw. Short enough that a transient
@@ -70,7 +69,7 @@ export type DbMirrorTickResult =
   | {kind: 'busy-elsewhere'}
   /** A run on this device already covered this interval. */
   | {kind: 'too-soon'; dueInMs: number}
-  /** The database could not say which database it is, so nothing was written. */
+  /** The database's log is empty, so there is nothing local to protect yet. */
   | {kind: 'no-identity'}
   | DbMirrorOutcome
 
@@ -85,7 +84,6 @@ export interface DbMirrorScheduleDeps {
   mirror?: typeof runDbMirror
   withRunLock?: typeof withMirrorRunLock
   job?: CadencedIdleJob
-  supported?: () => boolean
   now?: () => number
 }
 
@@ -112,7 +110,6 @@ export const createDbMirrorSchedule = ({
     repeatDelayMs: DB_MIRROR_DEFAULTS.intervalMinutes * 60_000,
     label: 'db-mirror',
   }),
-  supported = supportsDirectoryMirroring,
   now = Date.now,
 }: DbMirrorScheduleDeps = {}): DbMirrorSchedule => {
   /** The running effect's controls, or null while no effect is started. */
@@ -210,11 +207,10 @@ export const createDbMirrorSchedule = ({
       await conclude(userId, at, 'no-identity')
       return {outcome: {kind: 'no-identity'}, intervalMs}
     }
-    // An UNREADABLE log is not. It says nothing about whether the FILE copies,
+    // An UNREADABLE log is not: it says nothing about whether the FILE copies,
     // since the export streams raw bytes and runs no query but the checkpoint,
     // and a partly damaged database is exactly when a byte copy is worth most.
-    // The copy is taken under a name no run can claim, so it is never ranked
-    // against copies of a database it may not be.
+    // The copy is taken under a name no run can claim — see `governedBy`.
     const incarnation = reading.kind === 'known' ? reading.id : undefined
     // The recorded copy describes a database that is no longer here — an import
     // replaced it, or the browser wiped the local store and the app rebuilt it.
@@ -463,10 +459,6 @@ export const createDbMirrorSchedule = ({
   const effect: AppEffect = {
     id: 'db-mirror.schedule',
     start: ({repo}) => {
-      // No picker, no feature: there is no way for the user to have chosen a
-      // folder, and nothing to re-check later in the same session.
-      if (!supported()) return
-
       // Reporting the tick's own outcome, not just the run's: `mirrorOnce`
       // records a failure to the store, but a failure to READ the store cannot
       // be recorded there at all, and that is the one that would otherwise

@@ -119,7 +119,7 @@ const clamp = (value: number, min: number, max: number, fallback: number): numbe
 
 /** Answers for a hand-edited or half-written record as well as for our own
  *  writes — this is the only place a stored value becomes a setting. */
-export const normalizeSettings = (value: unknown): DbMirrorSettings => {
+const normalizeSettings = (value: unknown): DbMirrorSettings => {
   const raw = (typeof value === 'object' && value !== null ? value : {}) as Partial<DbMirrorSettings>
   return {
     enabled: raw.enabled === true,

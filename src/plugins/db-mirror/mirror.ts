@@ -212,7 +212,7 @@ const prune = async (
     // No clamp for a non-finite count: NaN slices to 0, keeping the protected
     // copy alone, and Infinity keeps everything. `normalizeSettings` makes both
     // unreachable.
-    const keep = Math.max(0, Math.max(1, Math.trunc(keepCount)) - 1)
+    const keep = Math.max(0, Math.trunc(keepCount) - 1)
     const doomed = [
       ...copies.filter(isResidue),
       ...copies
@@ -328,10 +328,14 @@ export const runDbMirror = async ({
   const marker = await readChangeMarker(repo)
   const dbFilename = dbFilenameForUser(repo.user.id)
   const mine = governedBy(installId, incarnationGroup(incarnation))
-  /** Split the folder into what this run may prune and what it may not, with
-   *  the run's OWN copy left out of the second count — the user is told about
-   *  that one directly, and listing it as unmanaged reads as a stray file. */
-  const partition = (scanned: readonly MirrorCopy[], ownName: string) => {
+  /** Read the folder and split it into what this run may prune and what it may
+   *  not, with the run's OWN copy left out of the second count — the user is
+   *  told about that one directly, and listing it as unmanaged reads as a stray
+   *  file. The two overlap: an unreadable copy of ours is governed AND
+   *  unmanaged, because we may delete it in principle and cannot count it as a
+   *  backup in practice. */
+  const survey = async (ownName: string) => {
+    const scanned = await scanQuietly(directory, dbFilename)
     const others = scanned.filter(copy => copy.name !== ownName)
     return {
       governed: scanned.filter(mine),
@@ -350,7 +354,7 @@ export const runDbMirror = async ({
     // be there. Otherwise deleting the last mirror by hand, or changing folders
     // while a run was in flight, would leave a stored marker that skipped every
     // run for good while the status went on claiming success.
-    const {governed, unmanaged} = partition(await scanQuietly(directory, dbFilename), lastCopy.filename)
+    const {governed, unmanaged} = await survey(lastCopy.filename)
     const present = governed.some(
       copy => copy.name === lastCopy.filename && isIntactCopy(copy, lastCopy.bytes),
     )
@@ -395,7 +399,7 @@ export const runDbMirror = async ({
     )
   }
 
-  const {governed, unmanaged} = partition(await scanQuietly(directory, dbFilename), filename)
+  const {governed, unmanaged} = await survey(filename)
   return {
     kind: 'mirrored',
     filename,
