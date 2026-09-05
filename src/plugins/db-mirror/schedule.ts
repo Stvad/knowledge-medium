@@ -138,9 +138,10 @@ export const createDbMirrorSchedule = ({
   const recordStatus = async (
     userId: string,
     patch: Parameters<DbMirrorStore['recordStatus']>[1],
+    opts?: {ifDirectoryEpoch?: number},
   ): Promise<void> => {
     try {
-      await store.recordStatus(userId, patch)
+      await store.recordStatus(userId, patch, opts)
     } catch (err) {
       console.warn('[db-mirror] could not record the run status', err)
     }
@@ -158,6 +159,7 @@ export const createDbMirrorSchedule = ({
     at: number,
     kind: DbMirrorVerdict,
     patch: Parameters<DbMirrorStore['recordStatus']>[1] = {},
+    opts?: {ifDirectoryEpoch?: number},
   ): Promise<void> =>
     recordStatus(userId, {
       // A run that reached a verdict at all got past the permission check and
@@ -172,7 +174,7 @@ export const createDbMirrorSchedule = ({
       ...patch,
       lastOutcome: kind,
       lastOutcomeAt: at,
-    })
+    }, opts)
 
   /**
    * @param force take the copy even if a run already covered this interval.
@@ -193,12 +195,14 @@ export const createDbMirrorSchedule = ({
     // One reading for the whole run, so "checked" and "mirrored" can't come
     // out a millisecond apart on the same copy.
     //
-    // ACCEPTED, not guarded: changing the folder while a copy is in flight
-    // leaves this run recording the previous folder's filename against the new
-    // one. It costs a wrong line of status until the next run, and nothing
-    // more — the skip verifies the named copy is in the folder it is looking
-    // at, so a stale record makes the next run COPY rather than skip.
     const at = now()
+    // Captured with the folder, and handed back to every write about the copy.
+    // A run is not instantaneous: the user can pick a NEW folder while a
+    // multi-gigabyte copy into the old one is still going, and the result would
+    // then describe a folder nobody is looking at any more — while its fresh
+    // `lastCheckedAt` deferred the first copy into the new folder for a whole
+    // interval. The store rejects the write if the folder has moved on.
+    const ifDirectoryEpoch = state.directoryEpoch
     // Every path that turns mirroring on is a persisting write, and those mint
     // the install id — so reaching here without one means a half-written
     // record. Minting it now rather than carrying an "install unknown" state
@@ -338,7 +342,7 @@ export const createDbMirrorSchedule = ({
                   lastBytes: outcome.bytes,
                 }
               : {}),
-          })
+          }, {ifDirectoryEpoch})
           break
         case 'skipped-unchanged':
           // Reaching here means the permission held and the folder was read, so
@@ -348,14 +352,14 @@ export const createDbMirrorSchedule = ({
             lastCheckedAt: at,
             unmanagedCopies: outcome.unmanaged,
             permissionLost: false,
-          })
+          }, {ifDirectoryEpoch})
           break
         case 'permission-lost':
           await conclude(userId, at, 'permission-lost', {
             permissionLost: true,
             lastError: PERMISSION_LOST_MESSAGE,
             lastErrorAt: at,
-          })
+          }, {ifDirectoryEpoch})
           break
         default: {
           // Exhaustiveness: a new outcome kind is a compile error here rather

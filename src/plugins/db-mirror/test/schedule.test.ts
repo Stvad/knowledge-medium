@@ -804,6 +804,34 @@ describe('the mirror schedule', () => {
     await Promise.all([bobFirst, bobSecond])
   })
 
+  it('does not record a copy into a folder the user has since replaced', async () => {
+    // A run is not instantaneous. Picking a new folder mid-copy used to leave
+    // the old folder's result on the record with a fresh `lastCheckedAt`, so
+    // the cadence gate deferred the FIRST copy into the new folder for a whole
+    // interval — a week at the longest setting — while the chip said nothing
+    // and the dialog named a file that was not in the chosen folder.
+    await enable()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    mirror.mockImplementationOnce(async () => { await held; return MIRRORED })
+    const {job} = build()
+
+    const inFlight = job.body!()
+    await vi.waitFor(() => expect(mirror).toHaveBeenCalled())
+    await store.setDirectory(USER, {kind: 'directory', name: 'Elsewhere'} as never)
+    release()
+    await inFlight
+
+    const {status} = await store.load(USER)
+    expect(status.lastFilename).toBeUndefined()
+    expect(status.lastCheckedAt).toBeUndefined()
+
+    // And the next run is therefore free to copy into the new folder at once.
+    clock += 60_000
+    await job.body!()
+    expect(mirror).toHaveBeenCalledTimes(2)
+  })
+
   it('does not let a failed run defer the retry it just asked for', async () => {
     // `lastCheckedAt` is the cadence gate's input and means "a run COMPLETED".
     // A run that threw completed nothing; stamping it there made the 5-minute

@@ -100,6 +100,13 @@ export interface DbMirrorState {
    *  folder must not prune each other's copies, and this is what tells them
    *  apart. Undefined until something has been saved. */
   installId?: string
+  /** Bumped every time the folder changes. A run captures it and records its
+   *  result only if it still matches, because a run is not instantaneous: a
+   *  copy into the OLD folder that lands after the user has picked a new one
+   *  would otherwise write a fresh `lastCheckedAt`, and the device-wide cadence
+   *  gate would defer the first copy into the new folder for a whole interval —
+   *  a week at the longest setting — with nothing reporting it. */
+  directoryEpoch?: number
 }
 
 export const DB_MIRROR_DEFAULTS: DbMirrorSettings = {
@@ -185,7 +192,14 @@ export interface DbMirrorStore {
   load: (userId: string) => Promise<DbMirrorState>
   updateSettings: (userId: string, patch: Partial<DbMirrorSettings>) => Promise<DbMirrorState>
   setDirectory: (userId: string, directory: FileSystemDirectoryHandle | undefined) => Promise<DbMirrorState>
-  recordStatus: (userId: string, patch: DbMirrorStatus) => Promise<DbMirrorState>
+  /** `ifDirectoryEpoch` makes the write conditional on the folder not having
+   *  changed since the caller read it. Checked INSIDE the transaction, because
+   *  the whole point is that time passes between the two. */
+  recordStatus: (
+    userId: string,
+    patch: DbMirrorStatus,
+    opts?: {ifDirectoryEpoch?: number},
+  ) => Promise<DbMirrorState>
   /** The last loaded state, or null before the first load. Stable BETWEEN
    *  writes, which is what `useSyncExternalStore` needs; a re-read publishes a
    *  freshly built object even when storage has not changed, and at one read
@@ -242,7 +256,7 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
           | FileSystemDirectoryHandle
           | undefined
         const stored = record as
-          | {settings?: unknown; status?: unknown; installId?: unknown}
+          | {settings?: unknown; status?: unknown; installId?: unknown; directoryEpoch?: unknown}
           | undefined
         // Validated, not merely typed: the id goes into the copy's NAME, and
         // one that cannot appear there produces files the parser never matches
@@ -260,10 +274,16 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
           // one: the loop reads on every tick, and the id has to be the same
           // one the copies already in the folder were named for.
           installId: known ?? (persist ? mintInstallId() : undefined),
+          directoryEpoch: isFiniteNumber(stored?.directoryEpoch) ? stored.directoryEpoch : undefined,
         })
         if (persist) {
           store.put(
-            {settings: updated.settings, status: updated.status, installId: updated.installId},
+            {
+              settings: updated.settings,
+              status: updated.status,
+              installId: updated.installId,
+              directoryEpoch: updated.directoryEpoch,
+            },
             keys.settings,
           )
           if (updated.directory) store.put(updated.directory, keys.directory)
@@ -316,15 +336,17 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         ...state,
         settings: normalizeSettings({...state.settings, ...patch}),
       })),
-    recordStatus: (userId, patch) =>
-      update(userId, state => ({
-        ...state,
-        status: normalizeStatus({...state.status, ...patch}),
-      })),
+    recordStatus: (userId, patch, opts) =>
+      update(userId, state =>
+        opts?.ifDirectoryEpoch !== undefined && state.directoryEpoch !== opts.ifDirectoryEpoch
+          ? state
+          : {...state, status: normalizeStatus({...state.status, ...patch})},
+      ),
     setDirectory: (userId, directory) =>
       update(userId, state => ({
         ...state,
         directory,
+        directoryEpoch: (state.directoryEpoch ?? 0) + 1,
         // The whole status describes copies in the folder being replaced: its
         // change marker, its last filename, its failure. Carrying the MARKER
         // across in particular would have the next run report
