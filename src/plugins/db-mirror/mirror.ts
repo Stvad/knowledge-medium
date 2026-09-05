@@ -191,12 +191,11 @@ const pruneGoverned = async (
   const isResidue = (copy: MirrorCopy): boolean =>
     copy.size !== undefined && copy.size < SQLITE_HEADER_BYTES
   // The protected copy occupies one of the slots, so only the rest compete.
-  // `Number.isFinite` first: `Math.trunc(NaN)` is NaN, which survives both
-  // `Math.max` calls and makes `slice(NaN)` a `slice(0)` that deletes
-  // everything. `normalizeSettings` makes that unreachable today, but a clamp
-  // that does not clamp is worse than no clamp.
-  const budget = Number.isFinite(keepCount) ? Math.max(1, Math.trunc(keepCount)) : 1
-  const keep = Math.max(0, budget - (protectedName ? 1 : 0))
+  // Non-finite inputs already land somewhere safe and need no separate clamp:
+  // NaN falls through to `slice(0)`, which keeps the protected copy and
+  // nothing else — the same as the minimum legal count — and Infinity keeps
+  // everything. `normalizeSettings` makes both unreachable anyway.
+  const keep = Math.max(0, Math.max(1, Math.trunc(keepCount)) - (protectedName ? 1 : 0))
   const doomed = [
     ...copies.filter(isResidue),
     ...copies

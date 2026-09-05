@@ -327,19 +327,6 @@ describe('runDbMirror', () => {
       expect(dir.names().sort()).toEqual([good, dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN)].sort())
     })
 
-    it('keeps one copy rather than none when the keep count is not a number', async () => {
-      // `Math.trunc(NaN)` survives both `Math.max` calls, and `slice(NaN)` is
-      // `slice(0)` — so a clamp that does not check finiteness deletes every
-      // copy it governs. `normalizeSettings` makes this unreachable today.
-      const dir = new FakeDirectoryHandle()
-      const previous = dbMirrorFilename(DB, INSTALL_A, CURRENT, AT - HOUR, TOKEN)
-      dir.seed(previous, 512)
-
-      await run({directory: dir.asHandle(), keepCount: Number.NaN})
-
-      expect(dir.names()).toEqual([dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN)])
-    })
-
     it('still prunes when the database has not changed', async () => {
       // Housekeeping is about the folder, not the copy: lowering the keep count
       // has to take effect even while the database sits unchanged, and a

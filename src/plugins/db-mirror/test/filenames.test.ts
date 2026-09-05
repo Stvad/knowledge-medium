@@ -5,6 +5,7 @@ import {
   incarnationTagOf,
   parseDbMirrorFilename,
 } from '../filenames.js'
+import {fnv1a32Hex} from '@/utils/fnv1a.js'
 
 const DB = 'kmp-v6-alice.db'
 const AT = Date.UTC(2026, 8, 4, 13, 45, 2)
@@ -114,6 +115,18 @@ describe('parseDbMirrorFilename', () => {
     expect(
       parseDbMirrorFilename(db, `kmp-v6-XprX9Xa.b-mirror-2026-09-04T13-45-02Z-${INSTALL_A}-${TAG}-abc123.db`),
     ).toBeUndefined()
+  })
+
+  it('parses an incarnation whose hash is shorter than the group', () => {
+    // FNV-1a hex drops leading zeroes, so roughly one incarnation in sixteen
+    // hashes to fewer than eight characters. Without the zero-pad those copies
+    // do not match the group pattern at all — so the install that wrote them
+    // would stop recognising them, and nothing would ever prune them.
+    const short = '68'
+    expect(fnv1a32Hex(short).length).toBeLessThan(8)
+    expect(incarnationTagOf(short)).toHaveLength(8)
+    const name = dbMirrorFilename(DB, INSTALL_A, short, AT)
+    expect(parse(name)).toMatchObject({installId: INSTALL_A, incarnation: incarnationTagOf(short)})
   })
 
   it('does not mistake a longer database name for this one', () => {
