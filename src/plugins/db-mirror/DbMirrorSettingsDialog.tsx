@@ -376,10 +376,11 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
               <span className="font-medium">
                 Replace database with an uploaded SQLite file or recovery archive
               </span>{' '}
-              command and pick the file. Take the newest one whose name matches the copies listed
-              above — after a browser wipes its storage the folder can hold copies of more than one
-              database, and the newest file overall may be from the empty one the app rebuilt rather
-              than the one holding your work.
+              command and pick the file. After a browser clears its storage the folder can hold
+              copies of more than one database, and the newest file is not always the one you want:
+              each name carries the database it came from, so prefer the newest copy sharing a name
+              with the last one listed above — that is the one holding your work, not the empty
+              database the app rebuilt.
             </p>
           </div>
         )}
