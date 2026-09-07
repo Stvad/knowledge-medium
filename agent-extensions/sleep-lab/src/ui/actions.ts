@@ -92,6 +92,7 @@ export const startExperimentHereAction: ActionConfig<typeof ActionContextTypes.N
   id: START_EXPERIMENT_ACTION_ID,
   description: 'Sleep Lab: start an experiment here',
   context: ActionContextTypes.NORMAL_MODE,
+  defaultBinding: {keys: 'Control+Shift+e'},
   handler: async ({block}) => {
     const repo = block.repo
     const workspaceId = repo.activeWorkspaceId

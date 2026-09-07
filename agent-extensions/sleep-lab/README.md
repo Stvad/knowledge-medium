@@ -155,7 +155,7 @@ pnpm agent --profile <profile> enable-extension "Sleep Lab"
 Actions:
 
 - **Sleep Lab: open** — creates the page on first use and navigates.
-- **Sleep Lab: start an experiment here** — asks for the intervention,
+- **Sleep Lab: start an experiment here** (⌃⇧E) — asks for the intervention,
   dose, control, start date, period length, pairs and seed, then stamps
   the experiment block and its schedule where your cursor is — inside the
   protocol page. An experiment block typed by hand gets a **Stamp
