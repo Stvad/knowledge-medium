@@ -79,6 +79,22 @@ describe('parseHealthConnectPayload', () => {
     expect(sessions).toEqual([])
     expect(warnings[0]).toContain('could not determine start/end time')
   })
+
+  it('hands back every sample array time-sorted, even when the payload lists them out of order', () => {
+    const payload = {
+      sleep: [{start_time: '2024-03-11T00:00:00.000Z', end_time: '2024-03-11T08:00:00.000Z', stages: []}],
+      heart_rate: [
+        {bpm: 61, time: '2024-03-11T06:00:00.000Z'},
+        {bpm: 58, time: '2024-03-11T01:00:00.000Z'},
+        {bpm: 52, time: '2024-03-11T03:00:00.000Z'},
+      ],
+    }
+    const {sessions} = parseHealthConnectPayload(payload)
+    expect(sessions[0].heartRate.map(s => s.value)).toEqual([58, 52, 61])
+    for (let i = 1; i < sessions[0].heartRate.length; i++) {
+      expect(sessions[0].heartRate[i].at.getTime()).toBeGreaterThanOrEqual(sessions[0].heartRate[i - 1].at.getTime())
+    }
+  })
 })
 
 describe('detectImport / importSessions (health-connect)', () => {

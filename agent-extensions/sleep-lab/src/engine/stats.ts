@@ -1,4 +1,5 @@
-/** The comparison PROTOCOL.md §7 pre-registers: eligibility, means,
+/** The comparison a protocol page pre-registers (README, "Writing the
+ *  protocol page"): eligibility, means,
  *  bootstrap CI, a pair-respecting permutation p-value, and the paired
  *  (within-pair) estimate as a check.
  *
@@ -25,7 +26,7 @@ export const outcomeValue = (night: NightRecord, outcome: Outcome): number | und
 
 export interface EligibilityOptions {
   /** Drop the first night of each period. Off by default — the primary
-   *  analysis keeps transition nights (PROTOCOL.md §3). */
+   *  analysis keeps transition nights; dropping them is a sensitivity check. */
   excludeTransition?: boolean
   /** Drop nights whose logged alcohol count exceeds this. Nights with no
    *  alcohol logged are never dropped by this option alone. */
@@ -142,19 +143,21 @@ const permutationP = (
 ): number => {
   const labeled = eligible.map(n => ({value: outcomeValue(n, outcome) as number, arm: n.arm as Arm, pair: n.pair}))
   let count = 0
+  let valid = 0
   for (let i = 0; i < PERMUTATION_DRAWS; i++) {
     const arms = permuteLabels(labeled, rng)
     const interventionValues = labeled.filter((_, idx) => arms[idx] === 'intervention').map(l => l.value)
     const controlValues = labeled.filter((_, idx) => arms[idx] === 'control').map(l => l.value)
-    // A degenerate split (every night landed on one arm) can't be compared;
-    // it simply doesn't count toward either side of the ratio's numerator.
+    // A degenerate split (every night landed on one arm) can't be compared
+    // and is not a draw: it leaves the denominator as well as the numerator.
     if (interventionValues.length === 0 || controlValues.length === 0) continue
+    valid += 1
     const diff = mean(interventionValues) - mean(controlValues)
     if (Math.abs(diff) >= Math.abs(observedDifference)) count++
   }
   // Add-one smoothing: a p-value of exactly 0 would overstate the evidence
   // a finite number of permutations can provide.
-  return (count + 1) / (PERMUTATION_DRAWS + 1)
+  return (count + 1) / (valid + 1)
 }
 
 const pairedEstimate = (
@@ -238,7 +241,8 @@ export const compareAll = (
 ): Comparison[] =>
   ([...SESSION_MEASURES, ...NIGHT_RATINGS] as Outcome[]).map(outcome => compareArms(nights, outcome, population, options))
 
-/** The three outcomes PROTOCOL.md §6 pre-registers as primary. */
+/** The three primaries of the glycine protocol — the ones the dashboard
+ *  marks; every other outcome is shown as secondary. */
 export const PRIMARY_OUTCOMES: Outcome[] = ['onsetMinutes', 'deepMinutes', 'quality']
 
 export const OUTCOME_LABELS: Record<Outcome, string> = {

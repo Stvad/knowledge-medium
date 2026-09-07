@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 
 import {deriveMeasures, isMainSession, pickMain, wakeDateOf} from '../src/engine/derive'
-import type {ImportedSession, Stage} from '../src/engine/types'
+import type {ImportedSession, Sample, Stage} from '../src/engine/types'
 
 const at = (time: string): Date => new Date(`2026-02-10T${time}`)
 
@@ -50,6 +50,25 @@ describe('deriveMeasures', () => {
     const end = new Date('2026-02-11T07:00:00')
     const stages: Stage[] = [{kind: 'light', start, end}]
     expect(deriveMeasures(session({start, end, stages})).onsetMinutes).toBe(0)
+  })
+
+  it('lets a stated onsetMinutes win over a derived zero (first stage already sleep)', () => {
+    const start = at('23:00:00')
+    const end = new Date('2026-02-11T07:00:00')
+    const stages: Stage[] = [{kind: 'light', start, end}]
+    const s = session({start, end, stages, stated: {onsetMinutes: 12}})
+    expect(deriveMeasures(s).onsetMinutes).toBe(12)
+  })
+
+  it('keeps a derived non-zero onset over a stated one', () => {
+    const start = at('23:00:00')
+    const end = new Date('2026-02-11T07:00:00')
+    const stages: Stage[] = [
+      {kind: 'awake', start, end: at('23:15:00')}, // 15 min leading awake
+      {kind: 'light', start: at('23:15:00'), end},
+    ]
+    const s = session({start, end, stages, stated: {onsetMinutes: 999}})
+    expect(deriveMeasures(s).onsetMinutes).toBe(15)
   })
 
   it('sums a stage kind across multiple non-contiguous bouts', () => {
@@ -150,6 +169,25 @@ describe('deriveMeasures', () => {
     const measures = deriveMeasures(s)
     expect(measures.hrMean).toBe(55)
     expect(measures.hrMin).toBe(50)
+  })
+
+  it('finds the same in-window samples via binary search (sorted) or a linear scan (unsorted)', () => {
+    const start = at('23:00:00')
+    const end = new Date('2026-02-11T07:00:00') // an 8h = 480 min window
+    // One sample every 15 minutes, from 75 min before `start` to 600 min
+    // after it — well past both edges of the window on either side.
+    const many: Sample[] = []
+    for (let i = -5; i <= 40; i++) {
+      many.push({at: new Date(start.getTime() + i * 15 * 60_000), value: i})
+    }
+    // i=0 (`start`) through i=32 (exactly `end`, 480 min later) are the only
+    // ones inside the window: 33 samples, mean 16, min 0.
+    const sorted = session({start, end, heartRate: many})
+    const unsorted = session({start, end, heartRate: [...many].reverse()})
+    const sortedMeasures = deriveMeasures(sorted)
+    expect(sortedMeasures.hrMean).toBe(16)
+    expect(sortedMeasures.hrMin).toBe(0)
+    expect(deriveMeasures(unsorted)).toEqual(sortedMeasures)
   })
 
   it('omits a vitals measure entirely when no sample falls in the window', () => {

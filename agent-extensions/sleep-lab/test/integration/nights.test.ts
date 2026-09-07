@@ -15,7 +15,7 @@
  *  since a `repo.tx`-per-test integration file is exactly the shape that
  *  stretches under a fully-loaded gate.
  */
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 
 import {ChangeScope, propertyValue} from '@/data/api'
 import type {BlockData} from '@/data/api'
@@ -42,7 +42,7 @@ import {buildNights, trainedDays} from '../../src/km/records'
 import {
   SLEEPLAB_PROPS, SLEEPLAB_TYPES,
   armProp, controlProp, doseTextProp, experimentStatusProp, fromProp, indexProp, interventionProp,
-  pairProp, pairsProp, periodNightsProp, seedProp, startDateProp, toProp,
+  mainProp, pairProp, pairsProp, periodNightsProp, seedProp, startDateProp, toProp,
 } from '../../src/km/schema'
 import type {ImportedSession, Stage} from '../../src/engine/types'
 
@@ -171,7 +171,7 @@ describe('importSessions', {timeout: 30_000}, () => {
     const nap = sleepSession(local(2026, 2, 9, 13, 0), local(2026, 2, 9, 13, 40)) // 40min — too short to qualify
 
     const report = await importSessions(repo, WORKSPACE_ID, [sleep, nap])
-    expect(report).toEqual({nights: 1, created: 2, updated: 0})
+    expect(report).toEqual({nights: 1, created: 2, updated: 0, failed: []})
 
     const nightId = derivedBlockId(nightIdentity(WORKSPACE_ID, '2026-02-09'))
     const sessions = await liveChildren(nightId, SESSION_TYPE)
@@ -190,7 +190,7 @@ describe('importSessions', {timeout: 30_000}, () => {
   it('re-importing the same session reports `updated`, not `created`, with the block count unchanged', async () => {
     const end = local(2026, 2, 9, 7, 0)
     const first = await importSessions(repo, WORKSPACE_ID, [sleepSession(local(2026, 2, 9, 0, 41, 0), end)])
-    expect(first).toEqual({nights: 1, created: 1, updated: 0})
+    expect(first).toEqual({nights: 1, created: 1, updated: 0, failed: []})
 
     const nightId = derivedBlockId(nightIdentity(WORKSPACE_ID, '2026-02-09'))
     expect(await liveChildren(nightId, SESSION_TYPE)).toHaveLength(1)
@@ -198,12 +198,12 @@ describe('importSessions', {timeout: 30_000}, () => {
     // Session identity is keyed to the start MINUTE: 20s later is the same
     // minute, so this converges onto the same block and reports `updated`.
     const sameMinute = await importSessions(repo, WORKSPACE_ID, [sleepSession(local(2026, 2, 9, 0, 41, 20), end)])
-    expect(sameMinute).toEqual({nights: 1, created: 0, updated: 1})
+    expect(sameMinute).toEqual({nights: 1, created: 0, updated: 1, failed: []})
     expect(await liveChildren(nightId, SESSION_TYPE)).toHaveLength(1)
 
     // 2 minutes later is a DIFFERENT minute, so a second, distinct block.
     const nextMinute = await importSessions(repo, WORKSPACE_ID, [sleepSession(local(2026, 2, 9, 0, 43, 0), end)])
-    expect(nextMinute).toEqual({nights: 1, created: 1, updated: 0})
+    expect(nextMinute).toEqual({nights: 1, created: 1, updated: 0, failed: []})
     expect(await liveChildren(nightId, SESSION_TYPE)).toHaveLength(2)
   })
 
@@ -433,5 +433,227 @@ describe('buildNights — end to end against a real query', {timeout: 30_000}, (
     expect(n11.transition).toBe(true) // first (and only) night of period 2
     expect(n11.doseTaken).toBeUndefined() // control + 'nothing': no dose block at all
     expect(n11.trained).toBe(false)
+  })
+})
+
+// ──── Fixes pinned below: assignNightInTx's refs-even-when-preset behaviour,
+// settleMainInTx's hand-flip stability, the taken-seat re-mint-then-converge
+// path in upsertSessionInTx, importSessions' per-night failure isolation, and
+// the hasBlockType re-check inside writeRating/writeCovariates/markDoseTaken. ────
+
+describe('assignNightInTx — a pre-set arm still gets its refs', {timeout: 30_000}, () => {
+  it('keeps a hand-set arm (never relabels) but still writes the experiment/period refs, reporting "already"', async () => {
+    const pageId = await labPageId()
+    await seedExperiment(pageId, [
+      {index: 1, pair: 1, arm: 'intervention', from: '2026-02-09', to: '2026-02-11'},
+    ], {control: 'nothing'})
+
+    // Hand-set the arm BEFORE stampNight ever sees this night — as if the
+    // night were logged by hand, ahead of the schedule reaching it.
+    const nightId = await repo.tx(async tx => {
+      const typeSnapshot = repo.snapshotTypeRegistries()
+      const id = await getOrCreateNightInTx(repo, tx, {workspaceId: WORKSPACE_ID, pageId, date: '2026-02-09', typeSnapshot})
+      await tx.setProperty(id, armProp, 'control')
+      return id
+    }, {scope: ChangeScope.BlockDefault, description: 'hand-set arm before stamping'})
+
+    const result = await stampNight(repo, WORKSPACE_ID, '2026-02-09')
+    expect(result.assignment).toBe('already')
+    expect(result.arm).toBe('control') // the hand-set arm, never relabelled to the schedule's 'intervention'
+
+    const night = await repo.load(nightId)
+    expect(night?.properties[FIELD.arm]).toBe('control')
+    // The refs land regardless: without them the analysis, which reads
+    // nights by experiment, would never see this one.
+    expect(typeof night?.properties[FIELD.experiment]).toBe('string')
+    expect(typeof night?.properties[FIELD.period]).toBe('string')
+  })
+
+  it('leaves every property untouched when the night already has both the arm and the refs', async () => {
+    const pageId = await labPageId()
+    await seedExperiment(pageId, [
+      {index: 1, pair: 1, arm: 'intervention', from: '2026-02-09', to: '2026-02-11'},
+    ], {control: 'nothing'})
+
+    // First stamp assigns the arm and the refs normally.
+    const first = await stampNight(repo, WORKSPACE_ID, '2026-02-09')
+    expect(first.assignment).toBe('assigned')
+    const before = (await repo.load(first.nightId))?.properties
+
+    // Second stamp: both `armProp` and the refs are already strings, so
+    // `assignNightInTx`'s two `if`s and its `preset` branch all skip their
+    // writes — nothing should change.
+    const second = await stampNight(repo, WORKSPACE_ID, '2026-02-09')
+    expect(second.assignment).toBe('already')
+
+    const after = (await repo.load(first.nightId))?.properties
+    expect(after).toEqual(before)
+  })
+})
+
+describe('settleMainInTx — a hand-flipped main flag is a record, not a suggestion', {timeout: 30_000}, () => {
+  it('survives a re-import of the same two sessions', async () => {
+    const sleep = sleepSession(local(2026, 2, 9, 0, 0), local(2026, 2, 9, 7, 0))
+    const nap = sleepSession(local(2026, 2, 9, 13, 0), local(2026, 2, 9, 13, 40))
+
+    await importSessions(repo, WORKSPACE_ID, [sleep, nap])
+    const nightId = derivedBlockId(nightIdentity(WORKSPACE_ID, '2026-02-09'))
+    const before = await liveChildren(nightId, SESSION_TYPE)
+    const sleepBlock = before.find(s => s.content.startsWith('Sleep'))!
+    const napBlock = before.find(s => s.content.startsWith('Nap'))!
+    expect(sleepBlock.properties[FIELD.main]).toBe(true)
+    expect(napBlock.properties[FIELD.main]).toBe(false)
+
+    // Flip by hand — the README's answer to a night slept in another zone.
+    await repo.tx(async tx => {
+      await tx.setProperty(sleepBlock.id, mainProp, false)
+      await tx.setProperty(napBlock.id, mainProp, true)
+    }, {scope: ChangeScope.BlockDefault, description: 'hand-flip main'})
+
+    const again = await importSessions(repo, WORKSPACE_ID, [sleep, nap])
+    expect(again).toEqual({nights: 1, created: 0, updated: 2, failed: []})
+
+    const after = await liveChildren(nightId, SESSION_TYPE)
+    expect(after.find(s => s.id === napBlock.id)?.properties[FIELD.main]).toBe(true)
+    expect(after.find(s => s.id === sleepBlock.id)?.properties[FIELD.main]).toBe(false)
+  })
+
+  it('still settles once the long sleep arrives, even though the nap alone (imported first) qualified for nothing', async () => {
+    const nap = sleepSession(local(2026, 2, 9, 13, 0), local(2026, 2, 9, 13, 40))
+    const sleep = sleepSession(local(2026, 2, 9, 0, 0), local(2026, 2, 9, 7, 0))
+
+    const first = await importSessions(repo, WORKSPACE_ID, [nap])
+    expect(first).toEqual({nights: 1, created: 1, updated: 0, failed: []})
+    const nightId = derivedBlockId(nightIdentity(WORKSPACE_ID, '2026-02-09'))
+    const afterNap = await liveChildren(nightId, SESSION_TYPE)
+    expect(afterNap).toHaveLength(1)
+    // `pickMain` found no qualifying session (a 40-minute nap fails
+    // `isMainSession`'s duration clause), so nothing was flagged — this is
+    // NOT yet a hand-set flag, and the next import must still be free to settle it.
+    expect(afterNap[0].properties[FIELD.main]).toBe(false)
+
+    await importSessions(repo, WORKSPACE_ID, [sleep])
+
+    const afterSleep = await liveChildren(nightId, SESSION_TYPE)
+    expect(afterSleep).toHaveLength(2)
+    expect(afterSleep.find(s => s.content.startsWith('Sleep'))?.properties[FIELD.main]).toBe(true)
+    expect(afterSleep.find(s => s.content.startsWith('Nap'))?.properties[FIELD.main]).toBe(false)
+  })
+})
+
+describe('upsertSessionInTx — a taken seat re-mints, then a later import converges on the mint', {timeout: 30_000}, () => {
+  it('mints a replacement session once the derived-id block is deleted, then updates that mint on the next re-import', async () => {
+    const session = sleepSession(local(2026, 2, 9, 0, 0), local(2026, 2, 9, 7, 0))
+
+    const first = await importSessions(repo, WORKSPACE_ID, [session])
+    expect(first).toEqual({nights: 1, created: 1, updated: 0, failed: []})
+
+    const nightId = derivedBlockId(nightIdentity(WORKSPACE_ID, '2026-02-09'))
+    const originalId = (await liveChildren(nightId, SESSION_TYPE))[0].id
+
+    await repo.tx(tx => tx.run(deleteBlock, {id: originalId}), {scope: ChangeScope.BlockDefault, description: 'delete session'})
+    // `repo.load` filters soft-deleted rows out (`SELECT ... WHERE deleted = 0`),
+    // so a tombstone reads back as null, not as a row with `deleted: true`.
+    expect(await repo.load(originalId)).toBeNull()
+
+    // The derived-id seat is now a tombstone (`taken`, not adoptable), and no
+    // OTHER live session shares its start minute — so this mints a fresh,
+    // randomly-id'd replacement rather than reviving the deleted one.
+    const second = await importSessions(repo, WORKSPACE_ID, [session])
+    expect(second).toEqual({nights: 1, created: 1, updated: 0, failed: []})
+
+    const liveAfterSecond = await liveChildren(nightId, SESSION_TYPE)
+    expect(liveAfterSecond).toHaveLength(1)
+    const mintedId = liveAfterSecond[0].id
+    expect(mintedId).not.toBe(originalId)
+    expect(await repo.load(originalId)).toBeNull() // the tombstone stays deleted
+
+    // The seat is STILL taken (the tombstone never goes away), but this time
+    // the by-minute lookup finds the live mint from the second import and
+    // updates it in place — never a third block.
+    const third = await importSessions(repo, WORKSPACE_ID, [session])
+    expect(third).toEqual({nights: 1, created: 0, updated: 1, failed: []})
+
+    const liveAfterThird = await liveChildren(nightId, SESSION_TYPE)
+    expect(liveAfterThird).toHaveLength(1)
+    expect(liveAfterThird[0].id).toBe(mintedId)
+  })
+})
+
+describe('importSessions — a per-night failure is reported, not thrown', {timeout: 30_000}, () => {
+  it('continues past a failing night, reporting it in `failed` without losing the night that succeeded', async () => {
+    const goodDate = '2026-02-09'
+    const badDate = '2026-02-10'
+    const goodSession = sleepSession(local(2026, 2, 9, 0, 0), local(2026, 2, 9, 7, 0))
+    const badSession = sleepSession(local(2026, 2, 10, 0, 0), local(2026, 2, 10, 7, 0))
+
+    const realTx = repo.tx.bind(repo)
+    const failure = new Error('simulated write failure')
+    const txSpy = vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      if (opts?.description?.includes(`Import sleep for ${badDate}`)) throw failure
+      return realTx(fn, opts)
+    })
+
+    const report = await importSessions(repo, WORKSPACE_ID, [goodSession, badSession])
+    txSpy.mockRestore()
+
+    expect(report.nights).toBe(1)
+    expect(report.created).toBe(1)
+    expect(report.updated).toBe(0)
+    expect(report.failed).toEqual([{date: badDate, error: failure.message}])
+
+    const goodNightId = derivedBlockId(nightIdentity(WORKSPACE_ID, goodDate))
+    expect(await liveChildren(goodNightId, SESSION_TYPE)).toHaveLength(1)
+
+    // The bad night's transaction never committed — not even the night
+    // block itself, since `getOrCreateNightInTx` runs inside the same tx.
+    const badNightId = derivedBlockId(nightIdentity(WORKSPACE_ID, badDate))
+    const badNight = await repo.load(badNightId)
+    expect(badNight === null || badNight?.deleted).toBeTruthy()
+  })
+})
+
+describe('writeRating / writeCovariates / markDoseTaken — the type re-check inside the write', {timeout: 30_000}, () => {
+  it('writeRating and writeCovariates return "gone" and write nothing once the night loses its type, though the block still exists', async () => {
+    const {nightId} = await stampNight(repo, WORKSPACE_ID, '2026-02-09')
+
+    // Pins the `hasBlockType(night, NIGHT_TYPE)` re-check specifically: the
+    // block is untouched otherwise (not deleted, not moved), so if that one
+    // clause were removed, both calls below would go back to returning
+    // 'written' against a block that is no longer a night.
+    await repo.tx(tx => repo.removeTypeInTx(tx, nightId, NIGHT_TYPE),
+      {scope: ChangeScope.BlockDefault, description: 'strip the night type'})
+    const stripped = await repo.load(nightId)
+    expect(stripped?.deleted).toBeFalsy()
+    expect(hasBlockType(stripped!, NIGHT_TYPE)).toBe(false)
+
+    expect(await writeRating(repo, nightId, 'quality', 4)).toBe('gone')
+    expect(await writeCovariates(repo, nightId, {alcohol: 1})).toBe('gone')
+
+    const after = await repo.load(nightId)
+    expect(after?.deleted).toBeFalsy() // the block itself is untouched
+    expect(after?.properties[FIELD.quality]).toBeUndefined()
+    expect(after?.properties[FIELD.alcohol]).toBeUndefined()
+  })
+
+  it('markDoseTaken returns "gone" and writes nothing once the dose loses its type, though the block still exists', async () => {
+    const pageId = await labPageId()
+    await seedExperiment(pageId, [{index: 1, pair: 1, arm: 'intervention', from: '2026-02-09', to: '2026-02-11'}])
+    const {doseId} = await stampNight(repo, WORKSPACE_ID, '2026-02-09')
+    expect(doseId).toBeDefined()
+
+    // Same clause, on the dose's own guard (`hasBlockType(dose, DOSE_TYPE)`).
+    await repo.tx(tx => repo.removeTypeInTx(tx, doseId!, DOSE_TYPE),
+      {scope: ChangeScope.BlockDefault, description: 'strip the dose type'})
+    const stripped = await repo.load(doseId!)
+    expect(stripped?.deleted).toBeFalsy()
+    expect(hasBlockType(stripped!, DOSE_TYPE)).toBe(false)
+
+    expect(await markDoseTaken(repo, doseId!, 123)).toBe('gone')
+
+    const after = await repo.load(doseId!)
+    expect(after?.deleted).toBeFalsy()
+    expect(after?.properties[FIELD.todoStatus]).not.toBe('done')
+    expect(after?.properties[FIELD.takenAt]).toBeUndefined()
   })
 })

@@ -234,5 +234,11 @@ export const parseHealthConnectPayload = (json: unknown): {sessions: ImportedSes
     })
   })
 
+  // Time-sorted, so the derivation can binary-search each session's window.
+  for (const session of sessions) {
+    for (const samples of [session.heartRate, session.hrv, session.spo2, session.skinTemp, session.respRate]) {
+      samples.sort((a, b) => a.at.getTime() - b.at.getTime())
+    }
+  }
   return {sessions, warnings}
 }

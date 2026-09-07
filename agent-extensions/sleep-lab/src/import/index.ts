@@ -17,10 +17,10 @@ export type ImportDetection =
 /** Shown by the import dialog: which files to pick out of a Samsung Health
  *  "Download personal data" export folder. */
 export const SAMSUNG_SLEEP_FILE_HINT =
-  'From the Samsung Health "Download personal data" export, pick the sleep and sleep-stage CSVs — '
-  + 'files named like "com.samsung.shealth.sleep.<timestamp>.csv" and '
-  + '"com.samsung.health.sleep_stage.<timestamp>.csv". Add the heart-rate, oxygen-saturation, HRV, '
-  + 'skin-temperature and respiratory-rate CSVs from the same folder too, if you want those measures.'
+  'Pick the whole Samsung Health "Download personal data" folder (the one named samsunghealth_…): '
+  + 'the sleep and sleep-stage CSVs give the nights, the heart-rate, oxygen-saturation, skin-temperature '
+  + 'and respiratory-rate CSVs the vitals, and the jsons/…hrv files the HRV — the HRV CSV alone carries no values. '
+  + 'Or pick individual files, or paste a Health Connect webhook payload.'
 
 /** A single JSON file (or a single pasted blob whose text starts with `{`)
  *  is the Health Connect Webhook payload; any file named with the

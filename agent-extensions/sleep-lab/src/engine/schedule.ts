@@ -1,5 +1,5 @@
 /** The experiment schedule: pairs of periods, order randomized within each
- *  pair. See PROTOCOL.md §3.
+ *  pair.
  *
  *  Dates throughout are wake-date strings (`YYYY-MM-DD`); `../km/day.ts`
  *  owns the local-calendar arithmetic so this stays consistent with how the

@@ -1,5 +1,5 @@
 /** A watch session's stages and vitals → the per-night numbers stored on
- *  the session block. See PROTOCOL.md §5 and §8.
+ *  the session block.
  *
  *  All minute-valued measures are clipped to the session's own [start, end]
  *  window before summing, so a stage or sample that overruns the session
@@ -29,12 +29,44 @@ const clipStage = (stage: Stage, start: Date, end: Date): Stage | undefined => {
   return clippedEnd > clippedStart ? {kind: stage.kind, start: clippedStart, end: clippedEnd} : undefined
 }
 
-const inWindow = (sample: Sample, start: Date, end: Date): boolean => sample.at >= start && sample.at <= end
+/** First index whose sample is at or after `at`, on a time-sorted array. */
+const lowerBound = (samples: readonly Sample[], at: number): number => {
+  let lo = 0
+  let hi = samples.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (samples[mid].at.getTime() < at) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+const isSorted = (samples: readonly Sample[]): boolean => {
+  for (let i = 1; i < samples.length; i++) {
+    if (samples[i - 1].at.getTime() > samples[i].at.getTime()) return false
+  }
+  return true
+}
+
+/** The samples inside [start, end]. The importers hand over the whole
+ *  export's samples time-sorted (a night is a few hundred out of ~100k), so
+ *  the window is found by binary search; an unsorted array still works,
+ *  by scanning. */
+const inWindow = (samples: readonly Sample[], start: Date, end: Date): number[] => {
+  if (!isSorted(samples)) {
+    return samples.filter(s => s.at >= start && s.at <= end).map(s => s.value)
+  }
+  const values: number[] = []
+  for (let i = lowerBound(samples, start.getTime()); i < samples.length && samples[i].at <= end; i++) {
+    values.push(samples[i].value)
+  }
+  return values
+}
 
 /** Mean of the samples falling in [start, end], rounded to 1 decimal;
  *  `undefined` when none do — omitted rather than NaN. */
 const meanInWindow = (samples: readonly Sample[], start: Date, end: Date): number | undefined => {
-  const values = samples.filter(s => inWindow(s, start, end)).map(s => s.value)
+  const values = inWindow(samples, start, end)
   return values.length === 0 ? undefined : round1(mean(values))
 }
 
@@ -62,6 +94,12 @@ export const deriveMeasures = (session: ImportedSession): Partial<Record<Session
       onsetMinutes += stageMinutes(stages[onsetEnd])
     }
     result.onsetMinutes = round1(onsetMinutes)
+    // Samsung's session begins where its algorithm placed sleep onset, so
+    // its stage list never opens with an awake segment and the latency it
+    // measured is only in the stated number. A stated latency therefore
+    // wins over the stages' zero — the one measure where "stated" is the
+    // better source rather than the fallback.
+    if (onsetMinutes === 0 && stated?.onsetMinutes !== undefined) result.onsetMinutes = stated.onsetMinutes
 
     const sumKind = (kind: StageKind): number =>
       stages.filter(s => s.kind === kind).reduce((acc, s) => acc + stageMinutes(s), 0)
@@ -98,7 +136,7 @@ export const deriveMeasures = (session: ImportedSession): Partial<Record<Session
     if (inBedMinutes > 0) result.efficiency = round3(sleepMinutes / inBedMinutes)
   }
 
-  const hrValues = session.heartRate.filter(s => inWindow(s, start, end)).map(s => s.value)
+  const hrValues = inWindow(session.heartRate, start, end)
   if (hrValues.length > 0) {
     result.hrMean = round1(mean(hrValues))
     result.hrMin = round1(Math.min(...hrValues))

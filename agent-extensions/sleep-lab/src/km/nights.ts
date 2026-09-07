@@ -41,8 +41,11 @@ export const nightIdentity = (workspaceId: string, date: string): DerivedIdentit
 
 /** Keyed to the MINUTE, so the same session reported by two sources that
  *  disagree by seconds still lands on one block. */
+const startMinute = (start: Date): number => Math.floor(start.getTime() / 60_000)
+const sameMinute = (a: Date, b: Date): boolean => startMinute(a) === startMinute(b)
+
 export const sessionIdentity = (workspaceId: string, start: Date): DerivedIdentity =>
-  ({namespace: SESSION_NS, key: `${workspaceId}/${Math.floor(start.getTime() / 60_000)}`})
+  ({namespace: SESSION_NS, key: `${workspaceId}/${startMinute(start)}`})
 
 export const doseIdentity = (nightId: string): DerivedIdentity =>
   ({namespace: DOSE_NS, key: nightId})
@@ -104,10 +107,14 @@ export const assignNightInTx = async (
   assignment: {experimentId: string; periodId: string; arm: Arm},
 ): Promise<AssignOutcome> => {
   const night = await tx.get(nightId)
-  if (!night || night.deleted) return 'gone'
-  if (typeof night.properties[FIELD.arm] === 'string') return 'already'
-  await tx.setProperty(nightId, experimentProp, assignment.experimentId)
-  await tx.setProperty(nightId, periodProp, assignment.periodId)
+  if (!night || night.deleted || !hasBlockType(night, NIGHT_TYPE)) return 'gone'
+  const preset = typeof night.properties[FIELD.arm] === 'string'
+  // A hand-set arm stays, but the night still belongs to the experiment and
+  // period covering its date — without the refs the analysis, which reads
+  // nights by experiment, would never see it.
+  if (typeof night.properties[FIELD.experiment] !== 'string') await tx.setProperty(nightId, experimentProp, assignment.experimentId)
+  if (typeof night.properties[FIELD.period] !== 'string') await tx.setProperty(nightId, periodProp, assignment.periodId)
+  if (preset) return 'already'
   await tx.setProperty(nightId, armProp, assignment.arm)
   return 'assigned'
 }
@@ -147,7 +154,7 @@ export type WriteOutcome = 'written' | 'gone'
 export const markDoseTaken = (repo: Repo, doseId: string, now: number = Date.now()): Promise<WriteOutcome> =>
   repo.tx(async tx => {
     const dose = await tx.get(doseId)
-    if (!dose || dose.deleted) return 'gone'
+    if (!dose || dose.deleted || !hasBlockType(dose, DOSE_TYPE)) return 'gone'
     await tx.setProperty(doseId, todoStatusProp, 'done')
     await tx.setProperty(doseId, takenAtProp, now)
     return 'written'
@@ -160,8 +167,11 @@ export const writeRating = (
   repo: Repo, nightId: string, rating: NightRating, value: number | null,
 ): Promise<WriteOutcome> =>
   repo.tx(async tx => {
+    // The type is re-read here, not trusted from the render that showed the
+    // control: a peer can untag the block in between, and a rating on a
+    // block that is no longer a night is a stray property.
     const night = await tx.get(nightId)
-    if (!night || night.deleted) return 'gone'
+    if (!night || night.deleted || !hasBlockType(night, NIGHT_TYPE)) return 'gone'
     if (value === null) await tx.unsetProperty(nightId, RATING_PROPS[rating])
     else await tx.setProperty(nightId, RATING_PROPS[rating], value)
     return 'written'
@@ -178,7 +188,7 @@ export interface CovariatePatch {
 export const writeCovariates = (repo: Repo, nightId: string, patch: CovariatePatch): Promise<WriteOutcome> =>
   repo.tx(async tx => {
     const night = await tx.get(nightId)
-    if (!night || night.deleted) return 'gone'
+    if (!night || night.deleted || !hasBlockType(night, NIGHT_TYPE)) return 'gone'
     if (patch.alcohol === null) await tx.unsetProperty(nightId, alcoholProp)
     else if (patch.alcohol !== undefined) await tx.setProperty(nightId, alcoholProp, patch.alcohol)
     if (patch.caffeineLate !== undefined) await tx.setProperty(nightId, caffeineLateProp, patch.caffeineLate)
@@ -226,10 +236,20 @@ export const upsertSessionInTx = async (
   }
   const outcome = await getOrCreateTypedChild(repo, tx, {identity: sessionIdentity(workspaceId, session.start), ...spec})
   if (outcome.status === 'created') return {id: outcome.id, status: 'created'}
-  const id = outcome.status === 'adopted'
-    ? outcome.id
-    : await createTypedChild(repo, tx, spec)
-  if (outcome.status === 'taken') return {id, status: 'created'}
+  let id: string
+  if (outcome.status === 'adopted') {
+    id = outcome.id
+  } else {
+    // The seat holds a tombstone or a row of another workspace, and stays
+    // that way — so a previous import already minted a replacement here.
+    // Find it by the same identity (its start minute) before minting again,
+    // or every re-import adds a block.
+    const minted = (await tx.childrenOf(nightId, undefined, {hidePropertyChildren: true}))
+      .map(asSession)
+      .find(existing => existing !== null && sameMinute(existing.start, session.start))
+    if (!minted) return {id: await createTypedChild(repo, tx, spec), status: 'created'}
+    id = minted.id
+  }
   for (const assignment of [...identityProps, ...measureAssignments(measures)]) {
     await tx.setProperty(id, assignment.schema, assignment.value)
   }
@@ -237,11 +257,18 @@ export const upsertSessionInTx = async (
 }
 
 /** Decide which of the night's sessions is the night's sleep, and write
- *  only the flags that change. */
+ *  only the flags that change.
+ *
+ *  Only while NO session is flagged: once one is, the flag is the record —
+ *  set by an earlier settle or by hand (the README's answer to a night
+ *  slept in another zone) — and a re-import must not undo it. A night whose
+ *  main sleep arrives after its nap still gets settled, since nothing was
+ *  flagged yet. */
 export const settleMainInTx = async (tx: Tx, nightId: string): Promise<void> => {
   const sessions = (await tx.childrenOf(nightId, undefined, {hidePropertyChildren: true}))
     .map(asSession)
     .filter((session): session is NonNullable<typeof session> => session !== null)
+  if (sessions.some(session => session.main)) return
   const mainIndex = pickMain(sessions)
   for (const [index, session] of sessions.entries()) {
     const main = index === mainIndex
@@ -255,11 +282,14 @@ export interface ImportReport {
   nights: number
   created: number
   updated: number
+  /** Nights whose transaction threw; the rest of the import went ahead. */
+  failed: {date: string; error: string}[]
 }
 
 /** Every imported session onto its night, one transaction per night so a
  *  large export lands in bounded steps and a failure loses one night, not
- *  the batch. */
+ *  the batch — and is REPORTED, per night, rather than thrown over the
+ *  nights already written. */
 export const importSessions = async (
   repo: Repo,
   workspaceId: string,
@@ -271,18 +301,28 @@ export const importSessions = async (
     const date = wakeDateOf(session.end)
     byNight.set(date, [...(byNight.get(date) ?? []), session])
   }
-  const report: ImportReport = {nights: 0, created: 0, updated: 0}
+  const report: ImportReport = {nights: 0, created: 0, updated: 0, failed: []}
   for (const [date, own] of [...byNight.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
-    await repo.tx(async tx => {
-      const typeSnapshot = repo.snapshotTypeRegistries()
-      const nightId = await getOrCreateNightInTx(repo, tx, {workspaceId, pageId: page.id, date, typeSnapshot})
-      for (const session of own) {
-        const {status} = await upsertSessionInTx(repo, tx, {workspaceId, nightId, session, typeSnapshot})
-        report[status] += 1
-      }
-      await settleMainInTx(tx, nightId)
-    }, {scope: ChangeScope.BlockDefault, description: `Import sleep for ${date}`})
-    report.nights += 1
+    try {
+      // Counted after the transaction commits; a throw rolls the night back,
+      // and its sessions must not show up as written.
+      const counts = await repo.tx(async tx => {
+        const typeSnapshot = repo.snapshotTypeRegistries()
+        const nightId = await getOrCreateNightInTx(repo, tx, {workspaceId, pageId: page.id, date, typeSnapshot})
+        const counted = {created: 0, updated: 0}
+        for (const session of own) {
+          const {status} = await upsertSessionInTx(repo, tx, {workspaceId, nightId, session, typeSnapshot})
+          counted[status] += 1
+        }
+        await settleMainInTx(tx, nightId)
+        return counted
+      }, {scope: ChangeScope.BlockDefault, description: `Import sleep for ${date}`})
+      report.created += counts.created
+      report.updated += counts.updated
+      report.nights += 1
+    } catch (error) {
+      report.failed.push({date, error: error instanceof Error ? error.message : String(error)})
+    }
   }
   return report
 }

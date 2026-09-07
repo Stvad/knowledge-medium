@@ -1,39 +1,50 @@
 /** Samsung Health "Download personal data" export importer.
  *
- *  The column layout below comes from public write-ups of Samsung Health's
- *  CSV export, **not from a real export** — fit this against one before
- *  trusting a number from this path (see the README).
+ *  Fitted against a real export (Samsung Health 7.x, Galaxy Watch 8,
+ *  2026-09). What it contains, and what this reads:
  *
- *  Known shape: files are named like
- *  `com.samsung.shealth.sleep.<timestamp>.csv` (one row per sleep session)
- *  and `com.samsung.health.sleep_stage.<timestamp>.csv` (one row per stage
- *  segment). The first line of every such file is exporter metadata, not
- *  data — the real header is line 2 — and a data row may carry one more
- *  (empty) trailing field than the header declares. Column names appear
- *  either bare (`start_time`) or dotted-prefixed
- *  (`com.samsung.health.sleep.start_time`); this file matches by the suffix
- *  after the last `.`, so either spelling works.
+ *   - `com.samsung.shealth.sleep.<ts>.csv` — one row per sleep session.
+ *     Columns are dotted-prefixed (`com.samsung.health.sleep.start_time`)
+ *     or bare (`efficiency`, `sleep_score`, `sleep_latency` in ms,
+ *     `total_rem_duration` / `total_light_duration` in minutes,
+ *     `sleep_duration` in minutes); this file matches by the suffix after
+ *     the last `.`.
+ *   - `com.samsung.health.sleep_stage.<ts>.csv` — one row per stage segment,
+ *     `sleep_id` = the session's `datauuid`, `stage` 40001–40004.
+ *   - `com.samsung.shealth.tracker.heart_rate.<ts>.csv` — ~1/min rows.
+ *   - `com.samsung.shealth.tracker.oxygen_saturation.<ts>.csv`,
+ *     `com.samsung.health.skin_temperature.<ts>.csv`,
+ *     `com.samsung.health.respiratory_rate.<ts>.csv` — one row per NIGHT,
+ *     spanning the sleep, with the night's mean (`spo2`, `temperature` +
+ *     `baseline`, `average`). Read as one sample at the window's midpoint.
+ *   - `com.samsung.health.hrv.<ts>.csv` carries NO value: RMSSD lives only
+ *     in the per-row binning files under `jsons/com.samsung.health.hrv/`,
+ *     `[{start_time, end_time, sdnn, rmssd}]` with epoch-ms times. Pick the
+ *     export FOLDER (not just the CSVs) to get HRV.
  *
- *  Timestamps are naive local strings (`2024-03-10 06:41:00.000`) plus a
- *  separate `time_offset` column (`UTC-0700`, `UTC+0900`) giving the offset
- *  the string was written in — the true instant is the wall-clock value
- *  reinterpreted at that offset (ISO sense: UTC = local − offset), not the
- *  wall-clock value taken as UTC.
+ *  Every file's first line is exporter metadata; the header is line 2; a
+ *  data row may carry one more (empty) trailing field than the header.
+ *
+ *  Timestamps (`2026-09-07 08:59:00.000`) are UTC. The `time_offset` column
+ *  (`UTC-0700`) says which zone the user was in and is NOT applied to the
+ *  instant — the local calendar day is the reader's business (`day.ts`).
  */
 
 import type {ImportedSession, Sample, SessionMeasure, Stage, StageKind} from '../engine/types'
 import {rowsWithHeader} from './csv'
 
 export interface SamsungFile {
+  /** The path inside the export when a folder was picked, else the bare
+   *  file name — either way the `com.samsung.…` segments are what is read. */
   name: string
   text: string
 }
 
 // ──── field access on a header-mapped CSV row ────
 
-/** Collapse every column name in a row down to its suffix after the last
- *  `.`, so `com.samsung.health.sleep.start_time` and a bare `start_time`
- *  read the same way. */
+/** Collapse every column name down to its suffix after the last `.`, so
+ *  `com.samsung.health.sleep.start_time` and a bare `start_time` read the
+ *  same way. */
 const normalizeRow = (row: Record<string, string>): Record<string, string> => {
   const out: Record<string, string> = {}
   for (const [key, value] of Object.entries(row)) {
@@ -60,28 +71,22 @@ const num = (row: Record<string, string>, ...keys: string[]): number | undefined
 
 // ──── timestamps ────
 
-/** `UTC-0700` / `UTC+0900` → signed offset minutes, ISO sense (UTC = local −
- *  offset). */
-const parseOffsetMinutes = (raw: string | undefined): number => {
-  const m = raw !== undefined ? /^UTC([+-])(\d{2})(\d{2})$/.exec(raw.trim()) : null
-  if (!m) return 0
-  const sign = m[1] === '-' ? -1 : 1
-  return sign * (Number(m[2]) * 60 + Number(m[3]))
-}
-
 const WALL_CLOCK = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/
 
-const parseSamsungInstant = (raw: string | undefined, offsetRaw: string | undefined): Date | undefined => {
+/** A Samsung timestamp string, which is UTC. */
+export const parseSamsungInstant = (raw: string | undefined): Date | undefined => {
   if (raw === undefined) return undefined
   const m = WALL_CLOCK.exec(raw.trim())
   if (!m) return undefined
   const [, y, mo, d, h, mi, s, ms] = m
-  const wallAsUtcMs = Date.UTC(
+  return new Date(Date.UTC(
     Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s),
     ms ? Number(ms.padEnd(3, '0')) : 0,
-  )
-  return new Date(wallAsUtcMs - parseOffsetMinutes(offsetRaw) * 60_000)
+  ))
 }
+
+const midpoint = (start: Date, end: Date | undefined): Date =>
+  end === undefined || end <= start ? start : new Date((start.getTime() + end.getTime()) / 2)
 
 // ──── stage codes ────
 
@@ -93,45 +98,94 @@ const STAGE_CODE: Record<string, StageKind> = {
 }
 
 // ──── file recognition ────
+// By exact dotted SEGMENT, not substring: `recovery_heart_rate`,
+// `sleep_snoring`, `sleep_apnea` and `oxygen_saturation.raw` all sit beside
+// the files wanted here and must not be read as them.
 
-const segments = (name: string): string[] => name.split('.')
-const isSleepStageFile = (name: string): boolean => segments(name).includes('sleep_stage')
-const isSleepSessionFile = (name: string): boolean => !isSleepStageFile(name) && segments(name).includes('sleep')
-const isHeartRateFile = (name: string): boolean => name.includes('heart_rate') && !isSleepStageFile(name)
-const isOxygenFile = (name: string): boolean => name.includes('oxygen_saturation')
-const isHrvFile = (name: string): boolean => segments(name).includes('hrv')
-const isSkinTempFile = (name: string): boolean => name.includes('skin_temperature')
-const isRespRateFile = (name: string): boolean => name.includes('respiratory_rate')
+const segments = (name: string): string[] => name.split(/[./\\]/)
+const has = (name: string, segment: string): boolean => segments(name).includes(segment)
+const isCsv = (name: string): boolean => name.toLowerCase().endsWith('.csv')
+const isJson = (name: string): boolean => name.toLowerCase().endsWith('.json')
+
+const isSleepSessionFile = (name: string): boolean => isCsv(name) && has(name, 'sleep')
+const isSleepStageFile = (name: string): boolean => isCsv(name) && has(name, 'sleep_stage')
+const isHeartRateFile = (name: string): boolean => isCsv(name) && has(name, 'heart_rate')
+const isOxygenFile = (name: string): boolean => isCsv(name) && has(name, 'oxygen_saturation') && !has(name, 'raw')
+const isSkinTempFile = (name: string): boolean => isCsv(name) && has(name, 'skin_temperature')
+const isRespRateFile = (name: string): boolean => isCsv(name) && has(name, 'respiratory_rate')
+const isHrvCsv = (name: string): boolean => isCsv(name) && has(name, 'hrv')
+const isHrvJson = (name: string): boolean => isJson(name) && has(name, 'hrv')
 
 const rowsOf = (files: SamsungFile[]): Record<string, string>[] =>
   files.flatMap(f => rowsWithHeader(f.text, {skipFirstLine: true}).rows.map(normalizeRow))
 
-/** A recognized vitals file, read tolerantly: `start_time` (falling back to
- *  `time`) + one of `valueKeys`. Every readable row across every matching
- *  file becomes one sample — same "whole export's samples on every session"
- *  contract the Health Connect path uses (see `ImportedSession` in
- *  engine/types.ts). */
-const parseVitalFiles = (files: SamsungFile[], valueKeys: string[], label: string, warnings: string[]): Sample[] => {
+// ──── vitals ────
+
+interface VitalSpec {
+  label: string
+  /** Column candidates for the value, first present wins. */
+  valueKeys: string[]
+  /** Subtracted from the value when present — skin temperature is stored
+   *  absolute with the watch's own baseline beside it, and the measure the
+   *  protocol compares is the delta. A row with no baseline is skipped. */
+  baselineKey?: string
+}
+
+/** Every readable row across every matching file becomes one sample at the
+ *  midpoint of its window — same "whole export's samples on every session"
+ *  contract the Health Connect path uses (`ImportedSession`). */
+const parseVitalFiles = (files: SamsungFile[], spec: VitalSpec, warnings: string[]): Sample[] => {
   const samples: Sample[] = []
   for (const file of files) {
     const {rows} = rowsWithHeader(file.text, {skipFirstLine: true})
     if (rows.length === 0) {
-      warnings.push(`${label} file "${file.name}" has no data rows — skipped.`)
+      warnings.push(`${spec.label} file "${file.name}" has no data rows — skipped.`)
       continue
     }
-    rows.map(normalizeRow).forEach((row, i) => {
-      const offset = str(row, 'time_offset')
-      const at = parseSamsungInstant(str(row, 'start_time'), offset) ?? parseSamsungInstant(str(row, 'time'), offset)
-      const value = num(row, ...valueKeys)
-      if (!at || value === undefined) {
-        warnings.push(`${label} file "${file.name}" row ${i}: missing time or value — skipped.`)
-        return
+    let skipped = 0
+    for (const raw of rows) {
+      const row = normalizeRow(raw)
+      const start = parseSamsungInstant(str(row, 'start_time'))
+      const value = num(row, ...spec.valueKeys)
+      const baseline = spec.baselineKey === undefined ? 0 : num(row, spec.baselineKey)
+      if (!start || value === undefined || baseline === undefined) {
+        skipped += 1
+        continue
       }
-      samples.push({at, value})
-    })
+      samples.push({at: midpoint(start, parseSamsungInstant(str(row, 'end_time'))), value: value - baseline})
+    }
+    if (skipped > 0) warnings.push(`${spec.label} file "${file.name}": ${skipped} row(s) without a time, value or baseline — skipped.`)
   }
   return samples
 }
+
+/** RMSSD from the HRV binning files: a JSON array of windows with epoch-ms
+ *  times. Each window is one sample at its start. */
+const parseHrvJsonFiles = (files: SamsungFile[], warnings: string[]): Sample[] => {
+  const samples: Sample[] = []
+  for (const file of files) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(file.text)
+    } catch {
+      warnings.push(`hrv file "${file.name}" is not valid JSON — skipped.`)
+      continue
+    }
+    if (!Array.isArray(parsed)) {
+      warnings.push(`hrv file "${file.name}" is not a JSON array — skipped.`)
+      continue
+    }
+    for (const entry of parsed) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const {start_time, rmssd} = entry as Record<string, unknown>
+      if (typeof start_time !== 'number' || typeof rmssd !== 'number' || !Number.isFinite(rmssd)) continue
+      samples.push({at: new Date(start_time), value: rmssd})
+    }
+  }
+  return samples
+}
+
+// ──── sessions and stages ────
 
 interface RawSession {
   id?: string
@@ -141,22 +195,31 @@ interface RawSession {
 }
 
 const parseSessionRow = (row: Record<string, string>, warnings: string[]): RawSession | undefined => {
-  const offset = str(row, 'time_offset')
-  const start = parseSamsungInstant(str(row, 'start_time'), offset)
-  const end = parseSamsungInstant(str(row, 'end_time'), offset)
+  const start = parseSamsungInstant(str(row, 'start_time'))
+  const end = parseSamsungInstant(str(row, 'end_time'))
   if (!start || !end) {
     warnings.push('sleep session row: missing start_time/end_time — skipped.')
     return undefined
   }
+  // Samsung's own numbers, used by the derivation only where the stages
+  // cannot answer (`deriveMeasures`); the score has no other source.
   const stated: Partial<Record<SessionMeasure, number>> = {}
   const score = num(row, 'sleep_score')
   if (score !== undefined) stated.score = score
-  // Samsung states efficiency as a percent; the engine's `efficiency` is 0–1
-  // (see FIELD.efficiency in km/fields.ts).
+  // Percent here, 0–1 in the engine (FIELD.efficiency).
   const efficiencyPct = num(row, 'efficiency')
   if (efficiencyPct !== undefined) stated.efficiency = efficiencyPct / 100
+  // `sleep_duration` is the whole in-bed span (it equals end − start on
+  // every real row), not the time asleep — so it states `inBedMinutes`.
   const durationMin = num(row, 'sleep_duration')
-  if (durationMin !== undefined) stated.sleepMinutes = durationMin
+  if (durationMin !== undefined) stated.inBedMinutes = durationMin
+  // Milliseconds in the export.
+  const latencyMs = num(row, 'sleep_latency')
+  if (latencyMs !== undefined && latencyMs >= 0) stated.onsetMinutes = Math.round(latencyMs / 60_000 * 10) / 10
+  const rem = num(row, 'total_rem_duration')
+  if (rem !== undefined) stated.remMinutes = rem
+  const light = num(row, 'total_light_duration')
+  if (light !== undefined) stated.lightMinutes = light
   return {id: str(row, 'datauuid'), start, end, stated}
 }
 
@@ -166,9 +229,8 @@ interface RawStage {
 }
 
 const parseStageRow = (row: Record<string, string>, warnings: string[]): RawStage | undefined => {
-  const offset = str(row, 'time_offset')
-  const start = parseSamsungInstant(str(row, 'start_time'), offset)
-  const end = parseSamsungInstant(str(row, 'end_time'), offset)
+  const start = parseSamsungInstant(str(row, 'start_time'))
+  const end = parseSamsungInstant(str(row, 'end_time'))
   if (!start || !end) {
     warnings.push('sleep stage row: missing start_time/end_time — skipped.')
     return undefined
@@ -194,40 +256,35 @@ export const parseSamsungExport = (files: SamsungFile[]): {sessions: ImportedSes
     .map(row => parseSessionRow(row, warnings))
     .filter((s): s is RawSession => s !== undefined)
 
-  const stageFiles = files.filter(f => isSleepStageFile(f.name))
-  const parsedStages = rowsOf(stageFiles)
+  const parsedStages = rowsOf(files.filter(f => isSleepStageFile(f.name)))
     .map(row => parseStageRow(row, warnings))
     .filter((s): s is RawStage => s !== undefined)
 
   const stagesFor = new Map<RawSession, Stage[]>(parsedSessions.map(s => [s, []]))
   const sessionById = new Map(parsedSessions.filter((s): s is RawSession & {id: string} => s.id !== undefined).map(s => [s.id, s]))
+  let orphanStages = 0
   for (const {stage, sleepId} of parsedStages) {
-    if (sleepId !== undefined) {
-      const owner = sessionById.get(sleepId)
-      if (owner) {
-        stagesFor.get(owner)!.push(stage)
-      } else {
-        warnings.push(`sleep stage row: sleep_id "${sleepId}" does not match any imported sleep session — skipped.`)
-      }
-      continue
-    }
-    // No sleep_id on this row: fall back to interval containment.
-    const owner = parsedSessions.find(s => stage.start >= s.start && stage.end <= s.end)
-    if (owner) {
-      stagesFor.get(owner)!.push(stage)
-    } else {
-      warnings.push(
-        `sleep stage row ${stage.start.toISOString()}–${stage.end.toISOString()}: `
-        + 'no sleep_id and no enclosing sleep session — skipped.',
-      )
-    }
+    const owner = sleepId !== undefined
+      ? sessionById.get(sleepId)
+      // No sleep_id on this row: fall back to interval containment.
+      : parsedSessions.find(s => stage.start >= s.start && stage.end <= s.end)
+    if (owner) stagesFor.get(owner)!.push(stage)
+    else orphanStages += 1
+  }
+  if (orphanStages > 0) warnings.push(`${orphanStages} sleep stage row(s) belong to no imported session — skipped.`)
+
+  const heartRate = parseVitalFiles(files.filter(f => isHeartRateFile(f.name)), {label: 'heart-rate', valueKeys: ['heart_rate', 'bpm']}, warnings)
+  const spo2 = parseVitalFiles(files.filter(f => isOxygenFile(f.name)), {label: 'oxygen-saturation', valueKeys: ['spo2', 'percentage']}, warnings)
+  const skinTemp = parseVitalFiles(files.filter(f => isSkinTempFile(f.name)), {label: 'skin-temperature', valueKeys: ['temperature'], baselineKey: 'baseline'}, warnings)
+  const respRate = parseVitalFiles(files.filter(f => isRespRateFile(f.name)), {label: 'respiratory-rate', valueKeys: ['average', 'respiratory_rate', 'rate']}, warnings)
+  const hrvJson = files.filter(f => isHrvJson(f.name))
+  const hrv = parseHrvJsonFiles(hrvJson, warnings)
+  if (hrvJson.length === 0 && files.some(f => isHrvCsv(f.name))) {
+    warnings.push('The HRV CSV carries no values — pick the whole export folder so its jsons/com.samsung.health.hrv files come along.')
   }
 
-  const heartRate = parseVitalFiles(files.filter(f => isHeartRateFile(f.name)), ['heart_rate', 'bpm'], 'heart-rate', warnings)
-  const spo2 = parseVitalFiles(files.filter(f => isOxygenFile(f.name)), ['spo2', 'percentage'], 'oxygen-saturation', warnings)
-  const hrv = parseVitalFiles(files.filter(f => isHrvFile(f.name)), ['rmssd', 'value'], 'hrv', warnings)
-  const skinTemp = parseVitalFiles(files.filter(f => isSkinTempFile(f.name)), ['delta', 'temperature'], 'skin-temperature', warnings)
-  const respRate = parseVitalFiles(files.filter(f => isRespRateFile(f.name)), ['respiratory_rate', 'rate', 'value'], 'respiratory-rate', warnings)
+  const byTime = (a: Sample, b: Sample): number => a.at.getTime() - b.at.getTime()
+  for (const samples of [heartRate, spo2, skinTemp, respRate, hrv]) samples.sort(byTime)
 
   const sessions: ImportedSession[] = parsedSessions.map(session => ({
     source: 'samsung-export',

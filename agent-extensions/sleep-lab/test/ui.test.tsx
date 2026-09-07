@@ -46,7 +46,10 @@ afterEach(() => cleanup())
 const fakeBlock = (id: string) => ({id, repo: {isReadOnly: false}}) as never
 const Inner = () => <div data-testid="inner"/>
 
-const nightRow = (id: string, date: string, arm: 'intervention' | 'control', quality?: number) => ({
+const nightRow = (
+  id: string, date: string, arm: 'intervention' | 'control', quality?: number,
+  extra: {experimentId?: string; alcohol?: number} = {},
+) => ({
   id,
   parentId: 'page-1',
   orderKey: id,
@@ -55,6 +58,25 @@ const nightRow = (id: string, date: string, arm: 'intervention' | 'control', qua
     [FIELD.date]: `${date}T12:00:00.000Z`,
     [FIELD.arm]: arm,
     ...(quality !== undefined ? {[FIELD.quality]: quality} : {}),
+    ...(extra.experimentId !== undefined ? {[FIELD.experiment]: extra.experimentId} : {}),
+    ...(extra.alcohol !== undefined ? {[FIELD.alcohol]: extra.alcohol} : {}),
+  },
+})
+
+const experimentRow = (id: string, intervention: string, status: 'planned' | 'running' | 'done', startDate: string) => ({
+  id,
+  parentId: 'page-1',
+  orderKey: id,
+  properties: {
+    types: [EXPERIMENT_TYPE],
+    [FIELD.intervention]: intervention,
+    [FIELD.doseText]: `${intervention} dose`,
+    [FIELD.control]: 'nothing',
+    [FIELD.startDate]: `${startDate}T12:00:00.000Z`,
+    [FIELD.periodNights]: 3,
+    [FIELD.pairs]: 1,
+    [FIELD.seed]: 1,
+    [FIELD.experimentStatus]: status,
   },
 })
 
@@ -95,22 +117,6 @@ describe('LabPageContent', () => {
     const period1: [string, string] = [addDays(tonight, -5), addDays(tonight, -3)]
     const period2: [string, string] = [addDays(tonight, -2), tonight]
 
-    const experimentRow = {
-      id: 'exp-1',
-      parentId: 'page-1',
-      orderKey: 'a0',
-      properties: {
-        types: [EXPERIMENT_TYPE],
-        [FIELD.intervention]: 'glycine',
-        [FIELD.doseText]: '3 g glycine',
-        [FIELD.control]: 'nothing',
-        [FIELD.startDate]: `${period1[0]}T12:00:00.000Z`,
-        [FIELD.periodNights]: 3,
-        [FIELD.pairs]: 1,
-        [FIELD.seed]: 1,
-        [FIELD.experimentStatus]: 'running',
-      },
-    }
     const periodRow = (id: string, index: number, arm: 'intervention' | 'control', from: string, to: string) => ({
       id,
       parentId: 'exp-1',
@@ -126,13 +132,15 @@ describe('LabPageContent', () => {
     })
 
     publishLayoffs([
-      experimentRow,
+      experimentRow('exp-1', 'glycine', 'running', period1[0]),
       periodRow('period-1', 1, 'control', period1[0], period1[1]),
       periodRow('period-2', 2, 'intervention', period2[0], period2[1]),
-      nightRow('night-1', addDays(tonight, -5), 'control', 3),
-      nightRow('night-2', addDays(tonight, -4), 'control', 3),
-      nightRow('night-3', addDays(tonight, -2), 'intervention', 4),
-      nightRow('night-4', addDays(tonight, -1), 'intervention', 4),
+      // Every night points at the (one) running experiment: the analysis
+      // table now reads one experiment's nights, never the whole workspace.
+      nightRow('night-1', addDays(tonight, -5), 'control', 3, {experimentId: 'exp-1'}),
+      nightRow('night-2', addDays(tonight, -4), 'control', 3, {experimentId: 'exp-1'}),
+      nightRow('night-3', addDays(tonight, -2), 'intervention', 4, {experimentId: 'exp-1'}),
+      nightRow('night-4', addDays(tonight, -1), 'intervention', 4, {experimentId: 'exp-1'}),
     ])
 
     render(<LabPageContent block={fakeBlock('page-1')}/>)
@@ -155,6 +163,51 @@ describe('LabPageContent', () => {
 
     expect(screen.getByText('No experiment is running. Start one to begin the schedule.')).toBeTruthy()
     expect(screen.getAllByText('No nights logged yet.')).toHaveLength(2)
+  })
+
+  it('restricts the analysis to one experiment (the running one by default), and the picker switches it', () => {
+    // exp-1 is running but older; exp-2 is newer but done — the default must
+    // pick the RUNNING one, not the newest, so the two disagree on purpose.
+    publishLayoffs([
+      experimentRow('exp-1', 'glycine', 'running', '2026-01-01'),
+      experimentRow('exp-2', 'melatonin', 'done', '2026-02-01'),
+      nightRow('night-1', '2026-01-05', 'intervention', 5, {experimentId: 'exp-1'}),
+      nightRow('night-2', '2026-01-06', 'control', 1, {experimentId: 'exp-1'}),
+      nightRow('night-3', '2026-02-05', 'intervention', 4, {experimentId: 'exp-2'}),
+      nightRow('night-4', '2026-02-06', 'control', 2, {experimentId: 'exp-2'}),
+    ])
+
+    render(<LabPageContent block={fakeBlock('page-1')}/>)
+
+    const qualityRow = () => screen.getByText(/Sleep quality/).closest('tr')!
+    expect(qualityRow().textContent).toContain('1/1')
+    expect(qualityRow().textContent).toContain('5.00')
+    expect(qualityRow().textContent).toContain('1.00')
+
+    fireEvent.click(screen.getByRole('button', {name: /melatonin/}))
+
+    expect(qualityRow().textContent).toContain('4.00')
+    expect(qualityRow().textContent).toContain('2.00')
+  })
+
+  it('excludes nights with 2+ drinks from the comparison once the alcohol sensitivity toggle is on', () => {
+    publishLayoffs([
+      experimentRow('exp-1', 'glycine', 'running', '2026-01-01'),
+      nightRow('night-1', '2026-01-05', 'intervention', 4, {experimentId: 'exp-1', alcohol: 2}),
+      nightRow('night-2', '2026-01-06', 'intervention', 4, {experimentId: 'exp-1'}),
+      nightRow('night-3', '2026-01-07', 'control', 2, {experimentId: 'exp-1'}),
+    ])
+
+    render(<LabPageContent block={fakeBlock('page-1')}/>)
+
+    const qualityRow = () => screen.getByText(/Sleep quality/).closest('tr')!
+    // Before the toggle: both intervention nights count, alcohol or not.
+    expect(qualityRow().textContent).toContain('2/1')
+
+    fireEvent.click(screen.getByRole('checkbox', {name: /2\+ drinks/}))
+
+    // After: the 2-drink night drops out; the night with no alcohol logged stays.
+    expect(qualityRow().textContent).toContain('1/1')
   })
 })
 

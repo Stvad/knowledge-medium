@@ -106,15 +106,21 @@ their sleep numbers, which is the record-grain test.
   sessions with stages, plus `heart_rate`, `heart_rate_variability`,
   `oxygen_saturation`, `skin_temperature`, `respiratory_rate` samples,
   joined to a session by time window.
-- `samsungExport.ts` — the `com.samsung.shealth.sleep.*.csv` +
-  `com.samsung.health.sleep_stage.*.csv` files from Samsung Health's
-  "Download personal data" (first line is metadata, timestamps are UTC
-  with a separate offset column, stage codes 40001–40004).
+- `samsungExport.ts` — Samsung Health's "Download personal data" folder,
+  fitted against a real export: the sleep and sleep-stage CSVs (first line
+  is metadata, timestamps are UTC, stage codes 40001–40004, stages join
+  the session by `sleep_id`), the per-night oxygen, skin-temperature and
+  respiratory-rate CSVs, the per-minute heart-rate CSV, and HRV from the
+  `jsons/com.samsung.health.hrv/` binning files, which is the only place
+  the export keeps it — so the import dialog takes the whole folder.
+  Samsung's own onset latency is used over the stages (its session starts
+  at detected onset, so the stages never show the latency), and its
+  `sleep_duration` is read as time in bed, which is what it is.
 
-Both produce the same `ImportedSession` shape; `src/km/sessions.ts` turns
-that into blocks. The column names the Samsung parser expects come from
-public write-ups, not from a real export — fit it against one before
-trusting a number from that path.
+Both produce the same `ImportedSession` shape; `src/km/nights.ts` turns
+that into blocks. Onset latency is measured differently by the two paths
+(Samsung's algorithm vs. leading awake stages from Health Connect), so
+compare nights within one path, not across them.
 
 [hcw]: https://github.com/mcnaveen/health-connect-webhook
 

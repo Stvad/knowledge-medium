@@ -26,7 +26,13 @@ interface Outcome {
 
 const readFiles = async (fileList: FileList | null): Promise<ImportFile[]> => {
   if (!fileList) return []
-  return Promise.all(Array.from(fileList).map(async file => ({name: file.name, text: await file.text()})))
+  // The path inside a picked folder, when there is one: the Samsung export's
+  // HRV lives in `jsons/com.samsung.health.hrv/…`, and the parser tells the
+  // files apart by their dotted path segments.
+  return Promise.all(Array.from(fileList).map(async file => ({
+    name: file.webkitRelativePath || file.name,
+    text: await file.text(),
+  })))
 }
 
 export const ImportDialog = ({repo, workspaceId, resolve, cancel}: DialogContextProps<void> & ImportDialogProps) => {
@@ -66,7 +72,20 @@ export const ImportDialog = ({repo, workspaceId, resolve, cancel}: DialogContext
       </div>
 
       <label className="flex flex-col gap-1 text-sm">
-        Files
+        Export folder (Samsung Health)
+        {/* A folder, so the HRV binning JSONs come with the CSVs. The attribute
+            is non-standard and not in React's typings, hence the spread. */}
+        <input
+          type="file"
+          multiple
+          className="text-sm"
+          {...{webkitdirectory: ''}}
+          onChange={event => setFileList(event.currentTarget.files)}
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        Or individual files
         <input
           type="file"
           multiple
@@ -93,11 +112,16 @@ export const ImportDialog = ({repo, workspaceId, resolve, cancel}: DialogContext
             <span key={warning} className="text-amber-700 dark:text-amber-400">{warning}</span>
           ))}
           {outcome.report ? (
-            <span>
-              {`${outcome.sessionCount} session${outcome.sessionCount === 1 ? '' : 's'} across `
-                + `${outcome.report.nights} night${outcome.report.nights === 1 ? '' : 's'} — `
-                + `${outcome.report.created} created, ${outcome.report.updated} updated.`}
-            </span>
+            <>
+              <span>
+                {`${outcome.sessionCount} session${outcome.sessionCount === 1 ? '' : 's'} across `
+                  + `${outcome.report.nights} night${outcome.report.nights === 1 ? '' : 's'} — `
+                  + `${outcome.report.created} created, ${outcome.report.updated} updated.`}
+              </span>
+              {outcome.report.failed.map(failure => (
+                <span key={failure.date} className="text-destructive">{`${failure.date}: ${failure.error}`}</span>
+              ))}
+            </>
           ) : outcome.sessionCount === 0 && !outcome.error ? (
             <span>No sessions found in what was given.</span>
           ) : null}

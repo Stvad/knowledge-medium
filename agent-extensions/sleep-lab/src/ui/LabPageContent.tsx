@@ -33,6 +33,8 @@ const formatValue = (outcome: Outcome, value: number | undefined): string => {
   return value.toFixed(2)
 }
 
+const experimentLabel = (experiment: ExperimentRecord): string => `${experiment.intervention} · ${experiment.startDate}`
+
 const ExperimentCard = ({experiment, nights, tonight}: {
   experiment: ExperimentRecord
   nights: readonly NightRecord[]
@@ -65,14 +67,21 @@ const POPULATION_OPTIONS: readonly {value: Population; label: string}[] = [
   {value: 'per-protocol', label: 'Per protocol'},
 ]
 
+/** A night with 2+ logged drinks is dropped by this cap; a night with none
+ *  logged is never touched by it (see `EligibilityOptions.maxAlcohol`). */
+const ALCOHOL_SENSITIVITY_CAP = 1
+
 const AnalysisTable = ({nights}: {nights: readonly NightRecord[]}) => {
   const [population, setPopulation] = useState<Population>('assigned')
-  const [sensitivity, setSensitivity] = useState(false)
+  const [excludeTransition, setExcludeTransition] = useState(false)
+  const [excludeAlcohol, setExcludeAlcohol] = useState(false)
 
   if (nights.length === 0) return <p className="text-sm text-muted-foreground">No nights logged yet.</p>
 
-  const rows = compareAll(nights, population, {excludeTransition: sensitivity})
-    .filter(c => c.nIntervention >= 1 || c.nControl >= 1)
+  const rows = compareAll(nights, population, {
+    excludeTransition,
+    ...(excludeAlcohol ? {maxAlcohol: ALCOHOL_SENSITIVITY_CAP} : {}),
+  }).filter(c => c.nIntervention >= 1 || c.nControl >= 1)
   const byOutcome = new Map(rows.map(c => [c.outcome, c] as const))
   const primary = PRIMARY_OUTCOMES
     .map(outcome => byOutcome.get(outcome))
@@ -85,8 +94,18 @@ const AnalysisTable = ({nights}: {nights: readonly NightRecord[]}) => {
       <div className="flex flex-wrap items-center gap-4 text-xs">
         <Segmented options={POPULATION_OPTIONS} value={population} onChange={setPopulation}/>
         <label className="flex items-center gap-1.5">
-          <input type="checkbox" checked={sensitivity} onChange={event => setSensitivity(event.currentTarget.checked)}/>
+          <input
+            type="checkbox" checked={excludeTransition}
+            onChange={event => setExcludeTransition(event.currentTarget.checked)}
+          />
           Sensitivity: exclude transition nights
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox" checked={excludeAlcohol}
+            onChange={event => setExcludeAlcohol(event.currentTarget.checked)}
+          />
+          Sensitivity: exclude nights with 2+ drinks
         </label>
       </div>
       {ordered.length === 0 ? (
@@ -163,8 +182,21 @@ export const LabPageContent = ({block}: BlockRendererProps) => {
   const workspaceId = useWorkspaceId(block)
   const {nights, experiments} = useLabRows(workspaceId)
   const [busy, setBusy] = useState(false)
+  const [selectedExperimentId, setSelectedExperimentId] = useState<string | undefined>(undefined)
   const running = runningExperiment(experiments)
   const tonightDate = tonightWakeDate()
+  // Nights read by the analysis are one experiment's: the running one by
+  // default, else the newest (`experiments` is newest-first — see
+  // `buildExperiments`). A stale selection (an experiment that no longer
+  // exists in the query result) falls back the same way, with no effect
+  // needed to reconcile it.
+  const defaultExperiment = running ?? experiments[0]
+  const selectedExperiment = (
+    selectedExperimentId !== undefined ? experiments.find(experiment => experiment.id === selectedExperimentId) : undefined
+  ) ?? defaultExperiment
+  const analysisNights = selectedExperiment
+    ? nights.filter(night => night.experimentId === selectedExperiment.id)
+    : []
 
   const startExperiment = async () => {
     const spec = await openDialog(StartExperimentDialog)
@@ -245,7 +277,16 @@ export const LabPageContent = ({block}: BlockRendererProps) => {
 
       <section>
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Analysis</h2>
-        <AnalysisTable nights={nights}/>
+        {experiments.length > 1 && selectedExperiment ? (
+          <div className="mb-2">
+            <Segmented
+              options={experiments.map(experiment => ({value: experiment.id, label: experimentLabel(experiment)}))}
+              value={selectedExperiment.id}
+              onChange={setSelectedExperimentId}
+            />
+          </div>
+        ) : null}
+        <AnalysisTable nights={analysisNights}/>
       </section>
 
       <section>
