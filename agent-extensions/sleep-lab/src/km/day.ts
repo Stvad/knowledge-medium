@@ -51,3 +51,16 @@ export const addDays = (day: string, n: number): string => {
   date.setDate(date.getDate() + n)
   return dateToDay(date)
 }
+
+/** Nights are keyed by the morning they END, and a day has two of them in
+ *  play: the one that ended this morning and the one ahead. Before the wake
+ *  window opens you are up late, and the sleep ahead still ends TODAY. */
+export const WAKE_WINDOW_HOUR = 4
+
+/** The wake date of the sleep you are about to have. */
+export const tonightWakeDate = (now: Date = new Date()): string =>
+  now.getHours() < WAKE_WINDOW_HOUR ? dateToDay(now) : addDays(dateToDay(now), 1)
+
+/** The wake date of the sleep that ended most recently. */
+export const lastNightWakeDate = (now: Date = new Date()): string =>
+  now.getHours() < WAKE_WINDOW_HOUR ? addDays(dateToDay(now), -1) : dateToDay(now)
