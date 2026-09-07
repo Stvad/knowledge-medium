@@ -1,12 +1,14 @@
 # Sleep Lab
 
-Runs N-of-1 sleep experiments — the first one is [glycine before
-bed](./PROTOCOL.md) — on top of the outline. The extension assigns each
-night to an arm, collects the morning check-in, imports what the Galaxy
-Watch measured, and shows the comparison the protocol pre-registered.
-Nothing here is glycine-specific: an experiment is a block naming its
-intervention, dose, period length and pair count, and a second
-intervention is a second experiment block.
+Runs N-of-1 sleep experiments on top of the outline. The protocol is a
+page in your notes — question, design, measures, outcomes, analysis,
+decision rule — and the experiment block sits inside it, carrying the
+machine-readable half: intervention, dose text, control kind, start date,
+period length, pair count, seed. The extension assigns each night to an
+arm from that block's schedule, collects the morning check-in, imports
+what the Galaxy Watch measured, and shows the comparison the protocol
+pre-registered. Nothing here is specific to one intervention: a second
+experiment is a second block in a second protocol page.
 
 Design lineage: the Strength Tracker next door. Same shape — the outline
 IS the state, one block per record, a pure engine, and gestures that write
@@ -14,10 +16,11 @@ once and never reconcile.
 
 ## What it does
 
-- **Schedule.** Starting an experiment stamps its periods as blocks: 3
-  nights on one arm, order randomized within pairs from a seed stored on
-  the experiment. You can see the whole schedule, and edit it by editing
-  the blocks.
+- **Schedule.** An experiment block is typed into the protocol page (or
+  created there by "start an experiment here"); stamping it writes its
+  periods as child blocks — N nights on one arm, order randomized within
+  pairs from the seed on the block. You can see the whole schedule, and
+  edit it by editing the blocks.
 - **Tonight.** One gesture creates tonight's night block — assigned arm
   from the schedule, dose todo beneath it when the arm calls for one —
   and takes you there. Run it twice and it takes you to the same block.
@@ -40,11 +43,12 @@ once and never reconcile.
 Everything is a typed block; nothing is a row inside a JSON property.
 
 ```
+<your protocol page>                   (anywhere in the notes)
+└─ glycine experiment                  sleeplab-experiment
+   ├─ Period 1 · glycine · Sep 15–17   sleeplab-period
+   ├─ Period 2 · control · Sep 18–20   sleeplab-period
+   └─ …
 Sleep Lab                              sleeplab-lab      (kernel page, one per workspace)
-├─ Glycine 3 g                         sleeplab-experiment
-│  ├─ Period 1 · glycine · Sep 15–17   sleeplab-period
-│  ├─ Period 2 · control · Sep 18–20   sleeplab-period
-│  └─ …
 ├─ Night of Sep 15 → 16                sleeplab-night    (one per wake date; id derived from the date)
 │  ├─ 3 g glycine, 30–60 min before bed  sleeplab-dose + todo
 │  └─ Sleep 23:41 → 07:12              sleeplab-session  (id derived from start time)
@@ -70,7 +74,9 @@ Sleep Lab                              sleeplab-lab      (kernel page, one per w
   stamped by the check-in's "taken now" button.
 - **Experiment** and **period** have ordinary minted ids: a duplicate is
   visible in the outline and deletable, which is the bar the Strength
-  Tracker settled on for visible records.
+  Tracker settled on for visible records. The experiment is read by TYPE
+  across the workspace, so it lives wherever the protocol does; the
+  running one is the newest with status `running`.
 - A strength session on the night's day is read from the Strength
   Tracker's own workout blocks at analysis time, not copied.
 
@@ -85,7 +91,11 @@ their sleep numbers, which is the record-grain test.
 - `derive.ts` — a session's stages and vitals → the per-night numbers.
 - `stats.ts` — per outcome: means, difference, bootstrap 95% CI, a
   permutation p-value that shuffles labels within pairs, the paired
-  period estimate; populations and exclusions exactly as PROTOCOL.md §7.
+  period estimate. Populations: *by assignment* (every night by its arm)
+  and *per protocol* (a night whose dose block is unticked is out, on
+  either arm; an intervention night with no dose block is out). Nights
+  flagged unusual are excluded by default; transition nights and an
+  alcohol cap are sensitivity toggles.
 
 ## Import (`src/import/`, pure)
 
@@ -142,9 +152,24 @@ pnpm agent --profile <profile> enable-extension "Sleep Lab"
 Actions:
 
 - **Sleep Lab: open** — creates the page on first use and navigates.
+- **Sleep Lab: start an experiment here** — asks for the intervention,
+  dose, control, start date, period length, pairs and seed, then stamps
+  the experiment block and its schedule where your cursor is — inside the
+  protocol page. An experiment block typed by hand gets a **Stamp
+  schedule** button in its footer instead.
 - **Sleep Lab: tonight** — tonight's night block with its assignment and
   dose; navigates there.
 - **Sleep Lab: last night** — last night's block, for the morning check-in.
 - **Sleep Lab: import watch data** — the import dialog.
 
-The page carries **Start an experiment** and **Import** buttons.
+The Sleep Lab page carries the same as buttons, plus the analysis.
+
+## Writing the protocol page
+
+Pre-register it before the first night: the question; the design (arms,
+period length, pairs, what a transition night is, blinding or not and
+why); the intervention and what is held constant; the measures and where
+each comes from; the primary outcomes (few) and the smallest effect worth
+acting on; the analysis (estimand, populations, exclusions, inference,
+sensitivity) and the decision rule at the end of the schedule; safety and
+stopping. Then the experiment block, with its properties filled in.
