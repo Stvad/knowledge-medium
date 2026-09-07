@@ -1,0 +1,2 @@
+import{joinValuePreset as e}from"./api/valuePresets.js";import"./api/index.js";import{valuePresetCoresFacet as t,valuePresetPresentationsFacet as n}from"./facets.js";var r=new WeakMap,i=i=>{let a=i.read(t),o=i.read(n),s=r.get(i);if(s?.cores===a&&s.presentations===o)return s.snapshot;let c=new Map;for(let[t,n]of o){let r=a.get(t);r&&c.set(t,e(r,n))}let l={cores:a,joined:c};return r.set(i,{cores:a,presentations:o,snapshot:l}),l},a=e=>i(e).joined;export{i as readValuePresetRegistry,a as readValuePresets};
+//# sourceMappingURL=valuePresetRegistry.js.map

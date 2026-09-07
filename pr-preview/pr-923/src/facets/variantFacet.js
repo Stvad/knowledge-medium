@@ -1,0 +1,2 @@
+import{defineFacet as e,isFunction as t}from"./facet.js";var n=[],r=()=>({all:n,last:void 0,first:void 0,byId:()=>void 0});function i({id:n}){return e({id:n,combine:e=>t=>{let n=[];for(let r of e){let e=r(t);e&&n.push(e)}if(n.length===0)return r();let i=new Map;for(let e of n)i.set(e.id,e);return{all:n,first:n[0],last:n[n.length-1],byId:e=>e==null?void 0:i.get(e)}},empty:()=>()=>r(),validate:t})}var a=(e,t,n)=>({id:e,label:t,render:n});export{a as defineVariant,i as defineVariantFacet};
+//# sourceMappingURL=variantFacet.js.map
