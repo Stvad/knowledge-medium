@@ -67,14 +67,18 @@ describe('eligibleNights', () => {
       .toEqual([usual, unusual])
   })
 
-  it('per-protocol drops an intervention night whose dose was not logged taken, but keeps its control counterpart', () => {
+  it('per-protocol keeps only nights whose dose was ticked, on either arm; an open-label control has no dose and stays', () => {
     const notTaken = night({arm: 'intervention', ratings: {quality: 3}, doseTaken: false})
-    const takenUndefined = night({arm: 'intervention', ratings: {quality: 3}}) // doseTaken undefined
+    const takenUndefined = night({arm: 'intervention', ratings: {quality: 3}}) // no dose block: adherence unknown
     const taken = night({arm: 'intervention', ratings: {quality: 3}, doseTaken: true})
-    const control = night({arm: 'control', ratings: {quality: 3}}) // doseTaken undefined, not intervention
-    const nights = [notTaken, takenUndefined, taken, control]
+    const control = night({arm: 'control', ratings: {quality: 3}}) // open-label: nothing to take
+    // A placebo control carries a dose block too — pinned separately from the
+    // intervention clause, since the two are decided by different lines.
+    const placeboSkipped = night({arm: 'control', ratings: {quality: 3}, doseTaken: false})
+    const placeboTaken = night({arm: 'control', ratings: {quality: 3}, doseTaken: true})
+    const nights = [notTaken, takenUndefined, taken, control, placeboSkipped, placeboTaken]
     expect(eligibleNights(nights, 'quality', 'assigned')).toEqual(nights) // assigned: all in
-    expect(eligibleNights(nights, 'quality', 'per-protocol')).toEqual([taken, control])
+    expect(eligibleNights(nights, 'quality', 'per-protocol')).toEqual([taken, control, placeboTaken])
   })
 
   it('drops a night with no value for the requested outcome, but keeps it for one it has', () => {

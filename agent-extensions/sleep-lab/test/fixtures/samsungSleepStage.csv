@@ -1,0 +1,10 @@
+#com.samsung.health.sleep_stage,,,,com.samsung.health,1.0,,
+com.samsung.health.sleep_stage.start_time,com.samsung.health.sleep_stage.end_time,com.samsung.health.sleep_stage.time_offset,com.samsung.health.sleep_stage.stage,com.samsung.health.sleep_stage.sleep_id
+2024-03-10 23:41:00.000,2024-03-10 23:50:00.000,UTC-0700,40001,ssn-main-1
+2024-03-10 23:50:00.000,2024-03-11 01:20:00.000,UTC-0700,40002,ssn-main-1
+2024-03-11 01:20:00.000,2024-03-11 02:10:00.000,UTC-0700,40003,ssn-main-1
+2024-03-11 02:10:00.000,2024-03-11 02:50:00.000,UTC-0700,40004,ssn-main-1
+2024-03-11 02:50:00.000,2024-03-11 07:12:00.000,UTC-0700,99999,ssn-main-1
+2024-03-11 14:05:00.000,2024-03-11 14:35:00.000,UTC-0700,40002,
+2024-03-11 08:00:00.000,2024-03-11 08:10:00.000,UTC-0700,40001,ssn-ghost
+,2024-03-11 08:20:00.000,UTC-0700,40002,ssn-main-1

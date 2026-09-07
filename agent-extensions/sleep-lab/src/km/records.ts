@@ -37,18 +37,18 @@ const text = (row: Row, name: string): string | undefined =>
 
 const bool = (row: Row, name: string): boolean => row.properties[name] === true
 
-/** A stored instant, or undefined when missing or unreadable. */
+/** A stored instant (epoch ms), or undefined when missing or unreadable. */
 const instant = (row: Row, name: string): Date | undefined => {
   const raw = row.properties[name]
-  const parsed = typeof raw === 'string' ? new Date(raw) : null
-  return parsed && !Number.isNaN(parsed.getTime()) ? parsed : undefined
+  return typeof raw === 'number' && Number.isFinite(raw) ? new Date(raw) : undefined
 }
 
-/** A stored wake date as `YYYY-MM-DD`, through `storedDate` so an
- *  editor-typed UTC-midnight value names the day meant. */
+/** A stored wake date (a `date` property) as `YYYY-MM-DD`, through
+ *  `storedDate` so an editor-typed UTC-midnight value names the day meant. */
 const day = (row: Row, name: string): string | undefined => {
-  const parsed = instant(row, name)
-  return parsed ? dateToDay(storedDate(parsed)) : undefined
+  const raw = row.properties[name]
+  const parsed = typeof raw === 'string' ? new Date(raw) : null
+  return parsed && !Number.isNaN(parsed.getTime()) ? dateToDay(storedDate(parsed)) : undefined
 }
 
 const isArm = (value: unknown): value is Arm => value === 'intervention' || value === 'control'

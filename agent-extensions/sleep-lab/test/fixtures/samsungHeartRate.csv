@@ -1,0 +1,5 @@
+#com.samsung.shealth.tracker.heart_rate,,,com.samsung.shealth,1.0,
+start_time,time_offset,heart_rate
+2024-03-11 00:00:00.000,UTC-0700,58
+2024-03-11 02:00:00.000,UTC-0700,52
+2024-03-11 07:00:00.000,UTC-0700,

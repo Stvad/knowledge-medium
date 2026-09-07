@@ -128,8 +128,9 @@ export interface ExperimentRecord {
 export type Outcome = SessionMeasure | NightRating
 
 /** `assigned`: every night by its arm, whatever was taken (intention to
- *  treat). `per-protocol`: intervention nights only when the dose is
- *  logged taken. */
+ *  treat). `per-protocol`: a night whose dose block is not ticked is out —
+ *  on either arm, since a placebo control carries a dose too — and an
+ *  intervention night with no dose block at all is out as well. */
 export type Population = 'assigned' | 'per-protocol'
 
 export interface Comparison {

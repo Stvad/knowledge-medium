@@ -209,8 +209,8 @@ export const upsertSessionInTx = async (
   const measures = deriveMeasures(session)
   const identityProps = [
     propertyValue(sourceProp, session.source),
-    propertyValue(startProp, session.start),
-    propertyValue(endProp, session.end),
+    propertyValue(startProp, session.start.getTime()),
+    propertyValue(endProp, session.end.getTime()),
     ...(session.externalId !== undefined ? [propertyValue(externalIdProp, session.externalId)] : []),
   ]
   const spec = {

@@ -243,9 +243,11 @@ export const externalIdProp = seedProperty({
   changeScope: scope,
 })
 
-/** Real instants (not local-noon days): when the session began and ended. */
-export const startProp = day('start', FIELD.start)
-export const endProp = day('end', FIELD.end)
+/** Real instants — epoch ms, like the Strength Tracker's `completedAt`. Not
+ *  the `date` preset: its editor is date-only, so correcting a session's
+ *  start in the property panel would silently drop the time. */
+export const startProp = optionalNumber('start', FIELD.start)
+export const endProp = optionalNumber('end', FIELD.end)
 export const mainProp = flag('main', FIELD.main)
 
 export const onsetMinutesProp = optionalNumber('onset-minutes', FIELD.onsetMinutes)
