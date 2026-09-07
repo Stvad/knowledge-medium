@@ -55,6 +55,12 @@ export const StartExperimentDialog = ({resolve, cancel}: DialogContextProps<Expe
     <div className="flex max-w-md flex-col gap-4 p-4">
       <h2 className="text-base font-semibold">Start an experiment</h2>
 
+      <p className="text-xs text-muted-foreground">
+        You can also type this by hand anywhere in your notes — give a block
+        the <code>sleeplab-experiment</code> type and fill in its properties
+        — then stamp its schedule from the button in its footer.
+      </p>
+
       <label className="flex flex-col gap-1 text-sm">
         Intervention
         <input

@@ -16,11 +16,11 @@ import {openDialog} from '@/utils/dialogs.js'
 import {useBlockOpener} from '@/utils/navigation.js'
 import type {BlockRendererProps} from '@/types.js'
 
-import {armForDate, scheduleProgress} from '../engine/schedule'
 import {compareAll, OUTCOME_LABELS, PRIMARY_OUTCOMES} from '../engine/stats'
 import type {Comparison, ExperimentRecord, NightRecord, Outcome, Population} from '../engine/types'
 import {lastNightWakeDate, tonightWakeDate} from '../km/day'
 import {createExperiment, runningExperiment, stampNight} from '../km/experiment'
+import {summarizeExperiment} from './experimentSummary'
 import {ImportDialog} from './ImportDialog'
 import {useLabRows} from './labRows'
 import {Segmented} from './Segmented'
@@ -39,12 +39,7 @@ const ExperimentCard = ({experiment, nights, tonight}: {
   /** Wake date of the sleep ahead — what the schedule is asked about. */
   tonight: string
 }) => {
-  const progress = scheduleProgress(experiment.periods, tonight)
-  const tonightArm = armForDate(experiment.periods, tonight)
-  const ownNights = nights.filter(n => n.experimentId === experiment.id)
-  const interventionNights = ownNights.filter(n => n.arm === 'intervention')
-  const taken = interventionNights.filter(n => n.doseTaken === true).length
-  const withSession = ownNights.filter(n => n.main !== undefined).length
+  const {progress, tonightArm, adherence, withSession} = summarizeExperiment(experiment, nights, tonight)
 
   return (
     <div className="rounded-md border border-border p-3">
@@ -58,7 +53,7 @@ const ExperimentCard = ({experiment, nights, tonight}: {
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
         <span>{progress ? `Night ${progress.night} of ${progress.total}` : 'Not in the schedule window'}</span>
         <span>Tonight: {tonightArm ?? '—'}</span>
-        <span>Adherence: {interventionNights.length > 0 ? `${taken}/${interventionNights.length}` : '—'}</span>
+        <span>Adherence: {adherence ? `${adherence.taken}/${adherence.of}` : '—'}</span>
         <span>{withSession} night{withSession === 1 ? '' : 's'} with a session</span>
       </div>
     </div>

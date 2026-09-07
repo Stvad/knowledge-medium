@@ -18,7 +18,7 @@
  *  What IS verified: `./ui/actions`, the one module `src/index.ts` composes
  *  that has no such blocker once its own km dependencies are mocked (same
  *  reason `test/startAction.test.ts` mocks every `km/*` module
- *  `startAction.ts` touches) — this pins the four action ids/descriptions
+ *  `startAction.ts` touches) — this pins the five action ids/descriptions
  *  for real. The rest of the wiring (every seed reaching
  *  `definitionSeedsFacet`/`typeSeedsFacet`, the renderer reaching
  *  `blockRenderersFacet`, `dialogAppMountExtension` being mounted) is
@@ -28,18 +28,21 @@
  */
 import {describe, expect, it, vi} from 'vitest'
 
-vi.mock('../src/km/experiment', () => ({stampNight: vi.fn()}))
+vi.mock('../src/km/experiment', () => ({stampNight: vi.fn(), createExperimentAt: vi.fn()}))
 vi.mock('../src/km/page', () => ({findLabPage: vi.fn(), getOrCreateLabPage: vi.fn()}))
 vi.mock('../src/km/nights', () => ({importSessions: vi.fn()}))
 
-const {openLabAction, tonightAction, lastNightAction, importAction} = await import('../src/ui/actions')
+const {
+  openLabAction, tonightAction, lastNightAction, importAction, startExperimentHereAction,
+} = await import('../src/ui/actions')
 
-describe('the four documented actions', () => {
-  const actions = [openLabAction, tonightAction, lastNightAction, importAction]
+describe('the five documented actions', () => {
+  const globalActions = [openLabAction, tonightAction, lastNightAction, importAction]
+  const actions = [...globalActions, startExperimentHereAction]
 
   it('carries the ids the README and PROTOCOL.md promise', () => {
     expect(actions.map(a => a.id).sort()).toEqual([
-      'sleeplab.import', 'sleeplab.lastNight', 'sleeplab.open', 'sleeplab.tonight',
+      'sleeplab.import', 'sleeplab.lastNight', 'sleeplab.open', 'sleeplab.startExperiment', 'sleeplab.tonight',
     ])
   })
 
@@ -49,10 +52,15 @@ describe('the four documented actions', () => {
     expect(byId.get('sleeplab.tonight')).toBe('Sleep Lab: tonight')
     expect(byId.get('sleeplab.lastNight')).toBe('Sleep Lab: last night')
     expect(byId.get('sleeplab.import')).toBe('Sleep Lab: import watch data')
+    expect(byId.get('sleeplab.startExperiment')).toBe('Sleep Lab: start an experiment here')
   })
 
-  it('registers every action under the GLOBAL context', () => {
-    expect(actions.every(a => a.context === 'global')).toBe(true)
+  it('registers the four dashboard commands under GLOBAL', () => {
+    expect(globalActions.every(a => a.context === 'global')).toBe(true)
+  })
+
+  it('registers "start an experiment here" under NORMAL_MODE, since the block you are on is its argument', () => {
+    expect(startExperimentHereAction.context).toBe('normal-mode')
   })
 
   it('has no duplicate ids', () => {

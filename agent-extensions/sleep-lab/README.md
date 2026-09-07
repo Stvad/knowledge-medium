@@ -65,8 +65,11 @@ Sleep Lab                              sleeplab-lab      (kernel page, one per w
   numbers derived from stages and vitals (onset latency, sleep and in-bed
   minutes, efficiency, stage minutes, awakenings, HR, HRV, SpO2, skin
   temperature delta, respiratory rate, Samsung score where available).
-  The `main` flag marks the night's sleep; other sessions ending the same
-  day are naps. Its id is derived from `{workspace, start minute}`, so the
+  The `main` flag marks the night's sleep — the longest session that ends
+  between 03:00 and 15:00 and lasts 3 h or more, judged in the browser's
+  own time zone; other sessions ending the same day are naps. A night
+  slept in another zone can therefore be filed as a nap: flip `main` on
+  the block by hand. Its id is derived from `{workspace, start minute}`, so the
   same session from either source lands on one block. The stage-by-stage
   series is **not** stored — the derived numbers are, and re-deriving
   means re-importing the source file.
