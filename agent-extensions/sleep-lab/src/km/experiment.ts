@@ -29,8 +29,9 @@ export interface ExperimentSpec extends ScheduleSpec {
   control: ControlKind
 }
 
+/** "control", not the control KIND: "Period 1 · nothing" reads as a gap. */
 const periodContent = (period: Period, intervention: string, control: ControlKind): string =>
-  `Period ${period.index} · ${period.arm === 'intervention' ? intervention : control} · ${period.from} → ${period.to}`
+  `Period ${period.index} · ${period.arm === 'intervention' ? intervention : control === 'placebo' ? 'placebo' : 'control'} · ${period.from} → ${period.to}`
 
 /** Where a new experiment block lands: under `parentId`, first or last. The
  *  lab page's button files it on the page; the "here" action files it where
