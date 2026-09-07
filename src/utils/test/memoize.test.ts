@@ -10,6 +10,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { memoizeAsync } from '../memoize'
+import { resolvedThenable } from '../resolvedThenable'
 
 describe('memoizeAsync', () => {
   it('memoizes a result, like memoize', async () => {
@@ -41,6 +42,24 @@ describe('memoizeAsync', () => {
 
     await expect(memoized('a')).rejects.toThrow('transient')
     expect(await memoized('a')).toBe('a!')
+  })
+
+  it('caches an already-fulfilled thenable as-is, keeping the status React reads', async () => {
+    const memoized = memoizeAsync(
+      async (key: string) => key,
+      (key) => key,
+    ) as (key: string) => Promise<string> & {status?: string; value?: string}
+    const direct = memoizeAsync(
+      (key: string): Promise<string> => resolvedThenable(`${key}!`),
+      (key) => key,
+    ) as (key: string) => Promise<string> & {status?: string; value?: string}
+
+    // The rejection guard mints a fresh promise for an ordinary result…
+    expect(memoized('a').status).toBeUndefined()
+    // …but must not for one that is already fulfilled, or `use()` suspends on it.
+    expect(direct('a').status).toBe('fulfilled')
+    expect(direct('a').value).toBe('a!')
+    expect(await direct('a')).toBe('a!')
   })
 
   it('keeps entries for other keys when one rejects', async () => {

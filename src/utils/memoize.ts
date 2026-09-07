@@ -37,7 +37,12 @@ export const memoizeAsync = <F extends (...args: never[]) => Promise<unknown>>(
 ): F => {
   const memoized = lodashMemoize(((...args: Parameters<F>) => {
     const key = resolver(...args)
-    return (fn(...args) as Promise<unknown>).catch((err: unknown) => {
+    const result = fn(...args) as Promise<unknown> & {status?: string}
+    // An already-fulfilled thenable (`resolvedThenable`) cannot reject, and the
+    // guard would replace it with a fresh promise `use()` has to suspend on —
+    // the very thing it exists to avoid.
+    if (result.status === 'fulfilled') return result
+    return result.catch((err: unknown) => {
       // Unconditional: an entry a retry has already replaced could be evicted
       // here too, and the only cost is running an idempotent `ensure` twice.
       // Checking identity first would be a guard nothing can pin.

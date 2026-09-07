@@ -12,6 +12,7 @@
  */
 
 import {memoize, memoizeAsync} from '@/utils/memoize'
+import {resolvedThenable} from '@/utils/resolvedThenable'
 import {
   ChangeScope,
   type PropertySchema,
@@ -342,23 +343,34 @@ export const getPluginPrefsBlock = memoizeAsync(
  *  block — per-panel UI state lives directly on it. Outside a panel,
  *  returns the user-level `ui-state` child of the user page. */
 export const getUIStateBlock = memoizeAsync(
-  async (
+  (
     repo: Repo,
     workspaceId: string,
     user: User,
     context: BlockContextType,
   ): Promise<Block> => {
-    if (context.panelId) {
-      await repo.load(context.panelId)
-      return repo.block(context.panelId)
-    }
-
-    const userBlock = await getUserBlock(repo, workspaceId, user)
-    return ensureUiChild(repo, userBlock, UI_STATE_PATH_PART)
+    if (context.panelId) return panelUIStateBlock(repo, context.panelId)
+    return rootUIStateBlock(repo, workspaceId, user)
   },
   (repo, workspaceId, user, context) =>
     instanceKey(repo, workspaceId, user.id, context.panelId ?? '__root__'),
 )
+
+/** Per-panel ui-state IS the panel row. Answer synchronously when the row is
+ *  already cached — which it is the moment the tx that created the pane
+ *  resolves — so a new pane's first render never suspends. Every consumer
+ *  reaches this through `use()`, and a fresh promise there costs the pane a
+ *  fallback plus React's 300ms reveal throttle (`resolvedThenable`). */
+const panelUIStateBlock = (repo: Repo, panelId: string): Promise<Block> => {
+  const block = repo.block(panelId)
+  if (block.peek() !== undefined) return resolvedThenable(block)
+  return repo.load(panelId).then(() => block)
+}
+
+const rootUIStateBlock = async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
+  const userBlock = await getUserBlock(repo, workspaceId, user)
+  return ensureUiChild(repo, userBlock, UI_STATE_PATH_PART)
+}
 
 const LAYOUT_SESSIONS_PATH_PART = 'layout-sessions'
 
