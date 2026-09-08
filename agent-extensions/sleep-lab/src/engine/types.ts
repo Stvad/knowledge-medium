@@ -102,6 +102,12 @@ export interface NightRecord {
   /** `undefined` when the night has no dose block (control under
    *  open-label, or a baseline night). */
   doseTaken?: boolean
+  /** Whether the protocol expects a dose this night: the intervention arm
+   *  always, the control arm when the experiment's control is a placebo.
+   *  Decided ONCE, here, for eligibility and adherence alike — the dose
+   *  block's presence is not the rule, since a deleted one must still count
+   *  as missing. */
+  doseRequired: boolean
   main?: SessionRecord
   naps: SessionRecord[]
   /** A strength session was logged for the night's day. */
@@ -128,9 +134,8 @@ export interface ExperimentRecord {
 export type Outcome = SessionMeasure | NightRating
 
 /** `assigned`: every night by its arm, whatever was taken (intention to
- *  treat). `per-protocol`: a night whose dose block is not ticked is out —
- *  on either arm, since a placebo control carries a dose too — and an
- *  intervention night with no dose block at all is out as well. */
+ *  treat). `per-protocol`: a night that owes a dose (`doseRequired`) is in
+ *  only when it was ticked. */
 export type Population = 'assigned' | 'per-protocol'
 
 export interface Comparison {

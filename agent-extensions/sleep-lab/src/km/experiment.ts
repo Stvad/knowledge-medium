@@ -17,9 +17,9 @@ import {dayToDate} from './day'
 import {EXPERIMENT_TYPE, PERIOD_TYPE, type ControlKind} from './fields'
 import {assignNightInTx, ensureDoseInTx, getOrCreateNightInTx} from './nights'
 import {getOrCreateLabPage} from './page'
-import {asExperiment, asPeriod, buildExperiments} from './records'
+import {asExperiment, asPeriod, buildExperiments, doseIsRequired} from './records'
 import {
-  armProp, controlProp, doseTextProp, experimentStatusProp, fromProp, indexProp, interventionProp,
+  armProp, controlProp, doseTextProp, experimentProp, experimentStatusProp, fromProp, indexProp, interventionProp,
   pairProp, pairsProp, periodNightsProp, seedProp, startDateProp, toProp,
 } from './schema'
 
@@ -118,6 +118,8 @@ export const stampSchedule = (repo: Repo, experimentId: string): Promise<StampSc
     const experiment = asExperiment(block && !block.deleted ? {...block, orderKey: block.orderKey} : null)
     if (!experiment) return {status: 'unreadable' as const, reason: 'This is not an experiment block.'}
     if (experiment.startDate === '') return {status: 'unreadable' as const, reason: 'Set a start date first.'}
+    // Every intervention night's todo would otherwise say nothing.
+    if (experiment.doseText.trim() === '') return {status: 'unreadable' as const, reason: 'Set the dose text first.'}
     const existing = (await tx.childrenOf(experimentId, undefined, {hidePropertyChildren: true}))
       .some(child => !child.deleted && hasBlockType(child, PERIOD_TYPE))
     if (existing) return {status: 'already' as const}
@@ -143,11 +145,11 @@ export const readExperiments = async (repo: Repo, workspaceId: string): Promise<
 export const runningExperiment = (experiments: readonly ExperimentRecord[]): ExperimentRecord | undefined =>
   experiments.find(experiment => experiment.status === 'running')
 
-/** Whether a night on `arm` gets a dose todo: the intervention always, the
- *  control only when it is a placebo. */
+/** The dose todo's text for a night on `arm`, or none when the protocol
+ *  owes no dose — the same rule `doseRequired` is read by. */
 export const doseTextFor = (experiment: ExperimentRecord, arm: Arm): string | undefined =>
-  arm === 'intervention' ? experiment.doseText
-    : experiment.control === 'placebo' ? 'Placebo dose' : undefined
+  !doseIsRequired(arm, experiment.control) ? undefined
+    : arm === 'intervention' ? experiment.doseText : 'Placebo dose'
 
 export interface StampedNight {
   nightId: string
@@ -189,6 +191,12 @@ export const stampNight = async (repo: Repo, workspaceId: string, date: string):
     const night = await tx.get(nightId)
     const raw = night?.properties[armProp.name]
     const arm: Arm = raw === 'intervention' || raw === 'control' ? raw : livePeriod.arm
+    // A night already bound to ANOTHER experiment keeps that experiment's
+    // dose (stamped when it was assigned); this one's instructions do not
+    // apply to it, whatever the schedules overlap.
+    if (night?.properties[experimentProp.name] !== live.id) {
+      return {nightId, arm, experiment: liveExperiment, assignment: assigned}
+    }
     const text = doseTextFor(liveExperiment, arm)
     const doseId = text === undefined ? undefined : await ensureDoseInTx(repo, tx, {nightId, text, typeSnapshot})
     return {nightId, arm, doseId, experiment: liveExperiment, assignment: assigned}

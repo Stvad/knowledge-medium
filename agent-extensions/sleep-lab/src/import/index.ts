@@ -2,7 +2,7 @@
 
 import type {ImportedSession} from '../engine/types'
 import {parseHealthConnectPayload} from './healthConnect'
-import {parseSamsungExport} from './samsungExport'
+import {isSamsungFileOfInterest, parseSamsungExport} from './samsungExport'
 
 export interface ImportFile {
   name: string
@@ -21,6 +21,14 @@ export const SAMSUNG_SLEEP_FILE_HINT =
   + 'the sleep and sleep-stage CSVs give the nights, the heart-rate, oxygen-saturation, skin-temperature '
   + 'and respiratory-rate CSVs the vitals, and the jsons/…hrv files the HRV — the HRV CSV alone carries no values. '
   + 'Or pick individual files, or paste a Health Connect webhook payload.'
+
+/** Whether a picked file is worth READING: the Samsung files the importer
+ *  uses, or a JSON outside the export's `jsons/` tree (a webhook payload).
+ *  The import dialog filters on this before calling `file.text()`, since a
+ *  whole export folder is thousands of files it would otherwise load. */
+export const isImportFile = (name: string): boolean =>
+  isSamsungFileOfInterest(name)
+  || (name.toLowerCase().endsWith('.json') && !/(^|[\/])jsons[\/]/.test(name))
 
 /** A single JSON file (or a single pasted blob whose text starts with `{`)
  *  is the Health Connect Webhook payload; any file named with the

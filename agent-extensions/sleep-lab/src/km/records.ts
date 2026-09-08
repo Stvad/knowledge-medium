@@ -158,7 +158,7 @@ export const asDose = (row: Row | null | undefined): DoseRow | null => {
 // ──── Night ────
 
 /** What the night block itself says, before its children are joined in. */
-export type NightBase = Omit<NightRecord, 'main' | 'naps' | 'trained' | 'doseTaken' | 'periodIndex' | 'pair' | 'transition'>
+export type NightBase = Omit<NightRecord, 'main' | 'naps' | 'trained' | 'doseTaken' | 'doseRequired' | 'periodIndex' | 'pair' | 'transition'>
 
 export const asNight = (row: Row | null | undefined): NightBase | null => {
   if (!usable(row, NIGHT_TYPE)) return null
@@ -209,10 +209,21 @@ export const trainedDays = (rows: readonly Row[]): Set<string> => {
  *  periods join by the night's ref. A night whose ref points at a period
  *  that is gone keeps its `arm` — the arm was copied at assignment for
  *  exactly this — and simply has no pair. */
+/** Whether a night on `arm` owes a dose under `control`. The one rule
+ *  `doseRequired` is computed from; `doseTextFor` in experiment.ts stamps
+ *  the dose block on the same rule. */
+export const doseIsRequired = (arm: Arm | undefined, control: ExperimentRecord['control'] | undefined): boolean =>
+  arm === 'intervention' || (arm === 'control' && control === 'placebo')
+
 export const buildNights = (rows: readonly Row[], trained: ReadonlySet<string> = new Set()): NightRecord[] => {
   const sessions = new Map<string, SessionRow[]>()
   const doses = new Map<string, DoseRow[]>()
   const periods = new Map<string, PeriodRow>()
+  const experiments = new Map<string, Omit<ExperimentRecord, 'periods'>>()
+  for (const row of rows) {
+    const experiment = asExperiment(row)
+    if (experiment) experiments.set(experiment.id, experiment)
+  }
   for (const row of [...rows].sort(byOrderKey)) {
     const session = asSession(row)
     if (session?.nightId) {
@@ -235,12 +246,19 @@ export const buildNights = (rows: readonly Row[], trained: ReadonlySet<string> =
       const own = sessions.get(night.id) ?? []
       const period = night.periodId ? periods.get(night.periodId) : undefined
       const nightDoses = doses.get(night.id) ?? []
+      const experiment = night.experimentId ? experiments.get(night.experimentId) : undefined
       return {
         ...night,
         ...(period ? {periodIndex: period.index, pair: period.pair, transition: night.date === period.from} : {}),
         // Any dose ticked counts; a second dose block is a duplicate, not a
         // second requirement.
         doseTaken: nightDoses.length === 0 ? undefined : nightDoses.some(dose => dose.taken),
+        // Without the experiment row (a caller that did not query it, or a
+        // night whose experiment is gone) the dose block's presence stands
+        // in for the control kind.
+        doseRequired: experiment
+          ? doseIsRequired(night.arm, experiment.control)
+          : night.arm === 'intervention' || nightDoses.length > 0,
         main: own.find(session => session.main),
         naps: own.filter(session => !session.main),
         trained: trained.has(night.date),

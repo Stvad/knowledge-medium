@@ -766,3 +766,35 @@ describe('getOrCreateNightInTx — the fallback lookup decodes an editor-typed d
     expect(nights.map(n => n.id)).toEqual([replacementId])
   })
 })
+
+describe('getOrCreateNightInTx — repairs a date the block lost', {timeout: 30_000}, () => {
+  it('restores sleeplab:date on the SAME block (adopted, not re-minted) once stampNight sees the date again', async () => {
+    const date = '2026-02-09'
+    const stamped = await stampNight(repo, WORKSPACE_ID, date)
+
+    await repo.tx(tx => tx.unsetProperty(stamped.nightId, dateProp),
+      {scope: ChangeScope.BlockDefault, description: 'strip the night\'s date'})
+    const stripped = await repo.load(stamped.nightId)
+    expect(stripped?.deleted).toBeFalsy()
+    expect(stripped?.properties[FIELD.date]).toBeUndefined()
+
+    // With no readable date, buildNights currently drops this block.
+    const rowsBefore = await repo.queryBlocks({workspaceId: WORKSPACE_ID, types: [NIGHT_TYPE]})
+    expect(buildNights(rowsBefore).map(n => n.id)).not.toContain(stamped.nightId)
+
+    const repaired = await stampNight(repo, WORKSPACE_ID, date)
+    expect(repaired.nightId).toBe(stamped.nightId) // adopted the same block, not a second one
+
+    const block = await repo.load(repaired.nightId)
+    expect(block?.properties[FIELD.date]).toBe(dayToDate(date).toISOString())
+
+    const pageId = await labPageId()
+    const nights = await liveChildren(pageId, NIGHT_TYPE)
+    expect(nights.map(n => n.id)).toEqual([stamped.nightId]) // still exactly one night block
+
+    const rowsAfter = await repo.queryBlocks({workspaceId: WORKSPACE_ID, types: [NIGHT_TYPE]})
+    const built = buildNights(rowsAfter)
+    expect(built.map(n => n.id)).toContain(stamped.nightId)
+    expect(built.find(n => n.id === stamped.nightId)?.date).toBe(date)
+  })
+})

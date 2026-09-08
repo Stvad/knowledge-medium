@@ -116,6 +116,13 @@ const isRespRateFile = (name: string): boolean => isCsv(name) && has(name, 'resp
 const isHrvCsv = (name: string): boolean => isCsv(name) && has(name, 'hrv')
 const isHrvJson = (name: string): boolean => isJson(name) && has(name, 'hrv')
 
+/** Whether a path inside the export is one this importer reads at all —
+ *  so a caller can skip reading the rest (a full export is thousands of
+ *  files, most of them per-minute JSON for series this never opens). */
+export const isSamsungFileOfInterest = (name: string): boolean =>
+  isSleepSessionFile(name) || isSleepStageFile(name) || isHeartRateFile(name) || isOxygenFile(name)
+  || isSkinTempFile(name) || isRespRateFile(name) || isHrvCsv(name) || isHrvJson(name)
+
 const rowsOf = (files: SamsungFile[]): Record<string, string>[] =>
   files.flatMap(f => rowsWithHeader(f.text, {skipFirstLine: true}).rows.map(normalizeRow))
 

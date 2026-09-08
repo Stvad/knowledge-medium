@@ -9,7 +9,7 @@ import {useState} from 'react'
 import type {DialogContextProps} from '@/utils/dialogs.js'
 import type {Repo} from '@/data/repo.js'
 
-import {importSessions as parseSessions, SAMSUNG_SLEEP_FILE_HINT, type ImportFile} from '../import/index'
+import {importSessions as parseSessions, SAMSUNG_SLEEP_FILE_HINT, type ImportFile, isImportFile} from '../import'
 import {importSessions as writeSessions, type ImportReport} from '../km/nights'
 
 export interface ImportDialogProps {
@@ -29,10 +29,12 @@ const readFiles = async (fileList: FileList | null): Promise<ImportFile[]> => {
   // The path inside a picked folder, when there is one: the Samsung export's
   // HRV lives in `jsons/com.samsung.health.hrv/…`, and the parser tells the
   // files apart by their dotted path segments.
-  return Promise.all(Array.from(fileList).map(async file => ({
-    name: file.webkitRelativePath || file.name,
-    text: await file.text(),
-  })))
+  return Promise.all(Array.from(fileList)
+    .map(file => ({file, name: file.webkitRelativePath || file.name}))
+    // Only what the parsers read; a whole export folder is mostly per-minute
+    // JSON for series never opened, and reading it all would stall the tab.
+    .filter(({name}) => isImportFile(name))
+    .map(async ({file, name}) => ({name, text: await file.text()})))
 }
 
 export const ImportDialog = ({repo, workspaceId, resolve, cancel}: DialogContextProps<void> & ImportDialogProps) => {

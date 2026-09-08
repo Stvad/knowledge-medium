@@ -48,14 +48,10 @@ export const eligibleNights = (
     // baseline night) or was never assigned — excluded either way.
     if (night.arm === undefined) return false
     if (excludeUnusual && night.unusual) return false
-    // Per protocol: a night with a dose block counts only if it was ticked —
-    // on BOTH arms, since a placebo control has one too. An intervention
-    // night with no dose block at all has unknown adherence and is dropped;
-    // an open-label control night has nothing to take and stays.
-    if (population === 'per-protocol') {
-      if (night.doseTaken === false) return false
-      if (night.arm === 'intervention' && night.doseTaken === undefined) return false
-    }
+    // Per protocol: a night that owes a dose counts only if it was ticked.
+    // Unticked and missing-block both fail — a placebo control whose dose
+    // block was deleted is unknown adherence, not an open-label control.
+    if (population === 'per-protocol' && night.doseRequired && night.doseTaken !== true) return false
     if (outcomeValue(night, outcome) === undefined) return false
     if (excludeTransition && night.transition === true) return false
     if (maxAlcohol !== undefined && night.alcohol !== undefined && night.alcohol > maxAlcohol) return false

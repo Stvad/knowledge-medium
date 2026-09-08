@@ -12,7 +12,8 @@ import {
 } from '../src/km/fields'
 import {dayToDate} from '../src/km/day'
 import {
-  asDose, asExperiment, asNight, asPeriod, asSession, buildExperiments, buildNights, trainedDays, type Row,
+  asDose, asExperiment, asNight, asPeriod, asSession, buildExperiments, buildNights, doseIsRequired, trainedDays,
+  type Row,
 } from '../src/km/records'
 
 let idCounter = 0
@@ -333,5 +334,80 @@ describe('buildNights', () => {
     const done = row([DOSE_TYPE, 'todo'], {[FIELD.todoStatus]: 'done'}, {id: 'dose-2', parentId: 'night-1'})
     const [result] = buildNights([night, open, done])
     expect(result.doseTaken).toBe(true)
+  })
+
+  describe('doseRequired — with the experiment row among the queried rows', () => {
+    it('derives control nights from the experiment\'s own control kind, and intervention nights are always required', () => {
+      const placeboExperiment = row([EXPERIMENT_TYPE], {[FIELD.control]: 'placebo'}, {id: 'exp-placebo'})
+      const controlUnderPlacebo = row([NIGHT_TYPE], {
+        [FIELD.date]: day('2026-02-09'), [FIELD.arm]: 'control', [FIELD.experiment]: 'exp-placebo',
+      }, {id: 'night-control-placebo'})
+      const interventionUnderPlacebo = row([NIGHT_TYPE], {
+        [FIELD.date]: day('2026-02-10'), [FIELD.arm]: 'intervention', [FIELD.experiment]: 'exp-placebo',
+      }, {id: 'night-intervention-placebo'})
+
+      const nothingExperiment = row([EXPERIMENT_TYPE], {[FIELD.control]: 'nothing'}, {id: 'exp-nothing'})
+      const controlUnderNothing = row([NIGHT_TYPE], {
+        [FIELD.date]: day('2026-02-11'), [FIELD.arm]: 'control', [FIELD.experiment]: 'exp-nothing',
+      }, {id: 'night-control-nothing'})
+      const interventionUnderNothing = row([NIGHT_TYPE], {
+        [FIELD.date]: day('2026-02-12'), [FIELD.arm]: 'intervention', [FIELD.experiment]: 'exp-nothing',
+      }, {id: 'night-intervention-nothing'})
+
+      const result = buildNights([
+        placeboExperiment, controlUnderPlacebo, interventionUnderPlacebo,
+        nothingExperiment, controlUnderNothing, interventionUnderNothing,
+      ])
+      const byId = new Map(result.map(n => [n.id, n]))
+
+      expect(byId.get('night-control-placebo')?.doseRequired).toBe(true) // control, placebo control
+      expect(byId.get('night-intervention-placebo')?.doseRequired).toBe(true) // intervention, either control kind
+      expect(byId.get('night-control-nothing')?.doseRequired).toBe(false) // control, 'nothing' control
+      expect(byId.get('night-intervention-nothing')?.doseRequired).toBe(true) // intervention, either control kind
+    })
+  })
+
+  describe('doseRequired — without the experiment row among the queried rows', () => {
+    it('intervention is required; control falls back to whether a dose child exists', () => {
+      const interventionNoExperiment = row([NIGHT_TYPE], {
+        [FIELD.date]: day('2026-02-09'), [FIELD.arm]: 'intervention', [FIELD.experiment]: 'exp-missing',
+      }, {id: 'night-intervention'})
+      const controlWithDose = row([NIGHT_TYPE], {
+        [FIELD.date]: day('2026-02-10'), [FIELD.arm]: 'control', [FIELD.experiment]: 'exp-missing',
+      }, {id: 'night-control-with-dose'})
+      const doseChild = row([DOSE_TYPE, 'todo'], {[FIELD.todoStatus]: 'open'}, {id: 'dose-1', parentId: 'night-control-with-dose'})
+      const controlNoDose = row([NIGHT_TYPE], {
+        [FIELD.date]: day('2026-02-11'), [FIELD.arm]: 'control', [FIELD.experiment]: 'exp-missing',
+      }, {id: 'night-control-no-dose'})
+
+      // No `exp-missing` experiment row is included: the caller didn't query
+      // it, or the night's experiment is gone.
+      const result = buildNights([interventionNoExperiment, controlWithDose, doseChild, controlNoDose])
+      const byId = new Map(result.map(n => [n.id, n]))
+
+      expect(byId.get('night-intervention')?.doseRequired).toBe(true)
+      expect(byId.get('night-control-with-dose')?.doseRequired).toBe(true)
+      expect(byId.get('night-control-no-dose')?.doseRequired).toBe(false)
+    })
+  })
+})
+
+describe('doseIsRequired', () => {
+  it('intervention always requires a dose, whatever the control kind', () => {
+    expect(doseIsRequired('intervention', 'nothing')).toBe(true)
+    expect(doseIsRequired('intervention', 'placebo')).toBe(true)
+    expect(doseIsRequired('intervention', undefined)).toBe(true)
+  })
+
+  it('control requires a dose only when the experiment is placebo-controlled', () => {
+    expect(doseIsRequired('control', 'placebo')).toBe(true)
+    expect(doseIsRequired('control', 'nothing')).toBe(false)
+    expect(doseIsRequired('control', undefined)).toBe(false)
+  })
+
+  it('an undefined arm never requires a dose', () => {
+    expect(doseIsRequired(undefined, 'placebo')).toBe(false)
+    expect(doseIsRequired(undefined, 'nothing')).toBe(false)
+    expect(doseIsRequired(undefined, undefined)).toBe(false)
   })
 })

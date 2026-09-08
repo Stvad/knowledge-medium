@@ -16,6 +16,8 @@ let nightIdCounter = 0
 const night = (overrides: Partial<NightRecord> = {}): NightRecord => ({
   id: overrides.id ?? `night-${nightIdCounter++}`,
   date: '2026-01-01',
+  // Open-label by default: only the intervention arm owes a dose.
+  doseRequired: overrides.arm === 'intervention',
   ratings: {},
   caffeineLate: false,
   lateMeal: false,
@@ -72,11 +74,12 @@ describe('eligibleNights', () => {
     const takenUndefined = night({arm: 'intervention', ratings: {quality: 3}}) // no dose block: adherence unknown
     const taken = night({arm: 'intervention', ratings: {quality: 3}, doseTaken: true})
     const control = night({arm: 'control', ratings: {quality: 3}}) // open-label: nothing to take
-    // A placebo control carries a dose block too — pinned separately from the
-    // intervention clause, since the two are decided by different lines.
-    const placeboSkipped = night({arm: 'control', ratings: {quality: 3}, doseTaken: false})
-    const placeboTaken = night({arm: 'control', ratings: {quality: 3}, doseTaken: true})
-    const nights = [notTaken, takenUndefined, taken, control, placeboSkipped, placeboTaken]
+    // A placebo control owes a dose too (`doseRequired`), whether its block
+    // was left unticked or is missing altogether.
+    const placeboSkipped = night({arm: 'control', ratings: {quality: 3}, doseRequired: true, doseTaken: false})
+    const placeboMissing = night({arm: 'control', ratings: {quality: 3}, doseRequired: true})
+    const placeboTaken = night({arm: 'control', ratings: {quality: 3}, doseRequired: true, doseTaken: true})
+    const nights = [notTaken, takenUndefined, taken, control, placeboSkipped, placeboMissing, placeboTaken]
     expect(eligibleNights(nights, 'quality', 'assigned')).toEqual(nights) // assigned: all in
     expect(eligibleNights(nights, 'quality', 'per-protocol')).toEqual([taken, control, placeboTaken])
   })

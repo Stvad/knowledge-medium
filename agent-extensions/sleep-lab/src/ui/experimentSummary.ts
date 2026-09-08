@@ -13,8 +13,10 @@ import type {Arm, ExperimentRecord, NightRecord} from '../engine/types'
 export interface ExperimentSummary {
   progress: {night: number; total: number} | undefined
   tonightArm: Arm | undefined
-  /** `undefined` when no intervention night has been logged yet — nothing
-   *  to divide by, rendered as '—' by both callers. */
+  /** Over the nights that OWE a dose (`doseRequired`: intervention nights,
+   *  and control nights too under a placebo). `undefined` when none has
+   *  been logged yet — nothing to divide by, rendered as '—' by both
+   *  callers. */
   adherence: {taken: number; of: number} | undefined
   withSession: number
 }
@@ -26,12 +28,12 @@ export const summarizeExperiment = (
   tonight: string,
 ): ExperimentSummary => {
   const ownNights = nights.filter(n => n.experimentId === experiment.id)
-  const interventionNights = ownNights.filter(n => n.arm === 'intervention')
-  const taken = interventionNights.filter(n => n.doseTaken === true).length
+  const owing = ownNights.filter(n => n.doseRequired)
+  const taken = owing.filter(n => n.doseTaken === true).length
   return {
     progress: scheduleProgress(experiment.periods, tonight),
     tonightArm: armForDate(experiment.periods, tonight),
-    adherence: interventionNights.length > 0 ? {taken, of: interventionNights.length} : undefined,
+    adherence: owing.length > 0 ? {taken, of: owing.length} : undefined,
     withSession: ownNights.filter(n => n.main !== undefined).length,
   }
 }

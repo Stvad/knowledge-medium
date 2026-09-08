@@ -10,20 +10,29 @@
  */
 import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {ChangeScope} from '@/data/api'
+import {ChangeScope, propertyValue} from '@/data/api'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
 import {deleteBlock} from '@/data/mutators'
+import {hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTypedChild} from '@/data/typedRecords'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
 import {buildSchedule} from '../../src/engine/schedule'
 import {dayToDate} from '../../src/km/day'
-import {createExperiment, readExperiments, runningExperiment, stampNight, type ExperimentSpec} from '../../src/km/experiment'
-import {FIELD, type Arm} from '../../src/km/fields'
+import {
+  createExperiment, readExperiments, runningExperiment, stampNight, stampSchedule, type ExperimentSpec,
+} from '../../src/km/experiment'
+import {
+  DOSE_TYPE, EXPERIMENT_TYPE, FIELD, PERIOD_TYPE, type Arm, type ControlKind, type ExperimentStatus,
+} from '../../src/km/fields'
 import {getOrCreateLabPage} from '../../src/km/page'
-import {SLEEPLAB_PROPS, SLEEPLAB_TYPES, armProp, experimentStatusProp, toProp} from '../../src/km/schema'
+import {
+  SLEEPLAB_PROPS, SLEEPLAB_TYPES, armProp, controlProp, doseTextProp, experimentStatusProp, fromProp,
+  indexProp, interventionProp, pairProp, pairsProp, periodNightsProp, seedProp, startDateProp, toProp,
+} from '../../src/km/schema'
 
 const WORKSPACE_ID = 'ws-1'
 
@@ -61,6 +70,80 @@ const spec = (over: Partial<ExperimentSpec> = {}): ExperimentSpec => ({
   seed: 7,
   ...over,
 })
+
+/** An experiment block the user typed by hand — no periods, no schedule —
+ *  for `stampSchedule` tests. Mirrors `createExperiment`'s own property
+ *  set, minus the schedule stamp it performs itself. */
+const handMakeExperiment = (pageId: string, over: {doseText?: string; startDate?: string} = {}): Promise<string> =>
+  repo.tx(async tx => {
+    const typeSnapshot = repo.snapshotTypeRegistries()
+    return createTypedChild(repo, tx, {
+      parentId: pageId,
+      content: 'Hand-typed experiment',
+      types: [EXPERIMENT_TYPE],
+      properties: [
+        propertyValue(interventionProp, 'glycine'),
+        propertyValue(doseTextProp, over.doseText ?? ''),
+        propertyValue(controlProp, 'nothing'),
+        propertyValue(startDateProp, dayToDate(over.startDate ?? '2026-02-01')),
+        propertyValue(periodNightsProp, 3),
+        propertyValue(pairsProp, 1),
+        propertyValue(seedProp, 0),
+        propertyValue(experimentStatusProp, 'planned'),
+      ],
+      typeSnapshot,
+    })
+  }, {scope: ChangeScope.BlockDefault, description: 'hand-make experiment'})
+
+interface SeedPeriodSpec { index: number; pair: number; arm: Arm; from: string; to: string }
+
+/** An experiment + its periods, built directly (same primitives
+ *  `createExperiment` itself uses) rather than through `createExperiment`,
+ *  so a test can pick the exact arm/date coverage it needs instead of
+ *  reverse-engineering a PRNG seed. Mirrors `nights.test.ts`'s own helper. */
+const seedExperiment = (
+  pageId: string,
+  periods: readonly SeedPeriodSpec[],
+  over: {control?: ControlKind; status?: ExperimentStatus; doseText?: string} = {},
+): Promise<string> =>
+  repo.tx(async tx => {
+    const typeSnapshot = repo.snapshotTypeRegistries()
+    const experimentId = await createTypedChild(repo, tx, {
+      parentId: pageId,
+      content: 'Test experiment',
+      types: [EXPERIMENT_TYPE],
+      properties: [
+        propertyValue(interventionProp, 'glycine'),
+        propertyValue(doseTextProp, over.doseText ?? '3 g glycine before bed'),
+        propertyValue(controlProp, over.control ?? 'nothing'),
+        propertyValue(startDateProp, dayToDate(periods[0]?.from ?? '2026-01-01')),
+        propertyValue(periodNightsProp, 3),
+        propertyValue(pairsProp, Math.max(1, Math.ceil(periods.length / 2))),
+        propertyValue(seedProp, 0),
+        propertyValue(experimentStatusProp, over.status ?? 'running'),
+      ],
+      typeSnapshot,
+    })
+    for (const period of periods) {
+      await createTypedChild(repo, tx, {
+        parentId: experimentId,
+        content: `Period ${period.index}`,
+        types: [PERIOD_TYPE],
+        properties: [
+          propertyValue(indexProp, period.index),
+          propertyValue(pairProp, period.pair),
+          propertyValue(armProp, period.arm),
+          propertyValue(fromProp, dayToDate(period.from)),
+          propertyValue(toProp, dayToDate(period.to)),
+        ],
+        typeSnapshot,
+      })
+    }
+    return experimentId
+  }, {scope: ChangeScope.BlockDefault, description: 'seed experiment'})
+
+const doseChildrenOf = async (nightId: string) =>
+  ((await repo.block(nightId).children.load()) ?? []).filter(row => !row.deleted && hasBlockType(row, DOSE_TYPE))
 
 describe('createExperiment', {timeout: 30_000}, () => {
   it('creates the experiment first under the page, and pairs*2 periods under it in schedule order', async () => {
@@ -327,5 +410,76 @@ describe('stampNight — revalidates inside the write, not just the period\'s ex
     expect(result.doseId).toBeDefined()
     const dose = await repo.load(result.doseId!)
     expect(dose?.content).toBe(flippedArm === 'intervention' ? testSpec.doseText : 'Placebo dose')
+  })
+})
+
+describe('stampSchedule — refuses without a dose text', {timeout: 30_000}, () => {
+  it('is unreadable with "Set the dose text first." for a blank dose text, and writes no period children', async () => {
+    const pageId = await labPageId()
+    // Start date is set (the earlier "Set a start date first." refusal does
+    // not apply); dose text is left at its default, blank.
+    const experimentId = await handMakeExperiment(pageId)
+
+    const outcome = await stampSchedule(repo, experimentId)
+    expect(outcome).toEqual({status: 'unreadable', reason: 'Set the dose text first.'})
+
+    const children = (await repo.block(experimentId).children.load()) ?? []
+    expect(children.filter(child => !child.deleted)).toHaveLength(0)
+    // Status was not touched either — still 'planned', never bumped to 'running'.
+    expect((await repo.load(experimentId))?.properties[FIELD.experimentStatus]).toBe('planned')
+  })
+
+  it('stamps normally once the dose text is set', async () => {
+    const pageId = await labPageId()
+    const experimentId = await handMakeExperiment(pageId, {doseText: '3 g glycine before bed'})
+
+    const outcome = await stampSchedule(repo, experimentId)
+    expect(outcome.status).toBe('stamped')
+    if (outcome.status !== 'stamped') throw new Error('unreachable')
+    expect(outcome.periods).toBeGreaterThan(0)
+
+    const children = (await repo.block(experimentId).children.load()) ?? []
+    expect(children.filter(child => !child.deleted && hasBlockType(child, PERIOD_TYPE))).toHaveLength(outcome.periods)
+    expect((await repo.load(experimentId))?.properties[FIELD.experimentStatus]).toBe('running')
+  })
+})
+
+describe('stampNight — a night stays on its original experiment', {timeout: 30_000}, () => {
+  it('keeps the night bound to experiment A, adding no dose, when a second running experiment (B) later covers the same date', async () => {
+    const pageId = await labPageId()
+    const date = '2026-03-01'
+
+    // Experiment A: open-label, control arm — stamping it adds no dose.
+    const experimentAId = await seedExperiment(pageId, [
+      {index: 1, pair: 1, arm: 'control', from: date, to: date},
+    ], {control: 'nothing'})
+
+    const first = await stampNight(repo, WORKSPACE_ID, date)
+    expect(first.assignment).toBe('assigned')
+    expect(first.arm).toBe('control')
+    expect(first.doseId).toBeUndefined()
+    expect(await doseChildrenOf(first.nightId)).toHaveLength(0)
+
+    // A is done; B starts, placebo-controlled, and its own schedule covers
+    // the SAME date — the overlap the README's data model section warns
+    // stampNight must not let a second schedule reach into.
+    await repo.tx(tx => tx.setProperty(experimentAId, experimentStatusProp, 'done'),
+      {scope: ChangeScope.BlockDefault, description: 'mark A done'})
+    const experimentBId = await seedExperiment(pageId, [
+      {index: 1, pair: 1, arm: 'control', from: date, to: date},
+    ], {control: 'placebo'})
+    expect((await readExperiments(repo, WORKSPACE_ID)).find(e => e.id === experimentBId)?.status).toBe('running')
+
+    const second = await stampNight(repo, WORKSPACE_ID, date)
+    expect(second.nightId).toBe(first.nightId)
+    expect(second.assignment).toBe('already')
+    // B is placebo-controlled and this night's (kept) arm is control — B's
+    // rule would stamp a placebo dose. None was: this night is not B's.
+    expect(second.doseId).toBeUndefined()
+
+    const night = await repo.load(first.nightId)
+    expect(night?.properties[FIELD.experiment]).toBe(experimentAId)
+    expect(night?.properties[FIELD.experiment]).not.toBe(experimentBId)
+    expect(await doseChildrenOf(first.nightId)).toHaveLength(0)
   })
 })

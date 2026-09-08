@@ -83,7 +83,14 @@ export const getOrCreateNightInTx = async (repo: Repo, tx: Tx, seat: NightSeat):
     typeSnapshot: seat.typeSnapshot,
   }
   const outcome = await getOrCreateTypedChild(repo, tx, {identity: nightIdentity(seat.workspaceId, seat.date), ...spec})
-  if (outcome.status !== 'taken') return outcome.id
+  if (outcome.status === 'created') return outcome.id
+  if (outcome.status === 'adopted') {
+    // Adopt repairs types, not properties. The seat IS this date's night by
+    // identity, so a block that lost its date gets it back — every reader
+    // rejects a night without one, and sessions filed under it would vanish.
+    if (asNight(outcome.block)?.date === undefined) await tx.setProperty(outcome.id, dateProp, dayToDate(seat.date))
+    return outcome.id
+  }
 
   // Decoded by the same rule every reader uses (`asNight` → `storedDate`),
   // so an editor-typed date finds its block here too.
