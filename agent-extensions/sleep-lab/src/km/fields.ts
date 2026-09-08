@@ -53,6 +53,10 @@ export const FIELD = {
    *  re-derive the same order. */
   seed: 'sleeplab:seed',
   experimentStatus: 'sleeplab:status',
+  /** The outcomes this protocol pre-registers as primary (outcome names
+   *  from `SESSION_MEASURES` / `NIGHT_RATINGS`). On the experiment, not
+   *  global: a second protocol has its own. */
+  primary: 'sleeplab:primary',
 
   // ── period ──
   /** 1-based position in the schedule. */

@@ -42,8 +42,8 @@ import {getOrCreateLabPage} from '../../src/km/page'
 import {asSession, buildNights, trainedDays} from '../../src/km/records'
 import {
   SLEEPLAB_PROPS, SLEEPLAB_TYPES,
-  armProp, controlProp, dateProp, doseTextProp, experimentStatusProp, fromProp, indexProp, interventionProp,
-  mainProp, pairProp, pairsProp, periodNightsProp, seedProp, startDateProp, toProp,
+  armProp, controlProp, dateProp, doseTextProp, experimentProp, experimentStatusProp, fromProp, indexProp,
+  interventionProp, mainProp, pairProp, pairsProp, periodNightsProp, seedProp, startDateProp, toProp,
 } from '../../src/km/schema'
 import type {ImportedSession, Stage} from '../../src/engine/types'
 
@@ -542,6 +542,30 @@ describe('settleMainInTx — a hand-flipped main flag is a record, not a suggest
   })
 })
 
+describe('upsertSessionInTx — a corrected end time rewrites the block\'s content', {timeout: 30_000}, () => {
+  it('updates the "Sleep HH:MM → HH:MM" line to the new span, keeping the main flag it already had', async () => {
+    const start = local(2026, 2, 9, 0, 0)
+    const firstEnd = local(2026, 2, 9, 7, 0) // 7h, ends 07:00 — qualifies as main
+
+    await importSessions(repo, WORKSPACE_ID, [sleepSession(start, firstEnd)])
+    const nightId = derivedBlockId(nightIdentity(WORKSPACE_ID, '2026-02-09'))
+    const [before] = await liveChildren(nightId, SESSION_TYPE)
+    expect(before.content).toBe('Sleep 00:00 → 07:00')
+    expect(before.properties[FIELD.main]).toBe(true)
+
+    // Same start MINUTE (same identity, per `sessionIdentity`) but a LATER
+    // end — a corrected re-import of the same session, not a new one.
+    const laterEnd = local(2026, 2, 9, 7, 30)
+    await importSessions(repo, WORKSPACE_ID, [sleepSession(start, laterEnd)])
+
+    const after = await liveChildren(nightId, SESSION_TYPE)
+    expect(after).toHaveLength(1) // updated in place, never a second block
+    expect(after[0].id).toBe(before.id)
+    expect(after[0].content).toBe('Sleep 00:00 → 07:30') // the line now says the new span
+    expect(after[0].properties[FIELD.main]).toBe(true) // main flag carried over, not reset
+  })
+})
+
 describe('upsertSessionInTx — a taken seat re-mints, then a later import converges on the mint', {timeout: 30_000}, () => {
   it('mints a replacement session once the derived-id block is deleted, then updates that mint on the next re-import', async () => {
     const session = sleepSession(local(2026, 2, 9, 0, 0), local(2026, 2, 9, 7, 0))
@@ -796,5 +820,77 @@ describe('getOrCreateNightInTx — repairs a date the block lost', {timeout: 30_
     const built = buildNights(rowsAfter)
     expect(built.map(n => n.id)).toContain(stamped.nightId)
     expect(built.find(n => n.id === stamped.nightId)?.date).toBe(date)
+  })
+})
+
+describe('getOrCreateNightInTx — repairs a date edited to another day', {timeout: 30_000}, () => {
+  it('resets the SAME block\'s date back to the seat\'s date on the next stamp for the original date', async () => {
+    const date = '2026-02-09'
+    const first = await stampNight(repo, WORKSPACE_ID, date)
+
+    // Hand-edit the night to a DIFFERENT valid day — not stripped (that's
+    // the "repairs a date the block lost" case above), edited. The block
+    // stays live at the SAME derived id (an id is derived from the seat's
+    // date, not from what the `date` property currently says).
+    await repo.tx(tx => tx.setProperty(first.nightId, dateProp, dayToDate('2026-02-15')),
+      {scope: ChangeScope.BlockDefault, description: 'hand-edit the night to another day'})
+    expect((await repo.load(first.nightId))?.properties[FIELD.date]).toBe(dayToDate('2026-02-15').toISOString())
+
+    // Stamping the ORIGINAL date resolves to the same derived id, adopts
+    // the live block there, and — since its date no longer matches the
+    // seat — writes the seat's date back onto it (nights.ts's own doc: "a
+    // night is not re-dated by hand; it is deleted").
+    const repaired = await stampNight(repo, WORKSPACE_ID, date)
+    expect(repaired.nightId).toBe(first.nightId) // same block, not a second one
+
+    const block = await repo.load(first.nightId)
+    expect(block?.properties[FIELD.date]).toBe(dayToDate(date).toISOString())
+
+    const pageId = await labPageId()
+    const nights = await liveChildren(pageId, NIGHT_TYPE)
+    expect(nights.map(n => n.id)).toEqual([first.nightId]) // still exactly one night block
+  })
+})
+
+describe('assignNightInTx — the two refs are written only when the night has NEITHER', {timeout: 30_000}, () => {
+  it('leaves a lone experiment ref alone and gains no period ref, while a night with neither gets both', async () => {
+    const pageId = await labPageId()
+
+    // Some unrelated experiment the "lone ref" night is already bound to —
+    // its own schedule does not cover the date under test, which is the
+    // point: `assignNightInTx` must not care either way, since a ref's
+    // mere presence (not what it resolves to) is what stops it.
+    const keptExperimentId = await seedExperiment(pageId, [
+      {index: 1, pair: 1, arm: 'control', from: '2026-01-01', to: '2026-01-03'},
+    ], {control: 'nothing', doseText: 'kept dose'})
+
+    // The experiment actually covering the dates under test.
+    const coveringExperimentId = await seedExperiment(pageId, [
+      {index: 1, pair: 1, arm: 'intervention', from: '2026-02-09', to: '2026-02-11'},
+    ], {control: 'nothing', doseText: 'covering dose'})
+    const coveringPeriodId = ((await repo.block(coveringExperimentId).children.load()) ?? [])
+      .find(child => !child.deleted && hasBlockType(child, PERIOD_TYPE))!.id
+
+    // A night with a LONE experiment ref (no period ref) — the "partial
+    // pair" nights.ts's own doc says is left as found, not completed from
+    // whichever experiment happens to cover the date now.
+    const partialId = await repo.tx(async tx => {
+      const typeSnapshot = repo.snapshotTypeRegistries()
+      const id = await getOrCreateNightInTx(repo, tx, {workspaceId: WORKSPACE_ID, pageId, date: '2026-02-09', typeSnapshot})
+      await tx.setProperty(id, experimentProp, keptExperimentId)
+      return id
+    }, {scope: ChangeScope.BlockDefault, description: 'hand-set a lone experiment ref'})
+
+    await stampNight(repo, WORKSPACE_ID, '2026-02-09')
+    const partialNight = await repo.load(partialId)
+    expect(partialNight?.properties[FIELD.experiment]).toBe(keptExperimentId) // kept, not overwritten
+    expect(partialNight?.properties[FIELD.period]).toBeUndefined() // no period ref gained
+
+    // A night with NEITHER ref, on a date the same covering experiment
+    // reaches: gets both refs.
+    const completeResult = await stampNight(repo, WORKSPACE_ID, '2026-02-10')
+    const completeNight = await repo.load(completeResult.nightId)
+    expect(completeNight?.properties[FIELD.experiment]).toBe(coveringExperimentId)
+    expect(completeNight?.properties[FIELD.period]).toBe(coveringPeriodId)
   })
 })

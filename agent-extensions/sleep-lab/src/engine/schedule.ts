@@ -12,6 +12,9 @@ import type {Arm, Period, ScheduleSpec} from './types'
 
 const MS_PER_DAY = 86_400_000
 
+export const MAX_PAIRS = 200
+export const MAX_PERIOD_NIGHTS = 30
+
 /** Whole days between two wake dates. Parsed at local noon (via
  *  `dayToDate`) so a DST boundary can't round a day off. */
 const daysBetween = (from: string, to: string): number =>
@@ -29,6 +32,11 @@ export const buildSchedule = (spec: ScheduleSpec): Period[] => {
   }
   if (!Number.isInteger(pairs) || pairs < 1) {
     throw new Error(`buildSchedule: pairs must be a positive integer, got ${pairs}`)
+  }
+  // A schedule is blocks in the outline, two per pair; beyond this it is a
+  // typo, and the dialog's preview would build it on every keystroke.
+  if (pairs > MAX_PAIRS || periodNights > MAX_PERIOD_NIGHTS) {
+    throw new Error(`buildSchedule: at most ${MAX_PAIRS} pairs of at most ${MAX_PERIOD_NIGHTS} nights`)
   }
 
   const rng = mulberry32(seed)

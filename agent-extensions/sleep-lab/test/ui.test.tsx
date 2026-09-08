@@ -27,10 +27,20 @@ vi.mock('../src/km/nights', () => ({
   importSessions: vi.fn(),
 }))
 vi.mock('../src/km/experiment', () => ({
-  // The one real bit of logic these tests lean on — trivial enough to
-  // restate here rather than mock away, and restating it is what lets the
-  // "which experiment is running" behaviour stay pinned.
+  // The real bit of logic these tests lean on — trivial enough to restate
+  // here rather than mock away, and restating it is what lets the "which
+  // experiment is running"/"which one covers tonight" behaviour stay
+  // pinned. `experimentFor` mirrors the real function's own doc: the
+  // running experiment whose schedule covers the date, newest running as
+  // the fallback when none does.
   runningExperiment: (experiments: readonly {status: string}[]) => experiments.find(e => e.status === 'running'),
+  experimentFor: (
+    experiments: readonly {status: string; periods: readonly {from: string; to: string}[]}[],
+    date: string,
+  ) => {
+    const running = experiments.filter(e => e.status === 'running')
+    return running.find(e => e.periods.some(p => p.from <= date && date <= p.to)) ?? running[0]
+  },
   createExperiment: vi.fn(),
   stampNight: vi.fn(),
 }))
@@ -38,8 +48,10 @@ vi.mock('../src/km/experiment', () => ({
 const {writeRating} = await import('../src/km/nights')
 const {NightLine} = await import('../src/ui/decorations/NightLine')
 const {LabPageContent} = await import('../src/ui/LabPageContent')
-const {FIELD, NIGHT_TYPE, EXPERIMENT_TYPE, PERIOD_TYPE} = await import('../src/km/fields')
+const {StartExperimentDialog} = await import('../src/ui/StartExperimentDialog')
+const {FIELD, NIGHT_TYPE, EXPERIMENT_TYPE, PERIOD_TYPE, SESSION_TYPE} = await import('../src/km/fields')
 const {addDays, tonightWakeDate} = await import('../src/km/day')
+const {OUTCOME_LABELS} = await import('../src/engine/stats')
 
 afterEach(() => cleanup())
 
@@ -48,7 +60,7 @@ const Inner = () => <div data-testid="inner"/>
 
 const nightRow = (
   id: string, date: string, arm: 'intervention' | 'control', quality?: number,
-  extra: {experimentId?: string; alcohol?: number; periodId?: string} = {},
+  extra: {experimentId?: string; alcohol?: number; periodId?: string; ease?: number} = {},
 ) => ({
   id,
   parentId: 'page-1',
@@ -61,10 +73,29 @@ const nightRow = (
     ...(extra.experimentId !== undefined ? {[FIELD.experiment]: extra.experimentId} : {}),
     ...(extra.alcohol !== undefined ? {[FIELD.alcohol]: extra.alcohol} : {}),
     ...(extra.periodId !== undefined ? {[FIELD.period]: extra.periodId} : {}),
+    ...(extra.ease !== undefined ? {[FIELD.ease]: extra.ease} : {}),
   },
 })
 
-const experimentRow = (id: string, intervention: string, status: 'planned' | 'running' | 'done', startDate: string) => ({
+/** A main sleep session under `nightId`, carrying only what the mixed-source
+ *  warning reads: `source` and `main`. */
+const sessionRow = (id: string, nightId: string, source: string, start: string, end: string) => ({
+  id,
+  parentId: nightId,
+  orderKey: id,
+  properties: {
+    types: [SESSION_TYPE],
+    [FIELD.source]: source,
+    [FIELD.start]: new Date(start).getTime(),
+    [FIELD.end]: new Date(end).getTime(),
+    [FIELD.main]: true,
+  },
+})
+
+const experimentRow = (
+  id: string, intervention: string, status: 'planned' | 'running' | 'done', startDate: string,
+  primary: readonly string[] = [],
+) => ({
   id,
   parentId: 'page-1',
   orderKey: id,
@@ -78,6 +109,7 @@ const experimentRow = (id: string, intervention: string, status: 'planned' | 'ru
     [FIELD.pairs]: 1,
     [FIELD.seed]: 1,
     [FIELD.experimentStatus]: status,
+    [FIELD.primary]: primary,
   },
 })
 
@@ -216,6 +248,103 @@ describe('LabPageContent', () => {
 
     // After: the 2-drink night drops out; the night with no alcohol logged stays.
     expect(qualityRow().textContent).toContain('1/1')
+  })
+
+  it('marks the selected experiment\'s stated primaries, not the defaults, and orders them first', () => {
+    // exp-1 states 'ease' as its only primary — different from the global
+    // PRIMARY_OUTCOMES defaults ('onsetMinutes', 'deepMinutes', 'quality'),
+    // so a table still reading the defaults would mark 'quality' instead.
+    publishLayoffs([
+      experimentRow('exp-1', 'glycine', 'running', '2026-01-01', ['ease']),
+      nightRow('night-1', '2026-01-05', 'intervention', 5, {experimentId: 'exp-1', ease: 4}),
+      nightRow('night-2', '2026-01-06', 'control', 2, {experimentId: 'exp-1', ease: 1}),
+    ])
+
+    render(<LabPageContent block={fakeBlock('page-1')}/>)
+
+    expect(screen.getByText(`${OUTCOME_LABELS.ease} *`)).toBeTruthy()
+    expect(screen.queryByText(`${OUTCOME_LABELS.quality} *`)).toBeNull()
+    expect(screen.getByText(OUTCOME_LABELS.quality)).toBeTruthy() // shown, just not marked primary
+
+    const dataRows = screen.getAllByRole('row').slice(1) // drop the header row
+    expect(dataRows[0].textContent).toContain('Ease of falling asleep')
+  })
+
+  it('marks the global default primaries when the selected experiment states none', () => {
+    publishLayoffs([
+      experimentRow('exp-1', 'glycine', 'running', '2026-01-01'), // no FIELD.primary set
+      nightRow('night-1', '2026-01-05', 'intervention', 5, {experimentId: 'exp-1'}),
+      nightRow('night-2', '2026-01-06', 'control', 2, {experimentId: 'exp-1'}),
+    ])
+
+    render(<LabPageContent block={fakeBlock('page-1')}/>)
+
+    expect(screen.getByText(`${OUTCOME_LABELS.quality} *`)).toBeTruthy()
+  })
+
+  it('shows the mixed-source warning when the selected experiment\'s nights carry main sessions from two sources', () => {
+    publishLayoffs([
+      experimentRow('exp-1', 'glycine', 'running', '2026-01-01'),
+      nightRow('night-1', '2026-01-05', 'intervention', 4, {experimentId: 'exp-1'}),
+      nightRow('night-2', '2026-01-06', 'control', 3, {experimentId: 'exp-1'}),
+      sessionRow('session-1', 'night-1', 'health-connect', '2026-01-05T00:00:00Z', '2026-01-05T07:00:00Z'),
+      sessionRow('session-2', 'night-2', 'samsung-export', '2026-01-06T00:00:00Z', '2026-01-06T07:00:00Z'),
+    ])
+
+    render(<LabPageContent block={fakeBlock('page-1')}/>)
+
+    expect(screen.getByText(/Nights from two import paths/)).toBeTruthy()
+  })
+
+  it('shows no mixed-source warning when every main session comes from one source', () => {
+    publishLayoffs([
+      experimentRow('exp-1', 'glycine', 'running', '2026-01-01'),
+      nightRow('night-1', '2026-01-05', 'intervention', 4, {experimentId: 'exp-1'}),
+      nightRow('night-2', '2026-01-06', 'control', 3, {experimentId: 'exp-1'}),
+      sessionRow('session-1', 'night-1', 'health-connect', '2026-01-05T00:00:00Z', '2026-01-05T07:00:00Z'),
+      sessionRow('session-2', 'night-2', 'health-connect', '2026-01-06T00:00:00Z', '2026-01-06T07:00:00Z'),
+    ])
+
+    render(<LabPageContent block={fakeBlock('page-1')}/>)
+
+    expect(screen.queryByText(/Nights from two import paths/)).toBeNull()
+  })
+})
+
+describe('StartExperimentDialog', () => {
+  it('resolves the checked set of primaries — uncheck one default, check a non-default', () => {
+    const resolve = vi.fn()
+    const cancel = vi.fn()
+    render(<StartExperimentDialog resolve={resolve} cancel={cancel}/>)
+
+    // Defaults: PRIMARY_OUTCOMES = ['onsetMinutes', 'deepMinutes', 'quality'].
+    expect((screen.getByLabelText(OUTCOME_LABELS.onsetMinutes) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText(OUTCOME_LABELS.quality) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText(OUTCOME_LABELS.hrv) as HTMLInputElement).checked).toBe(false)
+
+    fireEvent.click(screen.getByLabelText(OUTCOME_LABELS.quality)) // uncheck a default
+    fireEvent.click(screen.getByLabelText(OUTCOME_LABELS.hrv)) // check a non-default
+
+    fireEvent.click(screen.getByRole('button', {name: 'Start'}))
+
+    expect(resolve).toHaveBeenCalledTimes(1)
+    const spec = resolve.mock.calls[0][0]
+    // Canonical (dashboard) order, not click order: onsetMinutes and
+    // deepMinutes stayed checked, quality was unchecked, hrv was checked.
+    expect(spec.primary).toEqual(['onsetMinutes', 'deepMinutes', 'hrv'])
+  })
+
+  it('clamps the schedule preview instead of throwing past MAX_PAIRS/MAX_PERIOD_NIGHTS', () => {
+    const resolve = vi.fn()
+    const cancel = vi.fn()
+    render(<StartExperimentDialog resolve={resolve} cancel={cancel}/>)
+
+    fireEvent.change(screen.getByLabelText('Pairs'), {target: {value: '9999'}})
+
+    expect(screen.getByText(/At most \d+ pairs of at most \d+ nights\./)).toBeTruthy()
+    // The out-of-range guard disables Start rather than letting a throw
+    // from `buildSchedule` reach the render.
+    expect((screen.getByRole('button', {name: 'Start'}) as HTMLButtonElement).disabled).toBe(true)
   })
 })
 

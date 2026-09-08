@@ -12,7 +12,7 @@ import type {Repo} from '@/data/repo.js'
 import {createTypedChild} from '@/data/typedRecords.js'
 
 import {buildSchedule, periodForDate} from '../engine/schedule'
-import type {Arm, ExperimentRecord, Period, ScheduleSpec} from '../engine/types'
+import type {Arm, ExperimentRecord, Outcome, Period, ScheduleSpec} from '../engine/types'
 import {dayToDate} from './day'
 import {EXPERIMENT_TYPE, PERIOD_TYPE, type ControlKind} from './fields'
 import {assignNightInTx, ensureDoseInTx, getOrCreateNightInTx} from './nights'
@@ -20,13 +20,15 @@ import {getOrCreateLabPage} from './page'
 import {asExperiment, asPeriod, buildExperiments, doseIsRequired} from './records'
 import {
   armProp, controlProp, doseTextProp, experimentProp, experimentStatusProp, fromProp, indexProp, interventionProp,
-  pairProp, pairsProp, periodNightsProp, seedProp, startDateProp, toProp,
+  pairProp, pairsProp, periodNightsProp, primaryProp, seedProp, startDateProp, toProp,
 } from './schema'
 
 export interface ExperimentSpec extends ScheduleSpec {
   intervention: string
   doseText: string
   control: ControlKind
+  /** Pre-registered primaries; may be empty. */
+  primary: Outcome[]
 }
 
 /** "control", not the control KIND: "Period 1 · nothing" reads as a gap. */
@@ -88,6 +90,9 @@ export const createExperimentAt = (repo: Repo, placement: ExperimentPlacement, s
         propertyValue(pairsProp, spec.pairs),
         propertyValue(seedProp, spec.seed),
         propertyValue(experimentStatusProp, 'running'),
+        // Tolerant of a spec built without primaries (a caller predating the
+        // field): an empty list, which the dashboard reads as "defaults".
+        propertyValue(primaryProp, spec.primary ?? []),
       ],
       position: placement.position,
       typeSnapshot,
@@ -131,6 +136,7 @@ export const stampSchedule = (repo: Repo, experimentId: string): Promise<StampSc
       periodNights: experiment.periodNights,
       pairs: experiment.pairs,
       seed: experiment.seed,
+      primary: experiment.primary,
     }
     const periods = await stampPeriodsInTx(repo, tx, experimentId, spec, repo.snapshotTypeRegistries())
     if (experiment.status !== 'running') await tx.setProperty(experimentId, experimentStatusProp, 'running')
@@ -140,10 +146,19 @@ export const stampSchedule = (repo: Repo, experimentId: string): Promise<StampSc
 export const readExperiments = async (repo: Repo, workspaceId: string): Promise<ExperimentRecord[]> =>
   buildExperiments(await repo.queryBlocks({workspaceId, types: [EXPERIMENT_TYPE, PERIOD_TYPE]}))
 
-/** The experiment tonight belongs to: running, and newest-started first
- *  when two are. */
+/** The running experiment, newest-started first when two are — the
+ *  dashboard's default. */
 export const runningExperiment = (experiments: readonly ExperimentRecord[]): ExperimentRecord | undefined =>
   experiments.find(experiment => experiment.status === 'running')
+
+/** The running experiment a night on `date` belongs to: the one whose
+ *  schedule covers the date, so pre-registering the NEXT experiment while
+ *  this one runs does not leave tonight unassigned; newest first as the
+ *  tie-break, and the newest running one when none covers the date. */
+export const experimentFor = (experiments: readonly ExperimentRecord[], date: string): ExperimentRecord | undefined => {
+  const running = experiments.filter(experiment => experiment.status === 'running')
+  return running.find(experiment => periodForDate(experiment.periods, date) !== undefined) ?? running[0]
+}
 
 /** The dose todo's text for a night on `arm`, or none when the protocol
  *  owes no dose — the same rule `doseRequired` is read by. */
@@ -166,7 +181,7 @@ export interface StampedNight {
  *  call finds the same block and changes nothing. */
 export const stampNight = async (repo: Repo, workspaceId: string, date: string): Promise<StampedNight> => {
   const page = await getOrCreateLabPage(repo, workspaceId)
-  const experiment = runningExperiment(await readExperiments(repo, workspaceId))
+  const experiment = experimentFor(await readExperiments(repo, workspaceId), date)
   const period = experiment ? periodForDate(experiment.periods, date) : undefined
 
   return repo.tx(async tx => {

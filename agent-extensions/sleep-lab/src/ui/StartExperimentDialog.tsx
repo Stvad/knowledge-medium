@@ -8,11 +8,16 @@ import {useState} from 'react'
 
 import type {DialogContextProps} from '@/utils/dialogs.js'
 
-import {buildSchedule} from '../engine/schedule'
-import type {Period} from '../engine/types'
+import {OUTCOME_LABELS, PRIMARY_OUTCOMES} from '../engine/stats'
+import {buildSchedule, MAX_PAIRS, MAX_PERIOD_NIGHTS} from '../engine/schedule'
+import type {Outcome, Period} from '../engine/types'
 import type {ExperimentSpec} from '../km/experiment'
 import type {ControlKind} from '../km/fields'
 import {Segmented} from './Segmented'
+
+/** Every outcome, in the dashboard's own order — the same order
+ *  `OUTCOME_LABELS` is declared in. */
+const ALL_OUTCOMES = Object.keys(OUTCOME_LABELS) as Outcome[]
 
 const randomSeed = (): number => Math.floor(Math.random() * 0xFFFFFFFF)
 
@@ -40,13 +45,30 @@ export const StartExperimentDialog = ({resolve, cancel}: DialogContextProps<Expe
   const [periodNights, setPeriodNights] = useState(3)
   const [pairs, setPairs] = useState(8)
   const [seed, setSeed] = useState(randomSeed)
+  const [primary, setPrimary] = useState<Set<Outcome>>(new Set(PRIMARY_OUTCOMES))
+
+  const togglePrimary = (outcome: Outcome, checked: boolean) => {
+    setPrimary(prev => {
+      const next = new Set(prev)
+      if (checked) next.add(outcome)
+      else next.delete(outcome)
+      return next
+    })
+  }
 
   let preview: Period[] = []
   let error: string | null = null
-  try {
-    preview = buildSchedule({startDate, periodNights, pairs, seed}).slice(0, 4)
-  } catch (e) {
-    error = e instanceof Error ? e.message : 'Could not build a schedule from these settings.'
+  // Guarded before the call: `buildSchedule` itself throws past these
+  // maxima, but a live preview re-running on every keystroke should never
+  // reach for that — the message below says the same thing without it.
+  if (pairs > MAX_PAIRS || periodNights > MAX_PERIOD_NIGHTS) {
+    error = `At most ${MAX_PAIRS} pairs of at most ${MAX_PERIOD_NIGHTS} nights.`
+  } else {
+    try {
+      preview = buildSchedule({startDate, periodNights, pairs, seed}).slice(0, 4)
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Could not build a schedule from these settings.'
+    }
   }
 
   const canStart = intervention.trim() !== '' && doseText.trim() !== '' && error === null
@@ -101,6 +123,7 @@ export const StartExperimentDialog = ({resolve, cancel}: DialogContextProps<Expe
           <input
             type="number"
             min={1}
+            max={MAX_PERIOD_NIGHTS}
             className="rounded border border-border bg-transparent px-2 py-1"
             value={periodNights}
             onChange={event => setPeriodNights(Number(event.currentTarget.value))}
@@ -111,11 +134,28 @@ export const StartExperimentDialog = ({resolve, cancel}: DialogContextProps<Expe
           <input
             type="number"
             min={1}
+            max={MAX_PAIRS}
             className="rounded border border-border bg-transparent px-2 py-1"
             value={pairs}
             onChange={event => setPairs(Number(event.currentTarget.value))}
           />
         </label>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Primary outcomes</span>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+          {ALL_OUTCOMES.map(outcome => (
+            <label key={outcome} className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={primary.has(outcome)}
+                onChange={event => togglePrimary(outcome, event.currentTarget.checked)}
+              />
+              {OUTCOME_LABELS[outcome]}
+            </label>
+          ))}
+        </div>
       </div>
 
       <label className="flex flex-col gap-1 text-sm">
@@ -149,6 +189,7 @@ export const StartExperimentDialog = ({resolve, cancel}: DialogContextProps<Expe
           className="rounded bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
           onClick={() => resolve({
             intervention: intervention.trim(), doseText: doseText.trim(), control, startDate, periodNights, pairs, seed,
+            primary: ALL_OUTCOMES.filter(outcome => primary.has(outcome)),
           })}
         >Start</button>
       </div>

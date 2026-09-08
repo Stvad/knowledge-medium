@@ -204,6 +204,7 @@ describe('asExperiment', () => {
       pairs: 8,
       seed: 0,
       status: 'running',
+      primary: [],
     })
   })
 
@@ -227,6 +228,7 @@ describe('asExperiment', () => {
       periodNights: 3,
       pairs: 8,
       seed: 42,
+      primary: [],
       status: 'planned',
     })
   })
@@ -234,6 +236,21 @@ describe('asExperiment', () => {
   it('falls back to "running" for an unrecognized status', () => {
     const result = asExperiment(row([EXPERIMENT_TYPE], {[FIELD.experimentStatus]: 'bogus'}))
     expect(result?.status).toBe('running')
+  })
+
+  // Pins: `sleeplab:primary` is read as a string-list, and any name that
+  // is not one of `SESSION_MEASURES`/`NIGHT_RATINGS` is dropped rather than
+  // carried through as an unrecognized outcome the dashboard can't render.
+  it('reads sleeplab:primary, dropping any name that is not a recognized outcome', () => {
+    const result = asExperiment(row([EXPERIMENT_TYPE], {
+      [FIELD.primary]: ['onsetMinutes', 'bogus-outcome', 'quality'],
+    }, {id: 'exp-3'}))
+    expect(result?.primary).toEqual(['onsetMinutes', 'quality'])
+  })
+
+  it('reads an empty or missing sleeplab:primary as an empty list', () => {
+    expect(asExperiment(row([EXPERIMENT_TYPE], {[FIELD.primary]: []}))?.primary).toEqual([])
+    expect(asExperiment(row([EXPERIMENT_TYPE], {}))?.primary).toEqual([])
   })
 })
 
@@ -315,6 +332,28 @@ describe('buildNights', () => {
     expect(n2.transition).toBe(true)
     expect(n2.main?.id).toBe('session-main')
     expect(n2.naps.map(s => s.id)).toEqual(['session-nap'])
+  })
+
+  // Pins: when several sessions under one night are flagged `main` by hand
+  // (the property editor toggles each block on its own, so more than one
+  // can end up true at once), `buildNights` picks the LONGEST of them as
+  // `main` and reads every other one — flagged or not — as a nap.
+  it('when two sessions are both flagged main, the longer one wins and the shorter reads as a nap', () => {
+    const night = row([NIGHT_TYPE], {[FIELD.date]: day('2026-02-09')}, {id: 'night-1'})
+    const shortMain = row([SESSION_TYPE], {
+      [FIELD.start]: new Date('2026-02-09T00:00:00Z').getTime(),
+      [FIELD.end]: new Date('2026-02-09T04:00:00Z').getTime(), // 4h
+      [FIELD.main]: true,
+    }, {id: 'session-short', parentId: 'night-1'})
+    const longMain = row([SESSION_TYPE], {
+      [FIELD.start]: new Date('2026-02-09T00:30:00Z').getTime(),
+      [FIELD.end]: new Date('2026-02-09T07:30:00Z').getTime(), // 7h
+      [FIELD.main]: true,
+    }, {id: 'session-long', parentId: 'night-1'})
+
+    const [result] = buildNights([night, shortMain, longMain])
+    expect(result.main?.id).toBe('session-long')
+    expect(result.naps.map(s => s.id)).toEqual(['session-short'])
   })
 
   it('keeps a ref\'d arm when the period it points at is gone, with no pair/periodIndex/transition', () => {

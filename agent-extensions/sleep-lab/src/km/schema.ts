@@ -134,6 +134,15 @@ export const experimentStatusProp = seedProperty<ExperimentStatus>({
   changeScope: scope,
 })
 
+export const primaryProp = seedProperty({
+  seedKey: extensionPropertySeedKey('primary'),
+  revision: 1,
+  name: FIELD.primary,
+  preset: 'string-list',
+  defaultValue: [],
+  changeScope: scope,
+})
+
 // ──── Period ────
 
 export const indexProp = seedProperty({
@@ -318,7 +327,7 @@ export const experimentType = seedType({
   description: 'An intervention under test: dose, schedule, status. Its children are its periods.',
   properties: [
     interventionProp, doseTextProp, controlProp, startDateProp,
-    periodNightsProp, pairsProp, seedProp, experimentStatusProp,
+    periodNightsProp, pairsProp, seedProp, experimentStatusProp, primaryProp,
   ],
 })
 
@@ -372,7 +381,7 @@ export const SLEEPLAB_TYPES = [labType, experimentType, periodType, nightType, s
 
 export const SLEEPLAB_PROPS = [
   interventionProp, doseTextProp, controlProp, startDateProp,
-  periodNightsProp, pairsProp, seedProp, experimentStatusProp,
+  periodNightsProp, pairsProp, seedProp, experimentStatusProp, primaryProp,
   indexProp, pairProp, armProp, fromProp, toProp,
   dateProp, experimentProp, periodProp,
   qualityProp, restedProp, easeProp, sleepinessProp,

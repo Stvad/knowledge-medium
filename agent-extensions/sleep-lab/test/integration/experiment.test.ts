@@ -21,9 +21,11 @@ import {createTypedChild} from '@/data/typedRecords'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
 import {buildSchedule} from '../../src/engine/schedule'
+import type {ExperimentRecord, Period} from '../../src/engine/types'
 import {dayToDate} from '../../src/km/day'
 import {
-  createExperiment, readExperiments, runningExperiment, stampNight, stampSchedule, type ExperimentSpec,
+  createExperiment, experimentFor, readExperiments, runningExperiment, stampNight, stampSchedule,
+  type ExperimentSpec,
 } from '../../src/km/experiment'
 import {
   DOSE_TYPE, EXPERIMENT_TYPE, FIELD, PERIOD_TYPE, type Arm, type ControlKind, type ExperimentStatus,
@@ -246,6 +248,62 @@ describe('runningExperiment', {timeout: 30_000}, () => {
       {scope: ChangeScope.BlockDefault, description: 'mark done'})
 
     expect(runningExperiment(await readExperiments(repo, WORKSPACE_ID))).toBeUndefined()
+  })
+})
+
+// `experimentFor` is a pure function over `ExperimentRecord[]` (no repo
+// needed) — hand-built fixtures, passed in the newest-first order
+// `buildExperiments`/`readExperiments` actually hand it, since the
+// function itself does not sort and relies on that ordering for its
+// running[0] tie-break.
+const experimentFixture = (over: Partial<ExperimentRecord> & {id: string; periods: (Period & {id: string})[]}): ExperimentRecord => ({
+  intervention: 'glycine',
+  doseText: '3 g glycine before bed',
+  control: 'nothing',
+  startDate: '2026-01-01',
+  periodNights: 3,
+  pairs: 1,
+  seed: 0,
+  status: 'running',
+  primary: [],
+  ...over,
+})
+
+describe('experimentFor', () => {
+  it('picks the OLDER running experiment when the newer one does not yet cover the date', () => {
+    // Newest first, as `readExperiments` hands them over.
+    const newer = experimentFixture({
+      id: 'exp-newer', startDate: '2026-02-01',
+      periods: [{id: 'p-newer', index: 1, pair: 1, arm: 'control', from: '2026-04-01', to: '2026-04-03'}],
+    })
+    const older = experimentFixture({
+      id: 'exp-older', startDate: '2026-01-01',
+      periods: [{id: 'p-older', index: 1, pair: 1, arm: 'intervention', from: '2026-02-25', to: '2026-03-03'}],
+    })
+
+    expect(experimentFor([newer, older], '2026-03-01')?.id).toBe('exp-older')
+  })
+
+  it('falls back to the newest running experiment when none covers the date', () => {
+    const newer = experimentFixture({
+      id: 'exp-newer', startDate: '2026-02-01',
+      periods: [{id: 'p-newer', index: 1, pair: 1, arm: 'control', from: '2026-04-01', to: '2026-04-03'}],
+    })
+    const older = experimentFixture({
+      id: 'exp-older', startDate: '2026-01-01',
+      periods: [{id: 'p-older', index: 1, pair: 1, arm: 'intervention', from: '2026-02-25', to: '2026-03-03'}],
+    })
+
+    // Neither schedule reaches 2026-05-01 — the newest running one wins.
+    expect(experimentFor([newer, older], '2026-05-01')?.id).toBe('exp-newer')
+  })
+
+  it('is undefined when nothing is running', () => {
+    const planned = experimentFixture({
+      id: 'exp-planned', status: 'planned',
+      periods: [{id: 'p1', index: 1, pair: 1, arm: 'intervention', from: '2026-01-01', to: '2026-01-03'}],
+    })
+    expect(experimentFor([planned], '2026-01-01')).toBeUndefined()
   })
 })
 
@@ -481,5 +539,44 @@ describe('stampNight — a night stays on its original experiment', {timeout: 30
     expect(night?.properties[FIELD.experiment]).toBe(experimentAId)
     expect(night?.properties[FIELD.experiment]).not.toBe(experimentBId)
     expect(await doseChildrenOf(first.nightId)).toHaveLength(0)
+  })
+})
+
+describe('stampNight — picks the covering experiment when two are running at once', {timeout: 30_000}, () => {
+  it('assigns from the OLDER experiment (arm from its period, refs to it) when the newer one\'s schedule does not yet reach the date', async () => {
+    const pageId = await labPageId()
+    const date = '2026-03-01'
+
+    // Older (earlier startDate), whose schedule covers `date`.
+    const olderId = await seedExperiment(pageId, [
+      {index: 1, pair: 1, arm: 'intervention', from: '2026-02-25', to: '2026-03-03'},
+    ], {control: 'nothing', doseText: 'older dose'})
+
+    // Newer (later startDate — read from periods[0].from, see seedExperiment),
+    // also running, but its own schedule starts a month out — it does not
+    // cover `date`.
+    await seedExperiment(pageId, [
+      {index: 1, pair: 1, arm: 'control', from: '2026-04-01', to: '2026-04-03'},
+    ], {control: 'placebo', doseText: 'newer dose'})
+
+    // Newest-first is the order `readExperiments` hands `stampNight`.
+    const experiments = await readExperiments(repo, WORKSPACE_ID)
+    expect(experiments.map(e => e.id)[0]).not.toBe(olderId) // the newer one sorts first
+
+    const result = await stampNight(repo, WORKSPACE_ID, date)
+    expect(result.assignment).toBe('assigned')
+    expect(result.arm).toBe('intervention') // older's period's arm, not newer's 'control'
+
+    const night = await repo.load(result.nightId)
+    expect(night?.properties[FIELD.experiment]).toBe(olderId)
+    const olderPeriods = (await repo.block(olderId).children.load()) ?? []
+    expect(olderPeriods.map(p => p.id)).toContain(night?.properties[FIELD.period])
+
+    // Dose comes from the older experiment's own text, confirming the
+    // whole assignment — arm, refs, and the dose it drives — is one
+    // experiment's, not a mix of the two schedules.
+    expect(result.doseId).toBeDefined()
+    const dose = await repo.load(result.doseId!)
+    expect(dose?.content).toBe('older dose')
   })
 })

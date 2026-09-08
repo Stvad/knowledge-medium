@@ -17,6 +17,7 @@ const experiment: ExperimentRecord = {
   pairs: 1,
   seed: 0,
   status: 'running',
+    primary: [],
   periods: [],
 }
 

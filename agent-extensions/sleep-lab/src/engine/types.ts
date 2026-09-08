@@ -9,6 +9,10 @@ import type {Arm, NightRating, SessionMeasure, SessionSource} from '../km/fields
 
 export type {Arm, NightRating, SessionMeasure, SessionSource} from '../km/fields'
 
+/** Every outcome the dashboard can compare: the session measures plus the
+ *  night ratings, under one name. */
+export type Outcome = SessionMeasure | NightRating
+
 // ──── Schedule ────
 
 export interface ScheduleSpec {
@@ -124,14 +128,14 @@ export interface ExperimentRecord {
   pairs: number
   seed: number
   status: 'planned' | 'running' | 'done'
+  /** The protocol's pre-registered primaries; the dashboard marks these.
+   *  Empty when the block states none — the caller falls back to the
+   *  glycine defaults for display only. */
+  primary: Outcome[]
   periods: (Period & {id: string})[]
 }
 
 // ──── Analysis ────
-
-/** Every outcome the dashboard can compare: the session measures plus the
- *  night ratings, under one name. */
-export type Outcome = SessionMeasure | NightRating
 
 /** `assigned`: every night by its arm, whatever was taken (intention to
  *  treat). `per-protocol`: a night that owes a dose (`doseRequired`) is in

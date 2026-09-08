@@ -9,12 +9,15 @@
 import {hasBlockType} from '@/data/properties.js'
 
 import type {
-  Arm, ExperimentRecord, NightRating, NightRecord, Period, SessionMeasure, SessionRecord, SessionSource,
+  Arm, ExperimentRecord, NightRating, NightRecord, Outcome, Period, SessionMeasure, SessionRecord, SessionSource,
 } from '../engine/types'
 import {dateToDay, storedDate} from './day'
 import {
   DOSE_TYPE, EXPERIMENT_TYPE, FIELD, NIGHT_RATINGS, NIGHT_TYPE, PERIOD_TYPE, SESSION_MEASURES, SESSION_TYPE,
 } from './fields'
+
+const OUTCOMES: readonly string[] = [...SESSION_MEASURES, ...NIGHT_RATINGS]
+const isOutcome = (value: unknown): value is Outcome => typeof value === 'string' && OUTCOMES.includes(value)
 
 export interface Row {
   id: string
@@ -85,6 +88,7 @@ export const asExperiment = (row: Row | null | undefined): Omit<ExperimentRecord
     pairs: num(row, FIELD.pairs) ?? 8,
     seed: num(row, FIELD.seed) ?? 0,
     status: status === 'planned' || status === 'done' ? status : 'running',
+    primary: (Array.isArray(row.properties[FIELD.primary]) ? row.properties[FIELD.primary] as unknown[] : []).filter(isOutcome),
   }
 }
 
@@ -244,6 +248,11 @@ export const buildNights = (rows: readonly Row[], trained: ReadonlySet<string> =
     .filter((night): night is NightBase => night !== null)
     .map(night => {
       const own = sessions.get(night.id) ?? []
+      // Several flagged by hand (the property editor toggles each block on
+      // its own): the longest wins, the rest read as naps — deterministic,
+      // and the same answer `pickMain` would give among them.
+      const main = own.filter(session => session.main)
+        .sort((a, b) => (b.end.getTime() - b.start.getTime()) - (a.end.getTime() - a.start.getTime()))[0]
       const period = night.periodId ? periods.get(night.periodId) : undefined
       const nightDoses = doses.get(night.id) ?? []
       const experiment = night.experimentId ? experiments.get(night.experimentId) : undefined
@@ -259,8 +268,8 @@ export const buildNights = (rows: readonly Row[], trained: ReadonlySet<string> =
         doseRequired: experiment
           ? doseIsRequired(night.arm, experiment.control)
           : night.arm === 'intervention' || nightDoses.length > 0,
-        main: own.find(session => session.main),
-        naps: own.filter(session => !session.main),
+        main,
+        naps: own.filter(session => session !== main),
         trained: trained.has(night.date),
       }
     })

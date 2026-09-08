@@ -17,9 +17,9 @@ import {useBlockOpener} from '@/utils/navigation.js'
 import type {BlockRendererProps} from '@/types.js'
 
 import {compareAll, OUTCOME_LABELS, PRIMARY_OUTCOMES} from '../engine/stats'
-import type {Comparison, ExperimentRecord, NightRecord, Outcome, Population} from '../engine/types'
+import type {Comparison, ExperimentRecord, NightRecord, Outcome, Population, SessionSource} from '../engine/types'
 import {lastNightWakeDate, tonightWakeDate} from '../km/day'
-import {createExperiment, runningExperiment, stampNight} from '../km/experiment'
+import {createExperiment, experimentFor, runningExperiment, stampNight} from '../km/experiment'
 import {summarizeExperiment} from './experimentSummary'
 import {ImportDialog} from './ImportDialog'
 import {useLabRows} from './labRows'
@@ -81,26 +81,42 @@ const POPULATION_OPTIONS: readonly {value: Population; label: string}[] = [
  *  logged is never touched by it (see `EligibilityOptions.maxAlcohol`). */
 const ALCOHOL_SENSITIVITY_CAP = 1
 
-const AnalysisTable = ({nights}: {nights: readonly NightRecord[]}) => {
+const AnalysisTable = ({nights, experiment}: {nights: readonly NightRecord[]; experiment?: ExperimentRecord}) => {
   const [population, setPopulation] = useState<Population>('assigned')
   const [excludeTransition, setExcludeTransition] = useState(false)
   const [excludeAlcohol, setExcludeAlcohol] = useState(false)
 
   if (nights.length === 0) return <p className="text-sm text-muted-foreground">No nights logged yet.</p>
 
+  // The protocol's own pre-registered primaries when it states any; the
+  // glycine defaults are a display fallback only (README, "Analysis").
+  const primaryOutcomes = experiment && experiment.primary.length > 0 ? experiment.primary : PRIMARY_OUTCOMES
+
+  // Onset latency (and every stage-derived number) is measured differently
+  // by the two import paths — see README, "Import" — so a table mixing
+  // main sessions from both is a silent apples-to-oranges comparison.
+  const mainSources = new Set(
+    nights.map(night => night.main?.source).filter((source): source is SessionSource => source !== undefined),
+  )
+
   const rows = compareAll(nights, population, {
     excludeTransition,
     ...(excludeAlcohol ? {maxAlcohol: ALCOHOL_SENSITIVITY_CAP} : {}),
   }).filter(c => c.nIntervention >= 1 || c.nControl >= 1)
   const byOutcome = new Map(rows.map(c => [c.outcome, c] as const))
-  const primary = PRIMARY_OUTCOMES
+  const primary = primaryOutcomes
     .map(outcome => byOutcome.get(outcome))
     .filter((c): c is Comparison => c !== undefined)
-  const secondary = rows.filter(c => !PRIMARY_OUTCOMES.includes(c.outcome))
+  const secondary = rows.filter(c => !primaryOutcomes.includes(c.outcome))
   const ordered = [...primary, ...secondary]
 
   return (
     <div className="flex flex-col gap-2">
+      {mainSources.size > 1 ? (
+        <p className="text-xs text-amber-600">
+          Nights from two import paths — onset latency is not comparable across them.
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-4 text-xs">
         <Segmented options={POPULATION_OPTIONS} value={population} onChange={setPopulation}/>
         <label className="flex items-center gap-1.5">
@@ -137,7 +153,7 @@ const AnalysisTable = ({nights}: {nights: readonly NightRecord[]}) => {
             </thead>
             <tbody>
               {ordered.map(row => {
-                const isPrimary = PRIMARY_OUTCOMES.includes(row.outcome)
+                const isPrimary = primaryOutcomes.includes(row.outcome)
                 return (
                   <tr key={row.outcome} className={`border-b border-border ${isPrimary ? 'font-medium' : 'text-muted-foreground'}`}>
                     <td className="py-1 pr-2">{OUTCOME_LABELS[row.outcome]}{isPrimary ? ' *' : ''}</td>
@@ -197,6 +213,11 @@ export const LabPageContent = ({block}: BlockRendererProps) => {
   const [selectedExperimentId, setSelectedExperimentId] = useState<string | undefined>(undefined)
   const running = runningExperiment(experiments)
   const tonightDate = tonightWakeDate()
+  // The card and its tonight-arm read the experiment whose SCHEDULE covers
+  // tonight — not just "the" running one — so pre-registering the next
+  // experiment while this one runs never leaves tonight showing the wrong
+  // arm (see `experimentFor`'s own doc).
+  const tonightExperiment = experimentFor(experiments, tonightDate)
   // Nights read by the analysis are one experiment's: the running one by
   // default, else the newest (`experiments` is newest-first — see
   // `buildExperiments`). A stale selection (an experiment that no longer
@@ -281,8 +302,8 @@ export const LabPageContent = ({block}: BlockRendererProps) => {
         ) : null}
       </div>
 
-      {running ? (
-        <ExperimentCard experiment={running} nights={nights} tonight={tonightDate}/>
+      {tonightExperiment ? (
+        <ExperimentCard experiment={tonightExperiment} nights={nights} tonight={tonightDate}/>
       ) : (
         <p className="text-sm text-muted-foreground">No experiment is running. Start one to begin the schedule.</p>
       )}
@@ -298,7 +319,7 @@ export const LabPageContent = ({block}: BlockRendererProps) => {
             />
           </div>
         ) : null}
-        <AnalysisTable nights={analysisNights}/>
+        <AnalysisTable nights={analysisNights} experiment={selectedExperiment}/>
       </section>
 
       <section>

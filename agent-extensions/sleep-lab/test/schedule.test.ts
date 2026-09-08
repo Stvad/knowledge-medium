@@ -4,6 +4,8 @@ import {
   armForDate,
   buildSchedule,
   isTransitionNight,
+  MAX_PAIRS,
+  MAX_PERIOD_NIGHTS,
   periodForDate,
   scheduleEnd,
   scheduleProgress,
@@ -97,6 +99,26 @@ describe('buildSchedule', () => {
     '',
   ])('rejects a malformed startDate %j', bad => {
     expect(() => buildSchedule(spec({startDate: bad}))).toThrow()
+  })
+
+  // A schedule is blocks in the outline, two per pair — beyond MAX_PAIRS
+  // pairs of MAX_PERIOD_NIGHTS nights each is a typo, not a real protocol
+  // (schedule.ts's own doc comment on the two constants).
+  it('throws past MAX_PAIRS pairs, and accepts exactly MAX_PAIRS', () => {
+    expect(() => buildSchedule(spec({pairs: MAX_PAIRS + 1}))).toThrow(
+      `at most ${MAX_PAIRS} pairs of at most ${MAX_PERIOD_NIGHTS} nights`,
+    )
+    expect(buildSchedule(spec({pairs: MAX_PAIRS}))).toHaveLength(MAX_PAIRS * 2)
+  })
+
+  it('throws past MAX_PERIOD_NIGHTS nights, and accepts exactly MAX_PERIOD_NIGHTS', () => {
+    expect(() => buildSchedule(spec({periodNights: MAX_PERIOD_NIGHTS + 1}))).toThrow(
+      `at most ${MAX_PAIRS} pairs of at most ${MAX_PERIOD_NIGHTS} nights`,
+    )
+    const periods = buildSchedule(spec({periodNights: MAX_PERIOD_NIGHTS, pairs: 1}))
+    expect(periods[0]).toMatchObject({from: '2026-01-01'})
+    const daysSpanned = (new Date(periods[0].to).getTime() - new Date(periods[0].from).getTime()) / (24 * 60 * 60 * 1000)
+    expect(daysSpanned).toBe(MAX_PERIOD_NIGHTS - 1)
   })
 })
 

@@ -86,9 +86,11 @@ export const getOrCreateNightInTx = async (repo: Repo, tx: Tx, seat: NightSeat):
   if (outcome.status === 'created') return outcome.id
   if (outcome.status === 'adopted') {
     // Adopt repairs types, not properties. The seat IS this date's night by
-    // identity, so a block that lost its date gets it back — every reader
-    // rejects a night without one, and sessions filed under it would vanish.
-    if (asNight(outcome.block)?.date === undefined) await tx.setProperty(outcome.id, dateProp, dayToDate(seat.date))
+    // identity — its id encodes the date — so a block whose date is missing
+    // or was edited to another day gets the seat's date back: readers file a
+    // night by its date, and a mismatch would split one night's sessions
+    // across two dates. A night is not re-dated by hand; it is deleted.
+    if (asNight(outcome.block)?.date !== seat.date) await tx.setProperty(outcome.id, dateProp, dayToDate(seat.date))
     return outcome.id
   }
 
@@ -114,8 +116,14 @@ export const assignNightInTx = async (
   // A hand-set arm stays, but the night still belongs to the experiment and
   // period covering its date — without the refs the analysis, which reads
   // nights by experiment, would never see it.
-  if (typeof night.properties[FIELD.experiment] !== 'string') await tx.setProperty(nightId, experimentProp, assignment.experimentId)
-  if (typeof night.properties[FIELD.period] !== 'string') await tx.setProperty(nightId, periodProp, assignment.periodId)
+  // The two refs are ONE assignment: written together, and a night that has
+  // either is left as found rather than completed from another experiment.
+  const hasAssignment = typeof night.properties[FIELD.experiment] === 'string'
+    || typeof night.properties[FIELD.period] === 'string'
+  if (!hasAssignment) {
+    await tx.setProperty(nightId, experimentProp, assignment.experimentId)
+    await tx.setProperty(nightId, periodProp, assignment.periodId)
+  }
   if (preset) return 'already'
   await tx.setProperty(nightId, armProp, assignment.arm)
   return 'assigned'
@@ -239,8 +247,10 @@ export const upsertSessionInTx = async (
   const outcome = await getOrCreateTypedChild(repo, tx, {identity: sessionIdentity(workspaceId, session.start), ...spec})
   if (outcome.status === 'created') return {id: outcome.id, status: 'created'}
   let id: string
+  let current: SessionRecord | null
   if (outcome.status === 'adopted') {
     id = outcome.id
+    current = asSession(outcome.block)
   } else {
     // The seat holds a tombstone or a row of another workspace, and stays
     // that way — so a previous import already minted a replacement here.
@@ -251,10 +261,14 @@ export const upsertSessionInTx = async (
       .find(existing => existing !== null && sameMinute(existing.start, session.start))
     if (!minted) return {id: await createTypedChild(repo, tx, spec), status: 'created'}
     id = minted.id
+    current = minted
   }
   for (const assignment of [...identityProps, ...measureAssignments(measures)]) {
     await tx.setProperty(id, assignment.schema, assignment.value)
   }
+  // The line says the span; a corrected end time must show. The main flag
+  // is whatever the block has now — settling is a separate decision.
+  await tx.update(id, {content: sessionContent(session, current?.main ?? false)})
   return {id, status: 'updated'}
 }
 
