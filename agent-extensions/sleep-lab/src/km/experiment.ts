@@ -17,7 +17,7 @@ import {dayToDate} from './day'
 import {EXPERIMENT_TYPE, PERIOD_TYPE, type ControlKind} from './fields'
 import {assignNightInTx, ensureDoseInTx, getOrCreateNightInTx} from './nights'
 import {getOrCreateLabPage} from './page'
-import {asExperiment, buildExperiments} from './records'
+import {asExperiment, asPeriod, buildExperiments} from './records'
 import {
   armProp, controlProp, doseTextProp, experimentStatusProp, fromProp, indexProp, interventionProp,
   pairProp, pairsProp, periodNightsProp, seedProp, startDateProp, toProp,
@@ -172,18 +172,25 @@ export const stampNight = async (repo: Repo, workspaceId: string, date: string):
     const nightId = await getOrCreateNightInTx(repo, tx, {workspaceId, pageId: page.id, date, typeSnapshot})
     if (!experiment || !period) return {nightId, assignment: 'none' as const}
 
-    // The schedule was read before this transaction; the period must still
-    // be there before the night is bound to it.
+    // The schedule was read before this transaction. What the night gets
+    // bound to is what the rows say NOW: the experiment still running, the
+    // period still typed, still covering the date, and its arm as stored.
+    const experimentRow = await tx.get(experiment.id)
     const periodRow = await tx.get(period.id)
-    if (!periodRow || periodRow.deleted) return {nightId, assignment: 'none' as const}
+    const live = experimentRow && !experimentRow.deleted ? asExperiment(experimentRow) : null
+    const livePeriod = periodRow && !periodRow.deleted ? asPeriod(periodRow) : null
+    if (!live || live.status !== 'running' || !livePeriod || livePeriod.from > date || date > livePeriod.to) {
+      return {nightId, assignment: 'none' as const}
+    }
+    const liveExperiment: ExperimentRecord = {...experiment, ...live}
 
-    const assigned = await assignNightInTx(tx, nightId, {experimentId: experiment.id, periodId: period.id, arm: period.arm})
+    const assigned = await assignNightInTx(tx, nightId, {experimentId: live.id, periodId: livePeriod.id, arm: livePeriod.arm})
     if (assigned === 'gone') return {nightId, assignment: 'none' as const}
     const night = await tx.get(nightId)
     const raw = night?.properties[armProp.name]
-    const arm: Arm = raw === 'intervention' || raw === 'control' ? raw : period.arm
-    const text = doseTextFor(experiment, arm)
+    const arm: Arm = raw === 'intervention' || raw === 'control' ? raw : livePeriod.arm
+    const text = doseTextFor(liveExperiment, arm)
     const doseId = text === undefined ? undefined : await ensureDoseInTx(repo, tx, {nightId, text, typeSnapshot})
-    return {nightId, arm, doseId, experiment, assignment: assigned}
+    return {nightId, arm, doseId, experiment: liveExperiment, assignment: assigned}
   }, {scope: ChangeScope.BlockDefault, description: `Night of ${date}`})
 }

@@ -21,9 +21,9 @@ import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 import {buildSchedule} from '../../src/engine/schedule'
 import {dayToDate} from '../../src/km/day'
 import {createExperiment, readExperiments, runningExperiment, stampNight, type ExperimentSpec} from '../../src/km/experiment'
-import {FIELD} from '../../src/km/fields'
+import {FIELD, type Arm} from '../../src/km/fields'
 import {getOrCreateLabPage} from '../../src/km/page'
-import {SLEEPLAB_PROPS, SLEEPLAB_TYPES, experimentStatusProp} from '../../src/km/schema'
+import {SLEEPLAB_PROPS, SLEEPLAB_TYPES, armProp, experimentStatusProp, toProp} from '../../src/km/schema'
 
 const WORKSPACE_ID = 'ws-1'
 
@@ -222,5 +222,110 @@ describe('stampNight — schedule edges', {timeout: 30_000}, () => {
     expect(night?.properties[FIELD.arm]).toBeUndefined()
     expect(night?.properties[FIELD.experiment]).toBeUndefined()
     expect(night?.properties[FIELD.period]).toBeUndefined()
+  })
+})
+
+describe('stampNight — revalidates inside the write, not just the period\'s existence', {timeout: 30_000}, () => {
+  it('assignment "none" when the experiment is marked done between the schedule read and the write', async () => {
+    const pageId = await labPageId()
+    const experimentId = await createExperiment(repo, pageId, spec({pairs: 1, startDate: '2026-02-01'}))
+    const date = '2026-02-01'
+
+    // Same race shape as the period-deleted test above: let the one
+    // `queryBlocks` call behind `readExperiments` resolve, then flip the
+    // experiment's status before `stampNight`'s own `tx.get(experiment.id)`
+    // re-check runs.
+    const originalQueryBlocks = repo.queryBlocks.bind(repo)
+    const raceSpy = vi.spyOn(repo, 'queryBlocks').mockImplementationOnce(async query => {
+      const rows = await originalQueryBlocks(query)
+      await repo.tx(tx => tx.setProperty(experimentId, experimentStatusProp, 'done'),
+        {scope: ChangeScope.BlockDefault, description: 'simulate concurrent status flip'})
+      return rows
+    })
+
+    const result = await stampNight(repo, WORKSPACE_ID, date)
+    expect(raceSpy).toHaveBeenCalledTimes(1)
+    raceSpy.mockRestore()
+
+    expect(result.assignment).toBe('none')
+    expect(result.arm).toBeUndefined()
+    expect(result.doseId).toBeUndefined()
+
+    const night = await repo.load(result.nightId)
+    expect(night?.properties[FIELD.arm]).toBeUndefined()
+    expect(night?.properties[FIELD.experiment]).toBeUndefined()
+    expect(night?.properties[FIELD.period]).toBeUndefined()
+  })
+
+  it('assignment "none" when the period is shrunk to no longer cover the date between the read and the write', async () => {
+    const pageId = await labPageId()
+    await createExperiment(repo, pageId, spec({pairs: 1, startDate: '2026-02-01'}))
+    const date = '2026-02-01'
+
+    const [experiment] = await readExperiments(repo, WORKSPACE_ID)
+    const period = experiment.periods.find(p => p.from <= date && date <= p.to)
+    expect(period).toBeDefined()
+
+    const originalQueryBlocks = repo.queryBlocks.bind(repo)
+    const raceSpy = vi.spyOn(repo, 'queryBlocks').mockImplementationOnce(async query => {
+      const rows = await originalQueryBlocks(query)
+      // Move `to` to the day before the date being stamped — the period no
+      // longer covers it by the time the write re-reads it.
+      await repo.tx(tx => tx.setProperty(period!.id, toProp, dayToDate('2026-01-31')),
+        {scope: ChangeScope.BlockDefault, description: 'simulate concurrent period shrink'})
+      return rows
+    })
+
+    const result = await stampNight(repo, WORKSPACE_ID, date)
+    expect(raceSpy).toHaveBeenCalledTimes(1)
+    raceSpy.mockRestore()
+
+    expect(result.assignment).toBe('none')
+    expect(result.arm).toBeUndefined()
+    expect(result.doseId).toBeUndefined()
+
+    const night = await repo.load(result.nightId)
+    expect(night?.properties[FIELD.arm]).toBeUndefined()
+    expect(night?.properties[FIELD.experiment]).toBeUndefined()
+    expect(night?.properties[FIELD.period]).toBeUndefined()
+  })
+
+  it('assigns the FLIPPED arm (and its matching dose) when the period\'s arm changes between the read and the write', async () => {
+    const pageId = await labPageId()
+    const testSpec = spec({pairs: 1, startDate: '2026-02-01', control: 'placebo'})
+    await createExperiment(repo, pageId, testSpec)
+    const date = '2026-02-01'
+
+    const [experiment] = await readExperiments(repo, WORKSPACE_ID)
+    const period = experiment.periods.find(p => p.from <= date && date <= p.to)
+    expect(period).toBeDefined()
+    const flippedArm: Arm = period!.arm === 'intervention' ? 'control' : 'intervention'
+
+    const originalQueryBlocks = repo.queryBlocks.bind(repo)
+    const raceSpy = vi.spyOn(repo, 'queryBlocks').mockImplementationOnce(async query => {
+      const rows = await originalQueryBlocks(query)
+      await repo.tx(tx => tx.setProperty(period!.id, armProp, flippedArm),
+        {scope: ChangeScope.BlockDefault, description: 'simulate concurrent arm flip'})
+      return rows
+    })
+
+    const result = await stampNight(repo, WORKSPACE_ID, date)
+    expect(raceSpy).toHaveBeenCalledTimes(1)
+    raceSpy.mockRestore()
+
+    // The night is bound to what the period says NOW — the flipped arm, not
+    // the one `readExperiments` saw before the race.
+    expect(result.assignment).toBe('assigned')
+    expect(result.arm).toBe(flippedArm)
+
+    const night = await repo.load(result.nightId)
+    expect(night?.properties[FIELD.arm]).toBe(flippedArm)
+
+    // Placebo control: both arms carry a dose, but with different content —
+    // so this also pins that the dose was written for the flipped arm, not
+    // the one read before the race.
+    expect(result.doseId).toBeDefined()
+    const dose = await repo.load(result.doseId!)
+    expect(dose?.content).toBe(flippedArm === 'intervention' ? testSpec.doseText : 'Placebo dose')
   })
 })

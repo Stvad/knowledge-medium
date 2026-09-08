@@ -26,7 +26,7 @@ const tomorrow = (): string => {
 
 const CONTROL_OPTIONS: readonly {value: ControlKind; label: string}[] = [
   {value: 'nothing', label: 'Nothing (open-label)'},
-  {value: 'placebo', label: 'Placebo'},
+  {value: 'placebo', label: 'Placebo (dose logged on both arms; the arm is NOT hidden)'},
 ]
 
 const previewLabel = (period: Period, intervention: string, control: ControlKind): string =>

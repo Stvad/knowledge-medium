@@ -18,11 +18,11 @@ import {createTypedChild, getOrCreateTypedChild, type DerivedIdentity} from '@/d
 import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
 
 import {deriveMeasures, pickMain, wakeDateOf} from '../engine/derive'
-import type {Arm, ImportedSession, NightRating, SessionMeasure} from '../engine/types'
+import type {Arm, ImportedSession, NightRating, SessionMeasure, SessionRecord} from '../engine/types'
 import {addDays, dayToDate} from './day'
 import {DOSE_TYPE, FIELD, NIGHT_TYPE, SESSION_TYPE} from './fields'
 import {getOrCreateLabPage} from './page'
-import {asSession} from './records'
+import {asNight, asSession} from './records'
 import {
   alcoholProp, armProp, caffeineLateProp, dateProp, endProp, experimentProp, externalIdProp,
   lateMealProp, mainProp, MEASURE_PROPS, periodProp, RATING_PROPS, sourceProp, startProp,
@@ -58,13 +58,6 @@ const hhmm = (at: Date): string =>
 export const sessionContent = (session: {start: Date; end: Date}, main: boolean): string =>
   `${main ? 'Sleep' : 'Nap'} ${hhmm(session.start)} → ${hhmm(session.end)}`
 
-const nightDateOf = (block: BlockData): string | undefined => {
-  const raw = block.properties[FIELD.date]
-  const parsed = typeof raw === 'string' ? new Date(raw) : null
-  if (!parsed || Number.isNaN(parsed.getTime())) return undefined
-  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`
-}
-
 // ──── Night ────
 
 export interface NightSeat {
@@ -92,8 +85,10 @@ export const getOrCreateNightInTx = async (repo: Repo, tx: Tx, seat: NightSeat):
   const outcome = await getOrCreateTypedChild(repo, tx, {identity: nightIdentity(seat.workspaceId, seat.date), ...spec})
   if (outcome.status !== 'taken') return outcome.id
 
+  // Decoded by the same rule every reader uses (`asNight` → `storedDate`),
+  // so an editor-typed date finds its block here too.
   const minted = (await tx.childrenOf(seat.pageId, undefined, {hidePropertyChildren: true}))
-    .find(block => !block.deleted && hasBlockType(block, NIGHT_TYPE) && nightDateOf(block) === seat.date)
+    .find(block => !block.deleted && asNight(block)?.date === seat.date)
   return minted ? minted.id : createTypedChild(repo, tx, spec)
 }
 
@@ -256,19 +251,25 @@ export const upsertSessionInTx = async (
   return {id, status: 'updated'}
 }
 
-/** Decide which of the night's sessions is the night's sleep, and write
- *  only the flags that change.
- *
- *  Only while NO session is flagged: once one is, the flag is the record —
- *  set by an earlier settle or by hand (the README's answer to a night
- *  slept in another zone) — and a re-import must not undo it. A night whose
- *  main sleep arrives after its nap still gets settled, since nothing was
- *  flagged yet. */
-export const settleMainInTx = async (tx: Tx, nightId: string): Promise<void> => {
-  const sessions = (await tx.childrenOf(nightId, undefined, {hidePropertyChildren: true}))
+const liveSessionsOf = async (tx: Tx, nightId: string): Promise<SessionRecord[]> =>
+  (await tx.childrenOf(nightId, undefined, {hidePropertyChildren: true}))
     .map(asSession)
     .filter((session): session is NonNullable<typeof session> => session !== null)
-  if (sessions.some(session => session.main)) return
+
+/** Whether the night's `main` flags are what `pickMain` would set — i.e.
+ *  still the importer's own choice. A hand edit (the README's answer to a
+ *  night slept in another zone) breaks the match, and that mismatch IS the
+ *  override record: nothing else is stored to say so. */
+export const mainFlagsMatchHeuristic = (sessions: readonly SessionRecord[]): boolean => {
+  const mainIndex = pickMain(sessions)
+  return sessions.every((session, index) => session.main === (index === mainIndex))
+}
+
+/** Decide which of the night's sessions is the night's sleep, and write
+ *  only the flags that change. Callers decide WHEN — `importSessions` only
+ *  settles a night whose flags were still its own before the import. */
+export const settleMainInTx = async (tx: Tx, nightId: string): Promise<void> => {
+  const sessions = await liveSessionsOf(tx, nightId)
   const mainIndex = pickMain(sessions)
   for (const [index, session] of sessions.entries()) {
     const main = index === mainIndex
@@ -309,12 +310,15 @@ export const importSessions = async (
       const counts = await repo.tx(async tx => {
         const typeSnapshot = repo.snapshotTypeRegistries()
         const nightId = await getOrCreateNightInTx(repo, tx, {workspaceId, pageId: page.id, date, typeSnapshot})
+        // Judged BEFORE this import's sessions land: a flag set by hand is
+        // kept; a flag the importer set is recomputed over the new set.
+        const importerOwned = mainFlagsMatchHeuristic(await liveSessionsOf(tx, nightId))
         const counted = {created: 0, updated: 0}
         for (const session of own) {
           const {status} = await upsertSessionInTx(repo, tx, {workspaceId, nightId, session, typeSnapshot})
           counted[status] += 1
         }
-        await settleMainInTx(tx, nightId)
+        if (importerOwned) await settleMainInTx(tx, nightId)
         return counted
       }, {scope: ChangeScope.BlockDefault, description: `Import sleep for ${date}`})
       report.created += counts.created

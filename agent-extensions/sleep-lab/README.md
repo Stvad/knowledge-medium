@@ -74,7 +74,11 @@ Sleep Lab                              sleeplab-lab      (kernel page, one per w
   series is **not** stored — the derived numbers are, and re-deriving
   means re-importing the source file.
 - **Dose** composes the built-in todo: ticked means taken; `takenAt` is
-  stamped by the check-in's "taken now" button.
+  stamped by the check-in's "taken now" button. With `control: placebo`
+  every night gets a dose todo, so adherence is logged on both arms — but
+  nothing is concealed: the arm is on the night, the period and the
+  dialog. A blinded pass needs a helper preparing indistinguishable doses
+  from the schedule and a UI that hides the arm; that mode is not built.
 - **Experiment** and **period** have ordinary minted ids: a duplicate is
   visible in the outline and deletable, which is the bar the Strength
   Tracker settled on for visible records. The experiment is read by TYPE

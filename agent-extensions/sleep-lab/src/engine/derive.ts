@@ -115,16 +115,19 @@ export const deriveMeasures = (session: ImportedSession): Partial<Record<Session
     result.lightMinutes = round1(light)
     result.sleepMinutes = round1(sleepMinutes)
 
+    // After onset, out of bed IS awake: a bathroom trip counts as
+    // wakefulness in both the minutes and the bouts.
+    const isWake = (kind: StageKind): boolean => kind === 'awake' || kind === 'out-of-bed'
     const afterOnset = stages.slice(onsetEnd)
     result.awakeMinutes = round1(
-      afterOnset.filter(s => s.kind === 'awake').reduce((acc, s) => acc + stageMinutes(s), 0),
+      afterOnset.filter(s => isWake(s.kind)).reduce((acc, s) => acc + stageMinutes(s), 0),
     )
 
-    // Awakenings: consecutive `awake` stages after onset count as one bout.
+    // Awakenings: consecutive wake stages after onset count as one bout.
     let awakenings = 0
     let inBout = false
     for (const stage of afterOnset) {
-      if (stage.kind === 'awake') {
+      if (isWake(stage.kind)) {
         if (!inBout) awakenings++
         inBout = true
       } else {

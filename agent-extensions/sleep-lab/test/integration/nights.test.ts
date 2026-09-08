@@ -35,13 +35,14 @@ import {
   type Arm, type ControlKind, type ExperimentStatus,
 } from '../../src/km/fields'
 import {
-  getOrCreateNightInTx, importSessions, markDoseTaken, nightIdentity, writeCovariates, writeRating,
+  getOrCreateNightInTx, importSessions, mainFlagsMatchHeuristic, markDoseTaken, nightIdentity,
+  writeCovariates, writeRating,
 } from '../../src/km/nights'
 import {getOrCreateLabPage} from '../../src/km/page'
-import {buildNights, trainedDays} from '../../src/km/records'
+import {asSession, buildNights, trainedDays} from '../../src/km/records'
 import {
   SLEEPLAB_PROPS, SLEEPLAB_TYPES,
-  armProp, controlProp, doseTextProp, experimentStatusProp, fromProp, indexProp, interventionProp,
+  armProp, controlProp, dateProp, doseTextProp, experimentStatusProp, fromProp, indexProp, interventionProp,
   mainProp, pairProp, pairsProp, periodNightsProp, seedProp, startDateProp, toProp,
 } from '../../src/km/schema'
 import type {ImportedSession, Stage} from '../../src/engine/types'
@@ -580,6 +581,73 @@ describe('upsertSessionInTx — a taken seat re-mints, then a later import conve
   })
 })
 
+describe('importSessions — main-flag ownership', {timeout: 30_000}, () => {
+  it('recomputes an importer-owned main flag once a longer session arrives on a later import', async () => {
+    const short = sleepSession(local(2026, 2, 9, 3, 0), local(2026, 2, 9, 7, 0)) // 4h, ends 07:00 — qualifies
+    const long = sleepSession(local(2026, 2, 9, 1, 30), local(2026, 2, 9, 8, 30)) // 7h, ends 08:30 — same wake date
+
+    await importSessions(repo, WORKSPACE_ID, [short])
+    const nightId = derivedBlockId(nightIdentity(WORKSPACE_ID, '2026-02-09'))
+    const afterFirst = await liveChildren(nightId, SESSION_TYPE)
+    expect(afterFirst).toHaveLength(1)
+    expect(afterFirst[0].properties[FIELD.main]).toBe(true)
+
+    // A separate import call: `importerOwned` is judged on the live sessions
+    // BEFORE this call's own session lands, and the lone existing session's
+    // flag still matches what `pickMain` would set — so this settles again
+    // over the full (now two-session) set, and the longer one wins.
+    await importSessions(repo, WORKSPACE_ID, [long])
+    const afterSecond = await liveChildren(nightId, SESSION_TYPE)
+    expect(afterSecond).toHaveLength(2)
+    const shortBlock = afterSecond.find(s => s.properties[FIELD.start] === short.start.getTime())
+    const longBlock = afterSecond.find(s => s.properties[FIELD.start] === long.start.getTime())
+    expect(longBlock?.properties[FIELD.main]).toBe(true)
+    expect(shortBlock?.properties[FIELD.main]).toBe(false)
+  })
+
+  it('leaves a hand-flipped main flag alone and does not settle on the next import', async () => {
+    const short = sleepSession(local(2026, 2, 9, 3, 0), local(2026, 2, 9, 7, 0)) // 4h, ends 07:00 — qualifies
+    const long = sleepSession(local(2026, 2, 9, 1, 30), local(2026, 2, 9, 8, 30)) // 7h, ends 08:30 — same wake date
+
+    await importSessions(repo, WORKSPACE_ID, [short])
+    const nightId = derivedBlockId(nightIdentity(WORKSPACE_ID, '2026-02-09'))
+    const shortId = (await liveChildren(nightId, SESSION_TYPE))[0].id
+
+    // Hand-flip to the OPPOSITE of what the heuristic set — the only qualifying
+    // session, flipped to false. Nothing else records that this was a manual
+    // edit: the mismatch with `pickMain`'s answer IS the override record.
+    await repo.tx(tx => tx.setProperty(shortId, mainProp, false),
+      {scope: ChangeScope.BlockDefault, description: 'hand-flip main'})
+
+    await importSessions(repo, WORKSPACE_ID, [long])
+    const after = await liveChildren(nightId, SESSION_TYPE)
+    expect(after).toHaveLength(2)
+    // No settle ran: the hand-flipped short session stays false, and the
+    // freshly-imported long session keeps the `false` every new session
+    // starts as (`upsertSessionInTx`'s own spec) — neither is promoted.
+    expect(after.find(s => s.id === shortId)?.properties[FIELD.main]).toBe(false)
+    expect(after.find(s => s.id !== shortId)?.properties[FIELD.main]).toBe(false)
+  })
+
+  it('mainFlagsMatchHeuristic is true for an empty list, and for a nap-only night where nothing qualifies', async () => {
+    expect(mainFlagsMatchHeuristic([])).toBe(true)
+
+    const nap = sleepSession(local(2026, 2, 9, 13, 0), local(2026, 2, 9, 13, 40)) // 40 min — too short to qualify
+    const report = await importSessions(repo, WORKSPACE_ID, [nap])
+    expect(report).toEqual({nights: 1, created: 1, updated: 0, failed: []})
+
+    const nightId = derivedBlockId(nightIdentity(WORKSPACE_ID, '2026-02-09'))
+    const rows = await liveChildren(nightId, SESSION_TYPE)
+    const sessions = rows.map(asSession).filter((s): s is NonNullable<typeof s> => s !== null)
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0].main).toBe(false)
+    // `pickMain` also finds nothing here (the nap is too short), so the
+    // all-false flag set still matches the heuristic: this night is
+    // importer-owned, not a hand override.
+    expect(mainFlagsMatchHeuristic(sessions)).toBe(true)
+  })
+})
+
 describe('importSessions — a per-night failure is reported, not thrown', {timeout: 30_000}, () => {
   it('continues past a failing night, reporting it in `failed` without losing the night that succeeded', async () => {
     const goodDate = '2026-02-09'
@@ -655,5 +723,46 @@ describe('writeRating / writeCovariates / markDoseTaken — the type re-check in
     expect(after?.deleted).toBeFalsy()
     expect(after?.properties[FIELD.todoStatus]).not.toBe('done')
     expect(after?.properties[FIELD.takenAt]).toBeUndefined()
+  })
+})
+
+describe('getOrCreateNightInTx — the fallback lookup decodes an editor-typed date', {timeout: 30_000}, () => {
+  it('finds a hand-created replacement night after the derived seat is tombstoned, reading a UTC-midnight date property the way the editor writes it', async () => {
+    const pageId = await labPageId()
+    const date = '2026-02-09'
+
+    // Seat the derived id, then tombstone it — as if the user deleted the
+    // night on purpose. The fallback lookup must not resurrect it (a
+    // deleted night was deleted on purpose — see nights.ts's own doc).
+    const seated = await stampNight(repo, WORKSPACE_ID, date)
+    await repo.tx(tx => tx.run(deleteBlock, {id: seated.nightId}),
+      {scope: ChangeScope.BlockDefault, description: 'delete night'})
+    expect(await repo.load(seated.nightId)).toBeNull()
+
+    // A replacement, hand-created under the lab page — with the date
+    // written the way the kernel's OWN date-property editor writes it:
+    // `new Date('YYYY-MM-DD')`, UTC MIDNIGHT — not this extension's own
+    // local noon (`dayToDate`). The suite runs under America/Los_Angeles
+    // (vitest.integration.config.ts), so reading this value's LOCAL
+    // calendar parts would land on 2026-02-08, the day before.
+    const replacementId = await repo.tx(async tx => {
+      const typeSnapshot = repo.snapshotTypeRegistries()
+      return createTypedChild(repo, tx, {
+        parentId: pageId,
+        content: 'Night of Feb 8 → Feb 9 (hand-repaired)',
+        types: [NIGHT_TYPE],
+        properties: [propertyValue(dateProp, new Date(date))],
+        typeSnapshot,
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'hand-create replacement night'})
+
+    const restamped = await stampNight(repo, WORKSPACE_ID, date)
+    expect(restamped.nightId).toBe(replacementId)
+    expect(restamped.nightId).not.toBe(seated.nightId)
+
+    // No third block: only the hand-created replacement is live under the
+    // page (the tombstoned original is invisible to `liveChildren`).
+    const nights = await liveChildren(pageId, NIGHT_TYPE)
+    expect(nights.map(n => n.id)).toEqual([replacementId])
   })
 })

@@ -48,7 +48,7 @@ const Inner = () => <div data-testid="inner"/>
 
 const nightRow = (
   id: string, date: string, arm: 'intervention' | 'control', quality?: number,
-  extra: {experimentId?: string; alcohol?: number} = {},
+  extra: {experimentId?: string; alcohol?: number; periodId?: string} = {},
 ) => ({
   id,
   parentId: 'page-1',
@@ -60,6 +60,7 @@ const nightRow = (
     ...(quality !== undefined ? {[FIELD.quality]: quality} : {}),
     ...(extra.experimentId !== undefined ? {[FIELD.experiment]: extra.experimentId} : {}),
     ...(extra.alcohol !== undefined ? {[FIELD.alcohol]: extra.alcohol} : {}),
+    ...(extra.periodId !== undefined ? {[FIELD.period]: extra.periodId} : {}),
   },
 })
 
@@ -137,10 +138,14 @@ describe('LabPageContent', () => {
       periodRow('period-2', 2, 'intervention', period2[0], period2[1]),
       // Every night points at the (one) running experiment: the analysis
       // table now reads one experiment's nights, never the whole workspace.
-      nightRow('night-1', addDays(tonight, -5), 'control', 3, {experimentId: 'exp-1'}),
-      nightRow('night-2', addDays(tonight, -4), 'control', 3, {experimentId: 'exp-1'}),
-      nightRow('night-3', addDays(tonight, -2), 'intervention', 4, {experimentId: 'exp-1'}),
-      nightRow('night-4', addDays(tonight, -1), 'intervention', 4, {experimentId: 'exp-1'}),
+      // Each night also points at its period (`FIELD.period`), the ref
+      // `buildNights` reads to derive `pair` — both control nights share
+      // period-1's pair with both intervention nights sharing period-2's,
+      // so this fixture yields one complete pair for the paired estimate.
+      nightRow('night-1', addDays(tonight, -5), 'control', 3, {experimentId: 'exp-1', periodId: 'period-1'}),
+      nightRow('night-2', addDays(tonight, -4), 'control', 3, {experimentId: 'exp-1', periodId: 'period-1'}),
+      nightRow('night-3', addDays(tonight, -2), 'intervention', 4, {experimentId: 'exp-1', periodId: 'period-2'}),
+      nightRow('night-4', addDays(tonight, -1), 'intervention', 4, {experimentId: 'exp-1', periodId: 'period-2'}),
     ])
 
     render(<LabPageContent block={fakeBlock('page-1')}/>)
@@ -154,6 +159,9 @@ describe('LabPageContent', () => {
     expect(row!.textContent).toContain('4.00')
     expect(row!.textContent).toContain('3.00')
     expect(row!.textContent).toContain('1.00')
+    // Paired Δ: one pair (both periods share pair 1), intervention mean 4
+    // minus control mean 3 — too few pairs (1 < 3) for a bootstrap CI.
+    expect(row!.textContent).toContain('1.00 (1 pair)')
   })
 
   it('shows the empty states with no experiment and no nights', () => {

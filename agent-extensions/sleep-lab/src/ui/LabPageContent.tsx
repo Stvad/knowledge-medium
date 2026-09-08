@@ -33,6 +33,16 @@ const formatValue = (outcome: Outcome, value: number | undefined): string => {
   return value.toFixed(2)
 }
 
+/** The within-pair estimate — a check against the by-assignment/per-protocol
+ *  comparison, computed only from pairs with data on both arms. `'—'` when
+ *  no pair qualifies (see `pairedEstimate` in `../engine/stats`). */
+const formatPaired = (outcome: Outcome, paired: Comparison['paired']): string => {
+  if (!paired) return '—'
+  const pairsLabel = `(${paired.pairs} pair${paired.pairs === 1 ? '' : 's'})`
+  const ciLabel = paired.ci ? ` [${formatValue(outcome, paired.ci[0])}, ${formatValue(outcome, paired.ci[1])}]` : ''
+  return `${formatValue(outcome, paired.difference)} ${pairsLabel}${ciLabel}`
+}
+
 const experimentLabel = (experiment: ExperimentRecord): string => `${experiment.intervention} · ${experiment.startDate}`
 
 const ExperimentCard = ({experiment, nights, tonight}: {
@@ -122,6 +132,7 @@ const AnalysisTable = ({nights}: {nights: readonly NightRecord[]}) => {
                 <th className="py-1 pr-2">Diff</th>
                 <th className="py-1 pr-2">95% CI</th>
                 <th className="py-1 pr-2">p</th>
+                <th className="py-1 pr-2">Paired Δ</th>
               </tr>
             </thead>
             <tbody>
@@ -138,6 +149,7 @@ const AnalysisTable = ({nights}: {nights: readonly NightRecord[]}) => {
                       {row.ci ? `[${formatValue(row.outcome, row.ci[0])}, ${formatValue(row.outcome, row.ci[1])}]` : '—'}
                     </td>
                     <td className="py-1 pr-2 tabular-nums">{row.p !== undefined ? row.p.toFixed(3) : '—'}</td>
+                    <td className="py-1 pr-2 tabular-nums">{formatPaired(row.outcome, row.paired)}</td>
                   </tr>
                 )
               })}

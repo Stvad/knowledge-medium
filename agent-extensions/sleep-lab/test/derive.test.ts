@@ -114,6 +114,45 @@ describe('deriveMeasures', () => {
     expect(measures.awakeMinutes).toBe(0)
   })
 
+  it('counts an out-of-bed stage after onset as an awakening, in both minutes and bouts', () => {
+    const start = at('23:00:00')
+    const end = new Date('2026-02-11T07:00:00')
+    const stages: Stage[] = [
+      {kind: 'light', start, end: at('23:30:00')}, // sleep begins immediately: onset 0
+      {kind: 'out-of-bed', start: at('23:30:00'), end: at('23:40:00')}, // a bathroom trip, 10 min
+      {kind: 'light', start: at('23:40:00'), end},
+    ]
+    const measures = deriveMeasures(session({start, end, stages}))
+    expect(measures.awakenings).toBe(1)
+    expect(measures.awakeMinutes).toBe(10)
+  })
+
+  it('counts a LEADING out-of-bed stage toward onset, not awakeMinutes/awakenings', () => {
+    const start = at('22:00:00')
+    const end = at('23:00:00')
+    const stages: Stage[] = [
+      {kind: 'out-of-bed', start, end: at('22:15:00')}, // leading, 15 min — not asleep yet
+      {kind: 'light', start: at('22:15:00'), end},
+    ]
+    const measures = deriveMeasures(session({start, end, stages}))
+    expect(measures.onsetMinutes).toBe(15)
+    expect(measures.awakenings).toBe(0)
+    expect(measures.awakeMinutes).toBe(0)
+  })
+
+  it('counts an unknown stage after onset toward neither awakeMinutes nor awakenings', () => {
+    const start = at('23:00:00')
+    const end = new Date('2026-02-11T07:00:00')
+    const stages: Stage[] = [
+      {kind: 'light', start, end: at('23:30:00')}, // sleep begins immediately: onset 0
+      {kind: 'unknown', start: at('23:30:00'), end: at('23:40:00')}, // ambiguous stage, 10 min
+      {kind: 'light', start: at('23:40:00'), end},
+    ]
+    const measures = deriveMeasures(session({start, end, stages}))
+    expect(measures.awakenings).toBe(0)
+    expect(measures.awakeMinutes).toBe(0)
+  })
+
   it('computes efficiency as sleepMinutes / inBedMinutes to 3 decimals', () => {
     const start = at('23:00:00')
     const end = new Date('2026-02-11T07:00:00') // 480 min in bed

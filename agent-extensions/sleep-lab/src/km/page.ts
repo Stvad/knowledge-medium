@@ -22,7 +22,10 @@ export const LAB_ALIAS = 'Sleep Lab'
 export const findLabPage = async (repo: Repo, workspaceId: string): Promise<string | null> => {
   const id = kernelPageBlockId(workspaceId, LAB_NS)
   const block = await repo.load(id)
-  return block && !block.deleted ? id : null
+  // `repo.load` is not workspace-scoped. The id is derived from this
+  // workspace, so a row of another one here is a collision that should not
+  // happen — defence in depth, since navigating to it would expose it.
+  return block && !block.deleted && block.workspaceId === workspaceId ? id : null
 }
 
 export const getOrCreateLabPage = (repo: Repo, workspaceId: string): Promise<Block> =>
