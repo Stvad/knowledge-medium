@@ -12,6 +12,7 @@
  */
 
 import {memoize, memoizeAsync} from '@/utils/memoize'
+import {resolvedThenable} from '@/utils/resolvedThenable'
 import {
   ChangeScope,
   type PropertySchema,
@@ -342,23 +343,37 @@ export const getPluginPrefsBlock = memoizeAsync(
  *  block — per-panel UI state lives directly on it. Outside a panel,
  *  returns the user-level `ui-state` child of the user page. */
 export const getUIStateBlock = memoizeAsync(
-  async (
+  // NOT async: an async dispatcher re-wraps the panel branch's fulfilled
+  // thenable in a fresh promise and silently loses the stamp.
+  (
     repo: Repo,
     workspaceId: string,
     user: User,
     context: BlockContextType,
   ): Promise<Block> => {
-    if (context.panelId) {
-      await repo.load(context.panelId)
-      return repo.block(context.panelId)
-    }
-
-    const userBlock = await getUserBlock(repo, workspaceId, user)
-    return ensureUiChild(repo, userBlock, UI_STATE_PATH_PART)
+    if (context.panelId) return panelUIStateBlock(repo, context.panelId)
+    return rootUIStateBlock(repo, workspaceId, user)
   },
   (repo, workspaceId, user, context) =>
     instanceKey(repo, workspaceId, user.id, context.panelId ?? '__root__'),
 )
+
+/** Per-panel ui-state IS the panel row. A cached row answers with an
+ *  already-fulfilled thenable so the pane's first `use()` reads it
+ *  synchronously (`resolvedThenable`); a fresh promise would suspend the pane
+ *  once. A confirmed-missing row (`peek()` null) takes the load path so the
+ *  marker is re-verified against SQL, as before. NOT async — see the
+ *  dispatcher above. */
+const panelUIStateBlock = (repo: Repo, panelId: string): Promise<Block> => {
+  const block = repo.block(panelId)
+  if (block.peek()) return resolvedThenable(block)
+  return repo.load(panelId).then(() => block)
+}
+
+const rootUIStateBlock = async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
+  const userBlock = await getUserBlock(repo, workspaceId, user)
+  return ensureUiChild(repo, userBlock, UI_STATE_PATH_PART)
+}
 
 const LAYOUT_SESSIONS_PATH_PART = 'layout-sessions'
 

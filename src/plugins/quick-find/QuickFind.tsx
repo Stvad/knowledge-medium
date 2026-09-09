@@ -1,6 +1,5 @@
 import {
   Suspense,
-  use,
   useId,
   useState,
   useEffect,
@@ -20,8 +19,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
-import { useUser } from '@/components/Login.js'
 import { useRepo } from '@/context/repo.js'
+import { useLayoutSessionBlock, usePluginUIStateBlock } from '@/data/globalState.js'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import { activePanelIdProp, aliasesProp } from '@/data/properties.js'
@@ -38,12 +37,6 @@ import {
   type LinkTargetBlockMatch,
 } from '@/utils/linkTargetAutocomplete.js'
 import { useTypes } from '@/hooks/typeRegistry.js'
-import {
-  getLayoutSessionBlock,
-  getPluginUIStateBlock,
-  getUIStateBlock,
-  requireWorkspaceId,
-} from '@/data/stateBlocks.js'
 import { useAncestorCrumbs } from '@/hooks/useAncestorCrumbs.js'
 import { quickFindToggle } from './toggleStore.ts'
 import { aliasResultItems, blockResultItems, recentResultItems } from './resultItems.tsx'
@@ -72,11 +65,6 @@ interface SearchResultState {
   query: string
   aliases: LinkTargetAliasMatch[]
   blocks: LinkTargetBlockMatch[]
-}
-
-interface QuickFindDialogResources {
-  quickFindUIStateBlock: Block
-  layoutSessionBlock: Block
 }
 
 export interface QuickFindListItem {
@@ -362,18 +350,12 @@ function QuickFindResources({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const repo = useRepo()
-  const user = useUser()
-  const workspaceId = requireWorkspaceId(repo, 'QuickFind')
-  const resourcesPromise = useMemo((): Promise<QuickFindDialogResources> => (async () => {
-    const rootUIStateBlock = await getUIStateBlock(repo, workspaceId, user, {})
-    const [quickFindUIStateBlock, layoutSessionBlock] = await Promise.all([
-      getPluginUIStateBlock(repo, workspaceId, user, quickFindUIStateType),
-      getLayoutSessionBlock(rootUIStateBlock, repo.activeLayoutSessionId),
-    ])
-    return {quickFindUIStateBlock, layoutSessionBlock}
-  })(), [repo, user, workspaceId])
-  const {quickFindUIStateBlock, layoutSessionBlock} = use(resourcesPromise)
+  // Core's memoized ensures, not a per-mount promise: `QuickFind` unmounts
+  // this on close, and `use()` suspends on any promise it has not seen — a
+  // promise minted per mount cost every open a fallback. The session id is
+  // read per mount on purpose (a perspective switch changes it).
+  const quickFindUIStateBlock = usePluginUIStateBlock(quickFindUIStateType)
+  const layoutSessionBlock = useLayoutSessionBlock()
 
   return (
     <QuickFindDialog
