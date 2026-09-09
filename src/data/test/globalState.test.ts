@@ -61,6 +61,8 @@ import {
   layoutSessionsContainerBlockId,
   resetBlockSelection,
 } from '@/data/stateBlocks'
+import type { FulfilledThenable } from '@/utils/resolvedThenable'
+import type { Block } from '@/data/block'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -398,8 +400,7 @@ describe('getUIStateBlock', () => {
     }), {scope: ChangeScope.BlockDefault})
     expect(env.repo.block(PANEL_ID).peek()).toBeDefined()
 
-    const thenable = getUIStateBlock(env.repo, WS, USER, {panelId: PANEL_ID}) as
-      Promise<unknown> & {status?: string; value?: unknown}
+    const thenable = getUIStateBlock(env.repo, WS, USER, {panelId: PANEL_ID}) as FulfilledThenable<Block>
     expect(thenable.status).toBe('fulfilled')
     expect(thenable.value).toBe(env.repo.block(PANEL_ID))
     expect(await thenable).toBe(env.repo.block(PANEL_ID))
@@ -418,8 +419,7 @@ describe('getUIStateBlock', () => {
     const cold = await setup()
     try {
       expect(cold.repo.block(PANEL_ID).peek()).toBeUndefined()
-      const thenable = getUIStateBlock(cold.repo, WS, USER, {panelId: PANEL_ID}) as
-        Promise<unknown> & {status?: string}
+      const thenable = getUIStateBlock(cold.repo, WS, USER, {panelId: PANEL_ID}) as FulfilledThenable<Block>
       expect(thenable.status).toBeUndefined()
       const block = await thenable
       expect(block).toBe(cold.repo.block(PANEL_ID))

@@ -1,14 +1,8 @@
 // @vitest-environment happy-dom
 /**
- * `useUIStateBlock()` inside a panel context is `use(getUIStateBlock(…))` —
- * a promise memoized PER PANE. For a pane that already has its row cached
- * (every freshly split pane, the moment the split tx resolves) the hook must
- * read synchronously: a promise `use()` has never seen suspends once even
- * when already resolved, and React 19 then holds the pane behind the Suspense
- * fallback for its 300ms reveal throttle — a visible lag on every split.
- *
- * Pins that the fallback NEVER mounts for a cached pane, not merely that the
- * content eventually appears (it always does — the delay is the bug).
+ * Pins that the Suspense fallback NEVER mounts for a pane whose row is already
+ * cached — not merely that content eventually appears (it always does, late).
+ * Why a fresh promise costs a fallback plus 300ms: `src/utils/resolvedThenable.ts`.
  */
 import { Suspense } from 'react'
 import { render, screen } from '@testing-library/react'
@@ -17,7 +11,6 @@ import { v4 as uuidv4 } from 'uuid'
 import { RepoContext } from '@/context/repo.tsx'
 import { BlockContextProvider } from '@/context/block'
 import { useUIStateBlock } from '@/data/globalState.ts'
-import { getUIStateBlock } from '@/data/stateBlocks.ts'
 import { ChangeScope, type User } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -70,8 +63,12 @@ describe('useUIStateBlock in a panel context', () => {
     const fallbackRendered = vi.fn()
     renderInPanel(panelId, fallbackRendered)
 
-    expect(await screen.findByTestId('ui-state')).toHaveTextContent(panelId)
+    // Both synchronous: the content commits inside `render`'s act. Asserting
+    // "eventually shows content" instead would prove nothing — this harness
+    // never flushes a Suspense retry scheduled by `use()` (verified with a
+    // plain timer promise), so a suspended probe simply never resolves.
     expect(fallbackRendered).not.toHaveBeenCalled()
+    expect(screen.getByTestId('ui-state')).toHaveTextContent(panelId)
   })
 
   it('shows the fallback for a pane whose row is not cached yet (the control)', async () => {
@@ -91,12 +88,5 @@ describe('useUIStateBlock in a panel context', () => {
     expect(fallbackRendered).toHaveBeenCalled()
     expect(screen.queryByTestId('ui-state')).toBeNull()
 
-    // The row still arrives — only through a load. (This harness never flushes
-    // a Suspense retry scheduled by `use()`, verified with a plain timer
-    // promise, so the resolved content cannot be asserted through the DOM
-    // here; that is also why the cached case above pins "fallback never
-    // mounted" rather than "content eventually shows".)
-    expect(await getUIStateBlock(repo, WS, ALICE, {panelId})).toBe(repo.block(panelId))
-    expect(repo.block(panelId).peek()?.content).toBe('page-a')
   })
 })

@@ -10,7 +10,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { memoizeAsync } from '../memoize'
-import { resolvedThenable } from '../resolvedThenable'
+import { resolvedThenable, type FulfilledThenable } from '../resolvedThenable'
 
 describe('memoizeAsync', () => {
   it('memoizes a result, like memoize', async () => {
@@ -48,11 +48,11 @@ describe('memoizeAsync', () => {
     const memoized = memoizeAsync(
       async (key: string) => key,
       (key) => key,
-    ) as (key: string) => Promise<string> & {status?: string; value?: string}
+    ) as (key: string) => FulfilledThenable<string>
     const direct = memoizeAsync(
       (key: string): Promise<string> => resolvedThenable(`${key}!`),
       (key) => key,
-    ) as (key: string) => Promise<string> & {status?: string; value?: string}
+    ) as (key: string) => FulfilledThenable<string>
 
     // The rejection guard mints a fresh promise for an ordinary result…
     expect(memoized('a').status).toBeUndefined()
@@ -64,7 +64,7 @@ describe('memoizeAsync', () => {
 
   it('stamps a settled entry so a later use() reads it synchronously', async () => {
     const memoized = memoizeAsync(async (key: string) => `${key}!`, (key) => key) as
-      (key: string) => Promise<string> & {status?: string; value?: string}
+      (key: string) => FulfilledThenable<string>
 
     const entry = memoized('a')
     expect(entry.status).toBeUndefined()

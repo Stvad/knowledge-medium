@@ -9,9 +9,14 @@
  *
  *  Use it where a value is available synchronously but the API shape is a
  *  promise consumers `use()`, so a cache hit never costs a fallback. */
-export const resolvedThenable = <T>(value: T): Promise<T> => {
-  const thenable = Promise.resolve(value) as Promise<T> & {status: 'fulfilled'; value: T}
-  thenable.status = 'fulfilled'
-  thenable.value = value
-  return thenable
+export type FulfilledThenable<T> = Promise<T> & {status?: string; value?: T}
+
+export const stampFulfilled = <T>(thenable: Promise<T>, value: T): FulfilledThenable<T> => {
+  const stamped = thenable as FulfilledThenable<T>
+  stamped.status = 'fulfilled'
+  stamped.value = value
+  return stamped
 }
+
+export const resolvedThenable = <T>(value: T): FulfilledThenable<T> =>
+  stampFulfilled(Promise.resolve(value), value)

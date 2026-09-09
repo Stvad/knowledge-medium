@@ -343,6 +343,8 @@ export const getPluginPrefsBlock = memoizeAsync(
  *  block — per-panel UI state lives directly on it. Outside a panel,
  *  returns the user-level `ui-state` child of the user page. */
 export const getUIStateBlock = memoizeAsync(
+  // NOT async: an async dispatcher re-wraps the panel branch's fulfilled
+  // thenable in a fresh promise and silently loses the stamp.
   (
     repo: Repo,
     workspaceId: string,
@@ -356,14 +358,15 @@ export const getUIStateBlock = memoizeAsync(
     instanceKey(repo, workspaceId, user.id, context.panelId ?? '__root__'),
 )
 
-/** Per-panel ui-state IS the panel row. Answer synchronously when the row is
- *  already cached — which it is the moment the tx that created the pane
- *  resolves — so a new pane's first render never suspends. Every consumer
- *  reaches this through `use()`, and a fresh promise there costs the pane a
- *  fallback plus React's 300ms reveal throttle (`resolvedThenable`). */
+/** Per-panel ui-state IS the panel row. A cached row answers with an
+ *  already-fulfilled thenable so the pane's first `use()` reads it
+ *  synchronously (`resolvedThenable`); a fresh promise would suspend the pane
+ *  once. A confirmed-missing row (`peek()` null) takes the load path so the
+ *  marker is re-verified against SQL, as before. NOT async — see the
+ *  dispatcher above. */
 const panelUIStateBlock = (repo: Repo, panelId: string): Promise<Block> => {
   const block = repo.block(panelId)
-  if (block.peek() !== undefined) return resolvedThenable(block)
+  if (block.peek()) return resolvedThenable(block)
   return repo.load(panelId).then(() => block)
 }
 

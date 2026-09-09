@@ -1,4 +1,5 @@
 import {memoize as lodashMemoize} from 'lodash-es'
+import {stampFulfilled, type FulfilledThenable} from '@/utils/resolvedThenable'
 
 /**
  * lodash memoize retyped to return plain `F`. The inferred
@@ -35,25 +36,29 @@ export const memoizeAsync = <F extends (...args: never[]) => Promise<unknown>>(
   fn: F,
   resolver: (...args: Parameters<F>) => unknown,
 ): F => {
+  // NOT async: an async wrapper would re-wrap the return and drop the
+  // fulfilled stamp the fast path below preserves.
   const memoized = lodashMemoize(((...args: Parameters<F>) => {
     const key = resolver(...args)
-    const result = fn(...args) as Promise<unknown> & {status?: string}
+    const result = fn(...args) as FulfilledThenable<unknown>
     // An already-fulfilled thenable (`resolvedThenable`) cannot reject, and the
     // guard would replace it with a fresh promise `use()` has to suspend on —
     // the very thing it exists to avoid.
     if (result.status === 'fulfilled') return result
-    const guarded = result.catch((err: unknown) => {
+    const guarded: FulfilledThenable<unknown> = result.catch((err: unknown) => {
       // Unconditional: an entry a retry has already replaced could be evicted
       // here too, and the only cost is running an idempotent `ensure` twice.
       // Checking identity first would be a guard nothing can pin.
       memoized.cache.delete(key)
       throw err
-    }) as Promise<unknown> & {status?: string; value?: unknown}
-    // Stamp the settled value the way React does after it has tracked a
-    // promise, so a `use()` that first meets this entry AFTER it resolved
-    // (a component mounted later than the ensure ran) reads it synchronously
-    // instead of suspending once and waiting out the fallback throttle.
-    void guarded.then(value => { guarded.status = 'fulfilled'; guarded.value = value }, () => {})
+    })
+    // Stamp on settle, as React does for a promise it has tracked, for the
+    // entries that settle under an imperative `await` BEFORE any component
+    // `use()`s them (workspace bootstrap's root ui-state + layout session, the
+    // deep-idle plugin ui-state pre-warm): their first `use()` would otherwise
+    // suspend once and wait out the fallback throttle. React's own stamp
+    // already covers an entry a component met while pending.
+    void guarded.then(value => { stampFulfilled(guarded, value) }, () => {})
     return guarded
   }) as F, resolver)
   return memoized as F
