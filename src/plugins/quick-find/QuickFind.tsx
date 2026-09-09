@@ -22,6 +22,9 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { useUser } from '@/components/Login.js'
 import { useRepo } from '@/context/repo.js'
+import type { Repo } from '@/data/repo.js'
+import type { User } from '@/data/api'
+import { memoizeAsync } from '@/utils/memoize'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import { activePanelIdProp, aliasesProp } from '@/data/properties.js'
@@ -355,6 +358,22 @@ export function QuickFind() {
   )
 }
 
+// Memoized, not minted per mount: `QuickFind` unmounts this on close, so a
+// per-mount promise is one `use()` has never seen — every open suspended on it
+// and then sat behind React's 300ms fallback throttle, with all three blocks
+// already resolved.
+const quickFindResources = memoizeAsync(
+  async (repo: Repo, workspaceId: string, user: User): Promise<QuickFindDialogResources> => {
+    const rootUIStateBlock = await getUIStateBlock(repo, workspaceId, user, {})
+    const [quickFindUIStateBlock, layoutSessionBlock] = await Promise.all([
+      getPluginUIStateBlock(repo, workspaceId, user, quickFindUIStateType),
+      getLayoutSessionBlock(rootUIStateBlock, repo.activeLayoutSessionId),
+    ])
+    return {quickFindUIStateBlock, layoutSessionBlock}
+  },
+  (repo, workspaceId, user) => `${repo.instanceId}:${workspaceId}:${user.id}`,
+)
+
 function QuickFindResources({
   open,
   onOpenChange,
@@ -365,15 +384,7 @@ function QuickFindResources({
   const repo = useRepo()
   const user = useUser()
   const workspaceId = requireWorkspaceId(repo, 'QuickFind')
-  const resourcesPromise = useMemo((): Promise<QuickFindDialogResources> => (async () => {
-    const rootUIStateBlock = await getUIStateBlock(repo, workspaceId, user, {})
-    const [quickFindUIStateBlock, layoutSessionBlock] = await Promise.all([
-      getPluginUIStateBlock(repo, workspaceId, user, quickFindUIStateType),
-      getLayoutSessionBlock(rootUIStateBlock, repo.activeLayoutSessionId),
-    ])
-    return {quickFindUIStateBlock, layoutSessionBlock}
-  })(), [repo, user, workspaceId])
-  const {quickFindUIStateBlock, layoutSessionBlock} = use(resourcesPromise)
+  const {quickFindUIStateBlock, layoutSessionBlock} = use(quickFindResources(repo, workspaceId, user))
 
   return (
     <QuickFindDialog

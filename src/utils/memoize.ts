@@ -42,13 +42,19 @@ export const memoizeAsync = <F extends (...args: never[]) => Promise<unknown>>(
     // guard would replace it with a fresh promise `use()` has to suspend on —
     // the very thing it exists to avoid.
     if (result.status === 'fulfilled') return result
-    return result.catch((err: unknown) => {
+    const guarded = result.catch((err: unknown) => {
       // Unconditional: an entry a retry has already replaced could be evicted
       // here too, and the only cost is running an idempotent `ensure` twice.
       // Checking identity first would be a guard nothing can pin.
       memoized.cache.delete(key)
       throw err
-    })
+    }) as Promise<unknown> & {status?: string; value?: unknown}
+    // Stamp the settled value the way React does after it has tracked a
+    // promise, so a `use()` that first meets this entry AFTER it resolved
+    // (a component mounted later than the ensure ran) reads it synchronously
+    // instead of suspending once and waiting out the fallback throttle.
+    void guarded.then(value => { guarded.status = 'fulfilled'; guarded.value = value }, () => {})
+    return guarded
   }) as F, resolver)
   return memoized as F
 }

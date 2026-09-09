@@ -62,6 +62,18 @@ describe('memoizeAsync', () => {
     expect(await direct('a')).toBe('a!')
   })
 
+  it('stamps a settled entry so a later use() reads it synchronously', async () => {
+    const memoized = memoizeAsync(async (key: string) => `${key}!`, (key) => key) as
+      (key: string) => Promise<string> & {status?: string; value?: string}
+
+    const entry = memoized('a')
+    expect(entry.status).toBeUndefined()
+    await entry
+    expect(memoized('a')).toBe(entry)
+    expect(entry.status).toBe('fulfilled')
+    expect(entry.value).toBe('a!')
+  })
+
   it('keeps entries for other keys when one rejects', async () => {
     const fn = vi.fn(async (key: string) => {
       if (key === 'bad') throw new Error('nope')
