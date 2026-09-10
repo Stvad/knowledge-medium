@@ -50,6 +50,8 @@ class AncestorBatcher {
         return
       }
       this.waiting.set(id, [{resolve, reject}])
+      // Work avoided, not a correctness guard: a second flush in the
+      // same tick finds the queue already drained and issues nothing.
       if (this.scheduled) return
       this.scheduled = true
       queueMicrotask(() => { void this.flush() })
