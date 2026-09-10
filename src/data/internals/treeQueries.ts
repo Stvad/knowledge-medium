@@ -68,7 +68,7 @@ export const SUBTREE_SQL = `
  *  seed it belongs to. Filters `deleted = 0`.
  *
  *  THE ancestor walk — there is no single-id variant, because every
- *  caller reaches it through `ancestorChainRows`, which coalesces
+ *  caller reaches it through `ancestorWalk`, which coalesces
  *  concurrent single-id walks into one of these and is what re-excludes
  *  the seed for the callers that want only the ancestors.
  *

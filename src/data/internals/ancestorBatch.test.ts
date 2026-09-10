@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * `ancestorChainRows` — the coalescing that makes one handle per id
+ * `ancestorWalk` — the coalescing that makes one handle per id
  * affordable. Its whole job is the statement COUNT, so that is what the
  * fake db here records; correctness of the walk itself belongs to
  * `treeQueries.test.ts` and `kernelQueries.test.ts`.
@@ -41,7 +41,7 @@ const fakeDb = (opts?: {failWhen?: (ids: string[]) => boolean}) => {
 const idsOf = (walk: {chain: readonly {chain_start_id: string}[]}) =>
   [...new Set(walk.chain.map(row => row.chain_start_id))]
 
-describe('ancestorChainRows', () => {
+describe('ancestorWalk', () => {
   it('answers walks started in one tick with ONE statement', async () => {
     const {db, statements} = fakeDb()
 

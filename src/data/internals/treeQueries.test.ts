@@ -137,7 +137,7 @@ describe('manyAncestorsSql', () => {
   beforeAll(async () => { h = await createTestDb() })
   afterAll(async () => { await h.cleanup() })
 
-  /** What `ancestorChainRows` does with the result: depth 0 is the seed,
+  /** What `ancestorWalk` does with the result: depth 0 is the seed,
    *  the rest is the chain. */
   const walk = (rows: {id: string; depth: number}[]) =>
     ({seed: rows[0]?.id, chain: rows.slice(1).map(r => r.id)})

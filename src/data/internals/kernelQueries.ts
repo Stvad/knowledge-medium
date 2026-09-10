@@ -668,7 +668,7 @@ const dependOnUnreachableParent = (ctx: QueryCtx, walk: AncestorWalk): void => {
  *  id. A surface showing many blocks holds one of these per block, so a
  *  change to the set it shows leaves the ids already held resolved and
  *  queries only the ids that entered — which is why there is no
- *  set-keyed handle for the batched shape. `ancestorChainRows` coalesces
+ *  set-keyed handle for the batched shape. `ancestorWalk` coalesces
  *  the walks that start in the same microtask into one statement, so
  *  that grain costs one round-trip, not one per id. */
 export const ancestorsQuery = defineQuery<{id: string}, BlockData[]>({
