@@ -239,6 +239,55 @@ export const CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL = `
   WHERE deleted = 0 AND reference_target_id IS NOT NULL
 `
 
+/** The reference-shaped-content prefilter shared by the derive sweep and the
+ *  alias rederive drain (`repo.ts`), and the partial index that serves it.
+ *  Both queries otherwise scan every row of a workspace — deleted rows are
+ *  included by design, so `idx_blocks_workspace_active` cannot serve them —
+ *  for a few dozen candidates: ~1 s of worker time cold on a phone per
+ *  session, and again per alias batch. The index holds only rows whose first
+ *  non-space character can open a reference form and whose target is still
+ *  unresolved (~5 % of a real workspace).
+ *
+ *  Queries must carry the predicate LITERALLY (the partial-index proof needs
+ *  the identical expression) and name the index with `INDEXED BY`: without
+ *  statistics the planner picks the full scan on its own. */
+export const REFERENCE_CANDIDATE_PREFIX_SQL = `substr(ltrim(content), 1, 1) IN ('(', '[', ':')`
+export const BLOCKS_REFERENCE_CANDIDATES_INDEX = 'idx_blocks_reference_candidates'
+export const CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS ${BLOCKS_REFERENCE_CANDIDATES_INDEX}
+  ON blocks (workspace_id, substr(ltrim(content), 1, 1))
+  WHERE reference_target_id IS NULL AND ${REFERENCE_CANDIDATE_PREFIX_SQL}
+`
+
+/** Sweep candidates: every reference form, tombstones included (a restored
+ *  tombstone arrives content-unchanged, so nothing else would re-derive it).
+ *  The real grammar check is `parseExactReferenceBlockContent`; these LIKEs
+ *  only prefilter. Lean (id + content): the write phase re-reads in-tx. */
+export const REFERENCE_TARGET_SWEEP_CANDIDATES_SQL = `
+  SELECT id, content FROM blocks INDEXED BY ${BLOCKS_REFERENCE_CANDIDATES_INDEX}
+   WHERE workspace_id = ?
+     AND reference_target_id IS NULL
+     AND ${REFERENCE_CANDIDATE_PREFIX_SQL}
+     AND (
+       (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
+       OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+       OR TRIM(content) LIKE '[%](((%)))'
+       OR TRIM(content) LIKE '::%'
+     )
+`
+
+/** Rederive candidates: alias forms only (`[[x]]` and the marked `::[[x]]`
+ *  twin) — the drain discards anything that isn't an alias, and an id form
+ *  can't be one. */
+export const REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL = `
+  SELECT id, content FROM blocks INDEXED BY ${BLOCKS_REFERENCE_CANDIDATES_INDEX}
+   WHERE workspace_id = ?
+     AND reference_target_id IS NULL
+     AND ${REFERENCE_CANDIDATE_PREFIX_SQL}
+     AND TRIM(content) LIKE '%]]'
+     AND (TRIM(content) LIKE '[[%' OR TRIM(content) LIKE '::[[%')
+`
+
 /** Partial index over the field-form bit (§9): "all field rows under X" /
  *  "all field rows in workspace W" scans hit
  *  `(workspace_id, parent_id, reference_target_id)` filtered to marked rows

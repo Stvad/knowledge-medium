@@ -8,7 +8,13 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, codecs, defineProperty, type BlockData } from '@/data/api'
-import { BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams } from '@/data/blockSchema'
+import {
+  BLOCKS_REFERENCE_CANDIDATES_INDEX,
+  BLOCKS_TABLE_COLUMN_NAMES,
+  REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL,
+  REFERENCE_TARGET_SWEEP_CANDIDATES_SQL,
+  blockToRowParams,
+} from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
@@ -671,5 +677,19 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     // definition merge/rename retarget reach both through the same index.
     expect(await refsOf('row')).toEqual([{id: STATUS_FIELD_ID, alias: STATUS_FIELD_ID}])
     expect(await refsOf('value')).toEqual([{id: 'target-page', alias: 'Target'}])
+  })
+})
+
+describe('candidate scans', () => {
+  // The index is only useful if SQLite actually plans to it; `INDEXED BY`
+  // makes a query that cannot use it fail loudly, and this pins that both
+  // queries still can (the partial-index predicate must match literally).
+  it('both candidate queries plan to the reference-candidates index', async () => {
+    for (const sql of [REFERENCE_TARGET_SWEEP_CANDIDATES_SQL, REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL]) {
+      const plan = (await sharedDb.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${sql}`, ['ws']))
+        .map(row => row.detail).join(' | ')
+      expect(plan).toContain(`USING INDEX ${BLOCKS_REFERENCE_CANDIDATES_INDEX}`)
+      expect(plan).not.toContain('SCAN blocks')
+    }
   })
 })
