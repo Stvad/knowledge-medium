@@ -1,39 +1,23 @@
 /**
- * Same-tx processor: when two blocks merge, move every member block's TYPE
- * MEMBERSHIP off the tombstoned `from` and onto the survivor.
+ * Same-tx processor: when blocks are folded together, move each member block's
+ * TYPE MEMBERSHIP off the tombstoned source and onto the survivor. Without it a
+ * merged-away type definition leaves its members carrying a token that resolves
+ * through nothing — silently un-typed, and never repaired, because `types` is
+ * stored state rather than a mirror of content (the `#type` gesture writes only
+ * the property).
  *
- * Merging two type-definition pages (the alias-collision "Merge into…" flow is
- * the easy way to get there) tombstones `from`, but every block previously
- * tagged with it still carries `from`'s id in its `types` list. That token
- * resolves through nothing afterwards — `blockIdByTypeId` only ever binds ids
- * of LIVE definition rows — so the blocks are silently un-typed: no chip, no
- * lifted properties, absent from every by-type query. Nothing repairs it later,
- * because `types` is independent stored state, not a derived mirror: the `#type`
- * gesture writes the property and deliberately leaves content alone
- * (`plugins/supertags/codeMirrorExtensions.ts`, `applyTag`), and the only other
- * writers are the explicit `TypeTagger` entry points.
+ * Two reasons this is not part of `references.retargetMergedBlockReferences`,
+ * both of which also rule out the tempting refactor of making `typesProp` a
+ * `refList` so that processor covers it:
+ *  - `types` holds type IDS, not block ids. A seeded type's token is a short
+ *    string that must resolve with NO backing block (`buildUnboundTypes`), so a
+ *    ref codec would assert an equality the model treats as a convention and
+ *    project reference rows onto targets that are not blocks.
+ *  - a tagged block has no reference edge to its type, so that processor's
+ *    `block_references` discovery can never reach it. Membership has its own
+ *    trigger-maintained index (`block_types`), which is what this reads.
  *
- * Why this is NOT part of `references.retargetMergedBlockReferences`, which
- * already retargets ref/refList property VALUES across a merge:
- *
- *  - `types` holds type IDS, not block ids. For every seeded type the token is
- *    a stable short string (`page`, `todo`, …) that must resolve with no backing
- *    block at all (`buildUnboundTypes`), and a seed's `block-type:type-id` claim
- *    deliberately breaks the block-id = type-id equality that user rows keep.
- *    So `typesProp` is not a `refList` and must not become one: a ref codec
- *    would assert an equality the model treats as a convention, project
- *    `block_references` rows onto targets like `todo` that are not blocks, and
- *    duplicate the membership index `block_types` already maintains.
- *  - discovery differs, which is the load-bearing half. That processor visits
- *    only sources the `block_references` index names (plus the merge target).
- *    A tagged block has no reference edge to its type — `types` is not
- *    projected, and the tag gesture writes no wikilink — so no
- *    field-eligibility change there could ever reach it. Membership has its own
- *    trigger-maintained index, and this is the processor that reads it.
- *
- * Kernel rather than a plugin: `typesProp`, `block_types` and `mergeBlocksInTx`
- * are all kernel, and membership must not be left dangling because a plugin
- * happens to be toggled off.
+ * Kernel, not a plugin: membership must not dangle because a plugin is off.
  */
 
 import {
@@ -51,12 +35,8 @@ import { typeMembershipTokenFor } from '@/data/typeDefinitionMetadata'
 export const RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME =
   'core.retargetMergedTypeMembership'
 
-/** Members of the merged-away type, via the trigger-maintained membership index
- *  (`type, workspace_id` is its leading index). The table already excludes
- *  tombstoned rows (its update trigger re-inserts only `WHEN deleted = 0`), and
- *  `ctx.db` reads inside the tx — so `from`'s own rows are gone by the time this
- *  runs and a self-tagged `from` can't come back as its own member. The `blocks`
- *  join is kept for the `deleted` re-check and a stable order. */
+/** Live members of the merged-away type. `block_types` excludes tombstoned rows
+ *  by construction, which is why the tombstone sweep below exists separately. */
 const SELECT_TYPE_MEMBER_IDS_SQL = `
   SELECT bt.block_id AS id
   FROM block_types bt
@@ -69,29 +49,19 @@ const SELECT_TYPE_MEMBER_IDS_SQL = `
   ORDER BY b.created_at, b.id
 `
 
-/** Members whose row is TOMBSTONED, which `block_types` structurally cannot see
- *  (its update trigger re-inserts only `WHEN deleted = 0`). Their stored token
- *  still names the merged-away type, so restoring such a block after the merge
- *  would resurrect it silently un-typed — the exact damage this processor
- *  exists to prevent, just deferred to whenever the user hits undo or runs a
- *  restore.
+/** Tombstoned members, which `block_types` cannot see. Skipping them (as
+ *  `mergeRetargetProcessor` does for deleted sources) is safe for references,
+ *  which re-derive from content on restore; membership has no such
+ *  re-derivation, so a token left here is wrong forever once the block is
+ *  restored.
  *
- *  Worth diverging from `mergeRetargetProcessor` here, which deliberately skips
- *  deleted sources: a restored block's REFERENCES are re-derived from its
- *  content by `parseReferences` on the next write, so skipping them costs
- *  nothing. Membership has no such re-derivation — `types` is stored state, and
- *  a token lost here is lost for good.
+ *  `LIKE` rather than `json_each`, which THROWS on a malformed
+ *  `properties_json` — one corrupt unrelated tombstone must not abort the
+ *  merge. It is only a prefilter (it matches the id anywhere in the bag), so
+ *  every hit is re-checked against the real cell by `rewriteTypeToken`.
  *
- *  Matched with `LIKE` over the raw JSON rather than `json_each`, because
- *  `json_each` THROWS on a malformed `properties_json`, and one corrupt
- *  unrelated tombstone must not abort the user's merge. The `LIKE` is only a
- *  prefilter — it can match the id anywhere in the bag — so every hit is
- *  re-checked by `rewriteTypeToken` against the real `types` cell.
- *
- *  Unindexable by construction (a leading-wildcard `LIKE`), so this is a scan of
- *  the workspace's tombstones. It is gated at the call site on the merged-away
- *  block actually being a type definition, which makes it rare enough to pay
- *  for: ordinary block merges never reach it. */
+ *  Unindexable, so this scans the workspace's tombstones; the call site gates it
+ *  on the source really being a type definition to keep it off ordinary merges. */
 const SELECT_DELETED_TYPE_MEMBER_IDS_SQL = `
   SELECT id
   FROM blocks
@@ -102,18 +72,9 @@ const SELECT_DELETED_TYPE_MEMBER_IDS_SQL = `
 `
 
 /** Follow `fromId` through every merge THIS tx emitted, to the block that
- *  actually survives it.
- *
- *  A composed mutator can merge `A → B` and then `B → C` in one transaction.
- *  Processors run after the whole user fn, so by the time the `A → B` event is
- *  handled, `B` is already a tombstone: retargeting onto it would move `A`'s
- *  members onto a dead block, and bailing (the previous behavior) left them on
- *  the dead `A`. Both are the silent un-typing this processor exists to stop, so
- *  resolve the chain and land them on `C`.
- *
- *  Returns `null` for a cycle (`A → B`, `B → A` in one tx — degenerate, but a
- *  `while` here must not be able to spin), letting the caller fall back to the
- *  event's own destination. */
+ *  actually survives it. A tx can fold `A → B` and `B → C`, and processors run
+ *  after the whole user fn — so an event's own `intoId` may already be a
+ *  tombstone. `null` on a cycle, so the loop cannot spin. */
 const resolveTerminalDestination = (
   fromId: string,
   mergeMap: ReadonlyMap<string, string>,
@@ -130,18 +91,14 @@ const resolveTerminalDestination = (
   return null
 }
 
-/** A row's `types` tokens when the cell is WELL-FORMED, else `null` — where
- *  `null` means "this cell says nothing", which is NOT "this cell says no
- *  tokens".
+/** A row's `types` tokens when the cell is well-formed, else `null` — "says
+ *  nothing", which is not "says no tokens".
  *
- *  Both halves are load-bearing, and the obvious tolerant decode gets one of
- *  them wrong. It must not THROW: `getBlockTypes`/`hasBlockType` do, on a
- *  malformed cell, so using them here would let a malformed synced cell on the
- *  merge source roll back the whole merge. It must also not ACCEPT: reading the
- *  scalar `types: "block-type"` as `["block-type"]` would let a malformed
- *  ordinary block satisfy the ownership gate, and the codec and type registry
- *  both reject that row as a type. Agree with them rather than out-guessing
- *  them. */
+ *  The obvious tolerant decode gets one half wrong. It must not THROW
+ *  (`getBlockTypes` does, so a malformed synced cell would roll back the merge)
+ *  and must not ACCEPT (reading the scalar `types: "block-type"` as a one-element
+ *  list would let a malformed ordinary block pass the ownership gate, which the
+ *  codec and registry both refuse). */
 const wellFormedTypeTokens = (row: BlockData): readonly string[] | null => {
   const raw = row.properties[typesProp.name]
   if (raw === undefined) return []
@@ -159,33 +116,19 @@ type TypeCellRewrite =
   | {outcome: 'rewritten'; value: readonly string[]}
   | {outcome: 'undecodable'}
 
-/** Rewrite `fromToken` → `intoToken` inside a `types` cell's RAW encoded value,
- *  the way `mergeRetargetProcessor`'s `rewriteRefValue` handles a ref cell: on
- *  the raw value, so a malformed cell can be RECOGNIZED instead of throwing a
- *  `CodecError` that would roll back the user's whole merge over one unrelated
- *  bad row.
+/** Rewrite `fromToken` → `intoToken` in a `types` cell's RAW value (as
+ *  `rewriteRefValue` does for ref cells), so a malformed cell is recognized
+ *  rather than throwing a `CodecError` that would roll back the merge.
  *
- *  Only a well-formed `string[]` cell is retargeted; a malformed one is left
- *  untouched. That is not fastidiousness — such a row CANNOT be retargeted from
- *  inside this tx at all. Any write dirties it for typeify's `rerunOnDirtyRows`
- *  pass, which decodes the row's BEFORE snapshot (the malformed value, whatever
- *  we wrote over it) and throws, aborting the merge. Skipping keeps the merge
- *  working and leaves the stale token to the audit query.
+ *  A malformed cell is left untouched because it CANNOT be retargeted in this
+ *  tx: any write dirties the row for typeify's `rerunOnDirtyRows` pass, which
+ *  decodes the BEFORE snapshot — still malformed — and throws. Such cells reach
+ *  here from sync-applied rows, which bypass the same-tx pass while the
+ *  `block_types` triggers still index them.
  *
- *  Malformed cells reach here despite no local write path producing one:
- *  sync-applied rows bypass the same-tx pass while the `block_types` triggers
- *  still index them, and `json_each` over a SCALAR yields that scalar, so even
- *  `types: "<fromId>"` is indexed as a real membership.
- *
- *  Deliberately NOT sharing `projectedIdOf`'s trim: a ref cell tolerates
- *  whitespace padding around an id, but a membership token is compared verbatim
- *  by `block_types`, `getBlockTypes` and every by-type query, so `' x'` and `'x'`
- *  are genuinely different tokens and trimming would retarget a token that was
- *  never a member.
- *
- *  A rewrite that collides with a token already in the list dedupes to one
- *  entry (a block tagged with BOTH types keeps a single tag afterwards) —
- *  positionally, the earlier slot wins. */
+ *  No `projectedIdOf` trim: membership tokens are compared verbatim everywhere,
+ *  so `' x'` and `'x'` are different tokens and trimming would retarget one that
+ *  was never a member. A rewrite colliding with an existing token dedupes. */
 const rewriteTypeToken = (
   raw: unknown,
   fromToken: string,
@@ -214,55 +157,31 @@ const retargetTypeMembership = async (
   mergeMap: ReadonlyMap<string, string>,
   ctx: SameTxCtx,
 ): Promise<void> => {
-  // The event's own `intoId` is only the IMMEDIATE destination; in a chained
-  // merge it is itself a tombstone by now. See `resolveTerminalDestination`.
   const destinationId = resolveTerminalDestination(event.fromId, mergeMap) ?? event.intoId
   const into = await ctx.tx.get(destinationId)
-  // A destination still deleted after chain resolution was deleted outright
-  // rather than merged onward, so there is nowhere better to point: leave the
-  // members alone rather than moving them from one tombstone to another.
+  // Still deleted after chain resolution = deleted outright, not merged onward.
+  // Nowhere better to point, so leave the members rather than moving them to
+  // another tombstone.
   if (into === null || into.deleted) return
-  // The token the survivor's type is tagged under, via the SAME §9 claim rule
-  // the registry publishes by, so the tag a merge writes is byte-equal to the
-  // one `blockIdByTypeId` will bind.
-  //
-  // For every case the tests can drive this is the survivor's block id: user
-  // types tag under their block id, and a merge that mutates a valid SEEDED
-  // definition's bag (or tombstones it) is rejected earlier by
-  // `assertNoSeedDefinitionWrites`. Going through the shared helper rather than
-  // hardcoding `event.intoId` is therefore defence in depth — it is right if a
-  // seeded survivor ever does come through here (its claimed `person` must not
-  // be written as the seed block's uuid), and it costs nothing. The claim rule
-  // itself is pinned by `typeDefinitionMetadata.test.ts`.
-  //
-  // When the survivor is NOT a type definition at all, the same helper yields
-  // its block id, and members are retargeted onto it rather than having the tag
-  // dropped. Dropping is destructive and unrecoverable; a token naming a live
-  // block is undoable with the merge, diagnosable, and becomes real membership
-  // again the moment that block is made a type — the same stance the reference
-  // retarget takes when it moves a ref value regardless of the target's shape.
+  // The §9 claim rule the registry publishes by, so the tag written here is
+  // byte-equal to the one `blockIdByTypeId` binds. Defence in depth today —
+  // every reachable survivor tags under its block id — but right if a seeded
+  // survivor ever arrives. When the survivor is not a type definition at all
+  // this yields its block id, and members follow it rather than losing the tag:
+  // dropping is unrecoverable, while a token naming a live block is undoable
+  // with the merge and becomes real membership if that block is made a type.
   const intoToken = typeMembershipTokenFor(into)
-  // Degenerate no-op guard, not a pinned behavior: a survivor claiming the
-  // merged-away id as its own type id would make every rewrite below identity.
   if (intoToken === event.fromId) return
 
-  // The merged-away block must actually BE the type definition that owns these
-  // memberships. `bt.type = event.fromId` alone does not prove that: a
-  // membership token is any string, block ids are any string, and a seeded type
-  // (`todo`) needs no backing block at its token — so an ordinary block that
-  // merely HAPPENS to carry the id `todo` (an import minting its own ids is the
-  // realistic route) would match every member of the seeded Todo type, and
-  // merging that unrelated block would retag all of them onto its survivor.
+  // The source must really BE the definition that owns these memberships:
+  // `bt.type = fromId` does not prove it, since tokens and block ids are both
+  // arbitrary strings and a seeded type needs no backing block at its token. An
+  // ordinary block carrying the id `todo` would otherwise match every member of
+  // the seeded Todo type and retag them all.
   //
-  // Reading `from` through `tx.get` still works — it is soft-deleted, bag
-  // intact. Gating here rather than at the sweep also keeps an ordinary block
-  // merge off BOTH queries.
-  //
-  // The trade, stated plainly: a definition row that was stripped of its
-  // `block-type` tag before being merged no longer looks like a type here, so
-  // its members are not retargeted. That is the safe direction — they stay
-  // visible to the audit query and are repairable out of band, whereas a false
-  // POSITIVE silently mass-retags an entire seeded type.
+  // Accepted trade: a definition stripped of its `block-type` tag before being
+  // merged no longer looks like one here, so its members are left for the audit
+  // query — the safe direction, since a false positive mass-retags a whole type.
   const from = await ctx.tx.get(event.fromId)
   if (from === null) return
   const fromTokens = wellFormedTypeTokens(from)
@@ -279,10 +198,8 @@ const retargetTypeMembership = async (
   ))
   for (const {id} of members) {
     const row = await ctx.tx.get(id)
-    // Deliberately NOT skipping tombstones — see
-    // `SELECT_DELETED_TYPE_MEMBER_IDS_SQL`. Rewriting a tombstone's bag does not
-    // resurrect it (`deleted` is untouched); it just means the row carries a
-    // live token if it is ever restored.
+    // Tombstones are deliberately included: rewriting the bag does not
+    // resurrect them, it just means they carry a live token if restored.
     if (row === null) continue
     const rewrite = rewriteTypeToken(
       row.properties[typesProp.name], event.fromId, intoToken)
@@ -295,10 +212,9 @@ const retargetTypeMembership = async (
       )
       continue
     }
-    // `skipMetadata: true`, matching the reference retarget: following a merge
-    // is derived bookkeeping, so it must not float every member into "recent"
-    // or rewrite its "edited by". `updatedAt` still advances — `properties_json`
-    // is synced, so the change needs a new row version to survive a peer's LWW.
+    // `skipMetadata`: derived bookkeeping must not float every member into
+    // "recent" or rewrite its "edited by". `updatedAt` still advances, which a
+    // synced column needs to survive a peer's LWW.
     await ctx.tx.update(id, {
       properties: setBlockTypesInProperties(row.properties, rewrite.value),
     }, {skipMetadata: true})
@@ -310,14 +226,13 @@ export const RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR = defineSameTxProcessor({
   watches: {kind: 'event', events: [CORE_BLOCK_MERGED_EVENT]},
   apply: async (event, ctx) => {
     const payloads = event.emittedEvents.map(e => e.payload as CoreBlockMergedEvent)
-    // Every merge this tx performed, so each event can resolve past the ones
-    // that ran after it. Built over ALL payloads before any is processed —
-    // the chain is only visible from the whole set.
+    // Built over ALL payloads first: a chain is only visible from the whole set.
     const mergeMap = new Map(payloads.map(p => [p.fromId, p.intoId]))
+    // Sequential is load-bearing. `foldBlocksInTx` emits one event per source,
+    // so a block tagged with two of them is rewritten twice; each pass re-reads
+    // through `tx.get`, and running these concurrently makes the second clobber
+    // the first (pinned by the "BOTH … types" tests).
     for (const payload of payloads) {
-      // Sequential, and each iteration re-reads its members through `tx.get`:
-      // a block tagged with two of this tx's merged-away types therefore picks
-      // up both rewrites instead of the second clobbering the first.
       await retargetTypeMembership(payload, mergeMap, ctx)
     }
   },

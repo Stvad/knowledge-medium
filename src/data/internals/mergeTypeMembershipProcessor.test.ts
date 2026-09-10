@@ -2,7 +2,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type BlockData } from '@/data/api'
-import { mergeBlocksInTx } from '@/data/blockMerge'
+import { foldBlocksInTx, mergeBlocksInTx } from '@/data/blockMerge'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { addBlockTypeToProperties, getBlockTypes, typesProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
@@ -417,6 +417,56 @@ describe('core.retargetMergedTypeMembership', () => {
     // Untouched: a malformed cell is not evidence that this block was the type
     // definition owning that token.
     expect(getBlockTypes(env.read(MEMBER)!)).toEqual([RAW_SOURCE])
+  })
+
+  // The alias-collision flow folds MANY sources into one survivor in a single
+  // tx (`foldBlocksInTx`), emitting one merge event per source. That — not the
+  // A→B→C chain — is the multi-event shape production actually produces, so it
+  // is worth pinning against the real entry point rather than a hand-rolled one.
+  describe('multi-source fold in one tx', () => {
+    const TYPE_D = '6666ffff-6666-4666-8666-666666666666'
+
+    beforeEach(async () => {
+      await createTypeDefinition(env.repo, TYPE_D, 'Human', 'a4')
+      await env.repo.awaitProcessors()
+    })
+
+    const foldBoth = async (): Promise<void> => {
+      await env.repo.tx(async tx => {
+        const require = async (id: string): Promise<BlockData> => {
+          const row = await tx.get(id)
+          if (row === null) throw new Error(`missing ${id}`)
+          return row
+        }
+        await foldBlocksInTx(tx, {
+          into: await require(TYPE_D),
+          froms: [await require(TYPE_A), await require(TYPE_B)],
+          contentStrategy: 'keepTarget',
+        })
+      }, {scope: ChangeScope.BlockDefault})
+    }
+
+    it('moves members of every folded type onto the survivor', async () => {
+      await createMember(MEMBER, 'member of A', TYPE_A)
+      await createMember(OTHER, 'member of B', TYPE_B)
+
+      await foldBoth()
+
+      expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_D])
+      expect(getBlockTypes(env.read(OTHER)!)).toEqual([TYPE_D])
+      expect(await indexedTypes(MEMBER)).toEqual([TYPE_D])
+    })
+
+    // Each event re-reads its members through `tx.get`, and the membership
+    // index is maintained inside the tx, so the second fold still sees this
+    // block and its rewrite composes with the first instead of clobbering it.
+    it('collapses a member of BOTH folded types to a single tag', async () => {
+      await createMember(MEMBER, 'member of A and B', TYPE_A, TYPE_B)
+
+      await foldBoth()
+
+      expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_D])
+    })
   })
 
   // `block_types` structurally cannot see these rows (its update trigger
