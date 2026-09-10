@@ -54,9 +54,10 @@ import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
  *  header renderer so the in-review chain renders identically. */
 const BREADCRUMB_OVERRIDES = {isNestedSurface: true, isBreadcrumb: true}
 const EMPTY_PARENTS: readonly Block[] = []
-/** How many cards' ancestors to prefetch per chunk (two chunks are in
- *  flight at once). Bounds the `core.manyAncestors` id count so a large
- *  deck can't exceed SQLite's host-parameter limit. */
+/** How far ahead of the current card to keep ancestor chains warm, so a
+ *  card's breadcrumb line is there the moment it is shown rather than a
+ *  load later. Bounds the handles held open, not the SQL — the walks are
+ *  coalesced and chunked below the parameter limit by `ancestorChainRows`. */
 const BREADCRUMB_PREFETCH = 24
 
 
@@ -250,19 +251,14 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     setProgress(null)
   }, [setProgress])
 
-  // Window the ancestor prefetch. Passing every queued id to one
-  // `core.manyAncestors` call (one SQL placeholder per id) would let a deck
-  // with a very large due queue exceed SQLite's host-parameter limit and
-  // fail the whole session. Anchor the window to a fixed-size chunk so the
-  // handle key — and thus the query — changes only every
-  // BREADCRUMB_PREFETCH cards rather than on every advance, and span two
-  // chunks so the next chunk is already warm before the user reaches it.
-  const prefetchStart = Math.floor(index / BREADCRUMB_PREFETCH) * BREADCRUMB_PREFETCH
+  // A window that slides with the card, rather than one anchored to a
+  // fixed chunk: each advance only adds the id entering the far end, and
+  // every card already in the window keeps the chain it resolved.
   const queueBlocks = useMemo(
     () => (queue ?? [])
-      .slice(prefetchStart, prefetchStart + BREADCRUMB_PREFETCH * 2)
+      .slice(index, index + BREADCRUMB_PREFETCH)
       .map(id => repo.block(id)),
-    [queue, repo, prefetchStart],
+    [queue, repo, index],
   )
   const parentsByCardId = useManyParents(queueBlocks)
   const currentParents = currentId
