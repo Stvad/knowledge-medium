@@ -228,9 +228,15 @@ export function useHandle<T, S = T | undefined>(
  *  keyed on a serialization of the ids, not on the source array, or every
  *  render tears down N subscriptions and opens N more.
  *
- *  Members are compared by identity, which is already the right grain — a
- *  `LoaderHandle` publishes a new value object only when its structural
- *  diff says the value changed. */
+ *  Members are compared with `useHandle`'s equality, not by identity: a
+ *  `LoaderHandle` stores every reload's value and applies its structural
+ *  diff only to the NOTIFY, so `peek()` hands back a fresh array after a
+ *  reload that changed nothing. Identity alone would rebuild the whole
+ *  aggregate on each of those, and every consumer memo with it.
+ *
+ *  No `committedRef` counterpart to `useHandle`'s, because the memo below
+ *  is rebuilt only when `handles` changes — which means the id set
+ *  changed, and a new array is then the honest answer. */
 export const useHandles = <T,>(
   handles: readonly Handle<T>[],
 ): readonly (T | undefined)[] => {
@@ -246,7 +252,7 @@ export const useHandles = <T,>(
       if (
         memoized !== null &&
         memoized.length === next.length &&
-        next.every((value, index) => Object.is(value, memoized![index]))
+        next.every((value, index) => areSelectedValuesEqual(value, memoized![index]))
       ) return memoized
       memoized = next
       return next

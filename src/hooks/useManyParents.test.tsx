@@ -23,35 +23,56 @@ type Chain = {id: string}[]
 const chainFor = (id: string): Chain => [{id: `${id}-parent`}]
 
 /** `useHandle`/`useHandles` reach `peek()`, `status()` and
- *  `subscribe()`; `load()` only from `'idle'`, and never `read()`. */
-const handleFor = (id: string, value: Chain | undefined): Handle<Chain> => ({
-  key: `ancestors:${id}`,
-  peek: () => value,
-  load: () => Promise.resolve(value ?? []),
-  subscribe: () => () => {},
-  read: () => value ?? [],
-  status: () => value ? 'ready' : 'loading',
-})
+ *  `subscribe()`; `load()` only from `'idle'`, and never `read()`.
+ *
+ *  `republish` models what a real `LoaderHandle` does on a reload: it
+ *  stores the new value unconditionally and applies its structural diff
+ *  only to the notify, so `peek()` returns a FRESH array even when
+ *  nothing about the chain changed. */
+const handleFor = (id: string, initial: Chain | undefined) => {
+  let value = initial
+  const listeners = new Set<(chain: Chain) => void>()
+  const handle: Handle<Chain> = {
+    key: `ancestors:${id}`,
+    peek: () => value,
+    load: () => Promise.resolve(value ?? []),
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    read: () => value ?? [],
+    status: () => value ? 'ready' : 'loading',
+  }
+  return {
+    handle,
+    republish: (next: Chain) => {
+      value = next
+      // Structurally equal to the last value, so a real handle suppresses
+      // the notify — nothing here fires either.
+    },
+  }
+}
 
 /** Every id resolves except `cold`, and each id's handle is a stable
  *  instance — the store's same-key-same-instance guarantee, which is
  *  what the hook's subscription identity rests on. */
 const makeRepo = () => {
   const acquired: string[] = []
-  const handles = new Map<string, Handle<Chain>>()
+  const handles = new Map<string, ReturnType<typeof handleFor>>()
   return {
     acquired,
+    handles,
     repo: {
       block: (id: string) => ({id}) as Block,
       query: {
         ancestors: ({id}: {id: string}) => {
           acquired.push(id)
-          let handle = handles.get(id)
-          if (!handle) {
-            handle = handleFor(id, id.startsWith('cold') ? undefined : chainFor(id))
-            handles.set(id, handle)
+          let entry = handles.get(id)
+          if (!entry) {
+            entry = handleFor(id, id.startsWith('cold') ? undefined : chainFor(id))
+            handles.set(id, entry)
           }
-          return handle
+          return entry.handle
         },
       },
     },
@@ -100,6 +121,21 @@ describe('useManyParents', () => {
     rerender({blocks: blocksFor(['b', 'a'])})
 
     expect(harness.acquired.length).toBe(afterFirstRender)
+  })
+
+  it('holds the same map when a handle republishes an equal chain', () => {
+    // A `LoaderHandle` stores every reload's value and applies its
+    // structural diff only to the NOTIFY, so `peek()` hands back a fresh
+    // array after a reload that changed nothing. Comparing members by
+    // identity would rebuild the map on each of those, and every consumer
+    // memo that closes over it.
+    const {result, rerender} = renderWith(['a', 'b'])
+    const first = result.current
+
+    harness.handles.get('a')!.republish(chainFor('a'))
+    rerender({blocks: blocksFor(['a', 'b'])})
+
+    expect(result.current).toBe(first)
   })
 
   it('survives an empty id set passing through', () => {

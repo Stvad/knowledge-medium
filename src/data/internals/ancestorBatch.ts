@@ -24,11 +24,13 @@ import { manyAncestorsSql } from './treeQueries'
 
 export type AncestorChainRow = BlockRow & {chain_start_id: string}
 
-/** Ids per statement. One SQL bind per id, so this is far under SQLite's
- *  variable cap; it is set at the size of a large visible set so that
- *  chunking is the degenerate path a caller reaches only by asking for
- *  more chains than any surface renders at once. */
-const MAX_IDS_PER_STATEMENT = 100
+/** Ids per statement. One SQL bind per id, and SQLite caps bound
+ *  parameters — 999 on older builds, 32766 since 3.32 — so the bound is
+ *  set under the old floor rather than at a guess about how many chains a
+ *  surface asks for. Same figure and same reason as `STAGING_READ_CHUNK`
+ *  in `syncObserver/materialize.ts`. Every caller today fits in one
+ *  statement, the recents feed's default 200-row window included. */
+const MAX_IDS_PER_STATEMENT = 500
 
 interface Waiter {
   resolve: (rows: AncestorChainRow[]) => void
@@ -91,9 +93,13 @@ class AncestorBatcher {
   }
 }
 
-/** One batcher per database. `WeakMap` rather than a field on `Repo`
- *  because the coalescing window is the microtask, not the Repo: two
- *  Repos over one connection are still one queue. */
+/** One batcher per read surface, which in practice is one per `Repo` —
+ *  `Repo` wraps its database in a per-instance metrics proxy, so two
+ *  Repos over one connection key here separately and each gets its own
+ *  queue. That costs one extra statement in the only arrangement that
+ *  produces it (a test sharing a db between Repos) and nothing in the app,
+ *  which has one Repo. `WeakMap` rather than a `Repo` field so the walk
+ *  stays reachable from a resolver holding only `ctx.db`. */
 const batchers = new WeakMap<QueryReadDb, AncestorBatcher>()
 
 /** The leaf-to-root chain for `id`, excluding `id` itself, deleted rows

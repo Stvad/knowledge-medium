@@ -83,24 +83,35 @@ describe('ancestorChainRows', () => {
 
   it('splits past the per-statement id bound', async () => {
     const {db, statements} = fakeDb()
-    const ids = Array.from({length: 101}, (_, i) => `id-${i}`)
+    const ids = Array.from({length: 501}, (_, i) => `id-${i}`)
 
     const chains = await Promise.all(ids.map(id => ancestorChainRows(db, id)))
 
-    expect(statements.map(s => s.ids.length)).toEqual([100, 1])
-    expect(idsOf(chains[100])).toEqual(['id-100'])
+    expect(statements.map(s => s.ids.length)).toEqual([500, 1])
+    expect(idsOf(chains[500])).toEqual(['id-500'])
+  })
+
+  it('keeps the recents feed default window in one statement', async () => {
+    // The largest set any surface asks for today. A bound below it would
+    // put the cold-storage path on serialized round trips.
+    const {db, statements} = fakeDb()
+    const ids = Array.from({length: 200}, (_, i) => `id-${i}`)
+
+    await Promise.all(ids.map(id => ancestorChainRows(db, id)))
+
+    expect(statements).toHaveLength(1)
   })
 
   it('confines a failed read to its own chunk', async () => {
-    const ids = Array.from({length: 101}, (_, i) => `id-${i}`)
-    const {db} = fakeDb({failWhen: chunk => chunk.length === 100})
+    const ids = Array.from({length: 501}, (_, i) => `id-${i}`)
+    const {db} = fakeDb({failWhen: chunk => chunk.length === 500})
 
     const settled = await Promise.allSettled(
       ids.map(id => ancestorChainRows(db, id)),
     )
 
-    expect(settled.slice(0, 100).every(r => r.status === 'rejected')).toBe(true)
-    expect(settled[100]).toMatchObject({status: 'fulfilled'})
+    expect(settled.slice(0, 500).every(r => r.status === 'rejected')).toBe(true)
+    expect(settled[500]).toMatchObject({status: 'fulfilled'})
   })
 
   it('rejects every caller waiting on a failed id, not just the first', async () => {
