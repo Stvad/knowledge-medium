@@ -5,7 +5,7 @@
  * bridge) and once in plain JS (`eslint-rules/no-raw-synced-table-writes.js`),
  * because ESLint loads rule files natively with no transpile step and the
  * app's tsconfigs don't enable `allowJs` — so neither side could import the
- * other. Three separate review rounds found a hole in that recognizer (CTE
+ * other. Review repeatedly found holes in that recognizer (CTE
  * prefixes, schema qualifiers, multi-statement scripts), and each fix had to
  * be applied to both copies by hand; this file used to just assert the two
  * copies agreed, without pinning what the agreed-upon answer should BE.
@@ -16,7 +16,7 @@
  * re-exports it, and the ESLint rule imports it directly. So this is now a
  * plain behavioral test of that single parser, pinning `syncedWriteTarget`'s
  * verdict for each case in the corpus that used to keep the two copies
- * honest — the corpus's coverage (every hole three review rounds found)
+ * honest — the corpus's coverage (every hole review previously found)
  * survives the merge.
  *
  * It still also runs the corpus through the ESLint rule's own report path
@@ -70,7 +70,7 @@ const CORPUS: ReadonlyArray<readonly [string, string | null]> = [
   // contains a real `UPDATE blocks` — position doesn't matter (module doc),
   // so this is a hit despite living in a "reads" comment block.
   ['CREATE TRIGGER t AFTER UPDATE ON blocks BEGIN UPDATE blocks SET x=1; END', 'blocks'],
-  // Destructive DDL — a target, same as DML (PR #386 review)
+  // Destructive DDL — a target, same as DML
   ['DROP TABLE blocks', 'blocks'],
   ['DROP TABLE IF EXISTS workspaces', 'workspaces'],
   ["DROP TABLE 'blocks'", 'blocks'],

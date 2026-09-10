@@ -12,33 +12,21 @@
  * One gate, not two: `materializeStagingRows` already consulted `ps_crud` /
  * `updated_at` to decide what to write to disk, so `snapshots` only contains
  * rows that won that gate. The cache write here is `applyIfNewer(after,
- * 'sync')` — the in-memory LWW. It heals a 0-stamped pristine default LIVE for
+ * 'sync')` — the in-memory LWW: it heals a 0-stamped pristine default LIVE for
  * free (any real server value out-stamps 0), while REJECTING an older-stamped
  * delivery over a newer local cache value.
  *
  * That reject is load-bearing: the disk gate is server-monotonic but
- * INDISCRIMINATE toward a strictly-newer local row (it applies an older server
- * row over a just-acked-not-yet-echoed real edit during a rescan's ack→echo
- * window — a transient disk revert the echo converges). Force-applying that
- * onto the cache would surface it as a new→old→new UI flash. Keeping the cache
- * LWW masks the transient: disk self-heals on the echo, and the rare legacy
- * NONZERO shadow heals on disk now + in the cache on the next reload. This is
- * the invariant commit cd8f87a9 established (force-heal only when the disk gate
- * protected real edits) — the gate is uniformly indiscriminate, so the cache is
- * uniformly LWW. A rejected row normally contributes no invalidation, avoiding
- * the re-read flicker that waking handles to stale SQL would cause.
+ * INDISCRIMINATE toward a strictly-newer local row — it can apply an older
+ * server row over a just-acked-not-yet-echoed real edit during a rescan's
+ * ack→echo window. Force-applying that onto the cache would surface it as a
+ * new→old→new UI flash; keeping the cache LWW masks the transient instead,
+ * since disk self-heals on the echo.
  *
- * KNOWN GAP (#526): "masks the transient" assumes some later delivery
- * out-stamps the cached value. For a client whose clock runs past the
- * trusted-skew cap that never happens — the server cannot issue a stamp that
- * high — so a drifted merge converges on disk while the cache keeps the
- * pre-merge row for the rest of the session. There the rejected row DID
- * suppress a real user-visible change, which is why the sentence above says
- * "normally". The two cases are indistinguishable here (both are "incoming
- * stamp < cached stamp" over a cache that matched disk beforehand); telling
- * them apart needs to know whether the local clock is ahead of the server's,
- * which nothing tracks today. Pinned by a characterization test in
- * `@/data/test/concurrentEditConvergence.test.ts`.
+ * KNOWN GAP (#526): a client whose clock runs past the trusted-skew cap never
+ * receives an out-stamping delivery, so a rejected row there DOES suppress a
+ * real user-visible change — indistinguishable here from the masked case,
+ * since nothing tracks whether the local clock is ahead of the server's.
  */
 
 import type { BlockCache } from '@/data/blockCache.js'
@@ -83,11 +71,8 @@ export const applySyncInvalidation = (
     // invalidate its parent-edge deps. Mirrors the fast path's post-commit
     // cache walk (commitPipeline step 6) and the retired tail's delete branch.
     //
-    // Apply branch is the in-memory LWW: heal a 0-stamped pristine default live
-    // (server out-stamps 0) but reject an older delivery over a newer local
-    // cache value, so a rescan's transient disk revert (ack→echo window) never
-    // surfaces as a UI flash. `before` is unused now — the gate's decision is
-    // already encoded in the disk write; the cache only guards re-read flicker.
+    // `before` is unused here — the gate's decision is already encoded in the
+    // disk write; the cache only guards re-read flicker (see header LWW rule).
     const changed = snap.after
       ? cache.applyIfNewer(snap.after, 'sync')
       : cache.markMissing(id)

@@ -36,10 +36,10 @@ interface Seed {
   order_key?: string
   workspace_id?: string
   deleted?: 0 | 1
-  /** Skip the workspace-invariant trigger by leaving tx_context.source NULL.
-   *  Sync-applied seeds (default for tests) bypass parent-validation per §4.1.1. */
 }
 
+/** Skip the workspace-invariant trigger by leaving tx_context.source NULL.
+ *  Sync-applied seeds (default for tests) bypass parent-validation per §4.1.1. */
 const insertOne = async (db: TestDb['db'], seed: Seed): Promise<void> => {
   await db.execute(
     `INSERT INTO blocks
@@ -313,8 +313,89 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
     // A MARKED child targeting the definition IS machinery and filters.
     await insertBlock({id: 'F', parent_id: 'P', reference_target_id: DEF, is_field_form: 1, order_key: 'a2'})
 
-    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['P'])
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['P', '[]', ''])
     expect(rows.map(r => r.id)).toEqual(['C', 'L'])
+  })
+
+  it('filters a marked row in an UN-flipped workspace, where the backfill mints it', async () => {
+    // Recognition used to require `properties_migration IN ('children',
+    // 'cell-off')`, on the premise that an un-flipped workspace holds no field
+    // rows. The backfill mints them while the workspace still reads cells, so
+    // this must answer the same either side of the flip — otherwise the cell
+    // renders the property through the property UI while the field row shows
+    // it a second time in the outline.
+    const UNFLIPPED = 'ws-vis-unflipped'
+    await h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'cell')`,
+      [UNFLIPPED, 'unflipped ws', 'user-1'],
+    )
+    const DEF_U = 'def-unflipped'
+    await h.db.execute(
+      `INSERT INTO block_types (block_id, workspace_id, type) VALUES (?, ?, 'property-schema')`,
+      [DEF_U, UNFLIPPED],
+    )
+    const insert = (id: string, parent: string | null, ref: string | null,
+                    marked: 1 | null, order: string) =>
+      h.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+            created_at, updated_at, created_by, updated_by, deleted, reference_target_id, is_field_form)
+          VALUES (?, ?, ?, ?, '', '{}', '[]', 0, 0, 'u', 'u', 0, ?, ?)`,
+        [id, UNFLIPPED, parent, order, ref, marked],
+      )
+    await insert('PU', null, null, null, 'b0')
+    await insert('CU', 'PU', null, null, 'a0')
+    await insert('FU', 'PU', DEF_U, 1, 'a1')
+
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['PU', '[]', ''])
+    expect(rows.map(r => r.id)).toEqual(['CU'])
+  })
+
+  it('filters a marked row whose SEED definition has not materialized yet (#389 item 7)', async () => {
+    // A code-declared property seed the registry knows but
+    // `materializePropertySeeds` has not written to `blocks` yet — so
+    // `block_types` carries nothing for it. Reachable on a warm device when
+    // a field row arrives over sync ahead of its definition block, which no
+    // boot-time ordering rule covers. The tx-layer checker resolves this
+    // through the registry and hides the row; the SQL predicate consults
+    // only `block_types` and shows it. Same row, two answers.
+    const UNMATERIALIZED_SEED = 'seed-def-not-yet-materialized'
+    await insertBlock({id: 'P3', parent_id: null, order_key: 'b0'})
+    await insertBlock({id: 'C3', parent_id: 'P3', order_key: 'a0'})
+    await insertBlock({
+      id: 'F3', parent_id: 'P3', reference_target_id: UNMATERIALIZED_SEED,
+      is_field_form: 1, order_key: 'a1',
+    })
+
+    // The registry-derived seed-id set is bound into the predicate, so the
+    // row classifies without any DB state for the definition.
+    const rows = await h.db.getAll<{id: string}>(
+      VISIBLE_CHILDREN_SQL, ['P3', JSON.stringify([UNMATERIALIZED_SEED]), WS],
+    )
+    expect(rows.map(r => r.id)).toEqual(['C3'])
+  })
+
+  it('leaves a row alone when the seed set belongs to a DIFFERENT workspace', async () => {
+    // §9: a foreign workspace's definition id must degrade to a VISIBLE
+    // "unknown field" row. Salting alone does not deliver that — it stops
+    // another workspace's OWN ids from matching, but a row here whose
+    // reference_target_id names the active workspace's seed (a cross-workspace
+    // copy) would match on id and be hidden.
+    const FOREIGN_SEED = 'seed-def-owned-by-another-workspace'
+    await insertBlock({id: 'P4', parent_id: null, order_key: 'c0'})
+    await insertBlock({id: 'C4', parent_id: 'P4', order_key: 'a0'})
+    await insertBlock({
+      id: 'F4', parent_id: 'P4', reference_target_id: FOREIGN_SEED,
+      is_field_form: 1, order_key: 'a1',
+    })
+
+    const rows = await h.db.getAll<{id: string}>(
+      // The seed set is bound for a workspace these rows do not belong to.
+      VISIBLE_CHILDREN_SQL, ['P4', JSON.stringify([FOREIGN_SEED]), 'some-other-ws'],
+    )
+    expect(rows.map(r => r.id)).toEqual(['C4', 'F4'])
   })
 
   it('VISIBLE_SUBTREE_SQL prunes AT each marked row, keeps unmarked stamped rows, and never prunes the root', async () => {
@@ -327,12 +408,12 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
     // Unmarked stamped row (the old look-alike) descends normally.
     await insertBlock({id: 'L2', parent_id: 'P2', reference_target_id: DEF, order_key: 'a0'})
 
-    const rows = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['P2'])
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['P2', '[]', ''])
     expect(rows.map(r => r.id)).toEqual(['P2', 'L2'])
 
     // The ROOT itself is never pruned — opening a field row shows its
     // subtree (its value child), minus nothing here (V2 is unmarked).
-    const fromField = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['F2'])
+    const fromField = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['F2', '[]', ''])
     expect(fromField.map(r => r.id)).toEqual(['F2', 'V2'])
   })
 })

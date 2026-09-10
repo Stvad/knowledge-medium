@@ -4,7 +4,7 @@
 // layout-root seam value (LayoutRootContext). New app-root behavior goes into
 // an overridable seam instead — a block renderer (like TopLevelRenderer), a
 // facet, or the layout-root hook (usePanelLayoutProjection / LayoutRootContext).
-// See the perspective keep-alive RFC (PR #357).
+// See docs/perspective-keep-alive-design.html.
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.js'
 import { use, useCallback, useEffect, useMemo, useState } from 'react'

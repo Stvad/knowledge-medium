@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Whole-block reference content: the `((id))` / `[[name]]` forms property
- * field rows and ref-typed values are written in (PR #288 §7).
+ * field rows and ref-typed values are written in (docs/properties-as-blocks-migration.html §7).
  */
 
 import { describe, expect, it } from 'vitest'
@@ -55,7 +55,7 @@ describe('referenceBlockContentForId', () => {
 
   // A case-variant UUID passes the no-parens/no-whitespace check but does NOT
   // round-trip: the parser canonicalizes UUID-looking ids to lowercase, so the
-  // ref reads back as a DIFFERENT id (PR #386 review). Same silent-corruption
+  // ref reads back as a DIFFERENT id. Same silent-corruption
   // shape as the unparseable case, except the derived stamp lands on a wrong or
   // nonexistent block instead of clearing.
   it('refuses a UUID id that is not already lowercase', () => {
@@ -234,7 +234,7 @@ describe('the two readers of this grammar', () => {
 // wikilink. Property names always ran both halves of this hygiene; type
 // labels ran only the grammar-shaped half, so a `]]`-bearing label
 // claimed an alias nothing could link to — a gap that predates the length
-// cap and that the cap widened (Codex on PR #540).
+// cap and that the cap widened.
 describe('assertRoundTrippableReferenceLabel', () => {
   it('accepts an ordinary name', () => {
     expect(() => assertRoundTrippableReferenceLabel('Book', 'ctx')).not.toThrow()
@@ -265,7 +265,7 @@ describe('assertRoundTrippableReferenceLabel', () => {
 // property field. Without the bound here, a whole-block `[[<over-cap>]]`
 // with an owner was stamped as a reference block while the inline parser
 // and the renderer both read the same text as literal — one string, two
-// contradictory classifications (Codex on PR #540).
+// contradictory classifications.
 describe('parseExactReferenceBlockContent — alias length bound', () => {
   it('reads an alias at the cap and refuses one past it', () => {
     const atCap = 'a'.repeat(MAX_ALIAS_LENGTH)

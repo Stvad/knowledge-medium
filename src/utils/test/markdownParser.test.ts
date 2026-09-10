@@ -262,4 +262,44 @@ Root
       expect(blocks[0].content).toBe('~~~\n```\ninner\n```\n~~~')
     })
   })
+
+  describe('tab indentation', () => {
+    it('nests a tab-indented outline instead of flattening it', () => {
+      const blocks = parseMarkdownToBlocks('- Project\n\t- Task 1\n\t- Task 2\n- Notes')
+
+      const project = findByContent(blocks, 'Project')
+      expect(isRoot(project)).toBe(true)
+      expect(isRoot(findByContent(blocks, 'Notes'))).toBe(true)
+      expect(childrenOf(blocks, project).map(b => b.content)).toEqual(['Task 1', 'Task 2'])
+    })
+
+    it('nests each further tab one level deeper', () => {
+      const blocks = parseMarkdownToBlocks('- a\n\t- b\n\t\t- c\n\t- d')
+
+      const a = findByContent(blocks, 'a')
+      const b = findByContent(blocks, 'b')
+      expect(isRoot(a)).toBe(true)
+      expect(b.parentId).toBe(a.id)
+      expect(findByContent(blocks, 'c').parentId).toBe(b.id)
+      expect(findByContent(blocks, 'd').parentId).toBe(a.id)
+    })
+
+    it('nests a tab-indented fence under its bullet', () => {
+      // The fence path measures its indent with the same function but
+      // STRIPS it by character count, so tabs are the case where those two
+      // can disagree.
+      const blocks = parseMarkdownToBlocks('- step\n\t```\n\tcode\n\t```')
+
+      expect(findByContent(blocks, '```\ncode\n```').parentId)
+        .toBe(findByContent(blocks, 'step').id)
+    })
+
+    it('measures a tab to the next 4-column stop when tabs and spaces mix', () => {
+      // CommonMark's tab-stop rule: a tab lands at column 4, past the two
+      // spaces above it, so it reads as deeper rather than the same level.
+      const blocks = parseMarkdownToBlocks('- a\n  - b\n\t- c')
+
+      expect(findByContent(blocks, 'c').parentId).toBe(findByContent(blocks, 'b').id)
+    })
+  })
 })

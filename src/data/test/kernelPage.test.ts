@@ -10,6 +10,7 @@ import {
   getOrCreateKernelPage,
   kernelPageBlockId,
 } from '@/data/kernelPage'
+import { getOrCreateMigrationsPage, migrationsPageBlockId } from '@/data/migrationsPage'
 import { Repo } from '@/data/repo'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -45,6 +46,20 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 afterEach(() => { vi.restoreAllMocks() })
+
+/** A live page carrying PAGE_TYPE and its alias but NO marker type — built
+ *  damaged rather than created-then-damaged, so no repair path launders it on
+ *  the way in. */
+const seedPageMissingMarker = async (repo: Repo): Promise<string> => {
+  const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+  const snapshot = repo.snapshotTypeRegistries()
+  await repo.tx(async tx => {
+    await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Foo'})
+    await tx.setProperty(id, aliasesProp, ['Foo'])
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
+  }, {scope: ChangeScope.BlockDefault})
+  return id
+}
 
 describe('getOrCreateKernelPage', () => {
   it('creates a deterministic page tagged with PAGE_TYPE plus the marker type', async () => {
@@ -104,15 +119,9 @@ describe('getOrCreateKernelPage', () => {
    */
   describe('repairing a live page in this workspace', () => {
     it('re-tags a marker type the page has lost', async () => {
-      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
-      const snapshot = env.repo.snapshotTypeRegistries()
-      await env.repo.tx(async tx => {
-        await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Foo'})
-        await tx.setProperty(id, aliasesProp, ['Foo'])
-        // PAGE_TYPE only — the marker is what a caller queries for, and its
-        // absence is exactly the state no query can report.
-        await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
-      }, {scope: ChangeScope.BlockDefault})
+      // PAGE_TYPE only — the marker is what a caller queries for, and its
+      // absence is exactly the state no query can report.
+      await seedPageMissingMarker(env.repo)
 
       const page = await getOrCreateKernelPage(env.repo, WS, {
         namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
@@ -142,6 +151,7 @@ describe('getOrCreateKernelPage', () => {
       expect(page.peekProperty(aliasesProp)).toEqual(['Foo', 'My Foo'])
     })
   })
+
 
   describe('on a read-only workspace', () => {
     const readOnlyRepo = () => {
@@ -322,5 +332,142 @@ describe('getOrCreateKernelPage', () => {
       const row = await env.repo.load(id)
       expect(row?.properties[aliasesProp.name]).toBeUndefined()
     })
+  })
+
+  it('restores a tombstone whose stored alias bag was squatted while it was dead (issue #378)', async () => {
+    // The bag carries an EXTRA alias beyond the canonical `spec.alias` —
+    // a collision on `spec.alias` itself is a separate, undecided case
+    // (issue #378).
+    const page = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+    await env.repo.tx(async tx => {
+      await tx.setProperty(page.id, aliasesProp, ['Foo', 'stale-extra'])
+      await tx.delete(page.id)
+    }, {scope: ChangeScope.BlockDefault})
+
+    // A different live block claims the freed stale alias while the
+    // kernel page is dead.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'squatter', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Squatter'})
+      await tx.setProperty('squatter', aliasesProp, ['stale-extra'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const restored = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+
+    expect(restored.id).toBe(page.id)
+    expect(restored.peek()?.deleted).toBe(false)
+    expect(restored.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+    // The restored page reclaims its canonical alias; the stale extra
+    // is NOT resurrected — it stays with the squatter.
+    expect(restored.peekProperty(aliasesProp)).toEqual(['Foo'])
+    expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['stale-extra'])
+  })
+
+  it('stays reachable when a live block already owns its canonical alias (issue #378)', async () => {
+    // The reported repro: canonical page deleted, user aliases a different
+    // page with the same name, app tries to restore and re-claim. The reclaim
+    // trips alias uniqueness, and because the page is minted in that same tx it
+    // dies with the rollback — so every retry repeats it and the page is
+    // permanently uncreatable. Yielding the contested alias keeps it reachable.
+    const page = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+    })
+    await env.repo.tx(tx => tx.delete(page.id), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'squatter', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Mine'})
+      await tx.setProperty('squatter', aliasesProp, ['Foo'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const again = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+    })
+
+    expect(again.id).toBe(kernelPageBlockId(WS, FOO_PAGE_NS))
+    const restored = await env.repo.load(again.id)
+    expect(restored).not.toBeNull()
+    expect(restored?.deleted).toBe(false)
+    // The alias stays with the squatter until the user merges; identity does not.
+    expect(again.peekProperty(aliasesProp) ?? []).not.toContain('Foo')
+    expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['Foo'])
+    expect(again.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+  })
+})
+
+describe('skipUndo (unattended bootstrap)', () => {
+  const spec = {namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE}
+
+  /** An edit, undone — so a redo is pending and the undo stack is non-empty,
+   *  which is the state an unattended create would damage. */
+  const editThenUndo = async (repo: Repo) => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'note', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'v1'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(async tx => { await tx.update('note', {content: 'v2'}) },
+      {scope: ChangeScope.BlockDefault})
+    expect(await repo.undo()).toBe(true)
+    expect((await repo.load('note'))?.content).toBe('v1')
+  }
+
+  it('records nothing and leaves the pending redo branch intact', async () => {
+    const {repo} = env
+    await editThenUndo(repo)
+    const before = repo.undoManager.depths(ChangeScope.BlockDefault)
+
+    await getOrCreateKernelPage(repo, WS, spec, {skipUndo: true})
+    expect(await repo.load(kernelPageBlockId(WS, FOO_PAGE_NS))).not.toBeNull()
+
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual(before)
+    // Recording clears redo — the half that actually bites.
+    expect(await repo.redo()).toBe(true)
+    expect((await repo.load('note'))?.content).toBe('v2')
+  })
+
+  it('the RESTORE path skips undo too, not just the create', async () => {
+    // Restore and create share ONE tx, so this cannot fail the option
+    // independently of the case above — what it adds is the branch, and a
+    // tripwire if that tx is ever split in two. Which makes the write fence
+    // load-bearing: a restore that silently stopped writing would leave the
+    // undo assertion true and this test green.
+    const {repo} = env
+    const id = (await getOrCreateKernelPage(repo, WS, spec, {skipUndo: true})).id
+    await repo.tx(async tx => { await tx.delete(id) }, {scope: ChangeScope.BlockDefault})
+    repo.undoManager.clear()
+
+    await getOrCreateKernelPage(repo, WS, spec, {skipUndo: true})
+
+    expect((await repo.load(id))?.deleted).toBe(false)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
+  })
+
+  it('the REPAIR path skips undo too — a live page missing its marker', async () => {
+    // The other tx site — nothing else here reaches a live page missing its
+    // marker, so this is the only case that can fail for its `skipUndo`.
+    const {repo} = env
+    await seedPageMissingMarker(repo)
+    repo.undoManager.clear()
+
+    const page = await getOrCreateKernelPage(repo, WS, spec, {skipUndo: true})
+
+    // The repair really ran — otherwise this asserts nothing.
+    expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
+  })
+
+  it('the Migrations page passes it — cmd-Z is never right for that page', async () => {
+    const {repo} = env
+    await editThenUndo(repo)
+    const before = repo.undoManager.depths(ChangeScope.BlockDefault)
+
+    await getOrCreateMigrationsPage(repo, WS)
+
+    expect(await repo.load(migrationsPageBlockId(WS))).not.toBeNull()
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual(before)
   })
 })

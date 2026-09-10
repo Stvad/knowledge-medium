@@ -1,6 +1,6 @@
 import * as React from "react"
 import { type DialogProps } from "@radix-ui/react-dialog"
-import { Command as CommandPrimitive } from "cmdk"
+import { Command as CommandPrimitive, useCommandState } from "cmdk"
 import { Search } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -80,15 +80,66 @@ const CommandInput = ({
 
 CommandInput.displayName = CommandPrimitive.Input.displayName
 
+/**
+ * Redo, for a query change only, the scroll cmdk gets wrong.
+ *
+ * cmdk scrolls to whichever row the DOM currently marks `aria-selected`.
+ * On a query change it re-selects the first match from inside its own
+ * layout-effect queue, and the flush walks the entries it appends while
+ * iterating — so the scroll runs before React has moved the mark, and
+ * lands on the row that WAS selected. In a re-sorted list that row is
+ * anywhere, which parks the list mid-way with the top matches scrolled
+ * past.
+ *
+ * The correction waits on a microtask, not on a second effect keyed to
+ * the selection: cmdk's bad scroll and the re-select it schedules both
+ * land inside this commit's layout phase, and React flushes that
+ * re-select synchronously before the phase returns — so the microtask
+ * runs once the DOM finally names the right row, and still before paint.
+ * Keying on the selection instead would also fire for pointer hover,
+ * where cmdk suppresses its own scroll on purpose and a correction jerks
+ * the list out from under the pointer. Only a query change reaches here.
+ */
+const useSelectedItemInView = (listRef: React.RefObject<HTMLDivElement | null>) => {
+  const search = useCommandState(state => state.search)
+
+  React.useLayoutEffect(() => {
+    queueMicrotask(() => {
+      const selected = listRef.current?.querySelector('[cmdk-item=""][aria-selected="true"]')
+      if (!selected) return
+      // The first row of a group sits flush under its heading — reveal the
+      // heading with it, or the group reads as unlabelled.
+      if (selected.parentElement?.firstChild === selected) {
+        selected
+          .closest('[cmdk-group=""]')
+          ?.querySelector('[cmdk-group-heading=""]')
+          ?.scrollIntoView({block: "nearest"})
+      }
+      selected.scrollIntoView({block: "nearest"})
+    })
+  }, [search, listRef])
+}
+
 const CommandList = ({
   className,
+  ref,
   ...props
-}: React.ComponentProps<typeof CommandPrimitive.List>) => (
-  <CommandPrimitive.List
-    className={cn("max-h-[300px] overflow-y-auto overflow-x-hidden", className)}
-    {...props}
-  />
-)
+}: React.ComponentProps<typeof CommandPrimitive.List>) => {
+  const listRef = React.useRef<HTMLDivElement>(null)
+  useSelectedItemInView(listRef)
+
+  return (
+    <CommandPrimitive.List
+      ref={node => {
+        listRef.current = node
+        if (typeof ref === "function") return ref(node)
+        if (ref) ref.current = node
+      }}
+      className={cn("max-h-[300px] overflow-y-auto overflow-x-hidden", className)}
+      {...props}
+    />
+  )
+}
 
 CommandList.displayName = CommandPrimitive.List.displayName
 

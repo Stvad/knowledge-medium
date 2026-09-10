@@ -77,13 +77,8 @@ export const mergeSnapshotsInto = (
  *  entry needs no ordering: the parent was live in the target state
  *  and untouched by this tx, so it is live now.
  *
- *  Before this, safety leaned on each mutator's first-touch order
- *  (e.g. softDeleteSubtree visiting the root first). core.merge broke
- *  that implicit obligation — it rehomes children before tombstoning
- *  the merged-from block, so undo restored the children under a
- *  still-tombstoned parent and the whole undo tx aborted with
- *  ParentDeletedError (found by repoMutators.fuzz). Centralizing the
- *  order here removes the per-mutator obligation entirely. */
+ *  Centralized here so no mutator carries a first-touch-ordering
+ *  obligation of its own. */
 export const replayApplicationOrder = (
   snapshots: SnapshotsMap,
   direction: 'before' | 'after',
@@ -100,8 +95,7 @@ export const replayApplicationOrder = (
   // deep chain (undoing a big subtree delete), and recursing per parent
   // hop would overflow the stack there. Walk up collecting the uncached
   // path, then fill depths back down. A malformed (cyclic) target graph
-  // bottoms out at depth 0 for the re-entered node, same as the old
-  // recursive pre-seed guard.
+  // bottoms out at depth 0 for the re-entered node.
   const depthOf = (start: string): number => {
     const path: string[] = []
     const onPath = new Set<string>()

@@ -190,8 +190,8 @@ describe('BacklinkFilters', () => {
   })
 
   // Guards the resultsQuery staleness check wired into RefPredicateInput's
-  // submit path (commit 41d5842b): mid-debounce, `results` still reflect the
-  // previous text, so "+"/submit must honor what's typed, not the stale top hit.
+  // submit path: mid-debounce, `results` still reflect the previous text, so
+  // "+"/submit must honor what's typed, not the stale top hit.
   it('ref submit ignores mid-debounce stale results and honors the typed text', async () => {
     vi.useFakeTimers()
     schemaStore.searchById.set('ab', [{id: 'block-ab', label: 'ab match', detail: '', key: 'block-ab'}])

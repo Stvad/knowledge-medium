@@ -1,5 +1,3 @@
-import fc from 'fast-check'
-
 /**
  * Shared markdown line-fragment arbitraries, used by both
  * `src/utils/test/markdownParser.fuzz.test.ts` (fuzzing `parseMarkdownToBlocks`
@@ -22,6 +20,7 @@ import fc from 'fast-check'
  * indentation, grapheme-composite words), this module exports the *union* of
  * their capabilities, so neither suite loses coverage it previously had.
  */
+import fc from 'fast-check'
 
 /** Leading whitespace: 0-8 spaces or 0-3 tabs (union of both suites' ranges — the wider still covers the narrower). */
 const indentSpacesArb = fc.integer({min: 0, max: 8}).map(n => ' '.repeat(n))

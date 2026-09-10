@@ -271,6 +271,35 @@ describe('property panel action visibility guards', () => {
     expect(update).toHaveBeenCalledWith('block-1', {properties: {b: 99, c: 1}})
   })
 
+  // A padded key is what synthesis mints for an orphaned cell key, verbatim.
+  // Reachable as an edit that lands back on the stored key — PropertyRow no
+  // longer commits at all unless an input event fired.
+  it('leaves a padded key alone when the edit lands back on it', async () => {
+    const {update, block} = deleteBlock({' padded ': 1, keep: 'me'})
+    await renameProperty({
+      block,
+      properties: {' padded ': 1, keep: 'me'},
+      schemas: new Map(),
+      uis: new Map(),
+      oldName: ' padded ',
+      newName: ' padded ',
+    })
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('still trims a padded key the user actually edited', async () => {
+    const {update, block} = deleteBlock({' padded ': 1, keep: 'me'})
+    await renameProperty({
+      block,
+      properties: {' padded ': 1, keep: 'me'},
+      schemas: new Map(),
+      uis: new Map(),
+      oldName: ' padded ',
+      newName: ' padded x',
+    })
+    expect(update).toHaveBeenCalledWith('block-1', {properties: {keep: 'me', 'padded x': 1}})
+  })
+
   it('deleteProperty (schema-less) writes the FRESH in-tx bag, not the stale snapshot', async () => {
     const {update, block} = deleteBlock({a: 1, b: 99}) // `b` concurrently changed
     await deleteProperty({

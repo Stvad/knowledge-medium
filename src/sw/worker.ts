@@ -11,6 +11,8 @@
  * The versioning model this implements is documented in the sw.ts header.
  */
 import {isCacheableAsset} from './assets'
+// Relative, not `@/`: the SW is built by vite.sw.config.ts, which has no alias.
+import {SQLITE_JOURNAL_SUFFIXES, WRITE_AHEAD_SIDECAR_SUFFIXES} from '../data/dbFileSiblings'
 import {
   computeExpiredIds,
   computeKeepIds,
@@ -27,8 +29,6 @@ import {
 
 const CACHE_PREFIX = 'km-'
 const VENDOR_HOSTS = new Set(['esm.sh'])
-const SQLITE_DB_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
-
 interface PreviewDatabaseRecord {
   scopeUrl: string
   recordUrl: string
@@ -501,14 +501,22 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   ): Promise<void> => {
     if (typeof env.storage?.getDirectory !== 'function') return
     const root = await env.storage.getDirectory()
-    const siblingResults = await Promise.allSettled(
-      SQLITE_DB_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
+    // Same ordering as `deleteLocalSqliteDb`: SQLite's journals before the main
+    // file, because beside a fresh database of this name they get replayed onto
+    // it — and the write-ahead pair after it, because deleting a log while its
+    // `.db` survives strips committed frames from a database this sweep may
+    // then fail to remove.
+    const journalResults = await Promise.allSettled(
+      SQLITE_JOURNAL_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
     )
-    const siblingFailure = siblingResults.find(
+    const journalFailure = journalResults.find(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     )
-    if (siblingFailure) throw siblingFailure.reason
+    if (journalFailure) throw journalFailure.reason
     await removeOpfsEntryIfExists(root, databaseName)
+    await Promise.allSettled(
+      WRITE_AHEAD_SIDECAR_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
+    )
   }
 
   const removeOpfsEntryIfExists = async (

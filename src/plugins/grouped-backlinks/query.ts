@@ -9,9 +9,9 @@ import {
   hasBacklinksFilter,
   normalizeBacklinksFilter,
   propertyMachinerySourceIds,
+  workspaceHasPropertyMachinery,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -23,6 +23,7 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
+import { registrySeedParams } from '@/data/internals/kernelQueries'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -124,16 +125,17 @@ const resolveBacklinkSourceIds = async (
     exclude: filter?.exclude,
     order: 'created-desc',
   })).filter(sourceId => sourceId !== id)
-  // Same flip-gated property-machinery exclusion `backlinks.forBlock` applies
-  // (PR #386 review): grouped backlinks resolve their own sources rather than
-  // routing through that query, so without this a hidden value row's
-  // `[[Target]]` disappears from Linked References and the inline count but
-  // still shows up here — duplicating the owner's projected property backlink
-  // on the one surface that didn't filter. Dormant while un-flipped: no
-  // machinery exists to exclude, and this pays only the cached flip read.
+  // Same property-machinery exclusion `backlinks.forBlock` applies: grouped
+  // backlinks resolve their own sources rather than routing through that
+  // query, so without this a hidden value row's `[[Target]]`
+  // disappears from Linked References and the inline count but still shows up
+  // here — duplicating the owner's projected property backlink on the one
+  // surface that didn't filter. Un-gated for the reason given there: the
+  // backfill mints value rows before the flip. It carries that filter's
+  // undeclared-ancestry-dependency residual too (km-nc46).
   if (ids.length === 0) return ids
-  if (!(await readIsChildBackedWorkspace(ctx.db, workspaceId))) return ids
-  const machinery = await propertyMachinerySourceIds(ctx.db, ids)
+  if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
+  const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
   return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
 }
 
@@ -217,7 +219,16 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
         refs.target_id AS context_id,
         'ref' AS context_kind
       FROM ancestor_chain
-      JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id
+      -- CROSS JOIN pins the join ORDER (results are identical either way).
+      -- Here refs is constrained only by workspace_id -- no target_id, unlike
+      -- the sibling statements -- so idx_block_references_ws_alias looks usable
+      -- on its leading column, and a recursive CTE carries no cardinality
+      -- estimate for the planner to weigh against it. It therefore drove from
+      -- every edge in the workspace and built a throwaway index on the chain,
+      -- instead of probing the (source_id, ...) primary key once per chain row.
+      -- ANALYZE does not fix this: the table stats are already right, it is the
+      -- CTE's size that is unknown.
+      CROSS JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id
       WHERE refs.workspace_id = ?
         AND (refs.source_field = '' OR refs.target_id != ?)
       UNION

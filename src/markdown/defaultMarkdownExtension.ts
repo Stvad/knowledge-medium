@@ -1,6 +1,7 @@
 import type { MarkdownExtension } from '@/markdown/extensions.js'
 import { MarkdownImage } from '@/markdown/MarkdownImage.js'
-import { Children, createElement, type ReactNode } from 'react'
+import { rehypeTrimBlockSeparators } from '@/markdown/blockSeparators.js'
+import { createElement } from 'react'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -49,48 +50,40 @@ const MarkdownAnchor: AnchorComponent = ({href, children, rel, node: _node, ...p
   }, children)
 }
 
-type BlockquoteComponent = NonNullable<Components['blockquote']>
+/** Marks the lists MARKDOWN produced, so their styling can be written without
+ *  a descendant selector. A `components` override only ever sees elements from
+ *  the markdown AST, so the mark cannot reach a React component rendered
+ *  inside the same container — an embedded block's own chrome list, say, which
+ *  `.markdown-content ul` could not tell apart. Merges rather than replaces:
+ *  remark-gfm marks a task list on the same element. */
+const MARKDOWN_LIST_CLASS = 'markdown-list'
 
-const isWhitespaceText = (child: ReactNode) =>
-  typeof child === 'string' && child.trim() === ''
+const withListClass = (className: string | undefined) =>
+  [className, MARKDOWN_LIST_CLASS].filter(Boolean).join(' ')
 
-/** Drop the whitespace-only children at each END of a list, keeping the ones
- *  between siblings. */
-const trimBoundaryWhitespace = (children: ReactNode): ReactNode[] => {
-  const nodes = Children.toArray(children)
-  let start = 0
-  let end = nodes.length
-  while (start < end && isWhitespaceText(nodes[start])) start += 1
-  while (end > start && isWhitespaceText(nodes[end - 1])) end -= 1
-
-  return nodes.slice(start, end)
-}
-
-/** `mdast-util-to-hast` separates a container's block children with literal
- *  `"\n"` text nodes (`<blockquote>\n<p>quote</p>\n</blockquote>`). Harmless
- *  under normal white-space collapsing, but a block's content renders with
- *  `white-space: pre-wrap` — a block's own soft newlines are meaningful — so
- *  each separator comes out as a real blank line. The two at the quote's edges
- *  pad it with an empty line above and below, which is the whole reason a
- *  quote looked like a box; those go.
- *
- *  The INTERIOR ones stay. Preflight zeroes paragraph margins, so that newline
- *  is what puts a blank line between two quoted paragraphs — and it is the
- *  same mechanism that spaces a block's own top-level paragraphs, which render
- *  as `<p>first</p>\n<p>second</p>`. Dropping it would make a paragraph break
- *  inside a quote — and only inside a quote — indistinguishable from a soft
- *  line break. */
-const MarkdownBlockquote: BlockquoteComponent = ({children, node: _node, ...props}) => {
+const MarkdownUnorderedList: NonNullable<Components['ul']> = (
+  {node: _node, className, children, ...props},
+) => {
   void _node
 
-  return createElement('blockquote', props, trimBoundaryWhitespace(children as ReactNode))
+  return createElement('ul', {...props, className: withListClass(className)}, children)
+}
+
+const MarkdownOrderedList: NonNullable<Components['ol']> = (
+  {node: _node, className, children, ...props},
+) => {
+  void _node
+
+  return createElement('ol', {...props, className: withListClass(className)}, children)
 }
 
 export const gfmMarkdownExtension: MarkdownExtension = () => ({
   remarkPlugins: [remarkGfm],
+  rehypePlugins: [rehypeTrimBlockSeparators],
   components: {
     a: MarkdownAnchor,
-    blockquote: MarkdownBlockquote,
     img: MarkdownImage,
+    ol: MarkdownOrderedList,
+    ul: MarkdownUnorderedList,
   },
 })

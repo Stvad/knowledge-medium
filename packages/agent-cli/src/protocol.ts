@@ -17,6 +17,21 @@ import {z} from 'zod'
 
 // ---------- Token / audience ----------
 
+/** The distinctive first sentence of {@link unknownTokenMessage}. The CLI
+ *  matches on THIS rather than the whole string so it can enrich a 401 the
+ *  bridge produced, without the two copies having to stay byte-identical
+ *  across versions (an older bridge may still be running). */
+export const UNKNOWN_TOKEN_MARKER = 'Agent token is not registered with the local bridge.'
+
+/** What the bridge returns for a token it has no client for. Lives here, not
+ *  in the server, because the CLI appends the half only IT can know — which
+ *  profiles are actually paired on this machine. */
+export const unknownTokenMessage = [
+  UNKNOWN_TOKEN_MARKER,
+  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token.',
+  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
+].join(' ')
+
 export const tokenScopeSchema = z.enum(['read-write', 'read-only'])
 export type TokenScope = z.infer<typeof tokenScopeSchema>
 
@@ -153,7 +168,7 @@ export const createBlockCommandSchema = z.looseObject({
  *  safe to retry. `shape: 'block'` keeps the whole markdown as ONE block
  *  (no outline split); `'outline'` (default) splits along the markdown
  *  outline. `properties` (looseObject passthrough) is applied to every
- *  block — the dispatch daemon uses it to tag `claude:reply`. Streaming a
+ *  block — the dispatch daemon uses it to tag `agent:reply`. Streaming a
  *  reply calls this repeatedly with the growing text (same key); the last
  *  call passes `final: true`. Replaces the old one-shot
  *  `create-blocks-from-markdown`. */
@@ -259,6 +274,28 @@ export const auditExtensionCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const auditPropertiesCommandSchema = z.looseObject({
+  type: z.literal('audit-properties'),
+  workspaceId: z.string().optional(),
+  ...commandIdField,
+})
+
+export const runBackfillCommandSchema = z.looseObject({
+  type: z.literal('run-backfill'),
+  backfillId: z.string(),
+  workspaceId: z.string().optional(),
+  ...commandIdField,
+})
+
+export const rematerializeWorkspaceCommandSchema = z.looseObject({
+  type: z.literal('rematerialize-workspace'),
+  workspaceId: z.string().optional(),
+  /** `'unapplied' | 'all'`; validated kernel-side so an unknown value comes
+   *  back as a named refusal rather than a schema rejection with no advice. */
+  scope: z.string().optional(),
+  ...commandIdField,
+})
+
 export const runActionCommandSchema = z.looseObject({
   type: z.literal('run-action'),
   id: z.string(),
@@ -324,7 +361,7 @@ export const pageCommandSchema = z.looseObject({
   type: z.literal('page'),
   name: z.string(),
   workspaceId: z.string().optional(),
-  limit: z.number().optional(),
+  limit: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
@@ -343,7 +380,7 @@ export const searchCommandSchema = z.looseObject({
   type: z.literal('search'),
   query: z.string(),
   workspaceId: z.string().optional(),
-  limit: z.number().optional(),
+  limit: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
@@ -481,6 +518,9 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   disableExtensionCommandSchema,
   uninstallExtensionCommandSchema,
   auditExtensionCommandSchema,
+  auditPropertiesCommandSchema,
+  runBackfillCommandSchema,
+  rematerializeWorkspaceCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
   backlinksCommandSchema,
@@ -523,6 +563,9 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   setExtensionEnabledCommandSchema,
   uninstallExtensionCommandSchema,
   auditExtensionCommandSchema,
+  auditPropertiesCommandSchema,
+  runBackfillCommandSchema,
+  rematerializeWorkspaceCommandSchema,
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
@@ -671,6 +714,22 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     // profile that has never had one. That is a write, so this verb is not
     // classified read-only rather than quietly breaking a read-only token's
     // contract.
+    readOnly: false,
+  },
+  'audit-properties': {
+    usage: 'kmagent audit-properties [--workspace <id>]',
+    description: 'List every property key present in the workspace\'s live blocks that the registry does NOT resolve — the keys property migration skips silently (propertyChildrenProcessor: no schema → `continue`), so they are the only property data a child-backed workspace cannot carry. Per key: exact cell count, the resolver\'s own reason (nothing declares it, or a definition block exists but is broken), the fix in the order §9 requires, plus sampled blocks and the types they carry (which extension wrote it). Audits the ACTIVE workspace; it refuses one whose registry is not loaded rather than reporting every key as unregistered. Reports its own basis — `syncGap` (staged rows the drain would actually apply — narrower than `agent health`\'s raw staging count, which also counts this device\'s own upload echoes — or the sync layer not settled: downloading, disconnected, or a download error — so the counts are short) and `syncedThrough` (this device\'s last completed sync); an empty list under a non-null `syncGap` means nothing, and a null `syncGap` only rules out work outstanding LOCALLY. Does NOT detect shadowed definitions or seed-name collisions — those still resolve, so no key is listed. Workspace-wide counterpart to `audit-extension`, which only sees blocks carrying one extension\'s declared types.',
+    readOnly: true,
+  },
+  'run-backfill': {
+    usage: 'kmagent run-backfill <backfillId> [--workspace <id>] [--wait <seconds>]',
+    description: 'Run one operator-triggered workspace backfill (currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched). Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
+    readOnly: false,
+  },
+  'rematerialize-workspace': {
+    usage: 'kmagent rematerialize-workspace [--workspace <id>] [--scope unapplied|all] [--wait <seconds>]',
+    description: 'Re-run the sync drain over rows this device downloaded but never applied — the remedy for the durable materialization gap every one-way pass refuses on ("N synced row(s) of this workspace have not reached `blocks` on this device"). Those rows reached the drain, were not applied (workspace not unlocked, mode unresolved, a key-store read that failed, ciphertext that would not decode, or a speculative stamp-0 mint the seed could not vouch for), and had their queue entry consumed — so nothing re-delivers them and waiting never clears them. A DERIVATION pass over LOCAL state: it rebuilds this device\'s `blocks` from rows this device already downloaded, uploads nothing, needs no per-graph claim, does not clear the undo stack, and is safe to run on any device any number of times. `--scope unapplied` (default) re-delivers exactly the rows the refusal counts; `--scope all` re-judges every staged row of the workspace, which is what to use when the flag itself is suspect, at the cost of a full pass. Returns the exact `unappliedBefore`/`unappliedAfter` gap sizes plus the pass\'s own counts and `remainingGap` — the predicate re-asked. A pass that leaves rows unapplied has not failed: its `deferred` / `quarantined` counts say why. Neither is fixed by re-running ALONE — `deferred` needs the workspace materializable first (unlock it, or a key store that reads: a transient key-store failure defers too, and that one a re-run does fix), `quarantined` needs bytes that decode. `reflagged` is the count going the other way — at `--scope all`, a workspace that answers `defer` re-flags rows an earlier drain had cleared, so that scope CAN leave the gap larger (at `--scope unapplied` it is always 0, since every row in that set is flagged already). Two more things to know before running it: prefer a settled sync, because a re-pass can briefly write an older staged row over a local edit that is acked but not yet echoed back (the echo re-asserts it, so it self-heals unless the tab closes inside that window); and the pass occupies this device\'s materialization queue for its whole run, so no synced row reaches `blocks` until it finishes — seconds at `unapplied`, minutes at `all` on a large graph.',
+    // Writes the local `blocks` table (never `blocks_synced`, never an upload).
     readOnly: false,
   },
   'run-action': {

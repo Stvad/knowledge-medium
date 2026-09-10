@@ -149,12 +149,12 @@ interface RawRow {
   workspace_id: string
 }
 
-/** `sweepDerivedIndexes` (block_aliases/block_types/block_references/
- *  blocks_fts vs a from-scratch recompute) now lives in
- *  `@/data/test/fuzzKernelHarness` (Batch 3) so `twoRepoConvergence` can
- *  reuse it — see its docblock there for the workspace-agnostic-recompute
- *  argument for why that's safe to share across suites with different
- *  workspace counts. */
+// `sweepDerivedIndexes` (block_aliases/block_types/block_references/
+// blocks_fts vs a from-scratch recompute) lives in
+// `@/data/test/fuzzKernelHarness` so `twoRepoConvergence` can
+// reuse it — see its docblock there for the workspace-agnostic-recompute
+// argument for why that's safe to share across suites with different
+// workspace counts.
 
 /** SUBTREE_SQL-vs-JS-walk differential for one workspace's rooted
  *  subtree. Also the workspace-uniformity check: `live` is filtered to

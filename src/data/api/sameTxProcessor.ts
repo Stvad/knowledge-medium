@@ -19,12 +19,7 @@
  * still use same-tx when atomicity is worth the extra commit cost.
  *
  * Cross-row writes are not disqualifying on their own — what matters is
- * whether the GESTURE is on a hot path. This header used to name
- * "rename rewriting backlinks across many sources" as the canonical
- * counter-example; `references.renameBacklinks` is same-tx as of #461,
- * because the read-outside-the-tx / write-inside-a-later-tx shape had a
- * gap that no amount of guarding closed (see that file's header), and a
- * rename is a rare, deliberate gesture whose latency nobody feels.
+ * whether the GESTURE is on a hot path.
  *
  * Capabilities of `apply`:
  *   - Reads via `ctx.tx` — sees the live staged state of the user's
@@ -105,39 +100,26 @@ export type SameTxProcessor = {
       }
   readonly apply: (event: SameTxEvent, ctx: SameTxCtx) => Promise<void>
   /** Derivation-liveness re-run (issue #402). When true, the commit
-   *  pipeline runs this processor a SECOND time after the full
-   *  single pass, over just the rows that were written after the
-   *  processor's first run — so a derivation whose input a later
-   *  processor rewrote (plugin content rewrites after kernel
-   *  DERIVE/PROJECT, a kernel stamp after MATERIALIZE's ancestry
-   *  read, …) re-derives from final inputs instead of committing
-   *  stale. Field-watch only (`defineSameTxProcessor` enforces it).
+   *  pipeline runs this processor a SECOND time after the full single
+   *  pass, over just the rows written after its first run — so a
+   *  derivation whose input a later processor rewrote re-derives from
+   *  final inputs instead of committing stale. Field-watch only
+   *  (`defineSameTxProcessor` enforces it).
    *
-   *  Opting in is a CONTRACT: apply must be idempotent (early-return
+   *  Opting in is a CONTRACT: `apply` must be idempotent (early-return
    *  when the derived output already matches) — the re-run pass is
    *  bounded at one and relies on idempotence, not a fixpoint, for
    *  convergence. The re-run event's `changedRows.before` is a MERGED
-   *  baseline: a field path diffs against `after` iff it changed
-   *  since TX START or since this processor's pass-one WATERMARK
-   *  (either baseline alone hides a real case — a net-zero
-   *  restore-to-tx-start is invisible from tx-start, and a write the
-   *  processor's own gates skipped in pass one is invisible from the
-   *  watermark; both found on PR #428), except that field paths whose
-   *  last writer was a `settledWrites` processor read as their final
-   *  values and never diff (see `settledWrites`). Transition
-   *  detection must still tolerate seeing an already-handled
+   *  baseline: a field path diffs against `after` iff it changed since
+   *  TX START or since this processor's pass-one WATERMARK, except that
+   *  field paths whose last writer was a `settledWrites` processor read
+   *  as their final values and never diff (see `settledWrites`).
+   *  Transition detection must still tolerate seeing an already-handled
    *  transition again.
    *
    *  Ordering caveat the re-run does NOT lift: pass two runs in
-   *  registration order, so an earlier re-run processor reads columns
-   *  a LATER re-run processor derives (e.g. MATERIALIZE's re-run
-   *  reads the stored `referenceTargetId` BEFORE DERIVE's re-run
-   *  refreshes it) as of pass one. Every current content rewriter
-   *  inline-recomputes the stamp it invalidates (merge retarget,
-   *  inline-deleted-refs, alias sync all do); a rewriter that skips
-   *  that recompute and leans on the re-run alone leaves earlier
-   *  re-run processors reading a stale column — there is no third
-   *  pass. */
+   *  registration order, so a content rewriter must inline-recompute any
+   *  stamp it invalidates — there is no third pass. */
   readonly rerunOnDirtyRows?: boolean
   /** Explicit-intent channel (issue #402): declares this processor's
    *  writes settled — already convergent with every derivation, or
@@ -148,9 +130,9 @@ export type SameTxProcessor = {
    *  re-run diff (`before` reads their final values) even when an
    *  unsettled co-writer later dirties the same row — without the
    *  mask, that co-write would launder the settled amendment into the
-   *  re-run as apparent user intent (PR #428 adversarial review). A
-   *  later unsettled write to the same field path un-settles it: last
-   *  writer wins, matching the sequential processor order. Canonical
+   *  re-run as apparent user intent. A later unsettled write to the
+   *  same field path un-settles it: last writer wins, matching the
+   *  sequential processor order. Canonical
    *  consumers: `core.migratePropertyRename`, whose consuming-cell
    *  re-keys would otherwise be re-read by a re-run MATERIALIZE
    *  against the stale tx-start registry and misinterpreted as a

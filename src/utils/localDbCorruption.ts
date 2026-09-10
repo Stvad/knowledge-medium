@@ -111,8 +111,7 @@ const messageOf = (error: unknown): string => {
   // does — it says nothing about the `[[Get]]` trap a SUBSEQUENT direct
   // `.message` read invokes. A proxy that forwards `getPrototypeOf` (so
   // `instanceof Error` succeeds) but throws from `get` for `message` passes
-  // this check and then throws on the very next line — the exact totality
-  // gap PR #447 review comment 3676752542 found. Route the read through
+  // this check and then throws on the very next line. Route the read through
   // `safeGet` like every other property read on a not-necessarily-honest
   // `error` in this module.
   if (safeInstanceOf(error, Error)) {
@@ -146,7 +145,7 @@ const messageChainOf = (error: unknown, depth = 5): string => {
     const err = error as Error
     // Same guard as `messageOf`: `instanceof` confirms the prototype chain,
     // not that a direct `.message`/`.cause` read is safe — both go through
-    // `safeGet` (PR #447 review comment 3676752542).
+    // `safeGet`.
     const msg = safeGet(err, 'message')
     const message = typeof msg === 'string' ? msg : safeString(error)
     const cause = safeGet(err, 'cause')

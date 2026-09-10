@@ -7,7 +7,7 @@ import {
   isInstanceAt,
   locationOf,
   panelInstances,
-  isRowAViewOfOtherRows,
+  isRowAContentView,
   visibilityTargetFor,
 } from '@/plugins/spatial-navigation/walker.js'
 import {
@@ -46,9 +46,9 @@ export const isRowInViewport = (instance: HTMLElement): boolean => {
 }
 
 /**
- * Is this a row geometry can speak for at all? A row that is a whole VIEW of
- * other rows (see `isRowAViewOfOtherRows`) is on screen at every scroll position
- * and comes first in document order, so it would win every pick.
+ * Is this a row geometry can speak for at all? A row showing a VIEW rather than
+ * the block's own text (see `isRowAContentView`) is on screen at every scroll
+ * position and comes first in document order, so it would win every pick.
  *
  * Excluded from both sides of the decision, not just from the candidates: asking
  * "is the cursor's row still visible" of such a view always answers yes, so
@@ -56,7 +56,7 @@ export const isRowInViewport = (instance: HTMLElement): boolean => {
  * held it — the same cursor/viewport disagreement this plugin exists to remove,
  * one level up.
  */
-const isGeometricRow = (instance: HTMLElement): boolean => !isRowAViewOfOtherRows(instance)
+const isGeometricRow = (instance: HTMLElement): boolean => !isRowAContentView(instance)
 
 /**
  * Is the CURSOR's own row settled where the user is looking — i.e. is there

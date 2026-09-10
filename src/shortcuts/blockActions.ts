@@ -114,17 +114,17 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   requestEditorFocus(uiStateBlock)
 }
 
-/** Extend the block selection to the next visible block. Returns whether a
- *  selection was actually extended — false at the last visible block in the
- *  surface (no next block) or if the range resolved empty. Edit-mode callers
- *  use this to avoid leaving edit mode for nothing, and pass `clearEditing` so
- *  the exit folds into the selection's transaction (see extendSelectionDownEdit). */
 /** True when a block selection is already active. The Roam-style first
  *  Shift+Direction selects just the focused block; only once something is
  *  selected do further presses extend to neighbours. */
 const hasActiveSelection = (uiStateBlock: Block): boolean =>
   (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds.length ?? 0) > 0
 
+/** Extend the block selection to the next visible block. Returns whether a
+ *  selection was actually extended — false at the last visible block in the
+ *  surface (no next block) or if the range resolved empty. Edit-mode callers
+ *  use this to avoid leaving edit mode for nothing, and pass `clearEditing` so
+ *  the exit folds into the selection's transaction (see extendSelectionDownEdit). */
 export const extendSelectionDown = async (
   uiStateBlock: Block,
   repo: Repo,

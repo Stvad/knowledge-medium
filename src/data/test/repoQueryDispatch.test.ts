@@ -31,6 +31,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { queriesFacet } from '../facets'
 import { Repo } from '../repo'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 let h: TestDb
 let cache: BlockCache
@@ -43,7 +44,7 @@ beforeAll(async () => { h = await createTestDb() })
 afterAll(async () => { await h.cleanup() })
 beforeEach(() => {
   cache = new BlockCache()
-  repo = new Repo({
+  repo = trackTestRepo(new Repo({
     db: h.db,
     cache,
     user: {id: 'user-1'},
@@ -51,7 +52,7 @@ beforeEach(() => {
     // not any registered query. Skip the kernel-runtime install so the
     // registries start empty.
     installKernelRuntime: false,
-  })
+  }))
 })
 
 const makeEchoQuery = (name: string): Query<{value: string}, string> =>

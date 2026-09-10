@@ -475,7 +475,9 @@ describe('nested gesture surfaces', () => {
     const outer = document.createElement('div')
     outer.className = 'block-content'
     const shell = document.createElement('div')
-    shell.className = 'tm-block'
+    // What a layout spreading `shellProps` produces — the shell half of the
+    // boundary. Not the default layout's class: a layout may style its own.
+    shell.setAttribute('data-block-shell', 'true')
     // Shell chrome OUTSIDE the nested content slot: the bullet, a breadcrumb
     // chain, the property panel. No `.block-content` above it but the
     // container's, which is what made the content marker alone insufficient.

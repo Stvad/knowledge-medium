@@ -52,6 +52,14 @@ export interface PromotionResult {
 export interface PromotionOptions {
   namespacePrefix?: string
   transformKey?: (key: string) => string
+  /** Decline to promote a key whose namespaced name this rejects. The source
+   *  block is then left completely untouched — not marked bubbled, so a
+   *  consumer doing SUBTRACTIVE promotion still keeps the bullet. That is the
+   *  point: a name no definition can be registered for (see
+   *  `isRegistrablePropertyName`) must not become a property, and the
+   *  decision has to happen HERE, before bubbling, because dropping the
+   *  property afterwards would destroy the only remaining copy of the text. */
+  acceptKey?: (propName: string) => boolean
 }
 
 /** Walk a parent's direct children and compute case-1/2/3/4 promotion.
@@ -72,6 +80,8 @@ export const computePromotedFromChildren = (
   const newlyBubbled = new Set<string>()
   const namespacePrefix = options.namespacePrefix ?? 'roam'
   const transformKey = options.transformKey ?? ((key: string) => key)
+  const acceptKey = options.acceptKey ?? (() => true)
+  const accepts = (key: string): boolean => acceptKey(`${namespacePrefix}:${transformKey(key)}`)
 
   const push = (key: string, value: unknown) => {
     const propName = `${namespacePrefix}:${transformKey(key)}`
@@ -86,6 +96,8 @@ export const computePromotedFromChildren = (
     if (alreadyBubbled.has(block.uid) || newlyBubbled.has(block.uid)) return
     const attr = detectInlineAttribute(block.string)
     if (!attr) return
+    // Before `newlyBubbled` — a declined key must leave the block intact.
+    if (!accepts(attr.key)) return
 
     if (depth >= 2) {
       diagnostics.push(
