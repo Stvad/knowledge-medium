@@ -1739,7 +1739,7 @@ b7b20b57449491d17522b2d52bf360256cc239e30bd54a2bfe17dfd8c399fd8f  ./src/App.js
 37a400d4dd3c8ade661675433ff94c5a3dfbfde4db6fb49584ceaea03a91e3cd  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-55f0b01a6feeaa27acbe071ada22cb0a9105bebff283ca4825ca0fd45c0436a1  ./src/appVersion.js
+bc28a80b61626c7ae1d703dddf645bead31f1c08983ea48498e8371f77f11275  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2275,8 +2275,8 @@ a3599d0ae636e1eba03d9c869704b9e113ffd24106148af779aff10f79849c94  ./src/facets/t
 19ab9e402df7a30da851f612bf0f6a38c75a0830669d927b0900d71c6a1259ba  ./src/facets/variantFacet.js.map
 b572ff682d970baa70b83f56e46bd2b8e96ad0def39a6a5a92d6b136434ab91f  ./src/facets/verbFacet.js
 3c813fe2c6533eb7ffd9ab7c639590c39ed352c5b8382e050bfbf3d344db2e87  ./src/facets/verbFacet.js.map
-32e8e55621689d66209196f1c92ed41e3d3e2e178e6680c12770244971e6290e  ./src/hooks/block.js
-b4ee3ddf70c9b2f93d7a81ebdcb920a26c1acb9a0a3ec6e020c67a897f917c17  ./src/hooks/block.js.map
+ca50a8c9a8c6c85f6440252d2539875e529802911c11b29f791ff8f5f6a6c43e  ./src/hooks/block.js
+0e7da429520119b133e1ea4fb818b169902eee0594a5487dbcab6f8f46a8fa7e  ./src/hooks/block.js.map
 08bffa750d905c15b0200bae2a81df682d16f5a154d81e69b88135ec8544cd41  ./src/hooks/propertySchemas.js
 5470638019056f7cb5208bf3ca7192a728920fa50dc80a42b130406d82dd088d  ./src/hooks/propertySchemas.js.map
 0d3830314183f458ae2258ffa17348ed17aecba81978e8fc7050d36862c41212  ./src/hooks/typeRegistry.js
@@ -3468,8 +3468,8 @@ eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/vi
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
 9af15883a114b174ae87ea81afacbbe329eac79367b557ca4b23ea5ab8a45ef7  ./src/utils/workspaceSnapshotStore.js
 0cb08d10b524ebeed439d29605e1e9993be5d5d03c7226fc3cee6d378657128a  ./src/utils/workspaceSnapshotStore.js.map
-a0c4dd46408340367e2c7dae605b93d25c226ca032d6fd1be8e57e2e87c0a4c5  ./sw.js
-68c613256e64bb62817ea29fc5141926d90cd27030dc00189e9d54f750ce75dc  ./version.json
+ffc95dc68292d486dba72cf2030108c35b3babd1ac643feae5b42f152240efb9  ./sw.js
+af528a559efa0b1712b5c0dce3795f48a0eb53cef44cc56a11cb6f89e88748cf  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
