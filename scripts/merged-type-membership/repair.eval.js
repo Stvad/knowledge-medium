@@ -203,31 +203,41 @@ const resolveFromCommandLog = async token => {
   const seen = new Set([token])
   let current = token
   for (let i = 0; i < 10; i++) {
-    const rows = await sql(`
-      SELECT mutator_calls, created_at FROM command_events
-      WHERE workspace_id = ?
-        AND (mutator_calls LIKE ? ESCAPE '\\' OR mutator_calls LIKE ? ESCAPE '\\')
-      ORDER BY created_at ASC LIMIT 40`,
-      // `JSON.stringify`, not raw interpolation: an id containing `"` or `\\`
-      // is stored ESCAPED in `mutator_calls`, so the raw form would never match
-      // and the token would be reported unresolved despite having provenance.
-      // BOTH shapes: `core.merge` records a singular `fromId`, while
-      // `alias.mergeCollision` — the flow that produces most of these orphans —
-      // folds many sources and records `fromIds: [...]`. Matching only the
-      // singular form made every alias-collision merge unresolvable.
-      [workspaceId,
-       `%${likeEscape(`"fromId":${JSON.stringify(current)}`)}%`,
-       `%${likeEscape(JSON.stringify(current))}%`])
+    // The exact source test is a JS predicate over parsed `mutator_calls`, and
+    // SQL can only prefilter with a substring LIKE — which also matches rows
+    // where the token is an `intoId` or an unrelated argument. Applying an exact
+    // filter AFTER a bounded window is the mistake AGENTS.md names: enough
+    // near-miss rows ahead of the real merge and it is never seen. So PAGE
+    // rather than widen — a bigger window only moves the cliff.
+    //
+    // `JSON.stringify`, not raw interpolation: an id containing `"` or `\\` is
+    // stored escaped in `mutator_calls`. BOTH shapes matched: `core.merge`
+    // records a singular `fromId`; `alias.mergeCollision` folds many sources and
+    // records `fromIds: [...]`.
+    const PAGE = 200
     let next
-    for (const row of rows) {
-      const calls = jsonOf(row.mutator_calls)
-      if (!Array.isArray(calls)) continue
-      const call = calls.find(c =>
-        (c?.name === 'core.merge' || c?.name === 'alias.mergeCollision') &&
-        typeof c?.args?.intoId === 'string' &&
-        (c?.args?.fromId === current ||
-         (Array.isArray(c?.args?.fromIds) && c.args.fromIds.includes(current))))
-      if (call) { next = call.args.intoId; break }
+    for (let offset = 0; next === undefined; offset += PAGE) {
+      const rows = await sql(`
+        SELECT mutator_calls FROM command_events
+        WHERE workspace_id = ?
+          AND (mutator_calls LIKE ? ESCAPE '\\' OR mutator_calls LIKE ? ESCAPE '\\')
+        ORDER BY created_at ASC LIMIT ? OFFSET ?`,
+        [workspaceId,
+         `%${likeEscape(`"fromId":${JSON.stringify(current)}`)}%`,
+         `%${likeEscape(JSON.stringify(current))}%`,
+         PAGE, offset])
+      if (rows.length === 0) break
+      for (const row of rows) {
+        const calls = jsonOf(row.mutator_calls)
+        if (!Array.isArray(calls)) continue
+        const call = calls.find(c =>
+          (c?.name === 'core.merge' || c?.name === 'alias.mergeCollision') &&
+          typeof c?.args?.intoId === 'string' &&
+          (c?.args?.fromId === current ||
+           (Array.isArray(c?.args?.fromIds) && c.args.fromIds.includes(current))))
+        if (call) { next = call.args.intoId; break }
+      }
+      if (rows.length < PAGE) break
     }
     if (!next || seen.has(next)) break
     hops.push({from: current, into: next})
@@ -466,16 +476,35 @@ for (const item of writable) {
       // cannot resolve — the very invariant being repaired — so re-assert it
       // here. Only NEWLY added tokens are checked, matching what that path did:
       // an orphan already in `before` must survive a no-op.
+      //
+      // Read `repo.types` HERE rather than the plan-time snapshot: a registry
+      // rebuild replaces the map, so a destination unpublished mid-run (deleted,
+      // merged onward) would still pass a captured copy — and nothing in the
+      // member's own row reflects a change to the destination BLOCK.
+      const live = repo.types ?? new Map()
       const priorTokens = new Set(Array.isArray(nowTypes) ? nowTypes : [])
-      const unresolvable = item.after.filter(t => !priorTokens.has(t) && !publishedTypes.has(t))
+      const unresolvable = item.after.filter(t => !priorTokens.has(t) && !live.has(t))
       if (unresolvable.length > 0) {
-        return {skipped: 'refusing to write a token the registry cannot resolve', unresolvable}
+        return {skipped: 'destination no longer resolves in the registry', unresolvable}
       }
+      // `skipMetadata`: derived bookkeeping must not restamp `userUpdatedAt` /
+      // `updatedBy` across up to `limit` blocks, which would make them look
+      // recently user-edited and reattribute authorship to whoever ran the
+      // repair. `updatedAt` still advances, which the synced column needs.
       await tx.update(item.blockId, {
         properties: {...current.properties, [TYPES_KEY]: [...item.after]},
-      })
+      }, {skipMetadata: true})
       return {written: true}
-    }, {scope: 'block-default', description: 'repair merged-type membership'})
+    }, {
+      scope: 'block-default',
+      description: 'repair merged-type membership',
+      // Clearing the pre-existing stack is only half the rule. Without this each
+      // repair pushes a NEW undo entry, so one cmd-Z replays the member's whole
+      // pre-repair row and restores the dangling token — re-breaking the
+      // invariant this write exists to restore, and falsifying the "journal is
+      // the only revert path" the output states.
+      skipUndo: true,
+    })
     if (outcome.written) {
       journal.push({blockId: item.blockId, before: item.before, after: item.after})
     } else {

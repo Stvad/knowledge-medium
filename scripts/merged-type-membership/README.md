@@ -127,7 +127,11 @@ Options: `apply` (default false), `limit` (default 500), `allowHeuristic`
   since the plan was built**, and **refuses** to write a token the registry
   can't resolve — the very invariant being restored — so a mis-resolved
   destination fails loudly instead of writing another dangling token.
-- **Applying CLEARS the workspace undo stack**, and says so in its output. This
+- **Applying CLEARS the workspace undo stack** and runs each repair with
+  `skipUndo`, and says so in its output. Both halves are needed: clearing
+  handles entries that already existed, `skipUndo` stops each repair adding a
+  fresh one — either alone leaves a cmd-Z that replays a whole pre-repair row
+  and restores the dangling token. This
   is a data migration by the [AGENTS.md
   taxonomy](../../AGENTS.md): undo replay restores an entry's whole `before`
   row rather than a field delta, so any pre-existing entry touching a repaired
