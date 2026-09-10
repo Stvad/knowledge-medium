@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { scheduleDeepIdle } from '../scheduleIdle.js'
+import { installIdleCallbackPolyfill } from '../idleCallbackPolyfill.js'
 
 type IdleCb = (deadline: { didTimeout: boolean; timeRemaining: () => number }) => void
 
@@ -91,6 +92,21 @@ describe('scheduleDeepIdle (browser path)', () => {
     vi.advanceTimersByTime(5_000)
     expect(fn).toHaveBeenCalledTimes(1)
     expect(ricCalls).toHaveLength(0)
+  })
+
+  // The no-rIC fallback below is the TEST path only. A browser without the
+  // primitive (WebKit) gets the polyfill from main.tsx, under which the floor
+  // must still hold — this is the boot-window regression the polyfill exists for.
+  it('with the polyfill on a host lacking requestIdleCallback, the floor still holds', () => {
+    glob.requestIdleCallback = undefined
+    installIdleCallbackPolyfill()
+    const fn = vi.fn()
+    scheduleDeepIdle(fn, { minDelayMs: 10_000, fallbackMs: 30_000 })
+
+    vi.advanceTimersByTime(9_999)
+    expect(fn).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(10)
+    expect(fn).toHaveBeenCalledTimes(1)
   })
 
   it('falls back to a macrotask defer when requestIdleCallback is unavailable', () => {

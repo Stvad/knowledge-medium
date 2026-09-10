@@ -17,11 +17,16 @@ import { registerServiceWorker } from '@/registerServiceWorker.js'
 import { requestPersistentStorage } from '@/requestPersistentStorage.js'
 import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { startStartupObservers } from '@/utils/startupTimeline.js'
+import { installIdleCallbackPolyfill } from '@/utils/idleCallbackPolyfill.js'
 import { installDbForensicsLifecycle } from '@/utils/dbForensicsHooks.js'
 
 // Begin tracking main-thread long tasks immediately, so the startup-metrics
 // plugin can later find when boot contention stopped (time to interactivity).
 startStartupObservers()
+
+// WebKit has no requestIdleCallback; without this every deep-idle maintenance
+// pass runs inside the cold-start window on iOS (src/utils/idleCallbackPolyfill.ts).
+installIdleCallbackPolyfill()
 
 // Out-of-band local-DB corruption instrumentation (issue #284): lifecycle
 // breadcrumbs + a clean-shutdown flag, so the next OPFS corruption is

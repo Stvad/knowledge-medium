@@ -76,7 +76,10 @@ export interface DeepIdleOptions {
  *  defer, identical to `scheduleIdle`, so the existing drain helpers
  *  (`vi.runAllTimersAsync`, real-timer `setTimeout(0)` + drain) keep working
  *  unchanged. The floor + genuine-idle gating are a production concern that
- *  needs a real idle primitive. */
+ *  needs a real idle primitive. That branch must only ever be the TEST path:
+ *  WebKit also lacks the primitive, and the boot shim installs
+ *  `installIdleCallbackPolyfill` there so the floor still applies — without it
+ *  every catch-up pass ran at boot on iOS. */
 export const scheduleDeepIdle = (fn: () => void, opts: DeepIdleOptions): void => {
   const ric = (globalThis as {requestIdleCallback?: RequestIdleCallback}).requestIdleCallback
   if (typeof ric !== 'function') {
