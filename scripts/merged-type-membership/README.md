@@ -73,7 +73,11 @@ signal.
 
 ```sql
 WITH tok AS (
-  SELECT b.id AS member_id, b.deleted AS member_deleted, je.value AS token
+  -- DISTINCT: a valid string-list can repeat a token (the codec allows it, and
+  -- raw/imported rows do), and `json_each` emits one row per occurrence, which
+  -- would count one block as several members. `block_types` dedupes, but this
+  -- deliberately bypasses it to see tombstones.
+  SELECT DISTINCT b.id AS member_id, b.deleted AS member_deleted, je.value AS token
   FROM blocks b, json_each(b.properties_json, '$.types') je
   WHERE b.workspace_id = ?1
     AND json_valid(b.properties_json) AND typeof(je.value) = 'text'

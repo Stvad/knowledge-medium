@@ -174,11 +174,10 @@ const rewriteTypeToken = (
  *  looks like a definition while owning nothing — and merging it, or into it,
  *  would sweep up or mint real Todo members.
  *
- *  A token ABSENT from `typesById` is owned by nobody, which is a real answer
- *  and safe to proceed on: `blockIdByTypeId` binds only what the projector has
- *  published, so requiring positive registration would refuse every legitimate
- *  merge on a client whose projection has not run. "No registry at all" is a
- *  different case and is not this function's to answer — see the call site. */
+ *  The snapshot is COMPLETE — `repo.tx` awaits the type projector before
+ *  capturing it — so a token absent from `typesById` is owned by nobody, and
+ *  that is a real answer rather than a gap. "No registry at all" is a different
+ *  case and not this function's to answer; see the call site. */
 const tokenOwnedByOther = (
   ownership: SameTxTypeOwnership,
   token: string,
