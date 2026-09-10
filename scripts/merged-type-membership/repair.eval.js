@@ -457,10 +457,6 @@ const journal = []
 const failures = []
 for (const item of writable) {
   try {
-    if (!undoCleared) {
-      repo.undoManager?.clear()
-      undoCleared = true
-    }
     // The "am I safe to write" check belongs INSIDE the writing tx, not at plan
     // time: this loop spans many transactions, and a sync update or another
     // window can change a cell in between. Re-check against the tx's own read
@@ -506,6 +502,21 @@ for (const item of writable) {
       skipUndo: true,
     })
     if (outcome.written) {
+      // Cleared AFTER the first write commits, not before the loop: every
+      // candidate can legitimately be skipped (deleted or edited since
+      // planning), and discarding the user's undo history for a run that wrote
+      // nothing is irreversible damage in exchange for nothing. Safe to defer
+      // because the repairs themselves carry `skipUndo`, so nothing this tool
+      // does is on the stack while we wait.
+      //
+      // `undoManagerFor(workspaceId)`, NOT `repo.undoManager`: that getter
+      // follows the ACTIVE workspace, so a workspace switch during the audit
+      // would clear a bystander's history and leave the repaired workspace's
+      // pre-migration entries live.
+      if (!undoCleared) {
+        repo.undoManagerFor?.(workspaceId)?.clear()
+        undoCleared = true
+      }
       journal.push({blockId: item.blockId, before: item.before, after: item.after})
     } else {
       failures.push({blockId: item.blockId, ...outcome})
@@ -524,6 +535,7 @@ return {
   failures,
   revert_hint: 'Save `journal` to a file. `--data <file>` previews the revert; ' +
     '`--data-json \'{"apply": true, "revert": <journal>}\'` performs it. ' +
-    'Every write is also individually undoable in-app.',
+    'In-app undo does NOT cover these writes (each repair runs with `skipUndo` ' +
+    'and the prior stack was cleared) — the journal is the only revert path.',
   journal,
 }
