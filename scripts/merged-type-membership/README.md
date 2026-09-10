@@ -121,20 +121,28 @@ Options: `apply` (default false), `limit` (default 500), `allowHeuristic`
 - Scoped to `repo.activeWorkspaceId`; aborts if nothing is pinned, and every
   query filters on it — an unopened workspace is never touched.
 - Dry-run by default. No write happens without `apply: true`.
-- Writes go through `repo.setBlockTypes`, not raw SQL, so each member is one
-  `repo.tx` under `ChangeScope.BlockDefault`: it lands in `row_events`, is
-  undoable in-app, and syncs like any user edit. That path also **refuses** to
-  write a token the type registry can't resolve — the very invariant being
-  restored — so a mis-resolved destination fails loudly instead of writing
-  another dangling token.
-- Reversible two ways: the printed journal replays the exact prior lists (and
-  refuses to clobber anything edited since the repair unless `force: true`), and
-  every individual write is undoable in-app. The revert path deliberately writes
-  the cell directly instead of going through `setBlockTypes`: that validates
-  every newly-added token against the registry, and a revert restores the
-  PRE-repair list, which by definition holds the dangling token that is absent
-  from `repo.types`. The validated path can therefore never replay this tool's
-  own journal — it would abort on the first ordinary entry.
+- Writes go through `repo.tx`, one transaction per member under
+  `ChangeScope.BlockDefault`, so each lands in `row_events` and syncs like any
+  user edit. Each transaction re-reads the row and **skips it if it changed
+  since the plan was built**, and **refuses** to write a token the registry
+  can't resolve — the very invariant being restored — so a mis-resolved
+  destination fails loudly instead of writing another dangling token.
+- **Applying CLEARS the workspace undo stack**, and says so in its output. This
+  is a data migration by the [AGENTS.md
+  taxonomy](../../AGENTS.md): undo replay restores an entry's whole `before`
+  row rather than a field delta, so any pre-existing entry touching a repaired
+  row would silently revert the repair the next time the user pressed cmd-Z for
+  an unrelated edit. `skipUndo` cannot help — it keeps the pass off the stack
+  but cannot reach entries already on it. The consequence is that **in-app undo
+  does not cover these writes**; the journal is the revert path.
+- Reversible via the printed journal, which replays the exact prior lists and
+  refuses to clobber anything edited since the repair unless `force: true`.
+  Since applying clears the undo stack, this is the **only** revert path — save
+  it. It writes cells directly rather than through `setBlockTypes`: that
+  validates every newly-added token against the registry, and a revert restores
+  the PRE-repair list, which by definition holds the dangling token that is
+  absent from `repo.types`, so the validated path could never replay this tool's
+  own journal.
 - A destination that is not itself a type definition is reported and skipped, so
   a repair can't quietly move members onto a plain page.
 - A malformed `types` cell is reported, never rewritten — `getBlockTypes` throws
@@ -149,6 +157,16 @@ Options: `apply` (default false), `limit` (default 500), `allowHeuristic`
   `restore it, then re-run` rather than silently omitted — restoring one
   otherwise resurrects the orphaned membership unchanged. (Merges going forward
   don't have this problem: the runtime processor sweeps tombstones directly.)
+- Resolution recognizes both merge shapes: `core.merge` records a singular
+  `fromId`, while `alias.mergeCollision` folds several sources at once and
+  records `fromIds: [...]`. Matching only the singular form made the
+  alias-collision flow — the one that produces most of these orphans —
+  permanently unresolvable.
+- Heuristic name matching is **exact**, never case- or whitespace-folded. Alias
+  ownership is exact in the data layer (`ba.alias = ?`; the separate
+  `alias_lower` column exists because case-insensitivity is an autocomplete
+  concern, not an identity one), so `Person` and `person` can be different
+  blocks and folding them could hand the members to the wrong type.
 - The merge record used for resolution is the **oldest** call naming the source,
   not the newest: `mergeBlocksInTx` no-ops on an already-tombstoned source but
   the mutator call is still recorded, so a retry leaves a later row naming a

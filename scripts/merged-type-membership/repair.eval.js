@@ -29,21 +29,24 @@
  *  - Scoped to `repo.activeWorkspaceId`. Aborts if no workspace is pinned, and
  *    every query filters on it, so an unopened workspace is never touched.
  *  - Dry-run by default. Nothing is written unless `apply: true` is passed.
- *  - Repairs go through `repo.setBlockTypes`, not raw SQL: each member is one
- *    `repo.tx` under `ChangeScope.BlockDefault`, so it lands in `row_events`,
- *    on the undo stack, and syncs like any user edit. It also REFUSES to write
- *    a token the type registry cannot resolve — the very invariant being
- *    restored — so a mis-resolved destination fails loudly instead of writing
- *    another dangling token. (The REVERT path is the one exception; see below.)
+ *  - Repairs go through `repo.tx`, one transaction per member under
+ *    `ChangeScope.BlockDefault`, so each lands in `row_events` and syncs like
+ *    any user edit. Each re-checks the row INSIDE its own transaction and
+ *    refuses to write a token the registry cannot resolve — the very invariant
+ *    being restored — so a mis-resolved destination fails loudly rather than
+ *    writing another dangling token.
+ *  - It is a DATA MIGRATION, so applying CLEARS the workspace undo stack and
+ *    says so in its output (undo replays whole `before` rows and would revert
+ *    the repair). In-app undo therefore does NOT cover these writes.
  *  - Never guesses. A destination is used only when `command_events` records
  *    the merge, or when exactly ONE live type definition matches the
  *    tombstone's alias/label. Anything else is reported as unresolved.
- *  - Reversible two ways: the printed `journal` replays exact prior values via
- *    mode 3 above, and each write is independently undoable in-app. The revert
- *    writes the cell DIRECTLY rather than through `setBlockTypes`, because that
- *    validates newly-added tokens and a revert restores the pre-repair list —
- *    which by definition holds the dangling token the registry does not know.
- *    It re-checks the current value inside its own tx before overwriting.
+ *  - Reversible via the printed `journal` (mode 3 above), which is the ONLY
+ *    revert path now that applying clears the undo stack — so save it. It
+ *    writes cells directly, because `setBlockTypes` validates newly-added
+ *    tokens and a revert restores the pre-repair list, which by definition
+ *    holds the dangling token the registry does not know. It re-checks the
+ *    current value inside its own tx before overwriting.
  *
  * Options (via --data / --data-json):
  *   apply:        false (default) → audit only; true → write.
@@ -70,6 +73,7 @@ if (!workspaceId) {
   return {error: 'No active workspace is pinned; refusing to run. Open the workspace first.'}
 }
 
+const TYPES_KEY = 'types'
 const jsonOf = raw => { try { return JSON.parse(raw) } catch { return null } }
 /** A row's alias list, tolerating every malformed shape. Imported/sync-applied
  *  data can store `alias` as an object or a number, and both `for...of` and
@@ -201,19 +205,28 @@ const resolveFromCommandLog = async token => {
   for (let i = 0; i < 10; i++) {
     const rows = await sql(`
       SELECT mutator_calls, created_at FROM command_events
-      WHERE workspace_id = ? AND mutator_calls LIKE ? ESCAPE '\\'
-      ORDER BY created_at ASC LIMIT 20`,
+      WHERE workspace_id = ?
+        AND (mutator_calls LIKE ? ESCAPE '\\' OR mutator_calls LIKE ? ESCAPE '\\')
+      ORDER BY created_at ASC LIMIT 40`,
       // `JSON.stringify`, not raw interpolation: an id containing `"` or `\\`
       // is stored ESCAPED in `mutator_calls`, so the raw form would never match
       // and the token would be reported unresolved despite having provenance.
-      [workspaceId, `%${likeEscape(`"fromId":${JSON.stringify(current)}`)}%`])
+      // BOTH shapes: `core.merge` records a singular `fromId`, while
+      // `alias.mergeCollision` — the flow that produces most of these orphans —
+      // folds many sources and records `fromIds: [...]`. Matching only the
+      // singular form made every alias-collision merge unresolvable.
+      [workspaceId,
+       `%${likeEscape(`"fromId":${JSON.stringify(current)}`)}%`,
+       `%${likeEscape(JSON.stringify(current))}%`])
     let next
     for (const row of rows) {
       const calls = jsonOf(row.mutator_calls)
       if (!Array.isArray(calls)) continue
       const call = calls.find(c =>
         (c?.name === 'core.merge' || c?.name === 'alias.mergeCollision') &&
-        c?.args?.fromId === current && typeof c?.args?.intoId === 'string')
+        typeof c?.args?.intoId === 'string' &&
+        (c?.args?.fromId === current ||
+         (Array.isArray(c?.args?.fromIds) && c.args.fromIds.includes(current))))
       if (call) { next = call.args.intoId; break }
     }
     if (!next || seen.has(next)) break
@@ -233,16 +246,18 @@ const resolveFromCommandLog = async token => {
  *  Accepted only on a UNIQUE match — several candidates means we cannot tell,
  *  and inventing a membership is worse than reporting it. */
 const resolveFromNames = async row => {
+  // EXACT, not case/whitespace-folded. Alias ownership is exact in the data
+  // layer (`ba.alias = ?`; the separate `alias_lower` column exists precisely
+  // because case-insensitivity is an autocomplete concern, not an identity one),
+  // so `Person` and `person` can be different blocks. Folding them here would
+  // let an unrelated live type look like the unique survivor and absorb the
+  // orphaned members.
   const names = new Set()
   for (const n of [row.tombstone_label, row.tombstone_content]) {
-    if (typeof n === 'string' && n.trim()) names.add(n.trim().toLowerCase())
+    if (typeof n === 'string' && n) names.add(n)
   }
-  // `Array.isArray`, not `?? []`: imported/sync-applied data can store `alias`
-  // as an object or a number, and `for...of` over that THROWS. This runs while
-  // building every audit entry, so one malformed tombstone would abort the
-  // whole tool — including for unrelated, perfectly actionable tokens.
   for (const a of aliasList(row.tombstone_aliases)) {
-    if (typeof a === 'string' && a.trim()) names.add(a.trim().toLowerCase())
+    if (typeof a === 'string' && a) names.add(a)
   }
   if (names.size === 0) return null
   const candidates = await sql(`
@@ -255,7 +270,7 @@ const resolveFromNames = async row => {
     [workspaceId])
   const matches = candidates.filter(c => {
     const own = [c.content, c.label, ...aliasList(c.aliases)]
-    return own.some(n => typeof n === 'string' && names.has(n.trim().toLowerCase()))
+    return own.some(n => typeof n === 'string' && names.has(n))
   })
   if (matches.length !== 1) {
     return {destination: null, confidence: 'ambiguous-name-match', candidates: matches.map(m => m.id)}
@@ -417,18 +432,65 @@ if (!APPLY) {
 }
 
 // ── 4. apply ──────────────────────────────────────────────────────────────
+// A DATA MIGRATION by the AGENTS.md taxonomy — it repairs source-of-truth rows
+// and uploads them — so the undo stack must be cleared before the first write.
+// Undo replay restores an entry's whole `before` row, not a field delta, so any
+// pre-existing entry touching a row this rewrites would silently revert the
+// repair when the user hits cmd-Z for their own unrelated edit. `skipUndo`
+// cannot help: it keeps this pass off the stack but cannot reach entries
+// already on it.
+//
+// This trades away "each write is independently undoable in-app". The `journal`
+// is the revert path now, which is why it is printed and worth saving.
+let undoCleared = false
 const journal = []
 const failures = []
 for (const item of writable) {
   try {
-    await repo.setBlockTypes(item.blockId, item.after)
-    journal.push({blockId: item.blockId, before: item.before, after: item.after})
+    if (!undoCleared) {
+      repo.undoManager?.clear()
+      undoCleared = true
+    }
+    // The "am I safe to write" check belongs INSIDE the writing tx, not at plan
+    // time: this loop spans many transactions, and a sync update or another
+    // window can change a cell in between. Re-check against the tx's own read
+    // and skip if the row moved under us.
+    const outcome = await repo.tx(async tx => {
+      const current = await tx.get(item.blockId)
+      if (!current || current.deleted) return {skipped: 'no longer a live block'}
+      const nowTypes = current.properties?.[TYPES_KEY]
+      if (JSON.stringify(nowTypes) !== JSON.stringify(item.before)) {
+        return {skipped: 'types changed since the plan was built', current: nowTypes}
+      }
+      // Writing raw loses `setBlockTypes`'s refusal to add a token the registry
+      // cannot resolve — the very invariant being repaired — so re-assert it
+      // here. Only NEWLY added tokens are checked, matching what that path did:
+      // an orphan already in `before` must survive a no-op.
+      const priorTokens = new Set(Array.isArray(nowTypes) ? nowTypes : [])
+      const unresolvable = item.after.filter(t => !priorTokens.has(t) && !publishedTypes.has(t))
+      if (unresolvable.length > 0) {
+        return {skipped: 'refusing to write a token the registry cannot resolve', unresolvable}
+      }
+      await tx.update(item.blockId, {
+        properties: {...current.properties, [TYPES_KEY]: [...item.after]},
+      })
+      return {written: true}
+    }, {scope: 'block-default', description: 'repair merged-type membership'})
+    if (outcome.written) {
+      journal.push({blockId: item.blockId, before: item.before, after: item.after})
+    } else {
+      failures.push({blockId: item.blockId, ...outcome})
+    }
   } catch (error) {
     failures.push({blockId: item.blockId, error: String(error?.message ?? error)})
   }
 }
 return {
   mode: 'applied',
+  undo_stack_cleared: undoCleared,
+  undo_note: undoCleared
+    ? 'The workspace undo stack was CLEARED before the first write (required of a migration that writes: undo replays whole `before` rows and would revert the repair). In-app undo can no longer reach these writes — the `journal` below is the revert path.'
+    : 'Nothing was written, so the undo stack was left alone.',
   summary: {...summary, written: journal.length, failed: failures.length},
   failures,
   revert_hint: 'Save `journal` to a file. `--data <file>` previews the revert; ' +
