@@ -55,12 +55,22 @@ Each token is reported with a `type_state` of `no-row`, `tombstoned`, or
 a `block-type` row with an empty label — visible in the audit, never
 auto-repaired).
 
-**As of 2026-07-30 this returns zero rows on the primary workspace** (checked
-across all three workspaces on the client, for live and deleted members alike).
+**Zero rows as of 2026-07-30, and re-checked 2026-09-10: still zero** — no token
+anywhere in the database points at a tombstoned definition block, for live or
+deleted members. The six weeks between those checks include the window in which
+the forward fix was NOT yet merged, so a type merge in that period would have
+produced fresh orphans; none did.
+
 The five tombstoned type definitions from the reported incident — `Person` ×2,
 `Dance`, `Dancer`, `Author` — have no surviving members: in each case the
 tombstoned side was a hand-created type block, and the members were already
 tagged with the deterministic alias-seat block that survived.
+
+Note the SQL above over-reports if used alone: seeded and plugin type ids
+(`readwise-book`, `system-plugins-prefs`, …) are short strings with no backing
+block at their token, so they show up as `no-row` while being perfectly healthy.
+That is why the script filters on the registry (`repo.types`) rather than on the
+presence of a block — the `tombstoned` state is the only unambiguous SQL signal.
 
 ## Resolving a destination
 
