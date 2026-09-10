@@ -81,7 +81,12 @@ const likeEscape = (value: string): string => value.replace(/[\\%_]/g, c => `\\$
 /** Follow `fromId` through every merge THIS tx emitted, to the block that
  *  actually survives it. A tx can fold `A → B` and `B → C`, and processors run
  *  after the whole user fn — so an event's own `intoId` may already be a
- *  tombstone. `null` on a cycle, so the loop cannot spin.
+ *  tombstone. `null` on a cycle, so the loop cannot spin; the caller then falls
+ *  back to the event's own destination. ACCEPTED consequence: a tx that composes
+ *  merges into a loop with a live survivor leaves those members on a dead token
+ *  — the pre-fix state for that merge, visible to the audit query. Untangling a
+ *  loop is more machinery than a case needing three composed merges plus a
+ *  restore is worth.
  *
  *  An edge is followed only while its source is still TOMBSTONED — the same
  *  rule the caller applies to the event's own source, applied uniformly. A tx

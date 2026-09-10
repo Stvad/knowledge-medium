@@ -35,12 +35,13 @@ Ownership is judged against the tx-start type registry, because carrying the
 `block-type` tag is not ownership. Note that *unowned* and *owned by someone
 else* are different answers and get opposite treatment:
 
-- the source does not own the token it is merged away from → **refuse**, since
-  the members are somebody else's;
-- the replacement token is owned by a DIFFERENT block → **refuse**, rather than
-  mint membership in a type the survivor does not own;
-- the replacement token is owned by NOBODY — including when the survivor is not
-  a type definition at all → **retarget onto it anyway**. Dropping membership is
+- the token is owned by a DIFFERENT block than the merged-away source →
+  **refuse**, since those members are somebody else's;
+- the replacement token is owned by a DIFFERENT block than the survivor →
+  **refuse**, rather than mint membership in a type the survivor does not own;
+- either token is owned by NOBODY — an unpublished source such as a label-less
+  `block-type` row, or a survivor that is not a type definition at all →
+  **proceed**, and retarget onto the survivor. Dropping membership is
   unrecoverable, while a token naming a live block is undoable with the merge
   and becomes real membership if that block is later made a type. Pinned by
   `retargets onto a non-type survivor instead of dropping membership`.

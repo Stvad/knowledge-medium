@@ -2029,11 +2029,12 @@ export class Repo {
     const readinessWorkspaceId = this.client.activeWorkspaceId
     const readinessGenerationToken = this.projectors.generationToken
     if (readinessWorkspaceId) {
-      // Checked after EACH wait, not once at the end. A switch during the first
+      // Checked after EACH wait, not once at the end: a switch during the first
       // wait leaves the second asking a projector about a workspace that is no
       // longer pinned, which throws its own unavailability error and masks this
-      // one — the caller-facing contract is that a switch reports as a
-      // generation change.
+      // one. This catches a switch that happened while a wait was RESOLVING; a
+      // switch that disposes a genuinely pending projector surfaces as that
+      // projector's own cancellation instead, and is not translated here.
       const assertSameGeneration = (): void => {
         if (
           this.client.activeWorkspaceId !== readinessWorkspaceId
