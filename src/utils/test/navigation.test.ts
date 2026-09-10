@@ -813,12 +813,12 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     let settle!: (ok: boolean) => void
     const ran = vi.fn()
     const promise = new Promise<void>((resolve, reject) => {
-      settle = ok => { ok ? resolve() : reject(new Error('ensure failed')) }
+      settle = ok => { if (ok) resolve(); else reject(new Error('ensure failed')) }
     })
     return {ensureTarget: () => { ran(); return promise }, settle, ran}
   }
 
-  it('ensureTarget: owns the click at once, navigates only once it resolves', async () => {
+  it('ensureTarget: owns the click at once, holds the navigation until it resolves', async () => {
     const {ensureTarget, settle} = deferred()
     const e = fakeMouseEvent()
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-lazy', workspaceId: WS}, {ensureTarget})
@@ -827,11 +827,21 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     // already owned must not fall through to the browser meanwhile.
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
-    expect(await currentPanelBlockIds()).toEqual([])
+
+    // FIFO fence, not a bare absence check: a plain click issued AFTER this one
+    // has landed, and both navigations queue through the same serialized
+    // `repo.tx`. So an eager `b-lazy` would already be here, and its absence is
+    // a fact rather than an assertion that outran the write.
+    const fence = fakeMouseEvent()
+    openBlockFromEvent(env.repo, fence as unknown as OpenerEvent, {blockId: 'b-fence', workspaceId: WS})
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toContain('b-fence')
+    })
+    expect(await currentPanelBlockIds()).not.toContain('b-lazy')
 
     settle(true)
     await vi.waitFor(async () => {
-      expect(await currentPanelBlockIds()).toEqual(['b-lazy'])
+      expect(await currentPanelBlockIds()).toContain('b-lazy')
     })
   })
 
@@ -840,10 +850,16 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     const {ensureTarget, settle} = deferred()
     const e = fakeMouseEvent()
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-doomed', workspaceId: WS}, {ensureTarget})
-
     settle(false)
-    await vi.waitFor(() => { expect(consoleError).toHaveBeenCalled() })
-    expect(await currentPanelBlockIds()).toEqual([])
+
+    const fence = fakeMouseEvent()
+    openBlockFromEvent(env.repo, fence as unknown as OpenerEvent, {blockId: 'b-fence', workspaceId: WS})
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toContain('b-fence')
+    })
+    expect(await currentPanelBlockIds()).not.toContain('b-doomed')
+    // Reported, not swallowed — and not left as an unhandled rejection either.
+    expect(consoleError).toHaveBeenCalled()
     consoleError.mockRestore()
   })
 

@@ -655,6 +655,10 @@ export const applyNavigationDecision = (
   e.preventDefault()
   if (decision.kind !== 'navigate') return
   const {input} = decision
+  // Not a shortcut the tests can pin (routing every click through a resolved
+  // promise is observationally identical): it keeps every caller that passes no
+  // `ensureTarget` reaching `navigate` in the same turn as before, rather than
+  // a microtask later.
   if (!ensureTarget) {
     void navigate(repo, input)
     return
@@ -830,10 +834,11 @@ export const openBlockFromEvent = (
   }), {ensureTarget})
 }
 
-/** Returns an opener `(event, {blockId, workspaceId?}) => void` for places
- *  that resolve the target block from the event (lists, breadcrumbs, map
- *  markers rendered in a loop). Single subscription per component instead
- *  of one hook per item. */
+/** Returns an opener `(event, {blockId, workspaceId?}, {ensureTarget?}) => void`
+ *  for places that resolve the target block from the event (lists, breadcrumbs,
+ *  map markers rendered in a loop). Single subscription per component instead
+ *  of one hook per item. Pass `ensureTarget` when the target's ROW is created
+ *  lazily — see `EnsureNavigationTarget`. */
 export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions = {}) => {
   const repo = useRepo()
   const {panelId} = useBlockContext()
