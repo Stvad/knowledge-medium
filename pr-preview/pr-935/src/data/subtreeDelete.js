@@ -1,0 +1,2 @@
+var e=async(e,t,n)=>{let r=new Set,i=[{id:t,data:n?await e.get(t):null}];for(;i.length>0;){let{id:t,data:a}=i.pop();if(r.has(t))continue;r.add(t);let o=await e.childrenOf(t,void 0);for(let e of o)i.push({id:e.id,data:e});await e.delete(t),n&&a!==null&&n(a)}};export{e as deleteSubtreeInTx};
+//# sourceMappingURL=subtreeDelete.js.map
