@@ -112,9 +112,9 @@ export interface NavigateSidebarStackInput extends NavigateBaseInput {
  *  accepted here (a `Pick`, not the full base, so a dropped field is a type
  *  error rather than a silent no-op). */
 export type GlobalCommandNavigateInput = Pick<NavigateBaseInput, 'blockId' | 'workspaceId'> & {
-  /** Materialize `blockId`'s row before opening it — see
-   *  `EnsureNavigationTarget`. Runs after the intent policy has resolved, so a
-   *  vetoed or retargeted command writes nothing. */
+  /** Materialize `blockId`'s row, for a page created lazily. When it runs and
+   *  when it is skipped is `EnsureNavigationTarget`'s to say, not this field's
+   *  — the rule lives there so these two declarations cannot drift from it. */
   ensure?: EnsureNavigationTarget
 }
 
@@ -819,9 +819,9 @@ export interface OpenBlockContext {
   blockId: string
   /** Defaults to repo.activeWorkspaceId. */
   workspaceId?: string
-  /** Materialize `blockId`'s row before opening it — see
-   *  `EnsureNavigationTarget`. Runs after the intent policy has resolved, so a
-   *  vetoed or retargeted click writes nothing. */
+  /** Materialize `blockId`'s row, for a page created lazily. When it runs and
+   *  when it is skipped is `EnsureNavigationTarget`'s to say, not this field's
+   *  — the rule lives there so these two declarations cannot drift from it. */
   ensure?: EnsureNavigationTarget
 }
 
