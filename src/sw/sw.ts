@@ -106,6 +106,13 @@ const sw = createServiceWorker(
   },
 )
 
+// Boot marks for on-device profiling (ios-device-debug skill): a page asks with
+// `BOOT_MARKS` over a MessageChannel and gets this worker's own start time,
+// when this script finished evaluating, and when the first navigation fetch
+// arrived and was answered — all ms, `timeOrigin` as epoch so the page can
+// place them on its own clock.
+const bootMarks = {timeOrigin: performance.timeOrigin, evaluatedAt: 0, firstNavAt: 0, firstNavRespondedAt: 0}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(sw.install())
   // Become active immediately so the NEXT load is served by this build.
@@ -119,11 +126,18 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting()
+  if (event.data === 'BOOT_MARKS') event.ports[0]?.postMessage(bootMarks)
 })
 
 self.addEventListener('fetch', (event) => {
   // Pass waitUntil so the preview ledger heartbeat (maybeTouchOwnLedger) is tied
   // to this event's lifetime and can't be dropped by early worker termination.
   const response = sw.handleFetch(event.request, (p) => event.waitUntil(p))
+  if (response && event.request.mode === 'navigate' && !bootMarks.firstNavAt) {
+    bootMarks.firstNavAt = performance.now()
+    void response.then(() => { bootMarks.firstNavRespondedAt = performance.now() }, () => {})
+  }
   if (response) event.respondWith(response)
 })
+
+bootMarks.evaluatedAt = performance.now()
