@@ -2,10 +2,7 @@ import { FacetRuntime } from '@/facets/facet.js'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { Repo } from '@/data/repo'
 import { truncate } from '@/utils/string'
-import {
-  describeAuthoringCatalog,
-  type AuthoringCatalog,
-} from './authoringCatalog.ts'
+import type { AuthoringCatalog } from './authoringCatalog.ts'
 import {
   extensionApiCatalog,
   extensionApiRuntimeExports,
@@ -18,6 +15,12 @@ import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
  *  extension-authoring guides in the authoring catalog — different
  *  audience (reading/querying user data vs authoring extensions). */
 export const DATA_MODEL_GUIDE_ID = 'data-model'
+
+// Loaded on demand, never statically: the catalog module embeds a glob of
+// the app's module graph (~1 MB built, mostly preload tables) that only the
+// two describe commands read. A static import here puts it in every device's
+// boot graph — measured at ~1 s of cold parse on an iPhone.
+const loadAuthoringCatalog = () => import('./authoringCatalog.ts')
 import {
   getCommandMeta,
   type KnownCommandType,
@@ -432,7 +435,7 @@ export const describeRuntime = async (
       : describeFacets(context.runtime)
         .filter(facet => matchesAnyFilter(filters.facets, facet.id)),
     apiSurface,
-    authoring: describeAuthoringCatalog({
+    authoring: (await loadAuthoringCatalog()).describeAuthoringCatalog({
       guides: filters.guides,
       modules: filters.modules,
       components: filters.components,
@@ -457,7 +460,7 @@ export const describeRuntimeSummary = async (
 ): Promise<RuntimeSummary> => {
   const apiSurface = getApiSurface()
   const renderers = Object.keys(context.renderers)
-  const authoring = describeAuthoringCatalog({}, context.document)
+  const authoring = (await loadAuthoringCatalog()).describeAuthoringCatalog({}, context.document)
 
   return {
     activeWorkspaceId: context.repo.activeWorkspaceId,
