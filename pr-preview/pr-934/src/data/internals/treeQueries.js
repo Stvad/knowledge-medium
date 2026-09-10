@@ -37,7 +37,6 @@ var e=`
          AND INSTR(chain.path, '!' || hex(parent.id) || '/') = 0
     )
     SELECT * FROM chain
-    WHERE chain.id != chain.chain_start_id
     ORDER BY chain.chain_start_id, chain.depth ASC
   `},n=`
   WITH RECURSIVE chain AS (
