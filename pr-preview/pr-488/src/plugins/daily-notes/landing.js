@@ -1,2 +1,0 @@
-import{dailyNoteBlockId as e,getOrCreateDailyNote as t,journalBlockId as n,todayIso as r}from"./dailyNotes.js";import{anyBlockTombstoned as i}from"../../data/blockLiveness.js";var a=async({repo:a,workspaceId:o,excludeBlockId:s})=>{let c=r(),l=e(o,c);return s&&(l===s||await i(a,[l,n(o)]))?null:(await t(a,o,c)).id};export{a as todayDailyNoteLanding};
-//# sourceMappingURL=landing.js.map
