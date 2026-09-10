@@ -2780,6 +2780,10 @@ export class Repo {
    * separate runtime resolution is needed. Awaited (not deferred): the pages
    * must exist before the seed's references parse.
    *
+   * A cross-workspace occupant is skipped like any other failure, not re-raised:
+   * a page whose derived id is held by a row from another of the user's own
+   * workspaces renders confusingly, which does not outrank the app not opening.
+   *
    * A failing `ensure` is logged and skipped, and this resolves regardless:
    * `bootstrapWorkspace` awaits it on the critical path with no catch, so a
    * throw here does not degrade one page's feature, it stops the app coming up.

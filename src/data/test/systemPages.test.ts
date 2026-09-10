@@ -71,13 +71,10 @@ describe('Repo.ensureSystemPages', () => {
     }
   })
 
-  /**
-   * One page's failure must not take the workspace down with it — on an
-   * EXISTING workspace. `bootstrapWorkspace` awaits this on the critical path
-   * with no catch, so a bare `Promise.all` makes any single `ensure` rejection
-   * fatal to workspace OPEN, and the realistic cause is an alias a user's own
-   * block already holds, whose remedy (rename that block) needs the app open.
-   */
+  /** One page's failure must not take the workspace down with it:
+   *  `bootstrapWorkspace` awaits this on the critical path with no catch, so an
+   *  unisolated rejection stops the app coming up rather than degrading one
+   *  page's feature. */
   describe('when one page cannot be created', () => {
     it('survives an owner whose ensure throws something that is not a rejection', async () => {
       // A plugin bug, not a data condition — an extension is transpiled, not
