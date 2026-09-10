@@ -523,6 +523,30 @@ describe('core.retargetMergedTypeMembership', () => {
     })
   })
 
+  // A tx can merge and then restore the source before its callback returns.
+  // Processors run afterwards, so the event outlives the state that defined it.
+  it('leaves members alone when the merge source is restored in the same tx', async () => {
+    await createMember(MEMBER, 'member of A', TYPE_A)
+
+    await env.repo.tx(async tx => {
+      const into = await tx.get(TYPE_B)
+      const from = await tx.get(TYPE_A)
+      if (!into || !from) throw new Error('fixture missing')
+      // Keep the destination's bag: the default union copies the source's
+      // alias onto it, and restoring the source would then make both claim the
+      // same name and the alias-collision processor would roll the tx back
+      // before this processor's behavior could be observed at all.
+      await mergeBlocksInTx(tx, {
+        into, from, contentStrategy: 'keepTarget',
+        mergeProperties: intoProps => intoProps,
+      })
+      await tx.restore(TYPE_A)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.read(TYPE_A)!.deleted).toBe(false)
+    expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_A])
+  })
+
   // `block_types` structurally cannot see these rows (its update trigger
   // re-inserts only `WHEN deleted = 0`), so without the separate tombstone
   // sweep a restore after the merge resurrects the block silently un-typed.

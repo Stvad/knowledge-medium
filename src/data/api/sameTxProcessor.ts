@@ -186,10 +186,13 @@ export interface SameTxCtx {
   db: SameTxReadDb
   /** Merged property-schema registry snapshotted at tx start. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
-  /** Type-definition ownership snapshotted at tx start — the same boundary as
-   *  `propertySchemas`. `null` before a workspace is pinned. Tx-start is the
-   *  useful moment for a merge: the source and destination were both still live
-   *  then, so the snapshot still says what each of them owned. */
+  /** Type-definition ownership for THIS TX'S workspace, snapshotted at tx start.
+   *  `null` when no workspace is pinned, or when the tx's workspace is not the
+   *  one whose registry was captured — fail closed rather than answer ownership
+   *  questions from a different workspace's registry, which would report every
+   *  local token as unknown. Tx-start is the useful moment for a merge: source
+   *  and destination were both still live then, so it still says what each
+   *  owned. */
   typeDefinitions: SameTxTypeOwnership | null
   /** Resolve a property-schema NAME against `workspaceId`'s deterministic
    *  fleet-wide winner map — the same tx-start-captured identity primitive

@@ -319,8 +319,10 @@ export interface RunTxParams<R> {
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
-  /** Type-definition ownership snapshot, captured at the same boundary. */
-  typeDefinitions: SameTxTypeOwnership | null
+  /** Tx-start-captured type-ownership factory, resolved once the tx's workspace
+   *  is known — the same shape (and the same fail-closed rule) as
+   *  `propertyDefinitionRegistryForWorkspace`. */
+  typeDefinitionsForWorkspace: (workspaceId: string) => SameTxTypeOwnership | null
   /** Tx-start-captured workspace registry factory. It reads no live runtime
    * state when the target row's workspace becomes known inside the tx. */
   propertyDefinitionRegistryForWorkspace: (
@@ -370,7 +372,8 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const {
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
-    mutators, processors, sameTxProcessors, propertySchemas, typeDefinitions,
+    mutators, processors, sameTxProcessors, propertySchemas,
+    typeDefinitionsForWorkspace,
     propertyDefinitionRegistryForWorkspace,
     propertySchemaWorkspaceId,
     propertySeedNameCounts,
@@ -568,7 +571,11 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               emittedEvents,
             },
             {
-              tx, db: txDb, propertySchemas, typeDefinitions,
+              tx, db: txDb, propertySchemas,
+              // Resolved against the TX's pinned workspace, not the active one:
+              // `TxImpl` pins from the first write, and the merge mutator does
+              // not require the active workspace to match.
+              typeDefinitions: typeDefinitionsForWorkspace(meta.workspaceId),
               resolvePropertySchemaName, resolvePropertySchemaField,
             },
           )

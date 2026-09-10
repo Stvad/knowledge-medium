@@ -2026,6 +2026,9 @@ export class Repo {
         )
       }
     }
+    // Captured at tx start, like the property registries beside it, so a facet
+    // rebuild landing mid-tx cannot change the answer under a processor.
+    const capturedTypeDefinitions = this._typeDefinitionRegistry
     const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
     const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
     try {
@@ -2051,8 +2054,14 @@ export class Repo {
         propertySchemas: this._propertySchemas,
         // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
         // whether the source/destination actually OWN the tokens they look like
-        // they own, which their rows alone cannot answer.
-        typeDefinitions: this._typeDefinitionRegistry,
+        // they own, which their rows alone cannot answer. Keyed by the TX's
+        // workspace (which `TxImpl` pins from the first write) rather than the
+        // active one — answering from another workspace's registry would report
+        // every local token as unknown and silently disable the ownership gate.
+        typeDefinitionsForWorkspace: workspaceId =>
+          capturedTypeDefinitions?.workspaceId === workspaceId
+            ? capturedTypeDefinitions
+            : null,
         // Serve the tx's active-at-start workspace, or the retained previous one,
         // from their frozen snapshots; any other workspace resolves null (fail
         // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope

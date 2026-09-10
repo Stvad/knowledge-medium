@@ -57,11 +57,19 @@ wrong in both directions — it misses a user type whose definition block carrie
 caller-supplied non-uuid id, and would misjudge a seeded id that happened to look
 like a uuid.
 
-The SQL below over-reports on its own, which is the trap: seeded and plugin type
-ids (`readwise-book`, `system-plugins-prefs`, …) legitimately have no block at
-their token and show as `no-row` while being perfectly healthy. Only
-`tombstoned` — a real block that exists and is deleted — is unambiguous without
-the registry.
+The SQL below over-reports on its own, which is the trap, and it does so in TWO
+ways. Seeded and plugin type ids (`readwise-book`, `system-plugins-prefs`, …)
+legitimately have no block at their token and show as `no-row` while being
+perfectly healthy. And a `tombstoned` row at a token does not prove the token is
+orphaned either: an imported ordinary block can occupy a seeded id such as
+`page`, be merged away, and leave a tombstone sitting at a token whose type is
+still published from code — so the query joins that tombstone to every healthy
+`page` member and reports them all as damaged. That is the same ownership
+collision the processor now refuses.
+
+So treat every row this returns as a CANDIDATE, and confirm against
+`repo.types` before believing any of it. There is no unambiguous SQL-only
+signal.
 
 ```sql
 WITH tok AS (

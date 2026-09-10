@@ -68,9 +68,15 @@ const SELECT_DELETED_TYPE_MEMBER_IDS_SQL = `
   FROM blocks
   WHERE workspace_id = ?
     AND deleted = 1
-    AND properties_json LIKE ?
+    AND properties_json LIKE ? ESCAPE '\\'
   ORDER BY created_at, id
 `
+
+/** Escape SQLite LIKE metacharacters. Without this a type id containing `%` or
+ *  `_` matches most or all tombstones in the workspace, and each hit is then
+ *  fetched one at a time INSIDE the user's merge transaction — a correctness
+ *  no-op (`rewriteTypeToken` rejects them) that turns a merge into a scan. */
+const likeEscape = (value: string): string => value.replace(/[\\%_]/g, c => `\\${c}`)
 
 /** Follow `fromId` through every merge THIS tx emitted, to the block that
  *  actually survives it. A tx can fold `A → B` and `B → C`, and processors run
@@ -211,7 +217,11 @@ const retargetTypeMembership = async (
   // merged no longer looks like one here, so its members are left for the audit
   // query — the safe direction, since a false positive mass-retags a whole type.
   const from = await ctx.tx.get(event.fromId)
-  if (from === null) return
+  // A tx can merge and then RESTORE the source before its callback returns;
+  // processors only run afterwards, so the event outlives the state that
+  // defined it. Retargeting then moves members off a definition that still
+  // exists. An effective merge is one whose source is tombstoned.
+  if (from === null || !from.deleted) return
   const fromTokens = wellFormedTypeTokens(from)
   if (fromTokens === null || !fromTokens.includes(BLOCK_TYPE_TYPE)) return
   // …and the tag alone is not ownership; see `tokenOwnedByOther`.
@@ -224,7 +234,7 @@ const retargetTypeMembership = async (
   // Tombstoned members are invisible to that index; sweep for them separately.
   members.push(...await ctx.db.getAll<{id: string}>(
     SELECT_DELETED_TYPE_MEMBER_IDS_SQL,
-    [event.workspaceId, `%${JSON.stringify(event.fromId)}%`],
+    [event.workspaceId, `%${likeEscape(JSON.stringify(event.fromId))}%`],
   ))
   for (const {id} of members) {
     const row = await ctx.tx.get(id)
