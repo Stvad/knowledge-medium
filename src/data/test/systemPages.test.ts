@@ -11,11 +11,9 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { systemPagesFacet } from '@/data/facets'
 import type { AppExtension } from '@/facets/facet'
-import { propertiesPageBlockId } from '@/data/propertiesPage'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -53,16 +51,6 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 afterEach(() => { vi.restoreAllMocks() })
 
-/** Park `alias` on an ordinary user block, the way a user who happened to name
- *  a page "Properties" leaves the workspace. `aliasesProp` is unique per
- *  workspace, so the kernel page's own claim is then refused. */
-const seatAlias = async (repo: Repo, id: string, alias: string): Promise<void> => {
-  await repo.tx(async tx => {
-    await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a9', content: alias})
-    await tx.setProperty(id, aliasesProp, [alias])
-  }, {scope: ChangeScope.BlockDefault})
-}
-
 const aliasesInWorkspace = async (h: TestDb, repo: Repo): Promise<Set<string>> => {
   const rows = await h.db.getAll<{ id: string }>('SELECT id FROM blocks WHERE deleted = 0')
   const out = new Set<string>()
@@ -91,20 +79,6 @@ describe('Repo.ensureSystemPages', () => {
    * block already holds, whose remedy (rename that block) needs the app open.
    */
   describe('when one page cannot be created', () => {
-    it('resolves rather than rejecting, and still creates every other page', async () => {
-      await seatAlias(env.repo, 'user-page', 'Properties')
-      vi.spyOn(console, 'error').mockImplementation(() => {})
-
-      await expect(env.repo.ensureSystemPages(WS)).resolves.toBeUndefined()
-
-      const aliases = await aliasesInWorkspace(env.h, env.repo)
-      for (const expected of EXPECTED_ALIASES.filter(a => a !== 'Properties')) {
-        expect(aliases.has(expected)).toBe(true)
-      }
-      // The one that failed is genuinely absent — degraded, not silently faked.
-      expect(await env.repo.load(propertiesPageBlockId(WS))).toBeNull()
-    })
-
     it('survives an owner whose ensure throws something that is not a rejection', async () => {
       // A plugin bug, not a data condition — an extension is transpiled, not
       // typechecked, so its `ensure` can throw anything at all.
@@ -156,46 +130,6 @@ describe('Repo.ensureSystemPages', () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('test:sync-throw'))
     })
 
-    it('lets every other page finish before it throws, leaving nothing in flight', async () => {
-      // `Promise.all` rejects the instant one ensure does and leaves its
-      // siblings writing — into whatever database the caller has moved on to.
-      // Settling all of them first is what makes the throw safe to tear down
-      // (or reload) after.
-      env = await setup([
-        systemPagesFacet.of(
-          {id: 'test:broken', ensure: () => Promise.reject(new Error('transient'))},
-          {source: 'test'},
-        ),
-      ])
-
-      await expect(env.repo.ensureSystemPages(WS, {freshlyCreated: true}))
-        .rejects.toThrow('transient')
-
-      // Asserted positively — every real page is already committed by the time
-      // the rejection surfaces — so this cannot pass by racing.
-      const aliases = await aliasesInWorkspace(env.h, env.repo)
-      for (const expected of EXPECTED_ALIASES) expect(aliases.has(expected)).toBe(true)
-    })
-
-    it('is fatal on a freshly created workspace, where swallowing would strand a rival', async () => {
-      env = await setup([
-        systemPagesFacet.of(
-          {id: 'test:broken', ensure: () => Promise.reject(new Error('transient'))},
-          {source: 'test'},
-        ),
-      ])
-
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-      await expect(env.repo.ensureSystemPages(WS, {freshlyCreated: true}))
-        .rejects.toThrow('transient')
-
-      // And the refusal comes BEFORE the log, whose "will retry on the next
-      // workspace open" is false once the throw stops bootstrap. Safe as an
-      // absence assertion: the catch runs synchronously, and the await above
-      // has already settled.
-      expect(errorSpy).not.toHaveBeenCalled()
-    })
   })
 
   it('is idempotent — a second run creates no new rows', async () => {
