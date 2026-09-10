@@ -2049,6 +2049,10 @@ export class Repo {
         processors: this.processors,
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
+        // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
+        // whether the source/destination actually OWN the tokens they look like
+        // they own, which their rows alone cannot answer.
+        typeDefinitions: this._typeDefinitionRegistry,
         // Serve the tx's active-at-start workspace, or the retained previous one,
         // from their frozen snapshots; any other workspace resolves null (fail
         // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope

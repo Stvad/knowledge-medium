@@ -27,6 +27,7 @@ import {
   type BlockData,
   type CoreBlockMergedEvent,
   type SameTxCtx,
+  type SameTxTypeOwnership,
 } from '@/data/api'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { setBlockTypesInProperties, typesProp } from '@/data/properties'
@@ -152,6 +153,29 @@ const rewriteTypeToken = (
   return decodable ? {outcome: 'rewritten', value: next} : {outcome: 'undecodable'}
 }
 
+/** Is `token` published as SOMEBODY ELSE's type than `blockId`?
+ *
+ *  The question a row cannot answer about itself. Carrying the `block-type` tag
+ *  is not ownership: `buildTypeDefinitionRegistry` skips a row whose block id
+ *  collides with an already-published id, so an imported block sitting at `todo`
+ *  looks like a definition while owning nothing — and merging it, or into it,
+ *  would sweep up or mint real Todo members.
+ *
+ *  Deliberately a REFUSAL and not a requirement. `blockIdByTypeId` only binds
+ *  types the projector has published, so demanding positive registration would
+ *  reject every legitimate merge on a client whose projection has not run yet.
+ *  An unknown token is left to the row-derived path; only a token demonstrably
+ *  owned by another block stops the retarget. */
+const tokenOwnedByOther = (
+  ownership: SameTxTypeOwnership | null,
+  token: string,
+  blockId: string,
+): boolean => {
+  if (ownership === null) return false
+  if (!ownership.typesById.has(token)) return false
+  return ownership.blockIdByTypeId.get(token) !== blockId
+}
+
 const retargetTypeMembership = async (
   event: CoreBlockMergedEvent,
   mergeMap: ReadonlyMap<string, string>,
@@ -172,6 +196,10 @@ const retargetTypeMembership = async (
   // with the merge and becomes real membership if that block is made a type.
   const intoToken = typeMembershipTokenFor(into)
   if (intoToken === event.fromId) return
+  // Never mint membership in a type the survivor does not own. Merging into an
+  // imported block that happens to sit at `todo` would otherwise turn the
+  // source's members into built-in Todos.
+  if (tokenOwnedByOther(ctx.typeDefinitions, intoToken, into.id)) return
 
   // The source must really BE the definition that owns these memberships:
   // `bt.type = fromId` does not prove it, since tokens and block ids are both
@@ -186,6 +214,8 @@ const retargetTypeMembership = async (
   if (from === null) return
   const fromTokens = wellFormedTypeTokens(from)
   if (fromTokens === null || !fromTokens.includes(BLOCK_TYPE_TYPE)) return
+  // …and the tag alone is not ownership; see `tokenOwnedByOther`.
+  if (tokenOwnedByOther(ctx.typeDefinitions, event.fromId, from.id)) return
 
   const members = await ctx.db.getAll<{id: string}>(
     SELECT_TYPE_MEMBER_IDS_SQL,

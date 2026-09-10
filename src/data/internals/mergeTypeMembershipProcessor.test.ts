@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type BlockData } from '@/data/api'
 import { foldBlocksInTx, mergeBlocksInTx } from '@/data/blockMerge'
-import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
+import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { addBlockTypeToProperties, getBlockTypes, typesProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -26,6 +26,10 @@ const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
   const { repo, cache } = createTestRepo({db: h.db, user: {id: 'user-1'}})
+  // Pin the workspace: production always has one, and without it
+  // `repo.typeDefinitions` is null, which silently disables the registry
+  // ownership checks the processor relies on.
+  repo.setActiveWorkspaceId(WS)
   return {h, repo, read: id => cache.getSnapshot(id)}
 }
 
@@ -466,6 +470,56 @@ describe('core.retargetMergedTypeMembership', () => {
       await foldBoth()
 
       expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_D])
+    })
+  })
+
+  // Carrying the `block-type` tag is not ownership. `buildTypeDefinitionRegistry`
+  // skips a row whose block id collides with an already-published id, so a block
+  // sitting at a seeded token looks like a definition while owning nothing.
+  // Both directions of that mistake destroy real membership.
+  describe('registry ownership', () => {
+    // A seeded token that is published in `repo.types` from the code
+    // declaration, with no backing block at the token in this harness.
+    const SEEDED = PAGE_TYPE
+    const OTHER_SIDE = 'cccc3333-cccc-4ccc-8ccc-cccccccccccc'
+
+    /** A `block-type`-tagged row squatting on a seeded membership token. */
+    const createImpostor = async (): Promise<void> => {
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id: SEEDED, workspaceId: WS, parentId: 'p', orderKey: 'e0',
+          content: 'impostor sitting on a seeded token',
+          properties: typesProperty(BLOCK_TYPE_TYPE),
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+    }
+
+    it('does not sweep up a seeded type when its token is merged away', async () => {
+      await createMember(MEMBER, 'a real page', SEEDED)
+      await createImpostor()
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id: OTHER_SIDE, workspaceId: WS, parentId: 'p', orderKey: 'e1',
+          content: 'survivor',
+        })
+      }, {scope: ChangeScope.BlockDefault})
+
+      await env.repo.mutate.merge({
+        intoId: OTHER_SIDE, fromId: SEEDED, contentStrategy: 'keepTarget'})
+
+      expect(getBlockTypes(env.read(MEMBER)!)).toEqual([SEEDED])
+    })
+
+    it('does not mint membership in a type the survivor does not own', async () => {
+      await createMember(MEMBER, 'member of A', TYPE_A)
+      await createImpostor()
+
+      await env.repo.mutate.merge({
+        intoId: SEEDED, fromId: TYPE_A, contentStrategy: 'keepTarget'})
+
+      // Left on the tombstoned source rather than silently becoming a `page`.
+      expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_A])
     })
   })
 

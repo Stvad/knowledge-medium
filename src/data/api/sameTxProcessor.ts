@@ -47,6 +47,7 @@
  */
 
 import type { BlockData } from './blockData'
+import type { TypeContribution } from './blockType'
 import type { AnyPropertySchema, PropertySchemaResolution } from './propertySchema'
 import type { ChangeScope } from './changeScope'
 import type { ChangedRow } from './processor'
@@ -161,6 +162,20 @@ export interface SameTxEvent {
   emittedEvents: SameTxEmittedEvent[]
 }
 
+/** The type-ownership facts a same-tx processor may consult — which membership
+ *  tokens the registry publishes, and which block backs each. Declared
+ *  structurally here rather than importing `TypeDefinitionRegistrySnapshot`,
+ *  which lives above this layer; that snapshot satisfies this shape.
+ *
+ *  Enough to answer the one question a row cannot: "does THIS block own that
+ *  token?". Carrying the `block-type` tag does not settle it — the registry
+ *  refuses to publish a row whose block id collides with an already-published
+ *  id, so a tagged row can look like a definition while owning nothing. */
+export interface SameTxTypeOwnership {
+  readonly typesById: ReadonlyMap<string, TypeContribution>
+  readonly blockIdByTypeId: ReadonlyMap<string, string>
+}
+
 export interface SameTxCtx {
   /** Active `Tx` — same handle the user fn used. Reads see staged
    *  state; writes amend the same tx. Throws here roll back the
@@ -171,6 +186,11 @@ export interface SameTxCtx {
   db: SameTxReadDb
   /** Merged property-schema registry snapshotted at tx start. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Type-definition ownership snapshotted at tx start — the same boundary as
+   *  `propertySchemas`. `null` before a workspace is pinned. Tx-start is the
+   *  useful moment for a merge: the source and destination were both still live
+   *  then, so the snapshot still says what each of them owned. */
+  typeDefinitions: SameTxTypeOwnership | null
   /** Resolve a property-schema NAME against `workspaceId`'s deterministic
    *  fleet-wide winner map — the same tx-start-captured identity primitive
    *  `tx.setProperty` resolves through (schema unification §7). `resolved`

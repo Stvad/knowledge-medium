@@ -24,154 +24,71 @@ Seeded types (`page`, `todo`, …) are **not** affected — their token is a sho
 stable string that resolves from the code declaration with no backing block at
 all, so there is nothing to dangle.
 
-## Fixed going forward
+## Fixed, and there is nothing to repair
 
 `src/data/internals/mergeTypeMembershipProcessor.ts` is a kernel same-tx
 processor on `core.blockMerged`: it finds members through the trigger-maintained
-`block_types` index and retargets each token onto the survivor, inside the merge
-transaction. This directory is only for data orphaned *before* that landed.
+`block_types` index (plus a sweep for tombstoned members, which that index cannot
+see) and retargets each token onto the survivor inside the merge transaction. It
+refuses when the source does not actually own the token, or when the survivor
+does not own the replacement, using the tx-start type registry — carrying the
+`block-type` tag is not ownership.
+
+**There is no repair script.** One existed on this branch and was dropped: the
+production audit found **zero** orphaned memberships (2026-07-30, re-verified
+2026-09-10 — a window that includes the six weeks the forward fix sat unmerged,
+during which a type merge would have created fresh ones). It was speculative
+tooling for damage that does not exist, and being an agent-bridge `.eval.js` it
+sat outside `pnpm run check` entirely, so every change to it shipped unverified.
+If orphans ever do appear, write the repair then — against real data, under the
+gate, and as a proper `WorkspaceBackfill` so it carries the per-graph claim and
+freshness guard a source-of-truth migration needs (`bd recall
+reference_oneshot_passes_two_kinds`).
 
 ## Detecting
 
-A token is orphaned iff **the live registry does not publish it**. That is the
-definition, and the script applies it directly: collect every distinct `types`
-token in the workspace, then keep the ones missing from `repo.types`.
+A token is orphaned iff **the live registry does not publish it**: collect every
+distinct `types` token in the workspace, then keep the ones missing from
+`repo.types`.
 
-It is tempting to infer this from the token's *shape* instead — a user type's
-token is a uuid-shaped block id, a seeded type's is a short string like `todo` —
-but that heuristic is wrong in both directions. It misses a user type whose
-definition block carries a caller-supplied non-uuid id (an import can mint its
-own), reading that block id as though it were a seeded token; and it would
-misjudge any future seeded id that happened to look like a uuid. `repo.types`
-already holds every resolvable token, so no guessing is needed.
+Do not infer this from the token's *shape*. A user type's token is a uuid-shaped
+block id and a seeded type's is a short string like `todo`, but that heuristic is
+wrong in both directions — it misses a user type whose definition block carries a
+caller-supplied non-uuid id, and would misjudge a seeded id that happened to look
+like a uuid.
 
-The enumeration reads `properties_json` directly rather than joining
-`block_types`, which is also deliberate: `block_types` excludes deleted rows, so
-it cannot see a token stranded on a soft-deleted member — one that comes back
-the moment the user restores the block.
+The SQL below over-reports on its own, which is the trap: seeded and plugin type
+ids (`readwise-book`, `system-plugins-prefs`, …) legitimately have no block at
+their token and show as `no-row` while being perfectly healthy. Only
+`tombstoned` — a real block that exists and is deleted — is unambiguous without
+the registry.
 
-Each token is reported with a `type_state` of `no-row`, `tombstoned`, or
-`live-but-unpublished` (a definition block that exists but fails to publish, e.g.
-a `block-type` row with an empty label — visible in the audit, never
-auto-repaired).
-
-**Zero rows as of 2026-07-30, and re-checked 2026-09-10: still zero** — no token
-anywhere in the database points at a tombstoned definition block, for live or
-deleted members. The six weeks between those checks include the window in which
-the forward fix was NOT yet merged, so a type merge in that period would have
-produced fresh orphans; none did.
-
-The five tombstoned type definitions from the reported incident — `Person` ×2,
-`Dance`, `Dancer`, `Author` — have no surviving members: in each case the
-tombstoned side was a hand-created type block, and the members were already
-tagged with the deterministic alias-seat block that survived.
-
-Note the SQL above over-reports if used alone: seeded and plugin type ids
-(`readwise-book`, `system-plugins-prefs`, …) are short strings with no backing
-block at their token, so they show up as `no-row` while being perfectly healthy.
-That is why the script filters on the registry (`repo.types`) rather than on the
-presence of a block — the `tombstoned` state is the only unambiguous SQL signal.
-
-## Resolving a destination
-
-Two sources, in order of trust:
-
-1. **`command_events`** — `core.merge` / `alias.mergeCollision` record
-   `{intoId, fromId}` verbatim in `mutator_calls`, so the mapping is exact.
-   Chains are followed (a survivor can itself have been merged away later).
-   Note the retention limit: that table is compacted, and the incident above
-   predates its oldest row by ~11 days, so an old merge may not be recoverable
-   this way.
-2. **The tombstone's own names** — an alias-collision merge unions the aliases
-   onto the survivor, so the dead type's name is normally claimed by it. This is
-   the same "merge survivor" signature `scripts/dangling-refs/README.md` uses for
-   dangling references. Accepted only on a **unique** match, and only when asked
-   for explicitly (`allowHeuristic: true`).
-
-Anything else is reported as unresolved rather than guessed.
-
-## Script
-
-`repair.eval.js` — an agent-bridge eval script (`**/*.eval.js` is the ESLint
-carve-out for these: the bridge wraps the body in an async function, so
-top-level `await`/`return` are expected and it isn't a standalone module).
-
-```bash
-# audit only — writes nothing (DEFAULT)
-pnpm agent --profile <profile> eval --file scripts/merged-type-membership/repair.eval.js
-
-# apply, after reading the plan. SAVE the printed `journal` — it is the undo record.
-pnpm agent --profile <profile> eval --file scripts/merged-type-membership/repair.eval.js \
-  --data-json '{"apply": true}'
-
-# preview a revert from a saved journal
-pnpm agent --profile <profile> eval --file scripts/merged-type-membership/repair.eval.js \
-  --data journal.json
-
-# perform that revert
-pnpm agent --profile <profile> eval --file scripts/merged-type-membership/repair.eval.js \
-  --data-json '{"apply": true, "revert": <journal array>}'
+```sql
+WITH tok AS (
+  SELECT b.id AS member_id, b.deleted AS member_deleted, je.value AS token
+  FROM blocks b, json_each(b.properties_json, '$.types') je
+  WHERE json_valid(b.properties_json) AND typeof(je.value) = 'text'
+)
+SELECT tok.token, COALESCE(t.content, '') AS name,
+       SUM(CASE WHEN tok.member_deleted = 0 THEN 1 ELSE 0 END) AS live_members,
+       SUM(CASE WHEN tok.member_deleted = 1 THEN 1 ELSE 0 END) AS dead_members
+FROM tok JOIN blocks t ON t.id = tok.token AND t.deleted = 1
+GROUP BY tok.token
+ORDER BY live_members DESC
 ```
 
-Options: `apply` (default false), `limit` (default 500), `allowHeuristic`
-(default false), `revert`, `force`.
+Read `properties_json` directly rather than joining `block_types`: that index
+excludes deleted rows, so it cannot see a token stranded on a soft-deleted member
+— one that comes back the moment the block is restored.
 
-### Safety properties
+## If you ever need to resolve a destination
 
-- Scoped to `repo.activeWorkspaceId`; aborts if nothing is pinned, and every
-  query filters on it — an unopened workspace is never touched.
-- Dry-run by default. No write happens without `apply: true`.
-- Writes go through `repo.tx`, one transaction per member under
-  `ChangeScope.BlockDefault`, so each lands in `row_events` and syncs like any
-  user edit. Each transaction re-reads the row and **skips it if it changed
-  since the plan was built**, and **refuses** to write a token the registry
-  can't resolve — the very invariant being restored — so a mis-resolved
-  destination fails loudly instead of writing another dangling token.
-- **Applying CLEARS the workspace undo stack** and runs each repair with
-  `skipUndo`, and says so in its output. Both halves are needed: clearing
-  handles entries that already existed, `skipUndo` stops each repair adding a
-  fresh one — either alone leaves a cmd-Z that replays a whole pre-repair row
-  and restores the dangling token. This
-  is a data migration by the [AGENTS.md
-  taxonomy](../../AGENTS.md): undo replay restores an entry's whole `before`
-  row rather than a field delta, so any pre-existing entry touching a repaired
-  row would silently revert the repair the next time the user pressed cmd-Z for
-  an unrelated edit. `skipUndo` cannot help — it keeps the pass off the stack
-  but cannot reach entries already on it. The consequence is that **in-app undo
-  does not cover these writes**; the journal is the revert path.
-- Reversible via the printed journal, which replays the exact prior lists and
-  refuses to clobber anything edited since the repair unless `force: true`.
-  Since applying clears the undo stack, this is the **only** revert path — save
-  it. It writes cells directly rather than through `setBlockTypes`: that
-  validates every newly-added token against the registry, and a revert restores
-  the PRE-repair list, which by definition holds the dangling token that is
-  absent from `repo.types`, so the validated path could never replay this tool's
-  own journal.
-- A destination that is not itself a type definition is reported and skipped, so
-  a repair can't quietly move members onto a plain page.
-- A malformed `types` cell is reported, never rewritten — `getBlockTypes` throws
-  on it, which would abort the write transaction.
-- A definition block that is **live but unpublished** (restored or recreated,
-  and currently failing to publish — an empty label, say) is reported and never
-  repaired, however old a merge record names it. Its members belong to the live
-  block; moving them to a historical survivor would be a fresh data loss. Fix
-  the definition instead.
-- **Tombstoned members cannot be repaired by this tool.** `setBlockTypes`
-  no-ops on a deleted row by contract, so they are listed as skipped with
-  `restore it, then re-run` rather than silently omitted — restoring one
-  otherwise resurrects the orphaned membership unchanged. (Merges going forward
-  don't have this problem: the runtime processor sweeps tombstones directly.)
-- Resolution recognizes both merge shapes: `core.merge` records a singular
-  `fromId`, while `alias.mergeCollision` folds several sources at once and
-  records `fromIds: [...]`. Matching only the singular form made the
-  alias-collision flow — the one that produces most of these orphans —
-  permanently unresolvable.
-- Heuristic name matching is **exact**, never case- or whitespace-folded. Alias
-  ownership is exact in the data layer (`ba.alias = ?`; the separate
-  `alias_lower` column exists because case-insensitivity is an autocomplete
-  concern, not an identity one), so `Person` and `person` can be different
-  blocks and folding them could hand the members to the wrong type.
-- The merge record used for resolution is the **oldest** call naming the source,
-  not the newest: `mergeBlocksInTx` no-ops on an already-tombstoned source but
-  the mutator call is still recorded, so a retry leaves a later row naming a
-  destination that was never applied.
+Two sources, in order of trust. `command_events` records `core.merge`
+(`{intoId, fromId}`) and `alias.mergeCollision` (`{intoId, fromIds: [...]}`)
+verbatim — note the plural, since the alias flow folds several sources at once.
+That table is compacted, so an old merge may be unrecoverable. Otherwise the
+tombstone's own names: an alias-collision merge unions aliases onto the survivor,
+the same "merge survivor" signature `scripts/dangling-refs/README.md` uses for
+dangling references. Match names EXACTLY — alias ownership is exact in the data
+layer (`ba.alias = ?`), and `alias_lower` exists because case-insensitivity is an
+autocomplete concern, not an identity one.
