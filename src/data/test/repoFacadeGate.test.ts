@@ -87,6 +87,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
   propertySchemaResolverFor: 'read — returns a resolver bound to an existing immutable snapshot',
   whenPropertyDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
+  whenTypeDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
   assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',

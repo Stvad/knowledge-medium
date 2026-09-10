@@ -81,18 +81,25 @@ const likeEscape = (value: string): string => value.replace(/[\\%_]/g, c => `\\$
 /** Follow `fromId` through every merge THIS tx emitted, to the block that
  *  actually survives it. A tx can fold `A → B` and `B → C`, and processors run
  *  after the whole user fn — so an event's own `intoId` may already be a
- *  tombstone. `null` on a cycle, so the loop cannot spin. */
-const resolveTerminalDestination = (
+ *  tombstone. `null` on a cycle, so the loop cannot spin.
+ *
+ *  An edge is followed only while its source is still TOMBSTONED — the same
+ *  rule the caller applies to the event's own source, applied uniformly. A tx
+ *  that folds `A → B`, then `B → C`, then restores `B` leaves a live `B` that is
+ *  once again a real definition, so `A`'s members belong on it and the stale
+ *  `B → C` edge must not carry them past it. */
+const resolveTerminalDestination = async (
   fromId: string,
   mergeMap: ReadonlyMap<string, string>,
-): string | null => {
+  isTombstoned: (id: string) => Promise<boolean>,
+): Promise<string | null> => {
   const seen = new Set<string>([fromId])
   let current = mergeMap.get(fromId)
   while (current !== undefined) {
     if (seen.has(current)) return null
     seen.add(current)
     const next = mergeMap.get(current)
-    if (next === undefined) return current
+    if (next === undefined || !await isTombstoned(current)) return current
     current = next
   }
   return null
@@ -184,7 +191,10 @@ const retargetTypeMembership = async (
   mergeMap: ReadonlyMap<string, string>,
   ctx: SameTxCtx,
 ): Promise<void> => {
-  const destinationId = resolveTerminalDestination(event.fromId, mergeMap) ?? event.intoId
+  const destinationId = await resolveTerminalDestination(
+    event.fromId, mergeMap,
+    async id => (await ctx.tx.get(id))?.deleted === true,
+  ) ?? event.intoId
   const into = await ctx.tx.get(destinationId)
   // Still deleted after chain resolution = deleted outright, not merged onward.
   // Nowhere better to point, so leave the members rather than moving them to
@@ -207,8 +217,7 @@ const retargetTypeMembership = async (
   // The cost of skipping is the pre-fix behaviour for this one merge: membership
   // stays pointed at the tombstoned source, visible to the audit and repairable.
   // The cost of proceeding is writing WRONG membership, which is neither. Not
-  // symmetric, so this fails closed — matching the contract on `typeDefinitions`
-  // that this helper previously contradicted by reading `null` as "unowned".
+  // symmetric, so this fails closed.
   const ownership = ctx.typeDefinitions
   if (ownership === null) {
     console.warn(

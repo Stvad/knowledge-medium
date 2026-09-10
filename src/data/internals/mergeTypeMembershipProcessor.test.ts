@@ -26,9 +26,9 @@ const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
   const { repo, cache } = createTestRepo({db: h.db, user: {id: 'user-1'}})
-  // Pin the workspace: production always has one, and without it
-  // `repo.typeDefinitions` is null, which silently disables the registry
-  // ownership checks the processor relies on.
+  // Pin the workspace: production always has one, and the processor refuses to
+  // retarget at all without a registry for the tx's workspace, so retargeting
+  // only happens in these tests because it is pinned.
   repo.setActiveWorkspaceId(WS)
   return {h, repo, read: id => cache.getSnapshot(id)}
 }
@@ -562,6 +562,36 @@ describe('core.retargetMergedTypeMembership', () => {
 
     expect(env.read(TYPE_A)!.deleted).toBe(true)
     expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_A])
+  })
+
+  // `A → B`, `B → C`, then B restored: B is a live definition again, so A's
+  // members belong on B and the stale `B → C` edge must not carry them to C.
+  it('stops chain resolution at an intermediate source that was restored', async () => {
+    const TYPE_C2 = 'dddd4444-dddd-4ddd-8ddd-dddddddddddd'
+    await createTypeDefinition(env.repo, TYPE_C2, 'Human2', 'f0')
+    await env.repo.awaitProcessors()
+    await createMember(MEMBER, 'member of A', TYPE_A)
+
+    await env.repo.tx(async tx => {
+      const need = async (id: string): Promise<BlockData> => {
+        const row = await tx.get(id)
+        if (row === null) throw new Error(`missing ${id}`)
+        return row
+      }
+      const keepInto = (intoProps: Record<string, unknown>) => intoProps
+      await mergeBlocksInTx(tx, {
+        into: await need(TYPE_B), from: await need(TYPE_A),
+        contentStrategy: 'keepTarget', mergeProperties: keepInto,
+      })
+      await mergeBlocksInTx(tx, {
+        into: await need(TYPE_C2), from: await need(TYPE_B),
+        contentStrategy: 'keepTarget', mergeProperties: keepInto,
+      })
+      await tx.restore(TYPE_B)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.read(TYPE_B)!.deleted).toBe(false)
+    expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_B])
   })
 
   // `block_types` structurally cannot see these rows (its update trigger

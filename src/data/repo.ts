@@ -158,7 +158,7 @@ import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { ProjectorRuntime } from './projectorRuntime'
 import {USER_SCHEMAS_PROJECTOR_ID, UserSchemasService} from './userSchemasService'
-import { UserTypesService } from './userTypesService'
+import { UserTypesService, USER_TYPES_PROJECTOR_ID} from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
 import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
@@ -1721,6 +1721,19 @@ export class Repo {
     return this.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)
   }
 
+  /** Wait until persisted TYPE definitions have produced their first complete
+   * workspace snapshot. Separate from `whenPropertyDefinitionsReady`: the type
+   * projector is its own lifecycle, and the registry deliberately publishes
+   * declared seed types before it primes — so a snapshot taken in between is
+   * non-null but missing every block-backed type, which reads as "nobody owns
+   * this token" to an ownership check. */
+  private async whenTypeDefinitionsReady(workspaceId: string): Promise<void> {
+    if (!this.facetRuntime) return
+    const handle = this.projectors.handle(USER_TYPES_PROJECTOR_ID)
+    if (!handle) return
+    await handle.whenPrimed(workspaceId)
+  }
+
   /** The active workspace's undo / redo manager — what cmd-Z and the
    *  Undo UI act on (issue #186). Because each workspace has its own
    *  manager, callers can use the plain `peekUndo` / `popUndo` API and it
@@ -2016,15 +2029,28 @@ export class Repo {
     const readinessWorkspaceId = this.client.activeWorkspaceId
     const readinessGenerationToken = this.projectors.generationToken
     if (readinessWorkspaceId) {
-      await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
-      if (
-        this.client.activeWorkspaceId !== readinessWorkspaceId
-        || this.projectors.generationToken !== readinessGenerationToken
-      ) {
-        throw new Error(
-          `[Repo.tx] active workspace generation changed while waiting for ${readinessWorkspaceId}`,
-        )
+      // Checked after EACH wait, not once at the end. A switch during the first
+      // wait leaves the second asking a projector about a workspace that is no
+      // longer pinned, which throws its own unavailability error and masks this
+      // one — the caller-facing contract is that a switch reports as a
+      // generation change.
+      const assertSameGeneration = (): void => {
+        if (
+          this.client.activeWorkspaceId !== readinessWorkspaceId
+          || this.projectors.generationToken !== readinessGenerationToken
+        ) {
+          throw new Error(
+            `[Repo.tx] active workspace generation changed while waiting for ${readinessWorkspaceId}`,
+          )
+        }
       }
+      await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
+      assertSameGeneration()
+      // Types too: their projector primes independently, and an ownership check
+      // reading a half-published registry cannot tell "nobody owns this" from
+      // "not projected yet".
+      await this.whenTypeDefinitionsReady(readinessWorkspaceId)
+      assertSameGeneration()
     }
     // Captured at tx start, like the property registries beside it, so a facet
     // rebuild landing mid-tx cannot change the answer under a processor.

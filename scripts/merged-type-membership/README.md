@@ -75,15 +75,29 @@ signal.
 WITH tok AS (
   SELECT b.id AS member_id, b.deleted AS member_deleted, je.value AS token
   FROM blocks b, json_each(b.properties_json, '$.types') je
-  WHERE json_valid(b.properties_json) AND typeof(je.value) = 'text'
+  WHERE b.workspace_id = ?1
+    AND json_valid(b.properties_json) AND typeof(je.value) = 'text'
 )
-SELECT tok.token, COALESCE(t.content, '') AS name,
+SELECT tok.token,
+       CASE WHEN t.id IS NULL THEN 'no-row'
+            WHEN t.deleted = 1 THEN 'tombstoned'
+            ELSE 'live' END AS type_state,
+       COALESCE(t.content, '') AS name,
        SUM(CASE WHEN tok.member_deleted = 0 THEN 1 ELSE 0 END) AS live_members,
        SUM(CASE WHEN tok.member_deleted = 1 THEN 1 ELSE 0 END) AS dead_members
-FROM tok JOIN blocks t ON t.id = tok.token AND t.deleted = 1
-GROUP BY tok.token
+FROM tok
+LEFT JOIN blocks t ON t.id = tok.token AND t.workspace_id = ?1
+GROUP BY tok.token, type_state
 ORDER BY live_members DESC
 ```
+
+Two predicates that are easy to drop and change the answer: scope the CTE to
+ONE workspace (`repo.types` only describes the active one, so tokens from
+another workspace would be judged against the wrong registry, with member
+counts merged across both), and LEFT join the token's block — an inner join
+requiring a tombstone silently discards every `no-row` token, which is exactly
+the hard-deleted-definition case, and would report no damage where there is
+some.
 
 Read `properties_json` directly rather than joining `block_types`: that index
 excludes deleted rows, so it cannot see a token stranded on a soft-deleted member
