@@ -373,6 +373,24 @@ describe('block-type typeify processor', () => {
     })).rejects.toThrow(LossyLabelError)
   })
 
+  // A PADDED label diverges from its own trimmed alias, so the strand needs
+  // no exotic fixture — content is aligned to the trimmed name the alias
+  // actually carries.
+  it('aligns content with a padded label, so a rename replaces the alias', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, ' Padded ', {[blockTypeLabelProp.name]: ' Padded '})
+    let row = await env.repo.load(id)
+    expect(row!.content).toBe('Padded')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Padded'])
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(id, blockTypeLabelProp, 'Gadget')
+      await tx.update(id, {content: 'Gadget'})
+    }, {scope: ChangeScope.BlockDefault})
+    row = await env.repo.load(id)
+    expect(row!.properties[aliasesProp.name]).toEqual(['Gadget'])
+  })
+
   // Blank (or whitespace-only) content has no second name in it, so the
   // label is adopted into content instead of refused — lossless, and it
   // restores the content == label == alias parity a later rename needs.

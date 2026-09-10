@@ -60,9 +60,8 @@ import { isTypeSeedKey } from '@/data/typeSeeds'
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME = 'core.blockTypeTypeify'
 
-/** Refusal code for a tag whose `content` and `block-type:label` are two
- *  different names. Needs no `rejectionToastFacet` contribution — the
- *  generic route falls back to the raw message, which says what to fix. */
+/** Needs no `rejectionToastFacet` contribution — the generic route falls
+ *  back to the raw message, which says what to fix. */
 export const BLOCK_TYPE_NAME_CONFLICT = 'blockType.nameConflict'
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
