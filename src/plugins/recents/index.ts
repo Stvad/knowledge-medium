@@ -8,7 +8,7 @@ import {
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
-import { recentsPageBlockId } from '@/data/recentsPage.js'
+import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
 import type { Repo } from '@/data/repo'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
@@ -16,10 +16,14 @@ import { RecentsPageBlockRenderer } from './RecentsPageBlockRenderer.tsx'
 
 export const OPEN_RECENTS_ACTION_ID = 'open_recents'
 
-const openRecents = (repo: Repo) => {
+/** Get-or-create before navigating, like `open_today` and `open_preferences`
+ *  do: `ensureSystemPages` may have SKIPPED this page, and navigating to its
+ *  derived id would then land on a row that does not exist (#931). */
+const openRecents = async (repo: Repo) => {
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) return
-  navigateFromGlobalCommand(repo, {blockId: recentsPageBlockId(workspaceId)})
+  const page = await getOrCreateRecentsPage(repo, workspaceId)
+  await navigateFromGlobalCommand(repo, {blockId: page.id, workspaceId})
 }
 
 export const openRecentsAction = (repo: Repo): ActionConfig<typeof ActionContextTypes.GLOBAL> => ({

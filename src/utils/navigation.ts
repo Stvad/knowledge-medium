@@ -628,6 +628,15 @@ const resolveNavigationIntent = (
     : decision
 }
 
+/** Optional async step between owning the click and executing the navigation,
+ *  for a target whose ROW is created lazily — a system page `ensureSystemPages`
+ *  may have SKIPPED, say. The block id must NOT depend on it: a deterministic
+ *  id is known before its row exists, which is what lets the decision stay
+ *  synchronous and `preventDefault` stay correct. A rejection cancels the
+ *  navigation (logged), because landing on a block known not to exist is the
+ *  thing this exists to prevent. */
+export type EnsureNavigationTarget = () => Promise<unknown>
+
 /** Apply a resolved decision to the click that produced it — the single place
  *  that maps an intent outcome onto DOM event handling, so no clickable surface
  *  re-implements the native-vs-veto distinction:
@@ -639,11 +648,23 @@ export const applyNavigationDecision = (
   repo: Repo,
   e: MouseEvent,
   decision: NavigationDecision,
+  {ensureTarget}: {ensureTarget?: EnsureNavigationTarget} = {},
 ): void => {
   if (decision.kind === 'passthrough') return
   e.stopPropagation()
   e.preventDefault()
-  if (decision.kind === 'navigate') void navigate(repo, decision.input)
+  if (decision.kind !== 'navigate') return
+  const {input} = decision
+  if (!ensureTarget) {
+    void navigate(repo, input)
+    return
+  }
+  void ensureTarget().then(
+    () => navigate(repo, input),
+    (error: unknown) => {
+      console.error('[navigation] target could not be materialized', error)
+    },
+  )
 }
 
 /** Resolve a gesture through the intent policy, then execute it. The single
@@ -791,7 +812,11 @@ export const openBlockFromEvent = (
   repo: Repo,
   e: MouseEvent,
   {blockId, workspaceId}: OpenBlockContext,
-  {plainClick = 'follow-link', panelId}: {plainClick?: BlockOpenerPlainClick; panelId?: string} = {},
+  {plainClick = 'follow-link', panelId, ensureTarget}: {
+    plainClick?: BlockOpenerPlainClick
+    panelId?: string
+    ensureTarget?: EnsureNavigationTarget
+  } = {},
 ): void => {
   const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
   if (!resolvedWorkspaceId) return
@@ -802,7 +827,7 @@ export const openBlockFromEvent = (
     blockId,
     workspaceId: resolvedWorkspaceId,
     viewport: currentViewport(),
-  }))
+  }), {ensureTarget})
 }
 
 /** Returns an opener `(event, {blockId, workspaceId?}) => void` for places
@@ -813,8 +838,11 @@ export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions 
   const repo = useRepo()
   const {panelId} = useBlockContext()
   return useCallback(
-    (e: MouseEvent, target: OpenBlockContext) =>
-      openBlockFromEvent(repo, e, target, {plainClick, panelId}),
+    (
+      e: MouseEvent,
+      target: OpenBlockContext,
+      {ensureTarget}: {ensureTarget?: EnsureNavigationTarget} = {},
+    ) => openBlockFromEvent(repo, e, target, {plainClick, panelId, ensureTarget}),
     [repo, panelId, plainClick],
   )
 }

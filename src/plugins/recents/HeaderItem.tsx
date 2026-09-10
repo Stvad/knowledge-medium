@@ -1,7 +1,7 @@
 import { Clock } from 'lucide-react'
 import { useRepo } from '@/context/repo.js'
 import { useBlockOpener } from '@/utils/navigation.js'
-import { recentsPageBlockId } from '@/data/recentsPage.js'
+import { getOrCreateRecentsPage, recentsPageBlockId } from '@/data/recentsPage.js'
 
 export function RecentsHeaderItem() {
   const repo = useRepo()
@@ -13,7 +13,15 @@ export function RecentsHeaderItem() {
       onClick={event => {
         const workspaceId = repo.activeWorkspaceId
         if (!workspaceId) return
-        openBlock(event, {blockId: recentsPageBlockId(workspaceId)})
+        // `ensureSystemPages` reports a failing `ensure` and carries on, so
+        // this page can be absent for the rest of the session (see the
+        // `SystemPage` doc). Get-or-creating at the point of use is what the
+        // Journal and Locations pages already do; `ensureTarget` keeps it off
+        // the gesture's synchronous path, where the id — deterministic, known
+        // before the row exists — is all the intent policy needs (#931).
+        openBlock(event, {blockId: recentsPageBlockId(workspaceId)}, {
+          ensureTarget: () => getOrCreateRecentsPage(repo, workspaceId),
+        })
       }}
       title="Recently edited blocks"
       aria-label="Open recents"

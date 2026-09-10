@@ -805,6 +805,56 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-x'})
     expect(e.preventDefault).not.toHaveBeenCalled()
   })
+
+  // `ensureTarget` — a target whose ROW is created lazily. The point of the
+  // option is that only the EXECUTION waits: the decision, and with it
+  // `preventDefault`, still resolve synchronously from the live event.
+  const deferred = () => {
+    let settle!: (ok: boolean) => void
+    const ran = vi.fn()
+    const promise = new Promise<void>((resolve, reject) => {
+      settle = ok => { ok ? resolve() : reject(new Error('ensure failed')) }
+    })
+    return {ensureTarget: () => { ran(); return promise }, settle, ran}
+  }
+
+  it('ensureTarget: owns the click at once, navigates only once it resolves', async () => {
+    const {ensureTarget, settle} = deferred()
+    const e = fakeMouseEvent()
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-lazy', workspaceId: WS}, {ensureTarget})
+
+    // Synchronous, while the ensure is still pending — a click the surface has
+    // already owned must not fall through to the browser meanwhile.
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(e.stopPropagation).toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+
+    settle(true)
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-lazy'])
+    })
+  })
+
+  it('ensureTarget: a rejection cancels the navigation rather than landing on a missing block', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const {ensureTarget, settle} = deferred()
+    const e = fakeMouseEvent()
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-doomed', workspaceId: WS}, {ensureTarget})
+
+    settle(false)
+    await vi.waitFor(() => { expect(consoleError).toHaveBeenCalled() })
+    expect(await currentPanelBlockIds()).toEqual([])
+    consoleError.mockRestore()
+  })
+
+  it('ensureTarget: a native passthrough leaves it unrun — the click was declined', async () => {
+    const {ensureTarget, ran} = deferred()
+    const e = fakeMouseEvent({metaKey: true})
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-native', workspaceId: WS}, {ensureTarget})
+
+    expect(ran).not.toHaveBeenCalled()
+    expect(e.preventDefault).not.toHaveBeenCalled()
+  })
 })
 
 describe('mapNavigate', () => {
