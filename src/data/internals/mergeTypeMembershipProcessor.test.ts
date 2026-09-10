@@ -547,6 +547,23 @@ describe('core.retargetMergedTypeMembership', () => {
     expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_A])
   })
 
+  // Ownership is unverifiable without a registry for the tx's own workspace
+  // (`typeDefinitionsForWorkspace` fails closed on a mismatch). Retargeting
+  // anyway could sweep a seeded type's members onto an id-colliding impostor,
+  // so the merge leaves membership where it is — the pre-fix state for that one
+  // merge, which is visible to the audit and repairable, unlike a wrong write.
+  it('does not retarget when no type registry covers the tx workspace', async () => {
+    await createMember(MEMBER, 'member of A', TYPE_A)
+    // Unpin: the tx still pins its own workspace from the first write, but no
+    // registry was captured for it.
+    env.repo.setActiveWorkspaceId(null)
+
+    await env.repo.mutate.merge({intoId: TYPE_B, fromId: TYPE_A, contentStrategy: 'keepTarget'})
+
+    expect(env.read(TYPE_A)!.deleted).toBe(true)
+    expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_A])
+  })
+
   // `block_types` structurally cannot see these rows (its update trigger
   // re-inserts only `WHEN deleted = 0`), so without the separate tombstone
   // sweep a restore after the merge resurrects the block silently un-typed.

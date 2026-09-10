@@ -167,20 +167,17 @@ const rewriteTypeToken = (
  *  looks like a definition while owning nothing — and merging it, or into it,
  *  would sweep up or mint real Todo members.
  *
- *  Deliberately a REFUSAL and not a requirement. `blockIdByTypeId` only binds
- *  types the projector has published, so demanding positive registration would
- *  reject every legitimate merge on a client whose projection has not run yet.
- *  An unknown token is left to the row-derived path; only a token demonstrably
- *  owned by another block stops the retarget. */
+ *  A token ABSENT from `typesById` is owned by nobody, which is a real answer
+ *  and safe to proceed on: `blockIdByTypeId` binds only what the projector has
+ *  published, so requiring positive registration would refuse every legitimate
+ *  merge on a client whose projection has not run. "No registry at all" is a
+ *  different case and is not this function's to answer — see the call site. */
 const tokenOwnedByOther = (
-  ownership: SameTxTypeOwnership | null,
+  ownership: SameTxTypeOwnership,
   token: string,
   blockId: string,
-): boolean => {
-  if (ownership === null) return false
-  if (!ownership.typesById.has(token)) return false
-  return ownership.blockIdByTypeId.get(token) !== blockId
-}
+): boolean =>
+  ownership.typesById.has(token) && ownership.blockIdByTypeId.get(token) !== blockId
 
 const retargetTypeMembership = async (
   event: CoreBlockMergedEvent,
@@ -202,10 +199,29 @@ const retargetTypeMembership = async (
   // with the merge and becomes real membership if that block is made a type.
   const intoToken = typeMembershipTokenFor(into)
   if (intoToken === event.fromId) return
+
+  // No registry for THIS tx's workspace — `typeDefinitionsForWorkspace` fails
+  // closed on a mismatch — means ownership is unverifiable, so retargeting could
+  // sweep a seeded type's real members onto an id-colliding impostor. Skip.
+  //
+  // The cost of skipping is the pre-fix behaviour for this one merge: membership
+  // stays pointed at the tombstoned source, visible to the audit and repairable.
+  // The cost of proceeding is writing WRONG membership, which is neither. Not
+  // symmetric, so this fails closed — matching the contract on `typeDefinitions`
+  // that this helper previously contradicted by reading `null` as "unowned".
+  const ownership = ctx.typeDefinitions
+  if (ownership === null) {
+    console.warn(
+      `[${RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME}] no type registry for ` +
+      `workspace ${event.workspaceId}; leaving membership on the merged-away ` +
+      `${event.fromId} rather than retargeting unverified`,
+    )
+    return
+  }
   // Never mint membership in a type the survivor does not own. Merging into an
   // imported block that happens to sit at `todo` would otherwise turn the
   // source's members into built-in Todos.
-  if (tokenOwnedByOther(ctx.typeDefinitions, intoToken, into.id)) return
+  if (tokenOwnedByOther(ownership, intoToken, into.id)) return
 
   // The source must really BE the definition that owns these memberships:
   // `bt.type = fromId` does not prove it, since tokens and block ids are both
@@ -225,7 +241,7 @@ const retargetTypeMembership = async (
   const fromTokens = wellFormedTypeTokens(from)
   if (fromTokens === null || !fromTokens.includes(BLOCK_TYPE_TYPE)) return
   // …and the tag alone is not ownership; see `tokenOwnedByOther`.
-  if (tokenOwnedByOther(ctx.typeDefinitions, event.fromId, from.id)) return
+  if (tokenOwnedByOther(ownership, event.fromId, from.id)) return
 
   const members = await ctx.db.getAll<{id: string}>(
     SELECT_TYPE_MEMBER_IDS_SQL,
