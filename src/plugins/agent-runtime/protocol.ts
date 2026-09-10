@@ -1,7 +1,8 @@
 import type React from 'react'
 import type ReactDOM from 'react-dom'
 import type { Block } from '@/data/block'
-import type { Repo } from '@/data/repo'
+import type { OperatorBackfillResult, Repo, WorkspaceRematerialization } from '@/data/repo'
+import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
 import type { BlockData, SubtreeRow } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet.js'
 import type { blockRenderersFacet } from '@/extensions/core.js'
@@ -220,6 +221,36 @@ export interface AuditExtensionResult {
   lint: ExtensionLintWarning[]
 }
 
+export interface RunBackfillInput {
+  backfillId: string
+  workspaceId?: string
+}
+
+/** Present when the pass that ran reports per-run detail. The properties
+ *  migration does: how much it swept, and every block whose legacy cell value
+ *  its codec rejected — which an operator has to see, since those keys stay
+ *  cell-only until the values are repaired and the pass re-run.
+ *
+ *  Declared off the pass's own progress type rather than re-listed: a
+ *  hand-written copy falls behind it silently, and the fields it drifts on —
+ *  the exact failure count, the values that could not be migrated — are the
+ *  ones the operator acts on. */
+export type RunBackfillResult =
+  OperatorBackfillResult
+  & {backfillId: string; workspaceId: string}
+  & Partial<PropertyCellBackfillProgress>
+
+export interface RematerializeWorkspaceInput {
+  /** Workspace to re-materialize. Defaults to, and must be, the ACTIVE one —
+   *  the pass rebuilds this client's view of the workspace it has open, so the
+   *  option is an assertion against running it on the wrong graph. */
+  workspaceId?: string
+  /** `'unapplied'` (default) re-delivers exactly the rows the durable refusal
+   *  counts; `'all'` re-judges every staged row of the workspace. Validated
+   *  kernel-side, so it stays a plain string on the wire. */
+  scope?: string
+}
+
 export interface AuditPropertiesInput {
   /** Workspace to audit. Defaults to, and in practice must be, the ACTIVE
    *  one: classification runs on `repo.propertyDefinitions`, which is the
@@ -255,6 +286,8 @@ export interface AgentRuntimeContext {
   uninstallExtension: (input: UninstallExtensionInput) => Promise<UninstallExtensionResult>
   auditExtension: (input: AuditExtensionInput) => Promise<AuditExtensionResult>
   auditProperties: (input: AuditPropertiesInput) => Promise<PropertyRegistrationAudit>
+  runBackfill: (input: RunBackfillInput) => Promise<RunBackfillResult>
+  rematerializeWorkspace: (input: RematerializeWorkspaceInput) => Promise<WorkspaceRematerialization>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime

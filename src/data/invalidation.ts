@@ -7,17 +7,11 @@ export interface ChangeSnapshotSide {
   orderKey?: string
   workspaceId: string
   deleted?: boolean
-  /** LOCAL derived reference-target column (PR #288 slice A). Surfaced so
-   *  the parent-edge computation can treat a field-row recognition flip as
-   *  a visible-membership change (§9 outline exclusion). Type-level only —
-   *  runtime values are full `BlockData` snapshots. */
+  /** LOCAL derived recognition column. Type-level only — runtime values are
+   *  full `BlockData` snapshots; this is the slim view rules see. */
   referenceTargetId?: string | null
-  /** LOCAL derived `::` field-marker column (PR #288 §7). The OTHER half of
-   *  §9 recognition, surfaced for the same parent-edge computation as
-   *  `referenceTargetId` — and the half that moves independently: adding or
-   *  removing the marker leaves the target identical, so a comparison keyed
-   *  on the target alone would miss the recognition flip entirely. Type-level
-   *  only — runtime values are full `BlockData` snapshots. */
+  /** LOCAL derived recognition column. Type-level only — runtime values are
+   *  full `BlockData` snapshots; this is the slim view rules see. */
   isFieldForm?: boolean
   /** Block content. Surfaced here for the kernel `content` invalidation
    *  channel — fires when content actually changes, so substring-search
@@ -76,17 +70,12 @@ export const collectPluginInvalidationsFromSnapshots = (
   if (rules.length === 0 || snapshots.size === 0) return undefined
   const out: MutablePluginInvalidationMap = new Map()
   const emit = createPluginInvalidationEmitter(out)
-  // Isolate each plugin rule. `InvalidationRule` is a live extension point, and
-  // this loop runs inside the sync observer's drain window BEFORE its watermark
-  // DELETE. A throw from one rule must not abort the pass: it would skip the
-  // watermark advance and the handle invalidation, and on retry the disk gate
-  // skip-stales the now-equal stamp, so the handle never re-fires — a
-  // permanently-stale UI (issue #191). The kernel rowIds/parentIds/workspaceIds
-  // are computed by the caller independently of this loop, so the affected ids'
-  // row/parent deps still invalidate regardless; only deps that depend SOLELY on
-  // a throwing rule's channel can miss this window. We keep whatever the rule
-  // emitted before it threw (over-firing an invalidation is a harmless re-read;
-  // under-firing is the bug), drop the rest, and log loudly.
+  // Isolate each plugin rule: this loop runs inside the sync observer's drain
+  // window BEFORE the watermark DELETE, so a throw would skip the watermark
+  // advance, the retry would skip-stale the now-equal stamp, and the handle
+  // would never re-fire (issue #191). Over-firing an invalidation is a
+  // harmless re-read; under-firing is the bug — so keep whatever the rule
+  // emitted before it threw, drop the rest, and log loudly.
   for (const rule of rules) {
     try {
       rule.collectFromSnapshots?.(snapshots, emit)

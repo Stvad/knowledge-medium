@@ -200,7 +200,7 @@ describe('createTypeBlock', () => {
     expect(env.repo.types.has(b)).toBe(true)
   })
 
-  // Name hygiene (PR #288 §7): the label is written as the definition
+  // Name hygiene (docs/properties-as-blocks-migration.html §7): the label is written as the definition
   // block's own content, so a reference-shaped one would mint a block that
   // reads as a span — `::`-marked, a recognized property field row of the
   // Types page, hidden from the outline and keyed onto its cell.

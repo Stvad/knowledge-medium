@@ -20,7 +20,8 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, BLOCK_LOCAL_COLUMNS, blockToSyncedRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, BLOCK_LOCAL_COLUMNS,
+  STAGING_LOCAL_COLUMNS, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import type { BlockData } from '@/data/api'
 
@@ -57,7 +58,7 @@ beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb })
 
 describe('blocks_synced staging table', () => {
   it('mirrors the blocks column shape exactly, minus the local-only columns (name + type + nullability)', async () => {
-    // PR #288 slice A: `blocks` gained LOCAL-only derived columns
+    // `blocks` gained LOCAL-only derived columns
     // (`reference_target_id`, `is_field_form`) that are deliberately never
     // staged/synced.
     // `blocks_synced` must still match `blocks` on every STORAGE column.
@@ -68,17 +69,28 @@ describe('blocks_synced staging table', () => {
     expect(staged.length).toBeGreaterThan(0)
     const localNames = new Set(BLOCK_LOCAL_COLUMNS.map(column => column.name as string))
     const storageOnlyBlocks = blocks.filter(column => !localNames.has(column.name))
-    expect(normalize(staged)).toEqual(normalize(storageOnlyBlocks))
+    // Each side carries its own local-only columns now — `blocks_synced` gained
+    // `needs_apply`, the drain's record of what it has applied — so the mirror
+    // is storage-column to storage-column, not table to table.
+    const stagedLocalNames = new Set(STAGING_LOCAL_COLUMNS.map(column => column.name as string))
+    const storageOnlyStaged = staged.filter(column => !stagedLocalNames.has(column.name))
+    expect(normalize(storageOnlyStaged)).toEqual(normalize(storageOnlyBlocks))
   })
 
   it('keeps every local column local-only: present on blocks, absent on blocks_synced', async () => {
-    // PR #288 slice A: this asymmetry is deliberate, not an oversight — see
+    // This asymmetry is deliberate, not an oversight — see
     // BLOCK_LOCAL_COLUMNS in blockSchema.ts.
     const blocks = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks)')
     const staged = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks_synced)')
     for (const local of BLOCK_LOCAL_COLUMNS) {
       expect(blocks.some(column => column.name === local.name)).toBe(true)
       expect(staged.some(column => column.name === local.name)).toBe(false)
+    }
+    // And the other direction: the drain's own bookkeeping never reaches the
+    // app-visible table, where a `SELECT *` consumer would parse it as a field.
+    for (const local of STAGING_LOCAL_COLUMNS) {
+      expect(staged.some(column => column.name === local.name)).toBe(true)
+      expect(blocks.some(column => column.name === local.name)).toBe(false)
     }
   })
 

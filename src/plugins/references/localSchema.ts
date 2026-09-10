@@ -1,4 +1,5 @@
 import type { LocalSchemaContribution, LocalSchemaDb } from '@/data/facets.js'
+import { isMarkerSet, markerDoneSql, recordMarkerSql } from '@/data/internals/clientSchema.js'
 
 export const CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_with_references
@@ -98,23 +99,13 @@ export const CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL = `
 export const BLOCK_REFERENCES_BACKFILL_MARKER_KEY = 'block_references_backfill_v1'
 export const BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY = 'block_references_source_field_v1'
 
-export const SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_REFERENCES_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL = markerDoneSql(BLOCK_REFERENCES_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_REFERENCES_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL = recordMarkerSql(BLOCK_REFERENCES_BACKFILL_MARKER_KEY)
 
-export const SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY}'
-`
+export const SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = markerDoneSql(BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY)
 
-export const RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = recordMarkerSql(BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY)
 
 export const BACKFILL_BLOCK_REFERENCES_SQL = `
   INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias, source_field)
@@ -137,8 +128,7 @@ export const BACKFILL_BLOCK_REFERENCES_SQL = `
 export const backfillBlockReferencesIfEmpty = async (
   db: LocalSchemaDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCK_REFERENCES_SQL)
   await db.execute(RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL)
 }
@@ -152,8 +142,7 @@ export const BLOCK_REFERENCES_TRIGGER_NAMES = [
 export const backfillBlockReferencesSourceFieldIfNeeded = async (
   db: LocalSchemaDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL)) return
 
   for (const triggerName of BLOCK_REFERENCES_TRIGGER_NAMES) {
     await db.execute(`DROP TRIGGER IF EXISTS ${triggerName}`)
@@ -187,6 +176,14 @@ export const referencesLocalSchema: LocalSchemaContribution = {
     CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,
   ],
   triggerNames: BLOCK_REFERENCES_TRIGGER_NAMES,
+  // The probe matches `idx_block_references_ws_alias` on its leading columns, so
+  // the plan is a SEARCH and it actually arms — see `LocalSchemaAnalyzeTable`.
+  analyzeTables: [
+    {
+      name: 'block_references',
+      probe: `SELECT target_id FROM block_references WHERE workspace_id = '' AND alias = ''`,
+    },
+  ],
   backfills: [
     {
       id: 'references.block-references-source-field',

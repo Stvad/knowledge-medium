@@ -16,16 +16,9 @@
  * into ONE entry, so a composite operation spanning several `repo.tx`
  * calls (via `repo.undoGroup`) reverts with a single cmd-Z.
  *
- * What this is NOT:
- *   - Checkpoint coalescing for fine-grained typing (§16.4 — deferred).
- *     v1 granularity is one entry per `repo.tx`; CodeMirror's internal
- *     undo handles per-keystroke during edit-mode, and the document
- *     write happens once on save/blur — already coarse-grained.
- *     Group merge is not typing coalescing — it only folds txs that
- *     explicitly share a minted group token.
- *   - Events-derived undo (§16.6 — deferred). row_events.before_json
- *     enables a future drift-tolerant variant; for now snapshots are
- *     in-memory only.
+ * Granularity is one entry per `repo.tx`. Group merge is not typing
+ * coalescing — it only folds txs that explicitly share a minted group
+ * token.
  *
  * Scope semantics:
  *   - `BlockDefault` — user undo stack (the cmd-Z target).

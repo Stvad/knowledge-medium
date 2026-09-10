@@ -35,19 +35,13 @@ export interface TypeDefinitionRegistrySnapshot {
    *  stale mirror on a later reorder. `getTypeBlockId` stays undefined until the
    *  duplicate is resolved — the same fail-closed stance as a contested id. */
   readonly contestedSeedKeys: ReadonlySet<string>
-  /** Each membership `id` → the seed key that WON it. A membership id claimed by
-   *  more than one key-deduped seed (two installs of the same dynamic extension, or
-   *  two plugins colliding) resolves via `typeSeedKeyOutranks`: a built-in (`system:`)
-   *  seed beats a third-party extension trying to take over a built-in id, otherwise
-   *  the LOWEST seed key wins — a deterministic, contribution-order-INDEPENDENT winner, so the
-   *  choice is stable across reloads and only ONE backing block is materialized per
-   *  id. This replaces the
-   *  earlier fail-closed stance (which withheld every contender): an id clash now
-   *  degrades gracefully to one working type. The loser never materializes; a former
-   *  winner demoted by an install change becomes a retired row (§7). This is the
-   *  authoritative winner map — `materializingTypeSeeds` / `workspaceSeeds`
-   *  materialize exactly its winners, `materializeTypeSeeds`' scheduled recheck
-   *  gates on it, and step 2's block-id binding uses it. */
+  /** Each membership `id` → the seed key that WON it, resolved via
+   *  `typeSeedKeyOutranks` (built-in first, else lowest key). The loser never
+   *  materializes; a former winner demoted by an install change becomes a
+   *  retired row (§7). This is the authoritative winner map —
+   *  `materializingTypeSeeds` / `workspaceSeeds` materialize exactly its
+   *  winners, `materializeTypeSeeds`' scheduled recheck gates on it, and
+   *  step 2's block-id binding uses it. */
   readonly seedKeyById: ReadonlyMap<string, string>
 }
 
@@ -125,11 +119,7 @@ const indexSeedsByKey = (
 /** Step 1 of the registry build, shared with the pre-pin unbound view: index the
  * declared seeds by key (keep-first), then synthesize each into its publishable
  * `typesById` contribution, resolving a membership-id collision via
- * `typeSeedKeyOutranks` (a built-in `system:` seed beats a third-party hijack, else
- * the lowest seed key). That winner is deterministic and contribution-order-
- * independent, so a two-install / two-plugin id clash degrades gracefully to one
- * stable working type (rather than failing closed and stranding both) and the
- * single materialized backing block never flips on a reorder. Returns the
+ * `typeSeedKeyOutranks` (built-in first, else lowest key). Returns the
  * contested-key set and the id→winning-key map (`seedKeyById`) the projected-row
  * binding + materialization paths need. Pure over the declarations — no workspace
  * or projected rows required, which is exactly why the unbound view can reuse it. */
@@ -152,10 +142,8 @@ const synthesizeSeedTypes = (
       typesById.set(seed.id, seedContribution(seed))
       continue
     }
-    // Same membership id claimed by another key. Winner-resolve (`typeSeedKeyOutranks`
-    // — a built-in `system:` seed beats a third-party hijack, else the lowest seed key
-    // wins) rather than fail closed. The winner is order-independent, so it (and the one
-    // materialized backing block) is stable across reloads, unlike a keep-first pick.
+    // Same membership id claimed by another key: resolved via `typeSeedKeyOutranks`
+    // (built-in first, else lowest key) rather than fail closed.
     // Warn once per id: a genuine two-plugin collision is worth surfacing, and for the
     // expected two-install case it's one benign line — mirroring the property side,
     // which already logs per rebuild when two installs collide on a property name.
@@ -215,10 +203,8 @@ export const buildUnboundTypes = (
  * retired row can never overwrite a user row that happens to share its short id.
  *
  * A membership-`id` collision (two key-deduped seeds claiming one `id`) is
- * WINNER-RESOLVED, not fail-closed: a built-in (`system:`) seed outranks a third-party
- * hijack, otherwise the lowest seed key wins (deterministic, order-independent — see
- * `typeSeedKeyOutranks`), so a two-install / two-plugin clash degrades to one working
- * type and one stable backing block; a warn keeps the collision observable. Only the
+ * WINNER-RESOLVED via `typeSeedKeyOutranks` (built-in first, else lowest key), not
+ * fail-closed; a warn keeps the collision observable. Only the
  * true authoring/corruption hazard still fails closed — binding a seed to a non-seed
  * block — where `blockIdByTypeId` is
  * populated ONLY from an actual valid mirror row (step 2), never predictively

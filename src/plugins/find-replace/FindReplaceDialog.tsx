@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useRepo } from '@/context/repo.js'
 import { showError, showSuccess } from '@/utils/toast.js'
+import { pluralize } from '@/utils/pluralize'
 import { cn } from '@/lib/utils.js'
 import {
   DEFAULT_FIND_REPLACE_MAX_BLOCKS,
@@ -51,9 +52,6 @@ const resultSummary = (result: ApplyContentReplaceResult): string => {
   return `${base}; ${count} left unchanged — the new text is not a valid value for `
     + `propert${result.unparseableProperties.length === 1 ? 'y' : 'ies'} ${names}`
 }
-
-const pluralize = (count: number, singular: string, plural = `${singular}s`): string =>
-  `${count} ${count === 1 ? singular : plural}`
 
 const blockMatchCountLabel = (blockCount: number, matchCount: number): string =>
   `${pluralize(blockCount, 'block')} · ${pluralize(matchCount, 'match', 'matches')}`

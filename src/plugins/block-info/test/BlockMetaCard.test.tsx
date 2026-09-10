@@ -5,9 +5,9 @@ import type { Block } from '@/data/block'
 import type { BlockData } from '@/data/api'
 
 // BlockMetaCard is pure presentation over a handful of hooks; mock those so we
-// can assert its behaviour (and the two bugs prior review rounds fixed here:
-// only the username is linked, and the author page is resolved in the BLOCK's
-// workspace) without standing up a repo.
+// can assert its behaviour (including that only the username is linked, and
+// that the author page is resolved in the BLOCK's workspace) without standing
+// up a repo.
 const {useHandleMock, useUserPageMock, useOpenBlockMock, useMinuteClockMock} = vi.hoisted(() => ({
   useHandleMock: vi.fn(),
   useUserPageMock: vi.fn(),

@@ -1,4 +1,4 @@
-/**
+/*
  * Web Lock helpers for the background byte-replication lanes (design §8/§9). The
  * up-lane drain and the down-lane replicator are SINGLE-OWNER across tabs so N open
  * tabs don't multiply egress; both elect one owner via `navigator.locks`.

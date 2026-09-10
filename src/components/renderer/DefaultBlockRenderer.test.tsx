@@ -610,6 +610,12 @@ const FacetSurfaceRenderer = ({block}: BlockRendererProps) => (
   <div className="facet-surface">{block.id}</div>
 )
 
+// The breadcrumb shape: the text renderer asked for an inline container, so it
+// sits in the surrounding line rather than owning a row.
+const InlineTextRenderer = (props: BlockRendererProps) => (
+  <MarkdownContentRenderer {...props} containerElement="span" />
+)
+
 // The recents-page shape: a custom content renderer that draws the real page
 // title AND a surface below it (`RecentsPageBlockRenderer`).
 const TitlePlusSurfaceRenderer = (props: BlockRendererProps) => (
@@ -715,6 +721,25 @@ describe('title typography', () => {
 
     await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
     expect(titleElement()).toBeNull()
+  })
+
+  // List styling is off by default and turned on per surface, so what the
+  // renderer marks IS the styling decision. An inline surface has to announce
+  // itself rather than merely omit the block marker: it sits inside a block
+  // surface, so anything ancestor-matched would still reach it.
+  it('marks a block surface as block', async () => {
+    renderBlock('root')
+
+    await screen.findByText('Page title')
+    expect(document.querySelector('.markdown-content')).not.toBeNull()
+    expect(document.querySelector('.markdown-content-inline')).toBeNull()
+  })
+
+  it('marks an inline text surface as inline', async () => {
+    renderBlock('root', InlineTextRenderer)
+
+    await screen.findByText('Page title')
+    expect(document.querySelector('.markdown-content-inline')).not.toBeNull()
   })
 
   it('still reaches a surface that composes the text renderer', async () => {

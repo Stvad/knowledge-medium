@@ -367,9 +367,9 @@ export const DefaultBlockLayout: BlockLayout = ({
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
-  // No per-block `view-transition-name`. Tried it (commit b1bfa4ef,
-  // reverted): the slide-between-positions effect was barely
-  // perceptible vs. the root-level crossfade we already get from
+  // No per-block `view-transition-name`. Tried it and reverted: the
+  // slide-between-positions effect was barely perceptible vs. the
+  // root-level crossfade we already get from
   // `withMoveTransition`, and it introduced two real issues —
   //  - per-block snapshots are lifted into the document-root overlay,
   //    so a block scrolled under the (in-flow) app header briefly

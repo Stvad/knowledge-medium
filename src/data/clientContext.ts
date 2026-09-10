@@ -186,6 +186,14 @@ export class ClientContext implements ClientContextReader {
    *  see mutateLayoutContextClaims. */
   private _claimedLayoutContextKeys = readPersistedLayoutContextClaims()
 
+  /** While a persist has FAILED, storage is behind the in-memory map, so
+   *  merge-reads are suspended and this instance is in-memory-authoritative;
+   *  a successful write clears the flag, because at that instant storage
+   *  equals memory. The healing write is a whole-map publish and overwrites
+   *  peers' claims from the degraded window once — never resetting would
+   *  clobber on every later write instead. */
+  private _claimsPersistenceDegraded = false
+
   /** Merge-on-write for the claim registry: re-read persisted state, apply
    *  the delta to the FRESH map, persist, and adopt the merged map as the
    *  new in-memory view (also absorbing other tabs' claims). The adoption
@@ -196,17 +204,6 @@ export class ClientContext implements ClientContextReader {
    *  shrinks the lost-update window from "construction → write" to the
    *  microseconds between read and write — and claim/release are
    *  idempotent per (scope, key), so replays are harmless. */
-  /** While a persist has FAILED (quota/private mode), storage is behind
-   *  the in-memory map — a re-read would adopt the stale persisted state
-   *  and silently drop the unpersisted claim, so reads are suspended and
-   *  this instance is in-memory-authoritative. Writes are still attempted,
-   *  and a SUCCESSFUL write clears the flag: at that instant storage
-   *  equals the in-memory map, so merge-reads are safe again. (That
-   *  healing write is a whole-map publish — claims peers persisted during
-   *  the degraded window are overwritten by it, once; never resetting
-   *  would instead make EVERY later write a clobber.) */
-  private _claimsPersistenceDegraded = false
-
   private mutateLayoutContextClaims(mutate: (claims: Map<string, Set<string>>) => boolean): void {
     const hasStorage = safeLocalStorage() !== null
     const canReadPersisted = hasStorage && !this._claimsPersistenceDegraded

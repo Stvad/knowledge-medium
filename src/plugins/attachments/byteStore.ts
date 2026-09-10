@@ -1,4 +1,4 @@
-/**
+/*
  * The local DECRYPTED byte store (design §8) — the single on-disk replica + the
  * render source for asset bytes.
  *

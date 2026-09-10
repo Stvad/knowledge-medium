@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Fuzz suite for `convertEmptyChildBlockToProperty`
- * (`src/utils/propertyCreation.ts`) — the `>`-on-empty-block gesture that
+ * (`src/utils/propertyCreation.ts`) — the `::`-on-empty-block gesture that
  * `delete()`s a scaffold block and turns it into a property-create request
  * on its parent. Two independent holes were already found and fixed in
  * this one small guard:
@@ -18,7 +18,7 @@
  *
  * `src/utils/test/propertyCreation.test.ts` pins one fixed example per
  * fix. This suite sweeps the full lattice the guard's own two checks
- * define (propertyCreation.ts:29-35):
+ * define (`canConvertEmptyChildBlockToProperty`):
  *   convert  ⟺  structural childIds EMPTY  ∧  cell (`data.properties`) EMPTY
  * across {cell state} × {structural-child-row state} × {workspace flip
  * state} — the flip axis matters because it's what makes the diverged
@@ -121,7 +121,7 @@ const runCase = async (
     // the `contentChild` case and leaving the b0392a7c9 regression (hidden
     // rows, empty cell) untested — the pre-fix guard would pass this case
     // too, since it never sees a divergence between the visible and
-    // structural lists (Codex review, comment 3672657052).
+    // structural lists.
     await repo.tx(async tx => {
       await tx.create({
         id: FIELD_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a1',

@@ -54,7 +54,8 @@ describe('writeBlockTypeLabel', () => {
     return repo
   }
 
-  // The mirror below is exactly why the label needs hygiene (PR #288 §7):
+  // The mirror below is exactly why the label needs hygiene
+  // (docs/properties-as-blocks-migration.html §7):
   // a reference-shaped label becomes reference-shaped CONTENT, and a
   // `::`-marked one makes the type's own block a recognized property field
   // row of the Types page — hidden from the outline, keyed onto its cell.

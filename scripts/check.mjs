@@ -5,6 +5,19 @@ import { performance } from 'node:perf_hooks'
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
+// First: every task below reads node_modules. A worktree DIRECTORY outlives the
+// branch checked out in it, so a clean tree at current master can sit over a
+// weeks-old install — git refreshes package.json and the lockfile, nothing
+// re-runs install. `--frozen-lockfile` also DOWNGRADES a package left newer than
+// the branch asks for; that is the same invariant, not a regression. Keep the
+// purge flag: tasks here are spawned with no stdin, and an install that has to
+// recreate node_modules aborts without a TTY — which would hard-fail the gate on
+// exactly the stale worktrees this step exists to repair.
+const installTask = {
+  name: 'install',
+  args: ['install', '--frozen-lockfile', '--config.confirm-modules-purge=false'],
+}
+
 const compileTask = {
   name: 'compile',
   args: ['run', 'compile'],
@@ -135,19 +148,33 @@ const abortFromSignal = signal => {
 process.once('SIGINT', () => abortFromSignal('SIGINT'))
 process.once('SIGTERM', () => abortFromSignal('SIGTERM'))
 
-const startedAt = performance.now()
-const compileResult = await runTask(compileTask)
-if (compileResult.code !== 0) {
-  process.exit(compileResult.code ?? 1)
+// Returns the exit code rather than taking it: every failure path here has
+// just relayed a failing task's entire output, and `process.exit()` drops what
+// is still queued on a piped stdout once the writes outrun the reader, which a
+// failing task's output does comfortably. Nothing is still running when any of
+// these returns, so the loop drains and ends.
+const runGate = async () => {
+  const startedAt = performance.now()
+  const installResult = await runTask(installTask)
+  if (installResult.code !== 0) return installResult.code ?? 1
+
+  const compileResult = await runTask(compileTask)
+  if (compileResult.code !== 0) return compileResult.code ?? 1
+
+  console.log(`[check] running ${parallelTasks.map(task => task.name).join(', ')} in parallel`)
+  const {firstFailure} = await runParallel(parallelTasks)
+  const duration = formatDuration(performance.now() - startedAt)
+
+  if (firstFailure) {
+    console.error(`[check] failed in ${duration}`)
+    return firstFailure.code ?? 1
+  }
+
+  console.log(`[check] passed in ${duration}`)
+  return 0
 }
 
-console.log(`[check] running ${parallelTasks.map(task => task.name).join(', ')} in parallel`)
-const {firstFailure} = await runParallel(parallelTasks)
-const duration = formatDuration(performance.now() - startedAt)
-
-if (firstFailure) {
-  console.error(`[check] failed in ${duration}`)
-  process.exit(firstFailure.code ?? 1)
-}
-
-console.log(`[check] passed in ${duration}`)
+const code = await runGate()
+// Assigned only on failure: a signal leaves through abortFromSignal, which
+// already set 130/143, and cancels every task so no firstFailure is reported.
+if (code !== 0) process.exitCode = code

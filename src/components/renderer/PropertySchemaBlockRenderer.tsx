@@ -25,6 +25,7 @@ import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
+import { trimIfEdited } from '@/utils/nameFieldCommit.js'
 
 const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
@@ -103,9 +104,11 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     setDraftName(propertyName)
   }
 
-  const writeName = useCallback(async (next: string) => {
+  const writeName = useCallback(async (draft: string) => {
+    const next = trimIfEdited(draft, propertyName)
     if (next === propertyName) return
-    // Same invariant addSchema enforces at creation (PR #288 §7): the name
+    // Same invariant addSchema enforces at creation
+    // (docs/properties-as-blocks-migration.html §7): the name
     // must survive a `[[name]]` round-trip — field-row retitles and every
     // re-derive-by-content path bind through that form, so a lossy label
     // (e.g. one containing `]]`) would strand the schema's field rows.
@@ -221,7 +224,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           placeholder="property name"
           disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
-          onBlur={() => { void writeName(draftName.trim()) }}
+          onBlur={() => { void writeName(draftName) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()

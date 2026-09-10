@@ -6,7 +6,7 @@
 // graph, which is where a key nobody owns shows up — and those are exactly
 // the keys `materializePropertyChildrenForExistingRow` skips.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { BlockProperties } from '@/types.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -42,12 +42,32 @@ let sharedDb: TestDb
 let repo: Repo
 let context: AgentRuntimeContext
 
-beforeAll(async () => { sharedDb = await createTestDb() })
+let realSyncStatus: unknown
+beforeAll(async () => {
+  sharedDb = await createTestDb()
+  realSyncStatus = (sharedDb.db as {currentStatus?: unknown}).currentStatus
+})
 afterAll(async () => { await sharedDb.cleanup() })
+// `repo` is rebuilt per test, but the db is shared for the whole file, so
+// anything installed ON the db outlives the test that installed it. Two
+// mechanisms, and `restoreAllMocks` only knows about the first: `currentStatus`
+// is a plain own field on the real PowerSync db, so a stub assigned over it has
+// to be put BACK. Deleting it instead would strip the genuine SyncStatus from
+// every later test, silently disabling anything that reads sync state.
+afterEach(() => {
+  vi.restoreAllMocks()
+  ;(sharedDb.db as {currentStatus?: unknown}).currentStatus = realSyncStatus
+})
 
-beforeEach(async () => {
-  await resetTestDb(sharedDb.db)
-  repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
+/** Rebuild the repo under test, optionally with a sync gate that says this
+ *  device is behind. The gate is the only injectable half of `syncViewGap`,
+ *  which the audit reports rather than refuses on. */
+const installRepo = (backfillSyncGate?: (cb: () => void) => () => void) => {
+  repo = createTestRepo({
+    db: sharedDb.db,
+    user: {id: 'user-1'},
+    ...(backfillSyncGate ? {backfillSyncGate} : {}),
+  }).repo
   repo.setActiveWorkspaceId(WS)
   const runtime = resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -56,6 +76,11 @@ beforeEach(async () => {
   ], {repo, workspaceId: WS, safeMode: false})
   repo.setFacetRuntime(runtime)
   context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+}
+
+beforeEach(async () => {
+  await resetTestDb(sharedDb.db)
+  installRepo()
 })
 
 const create = async (args: {id: string; workspaceId?: string; properties?: BlockProperties}) => {
@@ -136,12 +161,11 @@ describe('auditPropertyRegistration', () => {
   // `definitionsByFieldId` lookup in `auditPropertyRegistration`; its
   // rationale is recorded there.
 
-  // NOTE: the "resolver is captured before any await" property (so a live
-  // workspace switch mid-audit can't void the classification) is NOT pinned
-  // by a test. Intercepting it needs a spy on `repo.db`, which is the shared
-  // test database, and every shape of that spy recursed. A flaky test in the
-  // gate is worse than none; the invariant is a statement-order comment at
-  // the capture site in `auditPropertyRegistration`.
+  // NOTE: what remains unpinned is a workspace switch landing mid-audit for
+  // real. `waits for the definition projector…` below pins the STATEMENT ORDER
+  // that closes the window (every await resolves before the capture), which is
+  // what an edit would actually break; driving a live switch between two
+  // statements needs a seam this harness does not have.
 
   it('excludes a non-object properties_json instead of inventing a phantom empty key', async () => {
     // A corrupt scalar cell: `json_each('5')` yields one row whose key is
@@ -234,6 +258,52 @@ describe('auditPropertyRegistration', () => {
       .rejects.toThrow(/registry/i)
   })
 
+  it('waits for the definition projector, and captures after every await', async () => {
+    // Two properties, one sequence, because they fail the same way — a resolver
+    // frozen while the registry is still rebuilding calls a key whose
+    // definition has already landed "broken".
+    //
+    // The wait must RESOLVE, not merely be called: dropping the `await` keyword
+    // alone reintroduces the bug, and nothing else in the gate catches it
+    // (there is no no-floating-promises rule). Hence the deferred promise — a
+    // spy that records at call time cannot tell the two apart.
+    //
+    // And the capture must follow EVERY await. `syncViewGap` is sampled above
+    // it for that reason; moved back below, the capture would again sit on the
+    // near side of a suspension point.
+    await create({id: 'b1', properties: {[declaredProp.name]: 'v'}})
+    const order: string[] = []
+    let releaseProjector!: () => void
+    vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockImplementation(() => {
+      order.push('waited')
+      return new Promise<void>(resolve => {
+        releaseProjector = () => { order.push('released'); resolve() }
+      })
+    })
+    const syncViewGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(() => {
+      order.push('gap')
+      return syncViewGap()
+    })
+    const resolverFor = repo.propertySchemaResolverFor.bind(repo)
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockImplementation(ws => {
+      order.push('captured')
+      return resolverFor(ws)
+    })
+    const getAll = sharedDb.db.getAll.bind(sharedDb.db)
+    vi.spyOn(sharedDb.db, 'getAll').mockImplementation(async (sql: string, params?: unknown[]) => {
+      order.push('scanned')
+      return getAll(sql, params as never[])
+    })
+
+    const running = auditPropertyRegistration(repo, WS)
+    await vi.waitFor(() => { expect(order).toContain('waited') })
+    releaseProjector()
+    await running
+
+    expect(order.slice(0, 5)).toEqual(['waited', 'released', 'gap', 'captured', 'scanned'])
+  })
+
   it('totals cover every key, not just the unregistered ones', async () => {
     await create({id: 'b1', properties: {[declaredProp.name]: 'v', 'demo:undeclared': 'x'}})
 
@@ -318,6 +388,58 @@ describe('auditPropertyRegistration', () => {
   })
 })
 
+describe('audit-properties scan coverage', () => {
+  // The report READS; the flip is what acts on it. So an incomplete view is
+  // stated, not refused — and the statement has to be there, because an empty
+  // `unregistered` list from a half-materialized graph is indistinguishable
+  // from a clean one.
+
+  it('says so when downloaded rows are still draining into blocks', async () => {
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+    await sharedDb.db.execute(
+      `INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'upsert')`, ['not-yet-applied'])
+
+    const audit = await auditPropertyRegistration(repo, WS)
+
+    expect(audit.syncGap).toMatch(/draining/i)
+  })
+
+  it('says so when this device is behind the server', async () => {
+    installRepo(() => () => {})
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+
+    const audit = await auditPropertyRegistration(repo, WS)
+
+    expect(audit.syncGap).toMatch(/not caught up/i)
+  })
+
+  it('reports no gap when nothing is outstanding', async () => {
+    // The negative case is what makes the field readable: always-non-null
+    // would be noise, and always-null would be a lie.
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+
+    expect((await auditPropertyRegistration(repo, WS)).syncGap).toBeNull()
+  })
+
+  it('reports the last completed sync as the basis of the scan', async () => {
+    // `lastSyncedAt` is read through a structural cast, so nothing in the type
+    // system connects this field to PowerSync. A rename there degrades to
+    // `undefined` -> null, which reads to the operator as "never synced" on a
+    // graph that is in fact current.
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+    Object.assign(sharedDb.db, {currentStatus: {lastSyncedAt: new Date('2026-01-02T03:04:05Z')}})
+
+    expect((await auditPropertyRegistration(repo, WS)).syncedThrough)
+      .toBe('2026-01-02T03:04:05.000Z')
+  })
+
+  it('reports a null basis when this device has never synced', async () => {
+    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
+
+    expect((await auditPropertyRegistration(repo, WS)).syncedThrough).toBeNull()
+  })
+})
+
 describe('audit-properties command', () => {
   it('runs through executeCommand and defaults to the active workspace', async () => {
     await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
@@ -331,23 +453,60 @@ describe('audit-properties command', () => {
     expect(result.unregistered.map(entry => entry.property)).toContain('demo:undeclared')
   })
 
-  it('rejects an EMPTY --workspace instead of silently auditing the active one', async () => {
-    // `--workspace "$UNSET"` expands to '' — the assertion exists to pin the
-    // graph, so falling back would hand back a remediation list for a
-    // workspace the caller never named.
-    await create({id: 'b1', properties: {'demo:undeclared': 'x'}})
-
-    await expect(executeCommand(
-      {commandId: 'a-3', type: 'audit-properties', workspaceId: '   '},
-      context,
-    )).rejects.toThrow(/empty value/i)
-  })
-
   it('refuses an explicit workspace whose registry is not loaded', async () => {
     await expect(executeCommand(
       {commandId: 'a-2', type: 'audit-properties', workspaceId: 'ws-unloaded'},
       context,
     )).rejects.toThrow(/registry/i)
+  })
+})
+
+describe('shared workspace resolution', () => {
+  // Three resolvers reach `assertedWorkspaceOverride`: `commandWorkspaceId`
+  // (page/search/daily-note), `resolveBlockWorkspaceId` (the backlinks verbs),
+  // and audit-properties' own call. The remaining rows pin per-verb dispatch —
+  // that each verb reaches a resolver at all.
+  //
+  // WHITESPACE, not '', because it is the value that discriminates: '  ' is
+  // truthy, so it is what fails if the check is dropped from the normalizer OR
+  // sequenced below a resolver's `override && return override`. '' survives
+  // both of those mutations on its own; it gets one row below, for the
+  // CLI-emits-this link rather than for guard coverage.
+  it.each([
+    ['audit-properties', {type: 'audit-properties'}],
+    ['page', {type: 'page', name: 'x'}],
+    ['search', {type: 'search', query: 'x'}],
+    ['daily-note', {type: 'daily-note', date: '2026-08-18'}],
+    ['backlinks', {type: 'backlinks', blockId: 'b1'}],
+    ['grouped-backlinks', {type: 'grouped-backlinks', blockId: 'b1'}],
+  ] as const)(
+    '%s rejects an EMPTY workspace assertion instead of answering about the active one',
+    async (_label, base) => {
+      await expect(executeCommand(
+        {commandId: 'w-1', ...base, workspaceId: '  '} as never,
+        context,
+      )).rejects.toThrow(/empty value/i)
+    },
+  )
+
+  // The exact value `workspaceAssertion` emits for `--workspace ""`.
+  it("rejects the '' the CLI normalizes cac's 0 artifact into", async () => {
+    await expect(executeCommand(
+      {commandId: 'w-3', type: 'page', name: 'x', workspaceId: ''},
+      context,
+    )).rejects.toThrow(/empty value/i)
+  })
+
+  // A padded expansion used to mean two different things: audit-properties
+  // trimmed, the read verbs passed ' ws-1 ' through to the lookup and
+  // answered "no such page" for a workspace that exists.
+  it('trims a padded assertion rather than resolving it as a literal id', async () => {
+    const result = await executeCommand(
+      {commandId: 'w-2', type: 'page', name: 'x', workspaceId: `  ${WS}  `},
+      context,
+    ) as {workspaceId: string}
+
+    expect(result.workspaceId).toBe(WS)
   })
 })
 
@@ -382,6 +541,20 @@ describe('describeUnregisteredProperty', () => {
     })
     expect(blocksFlip).toBe(true)
     expect(fix).toMatch(/flip blocker/i)
+  })
+
+  it('calls a reference-shaped key a hard flip blocker too, agreeing with the migration', () => {
+    // Same predicate the migration command refuses on
+    // (`keyCannotBeDefined`). A report that called this fixable while the
+    // gesture declined to proceed past it would send an operator looking for
+    // a problem the report says is not there.
+    const {fix, blocksFlip} = describeUnregisteredProperty({
+      property: '((11111111-1111-4111-8111-111111111111))',
+      reason: 'definition-unavailable', definitionBlocks: 0,
+    })
+    expect(blocksFlip).toBe(true)
+    expect(fix).toMatch(/flip blocker/i)
+    expect(fix).toMatch(/block reference/i)
   })
 
   // `ambiguous` and `shadowed` cannot come back from a NAME lookup, which is

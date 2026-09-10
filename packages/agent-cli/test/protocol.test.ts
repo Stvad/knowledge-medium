@@ -55,6 +55,17 @@ describe('known command unions (strict per-verb validation)', () => {
     expect(knownAgentCommandSchema.safeParse({type: 'sql', sql: 'SELECT 1'}).success).toBe(true)
   })
 
+  // The CLI refuses a non-positive `--limit`, but the bridge is a second
+  // entry point: 0 survives `typeof command.limit === 'number'` downstream,
+  // bypasses the per-command default and runs LIMIT 0 — a confident empty
+  // answer rather than an error.
+  it.each(['page', 'search'] as const)('rejects a non-positive limit on %s', type => {
+    const base = type === 'page' ? {type, name: 'x'} : {type, query: 'x'}
+    expect(knownAgentCommandSchema.safeParse({...base, limit: 0}).success).toBe(false)
+    expect(knownAgentCommandSchema.safeParse({...base, limit: 1.5}).success).toBe(false)
+    expect(knownAgentCommandSchema.safeParse({...base, limit: 20}).success).toBe(true)
+  })
+
   it('rejects duplicate watcher names in one watch-events registration', () => {
     const watcher = (name: string) => ({kind: 'sql', name, sql: 'SELECT id FROM blocks'})
     expect(knownAgentCommandSchema.safeParse({

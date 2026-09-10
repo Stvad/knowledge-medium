@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * Fuzz suite pinning commit 5377a74c1 (`materializePropertyChildrenForExistingRow`,
- * `src/data/internals/propertyChildrenProcessor.ts:363-394`): a raw
+ * Fuzz suite pinning `materializePropertyChildrenForExistingRow`
+ * (`src/data/internals/propertyChildrenProcessor.ts:363-394`): a raw
  * `tx.update({properties})` whose value does NOT decode under its schema's
  * codec must abort the WHOLE transaction, never silently skip the bad key
  * (the old behavior left the cell holding the junk while a pre-existing

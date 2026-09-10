@@ -243,6 +243,15 @@ describe('VideoNotesLayout', () => {
     expect(probe.getAttribute('data-scope')).toBe(PANE_SCOPE) // scope still flows
   })
 
+  // Measured solo (n=7): both waits below settle in ~11-178ms, but that tail is
+  // ~15x the median, leaving under 6x over vi.waitFor's 1000ms default — inside
+  // the stretch this gate sees under one-worker-per-core load. The it() budget
+  // must clear the SUM of the budgets on this path (findByRole's 3s + 10s +
+  // 10s), not merely each one: a slow first wait would otherwise leave the
+  // second unable to reach its own budget, and the stall reports an opaque test
+  // timeout instead of the assertion that never settled.
+  const PANEL_WRITE_WAIT = 10_000
+
   it('zero children: renders the empty-state affordance; render alone creates nothing', async () => {
     renderLayout()
 
@@ -253,7 +262,7 @@ describe('VideoNotesLayout', () => {
     fireEvent.click(affordance)
     await vi.waitFor(async () => {
       expect(await videoBlockChildCount()).toBe(1)
-    })
+    }, {timeout: PANEL_WRITE_WAIT})
     // The click fire-and-forgets the full focus chain onto the panel:
     // focusBlock (focusedBlockLocationProp) → editorSelection →
     // requestEditorFocus (editorFocusRequestProp). We must fence on the LAST
@@ -270,8 +279,8 @@ describe('VideoNotesLayout', () => {
       const panel = repo.block(PANEL)
       expect(panel.peekProperty(focusedBlockLocationProp)?.blockId).toBe(childIds[0])
       expect(panel.peekProperty(editorFocusRequestProp)).toBeGreaterThanOrEqual(1)
-    })
-  })
+    }, {timeout: PANEL_WRITE_WAIT})
+  }, 30_000)
 
   it('fills the pane absolutely in a full panel, but sizes itself in a stacked panel', async () => {
     await setup({videoChildren: ['note-1']})

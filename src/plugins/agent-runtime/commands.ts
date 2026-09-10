@@ -1,6 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom'
-import type { Repo } from '@/data/repo'
+import type { Repo, WorkspaceRematerialization } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
@@ -65,6 +65,11 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {
+  PROPERTY_CELL_BACKFILL_ID,
+  takeLastPropertyCellBackfillRun,
+} from '@/data/internals/propertyCellBackfill'
+import {readIsChildBackedWorkspace} from '@/data/workspaceSchema'
 import type {
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
@@ -81,6 +86,8 @@ import type {
   MoveBlockInput,
   MoveBlockPosition,
   RestoreBlockInput,
+  RunBackfillResult,
+  RematerializeWorkspaceInput,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -414,19 +421,128 @@ const auditRuntimeProperties = async (
   repo: Repo,
   input: {workspaceId?: string},
 ): Promise<PropertyRegistrationAudit> => {
-  // An EMPTY assertion is not the same as no assertion. `--workspace` exists
-  // to pin which graph is being audited, so a shell expanding an unset
-  // variable (`--workspace "$WS"`) must fail loudly rather than quietly
-  // auditing the active workspace and handing back a remediation list for
-  // the wrong graph.
+  return auditPropertyRegistration(
+    repo,
+    assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo),
+  )
+}
+
+/** Run one `operator`-triggered workspace backfill — the properties
+ *  cell → children migration and anything later on that seam.
+ *
+ *  This is the whole operator surface for a pass that is deliberately NOT
+ *  scheduled: exactly-once across a fleet is not reachable over a
+ *  last-write-wins sync layer, so it is reached by a person running it in one
+ *  place while the others receive the rows. The outcome is returned rather
+ *  than logged so the caller can tell whether it ran, was already done, or
+ *  refused — and whether it dropped the workspace's undo history. */
+const runRuntimeBackfill = async (
+  repo: Repo,
+  input: {backfillId: string; workspaceId?: string},
+): Promise<RunBackfillResult> => {
+  // Same rule as `audit-properties`: `--workspace "$UNSET"` must fail rather
+  // than fall back to the active workspace. It matters more here — this one
+  // WRITES, and a migration run against a graph the operator did not name is
+  // not something a retry undoes.
   if (input.workspaceId !== undefined && input.workspaceId.trim() === '') {
     throw new Error(
-      'audit-properties: --workspace was given an empty value. It asserts which ' +
-      'workspace is audited, so an empty expansion must fail rather than fall back ' +
-      'to the active one. Pass a real workspace id, or omit the option entirely.',
+      'run-backfill: --workspace was given an empty value. It asserts which workspace ' +
+      'the pass writes to, so an empty expansion must fail rather than fall back to ' +
+      'the active one. Pass a real workspace id, or omit the option entirely.',
     )
   }
-  return auditPropertyRegistration(repo, input.workspaceId?.trim() || resolveWorkspaceId(repo))
+  const workspaceId = input.workspaceId?.trim() || resolveWorkspaceId(repo)
+  // Refused HERE, before the runner. A backfill for a non-active workspace
+  // aborts on its own per-transaction check — but only AFTER `tryClaim` has
+  // already written: it ensures a Migrations page and creates a claim row, so
+  // a mistyped assertion leaves two blocks in a graph the operator never meant
+  // to touch and reports nothing more alarming than "already done".
+  if (workspaceId !== repo.activeWorkspaceId) {
+    throw new Error(
+      `run-backfill: --workspace ${workspaceId} is not the active workspace ` +
+      `(${repo.activeWorkspaceId ?? 'none'}). The pass writes to the workspace this ` +
+      'client has open, so the option is an assertion, not a target — open that ' +
+      'workspace and re-run.',
+    )
+  }
+  // The properties migration is flip-THEN-backfill, and only the palette entry
+  // does both. Run through this generic verb on an un-flipped workspace it would
+  // do the old order — build machinery nothing recognizes or maintains, then
+  // report success — which is precisely the window flip-first exists to delete.
+  // Refused rather than routed: `run-backfill <id>` is generic over backfill ids
+  // and has no business owning one pass's runbook.
+  if (input.backfillId === PROPERTY_CELL_BACKFILL_ID
+      && !await readIsChildBackedWorkspace(repo.db, workspaceId)) {
+    throw new Error(
+      `run-backfill: ${PROPERTY_CELL_BACKFILL_ID} needs the workspace switched to ` +
+      'property blocks first, and this verb only runs the backfill half. Use the ' +
+      '"Migrate properties to child blocks" command in the palette, which does both ' +
+      'in the right order; this verb then fills in any stragglers.',
+    )
+  }
+  const result = await repo.runWorkspaceBackfillNow(workspaceId, input.backfillId)
+  // Only an outcome where the pass was actually ENTERED can wear its run
+  // detail — 'ran', or 'failed' (a throw partway still ran, and its partial
+  // counts are the most useful thing to hand the operator). Every other
+  // outcome never called the pass, so a `lastRun` left over from an earlier
+  // invocation must not decorate this response. Allow-listing the outcomes
+  // that ran (rather than deny-listing the ones that didn't) fails closed if
+  // the outcome union gains or renames a member.
+  const passWasEntered = result.outcome === 'ran' || result.outcome === 'failed'
+  return {
+    backfillId: input.backfillId,
+    workspaceId,
+    ...result,
+    // The seam hands back nothing (an unattended pass has no one to tell), so
+    // the detail an operator acts on is collected from the pass itself — only
+    // when THIS request is the one that ran it, or a `not-found` for some other
+    // id would come back wearing the last migration's counts.
+    ...(passWasEntered && input.backfillId === PROPERTY_CELL_BACKFILL_ID
+      ? takeLastPropertyCellBackfillRun(workspaceId) ?? {}
+      : {}),
+  }
+}
+
+/** Re-run the drain over a workspace's downloaded-but-unapplied rows.
+ *
+ *  The operator answer to `workspaceViewGap`'s durable arm — rows this device
+ *  downloaded, could not apply, and consumed the queue entry for, which nothing
+ *  re-delivers on its own. A DERIVATION pass over local state (see
+ *  `Repo.rematerializeWorkspace`): no uploads, no claim, no undo-stack clearing,
+ *  safe to re-run. */
+const rematerializeRuntimeWorkspace = async (
+  repo: Repo,
+  input: RematerializeWorkspaceInput,
+): Promise<WorkspaceRematerialization> => {
+  const scope = input.scope ?? 'unapplied'
+  if (scope !== 'all' && scope !== 'unapplied') {
+    throw new Error(`rematerialize-workspace: --scope must be "unapplied" or "all", got "${scope}"`)
+  }
+  // Same rule as `run-backfill`: `--workspace "$UNSET"` must fail rather than
+  // fall back to the active workspace, and for the same reason — the option is
+  // an assertion about which graph is being touched.
+  const workspaceId = assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo)
+  // The pass rebuilds THIS client's view of the workspace it has open. Its key
+  // state and its block cache are the active workspace's, so pointing it
+  // elsewhere would rewrite rows for a workspace nobody opened — the one thing
+  // workspace-scoped maintenance is not allowed to do.
+  //
+  // Checked ONCE, unlike `assertBackfillMayWrite`, which re-takes the same
+  // question inside every writing transaction of a pass of the same duration.
+  // Accepted, not overlooked: a user who navigates away mid-pass leaves it
+  // writing `blocks` for a workspace they no longer have open, but
+  // `getMaterializability` is keyed on each ROW's workspace_id rather than the
+  // active one, so the write is still correct — the cost is wasted work and
+  // cache growth, and the WK-paste path has had the same shape all along.
+  if (workspaceId !== repo.activeWorkspaceId) {
+    throw new Error(
+      `rematerialize-workspace: --workspace ${workspaceId} is not the active workspace ` +
+      `(${repo.activeWorkspaceId ?? 'none'}). The pass rebuilds the view of the workspace ` +
+      'this client has open, so the option is an assertion, not a target — open that ' +
+      'workspace and re-run.',
+    )
+  }
+  return repo.rematerializeWorkspace(workspaceId, {scope})
 }
 
 const mapPosition = (
@@ -453,6 +569,76 @@ const withGrainWarnings = async (
   return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
+/** Refuse a bridge mutation aimed at a workspace this client does not have open.
+ *
+ *  Field-row recognition resolves the definition through
+ *  `Repo.propertySchemaResolverFor`, which serves the active workspace and the
+ *  retained previous one and fails CLOSED for any other — so a mutation run
+ *  against a background workspace runs with recognition off, and a delete
+ *  there rewrites `::((fieldId))` field rows to prose instead of leaving the
+ *  dangling ref intact (#790).
+ *
+ *  Not in the kernel: `repo.tx` is workspace-agnostic on purpose — sync
+ *  arrival writes background rows through a path that needs no recognition,
+ *  and tests seed unopened workspaces directly — so a throw there would refuse
+ *  both. The bridge is where a block ID can name a row outside the workspace
+ *  its client is paired to. `eval` and raw `sql execute` reach `repo` directly
+ *  and stay unguardable. */
+const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): void => {
+  if (workspaceId === repo.activeWorkspaceId) return
+  throw new Error(
+    `${verb}: target is in workspace ${workspaceId}, which is not the active one `
+    + `(${repo.activeWorkspaceId ?? 'none'}). Mutating verbs write through the active `
+    + "workspace's property and alias registries, which resolve nothing for another "
+    + 'workspace — open that workspace and re-run.',
+  )
+}
+
+/** `assertActiveWorkspace` for every existing block a verb is about to touch.
+ *
+ *  Contract for callers:
+ *    - MISSING blocks PASS, so each verb still reports its own not-found error.
+ *    - The read is raw, not `repo.load`, so it sees tombstones —
+ *      `restore-block`'s target always is one.
+ *    - Pass the whole id set; it is deduplicated into one query.
+ *    - ISSUE THE WRITE on the synchronous path immediately after this
+ *      resolves. The lookup is async and the active workspace can move during
+ *      it, so the pin re-check at the end is the last word — an await between
+ *      it and the write reopens the window it closes.
+ *
+ *  Two residuals are accepted, both needing the check inside the writing
+ *  transaction: an id absent here that sync delivers before the mutator's
+ *  transaction opens, and a switch during a `run-action` handler. See the
+ *  kernel-side follow-up issue. */
+const assertActiveWorkspaceBlocks = async (
+  repo: Repo,
+  verb: string,
+  blockIds: readonly (string | undefined)[],
+): Promise<void> => {
+  const unique = [...new Set(blockIds.filter((id): id is string => id !== undefined && id !== ''))]
+  if (unique.length === 0) return
+  const pinned = repo.activeWorkspaceId
+  const rows = await repo.db.getAll<{workspace_id: string}>(
+    'SELECT workspace_id FROM blocks WHERE id IN (SELECT value FROM json_each(?))',
+    [JSON.stringify(unique)],
+  )
+  for (const row of rows) assertActiveWorkspace(repo, verb, row.workspace_id)
+  if (repo.activeWorkspaceId !== pinned) {
+    throw new Error(
+      `${verb}: the active workspace changed from ${pinned ?? 'none'} to `
+      + `${repo.activeWorkspaceId ?? 'none'} while checking this command's targets. `
+      + 'Refusing rather than writing against a registry they were not checked '
+      + 'for — re-run against the workspace you want.',
+    )
+  }
+}
+
+const assertActiveWorkspaceBlock = (
+  repo: Repo,
+  verb: string,
+  blockId: string,
+): Promise<void> => assertActiveWorkspaceBlocks(repo, verb, [blockId])
+
 const createRuntimeBlock = async (
   repo: Repo,
   input: CreateBlockInput = {},
@@ -462,8 +648,8 @@ const createRuntimeBlock = async (
   const explicitId = input.data?.id as string | undefined
   // Caller-supplied ids must be canonical UUIDs (issue #456): a non-UUID id
   // from an agent/CLI caller can render ambiguously in the outline (control
-  // characters, bidi reordering, homoglyphs — see PR #447's history) in a
-  // way no render-time filter alone can fully rule out.
+  // characters, bidi reordering, homoglyphs) in a way no render-time filter
+  // alone can fully rule out.
   //
   // NOT the enforcement point — `tx.create` is (see @/data/blockId), and it
   // would reject this id a few frames later regardless. This check is here
@@ -474,6 +660,7 @@ const createRuntimeBlock = async (
   const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId) {
+    await assertActiveWorkspaceBlock(repo, 'create-block', input.parentId)
     const id = await repo.mutate.createChild({
       parentId: input.parentId,
       content,
@@ -489,6 +676,7 @@ const createRuntimeBlock = async (
   if (!workspaceId) {
     throw new Error('createBlock with no parentId requires an active workspace')
   }
+  assertActiveWorkspace(repo, 'create-block', workspaceId)
 
   const id = explicitId ?? crypto.randomUUID()
   await repo.tx(async tx => {
@@ -516,7 +704,7 @@ const SUBTREE_KEY_PROP = 'agent:subtreeKey'
  *  parsed with the app's own paste parser (`parseMarkdownToBlocks`) so the
  *  split matches "paste as markdown" exactly; `shape:'block'` keeps it one
  *  block. Every block is tagged `SUBTREE_KEY_PROP=key` plus `properties`
- *  (the daemon passes `claude:reply`).
+ *  (the daemon passes `agent:reply`).
  *
  *  Idempotent by `key`: the tagged blocks are made to carry the parsed
  *  tree's content/parentage by a positional (pre-order) reconcile — update
@@ -540,6 +728,10 @@ const reconcileMarkdownSubtree = async (
   input: ReconcileMarkdownSubtreeInput,
 ): Promise<ReconcileMarkdownSubtreeResult> => {
   const {parentId, key, properties, shape, final} = input
+  // Before `parseMarkdownToBlocks`, not merely before the write: a doomed
+  // request should not pay the parser first. The in-tx assertion below stays —
+  // this one is the cheap refusal, that one is the atomic decision.
+  await assertActiveWorkspaceBlock(repo, 'reconcile-markdown-subtree', parentId)
   // shape 'block' → the whole markdown is ONE root block (newlines kept);
   // 'outline' (default) → split along the markdown outline.
   const parsed: ParsedBlock[] = shape === 'block'
@@ -555,6 +747,7 @@ const reconcileMarkdownSubtree = async (
     const parent = await tx.get(parentId)
     if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
     const {workspaceId} = parent
+    assertActiveWorkspace(repo, 'reconcile-markdown-subtree', workspaceId)
 
     // This subtree's existing blocks, in pre-order (the target we reconcile
     // onto). Walk children depth-first following ONLY tagged blocks, so user
@@ -689,9 +882,9 @@ const reconcileMarkdownSubtree = async (
         // Subtree-delete (not single-row): after foreign content is rescued
         // above, `doomed`'s only remaining descendants are its own property
         // field/value machinery, which must be tombstoned with it rather
-        // than stranded live under the tombstone (§9). In an un-flipped
-        // workspace there is no machinery, so this equals the single-row
-        // delete it replaces.
+        // than stranded live under the tombstone (§9). True pre-flip too:
+        // the backfill mints that machinery before the workspace reads it,
+        // and `hidePropertyChildren` recognizes it on the bit.
         // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge reconciling a markdown subtree, not a user gesture
         await deleteSubtreeInTx(tx, doomed.id)
       }
@@ -717,6 +910,7 @@ const updateRuntimeBlock = async (
   await repo.tx(async tx => {
     const before = await tx.get(input.id)
     if (!before || before.deleted) return
+    assertActiveWorkspace(repo, 'update-block', before.workspaceId)
     found = true
     const nextProperties = input.properties === undefined
       ? undefined
@@ -746,6 +940,7 @@ const moveRuntimeBlock = async (
   repo: Repo,
   input: MoveBlockInput,
 ): Promise<BlockData | null> => {
+  await assertActiveWorkspaceBlock(repo, 'move-block', input.id)
   await repo.mutate.move(input)
   return repo.load(input.id)
 }
@@ -754,6 +949,7 @@ const deleteRuntimeBlock = async (
   repo: Repo,
   input: DeleteBlockInput,
 ): Promise<DeleteBlockResult> => {
+  await assertActiveWorkspaceBlock(repo, 'delete-block', input.id)
   // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge is not a UI gesture; UI-layer guards deliberately don't apply
   await repo.mutate.delete(input)
   return {id: input.id, deleted: true}
@@ -763,6 +959,7 @@ const restoreRuntimeBlock = async (
   repo: Repo,
   input: RestoreBlockInput,
 ): Promise<BlockData | null> => {
+  await assertActiveWorkspaceBlock(repo, 'restore-block', input.id)
   await repo.mutate.restore(input)
   return repo.load(input.id)
 }
@@ -1072,6 +1269,15 @@ const runtimeBlock = (
   id: unknown,
 ) => isString(id) && id ? repo.block(id) : null
 
+/** The id a dependency's fallback chain actually selects. `runtimeBlock`'s
+ *  `??` chain expressed as the ID rather than the facade, so the workspace
+ *  guard can validate exactly what the handler is handed instead of
+ *  re-deciding precedence over the raw fields — an ignored back-compat id
+ *  belonging to another workspace must not refuse a request whose effective
+ *  dependencies are all local. */
+const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
+  candidates.find((id): id is string => isString(id) && id !== '')
+
 const runRuntimeAction = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
@@ -1085,12 +1291,11 @@ const runRuntimeAction = async (
   }
 
   const dependencies = command.dependencies ?? {}
-  const realUiStateBlock = runtimeBlock(context.repo, dependencies.uiStateBlockId)
-    ?? runtimeBlock(context.repo, command.uiStateBlockId)
+  const uiStateBlockId = chosenBlockId(dependencies.uiStateBlockId, command.uiStateBlockId)
+  const blockId = chosenBlockId(dependencies.blockId, command.blockId)
+  const realUiStateBlock = runtimeBlock(context.repo, uiStateBlockId)
   const uiStateBlock = realUiStateBlock ?? fakeUiStateBlock(context.repo)
-  const block = runtimeBlock(context.repo, dependencies.blockId)
-    ?? runtimeBlock(context.repo, command.blockId)
-    ?? uiStateBlock
+  const block = runtimeBlock(context.repo, blockId) ?? uiStateBlock
 
   if (action.context === 'edit-mode-cm' || action.context === 'property-editing') {
     throw new Error(
@@ -1102,7 +1307,8 @@ const runRuntimeAction = async (
     ? dependencies.selectedBlockIds.filter(isString)
     : []
   const selectedBlocks = selectedBlockIds.map(id => context.repo.block(id))
-  const anchorBlock = runtimeBlock(context.repo, dependencies.anchorBlockId)
+  const anchorBlockId = chosenBlockId(dependencies.anchorBlockId)
+  const anchorBlock = runtimeBlock(context.repo, anchorBlockId)
 
   // Imperative runner (no React context), so scopeRootId isn't injected
   // by useShortcutSurfaceActivations. Forward a caller-supplied one, else
@@ -1111,6 +1317,17 @@ const runRuntimeAction = async (
   const scopeRootId = isString(dependencies.scopeRootId)
     ? dependencies.scopeRootId
     : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
+
+  // `run-action` is the widest route to a kernel mutator: it turns
+  // caller-supplied ids into Block facades and hands them to a handler that
+  // may call `Block.delete()` (the `delete_block` action does). Guarding only
+  // the typed verbs would leave the same background-workspace corruption
+  // reachable through here — so every id that BECOMES a dependency is checked
+  // before dispatch, which is also the last point we can refuse: once
+  // `invokeAction` runs, the writes are inside a handler we don't control.
+  await assertActiveWorkspaceBlocks(context.repo, `run-action ${actionId}`, [
+    blockId, uiStateBlockId, anchorBlockId, scopeRootId, ...selectedBlockIds,
+  ])
 
   // Route imperative agent dispatch through the same `invokeAction` choke the
   // keyboard / pointer / runActionById paths use, so the action-dispatch
@@ -1244,7 +1461,8 @@ const resolveBlockWorkspaceId = async (
   blockId: string,
   override: unknown,
 ): Promise<string> => {
-  if (isString(override) && override) return override
+  const asserted = assertedWorkspaceOverride(override)
+  if (asserted) return asserted
   const data = await repo.load(blockId)
   if (data?.workspaceId) return data.workspaceId
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
@@ -1382,8 +1600,26 @@ const hydrateData = (data: BlockData): HydratedBlockRef => ({
   deepLink: deepLinkFor(data.workspaceId, data.id),
 })
 
+/** The one place a `workspaceId` override becomes a usable id: trims, and
+ *  refuses a blank one. Returns rather than asserting beside the value, so no
+ *  consumer re-decides whether to trim and none has to be sequenced above its
+ *  own `override && return override` — which whitespace passes. */
+const assertedWorkspaceOverride = (override: unknown): string | undefined => {
+  if (!isString(override)) return undefined
+  const asserted = override.trim()
+  if (asserted === '') {
+    throw new Error(
+      'workspaceId (--workspace) was given an empty value. It asserts which workspace to '
+      + 'use, so an empty expansion must fail rather than fall back to the active one. '
+      + 'Pass a real workspace id, or omit it entirely.',
+    )
+  }
+  return asserted
+}
+
 const commandWorkspaceId = (repo: Repo, override: unknown): string => {
-  if (isString(override) && override) return override
+  const asserted = assertedWorkspaceOverride(override)
+  if (asserted) return asserted
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')
 }
@@ -1562,7 +1798,7 @@ export const createAgentRuntimeContext = ({
     // agent-dispatch's prompt render) already surface each row's property BAG,
     // so emitting field/value rows too would show the same properties a second
     // time as `((fieldId))` blocks pretending to be user content. Agents that
-    // genuinely want raw storage have `sql` (PR #386 review).
+    // genuinely want raw storage have `sql`.
     getSubtree: async rootId =>
       await repo.query.subtree({id: rootId, hidePropertyChildren: true}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
@@ -1576,6 +1812,8 @@ export const createAgentRuntimeContext = ({
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
     auditExtension: input => auditRuntimeExtension(repo, input),
     auditProperties: input => auditRuntimeProperties(repo, input),
+    runBackfill: input => runRuntimeBackfill(repo, input),
+    rematerializeWorkspace: input => rematerializeRuntimeWorkspace(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1766,6 +2004,24 @@ export const executeCommand = async (
         workspaceId: command.workspaceId === undefined
           ? undefined
           : requireString(command.workspaceId, 'workspaceId'),
+      })
+
+    case 'run-backfill':
+      return context.runBackfill({
+        backfillId: requireString(command.backfillId, 'backfillId'),
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+      })
+
+    case 'rematerialize-workspace':
+      return context.rematerializeWorkspace({
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+        scope: command.scope === undefined
+          ? undefined
+          : requireString(command.scope, 'scope'),
       })
 
     case 'run-action':

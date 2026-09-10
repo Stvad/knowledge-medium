@@ -1,6 +1,5 @@
 /**
- * Arrival-processor seam (PR #288 slice A follow-up — a no-op extraction of
- * what used to be a hand-inlined block in `materialize.ts`).
+ * Arrival-processor seam.
  *
  * `materializeStagingRows`'s Phase-2 write tx runs a small, fixed set of
  * "arrival processors" AFTER every candidate in the window has been
@@ -169,15 +168,8 @@ export const runArrivalProcessors = async (
       }
     }
     if (devAssertionsEnabled()) {
-      // L2 dev/test-only enforcement of the module's CRITICAL INVARIANT (off
-      // in prod). A processor that stamps `tx_context.source` — directly, or
-      // by reaching for a write path that does — turns every remaining write
-      // in this window into an upload, echoing sync-applied rows back to the
-      // server as fresh local edits. That failure is silent at runtime and
-      // would surface only as mysterious upload traffic and clobbered peers,
-      // so catch it at the point of violation, naming the processor. This
-      // runs OUTSIDE the per-row try/catch, so an invariant violation is
-      // fatal (rolls back the tx) even if it surfaced via a quarantined row.
+      // Outside the per-row try/catch, so a violation is fatal even if it
+      // surfaced via a quarantined row.
       const ctxRow = await tx.getOptional<{source: string | null}>(
         'SELECT source FROM tx_context WHERE id = 1',
       )
@@ -195,32 +187,13 @@ export const runArrivalProcessors = async (
 }
 
 /**
- * `core.deriveReferenceTarget`'s arrival-path mirror (PR #288 slice A):
- * sync-applied rows never pass through `repo.tx`, so the same-tx processor
- * of that name (`@/data/internals/referenceTargetProcessor.ts`) never fires
- * for them — this stamps the LOCAL `reference_target_id` column for
- * content-changed arrivals instead, inside the same Phase-2 write tx.
+ * Sync-applied rows never pass through `repo.tx`, so `core.deriveReferenceTarget`
+ * never fires for them; this stamps the local `reference_target_id` /
+ * `is_field_form` columns inside the Phase-2 write tx instead.
  *
- * Content-changed rows (including a fresh arrival,
- * `before === null`) re-derive via `deriveReferenceColumns` — the same
- * resolution seam the same-tx processor uses, so the two write paths agree
- * on BOTH local columns (`reference_target_id` + `is_field_form`)
- * — and deleted/tombstoned arrivals derive too: a content edit that syncs
- * while the row is tombstoned would otherwise leave a stale column that a
- * later content-unchanged restore never repairs. Content-unchanged rows
- * keep the current column value (the UPSERT never touches
- * `reference_target_id` — it's outside `UPDATE_ASSIGNMENTS` — so an
- * unchanged-content arrival's column already holds the right value); the
- * SQL `UPDATE` only runs when the derived value actually differs from that
- * current value. Either way the `snapshots` entry is corrected to carry the
- * final value — the staging row has no such column, so the Phase-2 apply
- * loop's `parseBlockRow(plaintext)` said `null` regardless of what the
- * table holds, and the invalidation fan-out reads `snapshots`, not the
- * table.
- *
- * Gated on `deps.referenceTargetLookups` being provided: `prepare` returns
- * `null` for a storage-only harness that doesn't wire it up, opting the
- * processor out of the window.
+ * Tombstoned arrivals derive too: a content edit that syncs while the row is
+ * tombstoned would otherwise leave a stale column that a later
+ * content-unchanged restore never repairs.
  */
 export const deriveReferenceTargetArrivalProcessor: ArrivalProcessor = {
   name: 'sync.deriveReferenceTargetAtArrival',

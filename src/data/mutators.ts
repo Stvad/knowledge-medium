@@ -1,18 +1,8 @@
 /**
- * Kernel tree mutators (spec §13.3). Each is registered as a `Mutator`
- * via `defineMutator` and dispatched from `repo.mutate.X(args)` or
- * `repo.run('name', args)`.
- *
- * All mutators run inside a `repo.tx` (the dispatch wrapper opens one
- * automatically with the mutator's scope) and use the public Tx
- * primitives plus the tree CTEs from stage 1.3. Order keys are
- * computed via `fractional-indexing-jittered` (§4.7 / §16.12).
- *
- * Subtree handling note: legacy `Block.delete()` cascaded a soft-delete
- * across descendants; the new `delete` mutator preserves that behavior
- * via DFS over `tx.childrenOf`. Walking by repeated child-queries keeps
- * us on the public Tx surface (no raw SQL needed inside mutators); the
- * round-trips are bounded by tree depth, which is small in practice.
+ * Kernel tree mutators. Each is registered as a `Mutator` via
+ * `defineMutator` and dispatched from `repo.mutate.X(args)` or
+ * `repo.run('name', args)`, running inside a `repo.tx` that the
+ * dispatch wrapper opens automatically with the mutator's scope.
  */
 
 import { z } from 'zod'
@@ -215,7 +205,7 @@ export const setProperty = defineMutator<
 // ──── delete (subtree-aware soft-delete) ────
 
 /** Subtree-aware soft-delete via the shared `deleteSubtreeInTx` walk
- *  (property field/value rows included — PR #288 §9).
+ *  (property field/value rows included — docs/properties-as-blocks-migration.html §9).
  *
  *  Each freshly soft-deleted block emits `CORE_BLOCK_DELETED_EVENT` so
  *  same-tx consumers can react atomically with the delete — the
@@ -511,7 +501,7 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
 /**
  * The three relative gestures resolve their anchors against the sibling list
  * **the caller sees** — the visible view, with recognized property machinery
- * filtered (PR #288 §9, "movement anchors on the list the caller sees"). A
+ * filtered (docs/properties-as-blocks-migration.html §9, "movement anchors on the list the caller sees"). A
  * hidden row can therefore neither be picked as a gesture's target nor absorb
  * a step aimed past it; where a moved block lands *physically* relative to a
  * hidden row carries no semantics.

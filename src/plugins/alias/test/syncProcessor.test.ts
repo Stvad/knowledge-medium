@@ -79,7 +79,7 @@ const readAliases = async (id: string): Promise<string[]> => {
   return (JSON.parse(row.properties_json).alias ?? []) as string[]
 }
 
-/** The LOCAL derived column (PR #288 slice A) — not exposed by `env.read`. */
+/** The LOCAL derived column — not exposed by `env.read`. */
 const readReferenceTargetId = async (id: string): Promise<string | null> => {
   const row = await sharedDb.db.get<{reference_target_id: string | null}>(
     'SELECT reference_target_id FROM blocks WHERE id = ?', [id],
@@ -150,7 +150,7 @@ describe('alias.sync — Case AR1 (alias rename, content matches removed alias)'
   // precondition is that content did NOT change in this tx, so derive never
   // fired for the row at all. Without an inline recompute the derived column
   // is left describing pre-rewrite content. Reachable when the aliases being
-  // swapped are themselves spelled as references (PR #386 review).
+  // swapped are themselves spelled as references.
   it('re-derives reference_target_id for the content it rewrites', async () => {
     await createTarget('page-foo', 'Foo page', ['Foo'])
     await createTarget('page-bar', 'Bar page', ['Bar'])

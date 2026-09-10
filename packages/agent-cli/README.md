@@ -62,6 +62,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |
 | `kmagent audit-extension <handle>` | Audit the data an extension wrote: block ids in non-ref properties, records buried in JSON cells, properties with no registered schema, declared types nothing carries. |
 | `kmagent audit-properties [--workspace <id>]` | Every property key in the workspace's data the registry does not resolve — the keys property migration skips silently. Per key: exact cell count, why it doesn't resolve, the fix — plus sampled blocks and the types they carry. Active workspace only; refuses rather than mis-reporting. |
+| `kmagent rematerialize-workspace [--scope unapplied\|all]` | Re-run the sync drain over rows this device downloaded but never applied — the remedy when a one-way pass refuses with "N synced row(s) … have not reached `blocks` on this device". Local-only and idempotent: uploads nothing, clears no undo history, safe to re-run. |
 | `kmagent run-action <id> [depsJson]` | Run a registered action by id. |
 | `kmagent eval [--raw] [--file <path>] [--data <path> \| --data-json <json>] <code>` | Run JS in the app (use `return …` to print a value). See [Eval execution scope](#eval-execution-scope) for the bindings available inside the code. |
 | `kmagent reload` | Hard-reload the app tab and wait for it to reconnect. |

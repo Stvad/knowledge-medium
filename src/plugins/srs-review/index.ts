@@ -3,7 +3,7 @@ import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { actionContextsFacet, actionsFacet, blockRenderersFacet } from '@/extensions/core.js'
-import { blockLayoutFacet } from '@/extensions/blockInteraction.js'
+import { blockContentDecoratorsFacet, blockLayoutFacet } from '@/extensions/blockInteraction.js'
 import {
   ActionConfig,
   ActionContextTypes,
@@ -16,6 +16,7 @@ import { SRS_SM25_TYPE, srsReschedulingDataExtension } from '@/plugins/srs-resch
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { blockTaggingDataExtension } from '@/plugins/block-tagging/dataExtension.js'
 import { srsReviewDataExtension } from './dataExtension.ts'
+import { srsDailyNoteReviewHintDecorator } from './DailyNoteReviewHint.tsx'
 import { SrsReviewDeckRenderer } from './ReviewDeckRenderer.tsx'
 import { srsReviewCardLayoutContribution } from './reviewCardLayout.tsx'
 import { getOrCreateReviewDeck } from './deck.ts'
@@ -83,6 +84,11 @@ export const srsReviewPlugin = ({repo}: {repo: Repo}): AppExtension =>
       {source: 'srs-review'},
     ),
     blockLayoutFacet.of(srsReviewCardLayoutContribution, {source: 'srs-review'}),
+    // "N cards to review →" under today's daily-note title, one line per
+    // selected deck. Default precedence keeps it OUTSIDE the date-nav
+    // arrows' row (-50), so the lines start at the block's edge — see the
+    // nesting note on `dateNavDecoratorContribution`.
+    blockContentDecoratorsFacet.of(srsDailyNoteReviewHintDecorator, {source: 'srs-review'}),
     actionsFacet.of(openReviewAction(repo), {source: 'srs-review'}),
     actionsFacet.of(srsArchiveAction, {source: 'srs-review'}),
     // In-session reveal / grade shortcuts: a dedicated modal context the
@@ -93,9 +99,12 @@ export const srsReviewPlugin = ({repo}: {repo: Repo}): AppExtension =>
 
 export {
   SRS_REVIEW_DECK_TYPE,
+  dailyNoteDecksProp,
+  normalizeDailyNoteDecks,
   reviewDeckStartedProp,
   reviewDeckTagProp,
   srsReviewDeckType,
+  srsReviewPrefsType,
 } from './schema.ts'
 export { buildDueCardsQuery, dueBoundary } from './dueQuery.ts'
-export { getOrCreateReviewDeck, reviewDeckBlockId } from './deck.ts'
+export { getOrCreateReviewDeck, reviewDeckBlockId, startReviewDeck } from './deck.ts'

@@ -96,6 +96,7 @@ export const renderMarkdownHtml = (
   const markdown = (
     <Markdown
       remarkPlugins={config.remarkPlugins}
+      rehypePlugins={config.rehypePlugins}
       components={components}
     >
       {content}
