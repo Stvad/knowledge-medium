@@ -29,10 +29,24 @@ all, so there is nothing to dangle.
 `src/data/internals/mergeTypeMembershipProcessor.ts` is a kernel same-tx
 processor on `core.blockMerged`: it finds members through the trigger-maintained
 `block_types` index (plus a sweep for tombstoned members, which that index cannot
-see) and retargets each token onto the survivor inside the merge transaction. It
-refuses when the source does not actually own the token, or when the survivor
-does not own the replacement, using the tx-start type registry — carrying the
-`block-type` tag is not ownership.
+see) and retargets each token onto the survivor inside the merge transaction.
+
+Ownership is judged against the tx-start type registry, because carrying the
+`block-type` tag is not ownership. Note that *unowned* and *owned by someone
+else* are different answers and get opposite treatment:
+
+- the source does not own the token it is merged away from → **refuse**, since
+  the members are somebody else's;
+- the replacement token is owned by a DIFFERENT block → **refuse**, rather than
+  mint membership in a type the survivor does not own;
+- the replacement token is owned by NOBODY — including when the survivor is not
+  a type definition at all → **retarget onto it anyway**. Dropping membership is
+  unrecoverable, while a token naming a live block is undoable with the merge
+  and becomes real membership if that block is later made a type. Pinned by
+  `retargets onto a non-type survivor instead of dropping membership`.
+
+The registry must also be present for this tx's workspace; without one, ownership
+is unverifiable and the retarget is skipped entirely.
 
 **There is no repair script.** One existed on this branch and was dropped: the
 production audit found **zero** orphaned memberships (2026-07-30, re-verified
