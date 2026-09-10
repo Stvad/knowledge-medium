@@ -107,6 +107,7 @@ export type {
   BlockOpenerOptions,
   OpenBlockContext,
   EnsureNavigationTarget,
+  NavigationTargetEnsure,
 } from '@/utils/navigation.js'
 
 export type {

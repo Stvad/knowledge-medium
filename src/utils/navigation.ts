@@ -656,7 +656,7 @@ export type EnsureNavigationTarget = () => Promise<unknown>
 /** The block a surface asked to open, paired with how to materialize its row.
  *  ONE value on purpose: an `ensure` carried separately can end up describing a
  *  different block than the one the pipeline actually navigates to. */
-interface NavigationTargetEnsure {
+export interface NavigationTargetEnsure {
   blockId: string
   workspaceId: string
   ensure: EnsureNavigationTarget
@@ -690,7 +690,9 @@ const navigateEnsuringTarget = async (
  *    - `passthrough` → decline the event; the browser follows the href.
  *    - `navigate` / `suppress` → own the event (`stopPropagation` +
  *      `preventDefault`); `navigate` then fires the in-app navigation,
- *      `suppress` is a veto no-op. */
+ *      `suppress` is a veto no-op.
+ *  `target` names a block whose row is created lazily; the navigation is
+ *  unchanged and its `ensure` runs afterwards (see `EnsureNavigationTarget`). */
 export const applyNavigationDecision = (
   repo: Repo,
   e: MouseEvent,
@@ -702,11 +704,9 @@ export const applyNavigationDecision = (
   e.preventDefault()
   if (decision.kind !== 'navigate') return
   const {input} = decision
-  if (!target) {
-    void navigate(repo, input)
-    return
-  }
-  void navigateEnsuringTarget(repo, input, target)
+  void (target
+    ? navigateEnsuringTarget(repo, input, target)
+    : navigate(repo, input))
 }
 
 /** Resolve a gesture through the intent policy, then execute it. The single
