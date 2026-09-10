@@ -1,2 +1,2 @@
-import e from"../../node_modules/.pnpm/uuid@14.0.0/node_modules/uuid/dist/v5.js";var t=(t,n,r)=>e(`${t}:${r}`,n);export{t as pluginBlockId};
+import{derivedBlockId as e}from"../data/derivedIds.js";var t=(t,n,r)=>e({namespace:n,key:`${t}:${r}`});export{t as pluginBlockId};
 //# sourceMappingURL=pluginIds.js.map

@@ -39,5 +39,5 @@ import{isRefCodec as e,isRefListCodec as t}from"../api/codecs.js";import"../api/
     ${u.length>0?`WHERE ${u.join(`
       AND `)}`:``}
     ${h}
-  `,params:l}};export{S as assertAncestorWalkBounded,C as buildCandidatesCte,T as compileTypedBlockQuery,_ as hasAncestorScope,y as isSelectiveWhereValue,r as jsonPathForProperty,g as normalizeTypedBlockQuery};
+  `,params:l}};export{S as assertAncestorWalkBounded,C as buildCandidatesCte,T as compileTypedBlockQuery,_ as hasAncestorScope,i as inlineJsonPath,y as isSelectiveWhereValue,r as jsonPathForProperty,g as normalizeTypedBlockQuery};
 //# sourceMappingURL=typedBlockQuery.js.map
