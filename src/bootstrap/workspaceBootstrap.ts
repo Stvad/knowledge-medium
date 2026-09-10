@@ -234,7 +234,6 @@ export const bootstrapWorkspace = async ({
   // to exist first. That's why this is serialized ahead of the layout chain
   // rather than racing it the way these kernel pages used to (each is
   // idempotent + deterministic-id, so on a warm start it's just a cached read).
-
   await repo.ensureSystemPages(workspaceId)
 
   // Materialize the code-declared property seeds into block-backed definitions
