@@ -22,9 +22,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
-  ANCESTORS_SQL,
   CHILDREN_SQL,
   IS_DESCENDANT_OF_SQL,
+  manyAncestorsSql,
   SUBTREE_SQL,
   VISIBLE_CHILDREN_SQL,
   VISIBLE_SUBTREE_SQL,
@@ -132,7 +132,7 @@ describe('SUBTREE_SQL', () => {
   })
 })
 
-describe('ANCESTORS_SQL', () => {
+describe('manyAncestorsSql', () => {
   let h: TestDb
   beforeAll(async () => { h = await createTestDb() })
   afterAll(async () => { await h.cleanup() })
@@ -143,17 +143,36 @@ describe('ANCESTORS_SQL', () => {
       {id: 'p',     parent_id: 'gp',  order_key: 'a0'},
       {id: 'self',  parent_id: 'p',   order_key: 'a0'},
     ])
-    const rows = await h.db.getAll<{id: string}>(ANCESTORS_SQL, ['self', 'self'])
+    const rows = await h.db.getAll<{id: string}>(manyAncestorsSql(1), ['self'])
     expect(rows.map(r => r.id)).toEqual(['p', 'gp'])
   })
 
   it('returns empty when the row has no parent', async () => {
     await seed(h.db, [{id: 'a-root', parent_id: null, order_key: 'a0'}])
-    const rows = await h.db.getAll(ANCESTORS_SQL, ['a-root', 'a-root'])
+    const rows = await h.db.getAll(manyAncestorsSql(1), ['a-root'])
     expect(rows).toEqual([])
   })
 
-  it('truncates a non-root cycle (start → A → B → C → B …) at the visited-id guard', async () => {
+  it('keeps each seed chain separate, tagged by chain_start_id', async () => {
+    await seed(h.db, [
+      {id: 'r1',    parent_id: null,  order_key: 'a0'},
+      {id: 'm1',    parent_id: 'r1',  order_key: 'a0'},
+      {id: 'leaf1', parent_id: 'm1',  order_key: 'a0'},
+      {id: 'r2',    parent_id: null,  order_key: 'a0'},
+      {id: 'leaf2', parent_id: 'r2',  order_key: 'a0'},
+    ])
+    const rows = await h.db.getAll<{id: string; chain_start_id: string}>(
+      manyAncestorsSql(2), ['leaf1', 'leaf2'],
+    )
+    const byStart = new Map<string, string[]>()
+    for (const row of rows) {
+      byStart.set(row.chain_start_id, [...(byStart.get(row.chain_start_id) ?? []), row.id])
+    }
+    expect(byStart.get('leaf1')).toEqual(['m1', 'r1'])
+    expect(byStart.get('leaf2')).toEqual(['r2'])
+  })
+
+  it('truncates a non-root cycle (start \u2192 A \u2192 B \u2192 C \u2192 B \u2026) at the visited-id guard', async () => {
     // Setup: start has parent A; A has parent B; B has parent C; C has
     // parent B (cycle on B-C, NOT involving start). Pre-v4.25 path
     // encoding only checked the root segment; this test pins the v4.25
@@ -164,10 +183,14 @@ describe('ANCESTORS_SQL', () => {
       {id: 'A',     parent_id: 'B',     order_key: 'a0'},
       {id: 'start', parent_id: 'A',     order_key: 'a0'},
     ])
-    const rows = await h.db.getAll<{id: string}>(ANCESTORS_SQL, ['start', 'start'])
-    // Walk: start → A → B → C → (B blocked by visited-id). Each
+    const rows = await h.db.getAll<{id: string}>(manyAncestorsSql(1), ['start'])
+    // Walk: start \u2192 A \u2192 B \u2192 C \u2192 (B blocked by visited-id). Each
     // cycle member appears at most once in the result.
     expect(rows.map(r => r.id).sort()).toEqual(['A', 'B', 'C'])
+  })
+
+  it('refuses an empty id list rather than emitting `IN ()`', () => {
+    expect(() => manyAncestorsSql(0)).toThrow(/idCount/)
   })
 })
 

@@ -63,39 +63,18 @@ export const SUBTREE_SQL = `
   SELECT * FROM subtree ORDER BY path
 `
 
-/** Returns the leaf-to-root chain, excluding the start id. Filters
- *  `deleted = 0`. */
-export const ANCESTORS_SQL = `
-  WITH RECURSIVE chain AS (
-    SELECT *,
-           '!' || hex(id) || '/' AS path,
-           0 AS depth
-      FROM blocks
-     WHERE id = ? AND deleted = 0
-    UNION ALL
-    SELECT parent.*,
-           chain.path || '!' || hex(parent.id) || '/',
-           chain.depth + 1
-      FROM chain
-      JOIN blocks AS parent ON parent.id = chain.parent_id
-     WHERE parent.deleted = 0
-       AND chain.depth < 100
-       AND INSTR(chain.path, '!' || hex(parent.id) || '/') = 0
-  )
-  SELECT * FROM chain WHERE id != ? ORDER BY depth ASC
-`
-
-/** Many-id variant of `ANCESTORS_SQL` — runs the recursive walk for
- *  every seed id in one statement, tagging each row with the seed it
- *  belongs to. Used by `core.manyAncestors` to avoid N round-trips
- *  when a backlinks panel needs the parent chain for every visible
- *  source block.
+/** Returns the leaf-to-root chain for every seed id, excluding the seed
+ *  itself, in one statement, tagging each row with the seed it belongs
+ *  to. Filters `deleted = 0`.
+ *
+ *  THE ancestor walk — there is no single-id variant, because every
+ *  caller reaches it through `ancestorChainRows`, which coalesces
+ *  concurrent single-id walks into one of these.
  *
  *  Caller supplies `idCount` `?` placeholders bound to the seed ids;
  *  ordering of the input array is not preserved in the result, so
  *  consumers must group by `chain_start_id` themselves. Each chain is
- *  returned leaf-to-root (ascending `depth`) so it matches the
- *  single-id `ANCESTORS_SQL` shape exactly. */
+ *  returned leaf-to-root (ascending `depth`). */
 export const manyAncestorsSql = (idCount: number): string => {
   if (idCount <= 0) throw new Error('manyAncestorsSql: idCount must be >= 1')
   const placeholders = Array(idCount).fill('?').join(', ')
