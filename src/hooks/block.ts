@@ -389,11 +389,9 @@ const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
  *  produce.
  *
  *  Use over N `useParents` calls when a parent component knows the
- *  full id set up front (backlinks panel, tag list, etc.). One SQL
- *  round-trip vs. N: on a contended SQLite connection during cold
- *  start, the win is meaningful (a 15-entry backlinks panel went
- *  from ~2.3 s of summed ancestor wall time to ~150 ms in
- *  measurements).
+ *  full id set up front (backlinks panel, tag list, etc.): one SQL
+ *  round-trip instead of N, which matters on a contended SQLite
+ *  connection during cold start.
  *
  *  Stability: the query handle is keyed by the sorted id list, so
  *  re-renders with the same blocks (stable identity) hit the same
@@ -402,26 +400,20 @@ const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
  *  unchanged. A resolved result holds one (possibly empty) entry per
  *  input id; the carried result below can be partial.
  *
- *  Sticky across id-set changes: an add or a remove usually lands on an
- *  unresolved handle (`peek() === undefined` — a key used within the
- *  store's GC window can still be warm).
- *  Rendering that as "nobody has ancestors" collapses the panel by a
- *  line per entry until the load lands, because `BreadcrumbList`
- *  renders null for an empty chain (repro: the jump in
- *  `plugins/backlinks/test/linkedReferencesRefresh`). So while an
- *  unresolved handle loads we keep serving the last resolved chains; a
- *  resolved value always wins outright.
+ *  Sticky across id-set changes: an add or a remove usually lands on
+ *  an unresolved handle (`peek() === undefined` — a key used within
+ *  the store's GC window can still be warm), and rendering that as
+ *  "nobody has ancestors" drops every consumer's breadcrumb line
+ *  mid-refresh. While an unresolved handle loads we keep serving the
+ *  last resolved chains; a resolved value always wins outright.
  *
- *  Deliberately not covered. Ids ENTERING the set have no carried chain
- *  — a new backlink, or the ids a filter had excluded when it is
- *  switched off — so unless their key is still warm those entries gain
- *  their breadcrumb line a load late. "Last resolved" can be several
- *  id-set changes old under churn (one load is a floor, not a bound).
- *  And a FAILED load is indistinguishable from a slow one here, so its
- *  chains stay until the id set changes or the handle is disposed —
- *  the policy `peek()` already applies to a warm handle whose RELOAD
- *  fails, and the failures that reach a FIRST load are DB-level ones
- *  where the rest of the panel is usually in trouble too. */
+ *  Not covered, by design: ids ENTERING the set have no carried chain,
+ *  so unless their key is still warm those entries gain their chain a
+ *  load late; "last resolved" can be several id-set changes old under
+ *  churn; and a FAILED load is indistinguishable from a slow one here,
+ *  so its chains stay until the id set changes or the handle is
+ *  disposed — the policy `peek()` already applies to a warm handle
+ *  whose reload fails. */
 export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Block[]> => {
   const repo = useRepo()
   // Sort the ids so logically-equal block sets in different orders
@@ -434,10 +426,10 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
   // carry-over below has to tell "still loading" apart from "resolved,
   // and these blocks genuinely have no ancestors".
   //
-  // Memoized, not inline like the selectors above: it is one of
-  // `useHandle`'s getSelection deps, so a per-render identity re-runs
-  // this O(n) projection and its deep-equality check on every render.
-  // Not load-bearing for correctness, only for work avoided.
+  // Memoized rather than inline because it is a `useHandle`
+  // getSelection dep: a per-render identity re-runs this O(n)
+  // projection and its deep-equality check every render. Work avoided,
+  // not correctness.
   const selectParents = useCallback(
     (data: readonly {startId: string; ancestors: readonly BlockData[]}[] | undefined) => {
       if (!data) return undefined
@@ -452,30 +444,23 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
   )
   const resolved = useHandle(repo.query.manyAncestors({ids}), {selector: selectParents})
 
-  // Remember the last resolved chains with the "adjust state during
-  // render" pattern (as `usePromotableBreadcrumb` does) rather than an
-  // effect: the carry-over has to be available in the SAME render that
-  // first sees the unresolved handle, or the blank frame it exists to
-  // prevent paints anyway.
+  // Adjusted during render (as `usePromotableBreadcrumb` does) rather
+  // than in an effect: the carry has to be available in the SAME
+  // render that first sees the unresolved handle, or the blank frame
+  // it exists to prevent paints anyway.
   //
   // `ids.length > 0` because an EMPTY request resolves trivially, and
-  // overwriting the memory with its empty map throws the carry-over
-  // away right where it is needed: a list handle that re-keys (turning
-  // a backlinks filter ON) reports `[]` for a beat, and the filtered
-  // subset then arrives on a cold key with nothing to carry.
+  // remembering its empty map throws the carry away exactly where it
+  // is needed — a list handle that re-keys reports `[]` for a beat,
+  // and the next key arrives cold with nothing to carry.
   //
-  // SOME guard here is load-bearing everywhere, the app included:
-  // React applies no value-based bailout to a render-phase setState
+  // Some guard on the re-set is load-bearing: React applies no
+  // value-based bailout to a render-phase setState
   // (`dispatchSetStateInternal` takes the `isRenderPhaseUpdate` branch
-  // before its eager `Object.is`), so an unconditional re-set loops
-  // even when `resolved` is identical — drop the clause and the PANEL
-  // repro dies with "Too many re-renders", not just the unit test.
-  // Making it STRUCTURAL rather than `resolved !== lastResolved` is
-  // the defence-in-depth half: the real store keeps `resolved`
-  // identical across renders, so identity alone would do in the app.
-  // The fake seam in `useManyParents.test.tsx` mints a fresh
-  // equal-but-distinct map per render, and is what pins the
-  // structural form.
+  // before its eager `Object.is`), so an unconditional re-set loops.
+  // Structural rather than `!==` is defence in depth — the store keeps
+  // `resolved` identical across renders, so identity alone would do
+  // here; only a consumer whose handle identity churns needs more.
   const [lastResolved, setLastResolved] =
     useState<ReadonlyMap<string, Block[]>>(EMPTY_PARENT_MAP)
   if (

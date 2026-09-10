@@ -66,10 +66,10 @@ vi.mock('../useStoredBacklinkFilter.ts', () => ({
 }))
 
 // The entry renderer is the observation point: `initialParents` is what
-// decides whether the entry paints a breadcrumb line (see BacklinkEntry →
+// decides whether the entry paints a breadcrumb line (see BlockEntry →
 // BreadcrumbList, which renders null for an empty chain).
-vi.mock('../BacklinkEntry.tsx', () => ({
-  LazyBacklinkItem: ({block, initialParents}: {
+vi.mock('../BlockEntry.tsx', () => ({
+  LazyBlockEntry: ({block, initialParents}: {
     block: Block
     initialParents?: readonly Block[]
   }) => {

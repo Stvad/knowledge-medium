@@ -6,7 +6,7 @@
  * frame it hunts settles inside `act` and only a per-render recorder can
  * see it. That leaves an assumption unpinned: that a non-empty
  * `initialParents` actually reaches the DOM as a breadcrumb line. If
- * `BacklinkEntry` stopped threading its parents into
+ * `BlockEntry` stopped threading its parents into
  * `PromotableBreadcrumbList`, the panel would collapse exactly as it did
  * before the fix and every assertion over there would still pass.
  *
