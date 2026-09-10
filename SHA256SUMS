@@ -1739,7 +1739,7 @@ b7b20b57449491d17522b2d52bf360256cc239e30bd54a2bfe17dfd8c399fd8f  ./src/App.js
 37a400d4dd3c8ade661675433ff94c5a3dfbfde4db6fb49584ceaea03a91e3cd  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-bc28a80b61626c7ae1d703dddf645bead31f1c08983ea48498e8371f77f11275  ./src/appVersion.js
+86771f8ba8f60058918d001a798a966c03ef5e4e45e2b97f4f5ae45febbf9134  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -1980,7 +1980,7 @@ d3215ec1e6facaa2ba70248bfaeeef832ae89c91d93c2de16c504846c565e77f  ./src/data/der
 ba112625b2ac030d1e5c98742f15610165a427e357b57168a0072958e99acf81  ./src/data/facetBridge.js
 f2e6845682459c4391e3134bd15a965498366112b38646b0cb82103affc4f7e1  ./src/data/facetBridge.js.map
 cf9e5696e86d92dc63732abff83805a0dc18a87c01b40eb88c06ec5a42d3caf3  ./src/data/facets.js
-ff36bc54b5ae6218c46be3ae4ac95af7c4a612bd1e6415fb9791b521ce8942bf  ./src/data/facets.js.map
+2afb59b824f9be83695d73e630a4f965f1e03a7901cf89487cd99ac9617e7c16  ./src/data/facets.js.map
 a5beab77e55f1ebbcb0d622c956ec680826949ff908803b4a7d1527a679b9732  ./src/data/globalState.js
 2e94b502d87ceafa8031baadb5489b1b8772154914a453e8fa369aef987caf4d  ./src/data/globalState.js.map
 c32bbd638f1f2c612ff34cb1617c606cc71a21fdcd22fb06159dcea3dddf3741  ./src/data/internals/aliasClaimRederiveProcessor.js
@@ -2110,8 +2110,8 @@ a5e13054ae63913a49f784cd34999b43a4882352366cf371d3c4b49babf89748  ./src/data/rec
 3609562bc1866ff0406e1cbb4e5ace25c9664dd54dc0d3d5e4136361a452d70b  ./src/data/referenceBlock.js.map
 01de145709ef2228216b38f530370fb6d3d3a632ba6e43e9626318b6cce13459  ./src/data/releasePowerSyncConnection.js
 a70328c2ec7a7bb3383c827ee52239df08bead23566db59cf6f83e6d1ab70ef3  ./src/data/releasePowerSyncConnection.js.map
-73c85774c44e54e842a0beb9c05d4cf54eeebf96a30e0f1e02d519e54e307553  ./src/data/repo.js
-1069e0b1d7839a45a5c010ba8444fef73a1e81bdc4f7b268320fe479a1743712  ./src/data/repo.js.map
+40f47ccc2ca3161d6b2eb31f3608c7edc9bea904985e4d06f95c26d0c0dfc330  ./src/data/repo.js
+258b866ba2e6af97d2b393bf85c6b3240e75e1d8f1d1e86f8c8aaa45bd3f8eef  ./src/data/repo.js.map
 575b49121d0817fb129c741d74257265ea03e33e57b191479593ec9ddaf4f471  ./src/data/repoProvider.js
 d4ae813672f3e8527e3f41fb3275bb9808ec3e3d9c977a07dce66e2ec88da4cf  ./src/data/repoProvider.js.map
 de31a4089b79c12779db707012bb496f4ee3224c999e5f285442cbc04af695c0  ./src/data/rowProperty.js
@@ -3468,8 +3468,8 @@ eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/vi
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
 9af15883a114b174ae87ea81afacbbe329eac79367b557ca4b23ea5ab8a45ef7  ./src/utils/workspaceSnapshotStore.js
 0cb08d10b524ebeed439d29605e1e9993be5d5d03c7226fc3cee6d378657128a  ./src/utils/workspaceSnapshotStore.js.map
-ffc95dc68292d486dba72cf2030108c35b3babd1ac643feae5b42f152240efb9  ./sw.js
-af528a559efa0b1712b5c0dce3795f48a0eb53cef44cc56a11cb6f89e88748cf  ./version.json
+ca995a652c4b61234aec39335005a8ea12e91737b0b844c215a3f5ac6ff93ff3  ./sw.js
+1af3c62c38669ee24f5dc3e2497e0b3078a2e0fec333df6ec43cbdaf00c4948e  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
