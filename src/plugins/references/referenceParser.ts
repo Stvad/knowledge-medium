@@ -151,7 +151,7 @@ interface OpenWikilink {
  *  e.g. `[[a]b]]`) means no reading balances — fall back to the first pair,
  *  which is what this has always done.
  *
- *  ENCLOSING OPENERS GET THEIR CLOSERS FIRST (Codex on PR #548). A nested
+ *  ENCLOSING OPENERS GET THEIR CLOSERS FIRST. A nested
  *  span shares the run with the links around it, so absorbing greedily can
  *  eat a pair an outer link needed: in `[[outer [[inner[]]]]` the run is four
  *  `]` — inner taking one for its unmatched `[` leaves a single `]`, and the
@@ -162,8 +162,8 @@ interface OpenWikilink {
  *  `[[outer [[Book of [x]]] tail]]`, whose outer link closes later in the
  *  content and never wanted this run's brackets.
  *
- *  EVERYTHING HERE IS O(1), and that is load-bearing rather than tidy (Codex
- *  on #548, three rounds of it). This runs once per closer, so anything
+ *  EVERYTHING HERE IS O(1), and that is load-bearing rather than tidy. This
+ *  runs once per closer, so anything
  *  proportional to the alias — or to the closing run — makes the whole parse
  *  quadratic, and the strings it would walk are not free the way the caller's
  *  `slice` is, which V8 answers with an O(1) SlicedString. Two shapes found
@@ -208,7 +208,7 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
   // End of the maximal `]` run the scanner is currently inside, or -1 when it
   // is not inside one. Nested frames CLOSE INTO THE SAME RUN — `[[a[[b]]]]`
   // pops twice out of one `]]]]` — so measuring it per frame re-walks an
-  // overlapping suffix and is quadratic in the nesting depth (Codex on #548).
+  // overlapping suffix and is quadratic in the nesting depth.
   // Measured once per run instead: `i` only moves forward, so each `]` is
   // counted at most once across the whole parse.
   let runEnd = -1
@@ -572,6 +572,11 @@ export const faithfulWikilinkReplacement = (alias: string): SpanReplacement | nu
   return {text, refAlias: alias, toTargetId: null, lossyLabel: false}
 }
 
+/** Characters a label carries through our own round trip but that
+ *  MARKDOWN re-interprets when it renders the span. See the
+ *  `lossyLabel` note in `pinnedSpanReplacement`. */
+const MARKDOWN_UNSAFE_LABEL_RE = /[\\[]/
+
 /** `[label](((targetId)))` — the pinned form, which keeps the display
  *  text the source author wrote while binding to a stable id.
  *
@@ -587,11 +592,6 @@ export const faithfulWikilinkReplacement = (alias: string): SpanReplacement | nu
  *  failures are not equally bad: the reference still lands on the
  *  right block, only its visible text changed, and refusing to rewrite
  *  would strand the span on a name nothing claims. */
-/** Characters a label carries through our own round trip but that
- *  MARKDOWN re-interprets when it renders the span. See the
- *  `lossyLabel` note in `pinnedSpanReplacement`. */
-const MARKDOWN_UNSAFE_LABEL_RE = /[\\[]/
-
 export const pinnedSpanReplacement = (
   label: string,
   targetId: string,
@@ -611,7 +611,7 @@ export const pinnedSpanReplacement = (
   // compares `blocks.id` case-sensitively) the check would pass while the
   // spliced text and the stored edge bind to a lowercase id no row has.
   // `referenceBlockContentForId` rejects this same divergence on the
-  // `((id))` form for the same reason (PR #386 review); a whole-span guard
+  // `((id))` form for the same reason; a whole-span guard
   // that tolerates it is strictly worse than one that refuses, because the
   // caller then leaves the span alone instead of re-pointing it at nothing.
   if (mark.blockId !== targetId) return null
@@ -655,6 +655,39 @@ export const pinnedSpanReplacement = (
     // is exactly the distinction `lossyLabel` exists to draw.
     lossyLabel: mark.label !== label || MARKDOWN_UNSAFE_LABEL_RE.test(label),
   }
+}
+
+/** `((targetId))` — the canonical id form, carrying NO display text.
+ *
+ *  The third tier of the replacement ladder, and the one a MARKED row
+ *  wants: a field row renders its property name (resolved through the
+ *  definition the id points at), so a pinned label is text it never
+ *  displays, and `::((id))` is the canonical shape every other field row
+ *  already has (§7).
+ *
+ *  Having no label also makes it the only tier that can't be lossy, and
+ *  the only one that survives a label the pinned form has to refuse: an
+ *  alias containing `[[` smuggles a wikilink opener through
+ *  `pinnedSpanReplacement`, which refuses rather than splice it — with
+ *  nothing to put in a label there is nothing left to refuse.
+ *
+ *  Returns null on the same terms as the pinned form: the inline blockref
+ *  grammar is UUID-only, so a target whose id doesn't round-trip
+ *  character-for-character gets no replacement at all rather than text
+ *  that reads as prose. */
+export const canonicalIdSpanReplacement = (targetId: string): SpanReplacement | null => {
+  const text = `((${targetId}))`
+  const marks = parseBlockRefs(text)
+  // A non-UUID target fails HERE: the grammar doesn't match, so zero marks.
+  if (marks.length !== 1) return null
+  const [mark] = marks
+  if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
+  // EXACT, for the reason spelled out at `pinnedSpanReplacement`: the parser
+  // lower-cases UUID-shaped ids, so comparing against a pre-lowered target
+  // would certify a round trip that did not happen and bind the span to an
+  // id no row has.
+  if (mark.blockId !== targetId) return null
+  return {text, refAlias: mark.blockId, toTargetId: mark.blockId, lossyLabel: false}
 }
 
 /** `[display]([[alias]])` — a wikilink carrying custom display text.

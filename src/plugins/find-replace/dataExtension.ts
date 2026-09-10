@@ -12,12 +12,9 @@ import {
   kernelContentKey,
 } from '@/data/invalidation'
 import {
-  deriveReferenceColumns,
-  sameTxReferenceTargetLookups,
-} from '@/data/internals/referenceTargetProcessor'
-import {
   propertyChildContentToEncodedValue,
   resolvePropertyValueFieldSchema,
+  contentLosesPropertyValue,
 } from '@/data/propertyChildren'
 import {
   DEFAULT_FIND_REPLACE_OPTIONS,
@@ -209,7 +206,8 @@ export const applyContentReplaceMutator = defineMutator<
       // VALUE rows get the codec skip — see below — because a broken value
       // fails SILENTLY: the key drops from the owner's cell with no error.)
       //
-      // #404 item 5: under properties-as-blocks (PR #288 §9), a property
+      // #404 item 5: under properties-as-blocks
+      // (docs/properties-as-blocks-migration.html §9), a property
       // VALUE child's `content` IS its typed value — writing straight
       // through here can leave it unparseable under its codec (a
       // `number`/`date`/`boolean` value in particular), and PROJECT's
@@ -226,29 +224,38 @@ export const applyContentReplaceMutator = defineMutator<
       // forced re-run the write goes through and the property reads unset
       // (visible in the value row, undo-recoverable) until the text is fixed.
       //
-      // Dormant un-flipped: both recognizers return false/null whenever the
-      // workspace isn't child-backed (no field rows are ever recognized), so
-      // this whole section is a no-op there.
+      // Live in an un-flipped workspace too: the cell→children backfill
+      // mints value rows before the flip, and rewriting one corrupts a typed
+      // value exactly as it would after.
       const schema = await resolvePropertyValueFieldSchema(tx, current)
       if (schema !== null && !force) {
-        // Ref-typed values are validated against the target the PROPOSED
-        // content would derive (not the stale pre-replace column) — same-tx
-        // `core.deriveReferenceTarget` hasn't run yet at this point in the
-        // pipeline, so the column still reflects the OLD content.
-        const projectedTargetId = schema.codec.type === 'ref'
-          ? (await deriveReferenceColumns(
-              replaced.content, current.workspaceId, sameTxReferenceTargetLookups(tx),
-            )).targetId ?? null
-          : current.referenceTargetId ?? null
-        const breaksCodec = (() => {
+        // The check is on the PROPOSED content, and asking it takes nothing
+        // but that string: `propertyChildContentToEncodedValue` decodes a ref
+        // value by parsing the id out of its id-carrying span, so there is no
+        // derived column to project first (#443 group 3). It used to resolve
+        // `deriveReferenceColumns` here — an async alias lookup per candidate
+        // row — precisely because the decode trusted the column, and that
+        // made the guard agree with a decode that was itself wrong: a replace
+        // turning `((id))` into `[[SomeName]]` resolved to a non-null target,
+        // passed the guard, and PROJECT then wrote the WRONG id into the
+        // owner's cell. Now it reads as unparseable and is reported as a skip.
+        //
+        // Decoding is NOT the whole question, and asking only it let #688
+        // through here: `codecs.string` / `codecs.url` accept any string, so a
+        // replace that turned a value into `::((id))` decoded fine, was
+        // written, and then had the row classified as a field row out from
+        // under it — the owner's key dropped with no error. `setProperty`
+        // ESCAPES such a value; this path writes content the user chose, so it
+        // refuses instead and offers "replace anyway" like every other skip.
+        const unsafeToWrite = (() => {
           try {
-            propertyChildContentToEncodedValue(schema, replaced.content, projectedTargetId)
-            return false
+            propertyChildContentToEncodedValue(schema, replaced.content)
           } catch {
             return true
           }
+          return contentLosesPropertyValue(schema, replaced.content)
         })()
-        if (breaksCodec) {
+        if (unsafeToWrite) {
           result.skippedUnparseableProperty += 1
           unparseableProperties.add(schema.name)
           result.retryableSkips.push({

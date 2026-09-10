@@ -29,8 +29,13 @@ import type { SyncMode } from '../transform.js'
 
 /** HKDF `info` label binding K_id to this purpose + version (§10). NOT optional:
  *  it domain-separates the content-key subkey from any future WK-derived key
- *  (the deferred key hierarchy, a per-asset share key). Versioned for a clean
- *  future rotation. */
+ *  (the deferred key hierarchy, a per-asset share key).
+ *
+ *  Versioned, but bumping it is no longer the cheap rotation it was: `K_id` is
+ *  also the PRF behind an E2EE workspace's derived-id namespaces
+ *  ({@link deriveWorkspaceIdNamespace}). A new label re-points asset paths,
+ *  which are re-derivable and re-uploadable, AND every block id already minted
+ *  under the old namespace, which is stored data. */
 export const CONTENT_KEY_HKDF_INFO = 'km/asset-content-key/v1'
 
 /** K_id length — 32 bytes (a full SHA-256 block, matches the HMAC hash). */

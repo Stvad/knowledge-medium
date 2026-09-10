@@ -49,19 +49,45 @@ export interface ActionDiscovery {
 
 const NO_BINDINGS: readonly ShortcutBinding[] = []
 
-export function useActionDiscovery(): ActionDiscovery {
+/**
+ * The effective action list, re-resolved when the user remaps a key.
+ *
+ * Keybinding overrides are pushed in place via `setRuntimeContributions`,
+ * which leaves `runtime` identity untouched — so a `useMemo` keyed on
+ * `runtime` alone serves stale chords after a mid-session remap. Watching
+ * the facet is what closes that.
+ *
+ * Overrides are the ONLY in-place input that can change this list.
+ * `getEffectiveActions` also reads `actionsFacet` and
+ * `actionTransformsFacet`: transforms only arrive through extension
+ * resolution, which builds a fresh runtime, and while actions ARE
+ * contributed in place (theme-toggle, birthday), an added action can't
+ * alter another's binding — the collision-strip pass reads the overrides
+ * list, never other actions' defaults.
+ *
+ * Narrower than {@link useActionDiscovery}: no active-contexts
+ * subscription, so consumers don't re-render on every focus move.
+ */
+export function useEffectiveActions(): readonly ActionConfig[] {
   const runtime = useAppRuntime()
-  const active = useActiveContextsState()
-
-  // In-place keybinding-override updates don't change `runtime` identity, so
-  // watch the facet directly and re-resolve the (override-dependent) action
-  // list when it fires.
   const [generation, setGeneration] = useState(0)
   useEffect(() => {
     return runtime.onFacetChange(keybindingOverridesFacet.id, () => {
       setGeneration(g => g + 1)
     })
   }, [runtime])
+  return useMemo(
+    () => getEffectiveActions(runtime),
+    // `generation` re-resolves after an in-place override change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runtime, generation],
+  )
+}
+
+export function useActionDiscovery(): ActionDiscovery {
+  const runtime = useAppRuntime()
+  const active = useActiveContextsState()
+  const allActions = useEffectiveActions()
 
   const contextConfigsByType = useMemo(
     () => contextConfigsByTypeFrom(runtime),
@@ -69,7 +95,6 @@ export function useActionDiscovery(): ActionDiscovery {
   )
 
   const {actions, bindingsFor} = useMemo(() => {
-    const allActions = getEffectiveActions(runtime)
     const bindingsByActionId = new Map<string, ShortcutBinding[]>()
     for (const action of allActions) {
       if (!action.defaultBinding) continue
@@ -81,9 +106,7 @@ export function useActionDiscovery(): ActionDiscovery {
     const getBindings = (action: Pick<ActionConfig, 'context' | 'id'>): readonly ShortcutBinding[] =>
       bindingsByActionId.get(actionRuntimeKey(action)) ?? NO_BINDINGS
     return {actions: allActions, bindingsFor: getBindings}
-    // `generation` re-resolves after an in-place override change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runtime, generation])
+  }, [allActions])
 
   const activeContexts = useMemo<ActiveContextInfo[]>(
     () => Array.from(active.entries()).flatMap(([type, dependencies]) => {

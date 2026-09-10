@@ -36,5 +36,8 @@ export const blockEditingContentRenderer: BlockContentRendererContribution = con
     id: 'plain-outliner.editing-dispatcher',
     label: 'Editing dispatcher',
     render: renderer,
+    // This renders the block's own slots rather than replacing them, so
+    // whatever the block composed still describes what the slot shows.
+    showsOtherBlocks: 'as-composed',
   }
 }

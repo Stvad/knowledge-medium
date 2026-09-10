@@ -1,4 +1,4 @@
-/**
+/*
  * Gesture binding — the recognized/named trigger analogue of the structural
  * keyboard chord (`defaultBinding`) and pointer (`pointerBinding`) bindings.
  *

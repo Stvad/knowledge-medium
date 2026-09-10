@@ -111,7 +111,7 @@ export const isPropertySeedDeclaration = (
   typeof value.name === 'string' && value.name.trim().length > 0 &&
   // Mirrors `seedProperty`'s name-hygiene throw: a dynamic contribution with
   // a reference-shaped name is dropped rather than allowed to mint a backing
-  // block that reads as machinery (PR #288 §7).
+  // block that reads as machinery (docs/properties-as-blocks-migration.html §7).
   !isGrammarShapedLabel(value.name) &&
   typeof value.presetId === 'string' && value.presetId.trim().length > 0 &&
   own(value, 'config') &&
@@ -165,7 +165,7 @@ export function seedProperty<T, TConfig = void>(
     throw new Error('[seedProperty] seedKey must match <owner>/property/<stable-key>')
   }
   if (!args.name.trim()) throw new Error('[seedProperty] name is required')
-  // Name hygiene (PR #288 §7): `materializePropertySeeds` mirrors the seed
+  // Name hygiene (docs/properties-as-blocks-migration.html §7): `materializePropertySeeds` mirrors the seed
   // name into its backing block's `content`. Seeds are code-owned, so this
   // fails at declaration rather than at materialization.
   assertNotGrammarShapedLabel(args.name, '[seedProperty] name')

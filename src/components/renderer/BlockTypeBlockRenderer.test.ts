@@ -9,14 +9,16 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { writeBlockTypeLabel } from './BlockTypeBlockRenderer'
 
+// One DB for the FILE — both suites below share it, reset between tests. The
+// repo is still built fresh per test: these exercise processor-driven alias
+// writes, so they want their own registry and id sequence, just not their own
+// database.
+let h: TestDb
+beforeAll(async () => { h = await createTestDb() })
+afterAll(async () => { await h.cleanup() })
+beforeEach(async () => { await resetTestDb(h.db) })
+
 describe('writeBlockTypeLabel', () => {
-  // One DB for the file, reset between tests. The repo is still built fresh
-  // per test — these exercise processor-driven alias writes, so they want
-  // their own registry and id sequence, just not their own database.
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
-  beforeEach(async () => { await resetTestDb(h.db) })
 
   /** Fresh repo + one alias-less `block-type` block (`type-1`), mirroring
    *  the Types-page "New type" button: created with an empty label and no
@@ -52,7 +54,8 @@ describe('writeBlockTypeLabel', () => {
     return repo
   }
 
-  // The mirror below is exactly why the label needs hygiene (PR #288 §7):
+  // The mirror below is exactly why the label needs hygiene
+  // (docs/properties-as-blocks-migration.html §7):
   // a reference-shaped label becomes reference-shaped CONTENT, and a
   // `::`-marked one makes the type's own block a recognized property field
   // row of the Types page — hidden from the outline, keyed onto its cell.

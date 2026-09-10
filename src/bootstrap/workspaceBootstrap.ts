@@ -141,7 +141,7 @@ export const bootstrapWorkspace = async ({
   repo.scheduleWorkspaceRefBackfill(workspaceId)
 
   // One-time catch-up derive of the LOCAL `reference_target_id` column for
-  // rows that predate it (PR #288 slice A). Marker-gated per workspace,
+  // rows that predate it. Marker-gated per workspace,
   // deferred off this critical path; placed after `whenPropertyDefinitionsReady`
   // above so the `[[name]]` tier resolves against the primed name-winner map.
   repo.scheduleReferenceTargetDerivePass(workspaceId)

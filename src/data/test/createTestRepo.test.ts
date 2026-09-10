@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 
@@ -29,6 +30,34 @@ describe('createTestRepo', () => {
     const loaded = await repo.load(createdId)
     expect(loaded?.content).toBe('hello')
     expect(loaded?.createdBy).toBe('test-user')
+  })
+
+  it('a Repo outliving resetTestDb cannot collide with the next Repo on command_events.tx_id', async () => {
+    // #866: `command_events.tx_id` is a PRIMARY KEY on the SHARED db, while
+    // the shared-db pattern hands every Repo a `newId` counter restarting at
+    // `gen-1`. Both Repos below write the same number of times, so their
+    // counters stay in lockstep: with tx ids derived from `newId`, `live`'s
+    // second write collides with the one `abandoned` landed after the reset.
+    const write = (repo: Repo, id: string) => repo.tx(
+      tx => tx.create({ id, workspaceId: 'ws-1', parentId: null, orderKey: 'a0' }),
+      { scope: ChangeScope.BlockDefault },
+    )
+
+    const { repo: abandoned } = createTestRepo({ db: shared.db })
+    await write(abandoned, 'stale-1')
+
+    await resetTestDb(shared.db)
+    // The leak (#813, still open): nothing disposed `abandoned`, so it keeps
+    // writing into the next test's database.
+    await write(abandoned, 'stale-2')
+
+    const { repo: live } = createTestRepo({ db: shared.db })
+    await write(live, 'live-1')
+    await write(live, 'live-2')
+
+    const rows = await shared.db.getAll<{tx_id: string}>('SELECT tx_id FROM command_events')
+    expect(rows).toHaveLength(3)
+    expect(new Set(rows.map(row => row.tx_id)).size).toBe(3)
   })
 
   it('honors a custom user', async () => {

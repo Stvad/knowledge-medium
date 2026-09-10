@@ -11,7 +11,8 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { recognizedFieldRowSql } from '@/data/internals/treeQueries'
+import { registrySeedParams } from '@/data/internals/kernelQueries'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -21,11 +22,66 @@ export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
  *  observer's staging reads use (`materialize.ts`). 500 keeps a wide margin. */
 const MACHINERY_SOURCE_CHUNK = 500
 
+/** Does this workspace hold ANY property machinery at all?
+ *
+ *  Data-keyed, not flip-gated — it asks about the rows that exist, so a
+ *  backfilled pre-flip workspace answers yes and a flipped one that has never
+ *  been backfilled answers no. One indexed probe (`idx_blocks_any_field_form`).
+ *
+ *  THE RULE: a fast path must never be able to say NO where the slow path
+ *  would say YES. Everything below follows from it.
+ *
+ *  So this is deliberately an OVER-approximation — the `::` bit is syntax
+ *  alone, while recognition also wants a non-null parent and a resolving
+ *  definition. A workspace whose only marked row is a hand-authored
+ *  `::((someBlock))` therefore answers yes and gives up the aggregate path it
+ *  could have kept. That is the safe error, and it costs only the optimization
+ *  — the same work every flipped workspace already did before this probe
+ *  existed. Do NOT "tighten" it to full recognition: that makes a second copy
+ *  of a predicate which must never be NARROWER than the first, and a drift in
+ *  that direction silently stops filtering instead of merely costing time.
+ *  (It is also slower, not faster: the partial index requires the WHERE to
+ *  syntactically prove `is_field_form = 1`, which `recognizedFieldRowSql`'s
+ *  NULL-safe `COALESCE(...) = 1` does not, so the exact form drops to a full
+ *  workspace scan — measured 8.3ms against 0.001ms on 200k rows.)
+ *
+ *  TOMBSTONES COUNT for the same rule, which is why this is not the live
+ *  `idx_blocks_field_form`. Recognition never filters `deleted` — descent is
+ *  structural, and sync-apply permits a live child under a tombstoned parent —
+ *  so a value row whose only field ancestor is tombstoned IS machinery to the
+ *  walk, and probing live rows only would answer "nothing here" and skip the
+ *  filter over the very rows it exists to catch.
+ *
+ *  Its job is to keep the machinery filters from doing work that provably
+ *  finds nothing: the ancestor walk below, and — the expensive one — the
+ *  inline badge's whole id-list resolve. On a graph with no field rows both
+ *  are guaranteed-empty, and every outline render was paying for them.
+ *
+ *  STALENESS: like the filters themselves this declares no dependency, so a
+ *  mounted view can hold the fast path past the moment a workspace first grows
+ *  machinery (km-z2bk). That moment is a backfill writing hundreds of
+ *  thousands of rows, whose invalidation traffic no mounted view outlives —
+ *  and it is the same dependency gap the filters already have, not a new one.
+ */
+export const workspaceHasPropertyMachinery = async (
+  db: { getOptional<T>(sql: string, params?: unknown[]): Promise<T | null> },
+  workspaceId: string,
+): Promise<boolean> => (await db.getOptional(
+  `SELECT 1 AS one FROM blocks
+    WHERE workspace_id = ? AND is_field_form = 1 LIMIT 1`,
+  [workspaceId],
+)) !== null
+
 /** Which of `sourceIds` are property-subtree INTERIOR machinery — a value child,
  *  or a row deeper inside a property subtree, whose parent chain passes through
- *  a §9 field row. Same recognition as `VISIBLE_CHILD_PREDICATE_SQL`: a
- *  workspace-scoped `block_types = 'property-schema'` probe on a non-null
- *  `reference_target_id`, root rows exempt via `parent_id IS NOT NULL`.
+ *  a §9 field row. Recognition IS `recognizedFieldRowSql`, shared with the
+ *  outline rather than restated: the walk hoists the four columns the fragment
+ *  reads under the names it expects, so parity is structural. Do not inline a
+ *  copy here — the two predicates disagreeing is silent in both directions,
+ *  dropping real backlinks or leaking duplicate ones.
+ *
+ *  Bind `[...sourceIdChunk, seedDefinitionIdsJson, seedWorkspaceId]`: the
+ *  fragment's two parameters sit textually after the chunk placeholders.
  *
  *  STRICTLY INTERIOR (`depth > 0`): the field row ITSELF is deliberately NOT
  *  matched. The de-dup this filter exists for only applies to interiors — a
@@ -37,12 +93,12 @@ const MACHINERY_SOURCE_CHUNK = 500
  *  property definition's backlinks empty — the opposite of why field rows were
  *  put in `block_references` in the first place.
  *
- *  PRECONDITION — the caller MUST flip-gate this. There is no internal
- *  `properties_migration` check (unlike `VISIBLE_CHILD_PREDICATE_SQL`, which
- *  embeds one), because `reference_target_id` derivation and `property-schema`
- *  types both exist independent of the flip. Calling it for an UN-flipped
- *  workspace would misclassify an ordinary `((definitionId))` reference as
- *  machinery and silently drop a real backlink.
+ *  NOT flip-gated, and callers must not gate it either. `reference_target_id`
+ *  derivation and `property-schema` types both exist independent of the flip,
+ *  and so — since the cell→children backfill — do the field and value rows
+ *  themselves. The `::` bit is what disambiguates machinery from an ordinary
+ *  `((definitionId))` reference; the flip column never did, it only deferred
+ *  the question to a moment when field rows were known to exist.
  *
  *  The `up` walk carries the same per-seed `path` visited-guard as
  *  `manyAncestorsSql` (treeQueries.ts) — issue #404 item 8b: without it a
@@ -52,6 +108,7 @@ const MACHINERY_SOURCE_CHUNK = 500
 export const propertyMachinerySourceIds = async (
   db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
   sourceIds: readonly string[],
+  seedParams: readonly [string, string],
   chunkSize: number = MACHINERY_SOURCE_CHUNK,
 ): Promise<Set<string>> => {
   const machinery = new Set<string>()
@@ -59,13 +116,13 @@ export const propertyMachinerySourceIds = async (
     const chunk = sourceIds.slice(i, i + chunkSize)
     const placeholders = chunk.map(() => '?').join(', ')
     const rows = await db.getAll<{ id: string }>(
-      `WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, path, depth) AS (
-         SELECT id, id, reference_target_id, parent_id, workspace_id,
+      `WITH RECURSIVE up(start_id, id, reference_target_id, is_field_form, parent_id, workspace_id, path, depth) AS (
+         SELECT id, id, reference_target_id, is_field_form, parent_id, workspace_id,
                 '!' || hex(id) || '/',
                 0
            FROM blocks WHERE id IN (${placeholders})
          UNION ALL
-         SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id,
+         SELECT up.start_id, b.id, b.reference_target_id, b.is_field_form, b.parent_id, b.workspace_id,
                 up.path || '!' || hex(b.id) || '/',
                 up.depth + 1
            FROM blocks AS b JOIN up ON b.id = up.parent_id
@@ -75,15 +132,8 @@ export const propertyMachinerySourceIds = async (
        SELECT DISTINCT up.start_id AS id
          FROM up
         WHERE up.depth > 0
-          AND up.reference_target_id IS NOT NULL
-          AND up.parent_id IS NOT NULL
-          AND EXISTS (
-            SELECT 1 FROM block_types bt
-             WHERE bt.block_id = up.reference_target_id
-               AND bt.type = 'property-schema'
-               AND bt.workspace_id = up.workspace_id
-          )`,
-      [...chunk],
+          AND (${recognizedFieldRowSql('up')})`,
+      [...chunk, ...seedParams],
     )
     for (const r of rows) machinery.add(r.id)
   }
@@ -205,12 +255,24 @@ export const backlinksForBlockQuery: Query<
       exclude: normalized.exclude,
       order: 'created-desc',
     })).filter(sourceId => sourceId !== id)
-    // Machinery-source exclusion is flip-gated: an un-flipped workspace (all of
-    // prod) has no property value children, so there is nothing to exclude and
-    // this pays only the cached flip read.
+    // NOT flip-gated. The gate's premise — an un-flipped workspace has no
+    // property value children — is what the cell→children backfill breaks: it
+    // mints them while the workspace still reads cells, and a ref-typed value
+    // row's `[[X]]` then duplicates the owner's projected property edge on a
+    // surface that had stopped filtering.
+    //
+    // KNOWN, pre-existing: this post-filter walks each SOURCE's ancestry, but
+    // the only structural dep declared above is the TARGET's. Moving a source
+    // out from under a field row — or editing an ancestor between `((D))` and
+    // `::((D))` — changes membership with nothing to invalidate on, so the
+    // list stays stale until the next reference change or a reload. Un-gating
+    // makes it reachable in every workspace rather than only flipped ones.
+    // Not fixed here: the honest fix is a dep per candidate source and walked
+    // ancestor, and this query is composed by the inline badge on every
+    // visible block. km-nc46.
     if (rawSources || ids.length === 0) return ids
-    if (!(await readIsChildBackedWorkspace(ctx.db, workspaceId))) return ids
-    const machinery = await propertyMachinerySourceIds(ctx.db, ids)
+    if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
+    const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
     return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
   },
 })

@@ -33,13 +33,10 @@ const setup = async (): Promise<Harness> => {
   const { repo } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
-    newId: () => `gen-${++idCursor}`,
     // No live sync observer (the sanctioned deterministic-timing pattern).
     // This suite does explicit local writes + queries and never needs
-    // materialization. With it on, a prior test's async observer write — whose
-    // tx_id comes from the per-test `newId` counter (reset to gen-1 each test)
-    // — could land after this test's resetTestDb cleared command_events and
-    // collide on the UNIQUE command_events.tx_id under full-suite load.
+    // materialization, and an observer left running would keep writing into
+    // the next test's database.
     startSyncObserver: false,
     extensions: [
       typeSeedsFacet.of(dailyNoteType, {source: 'test'}),
@@ -59,15 +56,6 @@ const setup = async (): Promise<Harness> => {
 
 let sharedDb: TestDb
 let env: Harness
-// Monotonic across the whole file (NOT reset per test). The suite shares one
-// PowerSync DB; tx_id comes from this counter, and an awaited write's
-// command_events insert can land just after the next test's resetTestDb (PS
-// write-behind). A per-test reset to gen-1 made those late ids collide with
-// the next test's own ids on the UNIQUE command_events.tx_id; keeping it
-// monotonic means a leaked id is always lower than the live test's, so it
-// can never collide. Nothing here asserts on generated ids (blocks use
-// explicit ids), so the values themselves don't matter.
-let idCursor = 0
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })

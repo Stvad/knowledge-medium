@@ -1,5 +1,6 @@
 import { clamp } from 'lodash-es'
 import { isElementProperlyVisible } from '@/utils/dom.js'
+import { BLOCK_CONTENT_VIEW_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import {
   type FocusedBlockLocation,
   sameFocusedBlockLocation,
@@ -112,6 +113,21 @@ const surfaceOf = (el: HTMLElement): string | undefined =>
  *  a caller pick a row the decorator will then agree needs no scrolling. */
 export const visibilityTargetFor = (el: HTMLElement): HTMLElement =>
   el.querySelector<HTMLElement>(VISIBILITY_TARGET_SELECTOR) ?? el
+
+/** Does this row show a VIEW rather than the block's own text?
+ *
+ *  A renderer may fill a content slot with a review backlog, a review deck, a
+ *  recents list. That row's rect then describes everything it shows instead of
+ *  the block — so it reads as on screen at every scroll position, and comes
+ *  first in document order. Callers picking a row BY GEOMETRY need to tell it
+ *  from an ordinary row; walking (j/k) does not, and still treats it as one.
+ *
+ *  Read from what the content slot DECLARED (`BLOCK_CONTENT_VIEW_ATTRIBUTE`),
+ *  never inferred from the DOM underneath. "Holds other blocks' rows" is the
+ *  inference, and it is wrong both ways: also true of a paragraph containing an
+ *  embed, and false for a backlog whose rows are all still lazy placeholders. */
+export const isRowAContentView = (el: HTMLElement): boolean =>
+  visibilityTargetFor(el).hasAttribute(BLOCK_CONTENT_VIEW_ATTRIBUTE)
 
 const isRecoveryTargetVisible = (el: HTMLElement): boolean =>
   isElementProperlyVisible(visibilityTargetFor(el))
@@ -252,6 +268,8 @@ const collectAncestorLocations = (
   let el = closestBlockAncestor(instanceEl, panel)
   while (el) {
     const location = locationOf(el)
+    // Defence in depth: `findByLocation` treats a missing location as no
+    // match anyway, so a pushed null would change nothing.
     if (location) ancestors.push(location)
     el = closestBlockAncestor(el, panel)
   }
@@ -281,6 +299,8 @@ const findSameDepthSibling = (
   direction: 'prev' | 'next',
 ): FocusedBlockLocation | undefined => {
   const idx = instances.indexOf(instanceEl)
+  // Defence in depth: the only caller already returned if `indexOf` on this
+  // same array was negative.
   if (idx < 0) return undefined
   const own = closestBlockAncestor(instanceEl, panel)
   if (direction === 'prev') {
@@ -301,9 +321,9 @@ const findSameDepthSibling = (
 
 /**
  * Record the focused instance's neighborhood (siblings + ancestors +
- * positional index) inside its panel. Called whenever spatial
- * navigation (or the proactive focus-recovery watcher) confirms that
- * the focused block has a live DOM instance. The hint is consumed by
+ * positional index) inside its panel. Called by the proactive focus-recovery
+ * watcher whenever it confirms that the focused block has a live DOM
+ * instance. The hint is consumed by
  * `findRecoveryAnchor` (and `locateInstance`'s positional tier) when
  * that block later disappears.
  */
@@ -316,6 +336,11 @@ export const rememberInstancePosition = (
   if (!panel) return
   const instances = panelInstances(panel, excludedSurfaces)
   const idx = instances.indexOf(instanceEl)
+  // Defence in depth, unreached by any test: every in-repo caller passes an
+  // element it just found in this panel. `index.ts` re-exports this, so an
+  // extension is the real blast radius — without the guard a hint lands with
+  // BOTH indexes at -1, which either clamp reads as 0: a wrong recovery
+  // target, not none.
   if (idx < 0) return
   const location = locationOf(instanceEl)
   if (!location) return
@@ -375,12 +400,9 @@ export const findRecoveryAnchor = (
   const panel = panelById(panelId)
   if (!panel) return null
   const instances = panelInstances(panel, excludedSurfaces)
-  if (instances.length === 0) return null
-
   const hint = lastPositionByPanel.get(panelId)
   if (!hint || !sameFocusedBlockLocation(hint.location, forLocation)) return null
   const candidates = sameSurfaceInstances(instances, hint.surface)
-  if (candidates.length === 0) return null
 
   const findByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined =>
     location
@@ -403,8 +425,7 @@ export const findRecoveryAnchor = (
     if (ancestor) return ancestor
   }
 
-  const positionalIndex = hint.surfaceIndex >= 0 ? hint.surfaceIndex : hint.index
-  const positionalChoice = candidates[clamp(positionalIndex, 0, candidates.length - 1)] ?? null
+  const positionalChoice = candidates[clamp(hint.surfaceIndex, 0, candidates.length - 1)] ?? null
   return pickViewportFallback(candidates, positionalChoice)
 }
 

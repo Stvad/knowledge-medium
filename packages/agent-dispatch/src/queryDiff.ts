@@ -1,4 +1,4 @@
-/**
+/*
  * Query-watcher row diffing — the union-cursor dedup that decides which
  * query rows are "new" (and therefore trigger a billed agent run). Pure and
  * synchronous: no DB, no config, no I/O.

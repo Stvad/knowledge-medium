@@ -203,6 +203,16 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     exports: ['bindBlockActionContext', 'createSharedBlockActions', 'extendSelectionDown', 'extendSelectionUp'],
     types: [],
   },
+  {
+    category: 'ui',
+    importPath: '@/context/backgroundSubtree.js',
+    description: 'Mark a subtree BACKGROUND — alive and rendering, but not entitled to claim single-holder app resources (today the keyboard, via declarative shortcut activations). For hosts that keep several layout sessions mounted and show one. NOT a signal to stop working.',
+    exports: [
+      'BackgroundSubtreeContext', 'BackgroundSubtreeProvider',
+      'useIsBackgroundSubtree',
+    ],
+    types: [],
+  },
 
   // --- Data / block primitives ----------------------------------------------
   {
@@ -224,8 +234,8 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     importPath: '@/data/stateBlocks.js',
     description: 'System state-block accessors (user, prefs, plugin prefs / UI-state, layout session). layoutSessionBlockIdForKey / layoutSessionsContainerBlockId are the canonical session-key → block-id derivations for out-of-core session hosts — never re-derive the uuid chain.',
     exports: [
-      'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUserBlock',
-      'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
+      'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUIStateBlock',
+      'getUserBlock', 'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
     ],
     types: [],
   },

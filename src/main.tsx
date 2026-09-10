@@ -2,7 +2,7 @@
 // and the pre-React instrumentation, nothing else. New app-root behavior goes
 // into an overridable seam — a block renderer (like TopLevelRenderer), a
 // facet, or the layout-root hook (usePanelLayoutProjection / LayoutRootContext).
-// See the perspective keep-alive RFC (PR #357).
+// See docs/perspective-keep-alive-design.html.
 import React, { StrictMode, Suspense } from 'react'
 import ReactDOM from 'react-dom'
 import { createRoot } from 'react-dom/client'

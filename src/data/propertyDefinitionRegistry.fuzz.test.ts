@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * Fuzz: the property-definition registry + workspace-bound resolver (PR #364,
- * schema-unification Slice B). Random universes of code-owned seed
+ * Fuzz: the property-definition registry + workspace-bound resolver
+ * (docs/schema-unification.html Slice B). Random universes of code-owned seed
  * declarations and projected definition rows (seed-provenanced, poisoned,
  * user, renamed, foreign-workspace) are built into a snapshot and swept for
  * the invariants the two modules maintain BY HAND across each other:

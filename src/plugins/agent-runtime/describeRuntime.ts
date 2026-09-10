@@ -436,11 +436,10 @@ export const describeRuntime = async (
       guides: filters.guides,
       modules: filters.modules,
       components: filters.components,
-      // In brief mode, suppress the module/component glob dumps —
-      // they're 150KB of internal paths the agent doesn't need while
-      // reading a guide. The guide's `preferredModules` field already
-      // names what matters.
-      omitDiscoverableModules: briefMode,
+      // In brief mode, suppress the module/component glob dumps — 150KB of
+      // internal paths the agent doesn't need while reading a guide. The
+      // guide's `preferredModules` field already names what matters.
+      brief: briefMode,
     }, context.document),
     ...(includeDataModel ? {dataModel: DATA_MODEL_GUIDE} : {}),
   }

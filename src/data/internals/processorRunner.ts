@@ -15,25 +15,14 @@
  *      caller fails the originating tx (clean rollback) instead of
  *      failing silently when the processor would otherwise fire.
  *
- * The framework does NOT auto-open a writeTransaction for the processor
- * (v4.32 — see §5.7). `apply(event, ctx)` runs as a plain async function
- * with `ctx = { db, repo }`. Pure-side-effect processors do nothing more;
- * write processors open their own `ctx.repo.tx(...)` when they decide to
- * write. This avoids holding a writer slot through read phases (the
- * shape that produced the §10 / `tasks/processor-tx-deadlock.md`
- * deadlock under PowerSync's serialized single-connection config) and
- * lets pure-side-effect processors skip the writer cost entirely.
+ * The framework does NOT auto-open a writeTransaction — `apply(event, ctx)`
+ * is a plain async fn with `ctx = { db, repo }` that opens its own
+ * `ctx.repo.tx(...)` if it writes. Holding a writer slot through a
+ * processor's read phase deadlocks under PowerSync's serialized
+ * single-connection config.
  *
  * Failures are caught + logged so a crashing processor can't poison
  * subsequent jobs.
- *
- * Stage-1.5 deferred:
- *   - per-block content debouncing (§7.2 row "Trigger on content change"):
- *     v1 ships every fire immediately. The dispatcher ordering is
- *     append-only and sequential, so two close-together content writes
- *     run parseReferences twice — that's slightly more work than the
- *     legacy debounced behavior, but is easier to reason about and
- *     covers correctness. Add coalescing if profiling shows pain.
  */
 
 import {
@@ -216,11 +205,10 @@ export class ProcessorRunner {
   }
 
   /** Invoke the processor's apply with a `{db, repo}` ctx. The framework
-   *  does not wrap apply in a writeTransaction (v4.32) — apply is a
-   *  plain async fn that reads via `ctx.db` and (if it needs to write)
-   *  opens its own tx via `ctx.repo.tx(...)`. Errors are caught + logged
-   *  with the processor name + txId so one buggy processor can't poison
-   *  the dispatch loop. */
+   *  does not wrap apply in a writeTransaction — apply is a plain async fn
+   *  that reads via `ctx.db` and (if it needs to write) opens its own tx
+   *  via `ctx.repo.tx(...)`. Errors are caught + logged with the processor
+   *  name + txId so one buggy processor can't poison the dispatch loop. */
   private async runOne(
     processor: AnyPostCommitProcessor,
     event: CommittedEvent<unknown>,

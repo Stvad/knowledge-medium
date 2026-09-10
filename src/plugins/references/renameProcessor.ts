@@ -13,6 +13,9 @@
  *      depend on what's left in `aliases`.
  *   3. Pure add (no removed aliases) — R3: no-op.
  *
+ * It also repairs the RESTORE transition (deleted → live), where the
+ * ladder above never ran: see `collectRestorePlans`.
+ *
  * Lives next to `parseReferencesProcessor` in the references plugin
  * because it needs the `block_references` projection to find source
  * blocks.
@@ -27,9 +30,8 @@
  * timestamp heuristic ("was this seat minted by MY window?") that no
  * available signal can actually answer: `skipMetadata` still ratchets
  * `updated_at`, so a re-derived span and a user-typed one are
- * indistinguishable. Six review rounds each found a new leak in that
- * heuristic. Running inside the user's transaction deletes the gap, and
- * with it all of that machinery — the claimant check becomes the plain
+ * indistinguishable. Running inside the user's transaction deletes the gap,
+ * and with it all of that machinery — the claimant check becomes the plain
  * question "does anything still claim α?", asked once, atomically.
  *
  * Costs, accepted deliberately (Vlad, #461):
@@ -81,6 +83,8 @@ import {
   type Tx,
 } from '@/data/api'
 import { aliasesProp, getAliases } from '@/data/properties'
+import { FIELD_FORM_MARKER, parseExactReferenceBlockContent } from '@/data/referenceBlock'
+import { isPropertyFieldRow } from '@/data/propertyChildren'
 import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
@@ -90,6 +94,11 @@ import {
   rewriteWikilinksMulti,
   type SpanReplacement,
 } from './referenceParser.ts'
+import {
+  mergeReferrers,
+  wikilinkSourcesByContent,
+  type ReferrerRow,
+} from './parseFence.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
@@ -110,8 +119,8 @@ export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
  *  extension is also the plugin's `systemToggle` boundary, so a bare
  *  contribution outside it keeps running when the user disables
  *  References — rewriting spans and invalidating edges with
- *  `parseReferences` gone and nothing left to rebuild them (Codex on
- *  PR #444). A precedence orders it without moving it.
+ *  `parseReferences` gone and nothing left to rebuild them. A precedence
+ *  orders it without moving it.
  *
  *  Room deliberately left below: a processor that must run after
  *  `alias.sync` but BEFORE this one can take any value in 1..9. */
@@ -132,9 +141,13 @@ export const RENAME_BACKLINKS_PRECEDENCE = 10
  *  Read through `ctx.db` (the active transaction's read surface), so the
  *  trigger-maintained projection already reflects anything this tx has
  *  staged. Rides `idx_block_references_ws_alias` (`localSchema.ts`).
- *  Ordered for determinism, like the sibling same-tx processors. */
-const SELECT_BACKLINK_SOURCE_IDS_SQL = `
-  SELECT DISTINCT br.source_id AS sourceId
+ *  Ordered for determinism, like the sibling same-tx processors.
+ *
+ *  Edge-keyed leg of the enumeration. Complete only for rows whose
+ *  post-commit parse has DRAINED — see `parseFence.ts` for the rows it
+ *  misses and the content-keyed leg that covers them. */
+const SELECT_BACKLINK_SOURCES_SQL = `
+  SELECT DISTINCT br.source_id AS sourceId, source.content AS content
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id
   WHERE br.workspace_id = ?
@@ -144,6 +157,63 @@ const SELECT_BACKLINK_SOURCE_IDS_SQL = `
     AND source.deleted = 0
   ORDER BY source.order_key, source.id
 `
+
+/** Is this source a MARKED NAME ROW for `alias` — a property field row
+ *  whose whole content is `::[[alias]]`, addressing its definition by name
+ *  rather than by id (§7/§9)? Selects the fallback tier: see
+ *  `SpanReplacementRequest.markedRow`.
+ *
+ *  Asked of the CONTENT rather than of `is_field_form`, though the bit is
+ *  derived from exactly this parse. The parse needs no stamp to have
+ *  landed — this runs same-tx over rows the same commit may have just
+ *  written, and slice 1 of #443 is the recorded cost of treating a derived
+ *  column as the signal when the content is right there.
+ *
+ *  TWO parsers, each asked what it alone can answer. The whole-block parse
+ *  establishes the SHAPE — `::` plus exactly one wikilink span, which is
+ *  what makes the row a marked name row — and the inline parse supplies the
+ *  ALIAS to compare, because that is the parser that produced the
+ *  `block_references.alias` this enumeration is keyed on.
+ *
+ *  Content alone is NOT enough, and asking only it was a bug.
+ *  §9 recognition also needs a non-null parent — a workspace-root
+ *  `::` row has no owner to be a field OF, so its marker is just text — and
+ *  a target that resolves to a definition. Not the workspace flip: the
+ *  backfill mints field rows before it (see below).
+ *  `isPropertyFieldRow` is that composed predicate, and it is awaited here
+ *  rather than restated. Without it a root-level `::[[α]]`, or one pointing
+ *  at an ordinary page, took the marked tier and lost the author's visible
+ *  label to `::((id))` when it should keep the pinned form.
+ *
+ *  The tier is NOT dormant pre-flip any more: the cell→children backfill
+ *  mints real field rows into a workspace still reading cells, and
+ *  `isPropertyFieldRow` recognizes them on the bit rather than on the flip.
+ *  A `::((id))` row is machinery wherever it is; only an UNMARKED row is
+ *  ordinary content.
+ *
+ *  Using `exact.alias` for the comparison was wrong, and not merely
+ *  conservatively so. The whole-block parser TRIMS its
+ *  alias while the inline one does not, so a `::[[ α ]]` row whose alias is
+ *  stored with padding — `tx.setProperty(aliasesProp, ['Old '])` is an
+ *  existing, tested case — matched the edge but failed this equality, fell
+ *  through to the pinned tier, and got `::[ α ](((id)))`: the invented
+ *  label this whole arm exists to prevent, plus sanitization and its
+ *  warning. Comparing the raw span makes the two agree by construction. */
+const isMarkedNameRowFor = async (
+  tx: Tx,
+  source: BlockData,
+  alias: string,
+): Promise<boolean> => {
+  const trimmed = source.content.trim()
+  const exact = parseExactReferenceBlockContent(trimmed)
+  if (exact?.kind !== 'alias' || !exact.fieldForm) return false
+  const marks = parseReferences(trimmed)
+  if (marks.length !== 1
+    || marks[0].alias !== alias
+    || marks[0].startIndex !== FIELD_FORM_MARKER.length
+    || marks[0].endIndex !== trimmed.length) return false
+  return isPropertyFieldRow(tx, source)
+}
 
 /** Replacement form for a single removed alias α — the rename ladder,
  *  composed from the shared `preferredSpanReplacement` policy.
@@ -158,23 +228,21 @@ const SELECT_BACKLINK_SOURCE_IDS_SQL = `
  *  labelled with the REMOVED alias so the source author's display text
  *  survives.
  *
- *  NOT YET IMPLEMENTED (§11 group 2, tracked on #443): the doc's
- *  marked-row arm — "its lossy-name fallback for marked rows is
- *  canonical `::((A))`, never a pinned label". Nothing here consults
- *  `isFieldForm`, so a marked name row `::[[α]]` with a lossy label
- *  currently gets `::[sanitized](((A)))` plus a warning. That is still a
- *  recognized field row (the bit stamps for every marked form,
- *  aliased blockref included), so it degrades honestly rather than
- *  silently — but it is not the canonical form the doc specifies. */
+ *  `markedRow` selects the fallback tier per SOURCE: a marked name row
+ *  falls back to canonical `::((A))` instead of a pinned label (§11 group
+ *  2 / #443 — see `SpanReplacementRequest.markedRow`). The wikilink tier
+ *  is unaffected and still wins a clean 1-for-1, marked or not. */
 export const replacementFor = (
   alias: string,
   removed: readonly string[],
   added: readonly string[],
   targetId: string,
+  markedRow = false,
 ): SpanReplacement | null => preferredSpanReplacement({
   wikilinkAlias: removed.length === 1 && added.length === 1 ? added[0] : null,
   pinLabel: alias,
   targetId,
+  markedRow,
   context: RENAME_BACKLINKS_PROCESSOR,
 })
 
@@ -233,6 +301,9 @@ const collectTargetPlans = async (
   before: BlockData,
   after: BlockData,
   plansBySourceId: Map<string, SourcePlan>,
+  /** Aliases MORE THAN ONE target releases in this same commit — see
+   *  `coReleasedAliases`. The content leg is skipped for these. */
+  coReleased: ReadonlySet<string>,
 ): Promise<void> => {
   const beforeAliases = getAliases(before)
   const afterAliases = getAliases(after)
@@ -241,16 +312,14 @@ const collectTargetPlans = async (
   const added = afterAliases.filter(a => !beforeAliases.includes(a))
 
   for (const alias of removed) {
-    const sourceIds = await ctx.db.getAll<{sourceId: string}>(
-      SELECT_BACKLINK_SOURCE_IDS_SQL,
+    const edgeSources = await ctx.db.getAll<ReferrerRow>(
+      SELECT_BACKLINK_SOURCES_SQL,
       [after.workspaceId, alias, after.id],
     )
-    if (sourceIds.length === 0) continue
-    // Consult α's claimants (§11 group 2). This is the whole check —
-    // one read, inside the tx that performed the release, so there is no
-    // window for a competing claim to land in and no seat-exemption
-    // heuristic to get wrong. A live claimant means α is not ours to
-    // re-key:
+    // α's claimants (§11 group 2). This is the whole check — one read,
+    // inside the tx that performed the release, so there is no window for a
+    // competing claim to land in and no seat-exemption heuristic to get
+    // wrong. A live claimant means α is not ours to re-key:
     //   - handoff — some other block owns the name now, so `[[α]]`
     //     already resolves where the author would expect. Rewriting it
     //     (to the new alias, or pinned to the block that just gave α up)
@@ -263,39 +332,169 @@ const collectTargetPlans = async (
     // computed from its own before/after, so by definition it no longer
     // claims α in this tx's staged state.
     //
-    // Only a genuine RELEASE falls through to the rename ladder.
+    // Only a genuine RELEASE falls through to the rename ladder — and read
+    // BEFORE the enumeration, because it also decides whether the fence
+    // leg below is needed.
     const claimants = await ctx.tx.aliasClaimants(alias, after.workspaceId)
-    // `replacementFor` REPORTS when it returns null, so it is called only
-    // on the release path — a handoff is not a rendering failure.
-    const replacement = claimants.length === 0
-      ? replacementFor(alias, removed, added, after.id)
-      : null
-    for (const {sourceId} of sourceIds) {
-      const plan = planFor(plansBySourceId, sourceId)
-      if (replacement === null) {
-        // Two ways to get here, one treatment. Either α was handed off /
-        // co-claimed, or no rendering could carry the span (already
-        // reported). Both leave the source's CONTENT alone — but the
-        // stored edge still names the block that gave α up, and the
-        // renderer resolves `[[α]]` through those stored edges
-        // (`wikilinkMarkdownExtension` builds its alias→id map from
-        // them), so leaving it would navigate the span to the wrong
-        // block permanently. Dropping the edge is itself the write that
-        // schedules `parseReferences` to rebind it, which resolves the
-        // alias exactly as the renderer does — so computing the answer
-        // here could only disagree with it.
-        plan.staleEdges.push({alias, targetId: after.id})
-        continue
-      }
-      plan.rewrites.push({
-        alias,
-        replacement: replacement.text,
-        fromTargetId: after.id,
-        toTargetId: replacement.toTargetId ?? after.id,
-        refAlias: replacement.refAlias,
-        pinned: replacement.toTargetId !== null,
-      })
+    // THE REFERENCES-PARSE FENCE. On a genuine release, add the rows whose
+    // content carries `[[α]]` but whose edge hasn't been parsed yet —
+    // `parseFence.ts` has the measurement and why the doc's "drain first"
+    // is unavailable to a same-tx processor. Gated on the release path
+    // because the content leg does no target check and is only SOUND there;
+    // on a handoff it would merely be wasted work (see its docblock).
+    // The content leg is sound only when THIS target owned every `[[α]]`
+    // span — see `wikilinkSourcesByContent`. Two targets releasing α in one
+    // commit both read zero claimants, so both would claim the same textual
+    // referrers and the span would pin to whichever iterated last while its
+    // edge followed the other. Fall back to the edge leg, which is
+    // target-keyed and therefore still attributes each row correctly; the
+    // undrained window simply stays open for that commit.
+    const sources = claimants.length === 0 && !coReleased.has(alias)
+      ? mergeReferrers(
+          edgeSources,
+          await wikilinkSourcesByContent(ctx.db, after.workspaceId, alias),
+        )
+      : edgeSources
+    if (sources.length === 0) continue
+    // Partitioned by fallback tier, then ONE ladder run per non-empty
+    // partition. Not per source: `replacementFor` REPORTS on failure, and
+    // running it per source would repeat the same warning once per
+    // referrer. Not once overall either — the tier is a property of the
+    // SOURCE (is this span the whole content of a marked name row?), not
+    // of the alias.
+    const partitions: Array<{markedRow: boolean; sourceIds: string[]}> = [
+      {markedRow: false, sourceIds: []},
+      {markedRow: true, sourceIds: []},
+    ]
+    for (const {sourceId} of sources) {
+      // The row, not the enumerated content: recognition needs `parentId`,
+      // `workspaceId` and the derived columns too, and `tx.get` sees this
+      // tx's staged state.
+      const source = await ctx.tx.get(sourceId)
+      if (source === null) continue
+      const marked = await isMarkedNameRowFor(ctx.tx, source, alias)
+      partitions[marked ? 1 : 0].sourceIds.push(sourceId)
     }
+
+    for (const {markedRow, sourceIds} of partitions) {
+      if (sourceIds.length === 0) continue
+      // `replacementFor` REPORTS when it returns null, so it is called only
+      // on the release path — a handoff is not a rendering failure.
+      const replacement = claimants.length === 0
+        ? replacementFor(alias, removed, added, after.id, markedRow)
+        : null
+      for (const sourceId of sourceIds) {
+        const plan = planFor(plansBySourceId, sourceId)
+        if (replacement === null) {
+          // Two ways to get here, one treatment. Either α was handed off /
+          // co-claimed, or no rendering could carry the span (already
+          // reported). Both leave the source's CONTENT alone — but the
+          // stored edge still names the block that gave α up, and the
+          // renderer resolves `[[α]]` through those stored edges
+          // (`wikilinkMarkdownExtension` builds its alias→id map from
+          // them), so leaving it would navigate the span to the wrong
+          // block permanently. Dropping the edge is itself the write that
+          // schedules `parseReferences` to rebind it, which resolves the
+          // alias exactly as the renderer does — so computing the answer
+          // here could only disagree with it.
+          plan.staleEdges.push({alias, targetId: after.id})
+          continue
+        }
+        plan.rewrites.push({
+          alias,
+          replacement: replacement.text,
+          fromTargetId: after.id,
+          toTargetId: replacement.toTargetId ?? after.id,
+          refAlias: replacement.refAlias,
+          pinned: replacement.toTargetId !== null,
+        })
+      }
+    }
+  }
+}
+
+/** Aliases that MORE THAN ONE target gives up in this one commit.
+ *
+ *  Normally impossible — the alias-uniqueness trigger admits a single
+ *  claimant — but it fires only for local user transactions, so
+ *  sync-applied rows can leave two blocks co-claiming one name (#460).
+ *  When both then release it, each sees zero post-tx claimants and each
+ *  would run the content leg over the SAME textual referrers, which is the
+ *  one case that leg's "this target owned every span" premise does not
+ *  cover.
+ *
+ *  Computed once per event from the same before/after pairs the loop
+ *  walks, so it costs nothing and cannot disagree with what the loop
+ *  processes. */
+const coReleasedAliases = (event: SameTxEvent): ReadonlySet<string> => {
+  const releaseCount = new Map<string, number>()
+  for (const row of event.changedRows) {
+    if (row.before === null || row.after === null || row.after.deleted) continue
+    if (!aliasFieldChanged(row.before, row.after)) continue
+    const afterAliases = new Set(getAliases(row.after))
+    for (const alias of new Set(getAliases(row.before))) {
+      if (afterAliases.has(alias)) continue
+      releaseCount.set(alias, (releaseCount.get(alias) ?? 0) + 1)
+    }
+  }
+  return new Set([...releaseCount].filter(([, n]) => n > 1).map(([alias]) => alias))
+}
+
+/** Inbound CONTENT edges onto `targetId`, whatever alias they are keyed
+ *  on — the restore repair's enumeration, mirroring
+ *  `SELECT_BACKLINK_SOURCES_SQL` without the alias pin.
+ *
+ *  Deliberately does NOT try to exclude raw `((id))` blockrefs by
+ *  `br.alias <> br.target_id`. The projection stores no syntax, so that
+ *  test is a value coincidence, not a classification: a page aliased to
+ *  its own uuid and referenced as `[[uuid]]` has the identical shape, and
+ *  excluding it would leave exactly the stale binding this repair exists
+ *  to clear. Letting blockref edges through costs one re-parse each — the
+ *  re-parse re-derives them unchanged — and that is nearly always zero
+ *  work anyway, since deleting a block inlines its live `((id))`
+ *  referrers before any restore can see them. */
+const SELECT_INBOUND_ALIAS_EDGES_SQL = `
+  SELECT DISTINCT br.alias AS alias, br.source_id AS sourceId
+  FROM block_references br
+  JOIN blocks source ON source.id = br.source_id
+  WHERE br.workspace_id = ?
+    AND br.target_id = ?
+    AND br.source_field = ''
+    AND source.deleted = 0
+  ORDER BY source.order_key, source.id
+`
+
+/** RESTORE repair: a block coming back live must not keep inbound
+ *  `[[α]]` edges for aliases it no longer claims.
+ *
+ *  The ladder above diffs LIVE rows and `apply` skips tombstones, so an
+ *  alias released while the target was deleted never reaches it — by
+ *  design: a tombstone claims nothing, and its inbound edges are the
+ *  release-reclaim residual the add-only contract retains so that
+ *  restoring the target rebinds cleanly. Restore it under a DIFFERENT
+ *  alias set and that premise fails, leaving a live source bound to a
+ *  live block that no longer answers to the name — which nothing else
+ *  heals, since the source re-parses only on its own row.
+ *
+ *  Invalidation only, never a content rewrite: rewriting live referrers'
+ *  text off a deleted page's rename is the call §11 group 2 / #383
+ *  defers, and dropping the edge IS the write that schedules
+ *  `parseReferences` to rebind α exactly as the renderer resolves it
+ *  (same reasoning as the handoff arm above). Aliases the row still
+ *  claims are skipped so a clean restore writes nothing. */
+const collectRestorePlans = async (
+  ctx: SameTxCtx,
+  after: BlockData,
+  plansBySourceId: Map<string, SourcePlan>,
+): Promise<void> => {
+  const claimed = new Set(getAliases(after))
+  const edges = await ctx.db.getAll<{alias: string; sourceId: string}>(
+    SELECT_INBOUND_ALIAS_EDGES_SQL,
+    [after.workspaceId, after.id],
+  )
+  for (const {alias, sourceId} of edges) {
+    if (claimed.has(alias)) continue
+    planFor(plansBySourceId, sourceId).staleEdges.push({alias, targetId: after.id})
   }
 }
 
@@ -346,7 +545,7 @@ export const applyRefRewrites = (
  *  every occurrence of one alias into a SINGLE entry, so there is no way
  *  to say "the pinned span points here, the embed points there" in the
  *  stored list; only a re-parse can. Drop the entry and let it own the
- *  rebind (PR #444 round 7, P2).
+ *  rebind.
  *
  *  Exported for a DIRECT unit test. Asserting it through the processor
  *  cannot work: the write is what schedules `parseReferences`, which
@@ -434,7 +633,7 @@ const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
     // create path does.
     //
     // Gated on a content rewrite, and that is sufficient — checked, because
-    // it looks like a hole (Codex on PR #444). The no-content-change paths
+    // it looks like a hole. The no-content-change paths
     // (handoff, co-claim, unrenderable replacement) still WRITE, because
     // they drop the stale edge; that write dirties the row, and the kernel's
     // derivation re-run visits dirty rows without filtering on watched
@@ -480,31 +679,46 @@ const aliasFieldChanged = (before: BlockData, after: BlockData): boolean => {
 
 export const renameBacklinksProcessor = defineSameTxProcessor({
   name: RENAME_BACKLINKS_PROCESSOR,
-  // Properties-only: alias diffs ride this field. The source content and
-  // `references` we write are watched by the post-commit
+  // Alias diffs ride `properties`; `deleted` is watched for the restore
+  // repair alone (`collectRestorePlans`), which is why watching it does
+  // NOT reopen the deferred call below: the delete direction still exits
+  // at the `row.after.deleted` skip, and the restore direction only ever
+  // invalidates edges — it never rewrites a source's content. The source
+  // content and `references` we write are watched by the post-commit
   // `parseReferences`, which re-derives the same list and writes nothing.
-  watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  watches: {kind: 'field', table: 'blocks', fields: ['properties', 'deleted']},
   // Deliberately NOT `rerunOnDirtyRows` — see the ORDERING note in the
   // header. This processor is placed after `alias.sync` so the alias diff
   // is already settled when it fires in pass one, which keeps the
   // kernel's own re-run pass (project-property-children in particular)
   // downstream of the content we rewrite.
   //
-  // The delete flow's release rewrite is deliberately NOT here. The doc's
+  // The delete flow's release REWRITE is deliberately NOT here. The doc's
   // sibling item — "the delete flow triggers the release rewrite
   // explicitly (a bare tombstone leaves no properties diff)" — needs the
   // definition-delete surface and a scope decision (§11 group 2 on #443,
-  // overlapping #383). Watching `deleted` from this processor would
-  // generalize the release rewrite to every page deletion, which is
-  // exactly the call that issue defers (Vlad: don't change the current
-  // rule beyond what props-as-blocks needs).
+  // overlapping #383): generalizing it to every page deletion is exactly
+  // the call that issue defers (Vlad: don't change the current rule beyond
+  // what props-as-blocks needs). `deleted` is watched all the same, for
+  // the opposite direction only — see `collectRestorePlans`, which
+  // invalidates and never rewrites.
   apply: async (event: SameTxEvent, ctx: SameTxCtx) => {
     const plansBySourceId = new Map<string, SourcePlan>()
+    const coReleased = coReleasedAliases(event)
     for (const row of event.changedRows) {
       if (row.before === null || row.after === null) continue
       if (row.after.deleted) continue
+      if (row.before.deleted) {
+        // Restore. The alias ladder's diff is meaningless across this
+        // edge — a tombstone claimed nothing, so every alias reads as
+        // "added" — and the repair is state-based, not diff-based:
+        // whatever the row claims NOW is what its inbound edges must
+        // agree with, however it got there.
+        await collectRestorePlans(ctx, row.after, plansBySourceId)
+        continue
+      }
       if (!aliasFieldChanged(row.before, row.after)) continue
-      await collectTargetPlans(ctx, row.before, row.after, plansBySourceId)
+      await collectTargetPlans(ctx, row.before, row.after, plansBySourceId, coReleased)
     }
     // Collect every target's plans BEFORE applying any: one commit can
     // rename several targets that share a source, and the content splice

@@ -222,8 +222,8 @@ const sweepInvariants = async (db: TestDb['db']): Promise<void> => {
   // `sweepStructuralInvariants` (`@/data/test/fuzzKernelHarness`) with
   // `allRows: true` — actions create blocks (split_block_cm & co.) and
   // later actions operate on them, so scanning only the seed ids would
-  // let a cycle through a created id escape the sweep (Codex review on
-  // PR #371). The collision check there is scoped to `ws: WS`, which is
+  // let a cycle through a created id escape the sweep. The collision
+  // check there is scoped to `ws: WS`, which is
   // equivalent to this suite's un-scoped grouping since every live block
   // is asserted (below) to belong to WS.
   await sweepStructuralInvariants(db, {ws: WS, allRows: true})

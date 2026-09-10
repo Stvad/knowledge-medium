@@ -601,7 +601,7 @@ describe('default CodeMirror shortcuts', () => {
     // Reachable from the keyboard: split the zoomed page at cursor 0 (its
     // content moves down), then Backspace at 0 in the now-empty root —
     // without the canMergeUp guard the handler tombstoned the whole
-    // rendered surface (Codex review on the interaction fuzzer, PR #371).
+    // rendered surface.
     // This gates the BACKSPACE gesture, which means "consume this block and
     // put the cursor on the previous visible one" and has nowhere to land at
     // the scope root. An explicit Delete on the same block IS allowed — that's

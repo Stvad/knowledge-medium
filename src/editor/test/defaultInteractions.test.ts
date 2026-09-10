@@ -55,6 +55,7 @@ const shellState = (
   overrides: Partial<BlockShellState['shellProps']> = {},
 ): BlockShellState => ({
   shellProps: {
+    'data-block-shell': 'true',
     'data-block-id': context.block.id,
     'data-editing': 'false',
     tabIndex: 0,
@@ -251,5 +252,72 @@ describe('blockContentPointerGestures (content-surface pointer gestures)', () =>
     surface.onTouchStart?.(touchAt(5, 5))
     surface.onTouchEnd?.(touchAt(80, 80))
     expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+  })
+
+  // A renderer that fills a block's content slot with real rows (the Readwise
+  // review backlog) puts one content surface inside another. Capture runs outer
+  // → inner, so without an ownership check the CONTAINER claims a nested
+  // block's double-click first and preventDefaults — the nested block never
+  // sees it, and the double-click lands on the backlog page.
+  describe('a nested block surface', () => {
+    const nested = () => {
+      const outer = document.createElement('div')
+      outer.className = 'block-content'
+      const inner = document.createElement('div')
+      inner.className = 'block-content'
+      const innerText = document.createElement('span')
+      inner.appendChild(innerText)
+      const ownText = document.createElement('span')
+      outer.append(ownText, inner)
+      return {outer, innerText, ownText}
+    }
+
+    it('leaves a nested surface its own double-click', () => {
+      const {outer, innerText} = nested()
+      props().onMouseDownCapture?.(mouseDown({currentTarget: outer, target: innerText}))
+      expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+    })
+
+    it('still claims a double-click on its own content', () => {
+      const {outer, ownText} = nested()
+      props().onMouseDownCapture?.(mouseDown({currentTarget: outer, target: ownText}))
+      expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
+    })
+
+    // A touch sequence is dispatched to the element it STARTED on, so the
+    // ownership question is asked once, at touchstart — which is also the only
+    // mixed case that can actually occur.
+    const tap = (
+      surface: BlockContentSurfaceProps,
+      outer: HTMLElement,
+      startTarget: EventTarget,
+      endTarget: EventTarget,
+    ) => {
+      const at = (x: number, y: number, target: EventTarget) => ({
+        ...touchAt(x, y),
+        currentTarget: outer,
+        target,
+      }) as unknown as TouchEvent<HTMLDivElement>
+      surface.onTouchStart?.(at(5, 5, startTarget))
+      surface.onTouchEnd?.(at(6, 6, endTarget))
+    }
+
+    it('leaves a nested surface its own tap', () => {
+      const {outer, innerText} = nested()
+      tap(props(), outer, innerText, innerText)
+      expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+    })
+
+    it('does not take a tap that BEGAN on a nested surface', () => {
+      const {outer, innerText, ownText} = nested()
+      tap(props(), outer, innerText, ownText)
+      expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+    })
+
+    it('still takes a tap that stays on its own content', () => {
+      const {outer, ownText} = nested()
+      tap(props(), outer, ownText, ownText)
+      expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
+    })
   })
 })

@@ -74,13 +74,10 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       const after = row.after
       if (!after || after.deleted) continue
 
-      // Seed-owned type rows (`materializeTypeSeeds` mints a `block-type` block at
-      // its deterministic `/type/` id) are code-authored, complete definitions —
-      // do NOT typeify them into navigable `[[Label]]` pages + aliases. That's the
-      // user-type gesture; code types were never pages, so forcing PAGE_TYPE +
-      // alias here would be a visible behavior change at the C4 cutover (and the
-      // materializer's Automation-scope tx would trip a BlockDefault scope clash).
-      // The materializer writes the finished bag; there is nothing to complete.
+      // Seed-owned type rows are code-authored, complete definitions — the
+      // materializer writes the finished bag, so there is nothing to
+      // complete, and forcing PAGE_TYPE + alias would both change behavior
+      // and trip a BlockDefault scope clash against its Automation-scope tx.
       const seedKey = seededDefinitionKey(after)
       if (seedKey !== undefined && isTypeSeedKey(seedKey)) continue
 

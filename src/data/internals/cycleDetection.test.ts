@@ -33,6 +33,7 @@ import { BlockCache } from '@/data/blockCache'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
 
@@ -44,12 +45,12 @@ beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
   const cache = new BlockCache()
-  const repo = new Repo({
+  const repo = trackTestRepo(new Repo({
     db: h.db,
     cache,
     user: { id: 'u1' },
     startSyncObserver: false, // tests start it explicitly with throttleMs: 0
-  })
+  }))
   env = { h, cache, repo }
 })
 afterEach(() => {

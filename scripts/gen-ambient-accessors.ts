@@ -40,10 +40,10 @@
 //
 // This is deliberately the WHOLE mechanism for making a new restriction
 // "a one-tag affair": e.g. the un-merged getLayoutSessionId follow-up
-// (PR #425) just needs the same two tags added to its export — no
-// eslint.config.js edit, no new eslint-rules module. (It's not applied on
-// this branch: 9 call sites haven't migrated to the injected channel yet
-// and would fail lint immediately.)
+// just needs the same two tags added to its export — no eslint.config.js
+// edit, no new eslint-rules module. (It's not applied on this branch:
+// 9 call sites haven't migrated to the injected channel yet and would
+// fail lint immediately.)
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'

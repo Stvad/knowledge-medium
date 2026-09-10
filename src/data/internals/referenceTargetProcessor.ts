@@ -1,7 +1,7 @@
 /**
  * `core.deriveReferenceTarget` — same-tx derivation of the LOCAL
  * `reference_target_id` column (properties-as-blocks migration, slice A;
- * PR #288 §5/§7).
+ * docs/properties-as-blocks-migration.html §5/§7).
  *
  * Watches `content`. When a row's whole content trims to exactly one
  * reference span — `((id))`, `[[alias]]`, or `[label](((uuid)))`, each
@@ -33,7 +33,10 @@ import {
   defineSameTxProcessor,
   type Tx,
 } from '@/data/api'
-import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
+import {
+  isIdCarryingReference,
+  parseExactReferenceBlockContent,
+} from '@/data/referenceBlock'
 
 export const DERIVE_REFERENCE_TARGET_PROCESSOR_NAME = 'core.deriveReferenceTarget'
 
@@ -71,7 +74,7 @@ export const deriveReferenceColumns = async (
 ): Promise<DerivedReferenceColumns> => {
   const exact = parseExactReferenceBlockContent(content)
   if (!exact) return {targetId: null, isFieldForm: false}
-  if (exact.kind === 'blockRef' || exact.kind === 'aliasedBlockRef') {
+  if (isIdCarryingReference(exact)) {
     return {targetId: exact.id, isFieldForm: exact.fieldForm}
   }
 

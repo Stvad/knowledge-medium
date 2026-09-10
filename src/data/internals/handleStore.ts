@@ -119,31 +119,9 @@ interface RegisteredHandle {
  *  the moved block disappears from its old parent's list, layout collapses,
  *  then it reappears under the new parent on the next paint.
  *
- *  Semantics:
- *    - Each handle invalidated as part of one `store.invalidate(...)`
- *      call registers itself with the batch via `register()` and MUST
- *      call `finish(notifyOrNull)` exactly once for that registration —
- *      with a notify thunk if it wants to fire after the barrier, or
- *      `null` to release its slot (errors, deferred-no-listeners,
- *      mid-load coalescing, structural-diff no-ops).
- *    - The barrier closes once `close()` has been called AND all
- *      registered slots have finished. At that point every queued notify
- *      runs synchronously in registration order, landing in one
- *      microtask so React 18 auto-batching captures them in one commit.
- *    - Slots that finish synchronously during the invalidate walk are
- *      drained the same way; if all matched handles short-circuit, the
- *      barrier flushes immediately on `close()`.
- *    - Mid-load handles forward `null` and don't re-register their
- *      post-settle reload into this batch; that reload's notify lands
- *      in its own microtask. The dominant indent/move case is ready
- *      handles, so the batch covers the symptom; mid-load is a
- *      best-effort fallback.
- *    - A barrier can outlive its own members' next re-resolve, so a queued
- *      slot is not automatically still the truth at flush time. Each slot
- *      carries the stamp of the settle that queued it and is DROPPED if a
- *      later settle of that handle has landed since — see
- *      `LoaderHandle.flushQueuedNotify` for the three ways that happens
- *      and why dropping loses no delivery.
+ *  Mid-load handles forward `null`; their post-settle reload notifies in
+ *  its own microtask, outside this barrier. Queued slots carry a settle
+ *  stamp — see `flushQueuedNotify`.
  */
 class NotifyBatch {
   private remaining = 0
@@ -353,23 +331,12 @@ export class HandleStore {
     // in tests and trigger further changes; iterating a stable snapshot
     // keeps that bounded.
     //
-    // Order matters (reviewer P2 #3): observeDuringLoad MUST run before
-    // invalidate. observeDuringLoad gates on `inflight` — if we invalidate
-    // first on a ready handle, the loader spins up and inflight becomes
-    // truthy, causing observeDuringLoad to record the same change in the
-    // queue. After the freshly-kicked-off load settles, the queued change
-    // matches the freshly-collected deps and schedules ANOTHER load even
-    // though the first reload already covered the change. Running
-    // observeDuringLoad first means ready handles skip the queue (correct:
-    // their fresh load already accounts for this change) while loading
-    // handles record the change for post-settle replay (correct: needed
-    // for late-declared deps to catch the change).
+    // observeDuringLoad MUST run before invalidate. Invalidating first
+    // makes a ready handle's own fresh load look in-flight, so the change
+    // is queued and replayed after settle — a second load for a change
+    // the first already covered.
     this.metrics.invalidations++
     const snapshot = Array.from(this.handles.values())
-    // First pass — observeDuringLoad for every handle, and collect the
-    // matched set. We need the matched count before deciding whether to
-    // open a batch (a single-handle invalidation has nothing to
-    // coordinate and skips the barrier machinery).
     const matched: RegisteredHandle[] = []
     for (const h of snapshot) {
       this.metrics.handlesWalked++
@@ -565,13 +532,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   /**
    * Resolve a disposed handle to whatever is LIVE at its key.
    *
-   * Why this exists: the documented contract used to be "re-acquire through
-   * the factory", and the factory only runs in the CALLER's render. That is
-   * unsatisfiable in this app — React Compiler output memoizes the factory
-   * call on deps that never change (`block.id`, `block.repo.query`), so a
-   * consumer handed a disposed handle gets the same corpse back on every
-   * subsequent render, forever. Rather than ask every caller to defeat its
-   * own compiler, a disposed handle resolves itself.
+   * Callers cannot re-acquire through the factory — React Compiler memoizes
+   * the factory call on deps that never change, so a consumer handed a
+   * corpse gets the same corpse forever. A disposed handle resolves itself.
    *
    * `liveAtKey` is the PURE half — it never creates, so it is safe on the
    * render path (`peek`, `status`).
@@ -597,23 +560,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    * `disposed` one-way, so `runLoader` and friends can go on reading it as
    * "this run was cancelled".
    *
-   * It cannot produce two live handles for one key, because `getOrCreate` IS
-   * adopt-or-mint: it hands back whatever someone else already registered and
-   * runs the factory only when the key is vacant. Adoption therefore needs no
-   * separate branch here — the same single-owner path every other caller uses
-   * gives it for free.
-   *
-   * Epoch caveat, stated plainly because it is a real trade: query keys embed
-   * the registry epoch (`query:<name>@<epoch>`, repo.ts) and the loader we
-   * hand the sibling captured that epoch's registry snapshot, so the sibling
-   * is registered under the OLD key and keeps serving the OLD snapshot.
-   * Serving it is already the contract for a not-yet-GC'd old-epoch handle
-   * (repo.ts), but this DOES change bounded into unbounded: previously such a
-   * handle died at GC and stayed dead, and now a holder that keeps resolving
-   * can keep a superseded resolver alive indefinitely. Nothing new lookups do
-   * is affected — they key at the current epoch. Closing it properly needs the
-   * epoch owner (Repo) to retire old-epoch keys explicitly; a handle cannot
-   * see the current epoch from here.
+   * A sibling minted at an old-epoch key (`query:<name>@<epoch>`, repo.ts)
+   * keeps serving that epoch's registry snapshot, so a holder that keeps
+   * resolving can keep a superseded resolver alive past its normal GC.
    */
   private resolveLive(): LoaderHandle<T> {
     // Defence in depth: the four call sites all test `disposed` first, so
@@ -647,16 +596,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   load(): Promise<T> {
     if (this.disposed) return this.resolveLive().load()
-    // An inflight load means the cached value is *known stale* — it was
-    // either never set (cold load) or was invalidated and a fresh fetch
-    // is in progress. Return the inflight so awaiters see post-
-    // invalidation truth. Callers who specifically want "give me the
-    // current cached value, don't wait" should use `peek()`. Without
-    // this preference, a `repo.tx` → `handleStore.invalidate(...)`
-    // sequence can hand the next `await handle.load()` a pre-commit
-    // snapshot — e.g. a processor reading a query handle right after a
-    // commit that just tombstoned the looked-up row would see it as
-    // live and skip the restore (references.parseReferences §7.5 race).
+    // An inflight load means the cached value is known stale — return the
+    // inflight so awaiters see post-invalidation truth. Callers who want
+    // the cached value without waiting use `peek()`.
     if (this.inflight) return this.inflight
     if (this.status_ === 'ready' && this.value !== undefined && !this.stale) {
       return Promise.resolve(this.value)
@@ -673,16 +615,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // entering corpse's `load()` forwards, then the loop's check hands the
     // whole operation to the same live handle one lap later).
     //
-    // Hold a ref for the WHOLE operation, the way a subscriber does. This is a
-    // multi-lap operation, and between laps the only thing keeping the handle
-    // alive is the inflight load's own retain — which `runLoader` hands back
-    // on settle. Under a non-positive `gcTimeMs` that `release()` disposes
-    // synchronously, so every lap kills the handle it just loaded, the check
-    // below forwards to a fresh sibling, and the sibling repeats it: an
-    // unbounded loader loop that starves the event loop (before this retain,
-    // `new HandleStore({gcTimeMs: 0})` + one `loadFresh()` never returned).
-    // Retaining also makes the ordinary case honest — a `continue` lap cannot
-    // find its own handle collected.
+    // Hold a ref for the whole multi-lap operation. Without it, a
+    // non-positive `gcTimeMs` disposes the handle on each lap's settle, the
+    // next lap loads a fresh sibling, and the loop never terminates.
     this.retain()
     try {
       while (true) {
@@ -690,17 +625,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         // A dirty settle schedules its follow-up reload in a microtask before
         // resolving the load promise. Yield once so that reload becomes visible.
         await Promise.resolve()
-        // The real check, and it has to sit HERE — after the awaits, before the
-        // state reads. This is the only method on the class that awaits between
-        // deciding "am I disposed" and acting on the answer, and `load()`
-        // settles by running LISTENER code: a listener is free to dispose this
-        // handle (`HandleStore.clear()`, which ignores the ref-count the retain
-        // above holds). Reading `inflight`/`stale`/`value` off a corpse —
-        // disposal cleared all three — then reports "completed without a value"
-        // for a load that in fact succeeded. Forward the WHOLE operation, never
-        // the inner `load()`: this method's contract is that the value it
-        // returns was not invalidated while its loader ran, and delegating only
-        // the load drops that.
+        // This check must sit after the awaits: `load()` settles by running
+        // listener code, and a listener may `HandleStore.clear()` this handle.
+        // Forward the whole operation, not the inner `load()` — the freshness
+        // contract is this method's, not `load()`'s.
         if (this.disposed) return this.resolveLive().loadFresh()
         if (this.inflight || this.stale) continue
         if (this.value === undefined) {
@@ -922,6 +850,22 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     return p
   }
 
+  /** Drop the structural-diff baseline, so the next settle notifies even when
+   *  its value equals the last one delivered.
+   *
+   *  The baseline is a valid stand-in for "what subscribers know" only while
+   *  everything they know came from here. A subscriber that also publishes
+   *  state of its own (a definition projector's imperative `upsert`) breaks
+   *  that: a write and its undo can land inside one loader window, leaving the
+   *  reload's value equal to the last delivered one — dedup then suppresses the
+   *  only delivery that could have retracted what the subscriber published, and
+   *  nothing later will, because nothing later differs either. */
+  forgetNotifiedValue(): void {
+    if (this.disposed) { this.resolveLive().forgetNotifiedValue(); return }
+    this.notifiedValue = undefined
+    this.hasNotifiedValue = false
+  }
+
   subscribe(listener: (value: T) => void): Unsubscribe {
     if (this.disposed) return this.resolveLive().subscribe(listener)
     this.listeners.add(listener)
@@ -1075,53 +1019,16 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   /** Flush a notify that was queued behind a `NotifyBatch` barrier.
    *
-   *  A barrier can stay open across LATER runs of one of its own members:
-   *  that reload is not a member of the open batch (it either joins a newer
-   *  batch or runs unbatched), so by flush time the slot may no longer speak
-   *  for the handle. `seq` is the stamp of the run that queued this slot, and
-   *  a slot whose stamp is stale is DROPPED rather than published. The three
-   *  ways a slot goes stale, each of which is exactly one later settle:
+   *  A queued slot speaks for the run that queued it. Drop it if a later
+   *  settle has landed since — that settle either notified, was
+   *  diff-suppressed as equal, or queued the rerun that will, so dropping
+   *  loses no delivery. Only a SUCCESSFUL settle bumps the stamp, so a slot
+   *  queued before a failed load still publishes.
    *
-   *   1. The later run notified already (unbatched, or an inner batch that
-   *      closed first). Publishing this slot's value would walk a listener
-   *      backwards — v2 followed by the queued v1 — and since `notify()` also
-   *      writes `notifiedValue`, the structural-diff baseline would be left
-   *      disagreeing with the value the handle actually holds, with nothing
-   *      to correct it until the next invalidation.
-   *   2. The later run settled DIRTY (`needsPostSettleReload`): it wrote
-   *      `value` for peek/load callers but deliberately withheld the notify
-   *      because the snapshot is known suspect, and queued a clean rerun that
-   *      will publish. Neither this slot's own vintage nor the suspect value
-   *      is the thing to hand a subscriber; the rerun's notify is.
-   *   3. The later run is queued in a NEWER, still-open barrier. Publishing
-   *      here would split that invalidation across two commits — its other
-   *      members are still gated — which is the exact intermediate state
-   *      `NotifyBatch` exists to prevent. Deferring to the newer barrier
-   *      keeps them together.
-   *
-   *  Dropping (rather than publishing latest-known) is safe because a stamp
-   *  only goes stale via a later SUCCESSFUL settle, and every such settle
-   *  either notifies itself, is diff-suppressed as equal to what listeners
-   *  already have, or schedules the rerun that will. The one place it defers
-   *  to another barrier is (3), and that barrier's own flush is what
-   *  publishes. A failed load does NOT bump the stamp, so a slot queued
-   *  before an error still publishes the value the handle still holds.
-   *
-   *  Why not publish anyway and let the structural diff sort it out: the
-   *  consumers that read the pushed argument instead of re-reading `peek()`
-   *  — the grouped-backlinks bridge, `Repo.queryBlocks`'s freshInitial path,
-   *  `PanelLayoutProjection` — rebuild from it, so a redundant or premature
-   *  delivery is a redundant or premature rebuild, not a free no-op.
-   *
-   *  A current stamp also makes the flush-time structural diff this method
-   *  used to re-run dead: `notifiedValue` moves only inside `notify()`, and
-   *  every caller of `notify()` is either an unbatched settle (which bumps
-   *  the stamp) or another slot's flush (a different run, hence a different
-   *  stamp) — so a slot that survives the stamp check cannot be holding a
-   *  value the listeners already have. Publishing the STAMPED value rather
-   *  than `this.value` is equivalent for the same reason (only a successful
-   *  settle writes `value`, and it bumps the stamp); the stamped value is
-   *  used because it keeps the slot a self-contained record of one run. */
+   *  Do not publish anyway and let the structural diff sort it out: the
+   *  consumers that rebuild from the pushed argument rather than re-reading
+   *  `peek()` (grouped-backlinks bridge, `Repo.queryBlocks` freshInitial,
+   *  `PanelLayoutProjection`) would rebuild redundantly. */
   private flushQueuedNotify(seq: number, value: T): void {
     if (this.disposed) return
     if (seq !== this.settleSeq) {
@@ -1262,6 +1169,16 @@ export const handleKey = (name: string, args?: unknown): string =>
  *  internals dependencies). */
 export type { ChangeSnapshot } from '@/data/invalidation.js'
 
+/** Did either column §9 recognition keys on move? Defined once because the
+ *  two parent-edge branches below MUST ask the identical question — the
+ *  visible-membership edge and the row's own `children(id)` edge are the two
+ *  halves of one recognition flip, and a version that checked only the
+ *  target would silently miss every `::` add/remove (which leaves the target
+ *  untouched) in exactly one of them. */
+const recognitionColumnsChanged = (entry: ChangeSnapshot): boolean =>
+  (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
+  || (entry.before?.isFieldForm ?? false) !== (entry.after?.isFieldForm ?? false)
+
 /** Compute a `ChangeNotification` from a tx's per-id snapshots map.
  *  Used by the TxEngine fast path (§9.3): post-commit, the engine
  *  passes its snapshots map here and feeds the result into
@@ -1291,16 +1208,6 @@ export type { ChangeSnapshot } from '@/data/invalidation.js'
  *  `handleStore.invalidate({tables: [...]})` directly, or (better)
  *  contribute an `InvalidationRule` that emits a narrow plugin channel.
  */
-/** Did either column §9 recognition keys on move? Defined once because the
- *  two parent-edge branches below MUST ask the identical question — the
- *  visible-membership edge and the row's own `children(id)` edge are the two
- *  halves of one recognition flip, and a version that checked only the
- *  target would silently miss every `::` add/remove (which leaves the target
- *  untouched) in exactly one of them. */
-const recognitionColumnsChanged = (entry: ChangeSnapshot): boolean =>
-  (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
-  || (entry.before?.isFieldForm ?? false) !== (entry.after?.isFieldForm ?? false)
-
 export const snapshotsToChangeNotification = (
   snapshots: ReadonlyMap<string, ChangeSnapshot>,
   invalidationRules: readonly InvalidationRule[] = [],
@@ -1349,7 +1256,7 @@ export const snapshotsToChangeNotification = (
     // Field-row recognition flipped in place (live both sides, same
     // parent, either recognition column changed): in a child-backed
     // workspace the VISIBLE child set default-excludes recognized field
-    // rows (PR #288 §9), so a row becoming/ceasing to be a field row
+    // rows (docs/properties-as-blocks-migration.html §9), so a row becoming/ceasing to be a field row
     // changes the parent's visible membership even though the tree edge
     // didn't. Un-flipped workspaces get a rare spurious re-resolve (content
     // edits to/from whole-block references) — harmless.

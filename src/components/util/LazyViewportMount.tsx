@@ -1,3 +1,4 @@
+import { BLOCK_SHELL_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { nearestScrollableAncestor } from '@/utils/dom.js'
@@ -163,6 +164,12 @@ export function LazyViewportMount({
       ref={containerRef}
       data-lazy-block-id={blockId}
       data-lazy-render-scope-id={renderScopeId}
+      // …and that a pointer landing anywhere in the reserved area belongs to
+      // the row waiting there, not to the surface showing it. Here rather than
+      // inside the placeholder because callers wrap their own chrome around one
+      // — padding, a header skeleton, a whole group's height — and only this
+      // element spans all of it.
+      {...{[BLOCK_SHELL_ATTRIBUTE]: 'true'}}
     >
       {renderPlaceholder({
         reservedHeight: measuredHeights.get(cacheKey) ?? estimatedHeightPx,

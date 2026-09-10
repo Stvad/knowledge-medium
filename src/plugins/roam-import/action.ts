@@ -8,7 +8,35 @@ import { importRoam } from './import.ts'
 import { showProgress } from '@/utils/toast.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { runAnalyzeIfStale } from '@/data/maintenance'
+import { installedAnalyzeArmingProbes } from '@/data/localSchema.js'
 import type { RoamExport } from './types.ts'
+
+/** Re-check planner stats after an import. A bulk import can multiply the
+ *  workspace, leaving `sqlite_stat1` stale enough to mis-rank join orders until
+ *  the next boot; this lands good plans in the same session. Usually a no-op —
+ *  it re-analyzes only what SQLite reports as stale (see
+ *  `clientSchema.runAnalyzeIfStale`), which for a table that merely grew means
+ *  ~10x growth. Fire-and-forget: if it no-ops, the next boot's check covers it.
+ *
+ *  Deep idle, matching repoProvider's boot check: ANALYZE is a multi-second park
+ *  of the single SQLite worker, and `scheduleIdle`'s 2s cap would land it right
+ *  as the freshly-imported tree renders.
+ *
+ *  {@link installedAnalyzeArmingProbes}, not the core default and NOT
+ *  `repo.facetRuntime`: an import grows the reference edges as much as it grows
+ *  `blocks`, and the runtime is toggle-filtered while the table is installed
+ *  regardless of whether the plugin is enabled.
+ *
+ *  Exported only so that last paragraph is testable — the choice of probe source
+ *  is invisible from the action's behaviour, and has already been made wrong
+ *  once. */
+export const scheduleImportAnalyze = (repo: Repo): void => {
+  scheduleDeepIdle(() => {
+    void runAnalyzeIfStale(repo.db, installedAnalyzeArmingProbes()).catch(error => {
+      console.warn('[roam-import] ANALYZE check failed:', error)
+    })
+  }, CATCHUP_DEEP_IDLE)
+}
 
 export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
   id: 'import_roam',
@@ -59,22 +87,7 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
             `${summary.pagesMerged} merged, ${summary.pagesDaily} daily, ` +
             `${summary.blocksWritten} blocks (${(summary.durationMs / 1000).toFixed(1)}s)`,
           )
-          // A bulk import can multiply the workspace; the planner's
-          // `sqlite_stat1` is now stale and would mis-rank join orders until
-          // the next boot. Re-check at idle so good plans land this session
-          // without a reload. Usually a no-op — it re-analyzes only what SQLite
-          // reports as stale (see clientSchema.runAnalyzeIfStale), which for a
-          // table that merely grew means ~10x growth.
-          //
-          // Deep idle, matching the boot check in repoProvider: ANALYZE is a
-          // multi-second park of the single SQLite worker, and scheduleIdle's
-          // 2s cap would land it right as the freshly-imported tree renders.
-          // Fire-and-forget: if this one no-ops, the next boot's check covers it.
-          scheduleDeepIdle(() => {
-            void runAnalyzeIfStale(repo.db).catch(error => {
-              console.warn('[roam-import] ANALYZE check failed:', error)
-            })
-          }, CATCHUP_DEEP_IDLE)
+          scheduleImportAnalyze(repo)
         } catch (err) {
           console.error('[roam-import] failed:', err)
           banner.fail(`Roam import failed: ${err instanceof Error ? err.message : String(err)}`)

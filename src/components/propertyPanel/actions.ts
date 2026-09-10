@@ -5,6 +5,7 @@ import {
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
+import { trimIfEdited } from '@/utils/nameFieldCommit.js'
 import {
   isPropertyPanelHiddenProperty,
   isPropertyPanelReadOnlyProperty,
@@ -76,7 +77,7 @@ export const renameProperty = async (args: {
   oldName: string
   newName: string
 }) => {
-  const nextName = args.newName.trim()
+  const nextName = trimIfEdited(args.newName, args.oldName)
   if (!nextName || nextName === args.oldName) return
   if (args.oldName === typesProp.name || nextName === typesProp.name) return
   if (

@@ -27,6 +27,7 @@ import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { recentsPageBlockId } from './recentsPage'
 import { propertyDefinitionBlockId, typeDefinitionBlockId } from './definitionSeeds'
+import { synthesizedPropertyDefinitionBlockId } from './internals/propertyDefinitionSynthesis'
 import { computeAliasSeatId } from './targets'
 import { stateChildBlockId, userPageBlockId } from './stateBlocks'
 import { locationsPageBlockId } from '@/plugins/geo/locationsPage'
@@ -37,6 +38,11 @@ import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes'
 import { roamBlockId } from '@/plugins/roam-import/ids'
 import { mediaBlockId } from '@/plugins/attachments/mediaCapture'
 import { shortcutsBlockId, journalShortcutBlockId } from '@/plugins/left-sidebar/shortcuts'
+
+/** The plaintext-workspace namespace, spelled out rather than imported: this
+ *  file's job is to compare each formula against its literal historical
+ *  expression, and importing the constant would compare it against itself. */
+const PLAINTEXT_SYNTHESIZED_NS = 'b1d6b0c7-6a2a-4c1e-9a19-2f0f7b6b3c41'
 
 // Arbitrary but fixed — the point is that the same inputs always hash the same
 // way, so any stable values do. Real-shaped where the shape matters (a uuid
@@ -128,6 +134,21 @@ describe('the ids live rows are already at', () => {
       .toBe(uuidv5(`${WS}:${seedKey}`, '737c2e9d-f3e9-4c99-94ef-e1cbec920e30'))
   })
 
+  it('synthesized property definitions (§9 orphan synthesis)', () => {
+    // A SEPARATE namespace from the seed one above: a synthesized key is a raw
+    // cell key with no grammar at all, so one literally spelled
+    // `system:todo/property/done` would otherwise land on that seed's id.
+    //
+    // The namespace is a PARAMETER here — an E2EE workspace derives its own
+    // from `K_id` so the id stops being a hash of the property name the server
+    // can recompute (`resolveSynthesisNamespace`). What is pinned is the KEY
+    // shape, which is shared by both modes; the plaintext namespace literal
+    // below is the constant that must not move.
+    expect(synthesizedPropertyDefinitionBlockId(
+      PLAINTEXT_SYNTHESIZED_NS, WS, 'demo:orphan'))
+      .toBe(uuidv5(`${WS}:demo%3Aorphan`, 'b1d6b0c7-6a2a-4c1e-9a19-2f0f7b6b3c41'))
+  })
+
   it('type definition seeds (same namespace as property seeds; disjoint grammars)', () => {
     const seedKey = 'system:kernel-data/type/page'
     expect(typeDefinitionBlockId(WS, seedKey))
@@ -194,5 +215,8 @@ describe('workspace scoping', () => {
       .not.toBe(computeAliasSeatId('Some Page', OTHER_WS))
     expect(propertyDefinitionBlockId(WS, 'system:kernel-data/property/show-properties'))
       .not.toBe(propertyDefinitionBlockId(OTHER_WS, 'system:kernel-data/property/show-properties'))
+    expect(synthesizedPropertyDefinitionBlockId(PLAINTEXT_SYNTHESIZED_NS, WS, 'demo:orphan'))
+      .not.toBe(synthesizedPropertyDefinitionBlockId(
+        PLAINTEXT_SYNTHESIZED_NS, OTHER_WS, 'demo:orphan'))
   })
 })

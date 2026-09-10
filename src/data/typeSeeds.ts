@@ -61,7 +61,7 @@ export const isTypeSeedDeclaration = (value: unknown): value is TypeSeedDeclarat
   typeof value.label === 'string' && value.label.trim().length > 0 &&
   // Mirrors `seedType`'s name-hygiene throw: a dynamic contribution with a
   // reference-shaped label is dropped rather than allowed to mint a backing
-  // block that reads as machinery (PR #288 §7).
+  // block that reads as machinery (docs/properties-as-blocks-migration.html §7).
   !isGrammarShapedLabel(value.label) &&
   isTypeSeedKey(value.seedKey) &&
   Number.isInteger(value.revision) && (value.revision as number) > 0 &&
@@ -94,7 +94,7 @@ export const seedType = (args: SeedTypeArgs): TypeSeedDeclaration => {
   }
   if (!args.id.trim()) throw new Error('[seedType] id is required')
   if (!args.label.trim()) throw new Error('[seedType] label is required')
-  // Name hygiene (PR #288 §7): `materializeTypeSeeds` mirrors the label into
+  // Name hygiene (docs/properties-as-blocks-migration.html §7): `materializeTypeSeeds` mirrors the label into
   // its backing block's `content`. Seeds are code-owned, so this fails at
   // declaration rather than at materialization.
   assertNotGrammarShapedLabel(args.label, '[seedType] label')
