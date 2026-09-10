@@ -67,8 +67,10 @@ import {
 } from './facets'
 import { changedRefSchemaNames } from './internals/refProjection'
 import {
-  changedPropertyDefinitions,
+  changedPropertyDefinitionFacts,
+  propertyDefinitionFacts,
   type PropertyDefinitionChange,
+  type PropertyDefinitionFactsByFieldId,
 } from './internals/propertyDefinitionMigrations'
 import {readValuePresetRegistry} from './valuePresetRegistry'
 
@@ -127,6 +129,17 @@ export interface FacetBridgeTarget {
   schedulePropertyDefinitionMigrations(
     workspaceId: string,
     changes: readonly PropertyDefinitionChange[],
+  ): void
+  /** Fold these facts into the workspace's durable definitions baseline, and —
+   *  when `detectChanges` — migrate whatever drifted from it (#780). */
+  syncPropertyDefinitionBaseline(
+    workspaceId: string,
+    facts: PropertyDefinitionFactsByFieldId,
+    options: {
+      readonly detectChanges: boolean
+      /** fieldIds whose codec resolved for the first time on THIS rebuild. */
+      readonly newlyResolvedCodecs: ReadonlySet<string>
+    },
   ): void
 }
 
@@ -425,24 +438,53 @@ export class FacetBridge {
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
           }
-          // Codec-TYPE-change migrations (docs/properties-as-blocks-migration.html §7/§9, slice B2): diff the
-          // registry snapshots by durable fieldId. RENAMES are no longer
-          // scheduled here — they are re-keyed atomically in the editing tx by
-          // the `core.migratePropertyRename` same-tx processor (one undoable
-          // step, no deferred plan-capture staleness, no half-migrated window).
-          // A codec-TYPE change still needs this deferred pass because it must
-          // build the NEW codec to re-encode values, which the same-tx registry
-          // snapshot can't. A combined rename+codec edit rides both: the
-          // processor re-keys the cell, this pass re-encodes values under the
-          // new codec — both converge on the new cell key. Same workspace only
-          // (the helper refuses cross-workspace diffs); synced-in changes are
-          // reconciled on the flipped-workspace open path (#389 item 2).
-          const codecChanges = changedPropertyDefinitions(
-            previousPropertyDefinitions, propertyDefinitions,
-          ).filter(change => change.codecChanged)
-          if (codecChanges.length > 0 && propertyDefinitions) {
-            target.schedulePropertyDefinitionMigrations(
-              propertyDefinitions.workspaceId, codecChanges,
+          // Definition-change migrations (slice B2,
+          // docs/properties-as-blocks-migration.html §7/§9). ONE decision: a
+          // same-workspace build is diffed in memory, a PRIME against the
+          // durable baseline (`propertyDefinitionBaseline.ts`).
+          if (propertyDefinitions) {
+            const previous = previousPropertyDefinitions
+            // Defence in depth: pinning a workspace rebuilds before its
+            // projector primes, so `previous` is null at every prime anyway. It
+            // stays because diffing one workspace's definitions against
+            // another's reads as a rename of every shared fieldId, and nothing
+            // else would catch it.
+            const previousFacts = previous && previous.workspaceId === propertyDefinitions.workspaceId
+              ? propertyDefinitionFacts(previous)
+              : null
+            const facts = propertyDefinitionFacts(propertyDefinitions)
+            if (previousFacts) {
+              // RENAMES are not scheduled here — `core.migratePropertyRename`
+              // re-keys a local one atomically in the editing tx, as one
+              // undoable step. A codec-TYPE change still needs this deferred
+              // pass: it must build the NEW codec to re-encode values, which
+              // the same-tx registry snapshot can't. A combined edit rides both
+              // and they converge on the new cell key.
+              const codecChanges = changedPropertyDefinitionFacts(previousFacts, facts)
+                .filter(change => change.codecChanged)
+              if (codecChanges.length > 0) {
+                target.schedulePropertyDefinitionMigrations(
+                  propertyDefinitions.workspaceId, codecChanges,
+                )
+              }
+            }
+            // A codec that only becomes resolvable on a LATER rebuild — a
+            // dynamic extension's preset finishing its load — is invisible to
+            // the in-memory diff above, which needs a codec on both sides to
+            // call it a change. Name those so the durable baseline, which does
+            // remember the old codec, is re-checked for them off a prime.
+            const newlyResolvedCodecs = new Set<string>()
+            if (previousFacts) {
+              for (const [fieldId, fact] of facts) {
+                if (fact.codecType !== undefined
+                  && previousFacts.get(fieldId)?.codecType === undefined) {
+                  newlyResolvedCodecs.add(fieldId)
+                }
+              }
+            }
+            target.syncPropertyDefinitionBaseline(
+              propertyDefinitions.workspaceId, facts,
+              {detectChanges: previousFacts === null, newlyResolvedCodecs},
             )
           }
           // No property-SPECIFIC reference-target rederive here. Recognition

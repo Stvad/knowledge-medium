@@ -54,6 +54,7 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureClientSchemaStateValueColumn,
   ensureUndoGroupIdColumns,
   ANALYZE_OPTIMIZE_SQL,
   runAnalyzeIfStale,
@@ -1412,6 +1413,37 @@ const fakeMigrationDb = (columnsByTable: Record<string, string[]>) => {
     },
   }
 }
+
+describe('ensureClientSchemaStateValueColumn — local migration', () => {
+  // Untested, this one fails in a single direction and quietly: a fresh install
+  // gets `value` from the CREATE, so only an UPGRADING device runs the ALTER —
+  // and the only reader catches its own error and logs, leaving the #780 fix a
+  // permanent no-op for every existing user while the suite stays green.
+  it('adds the column when the table predates it', async () => {
+    const db = fakeMigrationDb({client_schema_state: ['key', 'completed_at']})
+    await ensureClientSchemaStateValueColumn(db)
+    expect(db.executed).toEqual(['ALTER TABLE client_schema_state ADD COLUMN value TEXT'])
+  })
+
+  it('is a no-op once the column exists (fresh install / second boot)', async () => {
+    const db = fakeMigrationDb({client_schema_state: ['key', 'completed_at', 'value']})
+    await ensureClientSchemaStateValueColumn(db)
+    expect(db.executed).toEqual([])
+  })
+
+  it('tolerates losing the ALTER race to another tab, but not other errors', async () => {
+    const base = fakeMigrationDb({client_schema_state: ['key', 'completed_at']})
+    await expect(ensureClientSchemaStateValueColumn({
+      ...base,
+      execute: async () => { throw new Error('duplicate column name: value') },
+    })).resolves.toBeUndefined()
+
+    await expect(ensureClientSchemaStateValueColumn({
+      ...base,
+      execute: async () => { throw new Error('database is locked') },
+    })).rejects.toThrow('database is locked')
+  })
+})
 
 describe('ensureBlockUserUpdatedAtColumn — local migration', () => {
   it('adds the column to BOTH tables and backfills blocks with the audit trigger suspended', async () => {

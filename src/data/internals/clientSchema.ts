@@ -163,23 +163,52 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL = `
   ON block_aliases (workspace_id, alias)
 `
 
-/** Tiny key/value table for one-shot schema-bootstrapping markers
- *  (currently only the alias backfill). Local-only — the markers
- *  describe the state of a derived index on this device, not anything
- *  the server cares about.
+/** Tiny key/value table for local, per-device schema state. Most rows are
+ *  one-shot bootstrapping MARKERS whose presence is the whole payload and whose
+ *  `value` is NULL; a few carry a `value` blob. Local-only either way — these
+ *  describe derived state on THIS device, not anything the server cares about.
  *
  *  Why a dedicated table instead of "is block_aliases empty?": a
  *  legitimately empty workspace, or a workspace whose user removed
  *  every alias, would otherwise re-trigger the full backfill scan on
  *  every launch — which is exactly what the LIMIT 1 short-circuit was
  *  meant to avoid. The marker captures "we ran the backfill once for
- *  this schema version" directly. */
+ *  this schema version" directly.
+ *
+ *  Every marker INSERT names its columns explicitly, so adding a column here
+ *  never has to touch them. */
 export const CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS client_schema_state (
     key           TEXT PRIMARY KEY,
-    completed_at  INTEGER NOT NULL
+    completed_at  INTEGER NOT NULL,
+    value         TEXT
   )
 `
+
+/** Idempotent local migration adding `client_schema_state.value` on a device
+ *  whose table predates it (CREATE TABLE IF NOT EXISTS above is a no-op there).
+ *  Same shape as `ensureBlockUserUpdatedAtColumn` — no backfill, because an
+ *  absent value reads as "no baseline recorded yet", which is the correct
+ *  starting state for every existing install. */
+export const ensureClientSchemaStateValueColumn = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  const columns = await db.getAll<{name: string}>('PRAGMA table_info(client_schema_state)')
+  if (columns.some(column => column.name === 'value')) return
+  try {
+    await db.execute('ALTER TABLE client_schema_state ADD COLUMN value TEXT')
+  } catch (error) {
+    // PRAGMA-then-ALTER is a TOCTOU across tabs, and this DB is explicitly
+    // multi-tab: both can read "no column" before either alters, and the loser
+    // throws. Its boot is memoized on the rejection, so that tab stays broken
+    // until a reload. The winner's column is exactly what we wanted, so treat
+    // the duplicate as success — anything else still propagates.
+    if (!/duplicate column/i.test(error instanceof Error ? error.message : String(error))) {
+      throw error
+    }
+  }
+}
 
 /** Case-insensitive substring/prefix path for alias autocomplete. */
 export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
@@ -1207,6 +1236,20 @@ export const SELECT_RECONCILE_RESCAN_MARKER_SQL = `
 export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
   INSERT OR REPLACE INTO client_schema_state (key, completed_at)
   VALUES (?, strftime('%s', 'now') * 1000)
+`
+
+/** Per-workspace record of the property definitions this device has accounted
+ *  for (`property_definition_baseline:<workspaceId>` → a JSON `value`), owned
+ *  by `propertyDefinitionBaseline.ts`. */
+export const PROPERTY_DEFINITION_BASELINE_PREFIX = 'property_definition_baseline:'
+
+export const SELECT_PROPERTY_DEFINITION_BASELINE_SQL = `
+  SELECT value FROM client_schema_state WHERE key = ?
+`
+
+export const RECORD_PROPERTY_DEFINITION_BASELINE_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at, value)
+  VALUES (?, strftime('%s', 'now') * 1000, ?)
 `
 
 // ============================================================================
