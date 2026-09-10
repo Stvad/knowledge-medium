@@ -7,7 +7,7 @@
  * Coverage:
  *   - Identity stability per (factory, id).
  *   - Loader correctness: data shape matches the SQL-backed one-shot APIs
- *     (CHILDREN_SQL / SUBTREE_SQL / ANCESTORS_SQL).
+ *     (CHILDREN_SQL / SUBTREE_SQL / manyAncestorsSql).
  *   - Side-effects: each loader hydrates its result rows into the
  *     per-row cache via `applyIfNewer`.
  *   - Dependencies declared during resolve (verified via the test-only

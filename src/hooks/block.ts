@@ -451,13 +451,17 @@ const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
  *  a blank breadcrumb line under every consumer at once.
  *
  *  Costs one handle and one subscription per id, against one of each for
- *  the whole set before. The dep count is unchanged — the set-keyed
- *  handle declared a row dep per id and per ancestor either way — and a
- *  consumer holding the ids of rows it renders lazily is buying warm
- *  chains for the rows that scroll in, which is the trade it wants.
+ *  the whole set before, and an ancestor SHARED by several chains is now
+ *  a dep on each of their handles rather than one on the set's. That is
+ *  the price of a member surviving its neighbours' churn, and a consumer
+ *  holding the ids of rows it renders lazily is also buying warm chains
+ *  for the rows that scroll in.
  *
  *  A chain that has never resolved is absent from the map rather than
- *  empty, so a consumer can tell "not yet" from "this block is a root". */
+ *  empty, so a consumer can tell "not yet" from "this block is a root".
+ *  A chain whose load FAILED is absent by the same route and stays that
+ *  way while anything is subscribed: a first-load failure leaves the
+ *  handle with no deps, so nothing can invalidate it into a retry (#930). */
 export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Block[]> => {
   const repo = useRepo()
   // Keyed on the ids' CONTENT: a caller building its array inline hands
