@@ -25,11 +25,19 @@ import { manyAncestorsSql } from './treeQueries'
 export type AncestorChainRow = BlockRow & {chain_start_id: string}
 
 /** Ids per statement. One SQL bind per id, and SQLite caps bound
- *  parameters — 999 on older builds, 32766 since 3.32 — so the bound is
- *  set under the old floor rather than at a guess about how many chains a
- *  surface asks for. Same figure and same reason as `STAGING_READ_CHUNK`
- *  in `syncObserver/materialize.ts`. Every caller today fits in one
- *  statement, the recents feed's default 200-row window included. */
+ *  parameters at a build-dependent number — 999 on older builds, 32766
+ *  since 3.32 — that nothing here can read back, so the bound sits under
+ *  the old floor. Same figure and same reason as `STAGING_READ_CHUNK` in
+ *  `syncObserver/materialize.ts`.
+ *
+ *  A caller above it IS split, and the recents feed reaches that by
+ *  paging ("Show older" adds 200 rows a click, so the third page is two
+ *  statements). Declined raising it to the modern cap: the failure modes
+ *  are not symmetric — an over-limit statement throws and takes the whole
+ *  feed with it, while an extra chunk costs one round trip on a click
+ *  that already pays for a 600-chain recursive walk. Splitting is also
+ *  what an unchunked caller lacked before this existed, which is the
+ *  latent throw at ~1000 rows that this removes. */
 const MAX_IDS_PER_STATEMENT = 500
 
 /** Shared, so an id with no ancestors costs no allocation. */

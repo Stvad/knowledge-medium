@@ -216,6 +216,31 @@ describe('useAncestorCrumbs', () => {
     expect(result.current.has('a')).toBe(false)
   })
 
+  it('retries a failed walk when the result set next changes', async () => {
+    // One failed read errors every id it coalesced, so a single hiccup
+    // can strand a whole page of crumbs. A first-load failure leaves the
+    // handle with no deps, so nothing invalidates it into a retry — the
+    // next keystroke arriving as an observer is the only retry it gets.
+    let attempts = 0
+    chainResolvers.set('a', () => {
+      attempts += 1
+      return attempts === 1
+        ? Promise.reject(new Error('read failed'))
+        : Promise.resolve(chainFor('a'))
+    })
+
+    const {result, rerender} = renderHook(
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
+      {initialProps: {ids: ['a']}},
+    )
+    await waitFor(() => expect(attempts).toBe(1))
+    expect(result.current.has('a')).toBe(false)
+
+    rerender({ids: ['a', 'b']})
+
+    await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
+  })
+
   it('prefers the live row over the search payload for the seed parent', async () => {
     // `core.searchByContent` declares no row deps, so a parent move on a
     // result row does NOT invalidate it — the payload can still claim a

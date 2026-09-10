@@ -69,6 +69,22 @@ const areSelectedValuesEqual = <T,>(left: T, right: T): boolean => {
 
 const identitySelector = <V,>(v: V): V => v
 
+/** Ensure-load for a handle a hook has just started observing.
+ *
+ *  `'error'` is retried alongside `'idle'`, and that is the whole reason
+ *  this is one function rather than a status check at each call site: a
+ *  FIRST-load failure leaves the handle with no deps, so no change can
+ *  ever invalidate it into a retry, and every later observer would read a
+ *  permanent blank. Retrying when an observer arrives is the only retry
+ *  such a handle can get until failure is observable in its own right
+ *  (#930). Bounded by mounts and by changes to the observed set, so a
+ *  persistently failing query costs one read per those, not a spin. */
+const ensureLoaded = (handle: Handle<unknown>): void => {
+  const status = handle.status()
+  if (status !== 'idle' && status !== 'error') return
+  void handle.load().catch(() => {/* error stored on the handle */})
+}
+
 export interface UseHandleOptions<T, S> {
   /** Project the handle's value before returning. The hook applies
    *  snapshot-identity memoization so a selector that allocates (e.g.
@@ -173,17 +189,12 @@ export function useHandle<T, S = T | undefined>(
   /* eslint-enable react-hooks/immutability */
 
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
-  // Block both dedup their inflight load promise). The status() check
-  // prevents an unnecessary roundtrip when the handle is already ready. A
-  // disposed handle reports its live replacement's status, so this reads the
-  // replacement rather than a corpse; with the key vacant it reports
-  // 'disposed' and we skip — the subscribe below mints a live handle at that
-  // key, whose own first-subscriber load covers the ensure-load we declined.
-  useEffect(() => {
-    if (handle.status() === 'idle') {
-      void handle.load().catch(() => {/* error stored on the handle */})
-    }
-  }, [handle])
+  // Block both dedup their inflight load promise). A disposed handle
+  // reports its live replacement's status, so this reads the replacement
+  // rather than a corpse; with the key vacant it reports 'disposed' and we
+  // skip — the subscribe below mints a live handle at that key, whose own
+  // first-subscriber load covers the ensure-load we declined.
+  useEffect(() => { ensureLoaded(handle) }, [handle])
 
   // Stable subscribe — only changes when the handle changes, so we
   // don't tear down handle.subscribe on every render that produces a
@@ -267,13 +278,10 @@ export const useHandles = <T,>(
 
   // Ensure-load, as `useHandle` does per handle. Every member starts in
   // the same tick, which is what lets a batching loader answer them with
-  // one read.
+  // one read — and, since one failed batched read errors every member at
+  // once, is also why the retry inside `ensureLoaded` matters here.
   useEffect(() => {
-    for (const handle of handles) {
-      if (handle.status() === 'idle') {
-        void handle.load().catch(() => {/* error stored on the handle */})
-      }
-    }
+    for (const handle of handles) ensureLoaded(handle)
   }, [handles])
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)

@@ -92,8 +92,9 @@ describe('ancestorChainRows', () => {
   })
 
   it('keeps the recents feed default window in one statement', async () => {
-    // The largest set any surface asks for today. A bound below it would
-    // put the cold-storage path on serialized round trips.
+    // Its first page, and the size a bound must clear to keep the common
+    // cold-storage path off serialized round trips. Paging past the bound
+    // does split, deliberately — see the constant.
     const {db, statements} = fakeDb()
     const ids = Array.from({length: 200}, (_, i) => `id-${i}`)
 
