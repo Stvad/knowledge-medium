@@ -473,9 +473,10 @@ const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
  *
  *  A chain that has never resolved is absent from the map rather than
  *  empty, so a consumer can tell "not yet" from "this block is a root".
- *  A chain whose load FAILED is absent by the same route and stays that
- *  way while anything is subscribed: a first-load failure leaves the
- *  handle with no deps, so nothing can invalidate it into a retry (#930). */
+ *  A chain whose load FAILED is absent by the same route, and stays that
+ *  way until an observer arrives or the id set changes: a first-load
+ *  failure leaves the handle with no deps, so no change can invalidate it
+ *  into a retry and `ensureLoaded` is the only thing that re-asks (#930). */
 export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Block[]> => {
   const repo = useRepo()
   // Keyed on the ids' CONTENT: a caller building its array inline hands
