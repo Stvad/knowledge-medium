@@ -57,8 +57,12 @@ const EMPTY_PARENTS: readonly Block[] = []
 /** How far ahead of the current card to keep ancestor chains warm, so a
  *  card's breadcrumb line is there the moment it is shown rather than a
  *  load later. Bounds the handles held open, not the SQL — the walks are
- *  coalesced and chunked below the parameter limit by `ancestorChainRows`. */
+ *  coalesced and chunked below the parameter limit by `ancestorWalk`. */
 const BREADCRUMB_PREFETCH = 24
+/** And how far BEHIND. Back is a first-class move here, and a card whose
+ *  handle was released is cold again once the store's GC window passes —
+ *  which a few seconds on the next card is enough to reach. */
+const BREADCRUMB_LOOKBACK = 8
 
 
 const isInteractiveTarget = (el: HTMLElement | null): boolean => {
@@ -253,10 +257,12 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
 
   // A window that slides with the card, rather than one anchored to a
   // fixed chunk: each advance only adds the id entering the far end, and
-  // every card already in the window keeps the chain it resolved.
+  // every card already in the window keeps the chain it resolved. It
+  // reaches backwards as well as forwards so Back does not land on a card
+  // whose handle was released long enough ago to have been collected.
   const queueBlocks = useMemo(
     () => (queue ?? [])
-      .slice(index, index + BREADCRUMB_PREFETCH)
+      .slice(Math.max(0, index - BREADCRUMB_LOOKBACK), index + BREADCRUMB_PREFETCH)
       .map(id => repo.block(id)),
     [queue, repo, index],
   )

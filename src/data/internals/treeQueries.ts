@@ -63,13 +63,20 @@ export const SUBTREE_SQL = `
   SELECT * FROM subtree ORDER BY path
 `
 
-/** Returns the leaf-to-root chain for every seed id, excluding the seed
- *  itself, in one statement, tagging each row with the seed it belongs
- *  to. Filters `deleted = 0`.
+/** Returns the leaf-to-root chain for every seed id, INCLUDING the seed
+ *  itself at `depth = 0`, in one statement, tagging each row with the
+ *  seed it belongs to. Filters `deleted = 0`.
  *
  *  THE ancestor walk — there is no single-id variant, because every
  *  caller reaches it through `ancestorChainRows`, which coalesces
- *  concurrent single-id walks into one of these.
+ *  concurrent single-id walks into one of these and is what re-excludes
+ *  the seed for the callers that want only the ancestors.
+ *
+ *  The seed is carried rather than filtered here because its `parent_id`
+ *  is the only thing that distinguishes a chain that reached the ROOT
+ *  from one the walk could not finish — a parent that is soft-deleted or
+ *  has not been materialized yet stops the walk and is absent from the
+ *  result, so without the seed row an empty chain is unreadable.
  *
  *  Caller supplies `idCount` `?` placeholders bound to the seed ids;
  *  ordering of the input array is not preserved in the result, so
@@ -98,7 +105,6 @@ export const manyAncestorsSql = (idCount: number): string => {
          AND INSTR(chain.path, '!' || hex(parent.id) || '/') = 0
     )
     SELECT * FROM chain
-    WHERE chain.id != chain.chain_start_id
     ORDER BY chain.chain_start_id, chain.depth ASC
   `
 }

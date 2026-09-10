@@ -22,7 +22,22 @@ import type { QueryReadDb } from '@/data/api'
 import type { BlockRow } from '@/data/blockSchema'
 import { manyAncestorsSql } from './treeQueries'
 
-export type AncestorChainRow = BlockRow & {chain_start_id: string}
+export type AncestorChainRow = BlockRow & {chain_start_id: string; depth: number}
+
+/** One block's walk. `chain` is leaf-to-root and excludes the block
+ *  itself; `seed` is that block's own row, absent when it does not exist
+ *  or is soft-deleted.
+ *
+ *  `seed` is what makes an EMPTY chain readable. A walk stops at a parent
+ *  it cannot see — soft-deleted, or not materialized yet — and that
+ *  parent is absent from the result, so "no ancestors" and "the first hop
+ *  was unreachable" arrive identically. The seed's `parent_id` separates
+ *  them, and it is also the row a consumer must depend on for the chain
+ *  to re-resolve once that parent becomes live. */
+export interface AncestorWalk {
+  readonly seed: AncestorChainRow | undefined
+  readonly chain: readonly AncestorChainRow[]
+}
 
 /** Ids per statement. One SQL bind per id, and SQLite caps bound
  *  parameters at a build-dependent number — 999 on older builds, 32766
@@ -40,11 +55,11 @@ export type AncestorChainRow = BlockRow & {chain_start_id: string}
  *  latent throw at ~1000 rows that this removes. */
 const MAX_IDS_PER_STATEMENT = 500
 
-/** Shared, so an id with no ancestors costs no allocation. */
-const NO_ANCESTORS: readonly AncestorChainRow[] = Object.freeze([])
+/** Shared, so an id whose row is gone costs no allocation. */
+const NO_WALK: AncestorWalk = Object.freeze({seed: undefined, chain: Object.freeze([])})
 
 interface Waiter {
-  resolve: (rows: readonly AncestorChainRow[]) => void
+  resolve: (walk: AncestorWalk) => void
   reject: (error: unknown) => void
 }
 
@@ -55,8 +70,8 @@ class AncestorBatcher {
 
   constructor(private readonly db: QueryReadDb) {}
 
-  chainFor(id: string): Promise<readonly AncestorChainRow[]> {
-    return new Promise<readonly AncestorChainRow[]>((resolve, reject) => {
+  walkFor(id: string): Promise<AncestorWalk> {
+    return new Promise<AncestorWalk>((resolve, reject) => {
       const existing = this.waiting.get(id)
       if (existing) {
         existing.push({resolve, reject})
@@ -86,18 +101,23 @@ class AncestorBatcher {
         const rows = await this.db.getAll<AncestorChainRow>(
           manyAncestorsSql(chunk.length), chunk,
         )
+        // Rows arrive depth-ascending per seed, so the seed (depth 0) is
+        // first and the rest are already leaf-to-root.
         const byStart = new Map<string, AncestorChainRow[]>()
         for (const row of rows) {
-          const chain = byStart.get(row.chain_start_id)
-          if (chain) chain.push(row)
+          const walk = byStart.get(row.chain_start_id)
+          if (walk) walk.push(row)
           else byStart.set(row.chain_start_id, [row])
         }
-        // An id with no rows is a block that has no ancestors, or none
-        // the walk could reach — the ONE place that reading is made, so
-        // a waiter never sees `undefined` for an id it asked about.
+        // An id with no rows at all is a block that does not exist or is
+        // soft-deleted — the ONE place that reading is made, so a waiter
+        // never sees `undefined` for an id it asked about.
         for (const id of chunk) {
-          const chain = byStart.get(id) ?? NO_ANCESTORS
-          for (const waiter of batch.get(id) ?? []) waiter.resolve(chain)
+          const rowsForId = byStart.get(id)
+          const walk: AncestorWalk = rowsForId
+            ? {seed: rowsForId[0], chain: rowsForId.slice(1)}
+            : NO_WALK
+          for (const waiter of batch.get(id) ?? []) waiter.resolve(walk)
         }
       } catch (error) {
         // Scoped to the chunk: an id in a later chunk is a separate
@@ -119,18 +139,18 @@ class AncestorBatcher {
  *  stays reachable from a resolver holding only `ctx.db`. */
 const batchers = new WeakMap<QueryReadDb, AncestorBatcher>()
 
-/** The leaf-to-root chain for `id`, excluding `id` itself, deleted rows
- *  filtered out. Rows for the same id in one microtask are one read, so
- *  the returned array is shared between those callers — hence `readonly`,
- *  which is the contract and not a formality. */
-export const ancestorChainRows = (
+/** The walk for `id`: its own row and its leaf-to-root chain, deleted
+ *  rows filtered out. Calls for the same id in one microtask are one
+ *  read, so the result is shared between those callers — hence `readonly`
+ *  throughout, which is the contract and not a formality. */
+export const ancestorWalk = (
   db: QueryReadDb,
   id: string,
-): Promise<readonly AncestorChainRow[]> => {
+): Promise<AncestorWalk> => {
   let batcher = batchers.get(db)
   if (!batcher) {
     batcher = new AncestorBatcher(db)
     batchers.set(db, batcher)
   }
-  return batcher.chainFor(id)
+  return batcher.walkFor(id)
 }

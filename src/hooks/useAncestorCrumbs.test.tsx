@@ -17,10 +17,17 @@ import type { BlockData, Handle, HandleStatus } from '@/data/api'
  *  the way a `LoaderHandle` does. */
 class FakeHandle<T> implements Handle<T> {
   private value: T | undefined
-  private state: HandleStatus = 'idle'
+  private state: HandleStatus
   private readonly listeners = new Set<(value: T) => void>()
 
-  constructor(readonly key: string, private readonly resolve: () => Promise<T>) {}
+  constructor(
+    readonly key: string,
+    private readonly resolve: () => Promise<T>,
+    cached?: T,
+  ) {
+    this.value = cached
+    this.state = cached === undefined ? 'idle' : 'ready'
+  }
 
   peek(): T | undefined { return this.value }
   status(): HandleStatus { return this.state }
@@ -73,9 +80,13 @@ const blockHandles = new Map<string, FakeHandle<BlockData | null>>()
 const acquired: string[] = []
 /** Per-id overrides for the next `load()`; absent means the default chain. */
 const chainResolvers = new Map<string, () => Promise<BlockData[]>>()
-/** Ids whose row is loaded in the cache. Absent means `peek()` is
- *  undefined — a row the search returned but nothing has hydrated. */
-const loadedRows = new Map<string, string | null>()
+/** Ids whose row is already IN the cache, mapped to its parent edge —
+ *  what a search source that hydrated its rows leaves behind. An id
+ *  absent here has a cold handle: `peek()` is undefined, which is the
+ *  case the caller's payload `parentId` answers. */
+const cachedRows = new Map<string, string | null>()
+/** Seed rows the hook actually fetched, as opposed to merely observed. */
+const seedLoads: string[] = []
 
 // One stable repo object, deliberately — `useRepo` is memoized for the
 // app's lifetime in production (`src/context/repo.tsx`), and `repo` is a
@@ -87,8 +98,11 @@ const repo = {
   block: (id: string) => {
     let handle = blockHandles.get(id)
     if (!handle) {
-      handle = new FakeHandle<BlockData | null>(`block:${id}`, async () =>
-        loadedRows.has(id) ? row(id, id, loadedRows.get(id) ?? null) : null)
+      handle = new FakeHandle<BlockData | null>(
+        `block:${id}`,
+        async () => { seedLoads.push(id); return null },
+        cachedRows.has(id) ? row(id, id, cachedRows.get(id) ?? null) : undefined,
+      )
       blockHandles.set(id, handle)
     }
     return handle
@@ -122,8 +136,9 @@ beforeEach(() => {
   ancestorHandles.clear()
   blockHandles.clear()
   chainResolvers.clear()
-  loadedRows.clear()
+  cachedRows.clear()
   acquired.length = 0
+  seedLoads.length = 0
 })
 
 afterEach(() => vi.restoreAllMocks())
@@ -241,13 +256,24 @@ describe('useAncestorCrumbs', () => {
     await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
   })
 
+  it('observes seed rows without fetching the ones nothing hydrated', async () => {
+    // A search source may hand back rows it never put in the cache. The
+    // payload's parentId is the answer for those, so fetching each one
+    // would be a row read per result — serialized behind the ancestor
+    // walk — to improve on an answer we already have.
+    const {result} = renderHook(() => useAncestorCrumbs(targets('a', 'b')))
+
+    await waitFor(() => expect(result.current.size).toBe(2))
+    expect(seedLoads).toEqual([])
+  })
+
   it('prefers the live row over the search payload for the seed parent', async () => {
     // `core.searchByContent` declares no row deps, so a parent move on a
     // result row does NOT invalidate it — the payload can still claim a
     // parent for a block that has since moved to the workspace root, while
     // the ancestor walk (which IS row-dep'd) correctly returns nothing.
     // Trusting the payload there would mark a genuine root as truncated.
-    loadedRows.set('a', null)
+    cachedRows.set('a', null)
     chainResolvers.set('a', async () => [])
 
     const {result} = renderHook(() => useAncestorCrumbs([{id: 'a', parentId: 'stale-parent'}]))
@@ -255,7 +281,7 @@ describe('useAncestorCrumbs', () => {
     await waitFor(() => expect(result.current.get('a')).toEqual([]))
   })
 
-  it('falls back to the search payload when the row is not loaded', async () => {
+  it('falls back to the search payload when the row is not in the cache', async () => {
     chainResolvers.set('a', async () => [])
 
     const {result} = renderHook(() => useAncestorCrumbs([{id: 'a', parentId: 'gone-parent'}]))

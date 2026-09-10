@@ -248,9 +248,22 @@ export function useHandle<T, S = T | undefined>(
  *  No `committedRef` counterpart to `useHandle`'s, because the memo below
  *  is rebuilt only when `handles` changes — which means the id set
  *  changed, and a new array is then the honest answer. */
+export interface UseHandlesOptions {
+  /** Whether an unresolved member is FETCHED, or merely observed until
+   *  something else loads it. Default `true`.
+   *
+   *  `false` is for a set the caller wants updates about but has another
+   *  answer for when a member is missing — where fetching would be one
+   *  read per absent member, serialized by a single-slot connection, to
+   *  improve on an answer the caller already has. */
+  fetchMissing?: boolean
+}
+
 export const useHandles = <T,>(
   handles: readonly Handle<T>[],
+  opts?: UseHandlesOptions,
 ): readonly (T | undefined)[] => {
+  const fetchMissing = opts?.fetchMissing ?? true
   // Same closure-local memo as `useHandle`, and safe for the same reason:
   // the bindings live in the closure `useMemo` returned, never on a shared
   // object, so an abandoned render can at worst prime the memo with a
@@ -281,8 +294,9 @@ export const useHandles = <T,>(
   // one read — and, since one failed batched read errors every member at
   // once, is also why the retry inside `ensureLoaded` matters here.
   useEffect(() => {
+    if (!fetchMissing) return
     for (const handle of handles) ensureLoaded(handle)
-  }, [handles])
+  }, [handles, fetchMissing])
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }

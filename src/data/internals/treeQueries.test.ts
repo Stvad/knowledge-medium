@@ -137,19 +137,49 @@ describe('manyAncestorsSql', () => {
   beforeAll(async () => { h = await createTestDb() })
   afterAll(async () => { await h.cleanup() })
 
-  it('returns parents leaf-to-root, excluding self', async () => {
+  /** What `ancestorChainRows` does with the result: depth 0 is the seed,
+   *  the rest is the chain. */
+  const walk = (rows: {id: string; depth: number}[]) =>
+    ({seed: rows[0]?.id, chain: rows.slice(1).map(r => r.id)})
+
+  it('returns the seed at depth 0, then its parents leaf-to-root', async () => {
     await seed(h.db, [
       {id: 'gp',    parent_id: null,  order_key: 'a0'},
       {id: 'p',     parent_id: 'gp',  order_key: 'a0'},
       {id: 'self',  parent_id: 'p',   order_key: 'a0'},
     ])
-    const rows = await h.db.getAll<{id: string}>(manyAncestorsSql(1), ['self'])
-    expect(rows.map(r => r.id)).toEqual(['p', 'gp'])
+    const rows = await h.db.getAll<{id: string; depth: number}>(manyAncestorsSql(1), ['self'])
+    expect(walk(rows)).toEqual({seed: 'self', chain: ['p', 'gp']})
   })
 
-  it('returns empty when the row has no parent', async () => {
+  it('returns the seed alone when the row has no parent', async () => {
+    // The seed is what separates this from a walk stopped at its first
+    // hop, which also comes back with no ancestors.
     await seed(h.db, [{id: 'a-root', parent_id: null, order_key: 'a0'}])
-    const rows = await h.db.getAll(manyAncestorsSql(1), ['a-root'])
+    const rows = await h.db.getAll<{id: string; depth: number; parent_id: string | null}>(
+      manyAncestorsSql(1), ['a-root'],
+    )
+    expect(walk(rows)).toEqual({seed: 'a-root', chain: []})
+    expect(rows[0].parent_id).toBeNull()
+  })
+
+  it('carries a non-null parent_id on the seed when the first hop is deleted', async () => {
+    // The unreachable-parent case: no ancestor rows, but the seed says a
+    // parent exists — which is the dep `core.ancestors` declares so the
+    // chain re-resolves when that parent is restored.
+    await seed(h.db, [
+      {id: 'gone', parent_id: null,   order_key: 'a0', deleted: 1},
+      {id: 'orphan', parent_id: 'gone', order_key: 'a0'},
+    ])
+    const rows = await h.db.getAll<{id: string; depth: number; parent_id: string | null}>(
+      manyAncestorsSql(1), ['orphan'],
+    )
+    expect(walk(rows)).toEqual({seed: 'orphan', chain: []})
+    expect(rows[0].parent_id).toBe('gone')
+  })
+
+  it('returns nothing at all for a row that does not exist', async () => {
+    const rows = await h.db.getAll(manyAncestorsSql(1), ['no-such-id'])
     expect(rows).toEqual([])
   })
 
@@ -161,15 +191,15 @@ describe('manyAncestorsSql', () => {
       {id: 'r2',    parent_id: null,  order_key: 'a0'},
       {id: 'leaf2', parent_id: 'r2',  order_key: 'a0'},
     ])
-    const rows = await h.db.getAll<{id: string; chain_start_id: string}>(
+    const rows = await h.db.getAll<{id: string; chain_start_id: string; depth: number}>(
       manyAncestorsSql(2), ['leaf1', 'leaf2'],
     )
-    const byStart = new Map<string, string[]>()
+    const byStart = new Map<string, {id: string; depth: number}[]>()
     for (const row of rows) {
-      byStart.set(row.chain_start_id, [...(byStart.get(row.chain_start_id) ?? []), row.id])
+      byStart.set(row.chain_start_id, [...(byStart.get(row.chain_start_id) ?? []), row])
     }
-    expect(byStart.get('leaf1')).toEqual(['m1', 'r1'])
-    expect(byStart.get('leaf2')).toEqual(['r2'])
+    expect(walk(byStart.get('leaf1')!)).toEqual({seed: 'leaf1', chain: ['m1', 'r1']})
+    expect(walk(byStart.get('leaf2')!)).toEqual({seed: 'leaf2', chain: ['r2']})
   })
 
   it('truncates a non-root cycle (start \u2192 A \u2192 B \u2192 C \u2192 B \u2026) at the visited-id guard', async () => {
@@ -183,10 +213,10 @@ describe('manyAncestorsSql', () => {
       {id: 'A',     parent_id: 'B',     order_key: 'a0'},
       {id: 'start', parent_id: 'A',     order_key: 'a0'},
     ])
-    const rows = await h.db.getAll<{id: string}>(manyAncestorsSql(1), ['start'])
+    const rows = await h.db.getAll<{id: string; depth: number}>(manyAncestorsSql(1), ['start'])
     // Walk: start \u2192 A \u2192 B \u2192 C \u2192 (B blocked by visited-id). Each
     // cycle member appears at most once in the result.
-    expect(rows.map(r => r.id).sort()).toEqual(['A', 'B', 'C'])
+    expect(walk(rows).chain.slice().sort()).toEqual(['A', 'B', 'C'])
   })
 
   it('refuses an empty id list rather than emitting `IN ()`', () => {

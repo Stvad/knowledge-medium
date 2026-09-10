@@ -85,7 +85,12 @@ export const useAncestorCrumbs = (
   )
 
   const chains = useHandles(chainHandles)
-  const seeds = useHandles(seedHandles)
+  // Observed, not fetched. A seed row the caller's search already
+  // hydrated is free to read, and one it did not is exactly the case the
+  // payload's `parentId` fallback exists for — loading it would be a row
+  // read per result, serialized behind the ancestor walk, to improve on
+  // an answer we already have.
+  const seeds = useHandles(seedHandles, {fetchMissing: false})
 
   return useMemo(() => {
     if (!workspaceId) return EMPTY_CRUMBS

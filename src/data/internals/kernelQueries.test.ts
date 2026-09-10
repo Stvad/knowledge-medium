@@ -211,6 +211,49 @@ describe('repo.query.ancestors', () => {
     const out = asBlocks(await env.repo.query.ancestors({id: 'r'}).load())
     expect(out).toEqual([])
   })
+
+  it('re-resolves when the parent that TRUNCATED the chain comes back', async () => {
+    // The walk filters `deleted = 0`, so a soft-deleted parent ends the
+    // chain and is absent from the result — and being absent it could not
+    // invalidate this handle, so the truncated chain would be permanent.
+    // `core.restore` restores one block, which is exactly how a live child
+    // ends up under a tombstoned parent.
+    await create({id: 'r'})
+    await create({id: 'mid', parentId: 'r'})
+    await create({id: 'leaf', parentId: 'mid'})
+    // Cut ABOVE the first hop, so the chain is non-empty and the topmost
+    // row it DID reach is what names the missing parent.
+    await env.repo.tx(tx => tx.delete('r'), {scope: ChangeScope.BlockDefault})
+
+    const handle = env.repo.query.ancestors({id: 'leaf'})
+    const seen: string[][] = []
+    handle.subscribe(chain => seen.push(chain.map(a => a.id)))
+    await vi.waitFor(() => expect(handle.status()).toBe('ready'))
+    expect(handle.peek()!.map(a => a.id)).toEqual(['mid'])
+
+    await env.repo.tx(tx => tx.restore('r'), {scope: ChangeScope.BlockDefault})
+
+    await vi.waitFor(() => expect(seen.at(-1)).toEqual(['mid', 'r']))
+  })
+
+  it('re-resolves when the first hop of an EMPTY chain comes back', async () => {
+    // Same rule at the boundary the chain cannot speak for: with no
+    // ancestor rows at all, only the seed's own parent edge says the walk
+    // stopped rather than reached a root.
+    await create({id: 'top'})
+    await create({id: 'child', parentId: 'top'})
+    await env.repo.tx(tx => tx.delete('top'), {scope: ChangeScope.BlockDefault})
+
+    const handle = env.repo.query.ancestors({id: 'child'})
+    const seen: string[][] = []
+    handle.subscribe(chain => seen.push(chain.map(a => a.id)))
+    await vi.waitFor(() => expect(handle.status()).toBe('ready'))
+    expect(handle.peek()!.map(a => a.id)).toEqual([])
+
+    await env.repo.tx(tx => tx.restore('top'), {scope: ChangeScope.BlockDefault})
+
+    await vi.waitFor(() => expect(seen.at(-1)).toEqual(['top']))
+  })
 })
 
 describe('repo.query.manyAncestors', () => {

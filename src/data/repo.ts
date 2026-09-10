@@ -146,7 +146,7 @@ import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
 import { ClientContext, type ClientContextReader, type LayoutSessionRouter } from './clientContext'
 import type { TxImpl } from './internals/txEngine'
 import { CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
-import { ancestorChainRows } from './internals/ancestorBatch'
+import { ancestorWalk } from './internals/ancestorBatch'
 import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
@@ -1550,8 +1550,8 @@ export class Repo {
     if (opts?.children) await this.hydrateChildren(id)
 
     if (opts?.ancestors) {
-      const ancestorRows = await ancestorChainRows(this.db, id)
-      for (const r of ancestorRows) this.cache.applyIfNewer(parseBlockRow(r), 'hydrate')
+      const {chain} = await ancestorWalk(this.db, id)
+      for (const r of chain) this.cache.applyIfNewer(parseBlockRow(r), 'hydrate')
     }
 
     if (opts?.descendants) {

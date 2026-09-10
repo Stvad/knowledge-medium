@@ -35,7 +35,7 @@ import { seedKeyProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import type { Repo } from '@/data/repo'
 import { refCodecKind } from './refProjection'
-import { ancestorChainRows } from './ancestorBatch'
+import { ancestorWalk, type AncestorWalk } from './ancestorBatch'
 import {
   CHILDREN_IDS_SQL,
   CHILDREN_SQL,
@@ -642,6 +642,26 @@ export const subtreeQuery = defineQuery<
   },
 })
 
+/** Declare a dep on the parent the walk STOPPED at, when it stopped.
+ *
+ *  The walk filters `deleted = 0`, so a soft-deleted or not-yet-
+ *  materialized parent ends the chain and is absent from the result —
+ *  and being absent, nothing about it could invalidate the handle. A
+ *  chain truncated that way would then stay truncated for the life of the
+ *  handle, however long after the parent came back (`core.restore`
+ *  restores one block and can leave a live child under a tombstoned
+ *  parent; sync can deliver a child ahead of its parent).
+ *
+ *  A chain that reached a root has a null `parent_id` at its top and
+ *  declares nothing. The depth cap is the one false positive: it declares
+ *  a dep on a parent that is perfectly live, which costs an invalidation
+ *  and no wrong answer. */
+const dependOnUnreachableParent = (ctx: QueryCtx, walk: AncestorWalk): void => {
+  const topmost = walk.chain.length > 0 ? walk.chain[walk.chain.length - 1] : walk.seed
+  const unreachable = topmost?.parent_id
+  if (unreachable) ctx.depend({kind: 'row', id: unreachable})
+}
+
 /** Ancestor chain (excludes `id` itself).
  *
  *  THE cache and invalidation unit for a parent chain: one handle per
@@ -657,8 +677,9 @@ export const ancestorsQuery = defineQuery<{id: string}, BlockData[]>({
   resultSchema: blockDataArraySchema,
   resolve: async ({id}, ctx) => {
     ctx.depend({kind: 'row', id})
-    const rows = await ancestorChainRows(ctx.db, id)
-    return ctx.hydrateBlocks(asBlockRows(rows))
+    const walk = await ancestorWalk(ctx.db, id)
+    dependOnUnreachableParent(ctx, walk)
+    return ctx.hydrateBlocks(asBlockRows(walk.chain))
   },
 })
 
@@ -700,10 +721,11 @@ export const manyAncestorsQuery = defineQuery<
     // statement. Each chain is hydrated in its own call, which is what
     // keeps hydrate-order depth-ascending per chain rather than
     // interleaving them.
-    const chains = await Promise.all(ids.map(id => ancestorChainRows(ctx.db, id)))
+    const walks = await Promise.all(ids.map(id => ancestorWalk(ctx.db, id)))
+    for (const walk of walks) dependOnUnreachableParent(ctx, walk)
     return ids.map((startId, index) => ({
       startId,
-      ancestors: ctx.hydrateBlocks(asBlockRows(chains[index])),
+      ancestors: ctx.hydrateBlocks(asBlockRows(walks[index].chain)),
     }))
   },
 })
@@ -1502,15 +1524,15 @@ export const recentActivityQuery = defineQuery<
     const blocks = await resolveRecentUserBlocks(workspaceId, limit, ctx)
     if (blocks.length === 0) return []
 
-    const chains = await Promise.all(
-      blocks.map(block => ancestorChainRows(ctx.db, block.id)),
+    const walks = await Promise.all(
+      blocks.map(block => ancestorWalk(ctx.db, block.id)),
     )
 
     return blocks.map((block, index) => {
       // One call per chain so hydrate order stays depth-ascending within
       // it, as `core.manyAncestors` does.
       const ancestors = ctx.hydrateBlocks(
-        asBlockRows(chains[index]), {declareRowDeps: false},
+        asBlockRows(walks[index].chain), {declareRowDeps: false},
       )
       // The ANCESTORS only: the rows themselves are declared by the shared
       // resolver, which needs the same channel for the same reason. A page
