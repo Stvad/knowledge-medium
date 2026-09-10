@@ -19,8 +19,9 @@ export function RecentsHeaderItem() {
         // Journal and Locations pages already do; `ensureTarget` keeps it off
         // the gesture's synchronous path, where the id — deterministic, known
         // before the row exists — is all the intent policy needs (#931).
-        openBlock(event, {blockId: recentsPageBlockId(workspaceId)}, {
-          ensureTarget: () => getOrCreateRecentsPage(repo, workspaceId),
+        openBlock(event, {
+          blockId: recentsPageBlockId(workspaceId),
+          ensure: () => getOrCreateRecentsPage(repo, workspaceId),
         })
       }}
       title="Recently edited blocks"

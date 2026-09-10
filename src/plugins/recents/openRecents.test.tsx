@@ -34,26 +34,29 @@ vi.mock('@/context/repo.js', () => ({
   },
 }))
 
-// The opener stands in for `applyNavigationDecision`: it records the target
-// and runs `ensureTarget`, which is the ordering that module owns and pins
-// (see navigation.test.ts). What is under test HERE is what the button hands
-// it — the id, and an ensure that materializes the page.
+// Both navigation entry points stand in for the real ones: they record the
+// target and run its `ensure`. The ORDERING — resolve the policy, skip a
+// vetoed or retargeted gesture, then materialize — is navigation.ts's, pinned
+// there. What is under test HERE is what each consumer hands over: the id, and
+// an ensure that materializes the page.
 vi.mock('@/utils/navigation.js', async importOriginal => ({
   ...await importOriginal<typeof import('@/utils/navigation')>(),
   useBlockOpener: () => (
     event: MouseEvent,
-    target: {blockId: string},
-    {ensureTarget}: {ensureTarget?: () => Promise<unknown>} = {},
+    target: {blockId: string; ensure?: () => Promise<unknown>},
   ) => {
     event.preventDefault()
-    void (ensureTarget?.() ?? Promise.resolve()).then(() => {
+    void (target.ensure?.() ?? Promise.resolve()).then(() => {
       openCalls.current.push(target.blockId)
     })
   },
-  navigateFromGlobalCommand: (_repo: unknown, input: {blockId: string}) => {
+  navigateFromGlobalCommand: (
+    _repo: unknown,
+    input: {blockId: string; ensure?: () => Promise<unknown>},
+  ) => (input.ensure?.() ?? Promise.resolve()).then(() => {
     commandCalls.current.push(input.blockId)
-    return Promise.resolve(null)
-  },
+    return null
+  }),
 }))
 
 const { RecentsHeaderItem } = await import('./HeaderItem.tsx')
