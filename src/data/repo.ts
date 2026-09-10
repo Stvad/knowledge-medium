@@ -2784,19 +2784,45 @@ export class Repo {
    * `workspaceId`. Called at workspace bootstrap BEFORE the landing resolver
    * seeds, so a `[[reserved alias]]` wiki-link (Journal/Properties/Types/
    * Locations) resolves to the canonical page instead of auto-creating a rival
-   * that trips `alias.collision`. Each `ensure` get-or-creates at a
-   * deterministic id (idempotent), so repeated bootstraps and offline-
-   * converging clients all land on the same rows.
+   * that takes the name. Each `ensure` get-or-creates at a deterministic id
+   * (idempotent), so repeated bootstraps and offline-converging clients all
+   * land on the same rows.
    *
    * Reads off this Repo's own `facetRuntime` — which carries the data-layer
    * contributions installed at construction (`staticDataExtensions`) — so no
    * separate runtime resolution is needed. Awaited (not deferred): the pages
    * must exist before the seed's references parse.
+   *
+   * A cross-workspace occupant is skipped like any other failure, not re-raised:
+   * a page whose derived id is held by a row from another of the user's own
+   * workspaces renders confusingly, which does not outrank the app not opening.
+   *
+   * A failing `ensure` is logged and skipped, and this resolves regardless:
+   * `bootstrapWorkspace` awaits it on the critical path with no catch, so a
+   * throw here does not degrade one page's feature, it stops the app coming up.
+   * No page is worth that. Console rather than `onUserError` because what
+   * reaches here is a contributor's bug or a foreign row at the derived id —
+   * neither has a user action behind it, and a contested alias no longer
+   * arrives at all (`getOrCreateKernelPage` yields the name and stays
+   * reachable).
    */
   async ensureSystemPages(workspaceId: string): Promise<void> {
     if (!workspaceId) return
     const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
-    await Promise.all(pages.map(page => page.ensure(this, workspaceId)))
+    // `await` inside the try, not `return page.ensure(…)`: the catch has to
+    // cover a rejected promise as well as a synchronous throw, and a returned
+    // promise rejects after the try has already exited.
+    await Promise.all(pages.map(async page => {
+      try {
+        await page.ensure(this, workspaceId)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        console.error(
+          `[ensureSystemPages] ${page.id} unavailable in workspace ${workspaceId} `
+          + `(will retry on the next workspace open): ${reason}`,
+        )
+      }
+    }))
   }
 
   /**
