@@ -36,7 +36,7 @@ const fakeDb = (opts?: {failWhen?: (ids: string[]) => boolean}) => {
   return {db, statements}
 }
 
-const idsOf = (rows: {chain_start_id: string}[]) =>
+const idsOf = (rows: readonly {chain_start_id: string}[]) =>
   [...new Set(rows.map(row => row.chain_start_id))]
 
 describe('ancestorChainRows', () => {

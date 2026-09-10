@@ -32,8 +32,11 @@ export type AncestorChainRow = BlockRow & {chain_start_id: string}
  *  statement, the recents feed's default 200-row window included. */
 const MAX_IDS_PER_STATEMENT = 500
 
+/** Shared, so an id with no ancestors costs no allocation. */
+const NO_ANCESTORS: readonly AncestorChainRow[] = Object.freeze([])
+
 interface Waiter {
-  resolve: (rows: AncestorChainRow[]) => void
+  resolve: (rows: readonly AncestorChainRow[]) => void
   reject: (error: unknown) => void
 }
 
@@ -44,8 +47,8 @@ class AncestorBatcher {
 
   constructor(private readonly db: QueryReadDb) {}
 
-  chainFor(id: string): Promise<AncestorChainRow[]> {
-    return new Promise<AncestorChainRow[]>((resolve, reject) => {
+  chainFor(id: string): Promise<readonly AncestorChainRow[]> {
+    return new Promise<readonly AncestorChainRow[]>((resolve, reject) => {
       const existing = this.waiting.get(id)
       if (existing) {
         existing.push({resolve, reject})
@@ -76,10 +79,16 @@ class AncestorBatcher {
           manyAncestorsSql(chunk.length), chunk,
         )
         const byStart = new Map<string, AncestorChainRow[]>()
-        for (const id of chunk) byStart.set(id, [])
-        for (const row of rows) byStart.get(row.chain_start_id)?.push(row)
+        for (const row of rows) {
+          const chain = byStart.get(row.chain_start_id)
+          if (chain) chain.push(row)
+          else byStart.set(row.chain_start_id, [row])
+        }
+        // An id with no rows is a block that has no ancestors, or none
+        // the walk could reach — the ONE place that reading is made, so
+        // a waiter never sees `undefined` for an id it asked about.
         for (const id of chunk) {
-          const chain = byStart.get(id) ?? []
+          const chain = byStart.get(id) ?? NO_ANCESTORS
           for (const waiter of batch.get(id) ?? []) waiter.resolve(chain)
         }
       } catch (error) {
@@ -103,13 +112,13 @@ class AncestorBatcher {
 const batchers = new WeakMap<QueryReadDb, AncestorBatcher>()
 
 /** The leaf-to-root chain for `id`, excluding `id` itself, deleted rows
- *  filtered out. Rows for the same id in one microtask are one read, and
- *  the returned array is shared between those callers — read it, don't
- *  mutate it. */
+ *  filtered out. Rows for the same id in one microtask are one read, so
+ *  the returned array is shared between those callers — hence `readonly`,
+ *  which is the contract and not a formality. */
 export const ancestorChainRows = (
   db: QueryReadDb,
   id: string,
-): Promise<AncestorChainRow[]> => {
+): Promise<readonly AncestorChainRow[]> => {
   let batcher = batchers.get(db)
   if (!batcher) {
     batcher = new AncestorBatcher(db)

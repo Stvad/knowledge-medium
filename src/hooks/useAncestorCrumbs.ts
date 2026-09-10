@@ -74,10 +74,11 @@ export const useAncestorCrumbs = (
   )
   // The seed row, SUBSCRIBED rather than peeked. `core.searchByContent`
   // deliberately declares no row deps, so a parent move on a result row
-  // does not invalidate it — a block moved to the workspace root while
-  // the dialog is open would keep a stale non-null parent in the caller's
-  // payload, and the freshly emptied ancestor walk would then read as a
-  // cut chain, marking a genuine root as truncated.
+  // does not invalidate it (`kernelQueries.test.ts`, "parent move on a
+  // result row does NOT invalidate") — a block moved to the workspace
+  // root while the dialog is open would keep a stale non-null parent in
+  // the caller's payload, and the freshly emptied ancestor walk would
+  // then read as a cut chain, marking a genuine root as truncated.
   const seedHandles = useMemo(
     () => (workspaceId ? targets.map(([id]) => repo.block(id)) : []),
     [targets, repo, workspaceId],
