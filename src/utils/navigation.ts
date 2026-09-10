@@ -633,14 +633,24 @@ const resolveNavigationIntent = (
     : decision
 }
 
-/** Materialize the target block's ROW before opening it — for a page created
- *  lazily, such as a system page `ensureSystemPages` may have SKIPPED. The
- *  block id must NOT depend on it: a deterministic id is known before its row
- *  exists, which is what lets a click's decision — and with it `preventDefault`
- *  — stay synchronous while only the execution waits.
+/** Materialize the target block's ROW, for a page created lazily — a system
+ *  page `ensureSystemPages` may have SKIPPED, say. The block id must NOT depend
+ *  on it: a deterministic id is known before its row exists, which is what lets
+ *  a surface ask to open a page it has not created yet.
  *
- *  Failing (thrown or rejected) cancels the navigation, because landing on a
- *  block known not to exist is the thing this exists to prevent. */
+ *  Runs AFTER the navigation has landed, and only when it landed on exactly the
+ *  block and workspace the surface asked for. Both seams can veto or retarget —
+ *  `navigationIntentVerb` resolves the gesture, `navigationVerb` executes it —
+ *  and running the ensure first puts it on the wrong side of whichever one runs
+ *  later, writing for a gesture that then goes nowhere or somewhere else.
+ *  Landing first also keeps `navigate` on the call's own turn, so a slow
+ *  materialization cannot drop an older navigation on top of a newer gesture.
+ *
+ *  The panel therefore opens a moment before the row does. That happens only in
+ *  the case this exists for: with the page already there the ensure is a
+ *  cache-hit read and nothing is visibly late, and with it missing an empty
+ *  panel that fills itself in beats a permanently dead link. A failure leaves
+ *  the panel on a block that never arrives, and is logged. */
 export type EnsureNavigationTarget = () => Promise<unknown>
 
 /** The block a surface asked to open, paired with how to materialize its row.
@@ -648,31 +658,30 @@ export type EnsureNavigationTarget = () => Promise<unknown>
  *  different block than the one the pipeline actually navigates to. */
 interface NavigationTargetEnsure {
   blockId: string
+  workspaceId: string
   ensure: EnsureNavigationTarget
 }
 
-/** Materialize, then navigate — the ordering both gesture surfaces share.
+/** Navigate, then materialize what it landed on — the ordering both gesture
+ *  surfaces share. Compares against `NavigationResult`, which is where the
+ *  navigation ACTUALLY went: a veto resolves to `null` and a retarget to some
+ *  other block, and neither is ours to create.
  *
- *  Reached only for a resolved `navigate` decision, so a VETOED gesture creates
- *  nothing. And skipped when the policy retargeted the gesture: that
- *  destination is the policy's, and materializing a page nobody is about to
- *  open would write on the strength of a target that no longer applies.
- *
- *  `await` inside the try, not `return ensure().then(…)`: the catch has to
- *  cover a synchronous throw as well as a rejected promise. */
+ *  `await` inside the try, not `ensure().then(…)`: the catch has to cover a
+ *  synchronous throw as well as a rejected promise. */
 const navigateEnsuringTarget = async (
   repo: Repo,
   input: NavigateInput,
-  {blockId, ensure}: NavigationTargetEnsure,
+  {blockId, workspaceId, ensure}: NavigationTargetEnsure,
 ): Promise<NavigationResult | null> => {
-  if (input.blockId !== blockId) return navigate(repo, input)
+  const landed = await navigate(repo, input)
+  if (!landed || landed.blockId !== blockId || landed.workspaceId !== workspaceId) return landed
   try {
     await ensure()
   } catch (error) {
     console.error('[navigation] target could not be materialized', error)
-    return null
   }
-  return navigate(repo, input)
+  return landed
 }
 
 /** Apply a resolved decision to the click that produced it — the single place
@@ -693,9 +702,6 @@ export const applyNavigationDecision = (
   e.preventDefault()
   if (decision.kind !== 'navigate') return
   const {input} = decision
-  // Not a shortcut the tests can pin (routing every click through a resolved
-  // promise is observationally identical): it keeps every caller with no lazy
-  // target reaching `navigate` in the same turn as before, not a microtask later.
   if (!target) {
     void navigate(repo, input)
     return
@@ -742,7 +748,7 @@ export const navigateFromGlobalCommand = (
     blockId,
     workspaceId: resolvedWorkspaceId,
     viewport: currentViewport(),
-  }, ensure && {blockId, ensure})
+  }, ensure && {blockId, workspaceId: resolvedWorkspaceId, ensure})
 }
 
 export const useNavigateFromGlobalCommand = () => {
@@ -833,13 +839,20 @@ export interface BlockOpenerOptions {
  *  fires (e.g. breadcrumb chains, search result lists), use
  *  `useBlockOpener` instead and pass the block at call time. */
 export const useOpenBlock = (
-  {blockId, workspaceId}: OpenBlockContext,
+  target: OpenBlockContext,
   {plainClick = 'follow-link'}: BlockOpenerOptions = {},
 ) => {
   const opener = useBlockOpener({plainClick})
+  // `target` is forwarded WHOLE, so a field added to `OpenBlockContext` reaches
+  // the opener without an edit here — rebuilding it field by field is how
+  // `ensure` came to be silently dropped, a missing behaviour rather than a type
+  // error. Deps stay per-field because callers pass an object literal, which
+  // would otherwise rebuild the callback on every render.
+  const {blockId, workspaceId, ensure} = target
   return useCallback(
-    (e: MouseEvent) => opener(e, {blockId, workspaceId}),
-    [opener, blockId, workspaceId],
+    (e: MouseEvent) => opener(e, target),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: `target` is an unstable literal; its fields are the identity
+    [opener, blockId, workspaceId, ensure],
   )
 }
 
@@ -867,7 +880,7 @@ export const openBlockFromEvent = (
     blockId,
     workspaceId: resolvedWorkspaceId,
     viewport: currentViewport(),
-  }), ensure && {blockId, ensure})
+  }), ensure && {blockId, workspaceId: resolvedWorkspaceId, ensure})
 }
 
 /** Returns an opener `(event, {blockId, workspaceId?, ensure?}) => void` for

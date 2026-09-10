@@ -807,58 +807,51 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     expect(e.preventDefault).not.toHaveBeenCalled()
   })
 
-  // `ensure` — a target whose ROW is created lazily. The option's whole point is
-  // that only the EXECUTION waits: the decision, and with it `preventDefault`,
-  // still resolve synchronously from the live event.
-  const deferred = () => {
-    let settle!: (ok: boolean) => void
+  // `ensure` — a target whose ROW is created lazily. The ordering is
+  // navigate-then-materialize, against where the navigation ACTUALLY landed:
+  // both seams can veto or retarget, and neither outcome is ours to create.
+  const recording = () => {
     const ran = vi.fn()
-    const promise = new Promise<void>((resolve, reject) => {
-      settle = ok => { if (ok) resolve(); else reject(new Error('ensure failed')) }
-    })
-    return {ensure: () => { ran(); return promise }, settle, ran}
+    return {ran, ensure: () => { ran(); return Promise.resolve() }}
   }
 
-  /** Land a plain click issued AFTER the one under test. Both navigations queue
-   *  through the same serialized `repo.tx`, so once this one is in the layout an
-   *  eager navigation for the earlier click would be too — which turns "it did
-   *  not navigate" from an assertion that can outrun the write into a fact. */
-  const fenceOnLaterClick = async (fenceId: string) => {
-    openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {blockId: fenceId, workspaceId: WS})
+  /** Land a navigation that DOES go through, so "the ensure never ran" is a fact
+   *  rather than an assertion made before it would have been issued. */
+  const fenceOnLaterNavigation = async (fenceId: string) => {
+    await navigate(env.repo, {blockId: fenceId, target: 'main', workspaceId: WS})
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toContain(fenceId)
     })
   }
 
-  it('ensure: owns the click at once, holds the navigation until it resolves', async () => {
-    const {ensure, settle} = deferred()
+  it('ensure: owns the click synchronously, navigates, then materializes', async () => {
+    const order: string[] = []
+    env.repo.setRuntimeContributions(navigationVerb.decoratorsFacet, 'record', [
+      next => (req: NavigationRequest) => { order.push('navigate'); return next(req) },
+    ])
     const e = fakeMouseEvent()
-    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-lazy', workspaceId: WS, ensure})
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {
+      blockId: 'b-lazy', workspaceId: WS, ensure: () => { order.push('ensure'); return Promise.resolve() },
+    })
 
-    // Synchronous, while the ensure is still pending — a click the surface has
-    // already owned must not fall through to the browser meanwhile.
+    // Synchronous — a lazy target must not change when the surface owns the click.
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
 
-    await fenceOnLaterClick('b-fence')
-    expect(await currentPanelBlockIds()).not.toContain('b-lazy')
-
-    settle(true)
-    await vi.waitFor(async () => {
-      expect(await currentPanelBlockIds()).toContain('b-lazy')
-    })
+    await vi.waitFor(() => { expect(order).toEqual(['navigate', 'ensure']) })
+    expect(await currentPanelBlockIds()).toEqual(['b-lazy'])
   })
 
-  it('ensure: a rejection cancels the navigation rather than landing on a missing block', async () => {
+  it('ensure: a failure leaves the navigation in place and is reported', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const {ensure, settle} = deferred()
-    openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {blockId: 'b-doomed', workspaceId: WS, ensure})
-    settle(false)
+    openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {
+      blockId: 'b-doomed', workspaceId: WS, ensure: () => Promise.reject(new Error('ensure failed')),
+    })
 
-    await fenceOnLaterClick('b-fence')
-    expect(await currentPanelBlockIds()).not.toContain('b-doomed')
-    // Reported, not swallowed — and not left as an unhandled rejection either.
-    expect(consoleError).toHaveBeenCalled()
+    await vi.waitFor(() => { expect(consoleError).toHaveBeenCalled() })
+    // The panel is open on a block that never arrived — visibly empty, rather
+    // than a click that silently did nothing.
+    expect(await currentPanelBlockIds()).toEqual(['b-doomed'])
     consoleError.mockRestore()
   })
 
@@ -867,14 +860,13 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     const ensure = () => { throw new Error('threw before returning a promise') }
     openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {blockId: 'b-thrower', workspaceId: WS, ensure})
 
-    await fenceOnLaterClick('b-fence')
-    expect(await currentPanelBlockIds()).not.toContain('b-thrower')
-    expect(consoleError).toHaveBeenCalled()
+    await vi.waitFor(() => { expect(consoleError).toHaveBeenCalled() })
+    expect(await currentPanelBlockIds()).toEqual(['b-thrower'])
     consoleError.mockRestore()
   })
 
   it('ensure: a native passthrough leaves it unrun — the click was declined', async () => {
-    const {ensure, ran} = deferred()
+    const {ensure, ran} = recording()
     const e = fakeMouseEvent({metaKey: true})
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-native', workspaceId: WS, ensure})
 
@@ -882,43 +874,63 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     expect(e.preventDefault).not.toHaveBeenCalled()
   })
 
-  it('ensure: a vetoing policy leaves it unrun — nothing is created for a click that goes nowhere', async () => {
-    const ran = vi.fn()
+  it('ensure: an INTENT-seam veto leaves it unrun', async () => {
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
       () => () => SUPPRESS,
     ])
-    openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {
-      blockId: 'b-vetoed', workspaceId: WS, ensure: () => { ran(); return Promise.resolve() },
-    })
+    const {ensure, ran} = recording()
+    openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {blockId: 'b-vetoed', workspaceId: WS, ensure})
 
-    // Fence on a write that DOES land, so "never ran" is a fact rather than an
-    // assertion made before the ensure would have been issued. (The policy
-    // vetoes every click, so the fence goes through `navigate` directly.)
-    await navigate(env.repo, {blockId: 'b-fence', target: 'main', workspaceId: WS})
+    await fenceOnLaterNavigation('b-fence')
     expect(ran).not.toHaveBeenCalled()
-    expect(await currentPanelBlockIds()).toEqual(['b-fence'])
+  })
+
+  it('ensure: an EXECUTION-seam veto leaves it unrun — the later seam gets the last word', async () => {
+    // Vetoes only the block under test, so the fence below still lands.
+    env.repo.setRuntimeContributions(navigationVerb.decoratorsFacet, 'veto', [
+      next => (req: NavigationRequest) => req.input.blockId === 'b-exec-vetoed' ? null : next(req),
+    ])
+    const {ensure, ran} = recording()
+    openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {blockId: 'b-exec-vetoed', workspaceId: WS, ensure})
+
+    await fenceOnLaterNavigation('b-fence')
+    expect(ran).not.toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).not.toContain('b-exec-vetoed')
   })
 
   it('ensure: a policy that retargets the gesture leaves it unrun, and the rewritten target still opens', async () => {
-    const ran = vi.fn()
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
       () => () => goTo({blockId: 'b-elsewhere', target: 'main', workspaceId: WS}),
     ])
-    openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {
-      blockId: 'b-asked-for', workspaceId: WS, ensure: () => { ran(); return Promise.resolve() },
-    })
+    const {ensure, ran} = recording()
+    openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {blockId: 'b-asked-for', workspaceId: WS, ensure})
 
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-elsewhere'])
     })
-    // The policy owns where this landed; materializing the block it declined to
+    // The seam owns where this landed; materializing the block it declined to
     // open would write on the strength of a target that no longer applies.
     expect(ran).not.toHaveBeenCalled()
   })
+
+  it('ensure: a WORKSPACE-only rewrite leaves it unrun — a derived id belongs to the workspace it was derived from', async () => {
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      () => () => goTo({blockId: 'b-derived', target: 'main', workspaceId: 'ws-other'}),
+    ])
+    const {ensure, ran} = recording()
+    openBlockFromEvent(env.repo, fakeMouseEvent() as unknown as OpenerEvent, {blockId: 'b-derived', workspaceId: WS, ensure})
+
+    await fenceOnLaterNavigation('b-fence')
+    expect(ran).not.toHaveBeenCalled()
+  })
+
+  // `useOpenBlock` / `useBlockOpener` forwarding an `ensure` through to here is
+  // a React-render question — pinned in ./useOpenBlockEnsure.test.tsx, which is
+  // where a rebuilt context object silently dropped the callback.
 })
 
 describe('navigateFromGlobalCommand (ensure)', () => {
-  it('resolves the policy BEFORE materializing: a vetoed command writes nothing', async () => {
+  it('a vetoed command writes nothing', async () => {
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
       () => () => SUPPRESS,
     ])
@@ -934,7 +946,7 @@ describe('navigateFromGlobalCommand (ensure)', () => {
     expect(await currentPanelBlockIds()).toEqual([])
   })
 
-  it('materializes, then navigates', async () => {
+  it('navigates, then materializes', async () => {
     const order: string[] = []
     env.repo.setRuntimeContributions(navigationVerb.decoratorsFacet, 'record', [
       next => (req: NavigationRequest) => { order.push('navigate'); return next(req) },
@@ -945,7 +957,7 @@ describe('navigateFromGlobalCommand (ensure)', () => {
       ensure: () => { order.push('ensure'); return Promise.resolve() },
     })
 
-    expect(order).toEqual(['ensure', 'navigate'])
+    expect(order).toEqual(['navigate', 'ensure'])
     expect(await currentPanelBlockIds()).toEqual(['b-cmd-lazy'])
   })
 })

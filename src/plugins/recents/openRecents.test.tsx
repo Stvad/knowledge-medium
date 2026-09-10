@@ -12,7 +12,7 @@ import { Suspense } from 'react'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { MouseEvent } from 'react'
-import type { BlockData } from '@/data/api'
+import { ChangeScope, type BlockData } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { recentsPageBlockId } from '@/data/recentsPage'
@@ -119,6 +119,31 @@ describe('opening Recents when bootstrap skipped the page', () => {
 
     expect((await recentsRow(repo))?.content).toBe('Recents')
     expect(commandCalls.current).toEqual([recentsPageBlockId(WS)])
+  }, TIMEOUT_MS)
+
+  it('creating the page lazily does not discard a pending redo', async () => {
+    const repo = await setup()
+    const blockId = 'b-edited'
+    await repo.tx(
+      async tx => {
+        await tx.create({id: blockId, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'original'})
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed', skipUndo: true},
+    )
+    await repo.tx(
+      async tx => { await tx.update(blockId, {content: 'edited'}) },
+      {scope: ChangeScope.BlockDefault, description: 'edit'},
+    )
+    expect(await repo.undo()).toBe(true)
+
+    // The click that materializes the page runs against a LIVE undo stack, and
+    // `UndoManager.record` clears the redo branch on every push — so an
+    // unattended create here silently discards a redo the user still wanted.
+    await runOpenRecentsCommand(repo)
+    expect((await recentsRow(repo))?.content).toBe('Recents')
+
+    expect(await repo.redo()).toBe(true)
+    expect((await repo.load(blockId))?.content).toBe('edited')
   }, TIMEOUT_MS)
 
   it('a second open reuses the page rather than minting a rival', async () => {
