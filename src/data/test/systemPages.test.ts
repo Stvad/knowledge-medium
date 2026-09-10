@@ -109,12 +109,11 @@ describe('Repo.ensureSystemPages', () => {
      * work; swallowing makes a transient failure permanent.
      */
     it('survives an owner that throws SYNCHRONOUSLY, before returning a promise', async () => {
-      // `Promise.allSettled` only settles what the array already holds, so a
-      // synchronous throw escapes from `map` and takes workspace open with it —
-      // the one shape a rejected-promise fixture cannot reach. Reachable in
-      // practice: an extension is transpiled, not typechecked, so an ordinary
-      // bug on the first line of `ensure` arrives exactly like this, and TS
-      // accepts it because `never` satisfies the `Promise` return type.
+      // An extension is transpiled, not typechecked, so an ordinary bug on the
+      // first line of `ensure` throws before any promise exists — and TS accepts
+      // it, because `never` satisfies the declared `Promise` return. The current
+      // shape catches it structurally rather than by a clause; this guards a
+      // refactor that lifts the try/catch back out of the callback.
       env = await setup([
         systemPagesFacet.of(
           {id: 'test:sync-throw', ensure: (): Promise<unknown> => { throw new Error('sync bug') }},

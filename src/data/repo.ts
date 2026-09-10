@@ -2792,10 +2792,9 @@ export class Repo {
   async ensureSystemPages(workspaceId: string): Promise<void> {
     if (!workspaceId) return
     const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
-    // `async` on the callback is load-bearing: a contributor that throws
-    // SYNCHRONOUSLY escapes from `map` before any promise exists, and takes
-    // workspace open with it. An extension is transpiled, not typechecked, and
-    // `never` satisfies the declared `Promise` return.
+    // `await` inside the try, not `return page.ensure(…)`: the catch has to
+    // cover a rejected promise as well as a synchronous throw, and a returned
+    // promise rejects after the try has already exited.
     await Promise.all(pages.map(async page => {
       try {
         await page.ensure(this, workspaceId)
