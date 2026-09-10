@@ -13,10 +13,8 @@
  *   - **adopt content as the label** if it has none — an empty
  *     `block-type:label` makes `UserTypesService.tryBuildType` drop the
  *     type, so `book` tagged `block-type` would otherwise register
- *     nothing;
- *   - **refuse the tag** when content and an explicit `block-type:label`
- *     are two different names (`blockType.nameConflict`) — the one shape
- *     that leaves the alias unreconcilable on a later rename;
+ *     nothing, and **refuse the tag** when content and an explicit label
+ *     are two different names (`blockType.nameConflict`);
  *   - **tag it PAGE_TYPE** so it doubles as a navigable `[[Label]]` page
  *     (matches the `createTypeBlock` "type flow" pattern);
  *   - **ensure its label is in `alias`** so `[[Label]]` resolves to THIS
@@ -63,8 +61,8 @@ import { isTypeSeedKey } from '@/data/typeSeeds'
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME = 'core.blockTypeTypeify'
 
 /** Refusal code for a tag whose `content` and `block-type:label` are two
- *  different names. No `rejectionToastFacet` contribution: the generic
- *  route falls back to the raw message, which already says what to fix. */
+ *  different names. Needs no `rejectionToastFacet` contribution — the
+ *  generic route falls back to the raw message, which says what to fix. */
 export const BLOCK_TYPE_NAME_CONFLICT = 'blockType.nameConflict'
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
@@ -111,25 +109,18 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
         assertRoundTrippableReferenceLabel(name, 'Block type label')
       }
 
-      // `content`, `block-type:label` and the claimed alias are three
-      // spellings of ONE name — a type IS the page its name addresses, and
-      // every other minting path writes them equal. `aliasSyncProcessor`
-      // depends on that: it reconciles a rename by matching the OLD CONTENT,
-      // so an alias tracking the LABEL has no entry to replace — its rule 2
-      // appends the new name and the old one stays claimed forever, leaving
-      // `[[oldName]]` pointed at the renamed type and `alias.collision` on
-      // any later attempt to re-use that name.
+      // A type has ONE name: `content`, `block-type:label` and the claimed
+      // alias are three spellings of it. `aliasSyncProcessor` reconciles a
+      // rename by matching the OLD CONTENT, so an alias tracking the LABEL is
+      // never replaced — it stays claimed, and `[[oldName]]` keeps resolving
+      // here. An explicit label short-circuits `name`, making this the only
+      // TAGGING path that can mint that shape (a content rewrite on a block
+      // that is already a type still reaches it — nothing re-runs here).
       //
-      // An explicit label short-circuits `name`, making this the only path
-      // that can mint that shape — so it is refused HERE rather than
-      // repaired at rename time, where rule 2's heal is deliberately
-      // additive and a repair could not tell the type's own name claim from
-      // a user-added alias equal to it. Nor is `content` rewritten to match:
-      // in this branch it is text the user typed, not a whitespace variant
-      // of the label.
-      //
-      // Subsumes the grammar-shaped-CONTENT check this replaces — surviving
-      // content is now always the label, which the checks above already ran.
+      // Declined: rewriting `content` to match (here it is text the user
+      // typed, not a whitespace variant of the label), and repairing at
+      // rename time (rule 2's heal is additive by design, and cannot tell
+      // this claim from a user-added alias equal to the label).
       if (currentLabel !== '' && trimmedContent !== '' && trimmedContent !== currentLabel) {
         throw new ProcessorRejection(
           `Can't make this block a type: its text (${JSON.stringify(trimmedContent)}) and its ` +
@@ -151,13 +142,10 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       if (currentLabel === '' && name !== '') {
         await ctx.tx.setProperty(row.id, blockTypeLabelProp, name)
       }
-      // Store the one name in `content` too, so content == label == alias.
-      // Never lossy by the time it runs: the refusal above leaves only
-      // content that is blank or a whitespace-padded spelling of `name`.
-      // It is what makes a LATER rename replace the alias instead of
-      // appending — `aliasSyncProcessor` matches aliases by OLD content, so
-      // a `content` of "  Book" against an alias of "Book" would strand the
-      // stale alias and keep `[[Book]]` resolving to the renamed type.
+      // Store the one name in `content` too. Lossless here — the refusal
+      // above leaves only blank or whitespace-padded content — and it makes
+      // `content` always a name the checks above already validated, so
+      // nothing downstream has to re-validate it.
       if (name !== '' && after.content !== name) {
         await ctx.tx.update(row.id, {content: name})
       }

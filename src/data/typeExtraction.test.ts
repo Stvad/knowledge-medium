@@ -322,11 +322,6 @@ describe('block-type typeify processor', () => {
     await expect(tagBlockType(env, content)).rejects.toThrow(errorType)
   })
 
-  // A type's content, label and alias are one name. Content that is a
-  // SECOND name is refused, because nothing downstream can reconcile the
-  // two: aliasSync matches by old content, so the label-tracking alias is
-  // never replaced on rename. Refusing (rather than clobbering content, or
-  // accepting the drift) is the call recorded at the throw.
   it('refuses a tag whose content and explicit label are different names', async () => {
     env = await setup()
     await expect(tagBlockType(env, 'notes about books', {
@@ -334,10 +329,10 @@ describe('block-type typeify processor', () => {
     })).rejects.toMatchObject({code: BLOCK_TYPE_NAME_CONFLICT})
   })
 
-  // Atomic, and — the part a green suite hides — the refusal fires before
-  // ANY alias is claimed. Without it both names ended up claimed in this
-  // one tx: typeify claims the label, then aliasSync's additive drift heal
-  // appends the changed content.
+  // Both processors claim within the one tagging tx — typeify claims the
+  // label, then aliasSync's additive heal appends the changed content — so
+  // "refused" has to mean neither name is left claimed, not merely that
+  // the tx threw.
   it('claims neither name when the two disagree', async () => {
     env = await setup()
     const id = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
@@ -357,12 +352,10 @@ describe('block-type typeify processor', () => {
     }
   })
 
-  // Grammar-shaped content on a type block is what made the narrower
-  // "Block type content" check exist: `core.deriveReferenceTarget` stamps
-  // the row as a field form, and on a child-backed page the finished type
-  // then projects as property machinery instead of appearing in the
-  // outline. The name-conflict refusal covers it — and covers it more
-  // widely, since content now always ends up being the label.
+  // Grammar-shaped content on a type block is the dangerous residue:
+  // `core.deriveReferenceTarget` stamps the row as a field form, and on a
+  // child-backed page the type then projects as property machinery instead
+  // of appearing in the outline. The name-conflict refusal covers it.
   it('refuses when an explicit label hides grammar-shaped content', async () => {
     env = await setup()
     await expect(tagBlockType(env, '::((11111111-1111-4111-8111-111111111111))', {
@@ -392,7 +385,7 @@ describe('block-type typeify processor', () => {
       expect(row!.content).toBe('Book')
       expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
 
-      // The rename shape `writeBlockTypeLabel` writes. Without the adoption
+      // The rename shape `writeBlockTypeLabel` writes; without the adoption
       // above, aliasSync appends and strands 'Book'.
       await env.repo.tx(async tx => {
         await tx.setProperty(id, blockTypeLabelProp, 'Novel')
