@@ -1,2 +1,0 @@
-import{CallbackSet as e}from"./callbackSet.js";var t=t=>{let n=!1,r=new e(t),i=e=>{e!==n&&(n=e,r.notify())};return{isOpen:()=>n,subscribe:e=>r.add(e),set:i,open:()=>i(!0),close:()=>i(!1),toggle:()=>i(!n)}};export{t as createToggleStore};
-//# sourceMappingURL=toggleStore.js.map
