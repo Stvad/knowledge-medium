@@ -45,12 +45,18 @@ const ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 // the shown id — so a promote re-keys it, and the walks of every entry
 // that mounts in one commit coalesce into a single statement.
 //
-// `initialParents` SEEDS the frame before that walk lands. It is not a
-// second source of truth and not a branch: the handle's answer replaces it
-// the moment there is one, and a caller with nothing to offer just omits
-// it. An earlier shape made it a render-path switch, which is what this
-// deliberately is not — that swapped the component TYPE on promote and
-// remounted the body.
+// `initialParents` OWNS the chain for the block the caller handed over.
+// Where a caller supplies one it is authoritative, not a placeholder: it is
+// derived (the readwise backlog builds each highlight's from its section's)
+// or captured (the grouped panel's snapshot, which a paused panel
+// deliberately freezes), and in both cases it is the answer this entry
+// should paint. The walk covers the rest — an un-supplied chain, and the
+// promoted block, which sits on a different chain the caller never
+// described.
+//
+// The walk is subscribed either way, which is the price of ONE render
+// path: the shape this replaces put it in a second component, so promoting
+// swapped the component TYPE at this position and remounted the body.
 
 const BlockEntryContent = ({
   shownBlock,
@@ -117,11 +123,14 @@ const BlockEntry = ({
   scopeId,
 }: {
   block: Block
-  /** The chain to show until this entry's own walk lands — for a caller
-   *  that already holds one, either derived (the readwise backlog builds
-   *  each highlight's chain from its section's) or carried in its query's
-   *  payload (grouped backlinks). Omit it and the first frame simply has
-   *  no breadcrumb, which is what a caller with nothing to offer wants. */
+  /** This block's chain, from a caller that already knows it. Wins over
+   *  the entry's own walk for as long as this block is the one shown, so a
+   *  caller whose chain is deliberately FROZEN (the grouped panel while
+   *  paused) keeps the breadcrumb its grouping was built from.
+   *
+   *  `undefined` and `[]` say different things and both are honoured:
+   *  "I have no opinion, go and walk" versus "this block has no
+   *  ancestors". */
   initialParents?: readonly Block[]
   scopeId: string
 }) => {
@@ -131,12 +140,12 @@ const BlockEntry = ({
   // crossfade) shared with the SRS review session.
   const {shownId, promote, showBlock} = usePromotableBreadcrumb(block.id)
   const shownBlock = useMemo(() => repo.block(shownId), [repo, shownId])
-  // The seed describes the block we were HANDED. A promoted ancestor sits
-  // higher up a different chain, so once the shown id moves only the walk
-  // can answer — and `undefined` (not yet) is what keeps that apart from a
-  // root's `[]`.
-  const parents = useResolvedParents(shownBlock)
-    ?? (shownId === block.id ? initialParents ?? EMPTY_PARENTS : EMPTY_PARENTS)
+  // `undefined` is "no opinion" and `[]` is "no ancestors" — a distinction
+  // the supplier means, and the reason this tests for the property rather
+  // than for a non-empty array.
+  const walked = useResolvedParents(shownBlock)
+  const supplied = shownId === block.id ? initialParents : undefined
+  const parents = supplied ?? walked ?? EMPTY_PARENTS
   const parentRenderScopeId = typeof parentContext.renderScopeId === 'string'
     ? parentContext.renderScopeId
     : 'backlinks-root'

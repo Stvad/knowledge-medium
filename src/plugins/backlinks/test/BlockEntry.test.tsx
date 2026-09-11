@@ -113,52 +113,73 @@ describe('BlockEntry ancestors', () => {
     expect(mocks.useResolvedParents).toHaveBeenCalledWith({id: 'parent-block'})
   })
 
-  it('shows the seed while the walk is pending, then the walk that lands', () => {
-    // The seed is what keeps a caller that already holds the chain from
-    // painting a breadcrumb-less first frame and then growing a line under
-    // the rows below it.
+  it('keeps the supplied chain even after its own walk answers', () => {
+    // A supplied chain is the caller's answer, not a placeholder: the
+    // grouped panel freezes its snapshot while paused, so a walk that
+    // overrode it would move the breadcrumb while the grouping it was
+    // built from stayed put. It also outranks a STALE cached walk, which
+    // `peek()` serves without saying so — `HandleStatus` has no 'stale'.
     const source = {id: 'source-block'} as Block
-    const seed = [{id: 'seed-parent'}] as Block[]
-
-    const {rerender} = render(
-      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBlockEntry block={source} initialParents={seed} scopeId="test:seed" />
-      </BlockContextProvider>,
-    )
-    expect(screen.getByTestId('block-seed-parent')).toBeTruthy()
-
+    const supplied = [{id: 'supplied-parent'}] as Block[]
     mocks.parents = [{id: 'walked-parent'}]
-    rerender(
-      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBlockEntry block={source} initialParents={seed} scopeId="test:seed" />
-      </BlockContextProvider>,
-    )
-
-    // The walk wins the moment it has an answer — the seed is a stand-in,
-    // not a second source of truth.
-    expect(screen.getByTestId('block-walked-parent')).toBeTruthy()
-    expect(screen.queryByTestId('block-seed-parent')).toBeNull()
-  })
-
-  it('drops the seed once the user promotes past the block it described', () => {
-    // The seed is the chain above the block the caller handed over. A
-    // promoted ancestor sits higher up a different one, so reusing it
-    // would leave the entry wearing crumbs that are not its own.
-    const source = {id: 'source-block'} as Block
-    const seed = [{id: 'seed-parent'}] as Block[]
 
     render(
       <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBlockEntry block={source} initialParents={seed} scopeId="test:seed-promote" />
+        <LazyBlockEntry block={source} initialParents={supplied} scopeId="test:supplied" />
       </BlockContextProvider>,
     )
 
-    fireEvent.click(screen.getByTestId('block-seed-parent'))
+    expect(screen.getByTestId('block-supplied-parent')).toBeTruthy()
+    expect(screen.queryByTestId('block-walked-parent')).toBeNull()
+  })
 
-    expect(mocks.useResolvedParents).toHaveBeenCalledWith({id: 'seed-parent'})
+  it('honours a supplied EMPTY chain as "no ancestors", not "no opinion"', () => {
+    // The two say different things. Reading `[]` as "nothing supplied"
+    // would paint a breadcrumb the caller said does not exist.
+    const source = {id: 'source-block'} as Block
+    mocks.parents = [{id: 'walked-parent'}]
+
+    render(
+      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
+        <LazyBlockEntry block={source} initialParents={[]} scopeId="test:empty-supplied" />
+      </BlockContextProvider>,
+    )
+
+    expect(screen.queryByRole('link')).toBeNull()
+  })
+
+  it('walks for itself when the caller supplied nothing', () => {
+    const source = {id: 'source-block'} as Block
+    mocks.parents = [{id: 'walked-parent'}]
+
+    render(
+      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
+        <LazyBlockEntry block={source} scopeId="test:no-supply" />
+      </BlockContextProvider>,
+    )
+
+    expect(screen.getByTestId('block-walked-parent')).toBeTruthy()
+  })
+
+  it('drops the supplied chain once the user promotes past the block it described', () => {
+    // It describes the block the caller handed over. A promoted ancestor
+    // sits higher up a different chain the caller never saw, so only the
+    // walk can answer for it.
+    const source = {id: 'source-block'} as Block
+    const supplied = [{id: 'supplied-parent'}] as Block[]
+
+    render(
+      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
+        <LazyBlockEntry block={source} initialParents={supplied} scopeId="test:supplied-promote" />
+      </BlockContextProvider>,
+    )
+
+    fireEvent.click(screen.getByTestId('block-supplied-parent'))
+
+    expect(mocks.useResolvedParents).toHaveBeenCalledWith({id: 'supplied-parent'})
     // The promoted block is now the BODY, so its testid is still on screen —
     // assert on the breadcrumb, which is the only thing rendered as a link.
-    expect(screen.getByTestId('block-seed-parent').dataset.scopeRoot).toBe('seed-parent')
+    expect(screen.getByTestId('block-supplied-parent').dataset.scopeRoot).toBe('supplied-parent')
     expect(screen.queryByRole('link')).toBeNull()
   })
 })

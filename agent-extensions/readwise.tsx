@@ -2798,7 +2798,11 @@ const BacklogGroupSection = ({
   const sectionBlock = group.sectionId ? repo.block(group.sectionId) : undefined
 
   // Each highlight's parents = the section's ancestors plus the section itself.
-  // Handing these to the entry saves it firing its own ancestor query per row.
+  // Derived rather than walked per row: ONE ancestor round-trip covers every
+  // highlight under a section, and the entry paints this instead of its own
+  // walk (`BlockEntry`, where a supplied chain wins for the block it
+  // describes). The entry still subscribes to that walk, so this saves the
+  // FLICKER and the wrong-answer window, not the query.
   // `sectionId` is '' for a highlight sitting at the workspace root (moved out
   // of its document); there is no section block to name.
   const itemParents = useMemo(
@@ -2863,9 +2867,10 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   // is rebuilt whenever the query re-resolves, and handing `useManyParents` a
   // fresh array each time would churn its handle for an unchanged id set.
   // No cap. I added one, and it was wrong twice over: the fallback it claimed
-  // does not exist — `LazyBlockEntry` uses `initialParents` until the user
-  // promotes a breadcrumb, so an uncapped group got NO breadcrumbs, ever — and
-  // the limit it guarded is `MAX_VARIABLE_NUMBER=32766` (measured on a real
+  // was weaker than it looked — `LazyBlockEntry` paints `initialParents` over
+  // its own walk while the handed-over block is the one shown, so an uncapped
+  // group got the walk's answer a beat late at best, and nothing if it failed
+  // — and the limit it guarded is `MAX_VARIABLE_NUMBER=32766` (measured on a real
   // client, where 5000 bound parameters run fine), which needs 32k documents
   // carrying unreviewed highlights to reach. Trading certain breakage for an
   // unreachable one is a bad trade; if it ever is reached the query fails
