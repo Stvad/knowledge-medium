@@ -75,13 +75,18 @@ vi.mock('../useStoredBacklinkFilter.ts', () => ({
 // chain is what makes the entry paint no breadcrumb line (BlockEntry →
 // PromotableBreadcrumbList renders nothing for one), which is the blank
 // frame these tests hunt.
+//
+// `?? []` is what the ENTRY renders here because this panel passes no
+// `initialParents`: with no seed, a pending walk and a root are the same
+// blank line. A surface that does seed (grouped backlinks, the readwise
+// backlog) would need the seed in hand to say what was painted.
 vi.mock('@/hooks/block.ts', async importOriginal => {
   const actual = await importOriginal<typeof import('@/hooks/block')>()
   return {
     ...actual,
-    useParents: (block: Block) => {
-      const parents = actual.useParents(block)
-      state.entryRenders.push({id: block.id, parents: parents.map(p => p.id)})
+    useResolvedParents: (block: Block) => {
+      const parents = actual.useResolvedParents(block)
+      state.entryRenders.push({id: block.id, parents: (parents ?? []).map(p => p.id)})
       return parents
     },
   }

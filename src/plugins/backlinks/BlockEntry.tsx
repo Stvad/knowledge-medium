@@ -7,7 +7,7 @@ import { usePromotableBreadcrumb } from '@/plugins/breadcrumbs/usePromotableBrea
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { LazyViewportMount } from '@/components/util/LazyViewportMount.js'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.js'
-import { useParents } from '@/hooks/block.js'
+import { useResolvedParents } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
 import {
   backlinkEntryShortcutContextOverrides,
@@ -30,6 +30,7 @@ import { backlinkRenderScopeId } from '@/utils/renderScope.js'
  *  rather than becoming a prop. */
 const NESTED_OVERRIDES = {layoutBoundary: false, isNestedSurface: true, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
+const EMPTY_PARENTS: readonly Block[] = []
 const ENTRY_ESTIMATED_HEIGHT_PX = 96
 const ENTRY_OVERSCAN_PX = 600
 const ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
@@ -42,25 +43,30 @@ const ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 //
 // The chain comes from the entry's own `core.ancestors` handle, keyed by
 // the shown id — so a promote re-keys it, and the walks of every entry
-// that mounts in one commit coalesce into a single statement. An earlier
-// shape took a prefetched chain as a prop and rendered a second component
-// when it was absent; that existed to skip a per-entry query back when the
-// ancestor handle was keyed by the whole id SET.
+// that mounts in one commit coalesce into a single statement.
+//
+// `initialParents` SEEDS the frame before that walk lands. It is not a
+// second source of truth and not a branch: the handle's answer replaces it
+// the moment there is one, and a caller with nothing to offer just omits
+// it. An earlier shape made it a render-path switch, which is what this
+// deliberately is not — that swapped the component TYPE on promote and
+// remounted the body.
 
 const BlockEntryContent = ({
   shownBlock,
+  parents,
   onSelect,
   onShowBlock,
   renderScopeId,
 }: {
   shownBlock: Block
+  parents: readonly Block[]
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
   renderScopeId: string
 }) => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
-  const parents = useParents(shownBlock)
 
   const promoteBreadcrumb = useCallback(
     () => promoteClosestBreadcrumb(parents, onShowBlock),
@@ -107,9 +113,16 @@ const BlockEntryContent = ({
 
 const BlockEntry = ({
   block,
+  initialParents,
   scopeId,
 }: {
   block: Block
+  /** The chain to show until this entry's own walk lands — for a caller
+   *  that already holds one, either derived (the readwise backlog builds
+   *  each highlight's chain from its section's) or carried in its query's
+   *  payload (grouped backlinks). Omit it and the first frame simply has
+   *  no breadcrumb, which is what a caller with nothing to offer wants. */
+  initialParents?: readonly Block[]
   scopeId: string
 }) => {
   const repo = useRepo()
@@ -118,6 +131,12 @@ const BlockEntry = ({
   // crossfade) shared with the SRS review session.
   const {shownId, promote, showBlock} = usePromotableBreadcrumb(block.id)
   const shownBlock = useMemo(() => repo.block(shownId), [repo, shownId])
+  // The seed describes the block we were HANDED. A promoted ancestor sits
+  // higher up a different chain, so once the shown id moves only the walk
+  // can answer — and `undefined` (not yet) is what keeps that apart from a
+  // root's `[]`.
+  const parents = useResolvedParents(shownBlock)
+    ?? (shownId === block.id ? initialParents ?? EMPTY_PARENTS : EMPTY_PARENTS)
   const parentRenderScopeId = typeof parentContext.renderScopeId === 'string'
     ? parentContext.renderScopeId
     : 'backlinks-root'
@@ -130,6 +149,7 @@ const BlockEntry = ({
     <div className="border-l-2 border-muted pl-3 py-2">
       <BlockEntryContent
         shownBlock={shownBlock}
+        parents={parents}
         onSelect={promote}
         onShowBlock={showBlock}
         renderScopeId={renderScopeId}
@@ -155,9 +175,11 @@ const BlockEntryPlaceholder = ({
 
 export const LazyBlockEntry = ({
   block,
+  initialParents,
   scopeId,
 }: {
   block: Block
+  initialParents?: readonly Block[]
   scopeId: string
 }) => {
   return (
@@ -168,7 +190,7 @@ export const LazyBlockEntry = ({
       overscanPx={ENTRY_OVERSCAN_PX}
       renderPlaceholder={(props) => <BlockEntryPlaceholder {...props} />}
     >
-      <BlockEntry block={block} scopeId={scopeId} />
+      <BlockEntry block={block} initialParents={initialParents} scopeId={scopeId} />
     </LazyViewportMount>
   )
 }

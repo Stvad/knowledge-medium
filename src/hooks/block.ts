@@ -457,14 +457,25 @@ export const useHasChildren = (block: Block): boolean =>
 const parentsFromChain = (repo: Repo, chain: readonly BlockData[]): Block[] =>
   chain.map(data => repo.block(data.id)).reverse()
 
-/** Reactive parent chain (root → … → immediate parent), excluding
- *  `block` itself. */
-export const useParents = (block: Block): Block[] => {
+const EMPTY_PARENTS: Block[] = []
+
+/** Reactive parent chain, or `undefined` until the walk has landed.
+ *
+ *  For a caller holding a chain of its own — derived, or arrived in its
+ *  query's payload — which needs "not yet" told apart from a root's `[]`
+ *  to know whether its own answer is still the better one. Everything
+ *  else wants `useParents`. */
+export const useResolvedParents = (block: Block): Block[] | undefined => {
   const repo = block.repo
   return useHandle(block.repo.query.ancestors({id: block.id}), {
-    selector: data => parentsFromChain(repo, data?.ancestors ?? EMPTY_BLOCK_DATA_ARRAY),
+    selector: data => (data ? parentsFromChain(repo, data.ancestors) : undefined),
   })
 }
+
+/** Reactive parent chain (root → … → immediate parent), excluding
+ *  `block` itself. `[]` while the walk is still in flight. */
+export const useParents = (block: Block): Block[] =>
+  useResolvedParents(block) ?? EMPTY_PARENTS
 
 const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
 

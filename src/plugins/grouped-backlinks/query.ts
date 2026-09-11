@@ -40,12 +40,11 @@ export const GROUPED_BACKLINKS_FOR_BLOCK_QUERY = 'groupedBacklinks.forBlock'
 
 /** A source and its ancestry, root-first.
  *
- *  `parentIds` has no reader left: it fed the backlink entries' breadcrumb
- *  prefetch, and each entry now holds its own `core.ancestors` handle. The
- *  WALK still earns its keep — it is what declares a context-node dep on
- *  every ancestor, so a page moved out from under a source re-groups — and
- *  `sourceId` is what the sticky-claim pass reads as the current source
- *  set. See #948 for collapsing this to that set. */
+ *  Two readers, neither of them the grouping: `parentIds` SEEDS each
+ *  entry's breadcrumb for the frame before its own `core.ancestors` walk
+ *  lands, and `sourceId` is what the sticky-claim pass reads as the
+ *  current source set. Grouping itself reads the context chain from its
+ *  own candidates SQL and never looks here. */
 export interface GroupedBacklinkSourceParents {
   sourceId: string
   parentIds: string[]
