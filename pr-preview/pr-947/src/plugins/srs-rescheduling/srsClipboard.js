@@ -1,0 +1,2 @@
+import{CallbackSet as e}from"../../utils/callbackSet.js";var t=null,n=new e(`srsClipboard`),r=()=>t,i=e=>{t=e,n.notify()},a=()=>i(null),o=e=>n.add(e);export{a as clearSrsClipboard,r as getSrsClipboard,i as setSrsClipboard,o as subscribeSrsClipboard};
+//# sourceMappingURL=srsClipboard.js.map

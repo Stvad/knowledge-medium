@@ -1,0 +1,2 @@
+import{c as e}from"react/compiler-runtime";import{jsx as t}from"react/jsx-runtime";var n=n=>{let r=e(2),{block:i}=n,a;return r[0]===i?a=r[1]:(a=i?.peek()===void 0?t(`div`,{className:`text-gray-500 text-sm`,children:`Loading block...`}):null,r[0]=i,r[1]=a),a};n.canRender=({block:e})=>!e?.peek(),n.priority=()=>1;export{n as MissingDataRenderer};
+//# sourceMappingURL=MissingDataRenderer.js.map
