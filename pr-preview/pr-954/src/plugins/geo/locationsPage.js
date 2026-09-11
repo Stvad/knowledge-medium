@@ -1,0 +1,2 @@
+import{getOrCreateKernelPage as e,kernelPageBlockId as t}from"../../data/kernelPage.js";import"./blockTypes.js";var n=`f9c4e2a8-3b71-4d6e-9f8a-2c5b8e1d4a7f`,r=`Locations`,i=e=>t(e,n),a=(t,i)=>e(t,i,{namespace:n,alias:r,markerType:`map`});export{a as getOrCreateLocationsPage,i as locationsPageBlockId};
+//# sourceMappingURL=locationsPage.js.map
