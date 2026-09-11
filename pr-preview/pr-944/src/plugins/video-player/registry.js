@@ -1,0 +1,2 @@
+var e=``,t=new Map,n=(n,r,i)=>{let a=r??e,o=t.get(n);return o||(o=new Map,t.set(n,o)),o.set(a,i),()=>{let e=t.get(n);e&&(e.get(a)===i&&e.delete(a),e.size===0&&t.delete(n))}},r=(e,n)=>{let r=t.get(e);if(r){if(n!==void 0){let e=r.get(n);if(e)return e}return r.values().next().value}},i=(e,t)=>r(e,t)?.getCurrentTime(),a=(e,t)=>r(e,t)?.focus()??!1,o=(e,t)=>r(e,t)?.hasFocus()??!1,s=(e,t,n)=>r(t,n)?.seekTo(e);export{o as isVideoPlayerFocusActive,n as registerVideoPlayer,i as requestCurrentTime,a as requestVideoPlayerFocus,s as seekTo};
+//# sourceMappingURL=registry.js.map
