@@ -161,7 +161,7 @@ import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { ProjectorRuntime } from './projectorRuntime'
 import {USER_SCHEMAS_PROJECTOR_ID, UserSchemasService} from './userSchemasService'
-import { UserTypesService } from './userTypesService'
+import { UserTypesService, USER_TYPES_PROJECTOR_ID} from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
 import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
@@ -1723,6 +1723,19 @@ export class Repo {
     return this.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)
   }
 
+  /** Wait until persisted TYPE definitions have produced their first complete
+   * workspace snapshot. Separate from `whenPropertyDefinitionsReady`: the type
+   * projector is its own lifecycle, and the registry deliberately publishes
+   * declared seed types before it primes — so a snapshot taken in between is
+   * non-null but missing every block-backed type, which reads as "nobody owns
+   * this token" to an ownership check. */
+  private async whenTypeDefinitionsReady(workspaceId: string): Promise<void> {
+    if (!this.facetRuntime) return
+    const handle = this.projectors.handle(USER_TYPES_PROJECTOR_ID)
+    if (!handle) return
+    await handle.whenPrimed(workspaceId)
+  }
+
   /** The active workspace's undo / redo manager — what cmd-Z and the
    *  Undo UI act on (issue #186). Because each workspace has its own
    *  manager, callers can use the plain `peekUndo` / `popUndo` API and it
@@ -2018,16 +2031,33 @@ export class Repo {
     const readinessWorkspaceId = this.client.activeWorkspaceId
     const readinessGenerationToken = this.projectors.generationToken
     if (readinessWorkspaceId) {
-      await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
-      if (
-        this.client.activeWorkspaceId !== readinessWorkspaceId
-        || this.projectors.generationToken !== readinessGenerationToken
-      ) {
-        throw new Error(
-          `[Repo.tx] active workspace generation changed while waiting for ${readinessWorkspaceId}`,
-        )
+      // Checked after EACH wait, not once at the end: a switch during the first
+      // wait leaves the second asking a projector about a workspace that is no
+      // longer pinned, which throws its own unavailability error and masks this
+      // one. This catches a switch that happened while a wait was RESOLVING; a
+      // switch that disposes a genuinely pending projector surfaces as that
+      // projector's own cancellation instead, and is not translated here.
+      const assertSameGeneration = (): void => {
+        if (
+          this.client.activeWorkspaceId !== readinessWorkspaceId
+          || this.projectors.generationToken !== readinessGenerationToken
+        ) {
+          throw new Error(
+            `[Repo.tx] active workspace generation changed while waiting for ${readinessWorkspaceId}`,
+          )
+        }
       }
+      await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
+      assertSameGeneration()
+      // Types too: their projector primes independently, and an ownership check
+      // reading a half-published registry cannot tell "nobody owns this" from
+      // "not projected yet".
+      await this.whenTypeDefinitionsReady(readinessWorkspaceId)
+      assertSameGeneration()
     }
+    // Captured at tx start, like the property registries beside it, so a facet
+    // rebuild landing mid-tx cannot change the answer under a processor.
+    const capturedTypeDefinitions = this._typeDefinitionRegistry
     const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
     const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
     try {
@@ -2051,6 +2081,16 @@ export class Repo {
         processors: this.processors,
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
+        // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
+        // whether the source/destination actually OWN the tokens they look like
+        // they own, which their rows alone cannot answer. Keyed by the TX's
+        // workspace (which `TxImpl` pins from the first write) rather than the
+        // active one — answering from another workspace's registry would report
+        // every local token as unknown and silently disable the ownership gate.
+        typeDefinitionsForWorkspace: workspaceId =>
+          capturedTypeDefinitions?.workspaceId === workspaceId
+            ? capturedTypeDefinitions
+            : null,
         // Serve the tx's active-at-start workspace, or the retained previous one,
         // from their frozen snapshots; any other workspace resolves null (fail
         // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
