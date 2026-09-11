@@ -5,8 +5,12 @@
 const LIST = process.env.IWDP || 'http://localhost:9221'
 export const MATCH = process.env.MATCH || 'ts.net'
 
-// Fail loud, not with a stack trace: proxy down, no device, etc. all land here.
-process.on('unhandledRejection', e => { console.error('inspector:', e?.message || e); process.exit(1) })
+// Fail loud, not with a stack trace: proxy down, no device, etc. A rejected
+// top-level await in an entry module arrives as uncaughtException, not
+// unhandledRejection, so both are handled.
+const fail = e => { console.error('inspector:', e?.message || e); process.exit(1) }
+process.on('unhandledRejection', fail)
+process.on('uncaughtException', fail)
 
 export async function findPage() {
   const dev = (await (await fetch(LIST + '/json')).json())[0]
