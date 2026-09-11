@@ -11,6 +11,7 @@
  *   - `src/extensions/compiledModuleCache.ts` (approved/compiled extensions)
  *   - `src/sync/keys/keyStore.ts` (per-device workspace keys — browser-only path)
  *   - `src/plugins/attachments/uploadStore.ts` (the byte-upload staging queue)
+ *   - `src/plugins/db-mirror/store.ts` (the mirror's folder handle and settings)
  *
  * Records are stored under an opaque string key; {@link idbRecordId} builds a
  * collision-free `(owner, id)` composite for the stores that namespace records

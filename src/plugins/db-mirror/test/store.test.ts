@@ -1,0 +1,316 @@
+// File-scoped IndexedDB polyfill so the real store runs under Node. The
+// settings record is plain JSON; the directory handle is stored under its own
+// key, and stands in here as a plain object (a real handle is host-defined but
+// structured-cloneable, which is the whole reason it can live in IndexedDB).
+import 'fake-indexeddb/auto'
+import {IDBFactory} from 'fake-indexeddb'
+
+import {beforeEach, describe, expect, it, vi} from 'vitest'
+import {IdbKeyedStore} from '@/utils/idbKeyedStore.js'
+import {
+  DB_MIRROR_DEFAULTS,
+  createDbMirrorStore,
+  type DbMirrorStore,
+} from '../store.js'
+
+const storedKeys = () =>
+  new IdbKeyedStore('km-db-mirror', 'mirror').tx('readonly', s => s.getAllKeys())
+
+/** The record ids the store uses, so a test can assert what namespaces them. */
+const keyStringsFor = async () => (await storedKeys()).map(String)
+
+const USER = 'alice'
+
+let store: DbMirrorStore
+
+beforeEach(() => {
+  // A fresh IndexedDB per test: the store caches its connection, so a prior
+  // test's open handle would block a delete.
+  globalThis.indexedDB = new IDBFactory()
+  store = createDbMirrorStore()
+})
+
+const fakeDirectory = (name: string) =>
+  ({kind: 'directory', name} as unknown as FileSystemDirectoryHandle)
+
+describe('db-mirror store', () => {
+  it('starts off, with no folder and no history', async () => {
+    const state = await store.load(USER)
+    expect(state).toEqual({
+      settings: DB_MIRROR_DEFAULTS,
+      status: {},
+      directory: undefined,
+    })
+  })
+
+  it('writes nothing for a user who has never opted in', async () => {
+    // The scheduled loop reads this on every tick; a read that wrote back would
+    // churn storage forever for someone who never turned the feature on.
+    await store.load(USER)
+    expect(await storedKeys()).toEqual([])
+  })
+
+  describe('the install id', () => {
+    it('is minted on the first write and never changes', async () => {
+      await store.load(USER)
+      const minted = (await store.updateSettings(USER, {enabled: true})).installId
+      expect(minted).toEqual(expect.any(String))
+
+      await store.recordStatus(USER, {lastMarker: '1'})
+
+      expect((await createDbMirrorStore().load(USER)).installId).toBe(minted)
+    })
+
+    it('is not minted by a read, which the loop does on every tick', async () => {
+      // It has to be the same id the copies already in the folder were named
+      // for, so a read that minted one would rename this install every session.
+      expect((await store.load(USER)).installId).toBeUndefined()
+      expect(await storedKeys()).toEqual([])
+    })
+
+    it('replaces a stored id that could never appear in a copy’s name', async () => {
+      // The id goes into the filename, where the parser accepts eight lowercase
+      // hex and nothing else. Trusting a stored value outside that shape
+      // produces copies no scan ever matches — so nothing prunes them and the
+      // skip never finds the last one, which is the immortal-copy failure
+      // arriving through the other half of the name.
+      await store.load(USER)
+      await store.updateSettings(USER, {enabled: true})
+      const [key] = (await storedKeys()).filter(k => String(k).includes('settings'))
+      const idb = new IdbKeyedStore('km-db-mirror', 'mirror')
+      const record = await idb.tx('readonly', s => s.get(key))
+      await idb.tx('readwrite', s => s.put({...record, installId: 'NOT-HEX!'}, key))
+
+      const reopened = createDbMirrorStore()
+
+      expect((await reopened.load(USER)).installId).toBeUndefined()
+      expect((await reopened.updateSettings(USER, {})).installId).toMatch(/^[0-9a-f]{8}$/)
+    })
+
+    it('is not in the mirrored database, so a restore cannot clone it', async () => {
+      // Restoring a mirror onto a second machine copies the database wholesale.
+      // Anything stored inside it identifies the DATA, not the machine — which
+      // is why this lives in IndexedDB beside the folder handle.
+      await store.load(USER)
+      const first = (await store.updateSettings(USER, {enabled: true})).installId
+      globalThis.indexedDB = new IDBFactory()
+      const elsewhere = createDbMirrorStore()
+      await elsewhere.load(USER)
+
+      const second = (await elsewhere.updateSettings(USER, {enabled: true})).installId
+
+      expect(second).not.toBe(first)
+    })
+  })
+
+  it('persists settings across a reload', async () => {
+    await store.load(USER)
+    await store.updateSettings(USER, {enabled: true, keepCount: 5})
+
+    const reopened = createDbMirrorStore()
+    expect((await reopened.load(USER)).settings).toMatchObject({
+      enabled: true,
+      keepCount: 5,
+      intervalMinutes: DB_MIRROR_DEFAULTS.intervalMinutes,
+    })
+  })
+
+  it('persists the folder handle across a reload', async () => {
+    await store.load(USER)
+    await store.setDirectory(USER, fakeDirectory('Backups'))
+
+    const reopened = createDbMirrorStore()
+    expect((await reopened.load(USER)).directory).toMatchObject({name: 'Backups'})
+  })
+
+  it('forgets the folder when the user stops mirroring', async () => {
+    await store.load(USER)
+    await store.setDirectory(USER, fakeDirectory('Backups'))
+    await store.setDirectory(USER, undefined)
+
+    expect((await createDbMirrorStore().load(USER)).directory).toBeUndefined()
+  })
+
+  it('forgets everything the previous folder’s copies said', async () => {
+    // The change marker especially: carried across, the next run would report
+    // "nothing changed" while the newly chosen folder stayed empty.
+    await store.load(USER)
+    await store.recordStatus(USER, {
+      lastMarker: '42',
+      lastMirrorAt: 100,
+      lastFilename: 'copy.db',
+      permissionLost: true,
+      lastError: 'the grant lapsed',
+      lastErrorAt: 1,
+    })
+
+    const state = await store.setDirectory(USER, fakeDirectory('Elsewhere'))
+
+    expect(state.status).toEqual({})
+  })
+
+  it('keeps the opt-in reachable across a storage version bump', async () => {
+    // The database filename carries a storage version that is MEANT to change
+    // (kmp-v6 → v7). Keying the settings on it would silently return an
+    // opted-in user to off, with their chosen folder unreachable.
+    await store.load(USER)
+    await store.updateSettings(USER, {enabled: true})
+
+    const {dbFilenameForUser} = await import('@/data/localDbStorage.js')
+    const keys = await keyStringsFor()
+    expect(keys.some(k => k.includes(encodeURIComponent(dbFilenameForUser(USER))))).toBe(false)
+    expect(keys.every(k => k.startsWith(encodeURIComponent(USER)))).toBe(true)
+  })
+
+  it('keeps each account’s settings separate', async () => {
+    await store.load(USER)
+    await store.updateSettings(USER, {enabled: true})
+    await store.load('bob')
+
+    expect((await store.load('bob')).settings.enabled).toBe(false)
+    expect((await store.load(USER)).settings.enabled).toBe(true)
+  })
+
+  it('clamps a hand-edited keep count into a range that still leaves a copy', async () => {
+    await store.load(USER)
+    expect((await store.updateSettings(USER, {keepCount: 0})).settings.keepCount).toBe(1)
+    expect((await store.updateSettings(USER, {keepCount: 999})).settings.keepCount).toBe(20)
+  })
+
+  it('drops a stored number that is not one, rather than leaving readers to disagree', async () => {
+    // The chip read a NaN timestamp as "no copy taken yet" and the dialog read
+    // it as a copy at an unknown time. One owner, so neither has to.
+    await store.load(USER)
+
+    const {status} = await store.recordStatus(USER, {lastMirrorAt: Number.NaN, lastBytes: 512})
+
+    expect(status.lastMirrorAt).toBeUndefined()
+    expect(status.lastBytes).toBe(512)
+  })
+
+  it('records a success and clears the previous failure', async () => {
+    await store.load(USER)
+    await store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 1, permissionLost: true})
+    const state = await store.recordStatus(USER, {
+      lastMirrorAt: 100,
+      lastMarker: '42',
+      lastFilename: 'copy.db',
+      lastBytes: 1024,
+      lastError: undefined,
+      lastErrorAt: undefined,
+      permissionLost: false,
+    })
+
+    expect(state.status).toEqual({
+      lastMirrorAt: 100,
+      lastMarker: '42',
+      lastFilename: 'copy.db',
+      lastBytes: 1024,
+      permissionLost: false,
+    })
+  })
+
+  it('remembers the last success when a later run fails', async () => {
+    await store.load(USER)
+    await store.recordStatus(USER, {lastMirrorAt: 100, lastMarker: '42'})
+    const state = await store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 200})
+
+    expect(state.status).toMatchObject({lastMirrorAt: 100, lastMarker: '42', lastError: 'quota'})
+  })
+
+  it('does not let a second tab’s write revert this one’s', async () => {
+    // Two stores against the same IndexedDB model two tabs: each holds its own
+    // in-realm state, so only doing the read and the write in ONE transaction
+    // keeps the pair from interleaving and clobbering each other.
+    const tabA = createDbMirrorStore()
+    const tabB = createDbMirrorStore()
+    await tabA.load(USER)
+
+    await Promise.all([
+      tabA.updateSettings(USER, {enabled: true}),
+      tabB.recordStatus(USER, {lastMarker: '42'}),
+    ])
+
+    const reopened = await createDbMirrorStore().load(USER)
+    expect(reopened.settings.enabled).toBe(true)
+    expect(reopened.status.lastMarker).toBe('42')
+  })
+
+  it('refuses to publish an operation for a user who is no longer signed in', async () => {
+    // Local-only sign-out swaps accounts without a reload, so an operation for
+    // the previous user can still land afterwards. Published, it would put that
+    // account's folder and history back on screen — and the mounted dialog
+    // would never reload it, since its effect keys on the current user id.
+    await store.load('bob')
+    const bobs = store.getSnapshot()
+
+    await store.recordStatus('alice', {lastMarker: '42', lastFilename: 'alices-copy.db'})
+
+    expect(store.getSnapshot()).toBe(bobs)
+    expect(store.getSnapshot()?.status.lastMarker).toBeUndefined()
+  })
+
+  it('picks up a change another tab made', async () => {
+    // Every tab owns its own in-memory listeners, and an IndexedDB write
+    // notifies nobody — so without a broadcast, a settings dialog left open and
+    // the status chip go on reporting a healthy mirror after a background tab
+    // has recorded a failure.
+    const tabA = createDbMirrorStore()
+    const tabB = createDbMirrorStore()
+    await tabA.load(USER)
+    await tabB.load(USER)
+
+    await tabB.recordStatus(USER, {lastError: 'the disk is full', lastErrorAt: 1})
+
+    await vi.waitFor(() => expect(tabA.getSnapshot()?.status.lastError).toBe('the disk is full'))
+  })
+
+  it('notifies subscribers and hands them a fresh snapshot on every publish', async () => {
+    const seen: unknown[] = []
+    const unsubscribe = store.subscribe(() => seen.push(store.getSnapshot()))
+
+    await store.load(USER)
+    const afterLoad = store.getSnapshot()
+    await store.updateSettings(USER, {enabled: true})
+
+    expect(seen.length).toBeGreaterThanOrEqual(2)
+    expect(store.getSnapshot()).not.toBe(afterLoad)
+    expect(store.getSnapshot()).toBe(store.getSnapshot())
+    unsubscribe()
+  })
+
+  describe('when storage is unavailable', () => {
+    /** No IndexedDB at all — the private-window / blocked-storage shape. */
+    const withoutStorage = async (body: () => Promise<void>) => {
+      const indexedDb = globalThis.indexedDB
+      Reflect.deleteProperty(globalThis, 'indexedDB')
+      try { await body() } finally { globalThis.indexedDB = indexedDb }
+    }
+
+    it('rejects rather than answering "off, no folder"', async () => {
+      // Answering with the defaults is the worst possible lie here: the
+      // schedule would read an opted-in mirror as disabled and quietly stop.
+      const broken = createDbMirrorStore('km-db-mirror-broken')
+      await withoutStorage(async () => {
+        await expect(broken.load(USER)).rejects.toBeDefined()
+      })
+    })
+
+    it('leaves the snapshot it already had on screen', async () => {
+      await store.load(USER)
+      await store.updateSettings(USER, {enabled: true, keepCount: 5})
+      const known = store.getSnapshot()
+      // A store with a warm connection keeps working when the factory goes
+      // away, so the failure is injected at the transaction itself — which is
+      // the boundary a full disk or a closing connection breaks anyway.
+      vi.spyOn(IdbKeyedStore.prototype, 'runTransaction').mockRejectedValueOnce(
+        new DOMException('quota', 'QuotaExceededError'),
+      )
+
+      await expect(store.updateSettings(USER, {keepCount: 9})).rejects.toBeDefined()
+
+      expect(store.getSnapshot()).toBe(known)
+      expect(store.getSnapshot()?.settings.enabled).toBe(true)
+    })
+  })
+})

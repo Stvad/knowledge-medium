@@ -6,6 +6,7 @@ import type { Repo } from '@/data/repo'
 import {
   deleteLocalSqliteDb,
   exportRawSqliteDb,
+  exportRawSqliteDbToFile,
   getRawSqliteDbBackup,
   importRawSqliteDb,
   removeRecoveryBackupTemps,
@@ -51,6 +52,39 @@ afterEach(() => {
   Object.defineProperty(navigator, 'storage', {
     configurable: true,
     value: originalStorage,
+  })
+})
+
+describe('exportRawSqliteDbToFile', () => {
+  it('lets a background caller supply the message the deadline reports', async () => {
+    // The default tells the user to close the other tabs and reload, which is
+    // written for someone waiting on a button they just pressed. A scheduled
+    // copy hits the deadline for a different reason — a destination too slow to
+    // finish inside it — and that advice would be actively wrong.
+    vi.useFakeTimers()
+    try {
+      const sourceHandle = {getFile: vi.fn(async () => fakeFile(new Uint8Array(4)))}
+      const getFileHandle = vi.fn(async () => sourceHandle)
+      Object.defineProperty(navigator, 'storage', {
+        configurable: true,
+        value: {getDirectory: async () => ({getFileHandle})},
+      })
+      // A write lock that never grants: the hang the deadline exists to break.
+      const writeLock = vi.fn(() => new Promise<never>(() => {}))
+
+      const failing = exportRawSqliteDbToFile(
+        {user: {id: 'user-1'}, db: {writeLock}} as unknown as Repo,
+        {name: 'copy.db'} as unknown as FileSystemFileHandle,
+        {timeoutMessage: 'the chosen folder is too slow for a background copy'},
+      )
+      const rejects = expect(failing).rejects.toThrow(
+        'the chosen folder is too slow for a background copy',
+      )
+      await vi.advanceTimersByTimeAsync(200_000)
+      await rejects
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
