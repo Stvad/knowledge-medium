@@ -799,36 +799,23 @@ const MIRROR_MARKER = /^<!--\s*bd-comment\s+([0-9a-f-]{36})\s*-->/
 export const mirroredCommentIds = bodies => new Set(bodies.map(b => b.match(MIRROR_MARKER)?.[1]).filter(Boolean))
 
 // Bead ids are opaque to a GitHub reader (AGENTS.md: public text carries issue
-// numbers), so a mapped id is rewritten — outside code spans and fences,
-// where the id is part of a command. What cannot be rewritten splits by
-// whether waiting fixes it: an id in `holdIds` (a bead whose issue is still
-// to be minted) resolves by itself, so the comment is held (`unmapped`); an
-// id in code, one matching no bead at all (a fixture in a quoted test line, a
-// typo), or one whose ref points at no issue never will, and a bead comment
-// cannot be edited — so those go out and are reported (`leftover`), since
-// the GitHub copy is the one a human can fix. Holding them would hide the
-// whole comment for good.
-// Code kept verbatim: a fence of three or more backticks or tildes opened and
-// closed at a line start (Markdown's rule — a tilde run mid-line is prose),
-// or an inline span delimited by a backtick run of any length (a
-// double-backtick span may carry single backticks). Everything between is
-// prose.
-const CODE = /^[ ]{0,3}(`{3,}|~{3,})[\s\S]*?^[ ]{0,3}\1|(`+)(?:(?!\2)[^\n])+?\2/gm
+// numbers), so a mapped id is rewritten — code included, deliberately:
+// nothing inside code links on GitHub either way, and sparing it needs a
+// Markdown tokenizer whose edge cases (fences, spans, indented blocks, HTML)
+// never end. What cannot be rewritten splits by whether waiting fixes it: an
+// id in `holdIds` (a bead whose issue is still to be minted) resolves by
+// itself, so the comment is held (`unmapped`); one matching no bead at all
+// (a fixture in a quoted test line, a typo) or whose ref points at no issue
+// never will, and a bead comment cannot be edited — so those go out and are
+// reported (`leftover`), since the GitHub copy is the one a human can fix.
+// Holding them would hide the whole comment for good.
 export const rewriteBeadIds = (text, numberByBeadId, holdIds) => {
   const unmapped = new Set()
-  const rewriteProse = prose =>
-    prose.replace(BEAD_ID, id => {
-      if (numberByBeadId.has(id)) return `#${numberByBeadId.get(id)}`
-      if (holdIds.has(id)) unmapped.add(id)
-      return id
-    })
-  let rewritten = ''
-  let last = 0
-  for (const m of text.matchAll(CODE)) {
-    rewritten += rewriteProse(text.slice(last, m.index)) + m[0]
-    last = m.index + m[0].length
-  }
-  rewritten += rewriteProse(text.slice(last))
+  const rewritten = text.replace(BEAD_ID, id => {
+    if (numberByBeadId.has(id)) return `#${numberByBeadId.get(id)}`
+    if (holdIds.has(id)) unmapped.add(id)
+    return id
+  })
   const leftover = [...new Set(rewritten.match(BEAD_ID) ?? [])].filter(id => !unmapped.has(id))
   return { text: rewritten, unmapped: [...unmapped], leftover }
 }
@@ -1033,6 +1020,16 @@ const tryRead = p => {
 // the plan functions own status selection, so nothing here pre-filters.
 // --limit 0 is explicit: the documented default is 50, and a truncated bead
 // list would put every unlisted open bead back on the re-open-the-issue path.
+// One `bd export` carries every bead with its comments (id, text, time) in
+// about a second, where `bd comments` costs a spawn per bead — and it lets
+// the mirrored/pending split be exact, comment id by comment id.
+const exportBeads = env =>
+  run('bd', ['export'], { env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
+    .split('\n')
+    .filter(Boolean)
+    .map(l => JSON.parse(l))
+    .filter(r => r._type === 'issue')
+
 const listAllBeads = () =>
   JSON.parse(run('bd', ['list', '--status', 'open,in_progress,blocked,deferred,closed', '--limit', '0', '--json']))
 
@@ -1122,8 +1119,8 @@ const fetchIssueComments = (numbers, env) => {
 // Bead comments → issue comments, one way and append-only: bd 1.2.2's sync
 // carries comments in neither direction (nothing in its GitHub client, mapper
 // or tracker reads or writes them), so a mirrored comment never comes back as
-// a new bead comment. A bead whose marker count already covers its
-// comment_count costs no bd spawn. Posts are paced under GitHub's
+// a new bead comment. The beads come from one `bd export` (exportBeads), so
+// nothing is read per bead. Posts are paced under GitHub's
 // content-creation limit (80/min), and a bead stops at its first failed post
 // so the thread keeps bead order; the next run resumes where it stopped.
 // Every failure is a report line, never a throw: a throw here would swallow
@@ -1164,7 +1161,7 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
   const touched = []
   const commented = []
   for (const b of beads) {
-    if (!(b.comment_count > 0)) continue
+    if (!b.comments?.length) continue
     // skipIds: beads the restore left half-repaired — the touch would push
     // that row and bury the loss the push-back exclusion protects.
     if (skipIds.has(b.id)) report.push(`SKIPPED comments of ${b.id}: its restore failed this run — touching it would push the half-restored row`)
@@ -1192,15 +1189,10 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
       report.push(`SKIPPED comments of ${bead.id}: #${number} is not an issue (a PR, or deleted) — mis-pointed external_ref`)
       continue
     }
-    const mirrored = mirroredCommentIds(issue.bodies)
-    if (mirrored.size >= bead.comment_count) continue
-    let pending
-    try {
-      pending = planCommentMirror(JSON.parse(tryRun('bd', ['comments', bead.id, '--json'], { env })), mirrored)
-    } catch {
-      report.push(`FAILED to read the comments of ${bead.id} — skipped this run`)
-      continue
-    }
+    // Exact, id by id: a marker-shaped comment that is not one of this bead's
+    // comments (a pasted marker, two beads on one issue) counts for nothing.
+    const pending = planCommentMirror(bead.comments, mirroredCommentIds(issue.bodies))
+    if (!pending.length) continue
     // A bead stops at the first comment that cannot go (unpublishable, or a
     // failed post) so the thread keeps bead order; the rest wait for the next
     // run.
@@ -1478,11 +1470,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // runs once more, so its last_sync stamp covers the posts: without that,
     // the next run's pull would re-apply every posted issue onto its bead
     // (#955). Both are report lines on failure, like the mirror itself.
-    // Fresh listing, not postBeads: the touch writes the bead's CURRENT
+    // Read fresh here, not from postBeads: the touch writes the bead's CURRENT
     // priority back, and step 3 just rewrote priorities the pull flattened —
     // read from before it, the touch would undo the repair.
     const mirror = mirrorComments({
-      beads: dryRun ? preBeads : listAllBeads(),
+      beads: exportBeads(env),
       issueByNumber,
       mintedNumbers: new Set(planMintedRefs(preBeads, freshBeads).map(m => m.number)),
       skipIds: failedRestoreIds,

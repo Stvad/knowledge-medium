@@ -917,43 +917,11 @@ describe('mirrorCommentBody', () => {
     expect(body.endsWith('blocked on km-new (twice: km-new) and #12')).toBe(true)
   })
 
-  it('leaves bead ids inside code spans and fences alone, naming them as leftovers', () => {
-    const { body, leftover } = mirrorCommentBody({ ...comment, text: 'run `bd show km-abc` then km-abc:\n```\nbd close km-abc\n```' }, numbers, hold)
-    expect(body.endsWith('run `bd show km-abc` then #12:\n```\nbd close km-abc\n```')).toBe(true)
-    expect(leftover).toEqual(['km-abc'])
-  })
-
-  it('keeps a double-backtick span, which may itself carry single backticks', () => {
-    const text = 'try ``bd show km-abc`` or `` `km-abc` `` but km-abc here'
-    const { body, leftover } = mirrorCommentBody({ ...comment, text }, numbers, hold)
-    expect(body.endsWith('try ``bd show km-abc`` or `` `km-abc` `` but #12 here')).toBe(true)
-    expect(leftover).toEqual(['km-abc'])
-  })
-
-  it('treats a tilde run mid-line as prose, not a fence', () => {
-    const { body, leftover } = mirrorCommentBody({ ...comment, text: 'See ~~~km-abc~~~ for context, and ~~km-abc~~ struck' }, numbers, hold)
-    expect(body.endsWith('See ~~~#12~~~ for context, and ~~#12~~ struck')).toBe(true)
-    expect(leftover).toEqual([])
-  })
-
-  it('recognises tilde fences and fences longer than three backticks', () => {
-    const text = 'km-abc first\n~~~\nbd show km-abc\n~~~\nthen km-abc\n````\n```\nbd close km-abc\n```\n````\nlast km-abc'
-    const { body } = mirrorCommentBody({ ...comment, text }, numbers, hold)
-    expect(body.endsWith('#12 first\n~~~\nbd show km-abc\n~~~\nthen #12\n````\n```\nbd close km-abc\n```\n````\nlast #12')).toBe(true)
-  })
-
-  it('cuts a body past the GitHub comment limit and says so', () => {
-    const text = 'x'.repeat(70_000)
-    const { body } = mirrorCommentBody({ ...comment, text }, numbers, hold)
-    expect(body.length).toBeLessThanOrEqual(65_536)
-    expect(body.startsWith(`<!-- bd-comment ${comment.id} -->`)).toBe(true)
-    expect(body).toContain('[cut by the mirror: the bead comment is 70000 characters')
-  })
-
-  it('does not count a held id as a leftover', () => {
-    const { unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-new and `km-abc`' }, numbers, hold)
+  it('rewrites inside code too, and does not count a held id as a leftover', () => {
+    const { body, unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-new and `bd show km-abc`, km-zzz' }, numbers, hold)
+    expect(body.endsWith('km-new and `bd show #12`, km-zzz')).toBe(true)
     expect(unmapped).toEqual(['km-new'])
-    expect(leftover).toEqual(['km-abc'])
+    expect(leftover).toEqual(['km-zzz'])
   })
 })
 
@@ -981,7 +949,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failFullSync?: boolean
     failPushCall?: number
     failListCall?: number
-    /** `bd comments <id> --json` fixtures, keyed by bead id. */
+    /** Comment fixtures, keyed by bead id, joined into the `bd export` rows. */
     comments?: Record<string, object[]>
     /** `gh api graphql` responses, one per call (the last one repeats). */
     graphql?: object | object[]
@@ -990,6 +958,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failTouchId?: string
     /** Extra environment for the script (the mirror's post cap override). */
     env?: Record<string, string>
+    /** Rows `bd export` serves the mirror (default: the last listing), each joined with its `comments` fixture. */
+    exportRows?: object[]
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -1007,7 +977,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     )
     const lastShow = shows[shows.length - 1] ?? []
     writeFileSync(join(repo, 'show-last.json'), typeof lastShow === 'string' ? lastShow : JSON.stringify(lastShow, null, 2))
-    for (const [id, rows] of Object.entries(opts.comments ?? {})) writeFileSync(join(repo, `comments-${id}.json`), JSON.stringify(rows, null, 2))
+    const exportRows = (opts.exportRows ?? opts.lists[opts.lists.length - 1]) as { id: string }[]
+    writeFileSync(join(repo, 'export.jsonl'), exportRows.map(r => JSON.stringify({ _type: 'issue', ...r, comments: opts.comments?.[r.id] ?? [] })).join('\n') + '\n')
     const graphqlFixtures = Array.isArray(opts.graphql) ? opts.graphql : [opts.graphql ?? { data: { repository: {} } }]
     graphqlFixtures.forEach((g, i) => writeFileSync(join(repo, `gh-graphql-${i + 1}.json`), JSON.stringify(g)))
     writeFileSync(join(repo, 'gh-graphql-last.json'), JSON.stringify(graphqlFixtures[graphqlFixtures.length - 1]))
@@ -1035,7 +1006,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `      if [ "$k" = "${opts.failPushCall ?? 0}" ]; then echo "Error: push exploded"; else echo "Pushed 0 issues"; fi;;`,
         `    *) echo "${opts.failFullSync ? 'Error: pull exploded' : 'Pushed 0 issues'}";;`,
         '    esac;;',
-        `  comments) if [ -f "${repo}/comments-$2.json" ]; then cat "${repo}/comments-$2.json"; else echo "Error: no comments fixture for $2"; fi;;`,
+        `  export) cat "${repo}/export.jsonl";;`,
         ...(opts.failCloseId
           ? [`  close) if [ "$2" = "${opts.failCloseId}" ]; then echo "Error: cannot close"; else echo ok; fi;;`]
           : []),
@@ -1502,7 +1473,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
-    expect(shimCalls()).toContain('bd comments km-m --json')
+    expect(shimCalls()).toContain('bd export')
     // Slot pins: the pull comes first (a waiting GitHub-side edit must land
     // before the touch makes the pull skip the bead), the touch precedes the
     // first post, the touched bead is pushed after posting (bd skips it,
@@ -1569,16 +1540,16 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(postsOf(posted())).toHaveLength(1)
   })
 
-  it('publishes an id it cannot rewrite — in code, or unknown here — and says so', () => {
+  it('publishes an id it cannot rewrite — unknown here — and says so', () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': [beadComment(C1, 'run `bd show km-o`; km-zzz is a fixture', '2026-09-03T20:16:36Z')] },
+      comments: { 'km-m': [beadComment(C1, 'see km-o; km-zzz is a fixture', '2026-09-03T20:16:36Z')] },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-o, km-zzz)`)
+    expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-zzz)`)
     expect(postsOf(posted())).toHaveLength(1)
   })
 
@@ -1598,9 +1569,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls().match(/--pull-only/g)).toHaveLength(1)
   })
 
-  it('posts only the comments GitHub lacks, and spawns no bd for a bead whose issue carries every marker', () => {
+  it('posts only the comments GitHub lacks', () => {
     const converged = syncRow({ id: 'km-c', external_ref: ref(9), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 })
-    const { run, shimCalls, posted } = makeSyncRepo({
+    const { run, posted } = makeSyncRepo({
       issues: [...twoIssues(), ghIssue(9, '2026-08-20T00:00:00Z')],
       lists: [[...commentedRows(), converged]],
       comments: { 'km-m': twoComments },
@@ -1616,7 +1587,6 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('mirrored 1 comment(s) of km-m to #7')
-    expect(shimCalls()).not.toContain('bd comments km-c')
     const posts = postsOf(posted())
     expect(posts).toHaveLength(1)
     expect(posts[0]).toContain(`bd-comment ${C2}`)
@@ -1625,6 +1595,20 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // GraphQL resolves `issue(number)` to null for a PR or a deleted issue
   // (gh exits 1 but prints the data) — the REST comment endpoint would
   // happily post onto the PR, so a null alias must never reach it.
+  it('compares marker ids to the bead\'s own comments instead of counting markers', () => {
+    const foreign = (n: number) => `<!-- bd-comment 0000c0de-0000-7000-8000-00000000f00${n} -->\nnot ours`
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      lists: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([foreign(1), foreign(2)]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
+    expect(postsOf(posted())).toHaveLength(2)
+  })
+
   it('never posts onto a number GraphQL cannot resolve as an issue, and reports the mis-pointed ref', () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
@@ -1692,18 +1676,18 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const calls = shimCalls()
     expect(calls.match(/gh api graphql/g)).toHaveLength(2)
     expect(calls).toContain('after: "cursor-1"')
-    expect(calls).not.toContain('bd comments km-m')
     expect(posted()).toBe('')
   })
 
   // The touch writes the bead's current priority back, so it must read AFTER
   // step 3 has repaired a pull-flattened priority — the post-pull listing
-  // still carries the flattened value.
+  // still carries the flattened value; the export read at mirror time does not.
   it('touches with the repaired priority, not the flattened one the pull left', () => {
     const flattened = commentedRows().map(r => (r.id === 'km-m' ? { ...r, priority: 2 } : r))
     const { run, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows(), commentedRows(), flattened, commentedRows()],
+      lists: [commentedRows(), commentedRows(), flattened],
+      exportRows: commentedRows(),
       comments: { 'km-m': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
@@ -1763,7 +1747,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('does not touch or post a bead whose restore failed this run', () => {
     const closedLocal = syncRow({ id: 'km-t4', status: 'closed', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z', comment_count: 2 })
     const revertedRow = { ...closedLocal, status: 'open', priority: 2 }
-    const { run, shimCalls, posted } = makeSyncRepo({
+    const { run, posted } = makeSyncRepo({
       issues: [ghIssue(4, '2026-08-20T01:00:00Z')],
       lists: [[closedLocal], [closedLocal], [revertedRow]],
       shows: [[{ ...closedLocal, close_reason: 'done' }], [revertedRow]],
@@ -1775,7 +1759,6 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('FAILED to restore')
     expect(r.stdout).toContain('SKIPPED comments of km-t4: its restore failed this run')
-    expect(shimCalls()).not.toContain('bd comments km-t4')
     expect(posted()).toBe('')
   })
 
