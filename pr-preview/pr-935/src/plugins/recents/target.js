@@ -1,0 +1,2 @@
+import{getOrCreateRecentsPage as e,recentsPageBlockId as t}from"../../data/recentsPage.js";var n=n=>{let r=n.activeWorkspaceId;return r?{blockId:t(r),workspaceId:r,ensure:()=>e(n,r)}:null};export{n as recentsNavigationTarget};
+//# sourceMappingURL=target.js.map
