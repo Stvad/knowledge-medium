@@ -13,17 +13,21 @@
  *
  * These tests drive the real `LinkedReferences` over a real repo and
  * record what each entry was rendered with on EVERY commit (the flash
- * settles inside `act`, so a post-hoc DOM assertion can't see it). Only
- * the leaf entry renderer is stubbed, to capture its props.
+ * settles inside `act`, so a post-hoc DOM assertion can't see it). The
+ * recorder WRAPS `useParents` rather than replacing it: this panel supplies
+ * no chain of its own, so the hook is where a render and the id it was for
+ * are both in hand. `linkedReferencesBreadcrumbs` owns the other half — that
+ * the chain recorded here reaches the DOM.
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
+import type { ReactNode } from 'react'
 import { queriesFacet, invalidationRulesFacet } from '@/data/facets.js'
 import { referencesInvalidationRule } from '@/plugins/references/invalidation.js'
 import type { AppExtension } from '@/facets/facet.js'
@@ -41,6 +45,9 @@ interface EntryRender {
 const state = vi.hoisted(() => ({
   repo: undefined as unknown,
   entryRenders: [] as EntryRender[],
+  /** Each render's argument to `useRetainParents`, so a call that moved
+   *  inside the collapse branch is visible as an empty or absent list. */
+  retained: [] as string[][],
   emptyFilter: {},
 }))
 
@@ -65,18 +72,41 @@ vi.mock('../useStoredBacklinkFilter.ts', () => ({
   }),
 }))
 
-// The entry renderer is the observation point: `initialParents` is what
-// decides whether the entry paints a breadcrumb line (see BlockEntry →
-// BreadcrumbList, which renders null for an empty chain).
-vi.mock('../BlockEntry.tsx', () => ({
-  LazyBlockEntry: ({block, initialParents}: {
-    block: Block
-    initialParents?: readonly Block[]
-  }) => {
-    const parents = (initialParents ?? []).map(parent => parent.id)
-    state.entryRenders.push({id: block.id, parents})
-    return <div data-testid={`backlink-${block.id}`}>{parents.join('>')}</div>
-  },
+// The observation point. The REAL hook runs — this only records what it
+// returned, per render, against the block it was asked about. An empty
+// chain is what makes the entry paint no breadcrumb line (BlockEntry →
+// PromotableBreadcrumbList renders nothing for one), which is the blank
+// frame these tests hunt.
+//
+// What the hook returns IS what this panel's entries render, because it
+// supplies no `initialParents`. A surface that does supply one (grouped
+// backlinks, the readwise backlog) paints that instead, and a recorder
+// there would need it in hand to say what reached the screen.
+vi.mock('@/hooks/block.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/hooks/block')>()
+  return {
+    ...actual,
+    useParents: (block: Block) => {
+      const parents = actual.useParents(block)
+      state.entryRenders.push({id: block.id, parents: parents.map(parent => parent.id)})
+      return parents
+    },
+    useRetainParents: (blocks: readonly Block[]) => {
+      state.retained.push(blocks.map(b => b.id))
+      actual.useRetainParents(blocks)
+    },
+  }
+})
+
+// The leaf, so an entry's body is one identifiable node.
+vi.mock('@/components/BlockComponent.tsx', () => ({
+  BlockComponent: ({blockId}: {blockId: string}) => (
+    <span data-testid={`backlink-${blockId}`}>{blockId}</span>
+  ),
+}))
+
+vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
+  LazyViewportMount: ({children}: {children: ReactNode}) => <>{children}</>,
 }))
 
 const backlinksQueryExtension: AppExtension = [
@@ -116,9 +146,11 @@ const createSource = async (id: string) => {
 
 const renderPanel = async (expectedIds: string[]) => {
   const rendered = render(<LinkedReferences block={repo.block(TARGET)}/>)
+  // Fenced on the CHAINS, not just the entries: an assertion about a
+  // breadcrumb never dropping is trivially true before any chain landed.
   await waitFor(() => {
     for (const id of expectedIds) {
-      expect(rendered.getByTestId(`backlink-${id}`).textContent).toBe(`${id}-parent`)
+      expect(rendersFor(id).at(-1)?.parents).toEqual([`${id}-parent`])
     }
   })
   return rendered
@@ -142,6 +174,7 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
   state.repo = repo
   state.entryRenders = []
+  state.retained = []
   await create({id: TARGET})
 })
 
@@ -186,6 +219,27 @@ describe('LinkedReferences layout stability across a live refresh', () => {
     for (const id of ['src-1', 'src-2']) {
       expect(rendersFor(id).map(entry => entry.parents)).not.toContainEqual([])
     }
+  })
+
+  it('keeps holding every chain while the section is COLLAPSED', async () => {
+    // Collapsing unmounts the entries, so nothing else observes their
+    // handles; the store disposes an unobserved handle after its GC
+    // window, and `LazyViewportMount` brings previously-mounted rows
+    // straight back — so a reopen would paint them all breadcrumb-less
+    // and then grow a line under each. The retention call has to sit
+    // OUTSIDE the `open` branch, which is what this pins: moved inside,
+    // the collapsed render reports nothing here.
+    await createSource('src-1')
+    await createSource('src-2')
+    const rendered = await renderPanel(['src-1', 'src-2'])
+    state.retained = []
+
+    await act(async () => {
+      fireEvent.click(rendered.getByRole('button', {name: /Linked References/}))
+    })
+
+    expect(rendered.queryByTestId('backlink-src-1')).toBeNull()
+    expect([...(state.retained.at(-1) ?? [])].sort()).toEqual(['src-1', 'src-2'])
   })
 
   it('drops the breadcrumbs of an entry whose parent chain really went away', async () => {

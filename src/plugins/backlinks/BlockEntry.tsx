@@ -40,16 +40,22 @@ const ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 // chosen parent's subtree (which still contains the original backlink
 // as a descendant).
 //
-// Two render paths. A caller that already holds this block's ancestors —
-// because they rode in its own query payload, as grouped-backlinks does, or
-// because it warmed the handles, as the flat panel does — passes them as
-// `initialParents`, and `BlockEntryContent` renders without touching a handle
-// of its own. After the user clicks a breadcrumb the shown block changes, the
-// conditional flips, and `BlockEntryDynamicContent` takes over for the new id.
+// The chain comes from the entry's own `core.ancestors` handle, keyed by
+// the shown id — so a promote re-keys it, and the walks of every entry
+// that mounts in one commit coalesce into a single statement.
 //
-// The dynamic path is also the FALLBACK when nothing was supplied, which is
-// why the condition tests `initialParents !== undefined` rather than trusting
-// a default: a missing prefetch must cost a query, not a feature.
+// `initialParents` OWNS the chain for the block the caller handed over.
+// Where a caller supplies one it is authoritative, not a placeholder: it is
+// derived (the readwise backlog builds each highlight's from its section's)
+// or captured (the grouped panel's snapshot, which a paused panel
+// deliberately freezes), and in both cases it is the answer this entry
+// should paint. The walk covers the rest — an un-supplied chain, and the
+// promoted block, which sits on a different chain the caller never
+// described.
+//
+// The walk is subscribed either way, which is the price of ONE render
+// path: the shape this replaces put it in a second component, so promoting
+// swapped the component TYPE at this position and remounted the body.
 
 const BlockEntryContent = ({
   shownBlock,
@@ -104,32 +110,15 @@ const BlockEntryContent = ({
         />
       )}
       <NestedBlockContextProvider overrides={bodyOverrides}>
-        <BlockComponent blockId={shownBlock.id}/>
+        {/* Keyed so a promote remounts the BODY: `BlockComponent` owns an
+            ErrorBoundary with no `resetKeys`, so a source whose renderer
+            threw would otherwise keep showing its fallback after the user
+            clicks a breadcrumb out of it. Only the body — the crumbs,
+            the shortcut controller and the context above it all persist,
+            which is what the render-path split used to destroy. */}
+        <BlockComponent key={shownBlock.id} blockId={shownBlock.id}/>
       </NestedBlockContextProvider>
     </>
-  )
-}
-
-const BlockEntryDynamicContent = ({
-  shownBlock,
-  onSelect,
-  onShowBlock,
-  renderScopeId,
-}: {
-  shownBlock: Block
-  onSelect: (parent: Block) => void
-  onShowBlock: (blockId: string) => void
-  renderScopeId: string
-}) => {
-  const parents = useParents(shownBlock)
-  return (
-    <BlockEntryContent
-      shownBlock={shownBlock}
-      parents={parents}
-      onSelect={onSelect}
-      onShowBlock={onShowBlock}
-      renderScopeId={renderScopeId}
-    />
   )
 }
 
@@ -139,14 +128,14 @@ const BlockEntry = ({
   scopeId,
 }: {
   block: Block
-  /** Prefetched ancestors, when the parent component already has them.
+  /** This block's chain, from a caller that already knows it. Wins over
+   *  the entry's own walk for as long as this block is the one shown, so a
+   *  caller whose chain is deliberately FROZEN (the grouped panel while
+   *  paused) keeps the breadcrumb its grouping was built from.
    *
-   *  A HINT, not a switch. `undefined` means "I don't have them" and this
-   *  fetches its own; `[]` means "this block genuinely has no ancestors". They
-   *  used to collapse to the same thing, which made the optimisation's absence
-   *  silently disable the feature it optimises: both call sites pass
-   *  `map.get(id)`, so every entry the prefetch missed rendered with no
-   *  breadcrumb, permanently, with nothing to indicate it. */
+   *  `undefined` and `[]` say different things and both are honoured:
+   *  "I have no opinion, go and walk" versus "this block has no
+   *  ancestors". */
   initialParents?: readonly Block[]
   scopeId: string
 }) => {
@@ -154,8 +143,15 @@ const BlockEntry = ({
   const parentContext = useBlockContext()
   // Promote-in-place state (unfurl an ancestor, with the panel-nav
   // crossfade) shared with the SRS review session.
-  const {shownId, isInitial, promote, showBlock} = usePromotableBreadcrumb(block.id)
+  const {shownId, promote, showBlock} = usePromotableBreadcrumb(block.id)
   const shownBlock = useMemo(() => repo.block(shownId), [repo, shownId])
+  // `undefined` is "no opinion" and `[]` is "no ancestors" — a distinction
+  // the SUPPLIER means, and the reason this tests for the property rather
+  // than for a non-empty array. The walk needs no such distinction: it is
+  // consulted only where there is no supplied chain to prefer.
+  const walked = useParents(shownBlock)
+  const supplied = shownId === block.id ? initialParents : undefined
+  const parents = supplied ?? walked
   const parentRenderScopeId = typeof parentContext.renderScopeId === 'string'
     ? parentContext.renderScopeId
     : 'backlinks-root'
@@ -166,24 +162,13 @@ const BlockEntry = ({
 
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
-      {isInitial && initialParents !== undefined
-        ? (
-            <BlockEntryContent
-              shownBlock={shownBlock}
-              parents={initialParents}
-              onSelect={promote}
-              onShowBlock={showBlock}
-              renderScopeId={renderScopeId}
-            />
-          )
-        : (
-            <BlockEntryDynamicContent
-              shownBlock={shownBlock}
-              onSelect={promote}
-              onShowBlock={showBlock}
-              renderScopeId={renderScopeId}
-            />
-          )}
+      <BlockEntryContent
+        shownBlock={shownBlock}
+        parents={parents}
+        onSelect={promote}
+        onShowBlock={showBlock}
+        renderScopeId={renderScopeId}
+      />
     </div>
   )
 }

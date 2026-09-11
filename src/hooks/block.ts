@@ -457,12 +457,17 @@ export const useHasChildren = (block: Block): boolean =>
 const parentsFromChain = (repo: Repo, chain: readonly BlockData[]): Block[] =>
   chain.map(data => repo.block(data.id)).reverse()
 
+const EMPTY_PARENTS: Block[] = []
+
 /** Reactive parent chain (root → … → immediate parent), excluding
- *  `block` itself. */
+ *  `block` itself. `[]` while the walk is still in flight, and `[]` for a
+ *  root — no consumer has yet needed those told apart, and a caller that
+ *  holds a chain of its own prefers it over this outright rather than
+ *  only while it is pending (see `BlockEntry`). */
 export const useParents = (block: Block): Block[] => {
   const repo = block.repo
   return useHandle(block.repo.query.ancestors({id: block.id}), {
-    selector: data => parentsFromChain(repo, data?.ancestors ?? EMPTY_BLOCK_DATA_ARRAY),
+    selector: data => (data ? parentsFromChain(repo, data.ancestors) : EMPTY_PARENTS),
   })
 }
 
@@ -504,6 +509,28 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
     })
     return out.size === 0 ? EMPTY_PARENT_MAP : out
   }, [ids, walks, repo])
+}
+
+/** Hold one `core.ancestors` handle per block for as long as the CALLER
+ *  renders, whatever it renders.
+ *
+ *  Why a surface wants it: a collapsed section unmounts its entries, the
+ *  store disposes an unobserved handle after its GC window, and
+ *  `LazyViewportMount` remembers which rows were mounted and brings them
+ *  straight back — so without this a reopen paints every row without its
+ *  breadcrumb and then grows a line under the rows below it. Call it
+ *  OUTSIDE the collapse branch; inside it is a no-op that looks like a
+ *  fix.
+ *
+ *  It WALKS every block passed, including ones no one has scrolled to:
+ *  the first subscriber to a cold `LoaderHandle` starts its load, so for
+ *  this store retaining a chain and fetching it are the same act. Accepted
+ *  rather than narrowed — it is one coalesced statement per chunk of 500
+ *  ids, and it is what the flat backlinks panel already did. Retaining
+ *  only the handles a surface has ALREADY resolved would avoid the cold
+ *  ones (#956) at the cost of a retained set that changes as they land. */
+export const useRetainParents = (blocks: readonly Block[]): void => {
+  useManyParents(blocks)
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
