@@ -14,9 +14,14 @@ const RECENTS_ALIAS = 'Recents'
 export const recentsPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, RECENTS_PAGE_NS)
 
+/** `skipUndo`: neither caller has a user operation for this create to merge
+ *  into — bootstrap runs unattended, and opening Recents is a navigation, so
+ *  cmd-Z should undo the user's last edit rather than un-create the page they
+ *  are looking at. What a lone entry costs is `getOrCreateKernelPage`'s
+ *  `skipUndo` doc to say, not this one's. */
 export const getOrCreateRecentsPage = (repo: Repo, workspaceId: string): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: RECENTS_PAGE_NS,
     alias: RECENTS_ALIAS,
     markerType: RECENTS_PAGE_TYPE,
-  })
+  }, {skipUndo: true})

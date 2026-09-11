@@ -11,6 +11,7 @@ import {
   kernelPageBlockId,
 } from '@/data/kernelPage'
 import { getOrCreateMigrationsPage, migrationsPageBlockId } from '@/data/migrationsPage'
+import { getOrCreateRecentsPage, recentsPageBlockId } from '@/data/recentsPage'
 import { Repo } from '@/data/repo'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -469,5 +470,19 @@ describe('skipUndo (unattended bootstrap)', () => {
 
     expect(await repo.load(migrationsPageBlockId(WS))).not.toBeNull()
     expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual(before)
+  })
+
+  it('the Recents page passes it — opening Recents is a navigation, not an edit', async () => {
+    const {repo} = env
+    await editThenUndo(repo)
+    const before = repo.undoManager.depths(ChangeScope.BlockDefault)
+
+    // Unlike its siblings this one is reachable from a user GESTURE, so it runs
+    // against a live stack rather than only at bootstrap.
+    await getOrCreateRecentsPage(repo, WS)
+
+    expect(await repo.load(recentsPageBlockId(WS))).not.toBeNull()
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual(before)
+    expect(await repo.redo()).toBe(true)
   })
 })

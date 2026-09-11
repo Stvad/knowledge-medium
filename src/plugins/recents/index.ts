@@ -8,18 +8,18 @@ import {
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
-import { recentsPageBlockId } from '@/data/recentsPage.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
 import type { Repo } from '@/data/repo'
+import { openRecentsPage } from './target.js'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
 import { RecentsPageBlockRenderer } from './RecentsPageBlockRenderer.tsx'
 
 export const OPEN_RECENTS_ACTION_ID = 'open_recents'
 
-const openRecents = (repo: Repo) => {
-  const workspaceId = repo.activeWorkspaceId
-  if (!workspaceId) return
-  navigateFromGlobalCommand(repo, {blockId: recentsPageBlockId(workspaceId)})
+const openRecents = async (repo: Repo): Promise<void> => {
+  const target = await openRecentsPage(repo)
+  if (!target) return
+  await navigateFromGlobalCommand(repo, target)
 }
 
 export const openRecentsAction = (repo: Repo): ActionConfig<typeof ActionContextTypes.GLOBAL> => ({
