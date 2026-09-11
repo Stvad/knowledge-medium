@@ -13,6 +13,7 @@ import { LazyBlockEntry } from '../BlockEntry.tsx'
 const mocks = vi.hoisted(() => {
   const state = {
     openBlock: vi.fn(),
+    bodyMounts: [] as string[],
     parents: undefined as unknown[] | undefined,
     useResolvedParents: vi.fn(() => state.parents),
     repo: {
@@ -42,9 +43,21 @@ vi.mock('@/hooks/block.ts', async importOriginal => ({
 // declares to the blocks it renders, not just what it renders.
 vi.mock('@/components/BlockComponent.tsx', async () => {
   const {useBlockContext} = await import('@/context/block')
+  const {useEffect} = await import('react')
   return {
+    // Records MOUNTS, not renders: the entry keys this on the shown id so
+    // a promote gets a fresh instance (and so a fresh ErrorBoundary).
     BlockComponent: ({blockId}: {blockId: string}) => {
-      const {scopeRootId} = useBlockContext()
+      const {scopeRootId, isBreadcrumb} = useBlockContext()
+      // Empty deps on purpose: this must record a MOUNT, not an effect
+      // re-run. With `blockId` in the deps it fires on a plain prop change
+      // too, and then it cannot tell a fresh instance from a reconciled
+      // one — which is the whole distinction under test. Breadcrumb
+      // segments render one of these as well; only the BODY counts.
+      useEffect(() => {
+        if (!isBreadcrumb) mocks.bodyMounts.push(blockId)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [])
       return (
         <span data-testid={`block-${blockId}`} data-scope-root={scopeRootId ?? ''}>
           {blockId}
@@ -64,6 +77,7 @@ afterEach(() => {
   mocks.repo.block.mockClear()
   mocks.useResolvedParents.mockClear()
   mocks.parents = undefined
+  mocks.bodyMounts.length = 0
 })
 
 describe('BlockEntry breadcrumbs', () => {
@@ -177,6 +191,11 @@ describe('BlockEntry ancestors', () => {
     fireEvent.click(screen.getByTestId('block-supplied-parent'))
 
     expect(mocks.useResolvedParents).toHaveBeenCalledWith({id: 'supplied-parent'})
+    // A fresh body instance, which is what clears `BlockComponent`'s
+    // ErrorBoundary — it carries no `resetKeys`, so a source whose
+    // renderer threw would otherwise stay on its fallback after the user
+    // clicked a breadcrumb out of it.
+    expect(mocks.bodyMounts).toEqual(['source-block', 'supplied-parent'])
     // The promoted block is now the BODY, so its testid is still on screen —
     // assert on the breadcrumb, which is the only thing rendered as a link.
     expect(screen.getByTestId('block-supplied-parent').dataset.scopeRoot).toBe('supplied-parent')

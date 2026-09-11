@@ -1,7 +1,7 @@
 import { useCallback, useState, type MouseEvent } from 'react'
 import { Filter } from 'lucide-react'
 import { Block } from '../../data/block'
-import { useWorkspaceId } from '@/hooks/block.js'
+import { useRetainParents, useWorkspaceId } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
 import { useBlockOpener } from '@/utils/navigation.js'
 import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.js'
@@ -54,6 +54,8 @@ function LinkedReferencesInner({
     filterActive ? effectiveFilter : undefined,
   )
   const backlinks = filterActive ? filteredBacklinks : unfilteredBacklinks
+  // Deliberately above the `open` branch below — see the hook.
+  useRetainParents(backlinks)
   const [open, setOpen] = useState(true)
   const [filtersOpenOverride, setFiltersOpenOverride] = useState<boolean | null>(null)
   const filtersOpen = filtersOpenOverride ?? filterActive

@@ -27,10 +27,11 @@ import { GroupHeaderActionButton } from './GroupHeaderActionButton.tsx'
 interface GroupedBacklinksSnapshot {
   unfilteredBacklinks: Block[]
   grouped: GroupedBacklinksResult
-  /** Seeds each entry's breadcrumb for the frame before its own walk
-   *  lands. The query already resolved these, so an entry's first
-   *  committed frame carries its crumbs instead of growing a line once
-   *  the walk returns — a reflow of every visible row. */
+  /** The chain each entry PAINTS, not a stand-in for one: an entry keeps
+   *  it for as long as that source is the block it shows. Captured with
+   *  the rest of the snapshot, so a paused panel holds the ancestry its
+   *  grouping was built from instead of drifting to a live walk while the
+   *  row stays under its old group. */
   initialParentsByBacklinkId: ReadonlyMap<string, Block[]>
 }
 

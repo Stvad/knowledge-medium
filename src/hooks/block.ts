@@ -517,6 +517,23 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
   }, [ids, walks, repo])
 }
 
+/** Hold one `core.ancestors` handle per block for as long as the CALLER
+ *  renders, whatever it renders.
+ *
+ *  Not a prefetch — the entries that read these acquire them by key on
+ *  their own. This keeps them from being GC'd while the surface that owns
+ *  them is collapsed: a collapsed section unmounts its entries, the store
+ *  disposes an unobserved handle after its GC window, and
+ *  `LazyViewportMount` remembers which rows were mounted and brings them
+ *  straight back — so without this a reopen paints every row without its
+ *  breadcrumb and then grows a line under the rows below it.
+ *
+ *  Call it OUTSIDE the collapse branch; inside it is a no-op that looks
+ *  like a fix. */
+export const useRetainParents = (blocks: readonly Block[]): void => {
+  useManyParents(blocks)
+}
+
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
  *  Phase 2.D for parity with the four `repo.X` factories; existing
  *  call sites can adopt incrementally. */

@@ -111,7 +111,13 @@ const BlockEntryContent = ({
         />
       )}
       <NestedBlockContextProvider overrides={bodyOverrides}>
-        <BlockComponent blockId={shownBlock.id}/>
+        {/* Keyed so a promote remounts the BODY: `BlockComponent` owns an
+            ErrorBoundary with no `resetKeys`, so a source whose renderer
+            threw would otherwise keep showing its fallback after the user
+            clicks a breadcrumb out of it. Only the body — the crumbs,
+            the shortcut controller and the context above it all persist,
+            which is what the render-path split used to destroy. */}
+        <BlockComponent key={shownBlock.id} blockId={shownBlock.id}/>
       </NestedBlockContextProvider>
     </>
   )

@@ -40,9 +40,10 @@ export const GROUPED_BACKLINKS_FOR_BLOCK_QUERY = 'groupedBacklinks.forBlock'
 
 /** A source and its ancestry, root-first.
  *
- *  Two readers, neither of them the grouping: `parentIds` SEEDS each
- *  entry's breadcrumb for the frame before its own `core.ancestors` walk
- *  lands, and `sourceId` is what the sticky-claim pass reads as the
+ *  Two readers, neither of them the grouping: `parentIds` is the chain
+ *  each entry PAINTS for as long as that source is the block it shows —
+ *  captured here, so a paused panel keeps the ancestry its grouping was
+ *  built from — and `sourceId` is what the sticky-claim pass reads as the
  *  current source set. Grouping itself reads the context chain from its
  *  own candidates SQL and never looks here. */
 export interface GroupedBacklinkSourceParents {

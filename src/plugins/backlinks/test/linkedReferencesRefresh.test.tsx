@@ -22,7 +22,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -46,6 +46,9 @@ interface EntryRender {
 const state = vi.hoisted(() => ({
   repo: undefined as unknown,
   entryRenders: [] as EntryRender[],
+  /** Each render's argument to `useRetainParents`, so a call that moved
+   *  inside the collapse branch is visible as an empty or absent list. */
+  retained: [] as string[][],
   emptyFilter: {},
 }))
 
@@ -88,6 +91,10 @@ vi.mock('@/hooks/block.ts', async importOriginal => {
       const parents = actual.useResolvedParents(block)
       state.entryRenders.push({id: block.id, parents: (parents ?? []).map(p => p.id)})
       return parents
+    },
+    useRetainParents: (blocks: readonly Block[]) => {
+      state.retained.push(blocks.map(b => b.id))
+      actual.useRetainParents(blocks)
     },
   }
 })
@@ -168,6 +175,7 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
   state.repo = repo
   state.entryRenders = []
+  state.retained = []
   await create({id: TARGET})
 })
 
@@ -212,6 +220,27 @@ describe('LinkedReferences layout stability across a live refresh', () => {
     for (const id of ['src-1', 'src-2']) {
       expect(rendersFor(id).map(entry => entry.parents)).not.toContainEqual([])
     }
+  })
+
+  it('keeps holding every chain while the section is COLLAPSED', async () => {
+    // Collapsing unmounts the entries, so nothing else observes their
+    // handles; the store disposes an unobserved handle after its GC
+    // window, and `LazyViewportMount` brings previously-mounted rows
+    // straight back — so a reopen would paint them all breadcrumb-less
+    // and then grow a line under each. The retention call has to sit
+    // OUTSIDE the `open` branch, which is what this pins: moved inside,
+    // the collapsed render reports nothing here.
+    await createSource('src-1')
+    await createSource('src-2')
+    const rendered = await renderPanel(['src-1', 'src-2'])
+    state.retained = []
+
+    await act(async () => {
+      fireEvent.click(rendered.getByRole('button', {name: /Linked References/}))
+    })
+
+    expect(rendered.queryByTestId('backlink-src-1')).toBeNull()
+    expect([...(state.retained.at(-1) ?? [])].sort()).toEqual(['src-1', 'src-2'])
   })
 
   it('drops the breadcrumbs of an entry whose parent chain really went away', async () => {
