@@ -646,11 +646,9 @@ const resolveNavigationIntent = (
  *  Landing first also keeps `navigate` on the call's own turn, so a slow
  *  materialization cannot drop an older navigation on top of a newer gesture.
  *
- *  The panel therefore opens a moment before the row does. That happens only in
- *  the case this exists for: with the page already there the ensure is a
- *  cache-hit read and nothing is visibly late, and with it missing an empty
- *  panel that fills itself in beats a permanently dead link. A failure leaves
- *  the panel on a block that never arrives, and is logged. */
+ *  Accepted: the panel opens a moment before the row does, rather than holding
+ *  the gesture until the write lands. A failure leaves the panel on a block that
+ *  never arrives, and is logged. */
 export type EnsureNavigationTarget = () => Promise<unknown>
 
 /** The block a surface asked to open, paired with how to materialize its row.
