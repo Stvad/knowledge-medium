@@ -24,8 +24,7 @@ import { installDbForensicsLifecycle } from '@/utils/dbForensicsHooks.js'
 // plugin can later find when boot contention stopped (time to interactivity).
 startStartupObservers()
 
-// WebKit has no requestIdleCallback; without this every deep-idle maintenance
-// pass runs inside the cold-start window on iOS (src/utils/idleCallbackPolyfill.ts).
+// WebKit has no requestIdleCallback (src/utils/idleCallbackPolyfill.ts).
 installIdleCallbackPolyfill()
 
 // Out-of-band local-DB corruption instrumentation (issue #284): lifecycle

@@ -12,6 +12,7 @@ type IdleCb = (deadline: { didTimeout: boolean; timeRemaining: () => number }) =
 describe('scheduleDeepIdle (browser path)', () => {
   let ricCalls: Array<{ cb: IdleCb; opts?: { timeout: number } }>
   let originalRic: unknown
+  let originalCancel: unknown
 
   const idle = (timeRemaining: number) => ({ didTimeout: false, timeRemaining: () => timeRemaining })
   const timedOut = { didTimeout: true, timeRemaining: () => 0 }
@@ -22,6 +23,7 @@ describe('scheduleDeepIdle (browser path)', () => {
     vi.setSystemTime(new Date(2026, 0, 1))
     ricCalls = []
     originalRic = glob.requestIdleCallback
+    originalCancel = glob.cancelIdleCallback
     glob.requestIdleCallback = (cb: IdleCb, opts?: { timeout: number }) => {
       ricCalls.push({ cb, opts })
       return ricCalls.length
@@ -29,6 +31,7 @@ describe('scheduleDeepIdle (browser path)', () => {
   })
   afterEach(() => {
     glob.requestIdleCallback = originalRic
+    glob.cancelIdleCallback = originalCancel
     vi.useRealTimers()
   })
 
@@ -94,9 +97,8 @@ describe('scheduleDeepIdle (browser path)', () => {
     expect(ricCalls).toHaveLength(0)
   })
 
-  // The no-rIC fallback below is the TEST path only. A browser without the
-  // primitive (WebKit) gets the polyfill from main.tsx, under which the floor
-  // must still hold — this is the boot-window regression the polyfill exists for.
+  // WebKit has no rIC and gets the polyfill from main.tsx; the floor must hold
+  // under it (the no-rIC fallback below is the test path only).
   it('with the polyfill on a host lacking requestIdleCallback, the floor still holds', () => {
     glob.requestIdleCallback = undefined
     installIdleCallbackPolyfill()

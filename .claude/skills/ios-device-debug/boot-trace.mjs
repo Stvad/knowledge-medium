@@ -1,52 +1,17 @@
-// Inject a worker-message tracer via Page.setBootstrapScript, reload, then dump
-// the trace + startup marks. Usage: MATCH=github node ios-boot-trace.mjs [waitSecs]
-const LIST = process.env.IWDP || 'http://localhost:9221'
-const MATCH = process.env.MATCH || 'github'
+// Reload the app tab with a hook injected BEFORE any page script (Page.setBootstrapScript,
+// which survives a same-origin reload), then dump every DB-worker round trip
+// (comlink messages over the transferred MessagePorts, SQL text included), the
+// startup-timeline marks and every resource-timing entry.
+//
+//   MATCH=github node boot-trace.mjs [waitSecs]        # then: node analyze-trace.js out.json
+//   PRELUDE='<js>' …                                    # extra code to run before the hook
+import { connect, evalIn } from './inspector.mjs'
+
 const WAIT = Number(process.argv[2] || 15)
-process.on('unhandledRejection', e => { console.error('trace:', e?.message || e); process.exit(1) })
-
-const dev = (await (await fetch(LIST + '/json')).json())[0]
-const pages = await (await fetch('http://' + dev.url + '/json')).json()
-const page = pages.find(p => (p.url || '').includes(MATCH) && p.title !== 'ServiceWorker')
-if (!page) { console.error('no page'); process.exit(1) }
-
-const ws = new WebSocket(page.webSocketDebuggerUrl)
-let outerId = 0, innerId = 0
-const pending = new Map()
-let target = null
-const targets = []
-ws.addEventListener('message', ev => {
-  const m = JSON.parse(ev.data)
-  if (m.method === 'Target.targetCreated') {
-    const ti = m.params.targetInfo
-    targets.push(ti)
-    if (!target || ti.type === 'page') target = ti
-    console.error('target created', ti.targetId, ti.type)
-  } else if (m.method === 'Target.targetDestroyed') {
-    console.error('target destroyed', m.params.targetId)
-  } else if (m.method === 'Target.dispatchMessageFromTarget') {
-    const inner = JSON.parse(m.params.message)
-    if (inner.id && pending.has(inner.id)) { pending.get(inner.id)(inner); pending.delete(inner.id) }
-  }
-})
-await new Promise((res, rej) => { ws.addEventListener('open', res); ws.addEventListener('error', rej) })
-await new Promise(r => setTimeout(r, 1500))
-if (!target) { console.error('no target'); process.exit(1) }
-const send = (method, params = {}) => new Promise(res => {
-  const id = ++innerId
-  pending.set(id, res)
-  ws.send(JSON.stringify({ id: ++outerId, method: 'Target.sendMessageToTarget',
-    params: { targetId: target.targetId, message: JSON.stringify({ id, method, params }) } }))
-})
-const evalIn = async (expr) => {
-  const ev = (await send('Runtime.evaluate', { expression: `Promise.resolve((${expr}))`, returnByValue: false })).result || {}
-  if (ev.wasThrown) throw new Error('eval threw: ' + JSON.stringify(ev.result))
-  const aw = (await send('Runtime.awaitPromise', { promiseObjectId: ev.result.objectId, returnByValue: true })).result || {}
-  if (aw.wasThrown) throw new Error('eval rejected: ' + JSON.stringify(aw.result))
-  return aw.result?.value
-}
+const { s } = await connect()
 
 const HOOK = `(() => {
+  performance.setResourceTimingBufferSize(20000);
   const T = []; window.__dbTrace = T;
   const now = () => Math.round(performance.now() * 10) / 10;
   const seen = new WeakSet();
@@ -72,20 +37,18 @@ const HOOK = `(() => {
   window.addEventListener('DOMContentLoaded', () => T.push({t: now(), ev: 'DOMContentLoaded'}));
 })()`
 
-await send('Runtime.enable')
-await send('Page.enable')
-const SHIM = process.env.SHIM ? `window.requestIdleCallback = (cb, o) => setTimeout(() => cb({didTimeout: false, timeRemaining: () => 50}), 1); window.cancelIdleCallback = clearTimeout;` : ''
-const r = await send('Page.setBootstrapScript', { source: SHIM + HOOK })
-if (r.error) { console.error('setBootstrapScript error', JSON.stringify(r.error)); process.exit(2) }
+await s.send('Page.enable')
+await s.send('Page.setBootstrapScript', { source: (process.env.PRELUDE || '') + ';' + HOOK })
 console.error('bootstrap script set; reloading')
-await send('Page.reload')
+await s.send('Page.reload')
 await new Promise(r => setTimeout(r, WAIT * 1000))
-console.error('targets seen:', targets.map(t => t.targetId + ':' + t.type).join(', '), '→ using', target.targetId)
-const out = await evalIn(`(async () => {
+const out = await evalIn(s, `(async () => {
   const t = await import('@/utils/startupTimeline.js')
   const marks = {}; for (const [k, v] of Object.entries(t.getStartupTimeline().marks)) marks[k] = Math.round(v)
-  return { marks, hooked: !!window.__dbTrace, n: (window.__dbTrace || []).length, trace: window.__dbTrace || [] }
+  const res = performance.getEntriesByType('resource')
+  return { marks, hooked: !!window.__dbTrace, n: (window.__dbTrace || []).length, trace: window.__dbTrace || [],
+    resources: res.map(e => [Math.round(e.startTime), Math.round(e.responseEnd), e.name.replace(location.origin + '/knowledge-medium/', '')]) }
 })()`)
-await send('Page.setBootstrapScript', {})
-console.log(JSON.stringify(out))
+await s.send('Page.setBootstrapScript', {})
+console.log(JSON.stringify(out.value))
 process.exit(0)

@@ -84,13 +84,14 @@ actually uses.
   on the Mac via `pnpm agent eval --profile <p> "return $(…)"` for a baseline.
   The DB handle without the bridge is `getPowerSyncDb(getActiveUserId())` from
   `@/data/repoProvider.js`; `@/` resolves through the prod importmap.
-- `MATCH=github node boot-trace.mjs [waitSecs]` — injects a hook with
+- `MATCH=github node boot-trace.mjs [waitSecs]` (protocol shared via `inspector.mjs`) — injects a hook with
   `Page.setBootstrapScript` (runs before any page script, survives a same-
   origin reload), reloads, and dumps every DB-worker round trip (comlink
   messages over the transferred `MessagePort`s, SQL text included) plus the
   marks. `node analyze-trace.js <json> [lo hi] [v]` summarizes a window: idle
-  gaps, per-path totals, slowest calls. `SHIM=1` additionally polyfills
-  `requestIdleCallback` before boot — an A/B for anything gated on it.
+  gaps, per-path totals, slowest calls. `PRELUDE='<js>'` runs extra code before
+  the hook — the way the `requestIdleCallback` polyfill was A/B-tested on the
+  real build before it shipped.
 - The historical per-device record is already in the workspace: the
   startup-metrics plugin writes one block per boot under
   `ui-state → Startup metrics → <device group>`; query `startupRecord` via
