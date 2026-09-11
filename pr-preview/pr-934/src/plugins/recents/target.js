@@ -1,2 +1,0 @@
-import{getOrCreateRecentsPage as e}from"../../data/recentsPage.js";var t=async t=>{let n=t.activeWorkspaceId;return n?{blockId:(await e(t,n)).id,workspaceId:n}:null};export{t as openRecentsPage};
-//# sourceMappingURL=target.js.map
