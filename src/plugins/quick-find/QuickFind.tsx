@@ -415,8 +415,8 @@ function QuickFindDialog({
   // live query). Blocks and Recents go in one call because the two are
   // never on screen together — Recents render only for an empty query.
   const blockCrumbs = useAncestorCrumbs([
-    ...blocks.map(match => ({id: match.blockId, parentId: match.parentId})),
-    ...recents.map(item => ({id: item.blockId, parentId: item.parentId})),
+    ...blocks.map(match => match.blockId),
+    ...recents.map(item => item.blockId),
   ])
   const typeRegistry = useTypes()
   const rowContext = {crumbsByBlockId: blockCrumbs, typeRegistry}

@@ -23,14 +23,18 @@ const chainRowsFor = (id: string) => [
   {id: `${id}-gp`, chain_start_id: id, depth: 2, parent_id: null},
 ]
 
-const fakeDb = (opts?: {failWhen?: (ids: string[]) => boolean}) => {
+const fakeDb = (opts?: {
+  failWhen?: (ids: string[]) => boolean
+  rowsFor?: (id: string) => unknown[]
+}) => {
   const statements: Statement[] = []
+  const rowsFor = opts?.rowsFor ?? chainRowsFor
   const db = {
     getAll: vi.fn(async (_sql: string, params?: unknown[]) => {
       const ids = (params ?? []) as string[]
       statements.push({ids})
       if (opts?.failWhen?.(ids)) throw new Error(`read failed: ${ids.join(',')}`)
-      return ids.flatMap(chainRowsFor)
+      return ids.flatMap(rowsFor)
     }),
     getOptional: vi.fn(),
     get: vi.fn(),
@@ -53,7 +57,40 @@ describe('ancestorWalk', () => {
     expect(statements[0].ids).toEqual(['a', 'b', 'c'])
     expect(chains.map(idsOf)).toEqual([['a'], ['b'], ['c']])
     expect(chains[0].chain.map(row => row.id)).toEqual(['a-p', 'a-gp'])
-    expect(chains[0].seed?.id).toBe('a')
+    expect(chains[0].stoppedAtParentId).toBeNull()
+  })
+
+  it('names the parent a truncated walk stopped at', async () => {
+    // The chain is what the walk could REACH; the row it names is absent
+    // precisely because it could not (soft-deleted, or not materialized
+    // yet). No chain can say that about itself at any length — including
+    // zero, where a cut at the first hop and a root are both `[]`.
+    const {db} = fakeDb({rowsFor: id => [
+      {id, chain_start_id: id, depth: 0, parent_id: `${id}-p`},
+      {id: `${id}-p`, chain_start_id: id, depth: 1, parent_id: `${id}-gp`},
+    ]})
+
+    const cut = await ancestorWalk(db, 'a')
+
+    expect(cut.chain.map(row => row.id)).toEqual(['a-p'])
+    expect(cut.stoppedAtParentId).toBe('a-gp')
+  })
+
+  it('names the first hop when the chain is empty', async () => {
+    const {db} = fakeDb({rowsFor: id => [
+      {id, chain_start_id: id, depth: 0, parent_id: `${id}-p`},
+    ]})
+
+    const cut = await ancestorWalk(db, 'a')
+
+    expect(cut.chain).toEqual([])
+    expect(cut.stoppedAtParentId).toBe('a-p')
+  })
+
+  it('names no parent for a block whose own row is gone', async () => {
+    const {db} = fakeDb({rowsFor: () => []})
+
+    expect(await ancestorWalk(db, 'a')).toEqual({stoppedAtParentId: null, chain: []})
   })
 
   it('reads a repeated id once and gives both callers the chain', async () => {

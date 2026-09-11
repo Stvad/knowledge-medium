@@ -246,17 +246,6 @@ export const useStableJson = <T,>(value: T): T => {
   return useMemo(() => JSON.parse(key) as T, [key])
 }
 
-export interface UseHandlesOptions {
-  /** Whether an unresolved member is FETCHED. Default `true`.
-   *
-   *  Gates the ensure-load only, so it is meaningful for a handle whose
-   *  `subscribe` does not itself load — `Block`, whose subscribe is a
-   *  plain `BlockCache` listener. A `LoaderHandle` member loads on first
-   *  subscribe regardless (`handleStore.ts`), so passing `false` for one
-   *  buys nothing. */
-  fetchMissing?: boolean
-}
-
 /** `useHandle` for a SET of handles: one subscription each, values in
  *  the caller's order, `undefined` for a member that hasn't resolved.
  *
@@ -278,9 +267,7 @@ export interface UseHandlesOptions {
  *  changed, and a new array is then the honest answer. */
 export const useHandles = <T,>(
   handles: readonly Handle<T>[],
-  opts?: UseHandlesOptions,
 ): readonly (T | undefined)[] => {
-  const fetchMissing = opts?.fetchMissing ?? true
   // Same closure-local memo as `useHandle`, and safe for the same reason:
   // the bindings live in the closure `useMemo` returned, never on a shared
   // object, so an abandoned render can at worst prime the memo with a
@@ -305,9 +292,8 @@ export const useHandles = <T,>(
   // Every member starts in the same tick, which is what lets a batching
   // loader answer them with one read.
   useEffect(() => {
-    if (!fetchMissing) return
     for (const handle of handles) ensureLoaded(handle)
-  }, [handles, fetchMissing])
+  }, [handles])
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
@@ -476,7 +462,7 @@ const parentsFromChain = (repo: Repo, chain: readonly BlockData[]): Block[] =>
 export const useParents = (block: Block): Block[] => {
   const repo = block.repo
   return useHandle(block.repo.query.ancestors({id: block.id}), {
-    selector: data => parentsFromChain(repo, data ?? EMPTY_BLOCK_DATA_ARRAY),
+    selector: data => parentsFromChain(repo, data?.ancestors ?? EMPTY_BLOCK_DATA_ARRAY),
   })
 }
 
@@ -508,16 +494,16 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
     () => ids.map(id => repo.query.ancestors({id})),
     [ids, repo],
   )
-  const chains = useHandles(handles)
+  const walks = useHandles(handles)
 
   return useMemo(() => {
     const out = new Map<string, Block[]>()
     ids.forEach((id, index) => {
-      const chain = chains[index]
-      if (chain) out.set(id, parentsFromChain(repo, chain))
+      const walk = walks[index]
+      if (walk) out.set(id, parentsFromChain(repo, walk.ancestors))
     })
     return out.size === 0 ? EMPTY_PARENT_MAP : out
-  }, [ids, chains, repo])
+  }, [ids, walks, repo])
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
