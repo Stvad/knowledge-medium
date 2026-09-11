@@ -106,11 +106,12 @@ export interface NavigateSidebarStackInput extends NavigateBaseInput {
   sourcePanelId?: string
 }
 
-/** Input to the navigator / global-command entry points. Deliberately only the
- *  block (and an optional explicit workspace): the target panel is resolved by
- *  the intent policy and `origin` is fixed to `'navigator'`, so neither is
- *  accepted here (a `Pick`, not the full base, so a dropped field is a type
- *  error rather than a silent no-op). */
+/** Input to the navigator / global-command entry points: the block to open, an
+ *  optional explicit workspace, and — for a row created lazily — an optional
+ *  `ensure`. The target panel is resolved by the intent policy and `origin` is
+ *  fixed to `'navigator'`, so neither is accepted here (a `Pick` over the base
+ *  rather than the base itself, so a dropped field is a type error rather than
+ *  a silent no-op). */
 export type GlobalCommandNavigateInput = Pick<NavigateBaseInput, 'blockId' | 'workspaceId'> & {
   /** Materialize `blockId`'s row, for a page created lazily. When it runs and
    *  when it is skipped is `EnsureNavigationTarget`'s to say, not this field's
