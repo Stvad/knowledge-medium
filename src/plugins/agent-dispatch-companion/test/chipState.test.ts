@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
-import { chipStateFor, chipTitle } from '../chipState.ts'
+import { chipStateFor, chipTitle, isDeferredRetry } from '../chipState.ts'
 import { agentStatusChipContribution } from '../AgentStatusChip.tsx'
 import { contentWithAgentMention } from '../askAgent.ts'
 
@@ -19,7 +19,7 @@ describe('chipStateFor', () => {
       'agent:status': 'running',
       'agent:updated-at': 1_000,
       'agent:attempts': 2,
-    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: 1_000, attempts: 2, errorMessage: '', activity: '', cancelling: false})
+    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: 1_000, attempts: 2, errorMessage: '', activity: '', cancelling: false, retryAfterMs: null})
 
     expect(chipStateFor({'agent:status': 'done'})).toMatchObject({kind: 'done', attempts: 1})
     expect(chipStateFor({
@@ -38,7 +38,7 @@ describe('chipStateFor', () => {
       'agent:updated-at': 'yesterday',
       'agent:attempts': -3,
       'agent:activity': 42,
-    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false})
+    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false, retryAfterMs: null})
   })
 
   it('uses the persisted executor to label non-Claude runs', () => {
@@ -46,6 +46,25 @@ describe('chipStateFor', () => {
       .toMatchObject({executor: 'codex', executorLabel: 'Codex'})
     expect(chipTitle(chipStateFor({'agent:status': 'done', 'agent:executor': 'codex'})!))
       .toContain('Codex replied')
+  })
+
+  it('tells a DEFERRED task apart from a merely queued one', () => {
+    // The daemon writes queued + retry-after when a run could not even be
+    // attempted. Without the clock it is an ordinary "waiting its turn"
+    // chip, and offering Retry/Stop on that would be meaningless.
+    const deferred = chipStateFor({
+      'agent:status': 'queued',
+      'agent:retry-after': 2_000,
+      'agent:error': 'out of credits / usage limit reached — waiting to retry',
+    })!
+    expect(isDeferredRetry(deferred)).toBe(true)
+    expect(deferred.retryAfterMs).toBe(2_000)
+
+    expect(isDeferredRetry(chipStateFor({'agent:status': 'queued'})!)).toBe(false)
+    // 0 is the daemon's CLEARED form, not a due-at-the-epoch deferral.
+    expect(isDeferredRetry(chipStateFor({'agent:status': 'queued', 'agent:retry-after': 0})!)).toBe(false)
+    // A stale clock left on a task that has since moved on isn't a deferral.
+    expect(isDeferredRetry(chipStateFor({'agent:status': 'done', 'agent:retry-after': 2_000})!)).toBe(false)
   })
 
   it('flags cancelling only for a running chip with a truthy agent:cancel', () => {
@@ -63,6 +82,17 @@ describe('chipTitle', () => {
       .toContain('exit 1: boom')
     expect(chipTitle(chipStateFor({'agent:status': 'running', 'agent:attempts': 3})!))
       .toContain('attempt 3')
+  })
+
+  it('says a deferred task could not RUN, rather than that it is merely queued', () => {
+    const title = chipTitle(chipStateFor({
+      'agent:status': 'queued',
+      'agent:retry-after': 2_000,
+      'agent:error': 'out of credits / usage limit reached — waiting to retry',
+    })!)
+    expect(title).toContain('could not run')
+    expect(title).toContain('out of credits')
+    expect(chipTitle(chipStateFor({'agent:status': 'queued'})!)).toBe('Queued for Claude')
   })
 
   it('appends the activity label for a running chip when present', () => {

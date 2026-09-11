@@ -31,6 +31,18 @@ export { UNKNOWN_TOKEN_MARKER } from './protocol.js'
 
 export const defaultProfileName = 'default'
 
+/** Marks an error as a command the app REJECTED, rather than a failure to
+ *  reach it. Carried as a property rather than an Error subclass: an error
+ *  crossing a worker or serialization boundary loses its prototype, and a
+ *  silently-false `instanceof` here would misreport a rejection as an
+ *  outage. */
+const COMMAND_REJECTED = '__kmCommandRejected'
+
+/** Did the app receive this command and refuse it? False for anything that
+ *  failed on the way there. */
+export const isCommandRejection = (error: unknown): boolean =>
+  (error as Record<string, unknown> | null)?.[COMMAND_REJECTED] === true
+
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
@@ -464,6 +476,10 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
         return command.result
       }
       if (command.status === 'failed') {
+        // NOT marked. The bridge sets this status in one place only: when
+        // the target client goes away and its pending commands are failed
+        // with ClientGone. That is the app becoming unreachable, which
+        // callers must treat as the transport failure it is.
         const error = command.result?.error
         throw new Error(error?.message ?? `Runtime command ${id} failed`)
       }
@@ -483,7 +499,11 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
 
     if (!result?.ok) {
       const error = result?.error
-      throw new Error(error?.message ?? 'Runtime command failed')
+      // MARKED, and only here: the command COMPLETED and the app answered
+      // `ok: false`. Callers that retry transport failures must not retry
+      // this — an answered command is answered the same way forever. A
+      // `failed` status is the opposite case and is left unmarked above.
+      throw Object.assign(new Error(error?.message ?? 'Runtime command failed'), {[COMMAND_REJECTED]: true})
     }
 
     return result.value

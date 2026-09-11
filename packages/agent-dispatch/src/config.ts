@@ -17,7 +17,11 @@ import { isReadOnlySql } from '@knowledge-medium/agent-cli/mcpShared'
 /** Block-property namespace the daemon owns. Kept short and stable —
  *  these live on user blocks and act as the durable task state. */
 export const PROPS = {
-  /** queued | running | done | error — presence means "seen". */
+  /** queued | running | done | error — presence means "seen".
+   *  `queued` is the daemon's NON-terminal deferral state: a run that
+   *  failed for a retryable infrastructure reason (see runFailure.ts)
+   *  goes back to `queued` with `agent:retry-after`, so an outage never
+   *  parks a task as failed. */
   status: 'agent:status',
   /** Executor session/thread id (enables resume where supported). */
   session: 'agent:session',
@@ -32,8 +36,14 @@ export const PROPS = {
   /** How many times this task has been claimed (stale-running requeues
    *  bump it; MAX_ATTEMPTS in watchers.ts caps the retry loop). */
   attempts: 'agent:attempts',
-  /** Error message for status=error. */
+  /** Error message for status=error — and the deferral reason while
+   *  status=queued, so a task waiting out an outage says WHY. */
   error: 'agent:error',
+  /** Epoch-ms a `queued` (deferred) task may be re-attempted at. Written
+   *  with the retryable-failure deferral; the gate lives in the graph, not
+   *  in daemon memory, so a restart doesn't re-attempt the whole queue at
+   *  once. Cleared on every other terminal write. */
+  retryAfter: 'agent:retry-after',
   /** Marks daemon-authored reply blocks so watchers never re-trigger on them. */
   reply: 'agent:reply',
   /** Transient "what the run is doing right now" label (e.g. a tool
@@ -47,10 +57,30 @@ export const PROPS = {
    *  aborts the run, parks the task `error: cancelled`, and clears this
    *  (written as '') on the terminal write so it never re-cancels a rerun. */
   cancel: 'agent:cancel',
+  /** Epoch-ms of an explicit user re-queue (the companion's Ask/Retry
+   *  actions). READ-ONLY here and never written by the daemon: it is the
+   *  only signal that tells a task the USER just asked for apart from one
+   *  the daemon re-derived on its own, which is what lets an explicit
+   *  Retry through an infrastructure cooldown (engine.ts). */
+  askedAt: 'agent:asked-at',
 } as const
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'
 export type Executor = 'claude' | 'codex'
+
+/** Ports `fetch` refuses outright (the WHATWG "bad port" list). `new URL`
+ *  accepts them, so only the request fails — locally, identically, every
+ *  time — and a per-delivery rejection reads as a transport outage: the
+ *  task defers forever instead of saying the port is unusable. A fixed spec
+ *  list is worth carrying to turn that into one error at wiring time. */
+const FETCH_BLOCKED_PORTS: ReadonlySet<number> = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79,
+  87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
+  139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532,
+  540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
+  2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
+  6679, 6697, 10080,
+])
 
 const runnerBase = {
   /** Working directory for the spawned agent process. */
@@ -282,7 +312,19 @@ const rawConfigSchema = z.strictObject({
   runsPerHour: z.number().int().positive().default(10),
   /** Loopback port the dispatch channel MCP listener binds when the
    *  ambient session runs (watchers with delivery: 'channel' post here). */
-  channelPort: z.number().int().positive().default(8790),
+  // Bounded AND not one fetch refuses, because both make `fetch` reject
+  // locally on every delivery — which the retry path reads as a transport
+  // outage and defers forever instead of saying the port is unusable.
+  //
+  // Validated HERE rather than where the sender is wired: a config error has
+  // to surface as one (clean exit, no restart loop under launchd), and it
+  // should be found while reading the config rather than after the bridge
+  // preflight — including when no watcher uses channel delivery at all.
+  channelPort: z.number().int().min(1).max(65_535)
+    .refine(port => !FETCH_BLOCKED_PORTS.has(port), {
+      message: 'channelPort is one fetch refuses to connect to — pick another',
+    })
+    .default(8790),
   /** State file for query-watcher cursors (backlink watchers keep
    *  their state as block properties in the graph itself). */
   statePath: z.string().optional(),

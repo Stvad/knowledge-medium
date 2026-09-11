@@ -6,6 +6,7 @@
  * *shapes* differ) — this only owns the process plumbing they share.
  */
 import { spawn as nodeSpawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 
 export type SpawnImpl = typeof nodeSpawn
@@ -84,7 +85,21 @@ export const runJsonlProcess = async (options: RunJsonlProcessOptions): Promise<
   }
 
   const exitCode = await new Promise<number | null>((resolve, reject) => {
-    child.on('error', reject)
+    // Node reports a missing WORKING DIRECTORY with the same `spawn <bin>
+    // ENOENT` as a missing executable, and the two want opposite handling: a
+    // binary off launchd's PATH is the transient this daemon defers, while a
+    // cwd that does not exist is a configuration error that will fail
+    // identically forever — deferred, it also cools the shared executor lane
+    // and throttles watchers whose directories are fine. Only the spawn site
+    // can tell them apart, so it says which rather than leaving the message
+    // to be re-read downstream.
+    child.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT' && options.cwd && !existsSync(options.cwd)) {
+        reject(new Error(`working directory does not exist: ${options.cwd}`, {cause: error}))
+        return
+      }
+      reject(error)
+    })
     child.on('close', code => resolve(code))
   }).finally(() => {
     clearTimeout(timer)

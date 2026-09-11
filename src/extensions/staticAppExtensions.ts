@@ -169,7 +169,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   updateIndicatorPlugin,
   blockInfoPlugin,
   agentRuntimePlugin,
-  agentDispatchCompanionPlugin,
+  agentDispatchCompanionPlugin({repo}),
   roamImportPlugin({repo}),
   birthdayPlugin,
   // appIntentsPlugin's bootstrap effect resolves the layout-session

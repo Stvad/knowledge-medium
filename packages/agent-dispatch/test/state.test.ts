@@ -33,3 +33,22 @@ describe('state store', () => {
     expect(await store.getCursor('q')).toEqual(['a'])
   })
 })
+
+describe('commitDelivery', () => {
+  it('moves the generation and the cursor together, and both survive a reload', async () => {
+    // Apart they can disagree: a failure or a crash between them leaves a
+    // bumped generation over an old cursor, and the next tick re-delivers
+    // the same rows under a FRESH id — past the receiver's dedup, repeating
+    // billed work.
+    const file = path.join(dir, 'commit.json')
+    const store = createStateStore(file)
+    await store.setCursor('inbox', ['a'])
+
+    await store.commitDelivery('inbox', ['a', 'b'])
+
+    const reloaded = createStateStore(file)
+    expect(await reloaded.getCursor('inbox')).toEqual(['a', 'b'])
+    expect(await reloaded.getDeliveryGeneration('inbox')).toBe(1)
+  })
+})
+
