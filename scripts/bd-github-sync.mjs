@@ -45,6 +45,12 @@
  * every later fetch sees, no later run re-adopts the close. Inherent to a
  * push-based mirror; close the bead instead if it happens.
  *
+ * Beyond the guards, the wrapper carries what bd's sync does not: bead
+ * COMMENTS are mirrored onto their issues, one way and append-only
+ * (mirrorComments), after the pull and followed by one more pull so the
+ * last_sync stamp covers the posts. GitHub-side comments are never pulled
+ * into beads.
+ *
  * Modes:
  *   node scripts/bd-github-sync.mjs               # full sync (manual / SessionEnd)
  *   node scripts/bd-github-sync.mjs --quiet       # only report when something changed
@@ -782,6 +788,57 @@ export const planPriorityFixes = (preById, postBeads, issueByNumber) =>
     })
     .filter(({ to }) => to !== null && to !== 2)
 
+// ---- comment mirror ----
+// A mirrored comment opens with an HTML comment naming its bead comment id:
+// invisible when rendered, and the only link between the two — bd keeps no
+// per-comment external ref, so the issue's own bodies are the ledger of what
+// has been mirrored, and re-running never duplicates. Only the OPENING
+// position counts: a marker quoted mid-body (a human reply pasting raw
+// markdown, a bead comment discussing one) is text.
+const MIRROR_MARKER = /^<!--\s*bd-comment\s+([0-9a-f-]{36})\s*-->/
+export const mirroredCommentIds = bodies => new Set(bodies.map(b => b.match(MIRROR_MARKER)?.[1]).filter(Boolean))
+
+// Bead ids are opaque to a GitHub reader (AGENTS.md: public text carries issue
+// numbers), so a mapped id is rewritten — code included, deliberately:
+// nothing inside code links on GitHub either way, and sparing it needs a
+// Markdown tokenizer whose edge cases (fences, spans, indented blocks, HTML)
+// never end. What cannot be rewritten splits by whether waiting fixes it: an
+// id in `holdIds` (a bead whose issue is still to be minted) resolves by
+// itself, so the comment is held (`unmapped`); one matching no bead at all
+// (a fixture in a quoted test line, a typo) or whose ref points at no issue
+// never will, and a bead comment cannot be edited — so those go out and are
+// reported (`leftover`), since the GitHub copy is the one a human can fix.
+// Holding them would hide the whole comment for good.
+export const rewriteBeadIds = (text, numberByBeadId, holdIds) => {
+  const unmapped = new Set()
+  const rewritten = text.replace(BEAD_ID, id => {
+    if (numberByBeadId.has(id)) return `#${numberByBeadId.get(id)}`
+    if (holdIds.has(id)) unmapped.add(id)
+    return id
+  })
+  const leftover = [...new Set(rewritten.match(BEAD_ID) ?? [])].filter(id => !unmapped.has(id))
+  return { text: rewritten, unmapped: [...unmapped], leftover }
+}
+
+// GitHub caps an issue comment at this many characters, and a bead comment
+// can be as long. Cut deterministically and say so: an oversized body would
+// fail its POST on every run and stall every later comment of the bead.
+const GITHUB_COMMENT_MAX = 65_536
+export const mirrorCommentBody = (comment, numberByBeadId, holdIds) => {
+  const when = comment.created_at.replace(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d).*$/, '$1 $2 UTC')
+  const { text, unmapped, leftover } = rewriteBeadIds(comment.text, numberByBeadId, holdIds)
+  const head = `<!-- bd-comment ${comment.id} -->\n_Mirrored from a beads tracker comment of ${when}._\n\n`
+  let body = head + text
+  if (body.length > GITHUB_COMMENT_MAX) {
+    const note = `\n\n_[cut by the mirror: the bead comment is ${text.length} characters, GitHub caps a comment at ${GITHUB_COMMENT_MAX}]_`
+    body = head + text.slice(0, GITHUB_COMMENT_MAX - head.length - note.length) + note
+  }
+  return { body, unmapped, leftover }
+}
+
+export const planCommentMirror = (comments, mirrored) =>
+  comments.filter(c => !mirrored.has(c.id)).sort((a, b) => a.created_at.localeCompare(b.created_at))
+
 export const buildDenyMessage = (mapped, unmapped) => {
   const lines = [
     'BLOCKED: this text references bead ids (km-…), which GitHub readers cannot resolve.',
@@ -963,6 +1020,16 @@ const tryRead = p => {
 // the plan functions own status selection, so nothing here pre-filters.
 // --limit 0 is explicit: the documented default is 50, and a truncated bead
 // list would put every unlisted open bead back on the re-open-the-issue path.
+// One `bd export` carries every bead with its comments (id, text, time) in
+// about a second, where `bd comments` costs a spawn per bead — and it lets
+// the mirrored/pending split be exact, comment id by comment id.
+const exportBeads = env =>
+  run('bd', ['export'], { env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
+    .split('\n')
+    .filter(Boolean)
+    .map(l => JSON.parse(l))
+    .filter(r => r._type === 'issue')
+
 const listAllBeads = () =>
   JSON.parse(run('bd', ['list', '--status', 'open,in_progress,blocked,deferred,closed', '--limit', '0', '--json']))
 
@@ -994,6 +1061,184 @@ const pushBeads = (ids, env) => {
   for (let i = 0; i < ids.length; i += PUSH_CHUNK)
     out += run('bd', ['github', 'sync', '--push-only', '--issues', ids.slice(i, i + PUSH_CHUNK).join(',')], { env }) + '\n'
   return out
+}
+
+// One GraphQL call per chunk reads the comment bodies of every commented
+// bead's issue, so a converged run costs one request rather than one per
+// issue; an issue past the first page costs one more query per page.
+// `issue(number)` resolves a PR or a deleted issue to null — with a NOT_FOUND
+// error and a non-zero gh exit that still carries the data, so the parse
+// reads stdout and ignores the status. Returns number → { bodies } | null
+// (not an issue).
+const COMMENT_PAGE = 100
+const GRAPHQL_CHUNK = 50
+const [OWNER, NAME] = REPO.split('/')
+const commentsField = after => `comments(first: ${COMMENT_PAGE}${after ? `, after: "${after}"` : ''}) { pageInfo { hasNextPage endCursor } nodes { body } }`
+const graphqlRepository = (fields, env) => {
+  const r = spawnSync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: MAX_OUTPUT_BYTES,
+    env,
+  })
+  let repo
+  try {
+    repo = JSON.parse(r.stdout).data.repository
+  } catch {}
+  if (!repo) throw new Error(`gh api graphql: ${(r.stderr || r.stdout || '').trim().slice(0, 300)}`)
+  return repo
+}
+const fetchIssueComments = (numbers, env) => {
+  const byNumber = new Map()
+  for (let i = 0; i < numbers.length; i += GRAPHQL_CHUNK) {
+    const chunk = numbers.slice(i, i + GRAPHQL_CHUNK)
+    const repo = graphqlRepository(chunk.map(n => `i${n}: issue(number: ${n}) { ${commentsField()} }`).join(' '), env)
+    for (const n of chunk) {
+      const issue = repo[`i${n}`]
+      if (!issue) {
+        byNumber.set(n, null)
+        continue
+      }
+      // Every page is read: a marker beyond the first would otherwise not
+      // count, and a backfill that crosses the page boundary — which the
+      // per-run post cap can produce — would re-post its oldest comments.
+      const bodies = issue.comments.nodes.map(c => c.body)
+      let page = issue.comments.pageInfo
+      while (page.hasNextPage) {
+        const more = graphqlRepository(`issue(number: ${n}) { ${commentsField(page.endCursor)} }`, env).issue
+        if (!more) throw new Error(`issue #${n} vanished between comment pages`)
+        bodies.push(...more.comments.nodes.map(c => c.body))
+        page = more.comments.pageInfo
+      }
+      byNumber.set(n, { bodies })
+    }
+  }
+  return byNumber
+}
+
+// Bead comments → issue comments, one way and append-only: bd 1.2.2's sync
+// carries comments in neither direction (nothing in its GitHub client, mapper
+// or tracker reads or writes them), so a mirrored comment never comes back as
+// a new bead comment. The beads come from one `bd export` (exportBeads), so
+// nothing is read per bead. Posts are paced under GitHub's
+// content-creation limit (80/min), and a bead stops at its first failed post
+// so the thread keeps bead order; the next run resumes where it stopped.
+// Every failure is a report line, never a throw: a throw here would swallow
+// the report of the steps before it.
+//
+// Accepted race: two clones syncing the same unmirrored comment inside one
+// read-to-post window post it twice — the lock is per clone, and a duplicate
+// is visible and deletable; a cross-device claim is more machinery than that
+// warrants.
+//
+// Each bead is TOUCHED (a same-value update) before its first post, and the
+// caller pulls again afterwards. bd's pull re-applies a fetched issue onto any
+// bead not modified locally since last_sync, and the mapped copy drops what
+// GitHub does not carry (assignee, closed_at, a type the labels do not spell
+// out); `bd comment` itself does not bump the bead's updated_at. The touch
+// supplies that mark, so the pull that follows skips the bead and stamps
+// last_sync past the post, and the post leaves GitHub newer, so the next run
+// has nothing to push. A bead whose touch fails is not posted: the post alone
+// would set up exactly that re-apply. `touched` names every touched bead: the
+// caller pushes them before that pull — bd skips the posted ones (GitHub is
+// newer) and reconverges one whose post failed, which would otherwise be
+// pushed next run and re-applied by the pull behind it.
+const POST_PAUSE_MS = 800
+// Bounds one run under the SessionEnd hook's timeout (.claude/settings.json);
+// the rest resumes next run. The env override exists for the process tests.
+const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 60
+const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dryRun }) => {
+  // A ref is trusted only where the run-start listing shows an issue, or
+  // where this run's push minted it: a ref pointed at a PR or a deleted
+  // issue would otherwise turn a bead id into a confidently wrong #N,
+  // whether as a destination or a reference. PRs share the number sequence,
+  // so a number beyond the listing's last proves nothing by itself.
+  const isIssue = n => issueByNumber.has(n) || mintedNumbers.has(n)
+  const numberByBeadId = new Map(beads.map(b => [b.id, issueNumberFromRef(b.external_ref)]).filter(([, n]) => n && isIssue(n)))
+  const unmintedIds = new Set(beads.filter(b => !b.external_ref).map(b => b.id))
+  const report = []
+  const touched = []
+  const commented = []
+  for (const b of beads) {
+    if (!b.comments?.length) continue
+    // skipIds: beads the restore left half-repaired — the touch would push
+    // that row and bury the loss the push-back exclusion protects.
+    if (skipIds.has(b.id)) report.push(`SKIPPED comments of ${b.id}: its restore failed this run — touching it would push the half-restored row`)
+    else if (numberByBeadId.has(b.id)) commented.push(b)
+    else if (b.external_ref) report.push(`SKIPPED comments of ${b.id}: its external_ref does not point at an issue of this repo (a PR, or deleted) — fix the ref`)
+  }
+  if (!commented.length) return { report, touched }
+  let ghComments
+  try {
+    ghComments = fetchIssueComments(commented.map(b => numberByBeadId.get(b.id)), env)
+  } catch (e) {
+    return { report: [...report, `FAILED to read GitHub comments (${e.message}) — comment mirror skipped this run`], touched }
+  }
+  let posts = 0
+  for (const bead of commented) {
+    if (posts >= POST_CAP) {
+      report.push(`comment mirror stopped at ${POST_CAP} post(s) this run — the rest resumes next run`)
+      break
+    }
+    const number = numberByBeadId.get(bead.id)
+    const issue = ghComments.get(number)
+    // Defence in depth behind isIssue: the listing is minutes old, and a
+    // number minted this run is trusted unseen.
+    if (!issue) {
+      report.push(`SKIPPED comments of ${bead.id}: #${number} is not an issue (a PR, or deleted) — mis-pointed external_ref`)
+      continue
+    }
+    // Exact, id by id: a marker-shaped comment that is not one of this bead's
+    // comments (a pasted marker, two beads on one issue) counts for nothing.
+    const pending = planCommentMirror(bead.comments, mirroredCommentIds(issue.bodies))
+    if (!pending.length) continue
+    // A bead stops at the first comment that cannot go (unpublishable, or a
+    // failed post) so the thread keeps bead order; the rest wait for the next
+    // run.
+    const publishable = []
+    for (const c of pending) {
+      const { body, unmapped, leftover } = mirrorCommentBody(c, numberByBeadId, unmintedIds)
+      if (unmapped.length) {
+        report.push(`SKIPPED comment ${c.id} of ${bead.id}: it names bead(s) with no issue yet (${unmapped.join(', ')}) — ${pending.length - publishable.length} left for the next run`)
+        break
+      }
+      publishable.push({ id: c.id, body, leftover })
+    }
+    if (!publishable.length) continue
+    if (dryRun) {
+      report.push(`[dry-run] would mirror ${publishable.length} comment(s) of ${bead.id} to #${number}`)
+      continue
+    }
+    if (tryRun('bd', ['update', bead.id, '-p', String(bead.priority)], { env }) === null) {
+      report.push(`FAILED to touch ${bead.id} before mirroring — its ${publishable.length} comment(s) wait for the next run`)
+      continue
+    }
+    touched.push(bead.id)
+    let posted = 0
+    for (const { id, body, leftover } of publishable) {
+      if (posts >= POST_CAP) break
+      if (posts++) pause(POST_PAUSE_MS)
+      const ok =
+        tryRun('gh', ['api', '-X', 'POST', `repos/${REPO}/issues/${number}/comments`, '--input', '-'], {
+          env,
+          input: JSON.stringify({ body }),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }) !== null
+      if (!ok) {
+        report.push(`FAILED to mirror comment ${id} of ${bead.id} to #${number} — ${pending.length - posted} left for the next run`)
+        break
+      }
+      posted++
+      // The body is on GitHub now, which is the only copy anyone can edit —
+      // so this is a report, not a refusal (see rewriteBeadIds).
+      if (leftover.length)
+        report.push(`posted comment ${id} of ${bead.id} to #${number} with bead id(s) it could not resolve (${leftover.join(', ')}) — in code, or unknown here; edit the GitHub comment if they should read as issue numbers`)
+    }
+    const capped = posted < publishable.length && posts >= POST_CAP
+    if (posted) report.push(`mirrored ${posted} comment(s) of ${bead.id} to #${number}${capped ? ` — ${publishable.length - posted} left for the next run (post cap)` : ''}`)
+  }
+  return { report, touched }
 }
 
 // ---------------------------------------------------------------------------
@@ -1214,6 +1459,40 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       if (target.state === 'closed') continue
       const ok = tryRun('gh', ['issue', 'close', String(number), '--repo', REPO, '--reason', 'completed'], { env }) !== null
       report.push(ok ? `closed issue #${number} to match closed bead ${id}` : `FAILED to close issue #${number} (bead ${id}) — close it by hand or re-run`)
+    }
+
+    // 5. Mirror bead comments onto their issues (mirrorComments). Its slot is
+    // fixed on both sides: after the push, because a post bumps the issue
+    // past the local row and bd PATCHes only local-newer rows; after the
+    // pull, because the mirror touches the bead and the pull skips a touched
+    // bead — so any GitHub-side edit waiting on it must be imported first.
+    // Then the touched beads are pushed (see mirrorComments) and the pull
+    // runs once more, so its last_sync stamp covers the posts: without that,
+    // the next run's pull would re-apply every posted issue onto its bead
+    // (#955). Both are report lines on failure, like the mirror itself.
+    // Read fresh here, not from postBeads: the touch writes the bead's CURRENT
+    // priority back, and step 3 just rewrote priorities the pull flattened —
+    // read from before it, the touch would undo the repair.
+    const mirror = mirrorComments({
+      beads: exportBeads(env),
+      issueByNumber,
+      mintedNumbers: new Set(planMintedRefs(preBeads, freshBeads).map(m => m.number)),
+      skipIds: failedRestoreIds,
+      env,
+      dryRun,
+    })
+    report.push(...mirror.report)
+    if (mirror.touched.length) {
+      let out
+      try {
+        out = pushBeads(mirror.touched, env)
+      } catch (e) {
+        report.push(`FAILED to push the touched bead(s) ${mirror.touched.join(', ')} after mirroring (${e.message.slice(0, 200)}) — a bead whose post failed will be re-applied by the next pull`)
+      }
+      if (out) report.push(...out.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `post-mirror: ${l.trim()}`))
+      const again = tryRun('bd', ['github', 'sync', '--pull-only'], { env })
+      if (again === null) report.push(`FAILED to pull after mirroring — the next pull will re-apply the posted issue(s) onto ${mirror.touched.join(', ')}; run pnpm bd:sync again`)
+      else report.push(...again.split('\n').filter(l => /Pulled|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `post-mirror: ${l.trim()}`))
     }
 
     // "Changed" means an action was reported — a close-push candidate that

@@ -49,7 +49,25 @@ export interface BeadRow {
   close_reason?: string
   issue_type?: string
   labels?: string[]
+  comment_count?: number
 }
+export interface BeadComment {
+  id: string
+  text: string
+  created_at: string
+}
+export declare const mirroredCommentIds: (bodies: string[]) => Set<string>
+export declare const rewriteBeadIds: (
+  text: string,
+  numberByBeadId: Map<string, number>,
+  holdIds: Set<string>,
+) => { text: string; unmapped: string[]; leftover: string[] }
+export declare const mirrorCommentBody: (
+  comment: BeadComment,
+  numberByBeadId: Map<string, number>,
+  holdIds: Set<string>,
+) => { body: string; unmapped: string[]; leftover: string[] }
+export declare const planCommentMirror: (comments: BeadComment[], mirrored: Set<string>) => BeadComment[]
 export interface IssueInfo {
   state: 'OPEN' | 'CLOSED'
   labels: string[]
