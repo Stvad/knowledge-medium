@@ -8,7 +8,11 @@ for (const e of o.trace) {
   else if (e.d === 'in') { const s = outs.get(e.w + e.id); if (s) { calls.push({start: s.t, end: e.t, w: s.w, p: s.p, a: s.a, ty: e.ty}); outs.delete(e.w + e.id) } }
 }
 const sql = a => { try { const arr = JSON.parse(a.endsWith(']') ? a : a + '"}]'); const v = arr[0]?.value; return typeof v === 'string' ? v.replace(/\s+/g, ' ').slice(0, 110) : JSON.stringify(v).slice(0, 80) } catch { return a.slice(0, 110) } }
-const win = calls.filter(c => c.start >= lo && c.start <= hi).sort((x, y) => x.start - y.start)
+// Calls that overlap the window count, clipped to it: a call in flight at `lo`
+// is not idle time, and one that outlives `hi` contributes only its part inside.
+const win = calls.filter(c => c.end >= lo && c.start <= hi)
+  .map(c => ({...c, start: Math.max(c.start, lo), end: Math.min(c.end, hi)}))
+  .sort((x, y) => x.start - y.start)
 console.log(`window ${lo}..${hi} (${hi - lo}ms): ${win.length} calls`)
 // idle gaps: time with no call in flight
 let cursor = lo, idle = 0
