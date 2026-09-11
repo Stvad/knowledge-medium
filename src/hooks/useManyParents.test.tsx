@@ -18,9 +18,10 @@ import type { Handle } from '@/data/api'
 import type { Block } from '@/data/block'
 import { useManyParents } from './block.ts'
 
-type Chain = {id: string}[]
+type Walk = {ancestors: {id: string}[]; stoppedAtParentId: string | null}
 
-const chainFor = (id: string): Chain => [{id: `${id}-parent`}]
+const chainFor = (id: string): Walk =>
+  ({ancestors: [{id: `${id}-parent`}], stoppedAtParentId: null})
 
 /** `useHandle`/`useHandles` reach `peek()`, `status()` and
  *  `subscribe()`; `load()` only from `'idle'` or `'error'`, and never
@@ -34,25 +35,26 @@ const chainFor = (id: string): Chain => [{id: `${id}-parent`}]
  *  stores the new value unconditionally and applies its structural diff
  *  only to the notify, so `peek()` returns a FRESH array even when
  *  nothing about the chain changed. */
-const handleFor = (id: string, initial: Chain | undefined) => {
+const handleFor = (id: string, initial: Walk | undefined) => {
   let value = initial
   let loads = 0
-  const listeners = new Set<(chain: Chain) => void>()
-  const handle: Handle<Chain> = {
+  const listeners = new Set<(walk: Walk) => void>()
+  const empty: Walk = {ancestors: [], stoppedAtParentId: null}
+  const handle: Handle<Walk> = {
     key: `ancestors:${id}`,
     peek: () => value,
-    load: () => { loads += 1; return Promise.resolve(value ?? []) },
+    load: () => { loads += 1; return Promise.resolve(value ?? empty) },
     subscribe: (listener) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    read: () => value ?? [],
+    read: () => value ?? empty,
     status: () => value ? 'ready' : 'idle',
   }
   return {
     handle,
     loadCount: () => loads,
-    republish: (next: Chain) => {
+    republish: (next: Walk) => {
       value = next
       // Structurally equal to the last value, so a real handle suppresses
       // the notify — nothing here fires either.

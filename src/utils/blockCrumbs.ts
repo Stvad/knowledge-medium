@@ -84,8 +84,8 @@ const crumbLabel = (data: BlockData): string => {
     : truncate(label, CRUMB_MAX_CHARS)
 }
 
-/** Root→immediate-parent crumbs for one `core.manyAncestors` chain,
- *  ready to render.
+/** Root→immediate-parent crumbs for one `core.ancestors` chain, ready to
+ *  render.
  *
  *  The chain arrives leaf-to-root (depth ascending, self excluded), which
  *  is the reverse of reading order, hence the backwards walk.
@@ -117,7 +117,7 @@ const crumbLabel = (data: BlockData): string => {
  *  another workspace's content rather than trusting that invariant. */
 export const crumbsFromAncestors = (
   ancestors: readonly BlockData[],
-  {workspaceId, parentId}: {workspaceId: string; parentId: string | null},
+  {workspaceId, stoppedAtParentId}: {workspaceId: string; stoppedAtParentId: string | null},
 ): string[] => {
   const chain: BlockData[] = []
   for (const ancestor of ancestors) {
@@ -132,14 +132,11 @@ export const crumbsFromAncestors = (
     if (label) crumbs.push(label)
   }
 
-  const highest = chain[chain.length - 1]
-  // With no ancestors at all the array cannot answer whether the block is
-  // a root or an orphan — both arrive as `[]` — so the block's OWN parent
-  // edge decides. That case is not exotic: it is what a cut at the very
-  // first hop looks like, i.e. exactly the `core.restore` scenario this
-  // marker exists for, and the most likely one in practice.
-  const reachesRoot = chain.length === ancestors.length &&
-    (highest ? highest.parentId === null : parentId === null)
+  // Two independent ways to fall short of the root: leaving the workspace
+  // (the loop above stopped early) and the walk itself stopping, which
+  // only the walk can report — an empty chain is a root and a cut at the
+  // very first hop alike.
+  const reachesRoot = chain.length === ancestors.length && stoppedAtParentId === null
   // A cut chain has no root worth preserving, so the collapse that keeps
   // both ends doesn't apply — keep the nearest ancestors and let the
   // marker stand in for everything above them.

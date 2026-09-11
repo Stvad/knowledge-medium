@@ -11,6 +11,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BlockData, Handle, HandleStatus } from '@/data/api'
+import type { AncestorsResult } from '@/data/internals/kernelQueries'
 import { makeBlockData } from '@/data/test/factories'
 
 /** A handle the test drives: it starts `'idle'`, `load()` hands it to the
@@ -60,24 +61,24 @@ class FakeHandle<T> implements Handle<T> {
 const row = (id: string, content: string, parentId: string | null): BlockData =>
   makeBlockData({id, workspaceId: 'ws-1', content, parentId})
 
+/** What `core.ancestors` resolves to: the chain, plus the parent the walk
+ *  stopped at. */
+const walk = (
+  ancestors: BlockData[],
+  stoppedAtParentId: string | null = null,
+): AncestorsResult => ({ancestors, stoppedAtParentId})
+
 /** One crumb per id, named after it, so a mixed-up mapping is visible in
  *  the assertion rather than hidden behind a matching count. */
-const chainFor = (id: string): BlockData[] => [row(`${id}-parent`, `${id} parent`, null)]
+const chainFor = (id: string): AncestorsResult =>
+  walk([row(`${id}-parent`, `${id} parent`, null)])
 
-const ancestorHandles = new Map<string, FakeHandle<BlockData[]>>()
-const blockHandles = new Map<string, FakeHandle<BlockData | null>>()
+const ancestorHandles = new Map<string, FakeHandle<AncestorsResult>>()
 /** Every `repo.query.ancestors({id})` lookup, in order — how the test
  *  sees which ids the hook actually asked about. */
 const acquired: string[] = []
 /** Per-id overrides for the next `load()`; absent means the default chain. */
-const chainResolvers = new Map<string, () => Promise<BlockData[]>>()
-/** Ids whose row is already IN the cache, mapped to its parent edge —
- *  what a search source that hydrated its rows leaves behind. An id
- *  absent here has a cold handle: `peek()` is undefined, which is the
- *  case the caller's payload `parentId` answers. */
-const cachedRows = new Map<string, string | null>()
-/** Seed rows the hook actually fetched, as opposed to merely observed. */
-const seedLoads: string[] = []
+const chainResolvers = new Map<string, () => Promise<AncestorsResult>>()
 
 // One stable repo object, deliberately — `useRepo` is memoized for the
 // app's lifetime in production (`src/context/repo.tsx`), and `repo` is a
@@ -86,24 +87,12 @@ const seedLoads: string[] = []
 // re-asked" into "the harness did".
 const repo = {
   activeWorkspaceId: 'ws-1' as string | null,
-  block: (id: string) => {
-    let handle = blockHandles.get(id)
-    if (!handle) {
-      handle = new FakeHandle<BlockData | null>(
-        `block:${id}`,
-        async () => { seedLoads.push(id); return null },
-        cachedRows.has(id) ? row(id, id, cachedRows.get(id) ?? null) : undefined,
-      )
-      blockHandles.set(id, handle)
-    }
-    return handle
-  },
   query: {
     ancestors: ({id}: {id: string}) => {
       acquired.push(id)
       let handle = ancestorHandles.get(id)
       if (!handle) {
-        handle = new FakeHandle<BlockData[]>(
+        handle = new FakeHandle<AncestorsResult>(
           `ancestors:${id}`,
           () => (chainResolvers.get(id) ?? (async () => chainFor(id)))(),
         )
@@ -118,24 +107,16 @@ vi.mock('@/context/repo.js', () => ({useRepo: () => repo}))
 
 const { useAncestorCrumbs } = await import('./useAncestorCrumbs.js')
 
-/** Blocks that genuinely have a parent — matching `chainFor`, which gives
- *  each one a parent row. The hook needs the parent edge to tell a root
- *  from an orphan when the ancestor walk comes back empty. */
-const targets = (...ids: string[]) => ids.map(id => ({id, parentId: `${id}-parent`}))
-
 beforeEach(() => {
   ancestorHandles.clear()
-  blockHandles.clear()
   chainResolvers.clear()
-  cachedRows.clear()
   acquired.length = 0
-  seedLoads.length = 0
 })
 
 
 describe('useAncestorCrumbs', () => {
   it('maps each chain onto the block it belongs to', async () => {
-    const {result} = renderHook(() => useAncestorCrumbs(targets('a', 'b')))
+    const {result} = renderHook(() => useAncestorCrumbs(['a', 'b']))
 
     await waitFor(() => expect(result.current.size).toBe(2))
     expect(result.current.get('a')).toEqual(['a parent'])
@@ -148,10 +129,10 @@ describe('useAncestorCrumbs', () => {
     // ancestor query in front of the results. The release half is what
     // makes the empty assertion mean something — it proves the map was
     // pending, not permanently dead.
-    let release: (chain: BlockData[]) => void = () => {}
+    let release: (chain: AncestorsResult) => void = () => {}
     chainResolvers.set('a', () => new Promise(resolve => { release = resolve }))
 
-    const {result} = renderHook(() => useAncestorCrumbs(targets('a')))
+    const {result} = renderHook(() => useAncestorCrumbs(['a']))
 
     expect(result.current.size).toBe(0)
 
@@ -161,7 +142,7 @@ describe('useAncestorCrumbs', () => {
 
   it('asks only about the ids that entered as the result set shifts', async () => {
     const {result, rerender} = renderHook(
-      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(ids),
       {initialProps: {ids: ['a', 'b']}},
     )
     await waitFor(() => expect(result.current.size).toBe(2))
@@ -185,7 +166,7 @@ describe('useAncestorCrumbs', () => {
     // that teardown threw the resolved chains away, every keystroke would
     // re-fetch what it already had.
     const {result, rerender} = renderHook(
-      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(ids),
       {initialProps: {ids: ['a', 'b']}},
     )
     await waitFor(() => expect(result.current.size).toBe(2))
@@ -202,10 +183,10 @@ describe('useAncestorCrumbs', () => {
   it('re-crumbs a block reparented while the dialog is open', async () => {
     // What the snapshot shape could not do. The walk is row-dep'd, so a
     // move invalidates it and the crumb follows the block.
-    const {result} = renderHook(() => useAncestorCrumbs(targets('a')))
+    const {result} = renderHook(() => useAncestorCrumbs(['a']))
     await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
 
-    ancestorHandles.get('a')!.settle([row('moved', 'somewhere else', null)])
+    ancestorHandles.get('a')!.settle(walk([row('moved', 'somewhere else', null)]))
 
     await waitFor(() => expect(result.current.get('a')).toEqual(['somewhere else']))
   })
@@ -215,7 +196,7 @@ describe('useAncestorCrumbs', () => {
     // never the search dialog.
     chainResolvers.set('a', () => Promise.reject(new Error('ancestors exploded')))
 
-    const {result} = renderHook(() => useAncestorCrumbs(targets('a', 'b')))
+    const {result} = renderHook(() => useAncestorCrumbs(['a', 'b']))
 
     await waitFor(() => expect(result.current.get('b')).toEqual(['b parent']))
     expect(result.current.has('a')).toBe(false)
@@ -235,7 +216,7 @@ describe('useAncestorCrumbs', () => {
     })
 
     const {result, rerender} = renderHook(
-      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(ids),
       {initialProps: {ids: ['a']}},
     )
     await waitFor(() => expect(attempts).toBe(1))
@@ -246,35 +227,26 @@ describe('useAncestorCrumbs', () => {
     await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
   })
 
-  it('observes seed rows without fetching the ones nothing hydrated', async () => {
-    // A search source may hand back rows it never put in the cache. The
-    // payload's parentId is the answer for those, so fetching each one
-    // would be a row read per result — serialized behind the ancestor
-    // walk — to improve on an answer we already have.
-    const {result} = renderHook(() => useAncestorCrumbs(targets('a', 'b')))
+  it('reads an empty chain as a root when the walk reached one', async () => {
+    // Why the hook takes ids alone: the caller's payload could supply the
+    // seed's parent edge, but `core.searchByContent` declares no row deps,
+    // so a parent move on a result row does not invalidate it. A block
+    // since moved to the workspace root would still carry a parent there,
+    // and a genuine root would render as truncated. The walk is row-dep'd
+    // and says so itself.
+    chainResolvers.set('a', async () => walk([], null))
 
-    await waitFor(() => expect(result.current.size).toBe(2))
-    expect(seedLoads).toEqual([])
-  })
-
-  it('prefers the live row over the search payload for the seed parent', async () => {
-    // `core.searchByContent` declares no row deps, so a parent move on a
-    // result row does NOT invalidate it — the payload can still claim a
-    // parent for a block that has since moved to the workspace root, while
-    // the ancestor walk (which IS row-dep'd) correctly returns nothing.
-    // Trusting the payload there would mark a genuine root as truncated.
-    cachedRows.set('a', null)
-    chainResolvers.set('a', async () => [])
-
-    const {result} = renderHook(() => useAncestorCrumbs([{id: 'a', parentId: 'stale-parent'}]))
+    const {result} = renderHook(() => useAncestorCrumbs(['a']))
 
     await waitFor(() => expect(result.current.get('a')).toEqual([]))
   })
 
-  it('falls back to the search payload when the row is not in the cache', async () => {
-    chainResolvers.set('a', async () => [])
+  it('reads an empty chain as cut when the walk stopped at a parent', async () => {
+    // The same `[]`, the opposite reading — so the hook has to carry the
+    // walk's report through to the crumbs rather than just its chain.
+    chainResolvers.set('a', async () => walk([], 'gone-parent'))
 
-    const {result} = renderHook(() => useAncestorCrumbs([{id: 'a', parentId: 'gone-parent'}]))
+    const {result} = renderHook(() => useAncestorCrumbs(['a']))
 
     await waitFor(() => expect(result.current.get('a')).toEqual(['…']))
   })
@@ -285,7 +257,7 @@ describe('useAncestorCrumbs', () => {
     // cannot be ruled out, and splitting on one would query the wrong ids.
     const awkward = 'weird,id>with:delimiters'
 
-    const {result} = renderHook(() => useAncestorCrumbs([{id: awkward, parentId: null}]))
+    const {result} = renderHook(() => useAncestorCrumbs([awkward]))
 
     // The id reaches the query intact and its crumbs come back keyed by it
     // (the label itself is truncated, which is beside the point here).
@@ -299,7 +271,7 @@ describe('useAncestorCrumbs', () => {
     // than fetching rows it could not safely render.
     repo.activeWorkspaceId = null
     try {
-      const {result} = renderHook(() => useAncestorCrumbs(targets('a')))
+      const {result} = renderHook(() => useAncestorCrumbs(['a']))
 
       await waitFor(() => expect(result.current.size).toBe(0))
       expect(acquired).toEqual([])
@@ -309,7 +281,7 @@ describe('useAncestorCrumbs', () => {
 
     // Fences the assertion above on a real lookup happening once the
     // workspace IS known, so it can't pass just because nothing resolved.
-    const {result: withWorkspace} = renderHook(() => useAncestorCrumbs(targets('a')))
+    const {result: withWorkspace} = renderHook(() => useAncestorCrumbs(['a']))
     await waitFor(() => expect(withWorkspace.current.get('a')).toEqual(['a parent']))
   })
 })
