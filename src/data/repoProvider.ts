@@ -42,6 +42,7 @@ import {
   CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
   dropStaleAnyFieldFormIndex,
+  CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -434,6 +435,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // index is created after so it exists on upgrading devices too.
   await ensureBlockLocalColumns(powerSyncDb)
   await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
   await dropStaleAnyFieldFormIndex(powerSyncDb)
   await powerSyncDb.execute(CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL)
