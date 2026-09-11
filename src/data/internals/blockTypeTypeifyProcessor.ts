@@ -13,7 +13,8 @@
  *   - **adopt content as the label** if it has none — an empty
  *     `block-type:label` makes `UserTypesService.tryBuildType` drop the
  *     type, so `book` tagged `block-type` would otherwise register
- *     nothing;
+ *     nothing, and **refuse the tag** when content and an explicit label
+ *     are two different names (`blockType.nameConflict`);
  *   - **tag it PAGE_TYPE** so it doubles as a navigable `[[Label]]` page
  *     (matches the `createTypeBlock` "type flow" pattern);
  *   - **ensure its label is in `alias`** so `[[Label]]` resolves to THIS
@@ -37,6 +38,7 @@
  */
 
 import {
+  ProcessorRejection,
   defineSameTxProcessor,
   type AnySameTxProcessor,
 } from '@/data/api'
@@ -57,6 +59,10 @@ import { seededDefinitionKey } from '@/data/definitionSeeds'
 import { isTypeSeedKey } from '@/data/typeSeeds'
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME = 'core.blockTypeTypeify'
+
+/** Needs no `rejectionToastFacet` contribution — the generic route falls
+ *  back to the raw message, which says what to fix. */
+export const BLOCK_TYPE_NAME_CONFLICT = 'blockType.nameConflict'
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
   name: BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME,
@@ -83,7 +89,8 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
 
       const rawLabel = after.properties[blockTypeLabelProp.name]
       const currentLabel = (typeof rawLabel === 'string' ? rawLabel : '').trim()
-      const name = currentLabel || after.content.trim()
+      const trimmedContent = after.content.trim()
+      const name = currentLabel || trimmedContent
 
       // This adopts existing content as the type's name and claims it as
       // an alias, on ANY path that adds `block-type` — so the check has to
@@ -101,17 +108,27 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
         assertRoundTrippableReferenceLabel(name, 'Block type label')
       }
 
-      // An explicit label short-circuits `name`, so the content is neither
-      // adopted nor rewritten below — and the checks above never saw it.
-      // Grammar-shaped content surviving on a type block is the residue
-      // that matters: `core.deriveReferenceTarget` stamps the row as a
-      // field form, and on a child-backed page the finished type projects
-      // as property machinery instead of appearing in the outline.
-      if (currentLabel !== '') {
-        const survivingContent = after.content.trim()
-        if (survivingContent !== '') {
-          assertNotGrammarShapedLabel(survivingContent, 'Block type content')
-        }
+      // A type has ONE name: `content`, `block-type:label` and the claimed
+      // alias are three spellings of it. `aliasSyncProcessor` reconciles a
+      // rename by matching the OLD CONTENT, so an alias tracking the LABEL is
+      // never replaced — it stays claimed, and `[[oldName]]` keeps resolving
+      // here. An explicit label short-circuits `name`, making this the only
+      // TAGGING path that can mint that shape (a content rewrite on a block
+      // that is already a type still reaches it — nothing re-runs here).
+      //
+      // Declined: rewriting `content` to match (here it is text the user
+      // typed, not a whitespace variant of the label), and repairing at
+      // rename time (rule 2's heal is additive by design, and cannot tell
+      // this claim from a user-added alias equal to the label).
+      if (currentLabel !== '' && trimmedContent !== '' && trimmedContent !== currentLabel) {
+        throw new ProcessorRejection(
+          `Can't make this block a type: its text (${JSON.stringify(trimmedContent)}) and its ` +
+          `${blockTypeLabelProp.name} (${JSON.stringify(currentLabel)}) are different names, but a type ` +
+          `has ONE name — its text is the page title that "[[name]]" resolves to. Clear one of them, ` +
+          `or make them match, and tag it again.`,
+          BLOCK_TYPE_NAME_CONFLICT,
+          {blockId: row.id, content: after.content, label: currentLabel},
+        )
       }
 
       // PAGE_TYPE via the blessed raw membership helper (a full
@@ -123,17 +140,13 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       }
       if (currentLabel === '' && name !== '') {
         await ctx.tx.setProperty(row.id, blockTypeLabelProp, name)
-        // Trim the block's own content to the clean name too. `name` was
-        // adopted FROM `content` (`content.trim()`), so this only strips
-        // surrounding whitespace — it never clobbers meaningful text. It
-        // keeps content == label == alias, which matters on a LATER
-        // rename: `aliasSyncProcessor` replaces aliases by matching the
-        // OLD content, so a `content` of "  Book" against an alias of
-        // "Book" would leave the stale alias claimed (and `[[Book]]`
-        // resolving to the renamed type) instead of being replaced.
-        if (after.content !== name) {
-          await ctx.tx.update(row.id, {content: name})
-        }
+      }
+      // Store the one name in `content` too. Lossless here — the refusal
+      // above leaves only blank or whitespace-padded content — and it makes
+      // `content` always a name the checks above already validated, so
+      // nothing downstream has to re-validate it.
+      if (name !== '' && after.content !== name) {
+        await ctx.tx.update(row.id, {content: name})
       }
       if (name !== '') {
         const aliases = getAliases(after)
