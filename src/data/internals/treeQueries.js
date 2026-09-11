@@ -1,4 +1,4 @@
-var e=`
+import{buildInClause as e}from"./sqlBinds.js";var t=`
   WITH RECURSIVE subtree AS (
     SELECT *,
            '!' || hex(id) || '/' AS path,
@@ -17,32 +17,14 @@ var e=`
        AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
   )
   SELECT * FROM subtree ORDER BY path
-`,t=`
-  WITH RECURSIVE chain AS (
-    SELECT *,
-           '!' || hex(id) || '/' AS path,
-           0 AS depth
-      FROM blocks
-     WHERE id = ? AND deleted = 0
-    UNION ALL
-    SELECT parent.*,
-           chain.path || '!' || hex(parent.id) || '/',
-           chain.depth + 1
-      FROM chain
-      JOIN blocks AS parent ON parent.id = chain.parent_id
-     WHERE parent.deleted = 0
-       AND chain.depth < 100
-       AND INSTR(chain.path, '!' || hex(parent.id) || '/') = 0
-  )
-  SELECT * FROM chain WHERE id != ? ORDER BY depth ASC
-`,n=e=>{if(e<=0)throw Error(`manyAncestorsSql: idCount must be >= 1`);return`
+`,n=t=>{if(t<=0)throw Error(`manyAncestorsSql: idCount must be >= 1`);return`
     WITH RECURSIVE chain AS (
       SELECT blocks.*,
              blocks.id AS chain_start_id,
              '!' || hex(blocks.id) || '/' AS path,
              0 AS depth
         FROM blocks
-       WHERE blocks.id IN (${Array(e).fill(`?`).join(`, `)}) AND blocks.deleted = 0
+       WHERE blocks.id IN (${e(t)}) AND blocks.deleted = 0
       UNION ALL
       SELECT parent.*,
              chain.chain_start_id,
@@ -55,7 +37,6 @@ var e=`
          AND INSTR(chain.path, '!' || hex(parent.id) || '/') = 0
     )
     SELECT * FROM chain
-    WHERE chain.id != chain.chain_start_id
     ORDER BY chain.chain_start_id, chain.depth ASC
   `},r=`
   WITH RECURSIVE chain AS (
@@ -152,5 +133,5 @@ ${s(`child`)}
        )
   )
   SELECT * FROM subtree ORDER BY path
-`;export{t as ANCESTORS_SQL,o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,u as VISIBLE_CHILDREN_IDS_SQL,l as VISIBLE_CHILDREN_SQL,d as VISIBLE_SUBTREE_SQL,i as cycleScanSql,n as manyAncestorsSql,s as recognizedFieldRowSql};
+`;export{o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,t as SUBTREE_SQL,u as VISIBLE_CHILDREN_IDS_SQL,l as VISIBLE_CHILDREN_SQL,d as VISIBLE_SUBTREE_SQL,i as cycleScanSql,n as manyAncestorsSql,s as recognizedFieldRowSql};
 //# sourceMappingURL=treeQueries.js.map
