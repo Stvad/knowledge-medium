@@ -652,10 +652,10 @@ export const subtreeQuery = defineQuery<
  *  restores one block and can leave a live child under a tombstoned
  *  parent; sync can deliver a child ahead of its parent).
  *
- *  A chain that reached a root has a null `parent_id` at its top and
- *  declares nothing. The depth cap is the one false positive: it declares
- *  a dep on a parent that is perfectly live, which costs an invalidation
- *  and no wrong answer. */
+ *  A walk stopped by one of the recursion GUARDS rather than by an
+ *  unreachable row declares a dep on a block that is perfectly live — the
+ *  depth cap, and the visited-id check on a cycle, where the named parent
+ *  is already in the chain. An extra invalidation, no wrong answer. */
 const dependOnUnreachableParent = (ctx: QueryCtx, walk: AncestorWalk): void => {
   const topmost = walk.chain.length > 0 ? walk.chain[walk.chain.length - 1] : walk.seed
   const unreachable = topmost?.parent_id
@@ -1527,7 +1527,10 @@ export const recentActivityQuery = defineQuery<
     const walks = await Promise.all(
       blocks.map(block => ancestorWalk(ctx.db, block.id)),
     )
-
+    // No `dependOnUnreachableParent` here, unlike the two other ancestor
+    // queries: a parent becoming reachable is a liveness or workspace
+    // change, which fires `kernel.content` for the workspace — the
+    // channel this query already rides. Declared, it pinned nothing.
     return blocks.map((block, index) => {
       // One call per chain so hydrate order stays depth-ascending within
       // it, as `core.manyAncestors` does.

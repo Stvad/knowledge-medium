@@ -42,6 +42,10 @@ export interface AncestorCrumbTarget {
  *  entered it, and those reads coalesce into one statement. Crumbs are
  *  live, so a block reparented while the dialog is open re-crumbs.
  *
+ *  Crumbs live in the handles, so an id that LEAVES the set for longer
+ *  than the store's GC window loses them: type past a result and back to
+ *  it slowly, and those rows re-crumb a load late.
+ *
  *  A failed walk leaves that id absent from the map rather than throwing:
  *  breadcrumbs are decoration and must never take the search down with
  *  them. Crumb FORMATTING is deliberately not wrapped to match: a

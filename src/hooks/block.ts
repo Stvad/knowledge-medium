@@ -82,7 +82,12 @@ const identitySelector = <V,>(v: V): V => v
 const ensureLoaded = (handle: Handle<unknown>): void => {
   const status = handle.status()
   if (status !== 'idle' && status !== 'error') return
-  void handle.load().catch(() => {/* error stored on the handle */})
+  // Logged rather than swallowed: the handle stores the error but nothing
+  // reads it, so a surface that fails quietly by design (breadcrumbs, any
+  // decoration) would otherwise leave a blank line and no trace of why.
+  void handle.load().catch(error => {
+    console.error(`[handle] load failed for ${handle.key}`, error)
+  })
 }
 
 export interface UseHandleOptions<T, S> {
@@ -249,13 +254,13 @@ export function useHandle<T, S = T | undefined>(
  *  is rebuilt only when `handles` changes — which means the id set
  *  changed, and a new array is then the honest answer. */
 export interface UseHandlesOptions {
-  /** Whether an unresolved member is FETCHED, or merely observed until
-   *  something else loads it. Default `true`.
+  /** Whether an unresolved member is FETCHED. Default `true`.
    *
-   *  `false` is for a set the caller wants updates about but has another
-   *  answer for when a member is missing — where fetching would be one
-   *  read per absent member, serialized by a single-slot connection, to
-   *  improve on an answer the caller already has. */
+   *  Gates the ensure-load only, so it is meaningful for a handle whose
+   *  `subscribe` does not itself load — `Block`, whose subscribe is a
+   *  plain `BlockCache` listener. A `LoaderHandle` member loads on first
+   *  subscribe regardless (`handleStore.ts`), so passing `false` for one
+   *  buys nothing. */
   fetchMissing?: boolean
 }
 
@@ -273,11 +278,7 @@ export const useHandles = <T,>(
     let memoized: (T | undefined)[] | null = null
     return (): readonly (T | undefined)[] => {
       const next = handles.map(handle => handle.peek())
-      if (
-        memoized !== null &&
-        memoized.length === next.length &&
-        next.every((value, index) => areSelectedValuesEqual(value, memoized![index]))
-      ) return memoized
+      if (memoized !== null && areSelectedValuesEqual(memoized, next)) return memoized
       memoized = next
       return next
     }

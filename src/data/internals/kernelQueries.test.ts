@@ -284,6 +284,26 @@ describe('repo.query.manyAncestors', () => {
   it('returns [] when the input list is empty', async () => {
     expect(await env.repo.query.manyAncestors({ids: []}).load()).toEqual([])
   })
+
+  it('re-resolves when a parent that truncated ONE of the chains comes back', async () => {
+    // The batched path declares the unreachable-parent dep per entry, and
+    // only its own tests can pin that — the single-id query's tests reach
+    // a different call site.
+    await create({id: 'r'})
+    await create({id: 'cut', parentId: 'r'})
+    await create({id: 'intact'})
+    await env.repo.tx(tx => tx.delete('r'), {scope: ChangeScope.BlockDefault})
+
+    const handle = env.repo.query.manyAncestors({ids: ['cut', 'intact']})
+    const seen: string[][] = []
+    handle.subscribe(entries => seen.push(entries.map(e => e.ancestors.map(a => a.id).join('>'))))
+    await vi.waitFor(() => expect(handle.status()).toBe('ready'))
+    expect(handle.peek()!.find(e => e.startId === 'cut')!.ancestors).toEqual([])
+
+    await env.repo.tx(tx => tx.restore('r'), {scope: ChangeScope.BlockDefault})
+
+    await vi.waitFor(() => expect(seen.at(-1)).toEqual(['r', '']))
+  })
 })
 
 describe('repo.query.children', () => {
@@ -629,6 +649,31 @@ describe('repo.query.recentActivity', () => {
 
       await vi.waitFor(async () => {
         expect((await handle.load()).map(b => b.id)).not.toContain('note')
+      })
+    })
+
+    it('re-chains an entry whose page was restored, without reloading', async () => {
+      // Not pinning a row dep — this query declares none for ancestors.
+      // What covers it is `kernel.content`: restoring a block flips its
+      // liveness, which fires that workspace channel. Asserted through a
+      // live handle, because a fresh call re-runs the SQL and would pass
+      // whatever the deps said.
+      await create({id: 'page', content: 'Project Alpha'})
+      await create({id: 'note', parentId: 'page', content: 'a real note'})
+      await env.repo.tx(tx => tx.delete('page'), {scope: ChangeScope.BlockDefault})
+
+      const handle = env.repo.query.recentActivity({workspaceId: WS, limit: 50})
+      const entryFor = (entries: RecentActivityEntry[] | undefined) =>
+        (entries ?? []).find(entry => entry.block.id === 'note')
+      // Subscribed, because an invalidation on a handle with no listeners
+      // is deferred to the next `load()` rather than re-resolving.
+      handle.subscribe(() => {})
+      expect(entryFor(await handle.load())!.ancestors).toEqual([])
+
+      await env.repo.tx(tx => tx.restore('page'), {scope: ChangeScope.BlockDefault})
+
+      await vi.waitFor(() => {
+        expect(entryFor(handle.peek())!.ancestors.map(a => a.id)).toEqual(['page'])
       })
     })
 

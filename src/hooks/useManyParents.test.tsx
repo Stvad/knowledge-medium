@@ -23,7 +23,12 @@ type Chain = {id: string}[]
 const chainFor = (id: string): Chain => [{id: `${id}-parent`}]
 
 /** `useHandle`/`useHandles` reach `peek()`, `status()` and
- *  `subscribe()`; `load()` only from `'idle'`, and never `read()`.
+ *  `subscribe()`; `load()` only from `'idle'` or `'error'`, and never
+ *  `read()`.
+ *
+ *  An unresolved handle reports `'idle'`, as a real `LoaderHandle` does
+ *  before its first load — a fake that says `'loading'` there silently
+ *  removes the ensure-load path from every test in the file.
  *
  *  `republish` models what a real `LoaderHandle` does on a reload: it
  *  stores the new value unconditionally and applies its structural diff
@@ -31,20 +36,22 @@ const chainFor = (id: string): Chain => [{id: `${id}-parent`}]
  *  nothing about the chain changed. */
 const handleFor = (id: string, initial: Chain | undefined) => {
   let value = initial
+  let loads = 0
   const listeners = new Set<(chain: Chain) => void>()
   const handle: Handle<Chain> = {
     key: `ancestors:${id}`,
     peek: () => value,
-    load: () => Promise.resolve(value ?? []),
+    load: () => { loads += 1; return Promise.resolve(value ?? []) },
     subscribe: (listener) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
     read: () => value ?? [],
-    status: () => value ? 'ready' : 'loading',
+    status: () => value ? 'ready' : 'idle',
   }
   return {
     handle,
+    loadCount: () => loads,
     republish: (next: Chain) => {
       value = next
       // Structurally equal to the last value, so a real handle suppresses
@@ -136,6 +143,17 @@ describe('useManyParents', () => {
     rerender({blocks: blocksFor(['a', 'b'])})
 
     expect(result.current).toBe(first)
+  })
+
+  it('asks an unresolved member to load, and a resolved one not to', () => {
+    // The ensure-load path. A fake reporting `'loading'` for a handle
+    // that has never loaded hides it: `useHandles` loads from `'idle'`,
+    // so nothing would ever be asked. Its own id, because the harness
+    // keeps one handle per key for the whole file.
+    renderWith(['a', 'cold-ensure'])
+
+    expect(harness.handles.get('cold-ensure')!.loadCount()).toBe(1)
+    expect(harness.handles.get('a')!.loadCount()).toBe(0)
   })
 
   it('survives an empty id set passing through', () => {
