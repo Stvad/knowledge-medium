@@ -1,10 +1,8 @@
 // @vitest-environment happy-dom
-/** That the opener HOOKS carry `OpenBlockContext.ensure` through to the
+/** That the opener HOOKS carry every `OpenBlockContext` field through to the
  *  navigation, which `openBlockFromEvent`'s own tests cannot see: both hooks sit
- *  between the caller and that function, and `useOpenBlock` used to rebuild the
- *  context field by field — silently dropping a callback it did not enumerate.
- *  A dropped `ensure` is a missing behaviour, not a type error, so it needs a
- *  render to catch. */
+ *  between the caller and that function. A field the hook fails to forward is a
+ *  missing behaviour rather than a type error, so catching it takes a render. */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { RepoContext } from '@/context/repo'
