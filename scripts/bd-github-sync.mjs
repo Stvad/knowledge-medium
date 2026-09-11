@@ -801,14 +801,15 @@ export const mirroredCommentIds = bodies => new Set(bodies.map(b => b.match(MIRR
 // Bead ids are opaque to a GitHub reader (AGENTS.md: public text carries issue
 // numbers), so a mapped id is rewritten — outside code spans and fences,
 // where the id is part of a command. What cannot be rewritten splits by
-// whether waiting fixes it: an id naming a bead WITHOUT an issue resolves by
-// itself once the bead is minted, so the comment is held (`unmapped`); an id
-// in code, or one matching no bead at all (a fixture in a quoted test line, a
-// typo), never will, and a bead comment cannot be edited — so those go out
-// and are reported (`leftover`), since the GitHub copy is the one a human can
-// fix. Holding them would hide the whole comment for good.
+// whether waiting fixes it: an id in `holdIds` (a bead whose issue is still
+// to be minted) resolves by itself, so the comment is held (`unmapped`); an
+// id in code, one matching no bead at all (a fixture in a quoted test line, a
+// typo), or one whose ref points at no issue never will, and a bead comment
+// cannot be edited — so those go out and are reported (`leftover`), since
+// the GitHub copy is the one a human can fix. Holding them would hide the
+// whole comment for good.
 const CODE_SPAN = /(```[\s\S]*?```|`[^`\n]*`)/
-export const rewriteBeadIds = (text, numberByBeadId, knownIds) => {
+export const rewriteBeadIds = (text, numberByBeadId, holdIds) => {
   const unmapped = new Set()
   const rewritten = text
     .split(CODE_SPAN)
@@ -817,7 +818,7 @@ export const rewriteBeadIds = (text, numberByBeadId, knownIds) => {
         ? part
         : part.replace(BEAD_ID, id => {
             if (numberByBeadId.has(id)) return `#${numberByBeadId.get(id)}`
-            if (knownIds.has(id)) unmapped.add(id)
+            if (holdIds.has(id)) unmapped.add(id)
             return id
           }),
     )
@@ -826,9 +827,9 @@ export const rewriteBeadIds = (text, numberByBeadId, knownIds) => {
   return { text: rewritten, unmapped: [...unmapped], leftover }
 }
 
-export const mirrorCommentBody = (comment, numberByBeadId, knownIds) => {
+export const mirrorCommentBody = (comment, numberByBeadId, holdIds) => {
   const when = comment.created_at.replace(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d).*$/, '$1 $2 UTC')
-  const { text, unmapped, leftover } = rewriteBeadIds(comment.text, numberByBeadId, knownIds)
+  const { text, unmapped, leftover } = rewriteBeadIds(comment.text, numberByBeadId, holdIds)
   return { body: `<!-- bd-comment ${comment.id} -->\n_Mirrored from a beads tracker comment of ${when}._\n\n${text}`, unmapped, leftover }
 }
 
@@ -1051,34 +1052,52 @@ const pushBeads = (ids, env) => {
 
 // One GraphQL call per chunk reads the comment bodies of every commented
 // bead's issue, so a converged run costs one request rather than one per
-// issue. `issue(number)` resolves a PR or a deleted issue to null — with a
-// NOT_FOUND error and a non-zero gh exit that still carries the data, so the
-// parse reads stdout and ignores the status. Returns number → { bodies,
-// complete } | null (not an issue).
+// issue; an issue past the first page costs one more query per page.
+// `issue(number)` resolves a PR or a deleted issue to null — with a NOT_FOUND
+// error and a non-zero gh exit that still carries the data, so the parse
+// reads stdout and ignores the status. Returns number → { bodies } | null
+// (not an issue).
 const COMMENT_PAGE = 100
 const GRAPHQL_CHUNK = 50
 const [OWNER, NAME] = REPO.split('/')
+const commentsField = after => `comments(first: ${COMMENT_PAGE}${after ? `, after: "${after}"` : ''}) { pageInfo { hasNextPage endCursor } nodes { body } }`
+const graphqlRepository = (fields, env) => {
+  const r = spawnSync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: MAX_OUTPUT_BYTES,
+    env,
+  })
+  let repo
+  try {
+    repo = JSON.parse(r.stdout).data.repository
+  } catch {}
+  if (!repo) throw new Error(`gh api graphql: ${(r.stderr || r.stdout || '').trim().slice(0, 300)}`)
+  return repo
+}
 const fetchIssueComments = (numbers, env) => {
   const byNumber = new Map()
   for (let i = 0; i < numbers.length; i += GRAPHQL_CHUNK) {
     const chunk = numbers.slice(i, i + GRAPHQL_CHUNK)
-    const fields = chunk
-      .map(n => `i${n}: issue(number: ${n}) { comments(first: ${COMMENT_PAGE}) { pageInfo { hasNextPage } nodes { body } } }`)
-      .join(' ')
-    const r = spawnSync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      maxBuffer: MAX_OUTPUT_BYTES,
-      env,
-    })
-    let repo
-    try {
-      repo = JSON.parse(r.stdout).data.repository
-    } catch {}
-    if (!repo) throw new Error(`gh api graphql: ${(r.stderr || r.stdout || '').trim().slice(0, 300)}`)
+    const repo = graphqlRepository(chunk.map(n => `i${n}: issue(number: ${n}) { ${commentsField()} }`).join(' '), env)
     for (const n of chunk) {
       const issue = repo[`i${n}`]
-      byNumber.set(n, issue ? { bodies: issue.comments.nodes.map(c => c.body), complete: !issue.comments.pageInfo.hasNextPage } : null)
+      if (!issue) {
+        byNumber.set(n, null)
+        continue
+      }
+      // Every page is read: a marker beyond the first would otherwise not
+      // count, and a backfill that crosses the page boundary — which the
+      // per-run post cap can produce — would re-post its oldest comments.
+      const bodies = issue.comments.nodes.map(c => c.body)
+      let page = issue.comments.pageInfo
+      while (page.hasNextPage) {
+        const more = graphqlRepository(`issue(number: ${n}) { ${commentsField(page.endCursor)} }`, env).issue
+        if (!more) throw new Error(`issue #${n} vanished between comment pages`)
+        bodies.push(...more.comments.nodes.map(c => c.body))
+        page = more.comments.pageInfo
+      }
+      byNumber.set(n, { bodies })
     }
   }
   return byNumber
@@ -1111,18 +1130,28 @@ const POST_PAUSE_MS = 800
 // the rest resumes next run. The env override exists for the process tests.
 const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 60
 const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-const mirrorComments = (beads, env, dryRun) => {
-  const numberByBeadId = new Map(beads.map(b => [b.id, issueNumberFromRef(b.external_ref)]).filter(([, n]) => n))
-  const knownIds = new Set(beads.map(b => b.id))
-  const commented = beads.filter(b => b.comment_count > 0 && numberByBeadId.has(b.id))
+const mirrorComments = (beads, issueByNumber, maxKnownIssueNumber, env, dryRun) => {
+  // A ref is trusted only where the run-start listing shows an issue, or
+  // beyond its last number (minted by this run's push — step 4's inference):
+  // a ref pointed at a PR or a deleted issue would otherwise turn a bead id
+  // into a confidently wrong #N, whether as a destination or a reference.
+  const isIssue = n => issueByNumber.has(n) || n > maxKnownIssueNumber
+  const numberByBeadId = new Map(beads.map(b => [b.id, issueNumberFromRef(b.external_ref)]).filter(([, n]) => n && isIssue(n)))
+  const unmintedIds = new Set(beads.filter(b => !b.external_ref).map(b => b.id))
   const report = []
   const touched = []
+  const commented = []
+  for (const b of beads) {
+    if (!(b.comment_count > 0)) continue
+    if (numberByBeadId.has(b.id)) commented.push(b)
+    else if (b.external_ref) report.push(`SKIPPED comments of ${b.id}: its external_ref does not point at an issue of this repo (a PR, or deleted) — fix the ref`)
+  }
   if (!commented.length) return { report, touched }
   let ghComments
   try {
     ghComments = fetchIssueComments(commented.map(b => numberByBeadId.get(b.id)), env)
   } catch (e) {
-    return { report: [`FAILED to read GitHub comments (${e.message}) — comment mirror skipped this run`], touched }
+    return { report: [...report, `FAILED to read GitHub comments (${e.message}) — comment mirror skipped this run`], touched }
   }
   let posts = 0
   for (const bead of commented) {
@@ -1132,12 +1161,10 @@ const mirrorComments = (beads, env, dryRun) => {
     }
     const number = numberByBeadId.get(bead.id)
     const issue = ghComments.get(number)
+    // Defence in depth behind isIssue: the listing is minutes old, and a
+    // number minted this run is trusted unseen.
     if (!issue) {
       report.push(`SKIPPED comments of ${bead.id}: #${number} is not an issue (a PR, or deleted) — mis-pointed external_ref`)
-      continue
-    }
-    if (!issue.complete) {
-      report.push(`SKIPPED comments of ${bead.id}: #${number} has more than ${COMMENT_PAGE} comments — the mirror reads one page`)
       continue
     }
     const mirrored = mirroredCommentIds(issue.bodies)
@@ -1154,7 +1181,7 @@ const mirrorComments = (beads, env, dryRun) => {
     // run.
     const publishable = []
     for (const c of pending) {
-      const { body, unmapped, leftover } = mirrorCommentBody(c, numberByBeadId, knownIds)
+      const { body, unmapped, leftover } = mirrorCommentBody(c, numberByBeadId, unmintedIds)
       if (unmapped.length) {
         report.push(`SKIPPED comment ${c.id} of ${bead.id}: it names bead(s) with no issue yet (${unmapped.join(', ')}) — ${pending.length - publishable.length} left for the next run`)
         break
@@ -1426,7 +1453,10 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // runs once more, so its last_sync stamp covers the posts: without that,
     // the next run's pull would re-apply every posted issue onto its bead
     // (#955). Both are report lines on failure, like the mirror itself.
-    const mirror = mirrorComments(postBeads, env, dryRun)
+    // Fresh listing, not postBeads: the touch writes the bead's CURRENT
+    // priority back, and step 3 just rewrote priorities the pull flattened —
+    // read from before it, the touch would undo the repair.
+    const mirror = mirrorComments(dryRun ? preBeads : listAllBeads(), issueByNumber, maxKnownIssueNumber, env, dryRun)
     report.push(...mirror.report)
     if (mirror.touched.length) {
       let out

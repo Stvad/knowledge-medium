@@ -896,11 +896,12 @@ describe('mirrorCommentBody', () => {
     ['km-abc', 12],
     ['km-1786746066130-174-003836b1', 502],
   ])
-  const known = new Set([...numbers.keys(), 'km-new'])
+  // Ids to HOLD: beads whose issue is still to be minted.
+  const hold = new Set(['km-new'])
   const comment = { id: '0000c0de-0000-7000-8000-000000000001', text: 'see km-abc and km-1786746066130-174-003836b1; km-zzz is nobody', created_at: '2026-09-03T20:16:36Z' }
 
   it('opens with the marker, stamps the original time, and rewrites mapped bead ids to issue numbers', () => {
-    const { body, unmapped, leftover } = mirrorCommentBody(comment, numbers, known)
+    const { body, unmapped, leftover } = mirrorCommentBody(comment, numbers, hold)
     expect(body.split('\n')[0]).toBe(`<!-- bd-comment ${comment.id} -->`)
     expect(body).toContain('2026-09-03 20:16 UTC')
     // An id that matches no bead is text (a fixture, a typo), not a reference
@@ -911,19 +912,19 @@ describe('mirrorCommentBody', () => {
   })
 
   it('reports an id that names a bead without an issue instead of publishing it', () => {
-    const { body, unmapped } = mirrorCommentBody({ ...comment, text: 'blocked on km-new (twice: km-new) and km-abc' }, numbers, known)
+    const { body, unmapped } = mirrorCommentBody({ ...comment, text: 'blocked on km-new (twice: km-new) and km-abc' }, numbers, hold)
     expect(unmapped).toEqual(['km-new'])
     expect(body.endsWith('blocked on km-new (twice: km-new) and #12')).toBe(true)
   })
 
   it('leaves bead ids inside code spans and fences alone, naming them as leftovers', () => {
-    const { body, leftover } = mirrorCommentBody({ ...comment, text: 'run `bd show km-abc` then km-abc:\n```\nbd close km-abc\n```' }, numbers, known)
+    const { body, leftover } = mirrorCommentBody({ ...comment, text: 'run `bd show km-abc` then km-abc:\n```\nbd close km-abc\n```' }, numbers, hold)
     expect(body.endsWith('run `bd show km-abc` then #12:\n```\nbd close km-abc\n```')).toBe(true)
     expect(leftover).toEqual(['km-abc'])
   })
 
   it('does not count a held id as a leftover', () => {
-    const { unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-new and `km-abc`' }, numbers, known)
+    const { unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-new and `km-abc`' }, numbers, hold)
     expect(unmapped).toEqual(['km-new'])
     expect(leftover).toEqual(['km-abc'])
   })
@@ -955,8 +956,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failListCall?: number
     /** `bd comments <id> --json` fixtures, keyed by bead id. */
     comments?: Record<string, object[]>
-    /** The one `gh api graphql` response the mirror's comment read gets. */
-    graphql?: object
+    /** `gh api graphql` responses, one per call (the last one repeats). */
+    graphql?: object | object[]
     failPostCall?: number
     /** Bead whose pre-mirror touch (`bd update <id> -p …`) fails. */
     failTouchId?: string
@@ -980,7 +981,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const lastShow = shows[shows.length - 1] ?? []
     writeFileSync(join(repo, 'show-last.json'), typeof lastShow === 'string' ? lastShow : JSON.stringify(lastShow, null, 2))
     for (const [id, rows] of Object.entries(opts.comments ?? {})) writeFileSync(join(repo, `comments-${id}.json`), JSON.stringify(rows, null, 2))
-    writeFileSync(join(repo, 'gh-graphql.json'), JSON.stringify(opts.graphql ?? { data: { repository: {} } }))
+    const graphqlFixtures = Array.isArray(opts.graphql) ? opts.graphql : [opts.graphql ?? { data: { repository: {} } }]
+    graphqlFixtures.forEach((g, i) => writeFileSync(join(repo, `gh-graphql-${i + 1}.json`), JSON.stringify(g)))
+    writeFileSync(join(repo, 'gh-graphql-last.json'), JSON.stringify(graphqlFixtures[graphqlFixtures.length - 1]))
     const postedLog = join(repo, 'posted.log')
     writeFileSync(postedLog, '')
     writeFileSync(
@@ -1028,7 +1031,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         // The real gh exits 1 when any alias is NOT_FOUND but still prints
         // the data — the shim mirrors that exit so the parser is pinned to
         // stdout, not the status.
-        `  "api graphql") cat "${repo}/gh-graphql.json"; grep -q '"errors"' "${repo}/gh-graphql.json" && exit 1;;`,
+        '  "api graphql")',
+        `    g=$(cat "${repo}/graphql-count" 2>/dev/null || echo 0); g=$((g+1)); echo $g > "${repo}/graphql-count"`,
+        `    f="${repo}/gh-graphql-$g.json"; [ -f "$f" ] || f="${repo}/gh-graphql-last.json"`,
+        `    cat "$f"; grep -q '"errors"' "$f" && exit 1;;`,
         '  "api -X")',
         `    p=$(cat "${repo}/post-count" 2>/dev/null || echo 0); p=$((p+1)); echo $p > "${repo}/post-count"`,
         `    if [ "$p" = "${opts.failPostCall ?? 0}" ]; then echo "gh: HTTP 403" >&2; exit 1; fi`,
@@ -1443,8 +1449,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   const C2 = '0000c0de-0000-7000-8000-000000000002'
   const beadComment = (id: string, text: string, created_at: string) => ({ id, issue_id: 'km-m', author: 'A', text, created_at })
   const twoComments = [beadComment(C2, 'second, mentions km-o', '2026-09-03T21:13:50Z'), beadComment(C1, 'first', '2026-09-03T20:16:36Z')]
-  const issueComments = (bodies: string[], hasNextPage = false) => ({
-    comments: { pageInfo: { hasNextPage }, nodes: bodies.map(body => ({ body })) },
+  const issueComments = (bodies: string[], next?: string) => ({
+    comments: { pageInfo: { hasNextPage: !!next, endCursor: next ?? null }, nodes: bodies.map(body => ({ body })) },
   })
   // A commented bead (km-m → #7) beside an uncommented one (km-o → #8) that
   // exists only to be referenced from a comment.
@@ -1644,16 +1650,73 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).not.toContain('bd update km-m')
   })
 
-  it('reads one comment page per issue and skips an issue that has more, rather than re-posting its oldest markers', () => {
-    const { run, posted } = makeSyncRepo({
+  it('reads every comment page, so a marker beyond the first still counts', () => {
+    const { run, shimCalls, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
       comments: { 'km-m': twoComments },
-      graphql: { data: { repository: { i7: issueComments([], true) } } },
+      graphql: [
+        { data: { repository: { i7: issueComments(['a human comment'], 'cursor-1') } } },
+        { data: { repository: { issue: issueComments([`<!-- bd-comment ${C1} -->\nfirst`, `<!-- bd-comment ${C2} -->\nsecond`]) } } },
+      ],
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('SKIPPED comments of km-m: #7 has more than')
+    const calls = shimCalls()
+    expect(calls.match(/gh api graphql/g)).toHaveLength(2)
+    expect(calls).toContain('after: "cursor-1"')
+    expect(calls).not.toContain('bd comments km-m')
+    expect(posted()).toBe('')
+  })
+
+  // The touch writes the bead's current priority back, so it must read AFTER
+  // step 3 has repaired a pull-flattened priority — the post-pull listing
+  // still carries the flattened value.
+  it('touches with the repaired priority, not the flattened one the pull left', () => {
+    const flattened = commentedRows().map(r => (r.id === 'km-m' ? { ...r, priority: 2 } : r))
+    const { run, shimCalls } = makeSyncRepo({
+      issues: twoIssues(),
+      lists: [commentedRows(), commentedRows(), flattened, commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('priority km-m → 1')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
+    const calls = shimCalls()
+    expect(calls).not.toContain('bd update km-m -p 2')
+    expect(calls.match(/bd update km-m -p 1\n/g)).toHaveLength(2)
+  })
+
+  // A ref below the listing's last number that the listing does not show is
+  // a PR or a deleted issue — rewriting it would publish a confidently wrong
+  // #N, which the repo treats as worse than an opaque bead id.
+  it('does not rewrite a reference whose bead points at no issue of this repo, and says so', () => {
+    const rows = [
+      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
+      syncRow({ id: 'km-o', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
+    ]
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      lists: [rows],
+      comments: { 'km-m': [beadComment(C1, 'see km-o', '2026-09-03T20:16:36Z')] },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-o)`)
+    const [post] = postsOf(posted())
+    expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see km-o')).toBe(true)
+  })
+
+  it('skips a commented bead whose own ref points at no issue of this repo, before any GitHub read', () => {
+    const rows = [syncRow({ id: 'km-m', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })]
+    const { run, shimCalls, posted } = makeSyncRepo({ issues: twoIssues(), lists: [rows], comments: { 'km-m': twoComments } })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('SKIPPED comments of km-m: its external_ref does not point at an issue of this repo')
+    expect(shimCalls()).not.toContain('gh api graphql')
     expect(posted()).toBe('')
   })
 

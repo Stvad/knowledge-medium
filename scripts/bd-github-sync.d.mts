@@ -60,12 +60,12 @@ export declare const mirroredCommentIds: (bodies: string[]) => Set<string>
 export declare const rewriteBeadIds: (
   text: string,
   numberByBeadId: Map<string, number>,
-  knownIds: Set<string>,
+  holdIds: Set<string>,
 ) => { text: string; unmapped: string[]; leftover: string[] }
 export declare const mirrorCommentBody: (
   comment: BeadComment,
   numberByBeadId: Map<string, number>,
-  knownIds: Set<string>,
+  holdIds: Set<string>,
 ) => { body: string; unmapped: string[]; leftover: string[] }
 export declare const planCommentMirror: (comments: BeadComment[], mirrored: Set<string>) => BeadComment[]
 export interface IssueInfo {
