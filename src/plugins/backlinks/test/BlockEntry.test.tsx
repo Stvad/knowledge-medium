@@ -6,16 +6,16 @@ import type { Block } from '@/data/block'
 import { BlockContextProvider } from '@/context/block'
 import { LazyBlockEntry } from '../BlockEntry.tsx'
 
-/** `parents` is what the stubbed `useResolvedParents` hands back — one
- *  array instance per test, since the hook is called on every render, and
- *  `undefined` for a walk that has not landed, which is the state the
- *  `initialParents` seed exists to cover. */
+/** `parents` is what the stubbed `useParents` hands back — one array
+ *  instance per test, since the hook is called on every render. */
+const NO_PARENTS: unknown[] = []
+
 const mocks = vi.hoisted(() => {
   const state = {
     openBlock: vi.fn(),
     bodyMounts: [] as string[],
-    parents: undefined as unknown[] | undefined,
-    useResolvedParents: vi.fn(() => state.parents),
+    parents: [] as unknown[],
+    useParents: vi.fn(() => state.parents),
     repo: {
       activeWorkspaceId: 'workspace',
       block: vi.fn((id: string) => ({id})),
@@ -36,7 +36,7 @@ vi.mock('@/utils/navigation.ts', () => ({
 // only the ancestor fetch is stubbed — it's the thing under test.
 vi.mock('@/hooks/block.ts', async importOriginal => ({
   ...(await importOriginal<typeof import('@/hooks/block')>()),
-  useResolvedParents: mocks.useResolvedParents,
+  useParents: mocks.useParents,
 }))
 
 // Surfaces the ambient block context so tests can assert what the entry
@@ -75,8 +75,8 @@ afterEach(() => {
   cleanup()
   mocks.openBlock.mockClear()
   mocks.repo.block.mockClear()
-  mocks.useResolvedParents.mockClear()
-  mocks.parents = undefined
+  mocks.useParents.mockClear()
+  mocks.parents = NO_PARENTS
   mocks.bodyMounts.length = 0
 })
 
@@ -118,13 +118,13 @@ describe('BlockEntry ancestors', () => {
         <LazyBlockEntry block={source} scopeId="test:own-chain" />
       </BlockContextProvider>,
     )
-    expect(mocks.useResolvedParents).toHaveBeenCalledWith({id: 'source-block'})
-    mocks.useResolvedParents.mockClear()
+    expect(mocks.useParents).toHaveBeenCalledWith({id: 'source-block'})
+    mocks.useParents.mockClear()
 
     // A plain primary click on a breadcrumb promotes that segment.
     fireEvent.click(screen.getByTestId('block-parent-block'))
 
-    expect(mocks.useResolvedParents).toHaveBeenCalledWith({id: 'parent-block'})
+    expect(mocks.useParents).toHaveBeenCalledWith({id: 'parent-block'})
   })
 
   it('keeps the supplied chain even after its own walk answers', () => {
@@ -190,7 +190,7 @@ describe('BlockEntry ancestors', () => {
 
     fireEvent.click(screen.getByTestId('block-supplied-parent'))
 
-    expect(mocks.useResolvedParents).toHaveBeenCalledWith({id: 'supplied-parent'})
+    expect(mocks.useParents).toHaveBeenCalledWith({id: 'supplied-parent'})
     // A fresh body instance, which is what clears `BlockComponent`'s
     // ErrorBoundary — it carries no `resetKeys`, so a source whose
     // renderer threw would otherwise stay on its fallback after the user

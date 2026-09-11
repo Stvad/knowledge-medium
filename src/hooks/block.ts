@@ -18,7 +18,7 @@
  *     row_events tail (Phase 2.C) drive invalidation; the per-hook
  *     `db.onChange({tables: ['blocks']})` polling that the old shape
  *     used is gone.
- *   - useParents / useResolvedParents: handle via `repo.ancestors(id)`.
+ *   - useParents: handle via `repo.ancestors(id)`.
  *   - useSubtree: handle via `repo.subtree(id)` (new in Phase 2.D).
  *
  * The legacy `useDataWithSelector` is gone — selectors move to the
@@ -459,23 +459,17 @@ const parentsFromChain = (repo: Repo, chain: readonly BlockData[]): Block[] =>
 
 const EMPTY_PARENTS: Block[] = []
 
-/** Reactive parent chain, or `undefined` until the walk has landed.
- *
- *  For a caller holding a chain of its own — derived, or arrived in its
- *  query's payload — which needs "not yet" told apart from a root's `[]`
- *  to know whether its own answer is still the better one. Everything
- *  else wants `useParents`. */
-export const useResolvedParents = (block: Block): Block[] | undefined => {
+/** Reactive parent chain (root → … → immediate parent), excluding
+ *  `block` itself. `[]` while the walk is still in flight, and `[]` for a
+ *  root — no consumer has yet needed those told apart, and a caller that
+ *  holds a chain of its own prefers it over this outright rather than
+ *  only while it is pending (see `BlockEntry`). */
+export const useParents = (block: Block): Block[] => {
   const repo = block.repo
   return useHandle(block.repo.query.ancestors({id: block.id}), {
-    selector: data => (data ? parentsFromChain(repo, data.ancestors) : undefined),
+    selector: data => (data ? parentsFromChain(repo, data.ancestors) : EMPTY_PARENTS),
   })
 }
-
-/** Reactive parent chain (root → … → immediate parent), excluding
- *  `block` itself. `[]` while the walk is still in flight. */
-export const useParents = (block: Block): Block[] =>
-  useResolvedParents(block) ?? EMPTY_PARENTS
 
 const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
 

@@ -7,7 +7,7 @@ import { usePromotableBreadcrumb } from '@/plugins/breadcrumbs/usePromotableBrea
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { LazyViewportMount } from '@/components/util/LazyViewportMount.js'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.js'
-import { useResolvedParents } from '@/hooks/block.js'
+import { useParents } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
 import {
   backlinkEntryShortcutContextOverrides,
@@ -30,7 +30,6 @@ import { backlinkRenderScopeId } from '@/utils/renderScope.js'
  *  rather than becoming a prop. */
 const NESTED_OVERRIDES = {layoutBoundary: false, isNestedSurface: true, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
-const EMPTY_PARENTS: readonly Block[] = []
 const ENTRY_ESTIMATED_HEIGHT_PX = 96
 const ENTRY_OVERSCAN_PX = 600
 const ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
@@ -147,11 +146,12 @@ const BlockEntry = ({
   const {shownId, promote, showBlock} = usePromotableBreadcrumb(block.id)
   const shownBlock = useMemo(() => repo.block(shownId), [repo, shownId])
   // `undefined` is "no opinion" and `[]` is "no ancestors" — a distinction
-  // the supplier means, and the reason this tests for the property rather
-  // than for a non-empty array.
-  const walked = useResolvedParents(shownBlock)
+  // the SUPPLIER means, and the reason this tests for the property rather
+  // than for a non-empty array. The walk needs no such distinction: it is
+  // consulted only where there is no supplied chain to prefer.
+  const walked = useParents(shownBlock)
   const supplied = shownId === block.id ? initialParents : undefined
-  const parents = supplied ?? walked ?? EMPTY_PARENTS
+  const parents = supplied ?? walked
   const parentRenderScopeId = typeof parentContext.renderScopeId === 'string'
     ? parentContext.renderScopeId
     : 'backlinks-root'

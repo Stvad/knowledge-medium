@@ -14,10 +14,9 @@
  * These tests drive the real `LinkedReferences` over a real repo and
  * record what each entry was rendered with on EVERY commit (the flash
  * settles inside `act`, so a post-hoc DOM assertion can't see it). The
- * recorder WRAPS `useResolvedParents` rather than replacing it: the entry
- * holds its own chain now, so there is no prop above it to intercept, and
- * that hook is the last point where a render and the id it was for are
- * both in hand. `linkedReferencesBreadcrumbs` owns the other half — that
+ * recorder WRAPS `useParents` rather than replacing it: this panel supplies
+ * no chain of its own, so the hook is where a render and the id it was for
+ * are both in hand. `linkedReferencesBreadcrumbs` owns the other half — that
  * the chain recorded here reaches the DOM.
  */
 
@@ -79,17 +78,17 @@ vi.mock('../useStoredBacklinkFilter.ts', () => ({
 // PromotableBreadcrumbList renders nothing for one), which is the blank
 // frame these tests hunt.
 //
-// `?? []` is what the ENTRY renders here because this panel passes no
-// `initialParents`: with no seed, a pending walk and a root are the same
-// blank line. A surface that does seed (grouped backlinks, the readwise
-// backlog) would need the seed in hand to say what was painted.
+// What the hook returns IS what this panel's entries render, because it
+// supplies no `initialParents`. A surface that does supply one (grouped
+// backlinks, the readwise backlog) paints that instead, and a recorder
+// there would need it in hand to say what reached the screen.
 vi.mock('@/hooks/block.ts', async importOriginal => {
   const actual = await importOriginal<typeof import('@/hooks/block')>()
   return {
     ...actual,
-    useResolvedParents: (block: Block) => {
-      const parents = actual.useResolvedParents(block)
-      state.entryRenders.push({id: block.id, parents: (parents ?? []).map(p => p.id)})
+    useParents: (block: Block) => {
+      const parents = actual.useParents(block)
+      state.entryRenders.push({id: block.id, parents: parents.map(parent => parent.id)})
       return parents
     },
     useRetainParents: (blocks: readonly Block[]) => {
