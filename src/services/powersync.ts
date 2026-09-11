@@ -81,10 +81,11 @@ export interface UploadDeps {
   ) => Promise<readonly CompactedBlockOperation[]>
 }
 
-/** Resolve a workspace's sync mode for the encrypt-on-upload decision. The
- *  policy (mode pin, §6) is injected; today's default is uniformly 'none'
- *  (no e2ee workspace exists pre-rollout), so encryption is a no-op until the
- *  §8 flows wire a real resolver + key store. */
+/** Resolve a workspace's sync mode for the encrypt-on-upload decision. Answered
+ *  for the ROW's own workspace, never the Repo's active one, so a write that
+ *  lands while the active-workspace pin is moving is still sealed under the
+ *  mode of the workspace it belongs to. The policy (mode pin, §6) is injected;
+ *  production binds it to the §6 resolver in `repoProvider`. */
 export type GetWorkspaceMode = (workspaceId: string) => SyncMode | Promise<SyncMode>
 
 /** Seal the content columns of each create/patch op whose workspace is e2ee,
