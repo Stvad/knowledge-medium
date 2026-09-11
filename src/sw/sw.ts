@@ -111,7 +111,7 @@ const sw = createServiceWorker(
 // when this script finished evaluating, and when the first navigation fetch
 // arrived and was answered — all ms, `timeOrigin` as epoch so the page can
 // place them on its own clock.
-const bootMarks = {timeOrigin: performance.timeOrigin, evaluatedAt: 0, firstNavAt: 0, firstNavRespondedAt: 0}
+const bootMarks = {timeOrigin: performance.timeOrigin, evaluatedAt: 0, firstNavReceivedAt: 0, firstNavAnsweredAt: 0}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(sw.install())
@@ -133,9 +133,9 @@ self.addEventListener('fetch', (event) => {
   // Pass waitUntil so the preview ledger heartbeat (maybeTouchOwnLedger) is tied
   // to this event's lifetime and can't be dropped by early worker termination.
   const response = sw.handleFetch(event.request, (p) => event.waitUntil(p))
-  if (response && event.request.mode === 'navigate' && !bootMarks.firstNavAt) {
-    bootMarks.firstNavAt = performance.now()
-    void response.then(() => { bootMarks.firstNavRespondedAt = performance.now() }, () => {})
+  if (response && event.request.mode === 'navigate' && !bootMarks.firstNavReceivedAt) {
+    bootMarks.firstNavReceivedAt = performance.now()
+    void response.then(() => { bootMarks.firstNavAnsweredAt = performance.now() }, () => {})
   }
   if (response) event.respondWith(response)
 })

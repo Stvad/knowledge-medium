@@ -43,7 +43,7 @@
         clearTimeout(t)
         const m = ev.data
         const off = m.timeOrigin - performance.timeOrigin
-        resolve({swStartedAt: r(off), swEvaluatedAt: r(off + m.evaluatedAt), firstNavReceivedAt: r(off + m.firstNavAt), firstNavAnsweredAt: r(off + m.firstNavRespondedAt), raw: m})
+        resolve({swStartedAt: r(off), swEvaluatedAt: r(off + m.evaluatedAt), firstNavReceivedAt: r(off + m.firstNavReceivedAt), firstNavAnsweredAt: r(off + m.firstNavAnsweredAt)})
       }
       c.postMessage('BOOT_MARKS', [ch.port2])
     } catch (e) { resolve(String(e)) }
