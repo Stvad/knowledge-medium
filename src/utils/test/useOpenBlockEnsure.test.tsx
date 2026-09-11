@@ -5,7 +5,7 @@
  *  context field by field — silently dropping a callback it did not enumerate.
  *  A dropped `ensure` is a missing behaviour, not a type error, so it needs a
  *  render to catch. */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { RepoContext } from '@/context/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -21,8 +21,12 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 afterEach(() => { cleanup() })
 
-const setup = async (): Promise<void> => {
+// Isolation lives in the hook, not in `setup` — see AGENTS.md's shared-db rule.
+beforeEach(async () => {
   await resetTestDb(sharedDb.db)
+})
+
+const setup = async (): Promise<void> => {
   repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
   repo.setActiveWorkspaceId(WS)
 }

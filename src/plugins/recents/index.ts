@@ -9,7 +9,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { getOrCreateRecentsPage, recentsPageBlockId } from '@/data/recentsPage.js'
-import { activeWorkspaceIdPreferringHash, navigateFromGlobalCommand } from '@/utils/navigation.js'
+import { navigateFromGlobalCommand } from '@/utils/navigation.js'
 import type { Repo } from '@/data/repo'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
 import { RecentsPageBlockRenderer } from './RecentsPageBlockRenderer.tsx'
@@ -24,13 +24,15 @@ export const OPEN_RECENTS_ACTION_ID = 'open_recents'
  *  before anything is written — an ensure run ahead of resolution creates the
  *  page even for a command the policy vetoes. */
 const openRecents = async (repo: Repo): Promise<void> => {
-  // The HASH, not the pin: during a workspace switch the hash already names the
-  // workspace the user is looking at while `repo.activeWorkspaceId` still names
-  // the previous one, and a command fired in that window would otherwise open —
-  // and now materialize — the workspace they just left. This is what the helper
-  // exists for. (The header button stays on the pin, like every other click
-  // surface; `openBlockFromEvent` resolves it there.)
-  const workspaceId = activeWorkspaceIdPreferringHash(repo)
+  // The PIN, not `activeWorkspaceIdPreferringHash`. That helper routes a command
+  // to the workspace the hash already names mid-switch, which is right for a
+  // command that only navigates — but this one also WRITES, and every gate on
+  // that write (`repo.isReadOnly`, the access decision) is a single Repo-wide
+  // flag an async App effect moves with the pin (#226). Resolved from the hash,
+  // the create would be checked against a different workspace than it lands in.
+  // Reading the pin costs a command fired mid-switch opening the workspace the
+  // user just left — idempotent, and the next click is correct.
+  const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) return
   await navigateFromGlobalCommand(repo, {
     blockId: recentsPageBlockId(workspaceId),

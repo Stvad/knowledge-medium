@@ -9,7 +9,7 @@
  *  with no row behind it (issue #931). The navigation layer itself is a
  *  recording stub — its modifier matrix is navigation.ts's contract. */
 import { Suspense } from 'react'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { MouseEvent } from 'react'
 import { ChangeScope, type BlockData } from '@/data/api'
@@ -68,8 +68,13 @@ let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
-const setup = async (): Promise<Repo> => {
+// Isolation lives in the hook, not in `setup`: a test that builds its repo any
+// other way would otherwise inherit the previous test's rows.
+beforeEach(async () => {
   await resetTestDb(sharedDb.db)
+})
+
+const setup = async (): Promise<Repo> => {
   openCalls.current = []
   commandCalls.current = []
   const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
@@ -149,17 +154,20 @@ describe('opening Recents when bootstrap skipped the page', () => {
     expect((await repo.load(blockId))?.content).toBe('edited')
   }, TIMEOUT_MS)
 
-  it('the command follows the hash, not a pin the workspace switch has not caught up to', async () => {
+  it('the command writes to the pinned workspace, never to one the hash alone names', async () => {
     const repo = await setup()
-    // The window in which the hash already names the workspace the user is
-    // looking at and `repo.activeWorkspaceId` still names the one they left.
+    // Mid-switch: the hash already names the workspace being moved to while the
+    // pin still names the current one. The write must follow the PIN — every
+    // gate on it (`repo.isReadOnly`, the access decision) is a Repo-wide flag
+    // that moves with the pin, so a row minted under the hash workspace would
+    // have been checked against a different workspace than it lands in.
     window.location.hash = buildAppHash(SWITCHED_TO_WS)
 
     await runOpenRecentsCommand(repo)
 
-    expect((await repo.load(recentsPageBlockId(SWITCHED_TO_WS)))?.content).toBe('Recents')
-    expect(await recentsRow(repo)).toBeNull()
-    expect(commandCalls.current).toEqual([recentsPageBlockId(SWITCHED_TO_WS)])
+    expect(await repo.load(recentsPageBlockId(SWITCHED_TO_WS))).toBeNull()
+    expect((await recentsRow(repo))?.content).toBe('Recents')
+    expect(commandCalls.current).toEqual([recentsPageBlockId(WS)])
   }, TIMEOUT_MS)
 
   it('a second open reuses the page rather than minting a rival', async () => {

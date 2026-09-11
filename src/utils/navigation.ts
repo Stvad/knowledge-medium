@@ -846,9 +846,8 @@ export const useOpenBlock = (
   // ONE list, feeding both the forwarded context and the deps, so what reaches
   // the opener and what re-reads it cannot disagree. It is enumerated rather
   // than `target` itself because callers pass an object literal, which would
-  // rebuild the callback on every render. Keep it in step with
-  // `OpenBlockContext`: a field left out here is dropped silently — that is how
-  // `ensure` was lost — and the type will not tell you.
+  // rebuild the callback on every render. Every `OpenBlockContext` field must
+  // appear here: one left out is dropped silently, and the type will not say so.
   const {blockId, workspaceId, ensure} = target
   return useCallback(
     (e: MouseEvent) => opener(e, {blockId, workspaceId, ensure}),
