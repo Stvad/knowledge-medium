@@ -38,6 +38,14 @@ import {
 
 export const GROUPED_BACKLINKS_FOR_BLOCK_QUERY = 'groupedBacklinks.forBlock'
 
+/** A source and its ancestry, root-first.
+ *
+ *  `parentIds` has no reader left: it fed the backlink entries' breadcrumb
+ *  prefetch, and each entry now holds its own `core.ancestors` handle. The
+ *  WALK still earns its keep — it is what declares a context-node dep on
+ *  every ancestor, so a page moved out from under a source re-groups — and
+ *  `sourceId` is what the sticky-claim pass reads as the current source
+ *  set. See #948 for collapsing this to that set. */
 export interface GroupedBacklinkSourceParents {
   sourceId: string
   parentIds: string[]
@@ -149,7 +157,8 @@ const resolveSourceParents = async (
   // core.manyAncestors returns one entry per input id (input order), each
   // with the leaf-to-root chain (depth-asc, excluding self) as hydrated
   // BlockData — the same ordering manyAncestorsSql produced. deps:'none'
-  // because the context-node deps are declared explicitly below.
+  // because the context-node deps declared below are the point of the walk;
+  // grouping itself reads the context chain from its own candidates SQL.
   const entries = await ctx.run('core.manyAncestors', {ids: sourceIds}, {deps: 'none'})
   for (const sourceId of sourceIds) dependOnSourceContextNode(ctx, workspaceId, sourceId)
   for (const entry of entries) {
