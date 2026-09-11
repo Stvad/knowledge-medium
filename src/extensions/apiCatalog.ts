@@ -353,6 +353,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     types: [],
   },
   {
+    category: 'react',
+    importPath: '@/context/block.js',
+    description: 'useBlockContext hook — which pane / surface / scope the block being rendered sits in.',
+    exports: ['useBlockContext'],
+    types: [],
+  },
+  {
     category: 'ui',
     importPath: '@/utils/dialogs.js',
     description: 'openDialog — imperative dialog primitive; the promise resolves with the user\'s choice (or null on cancel).',

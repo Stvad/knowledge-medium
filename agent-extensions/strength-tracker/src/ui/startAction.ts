@@ -8,7 +8,8 @@
  *
  *  WHERE it lands is the caller's to say — see `placement.ts`. The shortcut
  *  puts it where your cursor is; the Strength Log page's button puts it on
- *  that page. Nothing here files it by a rule of its own.
+ *  that page. Nothing here files it by a rule of its own. The same goes for
+ *  which pane it OPENS in — see `showSession`.
  */
 
 import type {Repo} from '@/data/repo.js'
@@ -30,7 +31,13 @@ export const START_SESSION_ACTION_ID = 'strength.startSession'
  *  Exported because the Strength Log page's button runs the SAME flow with a
  *  different placement — two entry points, one dialog, one set of races
  *  already thought about. */
-export const runStartSession = async (repo: Repo, placement: Placement): Promise<void> => {
+export const runStartSession = async (
+  repo: Repo,
+  placement: Placement,
+  /** The pane this ran in, so the session opens where the gesture was made
+   *  rather than in the main pane. See `ShowSessionTarget['panelId']`. */
+  panelId?: string,
+): Promise<void> => {
   const workspaceId = repo.activeWorkspaceId
   // Nothing here is readable-only: it bootstraps the log page and settings
   // block before the dialog even opens. The footer and the set controls
@@ -51,7 +58,9 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   // you are not doing.
   const standing = await standingSession(repo, workspaceId, snapshot, now)
   if (standing) {
-    await showSession(repo, workspaceId, standing, 'a session is already under way')
+    await showSession(repo, {
+      workspaceId, blockId: standing, panelId, what: 'a session is already under way',
+    })
     return
   }
 
@@ -119,8 +128,12 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   // from with a live workout you were never shown — least of all a persistent
   // one, which would make Start unable to reach the workout it just made.
   // See `showSession` for why the result is checked rather than discarded.
-  await showSession(repo, workspaceId, workoutId,
-    stamped ? 'the session was created' : 'a session was already under way')
+  await showSession(repo, {
+    workspaceId,
+    blockId: workoutId,
+    panelId,
+    what: stamped ? 'the session was created' : 'a session was already under way',
+  })
 
   // Recorded only now the session exists, so a cancelled dialog leaves the
   // tracked variant as it was — and only when the session is the one these
@@ -157,13 +170,15 @@ export const startSessionAction: ActionConfig<typeof ActionContextTypes.NORMAL_M
   id: START_SESSION_ACTION_ID,
   description: 'Strength: start a session here',
   context: ActionContextTypes.NORMAL_MODE,
-  handler: async ({block}) => {
+  handler: async ({block, uiStateBlock}) => {
     const data = block.peek()
     if (!data) return
     // Loaded rather than peeked: "does this block already hold something" is
     // the difference between taking an empty line's place and burying the
     // session under a heading, and children are not on the row.
     const children = (await block.repo.block(block.id).children.load()) ?? []
+    // `uiStateBlock` IS the pane block in this context — the same thing core's
+    // own zoom action navigates by.
     await runStartSession(block.repo, placeAtFocus({
       id: data.id,
       parentId: data.parentId,
@@ -174,7 +189,7 @@ export const startSessionAction: ActionConfig<typeof ActionContextTypes.NORMAL_M
       // property-schema definition, or any other record whose content is blank
       // by design" gets asked — see `isExpendableLine`.
       properties: data.properties,
-    }))
+    }), uiStateBlock.id)
   },
   defaultBinding: {keys: 'Control+Shift+l'},
 }
