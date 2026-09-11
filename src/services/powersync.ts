@@ -140,9 +140,10 @@ const encryptUploadOps = async (
   return out
 }
 
-// Pre-rollout defaults: every workspace is plaintext and no keys exist, so the
-// default encryptOps is identity. The §8 flows replace these with a mode-pin
-// resolver + IndexedDB key-store lookup when e2ee ships.
+// Fallbacks for a connector built WITHOUT the §6 resolver — tests, and any
+// caller that omits the deps. No pin to consult and no key store, so the
+// transform is identity. Production binds the real resolver (`repoProvider`),
+// so these never decide an e2ee workspace's upload.
 const defaultGetWorkspaceMode: GetWorkspaceMode = () => 'none'
 const defaultUploadGetCek: GetCek = async () => null
 
@@ -800,8 +801,7 @@ const fetchCredentials = async () => {
 
 /** §9.2 encrypt-on-upload wiring. The mode/key resolvers are injected so the
  *  app binds them to the signed-in user's mode pins + workspace-key store;
- *  omitted (e.g. in tests, or before e2ee is wired) they default to plaintext
- *  pass-through. */
+ *  omitted (e.g. in tests) they default to plaintext pass-through. */
 export interface PowerSyncConnectorOptions {
   readonly getWorkspaceMode?: GetWorkspaceMode
   readonly getCek?: GetCek
