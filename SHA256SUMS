@@ -1739,7 +1739,7 @@ b7b20b57449491d17522b2d52bf360256cc239e30bd54a2bfe17dfd8c399fd8f  ./src/App.js
 37a400d4dd3c8ade661675433ff94c5a3dfbfde4db6fb49584ceaea03a91e3cd  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-c7e0e3f74d075138cd6c0c37fe6f6097d0046dce4f4ecc006d09577978ad0fe1  ./src/appVersion.js
+cc701ea72774c72c294bae51bfa79b44e49c0422baf0096613f35bc6d1c4b84a  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -3478,8 +3478,8 @@ eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/vi
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
 9af15883a114b174ae87ea81afacbbe329eac79367b557ca4b23ea5ab8a45ef7  ./src/utils/workspaceSnapshotStore.js
 0cb08d10b524ebeed439d29605e1e9993be5d5d03c7226fc3cee6d378657128a  ./src/utils/workspaceSnapshotStore.js.map
-67bba898ab4793d2a212d691b4a33d56aefcfaea30e1e7b7ff510bf46f846064  ./sw.js
-bf490cd3bcbdf962f96e63b9109e4df4930b0caca934325e55656ad067fc8e1a  ./version.json
+0bed75a997c0e0d294a0938590f7bbe97caffae7386d289fb5c29ebaf18c8fc5  ./sw.js
+e0f9db01c196b62c6e33f07304df955654294a1564adb0c63f7b2db806242e45  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
