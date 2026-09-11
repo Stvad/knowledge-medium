@@ -36,7 +36,7 @@ f5fc34c9769c6de71196ea3b2e0558a97ce760cf8d2e4d74aed7f13362e4537c  ./assets/wa-sq
 8ee6b72637c58561bfb359d749af1917db3318acc106ad92651b206c03550ef1  ./icon-maskable.png
 860193ed68db0ad9732dd5bd58d1f887750d304af6403e55f7a21b448efdd593  ./icon-maskable.svg
 e28a19b80fa1b85618c471a1d625143eef192f32d61a7a2bab20b40a52e0bd47  ./icon.svg
-227c28b0fa4f67420200f344a43a731c3d60c6e1ac09ed3a85c5bc863bba2a25  ./index.html
+26348cf60e2b41a3424a67cb6de16752d52a46bc5aec6ec8606fe86bbcb1047b  ./index.html
 6cf376e0df578d93f4e092d8b2b349ed09577c3e50e3a43d131d583770e13b96  ./manifest.webmanifest
 b123074db7e32562b3d664d55810baa4431c54d1682872b379f8a1da37178287  ./mc-wa-sqlite-async.wasm
 586ce5edde062924e052cadf7bf03db4d1ed6abd796ed18054f5a5a3f9430c7f  ./mc-wa-sqlite.wasm
@@ -1739,7 +1739,7 @@ b7b20b57449491d17522b2d52bf360256cc239e30bd54a2bfe17dfd8c399fd8f  ./src/App.js
 37a400d4dd3c8ade661675433ff94c5a3dfbfde4db6fb49584ceaea03a91e3cd  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-7e99ae79e4ca0704e63a1f64f77516ee362cf3573a0cedc12d322985023c7c12  ./src/appVersion.js
+1dfcde812f9bf584642814e88da02a79fe966f740d8fa9be0db6a370d25d9a08  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2350,8 +2350,8 @@ d39eb1fb7e3a9b1702ab5106cdfc78f33e715131f14d597a0882754d3d945515  ./src/plugins/
 b1872b9a40a7e949417eedbb217930c0c1a45430a3d4bfc55be5c5aaa8697550  ./src/plugins/agent-runtime/AgentTokensDialog.js.map
 b82c0f25c1af8e3ad620ca1ed34976b9314ee458da3a778cc6e5373860a9107b  ./src/plugins/agent-runtime/BridgePairingDialog.js
 4308a81a3a1b68334e5984c7fc8feaae24dc44a72599b1c83b9a416c38ad4316  ./src/plugins/agent-runtime/BridgePairingDialog.js.map
-c8dba8d378a83dbd28dbff0647668c31b3a16ceb3d809d8636bc96359071bd61  ./src/plugins/agent-runtime/authoringCatalog.js
-060c71a804f0c229899456e4c34e73216a24a59743ed033da4ceb2d3a20bcdc1  ./src/plugins/agent-runtime/authoringCatalog.js.map
+05a8a2659fa49268726a2d99aee2f74f9dc431958016be7da13e319e64c1a7a2  ./src/plugins/agent-runtime/authoringCatalog.js
+396e07f9d27aaff4def377e0bad00e66583bd9ae697948a755df37da0a767e73  ./src/plugins/agent-runtime/authoringCatalog.js.map
 e9f3373e71b32c6ce8eb79fba07752bcf55226349d110e272d1bb4a67528bce8  ./src/plugins/agent-runtime/bridge.js
 fba6d6896e7a47ed25c8e42f073ccf421ca75c9cea05eaa1857fbbd050144141  ./src/plugins/agent-runtime/bridge.js.map
 963f0a8010ec590d1b982ca53a535071d79991e96e951ccf323312fa5c5444fb  ./src/plugins/agent-runtime/commands.js
@@ -2360,8 +2360,8 @@ fba6d6896e7a47ed25c8e42f073ccf421ca75c9cea05eaa1857fbbd050144141  ./src/plugins/
 c1a443869e7352efc7b53f6b9480d8f35dd5270965acf6e8edeef90490857761  ./src/plugins/agent-runtime/dataExtension.js.map
 6f41e41b8fb7e877a6cdbc721545ac0f0de29b9e4dc18d44e464efbb3b2034ae  ./src/plugins/agent-runtime/dataModelGuide.js
 5b939510c7cdf404973a3394a32deee4f78eeffb928fcbe467810b9b18d6f06a  ./src/plugins/agent-runtime/dataModelGuide.js.map
-0a7f4d43b757f6db31a9078b03ec7395341885610574e7ee868f97f880b87d97  ./src/plugins/agent-runtime/describeRuntime.js
-808714fcbc7b5f91d3ac3ce7d73aab2d07f3f856e7d7224f87aec48a57f1caa5  ./src/plugins/agent-runtime/describeRuntime.js.map
+67fa1e2f5f6f8f40eb38c3811e356bcd3ff199fa2d691512069262863b6e5056  ./src/plugins/agent-runtime/describeRuntime.js
+d4f0c2859bc9a93440671b12ba0ea99c0c6f0a30430a14fa9d9aea37d442cfb9  ./src/plugins/agent-runtime/describeRuntime.js.map
 67d81d2c3e64ca849491b479b9bc425c3db6dea12bb93783b93984f33d347cc5  ./src/plugins/agent-runtime/examples/importedRecordSync.js
 9026a9624dba5eafdc40afaf7906845d899bda73b6ff557b53718eda0ee9975a  ./src/plugins/agent-runtime/examples/importedRecordSync.js.map
 e077ad385cada3e0b2822f246a122907e6ccc8ef259e4bcf58d749af5eaf6415  ./src/plugins/agent-runtime/examples/localStorageCredentials.js
@@ -3468,8 +3468,8 @@ eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/vi
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
 9af15883a114b174ae87ea81afacbbe329eac79367b557ca4b23ea5ab8a45ef7  ./src/utils/workspaceSnapshotStore.js
 0cb08d10b524ebeed439d29605e1e9993be5d5d03c7226fc3cee6d378657128a  ./src/utils/workspaceSnapshotStore.js.map
-2c041d5542090f9f0694cda5105506d968f4ec741b6830d1a0620ef79ba57e78  ./sw.js
-c78a34ce679c1ac1ffb54fd3de7ee77f073652c77ff07af9f25d65c96f25e266  ./version.json
+a7e4a855908062c918462ebd21e88a57c174ae7b9d6d6e565f4719de585b8238  ./sw.js
+4a190ba266dccefd538179bd27de53e79cb0d10a014ae9eb6c23a27a6fb7084f  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
