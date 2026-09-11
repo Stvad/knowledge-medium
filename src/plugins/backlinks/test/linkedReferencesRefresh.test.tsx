@@ -14,11 +14,11 @@
  * These tests drive the real `LinkedReferences` over a real repo and
  * record what each entry was rendered with on EVERY commit (the flash
  * settles inside `act`, so a post-hoc DOM assertion can't see it). The
- * recorder WRAPS `useParents` rather than replacing it: the entry holds
- * its own chain now, so there is no prop above it to intercept, and the
- * hook is the last point where a render and the id it was for are both
- * in hand. `linkedReferencesBreadcrumbs` owns the other half — that the
- * chain recorded here reaches the DOM.
+ * recorder WRAPS `useResolvedParents` rather than replacing it: the entry
+ * holds its own chain now, so there is no prop above it to intercept, and
+ * that hook is the last point where a render and the id it was for are
+ * both in hand. `linkedReferencesBreadcrumbs` owns the other half — that
+ * the chain recorded here reaches the DOM.
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'

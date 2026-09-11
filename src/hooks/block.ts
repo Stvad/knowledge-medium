@@ -18,7 +18,7 @@
  *     row_events tail (Phase 2.C) drive invalidation; the per-hook
  *     `db.onChange({tables: ['blocks']})` polling that the old shape
  *     used is gone.
- *   - useParents: handle via `repo.ancestors(id)`.
+ *   - useParents / useResolvedParents: handle via `repo.ancestors(id)`.
  *   - useSubtree: handle via `repo.subtree(id)` (new in Phase 2.D).
  *
  * The legacy `useDataWithSelector` is gone — selectors move to the
