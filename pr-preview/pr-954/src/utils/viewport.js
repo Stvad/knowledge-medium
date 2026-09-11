@@ -1,2 +1,0 @@
-var e=`(max-width: 767px)`,t=()=>typeof window<`u`&&typeof window.matchMedia==`function`&&window.matchMedia(`(max-width: 767px)`).matches;export{e as MOBILE_BREAKPOINT_QUERY,t as isMobileViewport};
-//# sourceMappingURL=viewport.js.map
