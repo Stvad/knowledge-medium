@@ -1,36 +1,116 @@
 // @vitest-environment happy-dom
 //
-// The contract here is about WHEN and HOW OFTEN ancestors are fetched, not
-// about what a crumb reads (`utils/test/blockCrumbs.test.ts` owns that):
-// the whole feature is only acceptable if it costs one batched query for a
-// page of results, doesn't re-fetch what it already has as the user keeps
-// typing, and can't take the search down when it fails.
+// The contract here is about WHICH handles the hook holds and what it
+// does with their values, not about what a crumb reads
+// (`utils/test/blockCrumbs.test.ts` owns that) and not about how many SQL
+// statements the walks cost (`data/internals/ancestorBatch.test.ts` owns
+// that): the feature is only acceptable if it doesn't re-ask for what it
+// already has as the user keeps typing, and can't take the search down
+// when it fails.
 
-import { renderHook, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { BlockData } from '@/data/api'
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { BlockData, Handle, HandleStatus } from '@/data/api'
+import { makeBlockData } from '@/data/test/factories'
 
-interface AncestorEntry { startId: string; ancestors: BlockData[] }
+/** A handle the test drives: it starts `'idle'`, `load()` hands it to the
+ *  file-level resolver for its key, and `settle` publishes to subscribers
+ *  the way a `LoaderHandle` does. */
+class FakeHandle<T> implements Handle<T> {
+  private value: T | undefined
+  private state: HandleStatus
+  private readonly listeners = new Set<(value: T) => void>()
 
-const manyAncestors = vi.fn<(args: {ids: readonly string[]}) => Promise<AncestorEntry[]>>()
+  constructor(
+    readonly key: string,
+    private readonly resolve: () => Promise<T>,
+    cached?: T,
+  ) {
+    this.value = cached
+    this.state = cached === undefined ? 'idle' : 'ready'
+  }
+
+  peek(): T | undefined { return this.value }
+  status(): HandleStatus { return this.state }
+  read(): T { return this.value as T }
+  subscribe(listener: (value: T) => void) {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  async load(): Promise<T> {
+    this.state = 'loading'
+    try {
+      const next = await this.resolve()
+      this.settle(next)
+      return next
+    } catch (error) {
+      this.state = 'error'
+      throw error
+    }
+  }
+
+  settle(next: T): void {
+    this.value = next
+    this.state = 'ready'
+    act(() => { for (const listener of this.listeners) listener(next) })
+  }
+}
+
+const row = (id: string, content: string, parentId: string | null): BlockData =>
+  makeBlockData({id, workspaceId: 'ws-1', content, parentId})
+
+/** One crumb per id, named after it, so a mixed-up mapping is visible in
+ *  the assertion rather than hidden behind a matching count. */
+const chainFor = (id: string): BlockData[] => [row(`${id}-parent`, `${id} parent`, null)]
+
+const ancestorHandles = new Map<string, FakeHandle<BlockData[]>>()
+const blockHandles = new Map<string, FakeHandle<BlockData | null>>()
+/** Every `repo.query.ancestors({id})` lookup, in order — how the test
+ *  sees which ids the hook actually asked about. */
+const acquired: string[] = []
+/** Per-id overrides for the next `load()`; absent means the default chain. */
+const chainResolvers = new Map<string, () => Promise<BlockData[]>>()
+/** Ids whose row is already IN the cache, mapped to its parent edge —
+ *  what a search source that hydrated its rows leaves behind. An id
+ *  absent here has a cold handle: `peek()` is undefined, which is the
+ *  case the caller's payload `parentId` answers. */
+const cachedRows = new Map<string, string | null>()
+/** Seed rows the hook actually fetched, as opposed to merely observed. */
+const seedLoads: string[] = []
 
 // One stable repo object, deliberately — `useRepo` is memoized for the
-// app's lifetime in production (`src/context/repo.tsx`), and `repo` is an
-// effect dependency here. A mock returning a fresh literal per render
-// would re-fire the effect on every render, which quietly turns "the hook
-// re-requested this" into "the harness did" and would let a released id
-// get picked back up by an effect run no real session performs.
-/** Stands in for the BlockCache the `repo.block(id)` facade reads. Empty
- *  entries mean "not loaded", which is what `peek()` reports as undefined. */
-const blockCache = new Map<string, {parentId: string | null}>()
-
+// app's lifetime in production (`src/context/repo.tsx`), and `repo` is a
+// memo dependency here. A mock returning a fresh literal per render would
+// rebuild the handle arrays every render, which quietly turns "the hook
+// re-asked" into "the harness did".
 const repo = {
   activeWorkspaceId: 'ws-1' as string | null,
-  block: (id: string) => ({peek: () => blockCache.get(id)}),
+  block: (id: string) => {
+    let handle = blockHandles.get(id)
+    if (!handle) {
+      handle = new FakeHandle<BlockData | null>(
+        `block:${id}`,
+        async () => { seedLoads.push(id); return null },
+        cachedRows.has(id) ? row(id, id, cachedRows.get(id) ?? null) : undefined,
+      )
+      blockHandles.set(id, handle)
+    }
+    return handle
+  },
   query: {
-    manyAncestors: (args: {ids: readonly string[]}) => ({
-      load: () => manyAncestors(args),
-    }),
+    ancestors: ({id}: {id: string}) => {
+      acquired.push(id)
+      let handle = ancestorHandles.get(id)
+      if (!handle) {
+        handle = new FakeHandle<BlockData[]>(
+          `ancestors:${id}`,
+          () => (chainResolvers.get(id) ?? (async () => chainFor(id)))(),
+        )
+        ancestorHandles.set(id, handle)
+      }
+      return handle
+    },
   },
 }
 
@@ -38,52 +118,22 @@ vi.mock('@/context/repo.js', () => ({useRepo: () => repo}))
 
 const { useAncestorCrumbs } = await import('./useAncestorCrumbs.js')
 
-const ancestorRow = (id: string, content: string): BlockData => ({
-  id,
-  content,
-  properties: {},
-  workspaceId: 'ws-1',
-  parentId: null,
-  orderKey: 'a0',
-  updatedAt: 0,
-  userUpdatedAt: 0,
-  updatedBy: 'u1',
-  deleted: false,
-} as unknown as BlockData)
-
-/** One crumb per id, named after it, so a mixed-up mapping is visible in
- *  the assertion rather than hidden behind a matching count. */
-const chainFor = (id: string): AncestorEntry => ({
-  startId: id,
-  ancestors: [ancestorRow(`${id}-parent`, `${id} parent`)],
-})
-
-const idsOf = (call: [{ids: readonly string[]}]) => [...call[0].ids]
-
 /** Blocks that genuinely have a parent — matching `chainFor`, which gives
  *  each one a parent row. The hook needs the parent edge to tell a root
  *  from an orphan when the ancestor walk comes back empty. */
 const targets = (...ids: string[]) => ids.map(id => ({id, parentId: `${id}-parent`}))
 
 beforeEach(() => {
-  blockCache.clear()
-  manyAncestors.mockReset()
-  manyAncestors.mockImplementation(async ({ids}) => ids.map(chainFor))
+  ancestorHandles.clear()
+  blockHandles.clear()
+  chainResolvers.clear()
+  cachedRows.clear()
+  acquired.length = 0
+  seedLoads.length = 0
 })
 
-afterEach(() => vi.restoreAllMocks())
 
 describe('useAncestorCrumbs', () => {
-  it('fetches a whole page of results in ONE batched query', async () => {
-    const ids = Array.from({length: 25}, (_, i) => `block-${i}`)
-
-    const {result} = renderHook(() => useAncestorCrumbs(targets(...ids)))
-
-    await waitFor(() => expect(result.current.size).toBe(25))
-    expect(manyAncestors).toHaveBeenCalledOnce()
-    expect(idsOf(manyAncestors.mock.calls[0])).toEqual(ids)
-  })
-
   it('maps each chain onto the block it belongs to', async () => {
     const {result} = renderHook(() => useAncestorCrumbs(targets('a', 'b')))
 
@@ -92,141 +142,119 @@ describe('useAncestorCrumbs', () => {
     expect(result.current.get('b')).toEqual(['b parent'])
   })
 
-  it('hands back a usable empty map while the load is still in flight', async () => {
+  it('hands back a usable empty map while the walk is still in flight', async () => {
     // Search rows paint first; the crumb map is simply empty until the
-    // second pass lands. A hook that suspended or threw here would put the
+    // walks land. A hook that suspended or threw here would put the
     // ancestor query in front of the results. The release half is what
     // makes the empty assertion mean something — it proves the map was
     // pending, not permanently dead.
-    let release: (entries: AncestorEntry[]) => void = () => {}
-    manyAncestors.mockReturnValueOnce(new Promise(resolve => { release = resolve }))
+    let release: (chain: BlockData[]) => void = () => {}
+    chainResolvers.set('a', () => new Promise(resolve => { release = resolve }))
 
     const {result} = renderHook(() => useAncestorCrumbs(targets('a')))
 
     expect(result.current.size).toBe(0)
 
-    release([chainFor('a')])
+    release(chainFor('a'))
     await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
   })
 
-  it('only queries the ids it has not already loaded as the query changes', async () => {
+  it('asks only about the ids that entered as the result set shifts', async () => {
     const {result, rerender} = renderHook(
       ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
       {initialProps: {ids: ['a', 'b']}},
     )
     await waitFor(() => expect(result.current.size).toBe(2))
+    acquired.length = 0
 
     // Next keystroke: 'b' survived, 'c' is new.
     rerender({ids: ['b', 'c']})
-    await waitFor(() => expect(result.current.size).toBe(3))
+    await waitFor(() => expect(result.current.size).toBe(2))
 
-    expect(manyAncestors).toHaveBeenCalledTimes(2)
-    expect(idsOf(manyAncestors.mock.calls[1])).toEqual(['c'])
-    // 'b' keeps its crumbs across the re-query rather than blanking.
+    expect(new Set(acquired)).toEqual(new Set(['b', 'c']))
+    // 'b' keeps its crumbs across the shift rather than blanking — its
+    // handle resolved once and nothing about it changed.
     expect(result.current.get('b')).toEqual(['b parent'])
-  })
-
-  it('keeps a superseded run\u2019s result instead of throwing it away', async () => {
-    // The ancestors of a block do not depend on the search query that
-    // prompted the lookup, so a result that arrives "late" is still the
-    // right answer. Dropping it would only mean asking again.
-    let releaseFirst: (entries: AncestorEntry[]) => void = () => {}
-    manyAncestors.mockImplementationOnce(
-      () => new Promise<AncestorEntry[]>(resolve => { releaseFirst = resolve }),
-    )
-
-    const {result, rerender} = renderHook(
-      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
-      {initialProps: {ids: ['a']}},
-    )
-    await waitFor(() => expect(manyAncestors).toHaveBeenCalledOnce())
-
-    rerender({ids: ['a', 'b']})
-    await waitFor(() => expect(manyAncestors).toHaveBeenCalledTimes(2))
-    // 'a' was already in flight, so the second run asked only for what
-    // nobody was fetching yet.
-    expect(idsOf(manyAncestors.mock.calls[1])).toEqual(['b'])
-
-    releaseFirst([chainFor('a')])
-    await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
-    expect(result.current.get('b')).toEqual(['b parent'])
+    expect(result.current.get('c')).toEqual(['c parent'])
   })
 
   it('survives the id list transiently emptying between queries', async () => {
     // This is the caller's real shape: the rows are gated on the search
     // result matching the LIVE query, so the id list drops to [] the
     // instant a key is pressed and refills once the search resolves. If
-    // that teardown cancelled work, every keystroke would re-fetch what
-    // was already on its way.
-    let release: (entries: AncestorEntry[]) => void = () => {}
-    manyAncestors.mockImplementationOnce(
-      () => new Promise<AncestorEntry[]>(resolve => { release = resolve }),
-    )
-
+    // that teardown threw the resolved chains away, every keystroke would
+    // re-fetch what it already had.
     const {result, rerender} = renderHook(
       ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
       {initialProps: {ids: ['a', 'b']}},
     )
-    await waitFor(() => expect(manyAncestors).toHaveBeenCalledOnce())
+    await waitFor(() => expect(result.current.size).toBe(2))
 
     rerender({ids: []})
-    rerender({ids: ['a', 'b', 'c']})
-    await waitFor(() => expect(manyAncestors).toHaveBeenCalledTimes(2))
-    expect(idsOf(manyAncestors.mock.calls[1])).toEqual(['c'])
+    expect(result.current.size).toBe(0)
 
-    release([chainFor('a'), chainFor('b')])
-    await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
+    rerender({ids: ['a', 'b', 'c']})
+    await waitFor(() => expect(result.current.size).toBe(3))
+    expect(result.current.get('a')).toEqual(['a parent'])
     expect(result.current.get('b')).toEqual(['b parent'])
   })
 
-  it('splits an oversized id set into batched statements', async () => {
-    // One SQL bind per id, so the batch size is what keeps a caller from
-    // walking into SQLite's parameter ceiling. Every caller today sits at
-    // 25 (one chunk), which means nothing else in this suite exercises the
-    // split — collapse the loop to a single unbounded request and only
-    // this test notices.
-    const ids = Array.from({length: 51}, (_, i) => `block-${i}`)
-
-    const {result} = renderHook(() => useAncestorCrumbs(targets(...ids)))
-
-    await waitFor(() => expect(result.current.size).toBe(51))
-    expect(manyAncestors).toHaveBeenCalledTimes(2)
-    expect(idsOf(manyAncestors.mock.calls[0])).toHaveLength(50)
-    expect(idsOf(manyAncestors.mock.calls[1])).toEqual(['block-50'])
-  })
-
-  it('finishes the remaining batches when one of them fails', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const ids = Array.from({length: 51}, (_, i) => `block-${i}`)
-    manyAncestors.mockRejectedValueOnce(new Error('first batch exploded'))
-
-    const {result} = renderHook(() => useAncestorCrumbs(targets(...ids)))
-
-    // The surviving batch still lands rather than being abandoned with it.
-    await waitFor(() => expect(result.current.get('block-50')).toEqual(['block-50 parent']))
-    expect(result.current.size).toBe(1)
-    expect(consoleError).toHaveBeenCalled()
-  })
-
-  it('formats crumbs inside the guarded frame, not in the state updater', async () => {
-    // A function-form setState updater runs during a LATER render, so a
-    // throw from crumb formatting placed inside it would bypass this
-    // hook's catch entirely and land on the app-root ErrorBoundary —
-    // decoration taking down the whole app. Malformed rows are the shape
-    // that would trip it: the query's resultSchema is a no-op cast, so
-    // nothing enforces this at runtime.
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-    manyAncestors.mockResolvedValueOnce([
-      {startId: 'a', ancestors: null as unknown as BlockData[]},
-    ])
-
+  it('re-crumbs a block reparented while the dialog is open', async () => {
+    // What the snapshot shape could not do. The walk is row-dep'd, so a
+    // move invalidates it and the crumb follows the block.
     const {result} = renderHook(() => useAncestorCrumbs(targets('a')))
+    await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
 
-    await waitFor(() => expect(consoleError).toHaveBeenCalled())
-    // Reported through the hook's own channel and contained: no crumbs,
-    // no render crash, and the id is released so a later query retries.
-    expect(result.current.size).toBe(0)
-    expect(consoleError.mock.calls[0][0]).toContain('[ancestor-crumbs]')
+    ancestorHandles.get('a')!.settle([row('moved', 'somewhere else', null)])
+
+    await waitFor(() => expect(result.current.get('a')).toEqual(['somewhere else']))
+  })
+
+  it('leaves a failed walk absent instead of surfacing the error', async () => {
+    // Breadcrumbs are decoration: a failure costs one missing crumb line,
+    // never the search dialog.
+    chainResolvers.set('a', () => Promise.reject(new Error('ancestors exploded')))
+
+    const {result} = renderHook(() => useAncestorCrumbs(targets('a', 'b')))
+
+    await waitFor(() => expect(result.current.get('b')).toEqual(['b parent']))
+    expect(result.current.has('a')).toBe(false)
+  })
+
+  it('retries a failed walk when the result set next changes', async () => {
+    // One failed read errors every id it coalesced, so a single hiccup
+    // can strand a whole page of crumbs. A first-load failure leaves the
+    // handle with no deps, so nothing invalidates it into a retry — the
+    // next keystroke arriving as an observer is the only retry it gets.
+    let attempts = 0
+    chainResolvers.set('a', () => {
+      attempts += 1
+      return attempts === 1
+        ? Promise.reject(new Error('read failed'))
+        : Promise.resolve(chainFor('a'))
+    })
+
+    const {result, rerender} = renderHook(
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
+      {initialProps: {ids: ['a']}},
+    )
+    await waitFor(() => expect(attempts).toBe(1))
+    expect(result.current.has('a')).toBe(false)
+
+    rerender({ids: ['a', 'b']})
+
+    await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
+  })
+
+  it('observes seed rows without fetching the ones nothing hydrated', async () => {
+    // A search source may hand back rows it never put in the cache. The
+    // payload's parentId is the answer for those, so fetching each one
+    // would be a row read per result — serialized behind the ancestor
+    // walk — to improve on an answer we already have.
+    const {result} = renderHook(() => useAncestorCrumbs(targets('a', 'b')))
+
+    await waitFor(() => expect(result.current.size).toBe(2))
+    expect(seedLoads).toEqual([])
   })
 
   it('prefers the live row over the search payload for the seed parent', async () => {
@@ -235,16 +263,16 @@ describe('useAncestorCrumbs', () => {
     // parent for a block that has since moved to the workspace root, while
     // the ancestor walk (which IS row-dep'd) correctly returns nothing.
     // Trusting the payload there would mark a genuine root as truncated.
-    blockCache.set('a', {parentId: null})
-    manyAncestors.mockResolvedValueOnce([{startId: 'a', ancestors: []}])
+    cachedRows.set('a', null)
+    chainResolvers.set('a', async () => [])
 
     const {result} = renderHook(() => useAncestorCrumbs([{id: 'a', parentId: 'stale-parent'}]))
 
     await waitFor(() => expect(result.current.get('a')).toEqual([]))
   })
 
-  it('falls back to the search payload when the row is not cached', async () => {
-    manyAncestors.mockResolvedValueOnce([{startId: 'a', ancestors: []}])
+  it('falls back to the search payload when the row is not in the cache', async () => {
+    chainResolvers.set('a', async () => [])
 
     const {result} = renderHook(() => useAncestorCrumbs([{id: 'a', parentId: 'gone-parent'}]))
 
@@ -256,14 +284,13 @@ describe('useAncestorCrumbs', () => {
     // exempts sync-applied and applyRaw rows — so an id carrying a comma
     // cannot be ruled out, and splitting on one would query the wrong ids.
     const awkward = 'weird,id>with:delimiters'
-    manyAncestors.mockResolvedValueOnce([chainFor(awkward)])
 
     const {result} = renderHook(() => useAncestorCrumbs([{id: awkward, parentId: null}]))
 
     // The id reaches the query intact and its crumbs come back keyed by it
     // (the label itself is truncated, which is beside the point here).
     await waitFor(() => expect(result.current.has(awkward)).toBe(true))
-    expect(idsOf(manyAncestors.mock.calls[0])).toEqual([awkward])
+    expect(acquired).toEqual([awkward])
   })
 
   it('asks for nothing when there is no active workspace', async () => {
@@ -274,32 +301,15 @@ describe('useAncestorCrumbs', () => {
     try {
       const {result} = renderHook(() => useAncestorCrumbs(targets('a')))
 
-      // Fence on a real fetch happening once the workspace IS known, so
-      // this can't pass just because nothing had resolved yet.
       await waitFor(() => expect(result.current.size).toBe(0))
-      expect(manyAncestors).not.toHaveBeenCalled()
+      expect(acquired).toEqual([])
     } finally {
       repo.activeWorkspaceId = 'ws-1'
     }
 
+    // Fences the assertion above on a real lookup happening once the
+    // workspace IS known, so it can't pass just because nothing resolved.
     const {result: withWorkspace} = renderHook(() => useAncestorCrumbs(targets('a')))
     await waitFor(() => expect(withWorkspace.current.get('a')).toEqual(['a parent']))
-  })
-
-  it('logs and drops a failed load instead of surfacing it', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-    manyAncestors.mockRejectedValueOnce(new Error('ancestors exploded'))
-
-    const {result, rerender} = renderHook(
-      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
-      {initialProps: {ids: ['a']}},
-    )
-
-    await waitFor(() => expect(consoleError).toHaveBeenCalled())
-    expect(result.current.size).toBe(0)
-
-    // The failed ids stay eligible, so the next query retries them.
-    rerender({ids: ['a', 'b']})
-    await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
   })
 })

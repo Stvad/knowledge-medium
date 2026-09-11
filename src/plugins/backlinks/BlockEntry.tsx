@@ -40,18 +40,16 @@ const ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 // chosen parent's subtree (which still contains the original backlink
 // as a descendant).
 //
-// Two render paths so we can avoid a `useParents` query per visible entry in
-// the *initial* state: when the parent component has already prefetched
-// ancestors via `useManyParents` it passes them as `initialParents` and
-// `BlockEntryContent` renders without firing its own ancestor handle. After
-// the user clicks a breadcrumb the shown block changes, the conditional flips,
-// and `BlockEntryDynamicContent` (which DOES use `useParents`) takes over for
-// the new id. Conditional rendering is what gives us the query skip — React
-// unmounts whichever branch we're not on.
+// Two render paths. A caller that already holds this block's ancestors —
+// because they rode in its own query payload, as grouped-backlinks does, or
+// because it warmed the handles, as the flat panel does — passes them as
+// `initialParents`, and `BlockEntryContent` renders without touching a handle
+// of its own. After the user clicks a breadcrumb the shown block changes, the
+// conditional flips, and `BlockEntryDynamicContent` takes over for the new id.
 //
-// The dynamic path is also the FALLBACK when no prefetch was supplied, which
-// is why the condition tests `initialParents !== undefined` rather than
-// trusting a default: a missing prefetch must cost a query, not a feature.
+// The dynamic path is also the FALLBACK when nothing was supplied, which is
+// why the condition tests `initialParents !== undefined` rather than trusting
+// a default: a missing prefetch must cost a query, not a feature.
 
 const BlockEntryContent = ({
   shownBlock,

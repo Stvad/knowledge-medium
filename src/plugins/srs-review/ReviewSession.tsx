@@ -54,10 +54,15 @@ import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
  *  header renderer so the in-review chain renders identically. */
 const BREADCRUMB_OVERRIDES = {isNestedSurface: true, isBreadcrumb: true}
 const EMPTY_PARENTS: readonly Block[] = []
-/** How many cards' ancestors to prefetch per chunk (two chunks are in
- *  flight at once). Bounds the `core.manyAncestors` id count so a large
- *  deck can't exceed SQLite's host-parameter limit. */
+/** How far ahead of the current card to keep ancestor chains warm, so a
+ *  card's breadcrumb line is there the moment it is shown rather than a
+ *  load later. Bounds the handles held open, not the SQL — the walks are
+ *  coalesced and chunked below the parameter limit by `ancestorWalk`. */
 const BREADCRUMB_PREFETCH = 24
+/** And how far BEHIND. Back is a first-class move here, and a card whose
+ *  handle was released is cold again once the store's GC window passes —
+ *  which a few seconds on the next card is enough to reach. */
+const BREADCRUMB_LOOKBACK = 8
 
 
 const isInteractiveTarget = (el: HTMLElement | null): boolean => {
@@ -250,19 +255,11 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     setProgress(null)
   }, [setProgress])
 
-  // Window the ancestor prefetch. Passing every queued id to one
-  // `core.manyAncestors` call (one SQL placeholder per id) would let a deck
-  // with a very large due queue exceed SQLite's host-parameter limit and
-  // fail the whole session. Anchor the window to a fixed-size chunk so the
-  // handle key — and thus the query — changes only every
-  // BREADCRUMB_PREFETCH cards rather than on every advance, and span two
-  // chunks so the next chunk is already warm before the user reaches it.
-  const prefetchStart = Math.floor(index / BREADCRUMB_PREFETCH) * BREADCRUMB_PREFETCH
   const queueBlocks = useMemo(
     () => (queue ?? [])
-      .slice(prefetchStart, prefetchStart + BREADCRUMB_PREFETCH * 2)
+      .slice(Math.max(0, index - BREADCRUMB_LOOKBACK), index + BREADCRUMB_PREFETCH)
       .map(id => repo.block(id)),
-    [queue, repo, prefetchStart],
+    [queue, repo, index],
   )
   const parentsByCardId = useManyParents(queueBlocks)
   const currentParents = currentId

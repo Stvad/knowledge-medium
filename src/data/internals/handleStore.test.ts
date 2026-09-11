@@ -677,6 +677,31 @@ describe('LoaderHandle GC', () => {
     expect(store.size()).toBe(0)
   })
 
+  it('still disposes when ONE listener subscribed twice unsubscribes twice', async () => {
+    // A caller holding the same handle at two positions subscribes one
+    // listener to it twice. The listener set dedupes, so the second
+    // unsubscribe's delete fails and cannot release — retaining twice
+    // would pin the handle at refCount 1 past every GC.
+    const sched = manualScheduler()
+    const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
+    stores.push(store)
+    const { loader } = collectingLoader('v')
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<string>({ store, key: 'q', loader }),
+    )
+    const listener = () => {}
+    const offFirst = h.subscribe(listener)
+    const offSecond = h.subscribe(listener)
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+
+    offFirst()
+    offSecond()
+
+    expect(sched.pending()).toBe(1)
+    sched.flush(100)
+    expect(store.size()).toBe(0)
+  })
+
   it('cancels GC when a new subscriber arrives in the gc window', async () => {
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })

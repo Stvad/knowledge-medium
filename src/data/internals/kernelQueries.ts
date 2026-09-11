@@ -35,11 +35,10 @@ import { seedKeyProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import type { Repo } from '@/data/repo'
 import { refCodecKind } from './refProjection'
+import { ancestorWalk, type AncestorWalk } from './ancestorBatch'
 import {
-  ANCESTORS_SQL,
   CHILDREN_IDS_SQL,
   CHILDREN_SQL,
-  manyAncestorsSql,
   SUBTREE_SQL,
   VISIBLE_CHILDREN_IDS_SQL,
   VISIBLE_CHILDREN_SQL,
@@ -643,15 +642,44 @@ export const subtreeQuery = defineQuery<
   },
 })
 
-/** Ancestor chain (excludes `id` itself). */
+/** Declare a dep on the parent the walk STOPPED at, when it stopped.
+ *
+ *  The walk filters `deleted = 0`, so a soft-deleted or not-yet-
+ *  materialized parent ends the chain and is absent from the result —
+ *  and being absent, nothing about it could invalidate the handle. A
+ *  chain truncated that way would then stay truncated for the life of the
+ *  handle, however long after the parent came back (`core.restore`
+ *  restores one block and can leave a live child under a tombstoned
+ *  parent; sync can deliver a child ahead of its parent).
+ *
+ *  A walk stopped by one of the recursion GUARDS rather than by an
+ *  unreachable row declares a dep on a block that is perfectly live — the
+ *  depth cap, and the visited-id check on a cycle, where the named parent
+ *  is already in the chain. An extra invalidation, no wrong answer. */
+const dependOnUnreachableParent = (ctx: QueryCtx, walk: AncestorWalk): void => {
+  const topmost = walk.chain.length > 0 ? walk.chain[walk.chain.length - 1] : walk.seed
+  const unreachable = topmost?.parent_id
+  if (unreachable) ctx.depend({kind: 'row', id: unreachable})
+}
+
+/** Ancestor chain (excludes `id` itself).
+ *
+ *  THE cache and invalidation unit for a parent chain: one handle per
+ *  id. A surface showing many blocks holds one of these per block, so a
+ *  change to the set it shows leaves the ids already held resolved and
+ *  queries only the ids that entered — which is why there is no
+ *  set-keyed handle for the batched shape. `ancestorWalk` coalesces
+ *  the walks that start in the same microtask into one statement, so
+ *  that grain costs one round-trip, not one per id. */
 export const ancestorsQuery = defineQuery<{id: string}, BlockData[]>({
   name: 'core.ancestors',
   argsSchema: z.object({id: z.string()}),
   resultSchema: blockDataArraySchema,
   resolve: async ({id}, ctx) => {
     ctx.depend({kind: 'row', id})
-    const rows = await ctx.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
-    return ctx.hydrateBlocks(asBlockRows(rows))
+    const walk = await ancestorWalk(ctx.db, id)
+    dependOnUnreachableParent(ctx, walk)
+    return ctx.hydrateBlocks(asBlockRows(walk.chain))
   },
 })
 
@@ -668,13 +696,16 @@ const manyAncestorsResultSchema: Schema<ManyAncestorsEntry[]> = {
  *  order, with the leaf-to-root chain (depth-ascending) — same
  *  ordering as the single-id `core.ancestors` query.
  *
- *  Use over N `core.ancestors` calls when a UI needs ancestors for
- *  many ids known up front (e.g. a backlinks panel rendering N
- *  source blocks each with breadcrumbs). One round-trip vs. N gives
- *  a meaningful cold-start win when the SQLite connection is
- *  contended. Empty entries are returned for ids whose row doesn't
- *  exist or is soft-deleted, so consumers can map 1:1 over the input
- *  list without nullable lookups. */
+ *  For a caller that wants ONE settled answer for a fixed id set, and
+ *  is not a reactive surface: this handle is keyed by the whole id
+ *  list, so any change to the set mints a cold one. A surface whose id
+ *  set moves wants `core.ancestors` per id instead — the walks coalesce
+ *  into the same single statement, and the ids that stay resolve from
+ *  their own handles.
+ *
+ *  Empty entries are returned for ids whose row doesn't exist or is
+ *  soft-deleted, so consumers can map 1:1 over the input list without
+ *  nullable lookups. */
 export const manyAncestorsQuery = defineQuery<
   {ids: readonly string[]},
   ManyAncestorsEntry[]
@@ -686,26 +717,15 @@ export const manyAncestorsQuery = defineQuery<
     if (ids.length === 0) return []
     for (const id of ids) ctx.depend({kind: 'row', id})
 
-    type Row = BlockRow & {chain_start_id: string}
-    const rows = await ctx.db.getAll<Row>(manyAncestorsSql(ids.length), [...ids])
-
-    const rowsByStart = new Map<string, BlockRow[]>()
-    for (const id of ids) rowsByStart.set(id, [])
-    for (const row of rows) {
-      const list = rowsByStart.get(row.chain_start_id)
-      // The seed ids filter to deleted=0, so chain_start_id always
-      // matches one of the input ids — the conditional is just a
-      // belt-and-suspenders guard against a future SQL change.
-      if (list) list.push(row)
-    }
-
-    // Hydrate each chain through the dispatcher's hydrateBlocks so the
-    // per-row deps land and the BlockCache picks up the rows. We pass
-    // each chain in a single call so the hydrate-order is depth-asc
-    // per chain — a flat single-call hydrate would interleave chains.
-    return ids.map(startId => ({
+    // Started in one tick so the batcher answers them with one
+    // statement. Each chain is hydrated in its own call, which is what
+    // keeps hydrate-order depth-ascending per chain rather than
+    // interleaving them.
+    const walks = await Promise.all(ids.map(id => ancestorWalk(ctx.db, id)))
+    for (const walk of walks) dependOnUnreachableParent(ctx, walk)
+    return ids.map((startId, index) => ({
       startId,
-      ancestors: ctx.hydrateBlocks(asBlockRows(rowsByStart.get(startId) ?? [])),
+      ancestors: ctx.hydrateBlocks(asBlockRows(walks[index].chain)),
     }))
   },
 })
@@ -1504,19 +1524,18 @@ export const recentActivityQuery = defineQuery<
     const blocks = await resolveRecentUserBlocks(workspaceId, limit, ctx)
     if (blocks.length === 0) return []
 
-    type ChainRow = BlockRow & {chain_start_id: string}
-    const chainRows = await ctx.db.getAll<ChainRow>(
-      manyAncestorsSql(blocks.length), blocks.map(block => block.id),
+    const walks = await Promise.all(
+      blocks.map(block => ancestorWalk(ctx.db, block.id)),
     )
-    const chainsByStart = new Map<string, BlockRow[]>()
-    for (const block of blocks) chainsByStart.set(block.id, [])
-    for (const row of chainRows) chainsByStart.get(row.chain_start_id)?.push(row)
-
-    return blocks.map(block => {
+    // No `dependOnUnreachableParent` here, unlike the two other ancestor
+    // queries: a parent becoming reachable is a liveness or workspace
+    // change, which fires `kernel.content` for the workspace — the
+    // channel this query already rides. Declared, it pinned nothing.
+    return blocks.map((block, index) => {
       // One call per chain so hydrate order stays depth-ascending within
       // it, as `core.manyAncestors` does.
       const ancestors = ctx.hydrateBlocks(
-        asBlockRows(chainsByStart.get(block.id) ?? []), {declareRowDeps: false},
+        asBlockRows(walks[index].chain), {declareRowDeps: false},
       )
       // The ANCESTORS only: the rows themselves are declared by the shared
       // resolver, which needs the same channel for the same reason. A page

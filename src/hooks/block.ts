@@ -31,12 +31,12 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   useSyncExternalStore,
 } from 'react'
 import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
 import { getAliases } from '@/data/properties.js'
 import { Block } from '../data/block'
+import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo.js'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
@@ -69,6 +69,25 @@ const areSelectedValuesEqual = <T,>(left: T, right: T): boolean => {
 }
 
 const identitySelector = <V,>(v: V): V => v
+
+/** Ensure-load for a handle a hook has just started observing.
+ *
+ *  `'error'` is retried alongside `'idle'`: a FIRST-load failure leaves
+ *  the handle with no deps, so no change can ever invalidate it into a
+ *  retry, and an arriving observer is the only retry such a handle can
+ *  get until failure is observable in its own right (#930). Bounded by
+ *  mounts and by changes to the observed set, so a persistently failing
+ *  query costs one read per those, not a spin. */
+const ensureLoaded = (handle: Handle<unknown>): void => {
+  const status = handle.status()
+  if (status !== 'idle' && status !== 'error') return
+  // Logged rather than swallowed: the handle stores the error but nothing
+  // reads it, so a surface that fails quietly by design (breadcrumbs, any
+  // decoration) would otherwise leave a blank line and no trace of why.
+  void handle.load().catch(error => {
+    console.error(`[handle] load failed for ${handle.key}`, error)
+  })
+}
 
 export interface UseHandleOptions<T, S> {
   /** Project the handle's value before returning. The hook applies
@@ -174,17 +193,12 @@ export function useHandle<T, S = T | undefined>(
   /* eslint-enable react-hooks/immutability */
 
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
-  // Block both dedup their inflight load promise). The status() check
-  // prevents an unnecessary roundtrip when the handle is already ready. A
-  // disposed handle reports its live replacement's status, so this reads the
-  // replacement rather than a corpse; with the key vacant it reports
-  // 'disposed' and we skip — the subscribe below mints a live handle at that
-  // key, whose own first-subscriber load covers the ensure-load we declined.
-  useEffect(() => {
-    if (handle.status() === 'idle') {
-      void handle.load().catch(() => {/* error stored on the handle */})
-    }
-  }, [handle])
+  // Block both dedup their inflight load promise). A disposed handle
+  // reports its live replacement's status, so this reads the replacement
+  // rather than a corpse; with the key vacant it reports 'disposed' and we
+  // skip — the subscribe below mints a live handle at that key, whose own
+  // first-subscriber load covers the ensure-load we declined.
+  useEffect(() => { ensureLoaded(handle) }, [handle])
 
   // Stable subscribe — only changes when the handle changes, so we
   // don't tear down handle.subscribe on every render that produces a
@@ -215,6 +229,87 @@ export function useHandle<T, S = T | undefined>(
   }, [value])
 
   return value
+}
+
+/** A value stabilized by its CONTENT, for a caller that builds it inline.
+ *
+ *  `useHandles` keys its subscriptions on the handle array's identity, and
+ *  that array is built from a list a caller assembles per render — so
+ *  without this every render tears down N subscriptions and opens N more.
+ *
+ *  Serialized as JSON rather than joined on a delimiter: `blockId.ts`
+ *  enforces canonical uuids only on the tx INSERT path and exempts
+ *  sync-applied and `applyRaw` rows, so an id containing the delimiter is
+ *  not impossible, and encoding it away removes the assumption. */
+export const useStableJson = <T,>(value: T): T => {
+  const key = JSON.stringify(value)
+  return useMemo(() => JSON.parse(key) as T, [key])
+}
+
+export interface UseHandlesOptions {
+  /** Whether an unresolved member is FETCHED. Default `true`.
+   *
+   *  Gates the ensure-load only, so it is meaningful for a handle whose
+   *  `subscribe` does not itself load — `Block`, whose subscribe is a
+   *  plain `BlockCache` listener. A `LoaderHandle` member loads on first
+   *  subscribe regardless (`handleStore.ts`), so passing `false` for one
+   *  buys nothing. */
+  fetchMissing?: boolean
+}
+
+/** `useHandle` for a SET of handles: one subscription each, values in
+ *  the caller's order, `undefined` for a member that hasn't resolved.
+ *
+ *  Reach for it when the set itself moves — one handle per member is what
+ *  lets a member that stays keep its resolved value across a change to
+ *  the set. See `core.ancestors` for the shape this exists to serve.
+ *
+ *  The caller owns `handles`' identity: build the array from
+ *  `useStableJson`'d ids, not from the source array.
+ *
+ *  Members are compared with `useHandle`'s equality, not by identity: a
+ *  `LoaderHandle` stores every reload's value and applies its structural
+ *  diff only to the NOTIFY, so `peek()` hands back a fresh array after a
+ *  reload that changed nothing. Identity alone would rebuild the whole
+ *  aggregate on each of those, and every consumer memo with it.
+ *
+ *  No `committedRef` counterpart to `useHandle`'s, because the memo below
+ *  is rebuilt only when `handles` changes — which means the id set
+ *  changed, and a new array is then the honest answer. */
+export const useHandles = <T,>(
+  handles: readonly Handle<T>[],
+  opts?: UseHandlesOptions,
+): readonly (T | undefined)[] => {
+  const fetchMissing = opts?.fetchMissing ?? true
+  // Same closure-local memo as `useHandle`, and safe for the same reason:
+  // the bindings live in the closure `useMemo` returned, never on a shared
+  // object, so an abandoned render can at worst prime the memo with a
+  // superseded value array.
+  /* eslint-disable react-hooks/immutability */
+  const getSnapshot = useMemo(() => {
+    let memoized: (T | undefined)[] | null = null
+    return (): readonly (T | undefined)[] => {
+      const next = handles.map(handle => handle.peek())
+      if (memoized !== null && areSelectedValuesEqual(memoized, next)) return memoized
+      memoized = next
+      return next
+    }
+  }, [handles])
+  /* eslint-enable react-hooks/immutability */
+
+  const subscribe = useCallback((listener: () => void) => {
+    const unsubscribes = handles.map(handle => handle.subscribe(listener))
+    return () => { for (const unsubscribe of unsubscribes) unsubscribe() }
+  }, [handles])
+
+  // Every member starts in the same tick, which is what lets a batching
+  // loader answer them with one read.
+  useEffect(() => {
+    if (!fetchMissing) return
+    for (const handle of handles) ensureLoaded(handle)
+  }, [handles, fetchMissing])
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -371,118 +466,58 @@ export const useHasChildren = (block: Block): boolean =>
     selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
   })
 
+/** A leaf-to-root chain as breadcrumb-ordered facades. `core.ancestors`
+ *  walks leaf-to-root; every consumer renders root-first. */
+const parentsFromChain = (repo: Repo, chain: readonly BlockData[]): Block[] =>
+  chain.map(data => repo.block(data.id)).reverse()
+
 /** Reactive parent chain (root → … → immediate parent), excluding
- *  `block` itself. `repo.ancestors()` walks leaf-to-root, so reverse
- *  for the breadcrumb-friendly order callers expect. */
+ *  `block` itself. */
 export const useParents = (block: Block): Block[] => {
   const repo = block.repo
   return useHandle(block.repo.query.ancestors({id: block.id}), {
-    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)).reverse(),
+    selector: data => parentsFromChain(repo, data ?? EMPTY_BLOCK_DATA_ARRAY),
   })
 }
 
 const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
 
-/** Batched variant of `useParents` — runs one `core.manyAncestors`
- *  query for every id in `blocks`. Returns a Map<id, Block[]> in the
- *  same root→…→immediate-parent order each per-id `useParents` would
- *  produce.
+/** Batched variant of `useParents` — the parent chain for every id in
+ *  `blocks`, as a Map<id, Block[]> in the same root→…→immediate-parent
+ *  order each per-id `useParents` would produce.
  *
- *  Use over N `useParents` calls when a parent component knows the
- *  full id set up front (backlinks panel, tag list, etc.): one SQL
- *  round-trip instead of N, which matters on a contended SQLite
- *  connection during cold start.
+ *  One `core.ancestors` handle per id — see that query for why the set
+ *  is not the unit. The walks coalesce into one statement, so the cold
+ *  case costs what a single batched query did.
  *
- *  Stability: the query handle is keyed by the sorted id list, so
- *  re-renders with the same blocks (stable identity) hit the same
- *  cached handle. Block facade identity is stable per id, so the
- *  returned arrays compare equal across re-fires when the chain is
- *  unchanged. A resolved result holds one (possibly empty) entry per
- *  input id; the carried result below can be partial.
+ *  One handle, one subscription and one set of deps per id, so an
+ *  ancestor shared by several chains is a dep on each of them.
  *
- *  Sticky across id-set changes: an add or a remove usually lands on
- *  an unresolved handle (`peek() === undefined` — a key used within
- *  the store's GC window can still be warm), and rendering that as
- *  "nobody has ancestors" drops every consumer's breadcrumb line
- *  mid-refresh. While an unresolved handle loads we keep serving the
- *  last resolved chains; a resolved value always wins outright.
- *
- *  Not covered, by design: ids ENTERING the set have no carried chain,
- *  so unless their key is still warm those entries gain their chain a
- *  load late; "last resolved" can be several id-set changes old under
- *  churn; and a FAILED load is indistinguishable from a slow one here,
- *  so its chains stay until the id set changes or the handle is
- *  disposed — the policy `peek()` already applies to a warm handle
- *  whose reload fails. */
+ *  A chain that has never resolved is absent from the map rather than
+ *  empty, so a consumer can tell "not yet" from "this block is a root".
+ *  A chain whose load FAILED is absent by the same route, and stays that
+ *  way until an observer arrives or the id set changes: a first-load
+ *  failure leaves the handle with no deps, so no change can invalidate it
+ *  into a retry and `ensureLoaded` is the only thing that re-asks (#930). */
 export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Block[]> => {
   const repo = useRepo()
-  // Sort the ids so logically-equal block sets in different orders
-  // hit the same handle slot.
-  const ids = useMemo(
-    () => Array.from(new Set(blocks.map(b => b.id))).sort(),
-    [blocks],
+  // Deduped and sorted so logically-equal block sets in different orders
+  // share one set of handles.
+  const ids = useStableJson(Array.from(new Set(blocks.map(block => block.id))).sort())
+  const handles = useMemo(
+    () => ids.map(id => repo.query.ancestors({id})),
+    [ids, repo],
   )
-  // `undefined` (not EMPTY_PARENT_MAP) for an unresolved handle — the
-  // carry-over below has to tell "still loading" apart from "resolved,
-  // and these blocks genuinely have no ancestors".
-  //
-  // Memoized rather than inline because it is a `useHandle`
-  // getSelection dep: a per-render identity re-runs this O(n)
-  // projection and its deep-equality check every render. Work avoided,
-  // not correctness.
-  const selectParents = useCallback(
-    (data: readonly {startId: string; ancestors: readonly BlockData[]}[] | undefined) => {
-      if (!data) return undefined
-      const out = new Map<string, Block[]>()
-      for (const entry of data) {
-        const parents = entry.ancestors.map(d => repo.block(d.id)).reverse()
-        out.set(entry.startId, parents)
-      }
-      return out.size === 0 ? EMPTY_PARENT_MAP : out
-    },
-    [repo],
-  )
-  const resolved = useHandle(repo.query.manyAncestors({ids}), {selector: selectParents})
+  const chains = useHandles(handles)
 
-  // Adjusted during render (as `usePromotableBreadcrumb` does) rather
-  // than in an effect: the carry has to be available in the SAME
-  // render that first sees the unresolved handle, or the blank frame
-  // it exists to prevent paints anyway.
-  //
-  // `ids.length > 0` because an EMPTY request resolves trivially, and
-  // remembering its empty map throws the carry away exactly where it
-  // is needed — a list handle that re-keys reports `[]` for a beat,
-  // and the next key arrives cold with nothing to carry.
-  //
-  // Some guard on the re-set is load-bearing: React applies no
-  // value-based bailout to a render-phase setState
-  // (`dispatchSetStateInternal` takes the `isRenderPhaseUpdate` branch
-  // before its eager `Object.is`), so an unconditional re-set loops.
-  // Structural rather than `!==` is defence in depth — the store keeps
-  // `resolved` identical across renders, so identity alone would do
-  // here; only a consumer whose handle identity churns needs more.
-  const [lastResolved, setLastResolved] =
-    useState<ReadonlyMap<string, Block[]>>(EMPTY_PARENT_MAP)
-  if (
-    resolved &&
-    ids.length > 0 &&
-    !areSelectedValuesEqual(resolved, lastResolved)
-  ) setLastResolved(resolved)
-
-  // Projected onto the current ids so both branches keep one contract:
-  // the map's keys are the ids you asked for. Without it the carried
-  // map also retains ids that have LEFT the set, which a consumer that
-  // iterates would render as ghost entries.
-  const carried = useMemo(() => {
+  return useMemo(() => {
     const out = new Map<string, Block[]>()
-    for (const id of ids) {
-      const parents = lastResolved.get(id)
-      if (parents) out.set(id, parents)
-    }
+    ids.forEach((id, index) => {
+      const chain = chains[index]
+      if (chain) out.set(id, parentsFromChain(repo, chain))
+    })
     return out.size === 0 ? EMPTY_PARENT_MAP : out
-  }, [lastResolved, ids])
-
-  return resolved ?? carried
+  }, [ids, chains, repo])
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in

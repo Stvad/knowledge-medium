@@ -2,7 +2,7 @@
  * Fixture generators for the bench suite.
  *
  *   - `populateLinearChain` — A → B → C → … (depth N, each block has one
- *     child). Stresses path-INSTR in the recursion guard, ANCESTORS_SQL,
+ *     child). Stresses path-INSTR in the recursion guard, the ancestor walk,
  *     IS_DESCENDANT_OF_SQL.
  *   - `populateBalanced` — k-ary balanced tree of depth D. Stresses
  *     SUBTREE_SQL worst case + handle dep-registration density.

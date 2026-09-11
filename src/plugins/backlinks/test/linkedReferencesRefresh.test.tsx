@@ -2,14 +2,14 @@
 /**
  * Layout stability across a LIVE backlinks refresh.
  *
- * The list and the breadcrumb chains come from two different handles:
- * `backlinks.forBlock` (keyed by the target block) and
- * `core.manyAncestors` (keyed by the *set* of source ids). Every add or
- * remove changes the id set, so the ancestors handle is a NEW handle —
- * cold, `peek() === undefined`. Without stickiness that renders as
- * "every entry has no parents", `BreadcrumbList` returns null for all of
- * them, and the whole section loses one line per visible entry until the
- * ancestors load resolves — the jump the user sees.
+ * The list and the breadcrumb chains come from different handles:
+ * `backlinks.forBlock`, keyed by the target block, and one
+ * `core.ancestors` per source id. An entry that stays in the list keeps
+ * its chain because nothing about ITS handle changed — the property
+ * under test. A handle keyed by the whole id set could not: every add or
+ * remove made it cold, `BreadcrumbList` returned null for every entry,
+ * and the section lost one line per visible entry until the load
+ * resolved — the jump the user sees.
  *
  * These tests drive the real `LinkedReferences` over a real repo and
  * record what each entry was rendered with on EVERY commit (the flash
