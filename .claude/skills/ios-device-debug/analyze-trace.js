@@ -1,4 +1,5 @@
-const o = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'))
+import { readFileSync } from 'node:fs'
+const o = JSON.parse(readFileSync(process.argv[2], 'utf8'))
 const lo = Number(process.argv[3] ?? o.marks.workspaceResolved), hi = Number(process.argv[4] ?? o.marks.bootstrapDone)
 const verbose = process.argv[5] === "v"
 const outs = new Map(); const calls = []
