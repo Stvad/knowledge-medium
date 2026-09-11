@@ -900,12 +900,14 @@ describe('mirrorCommentBody', () => {
   const comment = { id: '0000c0de-0000-7000-8000-000000000001', text: 'see km-abc and km-1786746066130-174-003836b1; km-zzz is nobody', created_at: '2026-09-03T20:16:36Z' }
 
   it('opens with the marker, stamps the original time, and rewrites mapped bead ids to issue numbers', () => {
-    const { body, unmapped } = mirrorCommentBody(comment, numbers, known)
+    const { body, unmapped, leftover } = mirrorCommentBody(comment, numbers, known)
     expect(body.split('\n')[0]).toBe(`<!-- bd-comment ${comment.id} -->`)
     expect(body).toContain('2026-09-03 20:16 UTC')
-    // An id that matches no bead is text (a fixture, a typo), not a reference.
+    // An id that matches no bead is text (a fixture, a typo), not a reference
+    // — published, and named as a leftover.
     expect(body.endsWith('see #12 and #502; km-zzz is nobody')).toBe(true)
     expect(unmapped).toEqual([])
+    expect(leftover).toEqual(['km-zzz'])
   })
 
   it('reports an id that names a bead without an issue instead of publishing it', () => {
@@ -914,9 +916,16 @@ describe('mirrorCommentBody', () => {
     expect(body.endsWith('blocked on km-new (twice: km-new) and #12')).toBe(true)
   })
 
-  it('leaves bead ids inside code spans and fences alone', () => {
-    const { body } = mirrorCommentBody({ ...comment, text: 'run `bd show km-abc` then km-abc:\n```\nbd close km-abc\n```' }, numbers, known)
+  it('leaves bead ids inside code spans and fences alone, naming them as leftovers', () => {
+    const { body, leftover } = mirrorCommentBody({ ...comment, text: 'run `bd show km-abc` then km-abc:\n```\nbd close km-abc\n```' }, numbers, known)
     expect(body.endsWith('run `bd show km-abc` then #12:\n```\nbd close km-abc\n```')).toBe(true)
+    expect(leftover).toEqual(['km-abc'])
+  })
+
+  it('does not count a held id as a leftover', () => {
+    const { unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-new and `km-abc`' }, numbers, known)
+    expect(unmapped).toEqual(['km-new'])
+    expect(leftover).toEqual(['km-abc'])
   })
 })
 
@@ -951,6 +960,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failPostCall?: number
     /** Bead whose pre-mirror touch (`bd update <id> -p …`) fails. */
     failTouchId?: string
+    /** Extra environment for the script (the mirror's post cap override). */
+    env?: Record<string, string>
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -1029,7 +1040,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     )
     chmodSync(join(shimDir, 'bd'), 0o755)
     chmodSync(join(shimDir, 'gh'), 0o755)
-    const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH}` }
+    const env = { ...process.env, ...opts.env, PATH: `${shimDir}:${process.env.PATH}` }
     const run = (...args: string[]) => spawnSync('node', [script, ...args], { cwd: repo, env, encoding: 'utf8' })
     return { run, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
   }
@@ -1459,16 +1470,21 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
     expect(shimCalls()).toContain('bd comments km-m --json')
-    // The touch precedes the first post, and both precede the pull — the
-    // pull's last_sync stamp must cover the posts, and the touch is what
-    // makes the pull leave the bead alone.
+    // Slot pins: the pull comes first (a waiting GitHub-side edit must land
+    // before the touch makes the pull skip the bead), the touch precedes the
+    // first post, the touched bead is pushed after posting (bd skips it,
+    // GitHub being newer), and a second pull closes the run so its last_sync
+    // stamp covers the posts.
     const calls = shimCalls()
+    const pulls = [...calls.matchAll(/bd github sync --pull-only/g)].map(m => m.index)
     const touch = calls.indexOf('bd update km-m -p 1\n')
     const firstPost = calls.indexOf('gh api -X POST')
-    const pull = calls.indexOf('bd github sync --pull-only')
-    expect(touch).toBeGreaterThan(-1)
+    const pushTouched = calls.indexOf('bd github sync --push-only --issues km-m')
+    expect(pulls).toHaveLength(2)
+    expect(touch).toBeGreaterThan(pulls[0])
     expect(touch).toBeLessThan(firstPost)
-    expect(firstPost).toBeLessThan(pull)
+    expect(firstPost).toBeLessThan(pushTouched)
+    expect(pushTouched).toBeLessThan(pulls[1])
     expect(calls.match(/bd update km-m/g)).toHaveLength(1)
     const log = posted()
     const posts = postsOf(log)
@@ -1484,8 +1500,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   // Position pin for the mirror's slot: after the pre-pull push (a post
   // bumps the issue past the local row, and bd PATCHes only local-newer
-  // rows), before the pull.
-  it('mirrors after the pre-pull push has carried the bead out', () => {
+  // rows), and after the pull.
+  it('mirrors after the pre-pull push has carried the bead out and the pull has run', () => {
     const newer = syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
     const { run, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
@@ -1499,14 +1515,42 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
     const calls = shimCalls()
     const push = calls.indexOf('bd github sync --push-only --issues km-m')
+    const firstPull = calls.indexOf('bd github sync --pull-only')
     const touch = calls.indexOf('bd update km-m -p 1\n')
     expect(push).toBeGreaterThan(-1)
-    expect(push).toBeLessThan(touch)
-    expect(touch).toBeLessThan(calls.indexOf('bd github sync --pull-only'))
+    expect(push).toBeLessThan(firstPull)
+    expect(firstPull).toBeLessThan(touch)
+  })
+
+  it('caps the posts of one run and leaves the rest for the next', () => {
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      lists: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+      env: { KM_MIRROR_POST_CAP: '1' },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('mirrored 1 comment(s) of km-m to #7 — 1 left for the next run (post cap)')
+    expect(postsOf(posted())).toHaveLength(1)
+  })
+
+  it('publishes an id it cannot rewrite — in code, or unknown here — and says so', () => {
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      lists: [commentedRows()],
+      comments: { 'km-m': [beadComment(C1, 'run `bd show km-o`; km-zzz is a fixture', '2026-09-03T20:16:36Z')] },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-o, km-zzz)`)
+    expect(postsOf(posted())).toHaveLength(1)
   })
 
   it('does not post a bead whose touch failed — the post alone would set up the pull re-apply', () => {
-    const { run, posted } = makeSyncRepo({
+    const { run, posted, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
       comments: { 'km-m': twoComments },
@@ -1517,6 +1561,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('FAILED to touch km-m before mirroring — its 2 comment(s) wait for the next run')
     expect(posted()).toBe('')
+    // Nothing touched, so no second pull either.
+    expect(shimCalls().match(/--pull-only/g)).toHaveLength(1)
   })
 
   it('posts only the comments GitHub lacks, and spawns no bd for a bead whose issue carries every marker', () => {
@@ -1560,7 +1606,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('stops a bead at its first failed post so the thread keeps bead order, and leaves the rest for the next run', () => {
-    const { run, posted } = makeSyncRepo({
+    const { run, posted, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
       comments: { 'km-m': twoComments },
@@ -1572,6 +1618,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain(`FAILED to mirror comment ${C1} of km-m to #7 — 2 left for the next run`)
     expect(r.stdout).not.toContain('mirrored ')
     expect(posted()).toBe('')
+    // The touch went through, so the bead is pushed back out (it would
+    // otherwise be pushed next run and re-applied by the pull behind it) and
+    // the second pull still runs.
+    const calls = shimCalls()
+    const post = calls.indexOf('gh api -X POST')
+    expect(calls.indexOf('bd github sync --push-only --issues km-m', post)).toBeGreaterThan(post)
+    expect(calls.match(/--pull-only/g)).toHaveLength(2)
   })
 
   it('holds a bead at a comment naming an unminted bead, publishing nothing after it', () => {
@@ -1616,6 +1669,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('[dry-run] would mirror 2 comment(s) of km-m to #7')
     expect(posted()).toBe('')
     expect(shimCalls()).not.toContain('bd update')
+    expect(shimCalls().match(/--pull-only/g)).toHaveLength(1)
   })
 
   it('skips the mirror, without failing the run, when the GitHub comment read is unusable', () => {
