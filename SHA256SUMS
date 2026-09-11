@@ -1739,7 +1739,7 @@ b7b20b57449491d17522b2d52bf360256cc239e30bd54a2bfe17dfd8c399fd8f  ./src/App.js
 37a400d4dd3c8ade661675433ff94c5a3dfbfde4db6fb49584ceaea03a91e3cd  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-ae9f92e0d55f2f3b86b7acd4704425d73c49d9bf0235456a4f785a2f5ded0917  ./src/appVersion.js
+c7e0e3f74d075138cd6c0c37fe6f6097d0046dce4f4ecc006d09577978ad0fe1  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2281,8 +2281,8 @@ a3599d0ae636e1eba03d9c869704b9e113ffd24106148af779aff10f79849c94  ./src/facets/t
 19ab9e402df7a30da851f612bf0f6a38c75a0830669d927b0900d71c6a1259ba  ./src/facets/variantFacet.js.map
 b572ff682d970baa70b83f56e46bd2b8e96ad0def39a6a5a92d6b136434ab91f  ./src/facets/verbFacet.js
 3c813fe2c6533eb7ffd9ab7c639590c39ed352c5b8382e050bfbf3d344db2e87  ./src/facets/verbFacet.js.map
-f4564f52776babf921182041574460f89b172f73e3669c89c8796169392eda84  ./src/hooks/block.js
-f5fcbdd6ce5d98a729e95b9621d46685f68a4460822d08e4458f9886a1373a67  ./src/hooks/block.js.map
+f44bd7f723729bf61fd4e8c30cef9654855dd7a21af49bf4de6115137fda3120  ./src/hooks/block.js
+15e457d4d1874a932753c294854ef7121c976c7cc072a9f2f37cb60e30906a9c  ./src/hooks/block.js.map
 08bffa750d905c15b0200bae2a81df682d16f5a154d81e69b88135ec8544cd41  ./src/hooks/propertySchemas.js
 5470638019056f7cb5208bf3ca7192a728920fa50dc80a42b130406d82dd088d  ./src/hooks/propertySchemas.js.map
 0d3830314183f458ae2258ffa17348ed17aecba81978e8fc7050d36862c41212  ./src/hooks/typeRegistry.js
@@ -2508,10 +2508,10 @@ ac2ae1beddc6505820a97666f3f8e16d5e86943ad2abda8d86e1717ea1d860b1  ./src/plugins/
 c2a6dd9bcdf34bc2dc31b48ead1271fcaa8cbface84138081acba8afb691a36f  ./src/plugins/backlinks/BacklinkFilters.js.map
 dc96d69f94c0eeb548c4bc812ccfbb36ca7bbbaf77a9246afa35c77e04b222ca  ./src/plugins/backlinks/BacklinksFilterPropertyEditor.js
 008bd332eef03aff4eaa103ce32884c12bcc23b46a4b4cd22a786f13c0c2f821  ./src/plugins/backlinks/BacklinksFilterPropertyEditor.js.map
-d7dfe8776dd183e51a9552a6f297c8680b57020c012b6a6fcdb92e7b52fec43a  ./src/plugins/backlinks/BlockEntry.js
-85239fbd679cace734dc9fddf78155bfaf90ddb0c6a3e96a165efbc3753e84e9  ./src/plugins/backlinks/BlockEntry.js.map
-35ffd9985de580defc35edc2239a952acbeac9754c80f25cdb494567c4a6310c  ./src/plugins/backlinks/LinkedReferences.js
-aca7cb072a40535da970912542105efd9c840c7f17bf0ae469f3c650f5f47d8f  ./src/plugins/backlinks/LinkedReferences.js.map
+0633f3ff46019184c725c5cb4079fce952c9a2541363c3ed0f8c4e385b7b0b17  ./src/plugins/backlinks/BlockEntry.js
+5ea15cbcff5f4769ecd565d688a8c79e9f600984b22a092df9784d93f3c77198  ./src/plugins/backlinks/BlockEntry.js.map
+b1195630b25ed88f21bb01e6a3856a04dd8206c707b26aa43e244d1ff83ae285  ./src/plugins/backlinks/LinkedReferences.js
+f7cbe7a6d79695e5f8a08ab4d8a192b152ed10855ba4eca481eaa1866647f744  ./src/plugins/backlinks/LinkedReferences.js.map
 456558d3f4a5b04c12d3df63400f36a003d0e72eb189e4befce78f9db579bb72  ./src/plugins/backlinks/backlinkBreadcrumbShortcuts.js
 3f78534e7bd53498fb9ca288fae43049c5af70521a40675c7c73ac1fa0fb58dd  ./src/plugins/backlinks/backlinkBreadcrumbShortcuts.js.map
 5080601cbb25cb891a9542f14bc670fa4c6eeb913cd09056f4de02c90dbbd162  ./src/plugins/backlinks/dailyNoteDefaults.js
@@ -2588,8 +2588,8 @@ faaeade146d38d0e0d283e5c92a97d7b04bd1dfb04e359d49da5e9b1c84be059  ./src/plugins/
 dc874de92b26433f0a805d76147ccf6fe732670b54e90001934a0bb0f7cd4b32  ./src/plugins/breadcrumbs/breadcrumbPreview.js.map
 33e0ed5d9c1d924f5263397264537785f717c76aeb1cd9e810214ac1f0eecea9  ./src/plugins/breadcrumbs/index.js
 4526768e6e0b1bd5a3828806ad855fdbca4200dcc7af7ba3414af1c80bb410e7  ./src/plugins/breadcrumbs/index.js.map
-51eda07848235581736b7442df06799bb4bb59f9481e697ba57587dff9f978ea  ./src/plugins/breadcrumbs/usePromotableBreadcrumb.js
-56236776ef3faa42a2fee520d1f64fd8a24461cff853fae00f80c37808968dc2  ./src/plugins/breadcrumbs/usePromotableBreadcrumb.js.map
+54d83770ed1198fec596d6a3c7ac60e81b91774f22f69375573465d1857575cd  ./src/plugins/breadcrumbs/usePromotableBreadcrumb.js
+8d445bdfe29a5a4dda42d7b14e3b60b668d82e70504e524a15c57313bb419e59  ./src/plugins/breadcrumbs/usePromotableBreadcrumb.js.map
 c30cecb8329910c2d21adffb2a2ef69f442f57f49ae019c7409ce770309edc2f  ./src/plugins/character-counter/CharacterCountDecorator.js
 74f3147b9e2af5a1f3c98a905aefe00d318e6e5f6d1e8c21eaa49a50e2c15973  ./src/plugins/character-counter/CharacterCountDecorator.js.map
 c5f581907f6d8774edd9c710421f058c7f3f1a4df3ece4295689914804e69ee3  ./src/plugins/character-counter/blockType.js
@@ -2805,7 +2805,7 @@ d09fce64c63916f6cc86eb086589178f3eef5f1f7de51dca05ba67255b156526  ./src/plugins/
 1430f1f1033df7db8719956f41b678da1e4d9dbf28bd7cfbb0b6524a142076b2  ./src/plugins/grouped-backlinks/GroupedBacklinksConfigEditor.js
 bf123d06aa4112af2ed6eb492243a589c8da3979be74afdc0155e58096991009  ./src/plugins/grouped-backlinks/GroupedBacklinksConfigEditor.js.map
 1f2311712fda892aebfee60be3a9ac56d40f62be28ede408f09f6095bb645fc3  ./src/plugins/grouped-backlinks/GroupedLinkedReferences.js
-d94b413a47342dc8ace1749f02d41f6229f546729362edff0e5737253e8102f2  ./src/plugins/grouped-backlinks/GroupedLinkedReferences.js.map
+e7563dfcd792452cc01976aab758dcb723030ac2c155783bde62f5e3113f07e3  ./src/plugins/grouped-backlinks/GroupedLinkedReferences.js.map
 cce7959b577e611345b2edd926cf19975948b95a71bbf9548fd6323b2983c1a8  ./src/plugins/grouped-backlinks/config.js
 2e63652eea60bb5d59bff95af4a86222e4460c3fc480c3cbf2b5906cd08689de  ./src/plugins/grouped-backlinks/config.js.map
 08f96d5486dc259dc1b035c3aec963928488987f0ff359439c7d42ea723364b0  ./src/plugins/grouped-backlinks/dataExtension.js
@@ -2819,7 +2819,7 @@ b0a377cdbe42bf3a39625273fa709358066282bcfcdeb75e0d064e61fec4a71a  ./src/plugins/
 2ef6de1cf5830f59d75d4be5fd391fa3b906ef401d9e22774a41261ef07d8527  ./src/plugins/grouped-backlinks/propertyEditorOverride.js
 bbacfb42acc72b901dfa93998e831f9585ac0ca8c97edd79312b36e26d99c754  ./src/plugins/grouped-backlinks/propertyEditorOverride.js.map
 fa63ff9ad34b47f9ec937deb50989b48e495e844159e3d88bae015df4fe2631d  ./src/plugins/grouped-backlinks/query.js
-dba66a2b51dde1e8377217bbcecf4b8405fa7fa32a6c0495dac6a7418aa23739  ./src/plugins/grouped-backlinks/query.js.map
+05e3af060712a650a3bfd5f593b6e41e94f4e8aac620cd7d49550702b1c6a407  ./src/plugins/grouped-backlinks/query.js.map
 bce4c8dcb266c103ecfc89bd999bafd1fe9664fe0004c9b4476097081953b3bb  ./src/plugins/grouped-backlinks/resolveConfig.js
 84b5fcd7533f58a689d9e71b7a7281f4c700ebb517b64018bab77771df399f37  ./src/plugins/grouped-backlinks/resolveConfig.js.map
 2a0b9a372ddd7c88899e7057af0aa0cff6ad50245577a01f98407989e6cd62c2  ./src/plugins/grouped-backlinks/useGroupedBacklinks.js
@@ -3478,8 +3478,8 @@ eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/vi
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
 9af15883a114b174ae87ea81afacbbe329eac79367b557ca4b23ea5ab8a45ef7  ./src/utils/workspaceSnapshotStore.js
 0cb08d10b524ebeed439d29605e1e9993be5d5d03c7226fc3cee6d378657128a  ./src/utils/workspaceSnapshotStore.js.map
-c30732cb2f938742935a9b8ec7c5df204cf9179e753fd686977694b34e01e595  ./sw.js
-3ae234aad842484f960aa5b9dc6edfe3fa1fe2874b0d04e8cb6c64238a997945  ./version.json
+67bba898ab4793d2a212d691b4a33d56aefcfaea30e1e7b7ff510bf46f846064  ./sw.js
+bf490cd3bcbdf962f96e63b9109e4df4930b0caca934325e55656ad067fc8e1a  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
