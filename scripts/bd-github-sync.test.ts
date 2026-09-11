@@ -923,6 +923,13 @@ describe('mirrorCommentBody', () => {
     expect(leftover).toEqual(['km-abc'])
   })
 
+  it('keeps a double-backtick span, which may itself carry single backticks', () => {
+    const text = 'try ``bd show km-abc`` or `` `km-abc` `` but km-abc here'
+    const { body, leftover } = mirrorCommentBody({ ...comment, text }, numbers, hold)
+    expect(body.endsWith('try ``bd show km-abc`` or `` `km-abc` `` but #12 here')).toBe(true)
+    expect(leftover).toEqual(['km-abc'])
+  })
+
   it('recognises tilde fences and fences longer than three backticks', () => {
     const text = 'km-abc first\n~~~\nbd show km-abc\n~~~\nthen km-abc\n````\n```\nbd close km-abc\n```\n````\nlast km-abc'
     const { body } = mirrorCommentBody({ ...comment, text }, numbers, hold)

@@ -809,8 +809,10 @@ export const mirroredCommentIds = bodies => new Set(bodies.map(b => b.match(MIRR
 // the GitHub copy is the one a human can fix. Holding them would hide the
 // whole comment for good.
 // Code kept verbatim: a fence of three or more backticks or tildes closed by
-// the same run, or an inline span. Everything between is prose.
-const CODE = /(`{3,}|~{3,})[\s\S]*?\1|`[^`\n]*`/g
+// the same run, or an inline span delimited by a backtick run of any length
+// (a double-backtick span may carry single backticks). Everything between is
+// prose.
+const CODE = /(`{3,}|~{3,})[\s\S]*?\1|(`+)(?:(?!\2)[^\n])+?\2/g
 export const rewriteBeadIds = (text, numberByBeadId, holdIds) => {
   const unmapped = new Set()
   const rewriteProse = prose =>
@@ -1125,6 +1127,11 @@ const fetchIssueComments = (numbers, env) => {
 // so the thread keeps bead order; the next run resumes where it stopped.
 // Every failure is a report line, never a throw: a throw here would swallow
 // the report of the steps before it.
+//
+// Accepted race: two clones syncing the same unmirrored comment inside one
+// read-to-post window post it twice — the lock is per clone, and a duplicate
+// is visible and deletable; a cross-device claim is more machinery than that
+// warrants.
 //
 // Each bead is TOUCHED (a same-value update) before its first post, and the
 // caller pulls again afterwards. bd's pull re-applies a fetched issue onto any
