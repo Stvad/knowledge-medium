@@ -69,7 +69,41 @@ Override the tab match (default `ts.net`) with `MATCH=<substr>`.
 
 ---
 
+## Boot-time profiling on the real device (verified 2026-09-10, iPhone / iOS 26)
+
+The **deployed** app needs no tunnel: open it in Safari, or just launch the
+**home-screen app** — iwdp lists it as its own `PID:` with a page target plus
+two `ServiceWorker` targets, and `ios.mjs` skips the SW ones. Use
+`MATCH=github` (the hosted origin). The home-screen app has its OWN storage
+(a separate client id from the Safari tab), so profile the one the user
+actually uses.
+
+- `MATCH=github node ios.mjs eval "$(rg -v '^//' boot-probe.js)"` — read-only
+  boot snapshot: startup-timeline marks, storage estimate, table counts,
+  `sqlite_stat1`, one-shot markers, subtree plan+timing. Same expression works
+  on the Mac via `pnpm agent eval --profile <p> "return $(…)"` for a baseline.
+  The DB handle without the bridge is `getPowerSyncDb(getActiveUserId())` from
+  `@/data/repoProvider.js`; `@/` resolves through the prod importmap.
+- `MATCH=github node boot-trace.mjs [waitSecs]` (protocol shared via `inspector.mjs`) — injects a hook with
+  `Page.setBootstrapScript` (runs before any page script, survives a same-
+  origin reload), reloads, and dumps every DB-worker round trip (comlink
+  messages over the transferred `MessagePort`s, SQL text included) plus the
+  marks. `node analyze-trace.js <json> [lo hi] [v]` summarizes a window: idle
+  gaps, per-path totals, slowest calls. `PRELUDE='<js>'` runs extra code before
+  the hook — the way the `requestIdleCallback` polyfill was A/B-tested on the
+  real build before it shipped.
+- The historical per-device record is already in the workspace: the
+  startup-metrics plugin writes one block per boot under
+  `ui-state → Startup metrics → <device group>`; query `startupRecord` via
+  `json_extract(properties_json, '$.startupRecord.…')` on the Mac.
+
 ## Gotchas that will waste your time if you don't know them
+
+- **WebKit has NO `requestIdleCallback`.** Anything with a `setTimeout(0)`
+  fallback for it runs *immediately* on iOS — deep-idle maintenance ran inside
+  bootstrap and held the SQLite worker for ~1–1.9 s per boot until
+  `src/utils/idleCallbackPolyfill.ts` (installed from main.tsx). Also no Long
+  Tasks API, so the startup-metrics `interactive` mark equals first paint there.
 
 - **ios-webkit-debug-proxy sees REAL DEVICES ONLY, never the Simulator.** Device list at `:9221/json`, per-device tab list at `:9222/json`.
 - **Only the FOREGROUND, AWAKE tab is inspectable.** Lock the device or background Safari and the tab vanishes (`pages` → 0, target never announces). Auto-Lock → Never is not optional for a real session.
