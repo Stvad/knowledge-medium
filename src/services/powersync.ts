@@ -10,6 +10,8 @@ import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/service
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
 import { encryptUploadColumns, type GetCek, type SyncMode } from '@/sync/transform.js'
 
+// `§` references in this file cite docs/e2ee-design.html.
+
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
 const MAX_CRUD_ENTRIES_PER_UPLOAD_BATCH = 10_000
@@ -141,7 +143,7 @@ const encryptUploadOps = async (
 }
 
 // Fallbacks for a connector built WITHOUT the §6 resolver — tests, and any
-// caller that omits the deps. No pin to consult and no key store, so the
+// caller that omits `encryption`. No pin to consult and no key store, so the
 // transform is identity. Production binds the real resolver (`repoProvider`),
 // so these never decide an e2ee workspace's upload.
 const defaultGetWorkspaceMode: GetWorkspaceMode = () => 'none'
@@ -799,20 +801,24 @@ const fetchCredentials = async () => {
   }
 }
 
-/** §9.2 encrypt-on-upload wiring. The mode/key resolvers are injected so the
- *  app binds them to the signed-in user's mode pins + workspace-key store;
- *  omitted (e.g. in tests) they default to plaintext pass-through. */
+/** §9.2 encrypt-on-upload wiring. The mode and key lookups are ONE option
+ *  because they are inseparable: a mode resolver that can answer 'e2ee' paired
+ *  with a key lookup that cannot answer makes `requireCek` throw, and a bare
+ *  throw classifies transient — so that tx would retry forever and jam the
+ *  queue. Omitted (e.g. in tests) uploads are plaintext pass-through. */
 export interface PowerSyncConnectorOptions {
-  readonly getWorkspaceMode?: GetWorkspaceMode
-  readonly getCek?: GetCek
+  readonly encryption?: {
+    readonly getWorkspaceMode: GetWorkspaceMode
+    readonly getCek: GetCek
+  }
 }
 
 export const createPowerSyncConnector = (
   options: PowerSyncConnectorOptions = {},
 ): PowerSyncBackendConnector => {
   const deps = makeUploadDeps(
-    options.getWorkspaceMode ?? defaultGetWorkspaceMode,
-    options.getCek ?? defaultUploadGetCek,
+    options.encryption?.getWorkspaceMode ?? defaultGetWorkspaceMode,
+    options.encryption?.getCek ?? defaultUploadGetCek,
   )
   // Per-connector so `ambiguous` retry counts persist across the repeated
   // `uploadData` invocations PowerSync makes while a tx stays queued.
