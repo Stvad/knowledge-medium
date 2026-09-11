@@ -15,16 +15,15 @@ import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
  *  extension-authoring guides in the authoring catalog — different
  *  audience (reading/querying user data vs authoring extensions). */
 export const DATA_MODEL_GUIDE_ID = 'data-model'
-
-// Loaded on demand, never statically: the catalog module embeds a glob of
-// the app's module graph (~1 MB built, mostly preload tables) that only the
-// two describe commands read. A static import here puts it in every device's
-// boot graph — measured at ~1 s of cold parse on an iPhone.
-const loadAuthoringCatalog = () => import('./authoringCatalog.ts')
 import {
   getCommandMeta,
   type KnownCommandType,
 } from '@knowledge-medium/agent-cli/protocol'
+
+// Dynamic on purpose: the catalog embeds a glob of the app's module graph
+// (~1 MB built) that only the describe commands read; a static import here
+// puts it in every device's boot graph.
+const loadAuthoringCatalog = () => import('./authoringCatalog.ts')
 
 interface ContextDependencySchema {
   acceptedKeys: readonly string[]
