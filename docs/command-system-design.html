@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command system as a core foundation — design proposal</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1c1e21;
+    --muted: #5b6370;
+    --faint: #8a92a0;
+    --rule: #e3e7ec;
+    --accent: #2f6feb;
+    --accent-soft: #eaf1ff;
+    --code-bg: #f5f7fa;
+    --code-fg: #24292f;
+    --good: #1a7f37;
+    --warn: #9a6700;
+    --bad: #b42318;
+    --good-bg: #e8f5ec;
+    --warn-bg: #fdf6e3;
+    --bad-bg: #fdeceb;
+    --card: #fafbfc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c;
+      --fg: #e6e8eb;
+      --muted: #9aa3b0;
+      --faint: #6b7480;
+      --rule: #272c34;
+      --accent: #6ea0ff;
+      --accent-soft: #1a2640;
+      --code-bg: #1b1f26;
+      --code-fg: #d7dde5;
+      --good: #4ac26b;
+      --warn: #d4a72c;
+      --bad: #f08079;
+      --good-bg: #15281b;
+      --warn-bg: #2a2410;
+      --bad-bg: #2c1715;
+      --card: #181c22;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 56px 28px 120px; }
+  aside.doc-status { border: 1px solid var(--warn); background: var(--warn-bg); border-radius: 7px; padding: 10px 14px; font-size: 13.5px; margin: 0 0 26px; }
+  header.doc { border-bottom: 1px solid var(--rule); padding-bottom: 26px; margin-bottom: 8px; }
+  .kicker { font-size: 12px; letter-spacing: .09em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  h1 { font-size: 30px; line-height: 1.18; margin: 10px 0 8px; letter-spacing: -.01em; }
+  .lede { font-size: 18px; color: var(--muted); margin: 0; }
+  .meta { font-size: 13px; color: var(--faint); margin-top: 16px; }
+  .meta code { font-size: 12px; }
+  h2 { font-size: 22px; margin: 52px 0 6px; letter-spacing: -.01em; padding-top: 8px; }
+  h2 .num { color: var(--faint); font-weight: 600; margin-right: 10px; }
+  h3 { font-size: 16.5px; margin: 30px 0 4px; }
+  p { margin: 12px 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 6px 0; }
+  code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13.5px; background: var(--code-bg); color: var(--code-fg); padding: 1.5px 5px; border-radius: 4px; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 16px 18px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--rule); font-size: 13px; line-height: 1.55; }
+  pre code { background: none; padding: 0; font-size: 13px; }
+  .tok-c { color: var(--faint); font-style: italic; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  td code { font-size: 12.5px; }
+  .callout { border: 1px solid var(--rule); border-left-width: 3px; border-radius: 7px; padding: 13px 16px; margin: 18px 0; background: var(--card); font-size: 14.5px; }
+  .callout .label { font-weight: 700; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; display: block; margin-bottom: 4px; }
+  .callout.key { border-left-color: var(--accent); background: var(--accent-soft); }
+  .callout.key .label { color: var(--accent); }
+  .callout.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  .callout.warn .label { color: var(--warn); }
+  .pill { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 2px 8px; border-radius: 999px; vertical-align: middle; }
+  .pill.blocker { background: var(--bad-bg); color: var(--bad); }
+  .pill.task { background: var(--accent-soft); color: var(--accent); }
+  .pill.done { background: var(--good-bg); color: var(--good); }
+  .pill.later { background: var(--warn-bg); color: var(--warn); }
+  nav.toc { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px; margin: 28px 0 8px; font-size: 14px; }
+  nav.toc .label { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+  nav.toc ol { margin: 0; padding-left: 20px; }
+  nav.toc li { margin: 3px 0; }
+  .gap-grid { display: grid; gap: 14px; margin: 18px 0; }
+  .gap { border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; background: var(--card); }
+  .gap h4 { margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .gap h4 .g { font-family: ui-monospace, monospace; font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 1px 7px; border-radius: 5px; }
+  .gap p { margin: 6px 0 0; font-size: 14px; color: var(--fg); }
+  .gap .now { color: var(--muted); font-size: 13.5px; }
+  hr.soft { border: none; border-top: 1px solid var(--rule); margin: 40px 0; }
+  .footnote { color: var(--faint); font-size: 13px; }
+  .eq { font-weight: 600; }
+  .venn { display: flex; gap: 0; align-items: stretch; margin: 18px 0; flex-wrap: wrap; }
+  .venn .col { flex: 1 1 200px; border: 1px solid var(--rule); padding: 14px 16px; background: var(--card); }
+  .venn .col:first-child { border-radius: 8px 0 0 8px; }
+  .venn .col:last-child { border-radius: 0 8px 8px 0; }
+  .venn .col.mid { background: var(--accent-soft); border-color: var(--accent); }
+  .venn h4 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+  .venn ul { padding-left: 18px; margin: 0; font-size: 13.5px; }
+  .venn .col.mid h4 { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<aside class="doc-status">
+<strong>Status:</strong> proposal — not committed to; recommends the staged path in §1.1 (typed command layer on the async face first, lifecycle unification gated). <strong>Last verified against code:</strong> 2026-07-01 (branch <code>design/command-system</code>; every empirical claim re-checked in an adversarial review round on that date).
+</aside>
+
+<header class="doc">
+  <div class="kicker">Design proposal · extensibility</div>
+  <h1>Commands as a core foundation</h1>
+  <p class="lede">Upgrading the action system into a typed, observable command substrate — so behaviour like navigation can be intercepted, replaced, and composed through one generic seam instead of a new bespoke one each time.</p>
+  <p class="meta">Branch <code>design/command-system</code> · Companion docs: <code>docs/extensibility-axes.md</code>, <code>docs/extension-seam-gaps.md</code>, <code>docs/navigation-redesign.md</code></p>
+</header>
+
+<nav class="toc">
+  <div class="label">Contents</div>
+  <ol>
+    <li><a href="#thesis">The thesis</a> <span style="color:var(--faint)">· <a href="#alternatives">1.1 Alternatives &amp; the decision</a></span></li>
+    <li><a href="#today">Where we are today</a></li>
+    <li><a href="#gaps">The four gaps</a></li>
+    <li><a href="#equation">The shape of a command (the equation)</a></li>
+    <li><a href="#model">Proposed model</a></li>
+    <li><a href="#sync">Synchronous dispatch is a hard requirement</a></li>
+    <li><a href="#events">Commands and events</a></li>
+    <li><a href="#double">The "double thing": verbs fold into commands</a></li>
+    <li><a href="#migration">Migration path</a></li>
+    <li><a href="#open">Open questions</a></li>
+    <li><a href="#nonscope">What this is <em>not</em></a></li>
+  </ol>
+</nav>
+
+<h2 id="thesis"><span class="num">1</span>The thesis</h2>
+<p>
+The navigation work proved a pattern we keep repeating: to make <em>one</em> behaviour extensible (observe it, wrap it, veto it, replace it), we hand-build a bespoke seam for it. Navigation got <code>navigationVerb</code>; paste got <code>pasteDecisionVerb</code>. Each is correct in isolation, but each is a new vocabulary the rest of the system doesn't share.
+</p>
+<p>
+The higher-leverage move is to make two things <em>core foundations</em> that any behaviour can ride on, instead of re-deriving the seam per feature:
+</p>
+<ul>
+  <li><b>Commands</b> — the <em>imperative</em> channel: "do X, give me a typed result," with one dispatch pipeline that every caller and every interceptor shares.</li>
+  <li><b>Events</b> — the <em>reactive</em> channel: "X happened," that observers subscribe to without being able to veto. (Scoped separately; see <a href="#events">§7</a> and the event-bus investigation task.)</li>
+</ul>
+<div class="callout key">
+  <span class="label">Core claim</span>
+  Actions are already most of a command system — they have identity, binding, context, and a dispatch path. What's missing (a typed result channel, typed arguments, invocation-time middleware, one lifecycle) is exactly what we hand-rolled into the verb facet. <b>Closing that gap turns "actions" into "commands," and — once typed handles and the middleware slots exist — lets the bespoke verb seams retire into the generic bus.</b> The claim is that this is higher-leverage than building the next bespoke seam, because it's paid once for all behaviours; <a href="#alternatives">§1.1</a> weighs it against the cheaper alternatives.
+</div>
+
+<h3 id="alternatives">1.1 &nbsp;Alternatives &amp; the decision</h3>
+<p>The verb facet's own docstring argues most seams <em>shouldn't</em> pay a four-slot structure — "reach for this only when there's one output function." So full convergence is not self-evidently right; the realistic alternatives:</p>
+<ul>
+  <li><b>(A) G1-only + keep bespoke verbs.</b> Give actions a typed <em>result</em> (G1) so imperative/surface callers stop fire-and-forgetting, and let any new interceptable behaviour keep using <code>defineVerbFacet</code> as-is. Cheapest; preserves the verb facet's selectivity. <em>Cost:</em> the "double thing" persists — every new wrappable behaviour is still a hand-wired seam, and there's no <em>uniform</em> place to observe/veto across behaviours.</li>
+  <li><b>(B) A typed command layer on the async face.</b> G1 + <code>defineCommand</code> typed handles (G2) + handle-registered middleware (G3) — the verb facet's slots gaining identity, binding metadata, and deps resolution, without touching the keyboard coordinator. <b>This already retires both bespoke verbs</b>: <code>navigate.apply</code> is irreducibly async and paste awaits its decision today (<a href="#double">§8</a>), so all their middleware lives on the async face — and keyboard-triggered navigations are covered because the bound handlers call <code>navigate()</code> <em>internally</em> (the zoom actions do exactly this, with a comment saying so). What (B) does <em>not</em> buy: middleware on the chord face itself, a wildcard that sees keyboard dispatches, and the lifecycle/<code>canDispatch</code> unification (G4).</li>
+  <li><b>(C) Full convergence.</b> (B) plus G4: one lifecycle whose sync face the coordinator dispatches through (<a href="#sync">§6</a>), wildcard middleware on every dispatch. <em>Costs (B) doesn't pay:</em> coordinator surgery across five trigger kinds and their deliberate per-kind policies (<a href="#migration">§9</a> step 5); a second, permanently-degraded sync middleware executor (<a href="#model">§5</a>); and the extension-trust question (<a href="#open">§10</a>) becomes load-bearing — if wildcard middleware ends up first-party-only, the extensibility bet that justifies (C) shrinks with it.</li>
+</ul>
+<div class="callout key">
+  <span class="label">The decision</span>
+  <b>Recommendation: stage it.</b> Land G1, then (B) — typed handles <em>before</em> middleware, so the middleware layer is born typed (<a href="#model">§5</a>) — and fold both verbs. Treat G4 and the sync-face middleware as a <em>separately gated</em> track: build them when a concrete lifecycle defect bites (the palette <code>isVisible</code>/<code>canDispatch</code> mismatch in <a href="#gaps">G4</a> is the standing candidate) or chord-face middleware is actually demanded — not as a default continuation. <em>What to decide, and when:</em> G1 needs no decision; "(B) or stop at G1?" is owed before the typed-handles step; the G4 gate is its own later decision. <em>Settle alongside (B):</em> the <code>DECLINE</code>/<code>VETOED</code> outcome channels (<a href="#model">§5</a>) and the extension-trust stance (<a href="#open">§10</a>).
+</div>
+
+<h2 id="today"><span class="num">2</span>Where we are today</h2>
+<p>We have <em>two</em> partial command systems that don't know about each other.</p>
+
+<h3>The action system — identity, binding, context; no result, no invocation middleware</h3>
+<p>An <code>Action</code> (<code>src/shortcuts/types.ts</code>) carries an <code>id</code>, a <code>context</code>, a <code>handler</code>, optional keyboard/pointer/gesture bindings, and the gating predicates <code>isVisible</code> / <code>canDispatch</code>. It is dispatched through <em>four</em> entry paths that have quietly diverged — plus a fifth that bypasses dispatch entirely:</p>
+<table>
+  <thead><tr><th>Entry</th><th>Deps from</th><th>Context must be active?</th><th><code>canDispatch</code>?</th><th>Returns</th></tr></thead>
+  <tbody>
+    <tr><td><code>runActionById</code> / <code>useRunAction</code></td><td>active context</td><td>yes</td><td><b>ignored</b></td><td><code>void | Promise&lt;void&gt;</code></td></tr>
+    <tr><td><code>dispatchActionWithDeps</code></td><td>caller-supplied</td><td>no</td><td>gated</td><td><code>boolean</code> (handled?)</td></tr>
+    <tr><td>keyboard coordinator</td><td>active context</td><td>yes</td><td>gated</td><td>— (single-winner)</td></tr>
+    <tr><td>pointer / gesture coordinator</td><td>caller-supplied</td><td><b>no</b> (the gesture is the activation)</td><td>gated</td><td><code>boolean</code> (handled?)</td></tr>
+    <tr><td>agent bridge <code>run-action</code></td><td>hand-built</td><td>n/a — calls <code>action.handler(...)</code> directly</td><td><b>bypassed</b></td><td>untyped <code>{returned}</code> wire value</td></tr>
+  </tbody>
+</table>
+<p>The last row is worth dwelling on: the agent runtime bridge needed a result channel so badly that it skips dispatch altogether — it resolves the effective action, builds deps by hand, invokes the handler directly (no <code>canDispatch</code>, no deps validation, no sentinel coercion), and ships whatever came back over the wire untyped. The code itself flags the split too: <code>runAction.ts</code> notes that unifying the <code>canDispatch</code> gates "is tracked with the broader dispatch-lifecycle work." And the handler return type is the giveaway:</p>
+<pre><code>export type ActionHandlerResult = void | false | Promise&lt;void&gt;</code></pre>
+<p>
+There is <b>no typed-payload return channel</b>. The returns that do exist — the handled-<code>boolean</code> from the supplied-deps and pointer/gesture paths — carry only "did a candidate handle this?", the same axis as the <code>false</code> sentinel: a synchronous "not handled — try the next candidate" signal for the single-winner loop, not a value. So a caller that needs <em>data</em> back from a dispatch can't have it. Concretely, the PWA/share-target dispatcher (<code>plugins/app-intents</code>) has to fire-and-forget:
+</p>
+<pre><code>const result = runActionById(actionId, new CustomEvent('app-intent'))
+void Promise.resolve(result).catch(...)   <span class="tok-c">// result is void; nothing to read</span></code></pre>
+<p>
+Rewriting action <em>definitions</em> is possible — <code>actionTransformsFacet</code> folds transforms over the action list at resolution time (<code>effectiveActions.ts</code>). Transforms can replace any field: <code>vim-normal-mode</code> and <code>spatial-navigation</code> wrap the <code>handler</code> (spatial's vertical-move transform also replaces <code>description</code>, a definition field — which matters for migration, <a href="#migration">§9</a>); <code>srs-rescheduling</code> wraps the <code>isVisible</code> predicate <em>and</em> contributes three handler wrappers of its own (swipe-right, todo-cycle ×2); returning <code>null</code> unbinds. (Key <em>rebinding</em> is a separate pass — <code>applyKeybindingOverrides</code> reading <code>keybindingOverridesFacet</code> — not these plugins.) But every transform rewrites the <em>definition</em>, before any invocation. There is no way to intercept, observe, or veto <em>a specific dispatch</em> uniformly across the entry paths.
+</p>
+
+<h3>The verb facet — typed signature and invocation middleware; no identity, no binding</h3>
+<p>
+<code>defineVerbFacet</code> (<code>src/facets/verbFacet.ts</code>) is, in effect, a <em>single-command bus</em>. For one typed <code>(input) =&gt; output</code> it bundles four facets with the right combine algebra: <code>impl</code> (Replace, last-wins), <code>decorators</code> (Wrap, middleware), and <code>before</code>/<code>after</code> (Sum, observers) — plus an <code>onError: 'rethrow' | 'fallback'</code> policy that distinguishes effectful from pure verbs. <code>run()</code> executes <code>before → decorators(impl)(input) → after</code>.
+</p>
+<p>This is precisely the invocation-time middleware the action system lacks — but it has no <code>id</code> you can dispatch by name, no binding, no context/deps resolution. You wire each verb by hand at its one call site.</p>
+
+<div class="callout">
+  <span class="label">The smell</span>
+  Navigation now maintains <code>navigationVerb</code> <em>in parallel</em> to the action system, purely to get a typed result and middleware that actions can't give it. That's the "double thing": a bespoke per-feature bus shadowing the generic dispatch path. Every future "make behaviour X extensible" request will reproduce it unless we close the gap once.
+</div>
+
+<h2 id="gaps"><span class="num">3</span>The four gaps</h2>
+<p>What separates today's <code>Action</code> from a real command, ordered by <em>importance of the gap</em> (build order is <a href="#migration">§9</a>'s critical path):</p>
+
+<div class="gap-grid">
+  <div class="gap">
+    <h4><span class="g">G1</span> Typed result channel <span class="pill blocker">structural blocker</span></h4>
+    <p>Dispatch returns <code>void</code> (or a boolean "handled"). A command must return a typed <code>Result</code> to its caller. This is the <b>only <em>structural</em> blocker</b> — it's what forced navigation into a bespoke verb and the agent bridge into direct handler invocation. <b>Scope note:</b> G1 alone buys "a dispatch returns a typed value" (already a real win — see <a href="#model">surfaces</a>); retiring <code>navigationVerb</code> also needs G2+G3 (typed handles, and somewhere for its decorators/observers to live). Caveat that the model must resolve: once dispatch returns a real <code>Result</code>, the <code>false</code> not-handled signal can no longer <em>be</em> the return value (a <code>toggle→boolean</code> command's legitimate <code>false</code> would be read as "not handled"). The decline signal becomes out-of-band — a distinct <code>DECLINE</code> sentinel, representable on <em>both</em> dispatch faces so it never gets coerced away (<a href="#model">§5</a>, <a href="#sync">§6</a>).</p>
+  </div>
+  <div class="gap">
+    <h4><span class="g">G2</span> Typed arguments, distinct from deps</h4>
+    <p>Handlers receive <code>deps</code> (injected services, context- or caller-resolved) and a raw <code>trigger</code> event — but no typed <em>argument payload</em>. To pass data you smuggle it through deps or parse it off the event. A command is <code>Command&lt;Args, Result&gt;</code>: <b>Args</b> (what the caller asks for) is separate from <b>deps</b> (what the runtime injects). Typing flows through module-level <em>handles</em>, not through string ids (<a href="#model">§5</a>).</p>
+  </div>
+  <div class="gap">
+    <h4><span class="g">G3</span> Invocation-time middleware <span class="pill task">spawned: S1</span></h4>
+    <p><code>actionTransformsFacet</code> rewrites <em>definitions</em>; the verb facet wraps <em>invocations</em> but only per-bespoke-verb. We want generic, dispatch-time <code>before</code>/<code>decorator</code>/<code>after</code> registered through a command's typed handle (plus an explicitly-untyped wildcard), applied uniformly to every dispatch. Handler-wrapping transform consumers migrate onto this; key-rebinding/unbinding and predicate/definition-field rewrites stay definition transforms.</p>
+  </div>
+  <div class="gap">
+    <h4><span class="g">G4</span> One dispatch lifecycle <span class="pill later">gated</span></h4>
+    <p>Four coordinated entries (plus the bridge bypass) with different <code>canDispatch</code> behaviour and return shapes. Collapse to <em>one skeleton</em> — resolve → gate → middleware+handler — with <b>per-trigger-kind policy preserved</b> (the entries differ partly on purpose: modal shadowing, activation requirements, and error behaviour deliberately vary by caller type) and two execution faces at the tail (async <code>dispatch</code> / sync <code>dispatchSync</code>, <a href="#sync">§6</a>). The motivating <em>latent defect</em>: the command palette filters by <code>isVisible</code> only, then dispatches through the path that ignores <code>canDispatch</code> — an action with a <code>canDispatch</code> guard but no <code>isVisible</code> is shown, then runs ungated. Gated in <a href="#migration">§9</a>: built when that class of defect bites or chord-face middleware is demanded.</p>
+  </div>
+</div>
+
+<h2 id="equation"><span class="num">4</span>The shape of a command (the equation)</h2>
+<p>The cleanest way to see the design: a command is the <em>union</em> of what each existing system already gives us.</p>
+<div class="venn">
+  <div class="col">
+    <h4>Action gives</h4>
+    <ul>
+      <li>identity (<code>id</code>)</li>
+      <li>binding (key/pointer/gesture)</li>
+      <li>context + deps resolution</li>
+      <li>gating (<code>canDispatch</code>, <code>isVisible</code>)</li>
+      <li>registration via a facet</li>
+    </ul>
+  </div>
+  <div class="col mid">
+    <h4>Command =</h4>
+    <ul>
+      <li>dispatch <code>(cmd, args) → Result</code></li>
+      <li>typed Args + Result</li>
+      <li>handle-keyed middleware</li>
+      <li>one lifecycle</li>
+      <li>observable</li>
+    </ul>
+  </div>
+  <div class="col">
+    <h4>Verb facet gives</h4>
+    <ul>
+      <li>typed <code>(input) → output</code></li>
+      <li><code>impl</code> Replace</li>
+      <li><code>decorator</code> Wrap</li>
+      <li><code>before</code>/<code>after</code> Sum</li>
+      <li><code>onError</code> policy</li>
+    </ul>
+  </div>
+</div>
+<p class="eq" style="text-align:center; font-size:15px; color:var(--muted)">Command ≈ Action's identity / binding / context&nbsp;&nbsp;∪&nbsp;&nbsp;Verb's typed signature / middleware</p>
+<div class="callout">
+  <span class="label">Where the union frays</span>
+  Two seams the equation has to reconcile, not just add:
+  <ul style="margin:8px 0 0">
+    <li><b>One command can carry one <code>onError</code>; navigation needs two.</b> Navigation is not one verb — it's a pipeline of <code>navigationIntentVerb</code> (<em>pure</em>, <code>onError:'fallback'</code>, gesture → <code>NavigateInput</code>) → <code>navigationVerb</code> (<em>effectful</em>, <code>onError:'rethrow'</code>, request → <code>NavigationResult</code>). A single command with a single failure policy can't host both, so "the navigate command" is really two commands (<code>navigate.resolve</code> pure, <code>navigate.apply</code> effectful) or one command with an explicit two-phase internal structure. <a href="#double">§8</a> resolves which.</li>
+    <li><b>The two halves resolve winners differently.</b> The action coordinator picks one of several candidates per chord via a <em>synchronous</em> "run until not-<code>false</code>" loop; the verb facet has a <em>single</em> last-wins <code>impl</code> and an async <code>run</code>. The union must keep the sync multi-candidate resolution (<a href="#sync">§6</a>) while gaining the verb's typed/middleware shape — they don't simply add.</li>
+  </ul>
+</div>
+
+<h2 id="model"><span class="num">5</span>Proposed model</h2>
+<p>A sketch (illustrative, not final API) of where the pieces land:</p>
+<pre><code><span class="tok-c">// A command: a verb with identity, binding, and context/deps resolution.</span>
+<span class="tok-c">// (In also threads today's ActionDispatch (activate/deactivate) — elided here.)</span>
+type In&lt;Args, Ctx&gt; = { args: Args; deps: DepsFor&lt;Ctx&gt;; trigger?: ActionTrigger }
+
+<span class="tok-c">// EXACTLY ONE of run / runSync — a discriminated pair. Both may DECLINE (the</span>
+<span class="tok-c">// out-of-band "not handled" that frees `false` to be a real Result). runSync's</span>
+<span class="tok-c">// extra contract: the DECLINE decision is returned in-tick — Promise&lt;DECLINE&gt;</span>
+<span class="tok-c">// is forbidden; the Result may still be a promise the coordinator never awaits</span>
+<span class="tok-c">// (§6). This mirrors how types.ts forbids Promise&lt;false&gt; but allows Promise&lt;void&gt;.</span>
+type Command&lt;Args, Result, Ctx extends ActionContextType&gt; = Base&lt;Args, Result, Ctx&gt; &amp; (
+  | { run:     (i: In&lt;Args, Ctx&gt;) =&gt; Promise&lt;typeof DECLINE | Result&gt; }       <span class="tok-c">// async: dispatch() only</span>
+  | { runSync: (i: In&lt;Args, Ctx&gt;) =&gt; typeof DECLINE | MaybePromise&lt;Result&gt;    <span class="tok-c">// chord/pointer-bindable</span>
+      defaultBinding?: ...; pointerBinding?: ...; gestureBinding?: ... }
+)
+interface Base&lt;Args, Result, Ctx&gt; {
+  id: string
+  context: Ctx
+  <span class="tok-c">// Deps-only, NOT (args) — deliberately. These run at chord-resolution time,</span>
+  <span class="tok-c">// before any args exist. An arg-dependent guard returns DECLINE from</span>
+  <span class="tok-c">// run/runSync instead — which the invoking surface can observe and turn into</span>
+  <span class="tok-c">// a disabled state or a toast, not a silent no-op.</span>
+  canDispatch?: (deps: DepsFor&lt;Ctx&gt;) =&gt; boolean
+  isVisible?: (deps: DepsFor&lt;Ctx&gt;) =&gt; boolean
+}
+<span class="tok-c">// The type forbids binding a chord to a `run` (async-decision) command — the</span>
+<span class="tok-c">// coordinator must learn DECLINE-or-handled in-tick to fall through / preventDefault.</span>
+
+<span class="tok-c">// TWO dispatch entries, not one — §6 for why the sync one is mandatory. Typed</span>
+<span class="tok-c">// via the handle; DECLINE stays representable end-to-end on BOTH faces, so no</span>
+<span class="tok-c">// false→undefined-style coercion ever reappears.</span>
+dispatch(cmd: CommandHandle&lt;Args, Result&gt;, args: Args, opts?): Promise&lt;typeof DECLINE | Result&gt;
+dispatchSync(cmd: CommandHandle&lt;Args, Result&gt;, args: Args, opts?): typeof DECLINE | MaybePromise&lt;Result&gt;  <span class="tok-c">// decision in-tick; result not awaited here</span></code></pre>
+
+<h3>Typed handles first; strings only at the edge</h3>
+<p>
+A by-string <code>dispatch&lt;Args, Result&gt;(id: string, ...)</code> — caller-asserted generics over an erased registry — is VS Code's <code>executeCommand&lt;T&gt;</code>, and it is unsound: the assertion is checked nowhere. The verb facet's core virtue is the opposite: contributions are typed <em>through the module-level handle</em> (<code>navigationVerb.decorator(...)</code> type-checks its input and result today). Commands keep that. <code>defineCommand&lt;Args, Result&gt;</code> returns a typed handle; dispatch <b>and middleware registration</b> go through the handle, typed end-to-end. A by-<em>string</em> entry (<code>dispatchById(id, args?): Promise&lt;unknown&gt;</code>) remains — cross-plugin callers dispatch by id, never by module import (the toggle-store / audit-B3 convention), and the palette, agent bridge, and app-intents are genuinely dynamic — but it is <em>explicitly</em> untyped at that edge, never a fake generic. This also fixes the build order: handles (G2) land <b>before</b> middleware (G3), so the middleware layer is born typed rather than string-keyed first and retyped later (<a href="#migration">§9</a>).
+</p>
+<p class="footnote">Prior art cuts both ways and half of it lives in this repo: VS Code (string command registry, unsound <code>executeCommand&lt;T&gt;</code>, static <code>args</code> payloads in keybindings) and CodeMirror (sync <code>(view) =&gt; boolean</code> commands, fall-through by keymap precedence, typing by closure — exactly how <code>src/utils/codemirror.ts</code> uses <code>StateCommand</code> today). Both corroborate the two load-bearing choices here: an in-tick handled/declined decision on the bound path, and typing by handle/closure rather than by asserted string dispatch.</p>
+
+<h3>Middleware = the verb facet's slots, lifted to dispatch</h3>
+<p>We don't invent a new middleware mechanism — the verb facet's three slots, registered through a command's typed handle (or the untyped wildcard):</p>
+<ul>
+  <li><b>Replace</b> — swap a command's <code>run</code> entirely (what <code>navigationVerb.impl(...)</code> does).</li>
+  <li><b>Wrap</b> (decorator) — intercept a dispatch: observe args, transform them, call <code>next</code> or short-circuit.</li>
+  <li><b>Sum</b> (before/after) — pure observers; <code>after</code> sees the outcome and cannot change it.</li>
+</ul>
+<p>
+On the async <code>dispatch</code> face this is literally <code>defineVerbFacet.run</code>, <code>onError</code> policy included (effectful commands rethrow — no double-execution; pure ones may fall back). The sync face cannot reuse it: <code>run</code> is async-only and awaits the impl to build the outcome it hands to <code>after</code>, which the no-await <code>dispatchSync</code> contract forbids. So if/when the sync face is built (<a href="#migration">§9</a>'s gated step 5), it gets a separate, lighter fold with a degraded contract: <b>sync-deciding middleware only</b> — a decorator may have an async <em>body</em>, exactly like <code>runSync</code> itself, but its handled/declined/veto decision must not require an await — and <code>after</code> observes <em>invocation</em>, not settled outcome. A wildcard (mirroring <code>WILDCARD_ACTION_ID</code>) lets one contribution wrap all dispatches — a telemetry tap, a command-log — and necessarily sees <code>args: unknown</code>: one more reason the wildcard is observe/transform-shaped, not result-producing.
+</p>
+<p>
+<b>Veto needs its own outcome.</b> The navigation verbs veto by returning <code>null</code> — legitimate only because <code>NavigationResult | null</code> has a none-arm <em>by design</em>. A generic decorator (and any wildcard, whose <code>Result</code> it cannot know) can't fabricate a <code>Result</code> — and returning <code>DECLINE</code> is the <em>wrong</em> veto on the sync path, because DECLINE means <em>fall through</em>: the next candidate runs, or no candidate handles and the chord is released to the browser un-<code>preventDefault</code>ed. A "veto" that un-suppresses the native default is worse than no veto. So the model needs a third out-of-band outcome — <code>VETOED</code>: consume the event, run nothing, surface per <a href="#open">§10</a> — distinct from both <code>DECLINE</code> and any <code>Result</code>; or wildcard middleware is restricted to observe/transform and veto-by-return stays limited to commands whose Result carries a none-arm. Part of the decision owed alongside (B) (<a href="#alternatives">§1.1</a>).
+</p>
+<div class="callout warn">
+  <span class="label">Decide before building: trust, ordering, cost</span>
+  Generalizing a wildcard wrap from a handful of trusted verbs to <em>every</em> command changes the threat and performance model — this app runs untrusted user-installed extension code that can import internals and contribute to these facets:
+  <ul style="margin:8px 0 0">
+    <li><b>Trust.</b> A wildcard decorator can veto every command by simply not calling <code>next</code> (a veto is legitimate, so it's indistinguishable from intended behaviour) and can read the <code>args</code> of every dispatch (block ids, content — a new data-egress surface). Decide: can extensions register wildcard/command middleware at all, or first-party only? How is a non-<code>next</code> veto contained vs. a throw (which the verb facet already isolates)?</li>
+    <li><b>Ordering.</b> Cross-plugin middleware precedence must be deterministic — presumably the facet's precedence-asc-then-registration order — and the compose order between a surviving <em>definition</em> transform and a new <em>dispatch</em> middleware on the same command must be specified (today both could wrap the same action).</li>
+    <li><b>Cost.</b> Every dispatch now pays two facet reads + a per-call decorator-fold allocation + (async face) a microtask. On the keyboard path this fires per keystroke; bound the wildcard count and keep middleware off the sync path unless it's sync-deciding.</li>
+  </ul>
+</div>
+
+<h3>Resolution is its own stage; the coordinator stays synchronous</h3>
+<p>
+"Which command wins this chord?" is not hidden inside dispatch — it is <b>stage zero of the lifecycle</b>. The coordinator matches a chord, gets an <em>ordered candidate list</em> from <code>resolve()</code>, and tries each in-tick: a <code>DECLINE</code> falls through to the next candidate; the first non-DECLINE is the winner, and <code>preventDefault</code> applies to it alone — today's run-until-not-<code>false</code> loop with the sentinel renamed. Middleware wraps the <em>winning</em> dispatch, not every attempt: a wildcard command-log sees one entry per chord and the per-dispatch cost doesn't multiply by candidate count; the trade-off is that dispatch middleware can't influence <em>which</em> candidate wins — that stays the resolver's job (definition transforms still can). Two prerequisites this stage surfaces: <b>command ids must become globally unique by invariant</b> — today uniqueness is convention, the real runtime key is <code>context:id</code>, and the <code>edit.cm.*</code> id prefixes exist precisely to dodge collisions, so id-keyed anything silently misses a same-name command in another context; and <b>bound or palette-run commands take no caller args</b> — they need <code>Args ≅ void</code> or a statically-bound args payload (VS Code keybindings carry static <code>args</code> JSON), which constrains the G2 adapter.
+</p>
+
+<h3>Surfaces become first-class</h3>
+<p>Several places already treat actions as commands, each working around the missing channel differently. <code>app-intents</code> and the header/toast callers fire by id and discard the result; the swipe menu and mobile bottom-nav dispatch with supplied deps and get only a handled-boolean; the agent runtime bridge went furthest — it bypasses dispatch entirely, invokes <code>action.handler(...)</code> directly with hand-built deps, and ships an <em>untyped</em> <code>{returned}</code> wire value, because it needs exactly the result channel actions don't have. On a real command foundation each becomes a plain dispatch with typed args, a real (or explicitly-<code>unknown</code>) result, and observability — and the bridge's bespoke invocation path retires into <code>dispatch</code>.</p>
+
+<h2 id="sync"><span class="num">6</span>Synchronous dispatch is a hard requirement</h2>
+<div class="callout key">
+  <span class="label">The load-bearing constraint</span>
+  The keyboard / pointer / click surfaces — the <em>majority</em> of actions — are synchronous by contract. If "actions become commands" routes them through an async <code>Promise&lt;Result&gt;</code> pipeline, three things silently break. This is not an optimization to defer; it gates whether chord-face convergence is admissible at all.
+</div>
+<p>What the current code depends on, in the same tick the handler runs:</p>
+<ul>
+  <li><b><code>preventDefault</code> / <code>stopPropagation</code>.</b> The coordinator calls the handler synchronously, reads its return synchronously, then applies event options — all before the UA evaluates the native default. Cross a microtask and the browser has already saved/scrolled/typed: a bound chord <em>silently stops suppressing</em> native behaviour.</li>
+  <li><b>The not-handled fall-through.</b> Picking the winning candidate for a chord reads the synchronous decline signal to try the next one — "the loop can't await to find out." An async pipeline can't decide the winner within the event.</li>
+  <li><b>DOM capture.</b> The pointer path reads <code>currentTarget</code> / <code>targetElement</code> synchronously, because React nulls them once the handler returns.</li>
+</ul>
+<p>
+This is not hypothetical — the navigation work, this proposal's founding success story, <em>already hit this wall</em>. <code>useBlockOpener</code> decides native-passthrough and calls <code>preventDefault</code> <b>synchronously, before</b> the async intent verb runs, with a comment that the carve-out is "intentionally NOT plugin-overridable" precisely because the new-tab default must not be prevented. The async verb facet (<code>run</code> is async-only — "a sync verb still pays one microtask") forced a sync escape hatch around itself. Generalizing the async verb to <em>all</em> actions reproduces that problem everywhere, not just at one call site.
+</p>
+<div class="callout">
+  <span class="label">What the design must commit to</span>
+  <ol style="margin:6px 0 0">
+    <li><b>A first-class synchronous dispatch</b> (<code>dispatchSync</code>) the coordinator uses, with the handler invoked, the <code>DECLINE</code>-or-handled decision read, and <code>preventDefault</code> all in one tick. Only the <em>decision</em> is synchronous — the command's effect may still resolve async (a keyboard delete's <code>repo.tx</code>), unawaited, just as today. The async <code>dispatch</code> is for non-DOM callers that want the result.</li>
+    <li><b>Sync-deciding middleware only on the sync path</b> (<a href="#model">§5</a>): a guard whose decision requires an await cannot run before a sync <code>preventDefault</code>. Async-deciding guards are async-face-only — see below.</li>
+    <li><b>The narrowed thesis.</b> "Imperative / surface callers become commands; the keyboard/pointer coordinator keeps its sync path and merely <em>resolves</em> a command it dispatches synchronously" — carried through to the dispatch signature, not just asserted in one line.</li>
+  </ol>
+</div>
+<div class="callout warn">
+  <span class="label">Async guards do not run on the sync path</span>
+  A <em>sync-deciding</em> wildcard (telemetry, logging, a sync veto) can run on both faces. An <em>async-deciding</em> guard — the canonical "confirm destructive command" that <code>await</code>s a dialog (<code>openDialog</code> is promise-based) — can only run on the async <code>dispatch</code> face. So a keyboard-triggered delete (sync) would <b>bypass</b> an async confirm. This is the one place the two-tier risk is real, and the design must pick: (a) confirm-style guards are an <em>async-face capability</em>, advertised as such; or (b) a sync guard vetoes (consuming the event, <a href="#model">§5</a>) and kicks off an async confirm that <em>re-dispatches</em> on approval — a heavier, explicit protocol. Don't advertise "one guard for every command" without choosing one.
+</div>
+<p class="footnote">Scope note: the companion "sync resolution path for pure verbs" task gates only folding the <em>keyboard-chord</em> pure verbs (the in-tick fall-through decision) — paste folds onto the async path unchanged (<a href="#double">§8</a>).</p>
+
+<h2 id="events"><span class="num">7</span>Commands and events</h2>
+<p>The two foundations are complementary, and must not be conflated:</p>
+<table>
+  <thead><tr><th></th><th>Commands</th><th>Events</th></tr></thead>
+  <tbody>
+    <tr><td>Direction</td><td>imperative — caller asks</td><td>reactive — broadcaster announces</td></tr>
+    <tr><td>Returns</td><td>typed <code>Result</code></td><td>nothing</td></tr>
+    <tr><td>Can veto / transform?</td><td>yes (decorator)</td><td>no</td></tr>
+    <tr><td>In the call path?</td><td>yes</td><td>no — fire-after</td></tr>
+    <tr><td>Today</td><td>actions + verb facets</td><td>post-commit processors (data only)</td></tr>
+  </tbody>
+</table>
+<p>
+They compose, but the boundary is sharp and easy to get wrong. The verb <code>after</code> slot runs <em>inline and awaited, inside the dispatch</em> — it is in the call path (per the table above). So it is the right home only for <b>in-path lifecycle hooks the caller awaits</b> (a command-log entry that must land before the result returns, a timing pair with <code>before</code>) — and only on the <em>async</em> face: on <code>dispatchSync</code> the outcome isn't awaited (<a href="#model">§5</a>), so a sync-path <code>after</code> sees <em>invocation</em>, not success/failure. A keyboard-command telemetry/command-log built on <code>after</code> records "fired", not "succeeded"; per-outcome surfacing on the unawaited path is the <a href="#open">§10</a> open question. It is the <em>wrong</em> tool for <b>fire-and-forget domain reactions</b> ("a block was created → reindex"), which belong off the call path on the event bus. Don't reach for <code>after</code> to avoid building the event bus, and don't route a typed domain event through a decorator. The event bus is the broader reactive surface (domain + lifecycle events), tracked separately by the <b>typed domain-event/lifecycle bus investigation</b> task — and it must stay <b>typed</b> (the audit-B3 constraint): post-commit processors are already a typed data-event bus, and the investigation generalizes <em>that</em>; no relapse to the string-keyed <code>window.CustomEvent</code> bus that was deliberately removed.
+</p>
+
+<h2 id="double"><span class="num">8</span>The "double thing": verbs fold into commands</h2>
+<p>
+Once commands carry a typed result <em>and</em> the handle-keyed middleware slots exist (G1 with G2+G3 — not G1 alone, since the verbs' decorators/observers need a typed home), the bespoke verbs have nothing left that's special. The end state:
+</p>
+<ul>
+  <li><b>It's two of navigation's five seams, not "navigation".</b> The fold covers exactly the two verbs: <code>navigate.resolve</code> (pure intent, fallback) and <code>navigate.apply</code> (effectful execution, rethrow); each verb's <code>impl</code>/<code>decorators</code>/<code>before</code>/<code>after</code> become generic middleware on that command's handle, and the two parallel verbs retire. But back/forward and URL-restoration are <em>deliberately not routed through the verbs</em> ([navigation.ts:25-34], navigation-redesign.md) — they flow through <code>writePanelContent</code>, a separate un-folded seam, alongside the still-TODO <code>urlSerializerFacet</code>/<code>panelHistoryFacet</code>. <b>Consequence:</b> command-level navigation middleware sees gesture/command navigations, <em>not</em> browser-back or deep-link restoration. Don't read "the verbs retire" as "navigation is a command."</li>
+  <li><b>What the fold buys navigation is the G1/G2/G3 wins</b> — a typed <code>Result</code> to the caller, handle-keyed + wildcard middleware, one registry — not new coverage of the click path. A navigation click already goes through the bus today (<code>useBlockOpener</code> → <code>navigateFromGesture</code> → <code>navigationVerb.run</code>); the click's only <em>synchronous</em> obligation is <code>preventDefault</code> + the native-passthrough decision, which <a href="#sync">§6</a> keeps as a non-overridable carve-out <em>outside</em> the bus; and <code>navigate.apply</code> is irreducibly async (<code>repo.tx</code>), so it dispatches on the async face regardless. This is why the fold does <b>not</b> wait for G4 (<a href="#alternatives">§1.1</a>).</li>
+  <li><b><code>pasteDecisionVerb</code> is pure and is the <em>easy</em> case.</b> It folds onto the <b>async</b> <code>dispatch</code> face (the <code>onError: 'fallback'</code> policy maps directly) because its DOM handlers already <code>preventDefault</code> eagerly and <code>await</code> the decision today (CodeMirror deliberately re-reads live editor state <em>after</em> the await). Making the decision synchronous would be an optional latency win, nothing more.</li>
+  <li><b>Two consumers the fold must not strand.</b> <code>extensions/api.ts</code> exports both verbs on the public user-extension barrel — extensions are DB-installed and un-greppable from the repo, so retiring the verbs needs a deprecation shim there, not deletion. And <code>resolveGlobalCommandTarget</code> runs the intent verb as an <em>effect-free read probe</em> (resolving daily-note prev/next anchors and the shared destination-resolution read path), not a dispatch — the command shape needs an explicit probe entry that runs the resolution <em>without</em> firing <code>before</code>/<code>after</code> observers and never chains into <code>navigate.apply</code>.</li>
+</ul>
+<p class="footnote">The convergence tax doesn't vanish under "commands as foundation" — making a behaviour interceptable still means routing its callers through one choke. What changes is that the choke is <em>generic</em> and shared, so we pay it once for all behaviours instead of re-paying per feature.</p>
+
+<h2 id="migration"><span class="num">9</span>Migration path</h2>
+<p>Strictly incremental; each step is independently valuable and existing callers keep working. The dispatch surface to keep source-compatible is real but bounded: ≈17 production call sites across the by-id and supplied-deps entries (≈30 counting tests), plus the pointer/gesture dispatchers, the coordinator itself, and the agent bridge's direct-invocation path.</p>
+<p><b>Critical path: G1 → G2 → G3 → verb folds.</b> G1 unblocks "a dispatch returns a typed result"; retiring the verbs additionally needs G2 and G3 — typed handles first, precisely so the middleware layer is born typed (<a href="#model">§5</a>). G4 is deliberately <em>off</em> the critical path: everything above runs on the async face (<a href="#alternatives">§1.1</a>), so the coordinator/sync-face work is a separately gated track.</p>
+<ol>
+  <li><b>Return channel (G1)</b> <span class="pill blocker">do first</span> — widen the handler/dispatch result to carry a typed value, with <code>DECLINE</code> as the out-of-band not-handled signal (rationale in <a href="#gaps">G1</a>). Two consumers change mechanically: <code>dispatchActionWithDeps</code>'s boolean widens to <code>DECLINE | Result</code> (its two in-tick readers — the swipe menu's <code>preventDefault</code> decision and the interaction-fallback check — adjust their test), and the agent bridge's <code>{returned}</code> wire payload starts carrying real values (today a declining handler surfaces there as <code>returned: false</code>). Valuable on its own: app-intents, the bridge, and a future command palette stop fire-and-forgetting.</li>
+  <li><b>Typed command handles (G2)</b> — <code>defineCommand&lt;Args, Result&gt;</code> returning a typed handle (<a href="#model">§5</a>). Handles are an <em>intra-plugin</em> convenience: the cross-plugin convention stays dispatch-by-id, never module imports (audit B3), and by-id keeps today's throw-on-missing semantics that app-intents relies on for disabled plugins. The adapter from existing actions must thread the third handler argument (<code>ActionDispatch</code> — activate/deactivate) that hold-style handlers use.</li>
+  <li><b>Invocation middleware (G3)</b> <span class="pill task">spawned: S1</span> — the verb facet's slots registered through handles, plus the untyped wildcard (<a href="#model">§5</a>). Two specification duties: <b>(a) coverage</b> — definition transforms reach <em>every</em> handler invocation today, including the three sites that bypass the shared candidate loop (hold-binding fire, gesture progress, and the agent bridge, which runs <em>effective</em> actions); dispatch middleware must reach all of them, or the gap is a silent behaviour regression for migrated plugins. <b>(b) compose order</b> between a surviving definition transform and dispatch middleware on the same command. Migration inventory, from the code: vim-normal-mode's and spatial-navigation's handler wraps and srs-rescheduling's three handler wraps (swipe-right, todo-cycle ×2) become decorators — noting spatial's vertical transform <em>also replaces <code>description</code></em>, a definition field, so it splits into decorator + residual definition transform; srs's <code>isVisible</code> wrap and key-rebind/unbind stay definition transforms. Spatial's decorators are async-bodied but sync-deciding, which is exactly what the <a href="#model">§5</a> sync contract admits.</li>
+  <li><b>Verb folds</b> — re-express <code>navigate</code> as the <code>resolve</code>/<code>apply</code> command pair and fold <code>pasteDecisionVerb</code>; all on the async face, so <em>not</em> gated on the sync-path task (<a href="#sync">§6</a>, <a href="#double">§8</a>). Honour the two §8 caveats: a deprecation shim for the verbs on the extension barrel, and an effect-free probe entry for the intent-resolution read path.</li>
+  <li><b>Lifecycle unification (G4)</b> <span class="pill later">gated</span> — collapse the entries onto one skeleton with per-trigger-kind <em>policy</em>, not a naive two-face merge: modal shadowing applies to the keyboard only (the by-id path deliberately skips it; pointer/gesture bypass it with an open FIXME for opt-in), hold bindings invert the lifecycle (<code>preventDefault</code> at arm time, gate re-checked at timer fire), the event-filter cascade gates keyboard dispatch only, and the entries disagree on throw-vs-silent-false for a missing action. Build when the gate opens — the palette <code>isVisible</code>/<code>canDispatch</code> mismatch (<a href="#gaps">G4</a>) bites for real, or chord-face middleware is demanded — and build <code>dispatchSync</code>'s degraded middleware fold (<a href="#model">§5</a>) with it.</li>
+</ol>
+
+<h2 id="open"><span class="num">10</span>Open questions</h2>
+<ul>
+  <li><b>Outcome channels:</b> the exact <code>DECLINE</code> shape lands with G1 (step 1); the <code>VETOED</code> outcome and the sync-deciding middleware contract (<a href="#model">§5</a>, <a href="#sync">§6</a>) must be settled before the middleware step. The async-guard protocol — (a) async-face capability vs (b) veto-then-re-dispatch (<a href="#sync">§6</a>) — is part of the same decision.</li>
+  <li><b>Extension trust:</b> may user extensions register command/wildcard middleware, or first-party only? How is a veto contained, and the per-command <code>args</code> egress surface bounded? (<a href="#model">§5</a>.) This is load-bearing for the staged bet: if the answer is first-party-only, the uniform seam pays out less to the extension ecosystem the <a href="#alternatives">§1.1</a> bet counts on.</li>
+  <li><b>Vocabulary:</b> do "actions" simply <em>become</em> commands (binding is a thin layer that dispatches a command), or do commands sit beside actions as a superset actions adapt into? Strong lean: one vocabulary — actions are commands with bindings. Requires the id-uniqueness invariant (<a href="#model">§5</a>).</li>
+  <li><b>Args vs deps boundary:</b> is <code>trigger</code> an arg or ambient context? (Lean: ambient/optional.) How do bindings and palette rows supply args — <code>Args ≅ void</code> only, or a statically-bound args payload (<a href="#model">§5</a>)?</li>
+  <li><b>Imperative <code>canDispatch</code>:</b> gate by default for consistency (which also closes the palette shown-then-ungated mismatch, <a href="#gaps">G4</a>), or preserve <code>runActionById</code>'s "caller owns the precondition" escape hatch as an explicit opt-out?</li>
+  <li><b>Cancellation:</b> does <code>run</code> take an <code>AbortSignal</code> for long/superseded commands (rapid navigation, in-flight search)?</li>
+  <li><b>Failure surfacing &amp; tests:</b> how does a vetoed/declined/failed command reach the user — today verbs swallow to <code>console.error</code>, <code>navigate</code> swallows to <code>null</code>, and a <code>DECLINE</code> must be observable to the invoking surface (disable/toast) rather than a silent no-op. A toast analogue to <code>processorRejectionToast</code>, or silence? And the test strategy for the sync vs async paths (AGENTS.md forbids timeout-based async tests).</li>
+</ul>
+
+<h2 id="nonscope"><span class="num">11</span>What this is <em>not</em></h2>
+<ul>
+  <li><b>Not a replacement for the facet system.</b> Commands are built <em>on</em> facets — registration is a facet, middleware is facets (exactly as the verb facet already is).</li>
+  <li><b>Not a generic global pub/sub.</b> Commands are typed and identity-bearing; the event side is typed too (audit B3). No string-keyed <code>window</code> bus.</li>
+  <li><b>Not a rendering/palette rebuild.</b> Quick-find, the eventual command palette, app-intents, the agent bridge are command <em>surfaces</em> — they consume the foundation, they aren't part of it.</li>
+  <li><b>Not "build it all now."</b> G1 is independently valuable and safe under every <a href="#alternatives">§1.1</a> option; the staged recommendation, its gates, and the decisions owed at each stage live in the <a href="#alternatives">§1.1</a> decision callout. The live design questions before the middleware step are the outcome channels (<a href="#model">§5</a>) and extension trust (<a href="#open">§10</a>).</li>
+</ul>
+
+<hr class="soft">
+<p class="footnote">
+Related tasks already spawned: <span class="pill task">S1</span> action-dispatch middleware (= G3) · typed domain-event/lifecycle bus investigation (<a href="#events">§7</a>) · sync resolution path for pure verbs (<a href="#sync">§6</a> — gates only the keyboard-chord pure-verb folds) · declarative plugin-settings schema (independent, gap I2). This document covers the command-foundation thread itself, which was discussed but not yet broken into build tasks.
+</p>
+
+</div>
+</body>
+</html>
