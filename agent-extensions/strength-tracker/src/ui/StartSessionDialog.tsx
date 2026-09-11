@@ -91,10 +91,12 @@ export const StartSessionDialog = ({
       {/* The lift list is as long as the session is, so the dialog is capped at
           the viewport and only its BODY scrolls — the picks and the Start
           button stay put rather than scrolling off the end of the list.
-          `max-h-dvh`/`min-h-0` and not an arbitrary `max-h-[85vh]`: this
-          extension is installed into a client whose CSS was built without it,
-          and only the safelisted utility vocabulary survives that
-          (`src/extension-utilities.css`). */}
+          Every class here is in the extension safelist
+          (`src/extension-utilities.css`), which is the vocabulary a client
+          compiles whether or not it was built with this extension. An
+          arbitrary value — `max-h-[85vh]` — resolves only while some app file
+          happens to use that identical class, and loses the cap silently when
+          the last one stops. */}
       <DialogContent className="flex max-h-dvh flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Start a session</DialogTitle>
