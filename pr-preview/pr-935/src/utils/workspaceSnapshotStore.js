@@ -1,2 +1,0 @@
-import{CallbackSet as e}from"./callbackSet.js";var t=t=>{let n=new Map,r=new e(t);return{publish:e=>{n.set(e.workspaceId,e),r.notify()},getFor:e=>(e==null?void 0:n.get(e))??null,subscribe:e=>r.add(e),clearSnapshots:()=>{n.clear(),r.notify()},reset:()=>{n.clear(),r.clear()}}};export{t as createWorkspaceSnapshotStore};
-//# sourceMappingURL=workspaceSnapshotStore.js.map
