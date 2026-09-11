@@ -923,6 +923,20 @@ describe('mirrorCommentBody', () => {
     expect(leftover).toEqual(['km-abc'])
   })
 
+  it('recognises tilde fences and fences longer than three backticks', () => {
+    const text = 'km-abc first\n~~~\nbd show km-abc\n~~~\nthen km-abc\n````\n```\nbd close km-abc\n```\n````\nlast km-abc'
+    const { body } = mirrorCommentBody({ ...comment, text }, numbers, hold)
+    expect(body.endsWith('#12 first\n~~~\nbd show km-abc\n~~~\nthen #12\n````\n```\nbd close km-abc\n```\n````\nlast #12')).toBe(true)
+  })
+
+  it('cuts a body past the GitHub comment limit and says so', () => {
+    const text = 'x'.repeat(70_000)
+    const { body } = mirrorCommentBody({ ...comment, text }, numbers, hold)
+    expect(body.length).toBeLessThanOrEqual(65_536)
+    expect(body.startsWith(`<!-- bd-comment ${comment.id} -->`)).toBe(true)
+    expect(body).toContain('[cut by the mirror: the bead comment is 70000 characters')
+  })
+
   it('does not count a held id as a leftover', () => {
     const { unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-new and `km-abc`' }, numbers, hold)
     expect(unmapped).toEqual(['km-new'])
@@ -1708,6 +1722,48 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-o)`)
     const [post] = postsOf(posted())
     expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see km-o')).toBe(true)
+  })
+
+  // PRs share the number sequence, so a ref beyond the listing's last issue
+  // is not an issue by that fact alone — only a ref this run's push minted
+  // is trusted unseen.
+  it('does not trust a ref beyond the listing unless this run minted it', () => {
+    const rows = (oRef: string | null) => [
+      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
+      syncRow({ id: 'km-o', external_ref: oRef, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
+    ]
+    const comments = { 'km-m': [beadComment(C1, 'see km-o', '2026-09-03T20:16:36Z')] }
+    const graphql = { data: { repository: { i7: issueComments([]) } } }
+
+    const preExisting = makeSyncRepo({ issues: twoIssues(), lists: [rows(ref(9))], comments, graphql })
+    expect(preExisting.run().stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-o)`)
+
+    const minted = makeSyncRepo({ issues: twoIssues(), lists: [rows(null), rows(ref(9))], comments, graphql })
+    const r = minted.run()
+    expect(r.stdout).toContain('minted: km-o → #9')
+    const [post] = postsOf(minted.posted())
+    expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see #9')).toBe(true)
+  })
+
+  // A bead the restore left half-repaired is kept out of the push-back; the
+  // mirror's touch would push it just the same.
+  it('does not touch or post a bead whose restore failed this run', () => {
+    const closedLocal = syncRow({ id: 'km-t4', status: 'closed', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z', comment_count: 2 })
+    const revertedRow = { ...closedLocal, status: 'open', priority: 2 }
+    const { run, shimCalls, posted } = makeSyncRepo({
+      issues: [ghIssue(4, '2026-08-20T01:00:00Z')],
+      lists: [[closedLocal], [closedLocal], [revertedRow]],
+      shows: [[{ ...closedLocal, close_reason: 'done' }], [revertedRow]],
+      failCloseId: 'km-t4',
+      comments: { 'km-t4': twoComments },
+      graphql: { data: { repository: { i4: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('FAILED to restore')
+    expect(r.stdout).toContain('SKIPPED comments of km-t4: its restore failed this run')
+    expect(shimCalls()).not.toContain('bd comments km-t4')
+    expect(posted()).toBe('')
   })
 
   it('skips a commented bead whose own ref points at no issue of this repo, before any GitHub read', () => {

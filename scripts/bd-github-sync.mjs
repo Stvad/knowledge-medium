@@ -808,29 +808,42 @@ export const mirroredCommentIds = bodies => new Set(bodies.map(b => b.match(MIRR
 // cannot be edited — so those go out and are reported (`leftover`), since
 // the GitHub copy is the one a human can fix. Holding them would hide the
 // whole comment for good.
-const CODE_SPAN = /(```[\s\S]*?```|`[^`\n]*`)/
+// Code kept verbatim: a fence of three or more backticks or tildes closed by
+// the same run, or an inline span. Everything between is prose.
+const CODE = /(`{3,}|~{3,})[\s\S]*?\1|`[^`\n]*`/g
 export const rewriteBeadIds = (text, numberByBeadId, holdIds) => {
   const unmapped = new Set()
-  const rewritten = text
-    .split(CODE_SPAN)
-    .map((part, i) =>
-      i % 2
-        ? part
-        : part.replace(BEAD_ID, id => {
-            if (numberByBeadId.has(id)) return `#${numberByBeadId.get(id)}`
-            if (holdIds.has(id)) unmapped.add(id)
-            return id
-          }),
-    )
-    .join('')
+  const rewriteProse = prose =>
+    prose.replace(BEAD_ID, id => {
+      if (numberByBeadId.has(id)) return `#${numberByBeadId.get(id)}`
+      if (holdIds.has(id)) unmapped.add(id)
+      return id
+    })
+  let rewritten = ''
+  let last = 0
+  for (const m of text.matchAll(CODE)) {
+    rewritten += rewriteProse(text.slice(last, m.index)) + m[0]
+    last = m.index + m[0].length
+  }
+  rewritten += rewriteProse(text.slice(last))
   const leftover = [...new Set(rewritten.match(BEAD_ID) ?? [])].filter(id => !unmapped.has(id))
   return { text: rewritten, unmapped: [...unmapped], leftover }
 }
 
+// GitHub caps an issue comment at this many characters, and a bead comment
+// can be as long. Cut deterministically and say so: an oversized body would
+// fail its POST on every run and stall every later comment of the bead.
+const GITHUB_COMMENT_MAX = 65_536
 export const mirrorCommentBody = (comment, numberByBeadId, holdIds) => {
   const when = comment.created_at.replace(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d).*$/, '$1 $2 UTC')
   const { text, unmapped, leftover } = rewriteBeadIds(comment.text, numberByBeadId, holdIds)
-  return { body: `<!-- bd-comment ${comment.id} -->\n_Mirrored from a beads tracker comment of ${when}._\n\n${text}`, unmapped, leftover }
+  const head = `<!-- bd-comment ${comment.id} -->\n_Mirrored from a beads tracker comment of ${when}._\n\n`
+  let body = head + text
+  if (body.length > GITHUB_COMMENT_MAX) {
+    const note = `\n\n_[cut by the mirror: the bead comment is ${text.length} characters, GitHub caps a comment at ${GITHUB_COMMENT_MAX}]_`
+    body = head + text.slice(0, GITHUB_COMMENT_MAX - head.length - note.length) + note
+  }
+  return { body, unmapped, leftover }
 }
 
 export const planCommentMirror = (comments, mirrored) =>
@@ -1130,12 +1143,13 @@ const POST_PAUSE_MS = 800
 // the rest resumes next run. The env override exists for the process tests.
 const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 60
 const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-const mirrorComments = (beads, issueByNumber, maxKnownIssueNumber, env, dryRun) => {
+const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dryRun }) => {
   // A ref is trusted only where the run-start listing shows an issue, or
-  // beyond its last number (minted by this run's push — step 4's inference):
-  // a ref pointed at a PR or a deleted issue would otherwise turn a bead id
-  // into a confidently wrong #N, whether as a destination or a reference.
-  const isIssue = n => issueByNumber.has(n) || n > maxKnownIssueNumber
+  // where this run's push minted it: a ref pointed at a PR or a deleted
+  // issue would otherwise turn a bead id into a confidently wrong #N,
+  // whether as a destination or a reference. PRs share the number sequence,
+  // so a number beyond the listing's last proves nothing by itself.
+  const isIssue = n => issueByNumber.has(n) || mintedNumbers.has(n)
   const numberByBeadId = new Map(beads.map(b => [b.id, issueNumberFromRef(b.external_ref)]).filter(([, n]) => n && isIssue(n)))
   const unmintedIds = new Set(beads.filter(b => !b.external_ref).map(b => b.id))
   const report = []
@@ -1143,7 +1157,10 @@ const mirrorComments = (beads, issueByNumber, maxKnownIssueNumber, env, dryRun) 
   const commented = []
   for (const b of beads) {
     if (!(b.comment_count > 0)) continue
-    if (numberByBeadId.has(b.id)) commented.push(b)
+    // skipIds: beads the restore left half-repaired — the touch would push
+    // that row and bury the loss the push-back exclusion protects.
+    if (skipIds.has(b.id)) report.push(`SKIPPED comments of ${b.id}: its restore failed this run — touching it would push the half-restored row`)
+    else if (numberByBeadId.has(b.id)) commented.push(b)
     else if (b.external_ref) report.push(`SKIPPED comments of ${b.id}: its external_ref does not point at an issue of this repo (a PR, or deleted) — fix the ref`)
   }
   if (!commented.length) return { report, touched }
@@ -1456,7 +1473,14 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // Fresh listing, not postBeads: the touch writes the bead's CURRENT
     // priority back, and step 3 just rewrote priorities the pull flattened —
     // read from before it, the touch would undo the repair.
-    const mirror = mirrorComments(dryRun ? preBeads : listAllBeads(), issueByNumber, maxKnownIssueNumber, env, dryRun)
+    const mirror = mirrorComments({
+      beads: dryRun ? preBeads : listAllBeads(),
+      issueByNumber,
+      mintedNumbers: new Set(planMintedRefs(preBeads, freshBeads).map(m => m.number)),
+      skipIds: failedRestoreIds,
+      env,
+      dryRun,
+    })
     report.push(...mirror.report)
     if (mirror.touched.length) {
       let out
