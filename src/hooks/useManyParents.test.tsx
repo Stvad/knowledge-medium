@@ -87,7 +87,7 @@ const makeRepo = () => {
 }
 
 const harness = makeRepo()
-vi.mock('@/context/repo.tsx', () => ({useRepo: () => harness.repo}))
+vi.mock('@/context/repo.js', () => ({useRepo: () => harness.repo}))
 
 const blocksFor = (ids: string[]) => ids.map(id => ({id}) as Block)
 
@@ -131,11 +131,8 @@ describe('useManyParents', () => {
   })
 
   it('holds the same map when a handle republishes an equal chain', () => {
-    // A `LoaderHandle` stores every reload's value and applies its
-    // structural diff only to the NOTIFY, so `peek()` hands back a fresh
-    // array after a reload that changed nothing. Comparing members by
-    // identity would rebuild the map on each of those, and every consumer
-    // memo that closes over it.
+    // Comparing members by identity would rebuild the map on every no-op
+    // reload, and every consumer memo that closes over it.
     const {result, rerender} = renderWith(['a', 'b'])
     const first = result.current
 

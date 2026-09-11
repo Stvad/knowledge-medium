@@ -36,6 +36,7 @@ import {
 import { normalizeReferences, type BlockData } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
+import { buildInClause, MAX_IDS_PER_IN_CLAUSE } from '@/data/internals/sqlBinds.js'
 import type { ReferenceTargetLookups } from '@/data/internals/referenceTargetProcessor.js'
 import {
   blocksAlreadyReflects,
@@ -200,16 +201,12 @@ interface ApplyCandidate {
   readonly materializability: Exclude<Materializability, 'defer'>
 }
 
-const buildInClause = (count: number): string =>
-  Array.from({ length: count }, () => '?').join(', ')
-
-// Max ids per `WHERE id IN (...)` staging read. SQLite caps bound parameters
-// (SQLITE_MAX_VARIABLE_NUMBER — 999 on older builds, 32766 since 3.32); a large
-// initial sync or a long observer-down backlog can queue far more changed ids
-// than that. One oversized IN read would throw before any row materialized,
-// and since the queue is only consumed AFTER a successful pass, the batch would
-// wedge and every retry refail. 500 stays well under the old floor.
-const STAGING_READ_CHUNK = 500
+// Max ids per `WHERE id IN (...)` staging read. A large initial sync or a long
+// observer-down backlog can queue far more changed ids than the shared ceiling.
+// One oversized IN read would throw before any row materialized, and since the
+// queue is only consumed AFTER a successful pass, the batch would wedge and
+// every retry refail.
+const STAGING_READ_CHUNK = MAX_IDS_PER_IN_CLAUSE
 
 /** Read staging rows for `ids` in bounded chunks so the IN-clause never exceeds
  *  SQLite's bound-parameter limit. Missing ids (already removed) are simply

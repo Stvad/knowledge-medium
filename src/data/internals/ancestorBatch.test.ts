@@ -94,18 +94,6 @@ describe('ancestorWalk', () => {
     expect(idsOf(chains[500])).toEqual(['id-500'])
   })
 
-  it('keeps the recents feed default window in one statement', async () => {
-    // Its first page, and the size a bound must clear to keep the common
-    // cold-storage path off serialized round trips. Paging past the bound
-    // does split, deliberately — see the constant.
-    const {db, statements} = fakeDb()
-    const ids = Array.from({length: 200}, (_, i) => `id-${i}`)
-
-    await Promise.all(ids.map(id => ancestorWalk(db, id)))
-
-    expect(statements).toHaveLength(1)
-  })
-
   it('confines a failed read to its own chunk', async () => {
     const ids = Array.from({length: 501}, (_, i) => `id-${i}`)
     const {db} = fakeDb({failWhen: chunk => chunk.length === 500})

@@ -9,8 +9,9 @@
 // when it fails.
 
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BlockData, Handle, HandleStatus } from '@/data/api'
+import { makeBlockData } from '@/data/test/factories'
 
 /** A handle the test drives: it starts `'idle'`, `load()` hands it to the
  *  file-level resolver for its key, and `settle` publishes to subscribers
@@ -56,18 +57,8 @@ class FakeHandle<T> implements Handle<T> {
   }
 }
 
-const row = (id: string, content: string, parentId: string | null): BlockData => ({
-  id,
-  content,
-  properties: {},
-  workspaceId: 'ws-1',
-  parentId,
-  orderKey: 'a0',
-  updatedAt: 0,
-  userUpdatedAt: 0,
-  updatedBy: 'u1',
-  deleted: false,
-} as unknown as BlockData)
+const row = (id: string, content: string, parentId: string | null): BlockData =>
+  makeBlockData({id, workspaceId: 'ws-1', content, parentId})
 
 /** One crumb per id, named after it, so a mixed-up mapping is visible in
  *  the assertion rather than hidden behind a matching count. */
@@ -141,7 +132,6 @@ beforeEach(() => {
   seedLoads.length = 0
 })
 
-afterEach(() => vi.restoreAllMocks())
 
 describe('useAncestorCrumbs', () => {
   it('maps each chain onto the block it belongs to', async () => {

@@ -868,12 +868,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   subscribe(listener: (value: T) => void): Unsubscribe {
     if (this.disposed) return this.resolveLive().subscribe(listener)
-    // Retain only for a listener the set did not already hold. The
-    // unsubscribe below releases only when its delete SUCCEEDS, so a
+    // The unsubscribe below releases only when its delete SUCCEEDS, so a
     // repeated listener that retained twice could never release twice —
     // it would pin the handle at refCount >= 1 forever, past every GC.
-    // A caller subscribing one listener to a handle it holds twice is the
-    // reachable shape (`useHandles` over a list with a repeated id).
+    // Reachable via `useHandles` over a list with a repeated id.
     const alreadyListening = this.listeners.has(listener)
     this.listeners.add(listener)
     if (!alreadyListening) this.retain()

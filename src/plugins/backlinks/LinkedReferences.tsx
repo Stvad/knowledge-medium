@@ -54,11 +54,10 @@ function LinkedReferencesInner({
     filterActive ? effectiveFilter : undefined,
   )
   const backlinks = filterActive ? filteredBacklinks : unfilteredBacklinks
-  // Prefetch ancestors for every visible backlink in one batched
-  // query, instead of N concurrent `useParents` calls. Each entry's
-  // breadcrumbs read from this map; the per-entry `core.ancestors`
-  // handle only fires when the user clicks a breadcrumb (changing
-  // shownBlock to one we didn't prefetch).
+  // Warms one `core.ancestors` handle per backlink, so an entry that
+  // scrolls into view finds its chain already resolved. Entries read the
+  // same handles through `initialParents`; a promoted breadcrumb changes
+  // shownBlock to an id that was not prefetched, which acquires its own.
   const initialParentsByBacklinkId = useManyParents(backlinks)
   const [open, setOpen] = useState(true)
   const [filtersOpenOverride, setFiltersOpenOverride] = useState<boolean | null>(null)

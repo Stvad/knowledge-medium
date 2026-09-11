@@ -255,11 +255,6 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     setProgress(null)
   }, [setProgress])
 
-  // A window that slides with the card, rather than one anchored to a
-  // fixed chunk: each advance only adds the id entering the far end, and
-  // every card already in the window keeps the chain it resolved. It
-  // reaches backwards as well as forwards so Back does not land on a card
-  // whose handle was released long enough ago to have been collected.
   const queueBlocks = useMemo(
     () => (queue ?? [])
       .slice(Math.max(0, index - BREADCRUMB_LOOKBACK), index + BREADCRUMB_PREFETCH)

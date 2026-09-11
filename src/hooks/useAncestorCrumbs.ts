@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
-import type { BlockData } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
-import { useHandles } from '@/hooks/block.js'
+import { useHandles, useStableJson } from '@/hooks/block.js'
 import { crumbsFromAncestors } from '@/utils/blockCrumbs.js'
 
 const EMPTY_CRUMBS: ReadonlyMap<string, readonly string[]> = new Map()
@@ -23,24 +22,15 @@ export interface AncestorCrumbTarget {
  *  `BlockCrumbs`, whose height is fixed whether or not the crumbs have
  *  arrived, so the fill-in cannot move the rows under the user's cursor.
  *
- *  That is a scheduling guarantee, not an isolation one. This repo's
- *  PowerSync setup runs `OPFSCoopSyncVFS` — ONE connection behind a
- *  single-slot mutex, no read/read concurrency — so an ancestor read in
- *  flight when the next keystroke's search dispatches does delay it. What
- *  makes that a non-issue is the size of the read: the walk joins on
- *  `blocks.id` (the primary key), so it costs PK lookups bounded by chain
- *  DEPTH and dodges the automatic-index planner trap `SUBTREE_SQL` needs
- *  an `INDEXED BY` hint for. It therefore does NOT grow with the
- *  workspace the way content search does (an unindexed LIKE scan,
- *  "O(total content bytes)" in `linkTargetAutocomplete`'s own words) — so
- *  the margin holds as data grows. What would move it: the walk ceasing
- *  to be index-backed, or chains far deeper than an outline's usual 5–15
- *  levels.
+ *  That is a scheduling guarantee, not an isolation one: the walk shares
+ *  one SQLite connection with search, so it does delay the next
+ *  keystroke. Acceptable only while it stays a PK-bounded climb — what
+ *  would move it is the walk ceasing to be index-backed, or chains far
+ *  deeper than an outline's usual 5–15 levels.
  *
- *  One `core.ancestors` handle per id, which is the per-id cache: a
- *  result set that shifts every keystroke re-reads only the ids that
- *  entered it, and those reads coalesce into one statement. Crumbs are
- *  live, so a block reparented while the dialog is open re-crumbs.
+ *  One `core.ancestors` handle per id, so a result set that shifts every
+ *  keystroke re-reads only the ids that entered it. Crumbs are live: a
+ *  block reparented while the dialog is open re-crumbs.
  *
  *  Crumbs live in the handles, so an id that LEAVES the set for longer
  *  than the store's GC window loses them: type past a result and back to
@@ -48,10 +38,8 @@ export interface AncestorCrumbTarget {
  *
  *  A failed walk leaves that id absent from the map rather than throwing:
  *  breadcrumbs are decoration and must never take the search down with
- *  them. Crumb FORMATTING is deliberately not wrapped to match: a
- *  malformed chain would throw during render exactly as it would for
- *  every other consumer that projects a query result, and a catch here
- *  would be one site of a rule with no owner. */
+ *  them. Crumb FORMATTING is deliberately not wrapped to match — a catch
+ *  here would be one site of a rule with no owner. */
 export const useAncestorCrumbs = (
   blocks: readonly AncestorCrumbTarget[],
 ): ReadonlyMap<string, readonly string[]> => {
@@ -60,20 +48,12 @@ export const useAncestorCrumbs = (
   // refuses to render an ancestor from another one, and with no workspace
   // there is nothing to scope against, so we don't ask at all.
   const workspaceId = repo.activeWorkspaceId
-  // Keyed on the targets' CONTENT, not the array's identity, so a caller
-  // can build it inline — and serialized as JSON rather than joined on a
-  // delimiter. `blockId.ts` enforces canonical uuids only on the tx INSERT
-  // path and deliberately exempts sync-applied and `applyRaw` rows, so an
-  // id containing the delimiter is not impossible; encoding it away costs
-  // nothing and removes the assumption.
-  const targetsKey = JSON.stringify(blocks.map(block => [block.id, block.parentId]))
-  const targets = useMemo(
-    () => JSON.parse(targetsKey) as [string, string | null][],
-    [targetsKey],
+  const targets = useStableJson(
+    blocks.map(block => ({id: block.id, parentId: block.parentId})),
   )
 
   const chainHandles = useMemo(
-    () => (workspaceId ? targets.map(([id]) => repo.query.ancestors({id})) : []),
+    () => (workspaceId ? targets.map(target => repo.query.ancestors({id: target.id})) : []),
     [targets, repo, workspaceId],
   )
   // The seed row, SUBSCRIBED rather than peeked. `core.searchByContent`
@@ -84,28 +64,26 @@ export const useAncestorCrumbs = (
   // the caller's payload, and the freshly emptied ancestor walk would
   // then read as a cut chain, marking a genuine root as truncated.
   const seedHandles = useMemo(
-    () => (workspaceId ? targets.map(([id]) => repo.block(id)) : []),
+    () => (workspaceId ? targets.map(target => repo.block(target.id)) : []),
     [targets, repo, workspaceId],
   )
 
   const chains = useHandles(chainHandles)
-  // Observed, not fetched. A seed row the caller's search already
-  // hydrated is free to read, and one it did not is exactly the case the
-  // payload's `parentId` fallback exists for — loading it would be a row
-  // read per result, serialized behind the ancestor walk, to improve on
-  // an answer we already have.
+  // Observed, not fetched: a seed nothing hydrated is exactly the case
+  // the payload's `parentId` fallback exists for, so a row read per
+  // result would be spent improving on an answer we already have.
   const seeds = useHandles(seedHandles, {fetchMissing: false})
 
   return useMemo(() => {
     if (!workspaceId) return EMPTY_CRUMBS
     const out = new Map<string, readonly string[]>()
-    targets.forEach(([id, payloadParentId], index) => {
-      const ancestors = chains[index] as BlockData[] | undefined
+    targets.forEach((target, index) => {
+      const ancestors = chains[index]
       if (!ancestors) return
       const seed = seeds[index]
-      out.set(id, crumbsFromAncestors(ancestors, {
+      out.set(target.id, crumbsFromAncestors(ancestors, {
         workspaceId,
-        parentId: seed ? seed.parentId : payloadParentId,
+        parentId: seed ? seed.parentId : target.parentId,
       }))
     })
     return out.size === 0 ? EMPTY_CRUMBS : out

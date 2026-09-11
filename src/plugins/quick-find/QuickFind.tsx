@@ -410,15 +410,10 @@ function QuickFindDialog({
   const aliases = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.aliases : []
   const blocks = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.blocks : []
   const [recents, setRecents] = useState<RecentItem[]>([])
-  // Ancestor crumbs load on their own pass AFTER these rows render, so
-  // the search path keeps its current latency and the progressive
-  // aliases→blocks paint is unchanged. `blocks` is rebuilt on every
-  // render, and gating it on the live query means it transiently empties
-  // on each keystroke — the hook keys on the ids' CONTENT and holds one
-  // handle per id, so an inline map is fine here.
-  // Blocks and Recents in one call: the hook caches per id, and the two
-  // groups are never on screen together (Recents render only for an empty
-  // query), so this covers whichever is showing.
+  // An inline array is fine: the hook keys on the ids' CONTENT, and
+  // `blocks` transiently empties on each keystroke (it is gated on the
+  // live query). Blocks and Recents go in one call because the two are
+  // never on screen together — Recents render only for an empty query.
   const blockCrumbs = useAncestorCrumbs([
     ...blocks.map(match => ({id: match.blockId, parentId: match.parentId})),
     ...recents.map(item => ({id: item.blockId, parentId: item.parentId})),

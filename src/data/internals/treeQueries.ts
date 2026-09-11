@@ -28,6 +28,8 @@
  * Path is internal to the CTE; consumers ignore it.
  */
 
+import { buildInClause } from './sqlBinds'
+
 /** Returns the rooted subtree, ordered by path (i.e. depth-first, with
  *  siblings sorted by `(order_key, id)` via the path encoding). Filters
  *  `deleted = 0`.
@@ -84,7 +86,7 @@ export const SUBTREE_SQL = `
  *  returned leaf-to-root (ascending `depth`). */
 export const manyAncestorsSql = (idCount: number): string => {
   if (idCount <= 0) throw new Error('manyAncestorsSql: idCount must be >= 1')
-  const placeholders = Array(idCount).fill('?').join(', ')
+  const placeholders = buildInClause(idCount)
   return `
     WITH RECURSIVE chain AS (
       SELECT blocks.*,
