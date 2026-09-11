@@ -14,26 +14,30 @@
  *
  *  Gate shape follows the `blockContentDecoratorsFacet` contract: the
  *  contribution decides only structural things (`isFocalRender`), and
- *  "is this block a daily note" is decided INSIDE the component from a
- *  reactive `aliases` read — so a block that gains or loses its ISO alias
- *  picks the arrows up (or drops them) without a decorator re-resolve.
+ *  "is this block a daily note" is decided INSIDE the component, reactively,
+ *  so a block that becomes or stops being one picks the arrows up (or drops
+ *  them) without a decorator re-resolve. Both inputs `dailyNoteIso` weighs are
+ *  read reactively for that reason — the typed date property AND the aliases.
+ *  Neither is redundant: a day whose ISO name another page claims has yielded
+ *  it, and would lose its arrows on an alias-only read.
  */
 import { useCallback, type ComponentType } from 'react'
 import { ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react'
 import { useBlockContext } from '@/context/block.js'
 import type { Block } from '@/data/block'
 import { aliasesProp } from '@/data/properties.js'
+import { dailyNoteDateProp } from './schema.js'
 import {
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
-import { useProperty, useWorkspaceId } from '@/hooks/block.js'
+import { useHandle, useProperty, useWorkspaceId } from '@/hooks/block.js'
 import { isFocalRender } from '@/hooks/useIsFocalRender.js'
 import type { BlockRenderer } from '@/types.js'
 import { navigate } from '@/utils/navigation.js'
 import {
   addDaysIso,
-  dailyNoteIsoFromAliases,
+  dailyNoteIso,
   getOrCreateDailyNote,
 } from './dailyNotes.ts'
 
@@ -71,12 +75,26 @@ interface DateNavDecoratorProps {
 const DateNavDecorator = ({block, Inner}: DateNavDecoratorProps) => {
   const repo = block.repo
   const [aliases] = useProperty(block, aliasesProp)
+  // Tolerant: `useProperty` decodes inside the render with no catch, and this
+  // cell is user-editable, so one malformed stored value would throw above the
+  // per-block error boundary and blank the focal page. Same reasoning as
+  // `useBlockAliases`.
+  const date = useHandle(block, {
+    selector: data => {
+      if (!data) return undefined
+      try {
+        return dailyNoteDateProp.codec.decode(data.properties[dailyNoteDateProp.name])
+      } catch {
+        return undefined
+      }
+    },
+  })
   const {panelId} = useBlockContext()
   // The note's OWN workspace, not `repo.activeWorkspaceId`: the neighbouring
   // day has to be created and opened in the same workspace as the note the
   // arrows are attached to.
   const workspaceId = useWorkspaceId(block)
-  const iso = dailyNoteIsoFromAliases(aliases)
+  const iso = dailyNoteIso({id: block.id, workspaceId, date, aliases})
 
   const openOffset = useCallback((offset: number) => {
     if (!iso || !panelId || !workspaceId) return
