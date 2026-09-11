@@ -1,4 +1,4 @@
-import { KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Scissors, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -53,13 +53,13 @@ import {
   cursorIsAtEnd,
   cursorIsAtStart,
 } from '@/utils/codemirror.js'
-import { copyBlockIdsToClipboard, copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import { cutBlockIdsToClipboard, copySelectedBlocksToClipboard } from '@/utils/copy.js'
 import {
   deleteBlockThroughUi,
   deleteBlocksThroughUi,
   ensureDeletableThroughUi,
 } from '@/utils/deleteBlockThroughUi.js'
-import { pasteFromClipboard } from '@/paste/operations.js'
+import { pasteOrMove, type PasteOrMoveResult } from '@/paste/pasteOrMove.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -342,6 +342,24 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
+  /** Normal-mode single-block counterpart to `cut_selected_blocks`: marks
+   *  just the focused block as a pending move — see that action's doc for
+   *  the full mechanics. `$mod+x` is also bound in MULTI_SELECT_MODE
+   *  (`cut_selected_blocks`); the two never race since only one context is
+   *  active at a time. */
+  const cutBlock: BlockAction = {
+    id: 'cut_block',
+    description: 'Cut block (mark for move)',
+    icon: Scissors,
+    handler: async ({block}: BlockShortcutDependencies) => {
+      await cutBlockIdsToClipboard([block.id], repo)
+    },
+    defaultBinding: {
+      keys: '$mod+x',
+      eventOptions: {preventDefault: true},
+    },
+  }
+
   const normalModeActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomInBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomOutBlock),
@@ -349,6 +367,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, closeCurrentPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleMaximizePanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, cutBlock),
     copyBlockAction,
     copyBlockRefAction,
     copyBlockEmbedAction,
@@ -1215,24 +1234,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   }
 
   /**
-   * The body of BOTH destructive multi-select gestures. `Delete` and `d` differ
-   * only in whether the selection reaches the clipboard on its way out, so they
-   * share everything else rather than each re-deriving it — the divergence is
-   * what let `d` destroy a daily note that `Delete` refused, and later let
-   * `Delete` leave the pane in multi-select over tombstones that `d` exited
-   * cleanly.
-   *
-   * Order is load-bearing:
-   *  - guards BEFORE the clipboard write, so a refused cut can't leave the user
-   *    believing the content was copied;
-   *  - the copy while the blocks still exist, in SELECTION order (the delete
-   *    runs leaf-first so each removal can't disturb the next, which is not the
-   *    order the markdown should come out in);
-   *  - the selection reset only after a delete actually HAPPENED, so a refusal
-   *    leaves it intact to narrow and retry. `deleteBlocksThroughUi` re-asks
-   *    the guards immediately before writing, and a guard is not contracted to
-   *    answer the same way twice — an answer that flips during the clipboard
-   *    write would otherwise clear the selection having deleted nothing.
+   * `Delete` in multi-select. Destructive — see `ensureDeletableThroughUi`
+   * for the guards (a read-only workspace, a seeded definition anywhere in
+   * the selection) it refuses over.
    *
    * Focus is moved explicitly rather than left to `PanelFocusRecovery`: that
    * watcher is mounted by the spatial-navigation plugin, which is a toggle, so
@@ -1242,20 +1246,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * if that lands back inside the selection there is no sensible target and we
    * leave focus alone.
    */
-  const deleteSelectedBlocks = async (
-    deps: MultiSelectModeDependencies,
-    {copyFirst}: {copyFirst: boolean},
-  ): Promise<void> => {
+  const deleteSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
     const {uiStateBlock, selectedBlocks, scopeRootId} = deps
     if (!selectedBlocks.length) return
 
     const blocks = selectedBlocks.toReversed()
     if (!await ensureDeletableThroughUi(blocks)) return
-
-    // Copy exactly the set we're about to delete rather than re-reading the
-    // ui-state selection: with supplied deps the two can differ, and the copy
-    // would quietly no-op while the delete went ahead.
-    if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
 
     const selectedIds = new Set(selectedBlocks.map(block => block.id))
     const after = scopeRootId
@@ -1274,6 +1270,88 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     }
   }
 
+  /**
+   * `$mod+x` / `d` in multi-select. Non-destructive: it serializes the
+   * selection to markdown and writes that to the OS clipboard carrying the
+   * blocks' identity (`cutBlockIdsToClipboard`,
+   * `@/paste/clipboardPayload.js`). Nothing is deleted, and the blocks stay
+   * where they are until a paste completes the move (`pasteOrMove`, wired
+   * into `paste_after_selection` / `paste_before_selection` below) — so an
+   * un-pasted cut loses nothing, and there are no deletion guards to
+   * consult because there is no delete.
+   *
+   * Selection clears on success (a completed gesture exits multi-select),
+   * but nothing vanished, so unlike `deleteSelectedBlocks` there is no
+   * focus to redirect.
+   */
+  /** Clear the multi-select selection, but only if it is still the one
+   *  this gesture acted on — the callers resume after awaits long enough
+   *  for the user to have selected something else, and must not erase that.
+   *
+   *  The comparison runs INSIDE the write transaction, against its own
+   *  row. A pre-read followed by an unconditional `set` leaves a window
+   *  where a newer selection commits between the two and is then
+   *  overwritten by a check that already passed. */
+  const clearSelectionIfUnchanged = async (
+    uiStateBlock: Block,
+    actedOn: readonly Block[],
+  ): Promise<void> => {
+    const acted = actedOn.map(block => block.id)
+    await uiStateBlock.set(selectionStateProp, current => {
+      const live = current?.selectedBlockIds ?? []
+      const unchanged = live.length === acted.length && live.every((id, i) => id === acted[i])
+      return unchanged
+        ? selectionStateProp.defaultValue
+        : current ?? selectionStateProp.defaultValue
+    })
+  }
+
+  const cutSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
+    const {uiStateBlock, selectedBlocks} = deps
+    if (!selectedBlocks.length) return
+
+    const marked = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+    if (marked) await clearSelectionIfUnchanged(uiStateBlock, selectedBlocks)
+  }
+
+  /**
+   * The body of BOTH multi-select paste gestures. `p` and `Shift+p` differ
+   * only in which end of the selection anchors the paste, so they share
+   * this rather than each re-deriving the placement and selection rules —
+   * the shape that let `d` and `Delete` diverge until one destroyed a
+   * daily note the other refused.
+   *
+   * `placement: 'sibling'` rather than the 'visible' default: a paste
+   * around a multi-block range belongs beside the range, never inside the
+   * last selected block. `pasteOrMove` applies that to the move target as
+   * well, so completing a pending cut lands exactly where an ordinary
+   * paste here would.
+   *
+   * The selection clears on either outcome — those blocks are no longer
+   * what the user is acting on — but only a text paste mints something
+   * new to focus.
+   */
+  const pasteAroundSelection = async (
+    deps: MultiSelectModeDependencies,
+    position: 'before' | 'after',
+  ): Promise<void> => {
+    const {uiStateBlock, selectedBlocks} = deps
+    const target = position === 'after' ? selectedBlocks.at(-1) : selectedBlocks[0]
+    if (!target) return
+
+    let result: PasteOrMoveResult = {moved: false, pasted: []}
+    await withMoveTransition(async () => {
+      result = await pasteOrMove(repo, target, position, {
+        placement: 'sibling',
+        scopeRootId: deps.scopeRootId,
+      })
+    })
+
+    if (!result.moved && !result.pasted[0]) return
+    await clearSelectionIfUnchanged(uiStateBlock, selectedBlocks)
+    if (result.pasted[0]) void focusBlock(uiStateBlock, result.pasted[0].id)
+  }
+
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
     extendSelectionUpMultiAction,
     extendSelectionDownMultiAction,
@@ -1281,12 +1359,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
-    // Not a per-block fan-out: `Delete` on a selection IS `cut` minus the
-    // clipboard, so both run the same batch below rather than converging on it
-    // by having two code paths remember the same rules.
     {
       ...makeMultiSelect(deleteBlockAction),
-      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: false}),
+      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps),
     },
     applyToAllBlocksInSelection(moveBlockUpAction),
     applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
@@ -1314,9 +1389,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
     {
       id: 'cut_selected_blocks',
-      description: 'Cut selected blocks to clipboard',
+      description: 'Cut selected blocks (mark for move)',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: true}),
+      handler: (deps: MultiSelectModeDependencies) => cutSelectedBlocks(deps),
       defaultBinding: {
         keys: ['$mod+x', 'd'],
         eventOptions: {
@@ -1328,24 +1403,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'paste_after_selection',
       description: 'Paste from clipboard after selection',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => {
-        const {uiStateBlock, selectedBlocks} = deps
-        const target = selectedBlocks.at(-1)
-        if (!target) return
-
-        let pasted: Block[] = []
-        await withMoveTransition(async () => {
-          pasted = await pasteFromClipboard(target, repo, {
-            position: 'after',
-            placement: 'sibling',
-            scopeRootId: deps.scopeRootId,
-          })
-        })
-        if (pasted[0]) {
-          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-          void focusBlock(uiStateBlock, pasted[0].id)
-        }
-      },
+      handler: (deps: MultiSelectModeDependencies) => pasteAroundSelection(deps, 'after'),
       defaultBinding: {
         keys: 'p',
       },
@@ -1354,24 +1412,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'paste_before_selection',
       description: 'Paste from clipboard before selection',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => {
-        const {uiStateBlock, selectedBlocks} = deps
-        const target = selectedBlocks[0]
-        if (!target) return
-
-        let pasted: Block[] = []
-        await withMoveTransition(async () => {
-          pasted = await pasteFromClipboard(target, repo, {
-            position: 'before',
-            placement: 'sibling',
-            scopeRootId: deps.scopeRootId,
-          })
-        })
-        if (pasted[0]) {
-          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-          void focusBlock(uiStateBlock, pasted[0].id)
-        }
-      },
+      handler: (deps: MultiSelectModeDependencies) => pasteAroundSelection(deps, 'before'),
       defaultBinding: {
         keys: 'Shift+p',
       },

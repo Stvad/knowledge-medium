@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { useRepo } from '@/context/repo.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
+import { writeTextToClipboard } from '@/utils/copy.js'
 import {
   agentTokenStore,
   notifyAgentTokensChanged,
@@ -102,7 +103,11 @@ function AgentTokensDialogBody({
 
   const copy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text)
+      // `writeTextToClipboard` (not a raw `navigator.clipboard.writeText`)
+      // clears any pending cut→move first — this copy puts DIFFERENT
+      // content on the clipboard than whatever was cut, which must
+      // invalidate the move the same way every other clipboard write does.
+      await writeTextToClipboard(text)
       setCopyState('copied')
       window.setTimeout(() => setCopyState('idle'), 1500)
     } catch (error) {

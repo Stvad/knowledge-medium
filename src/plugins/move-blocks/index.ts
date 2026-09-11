@@ -10,14 +10,19 @@
  *   - `moveBlocks.ts`             — core: pruning + grouped `core.move` calls
  *   - `MoveDestinationPicker.tsx` — modal opened on demand via `openDialog`
  *   - `moveAction.ts`             — block/multi-select actions that open the picker
+ *   - `pasteAsMoveImpl.ts`        — fills core's `pasteAsMoveVerb` seam, so a
+ *     cut→paste (`@/shortcuts/defaultShortcuts.js`) completes as a real move
+ *     instead of a text paste when the plugin is installed
  */
 import { actionsFacet } from '@/extensions/core.js'
 import { blockContextMenuItemsFacet } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { systemToggle } from '@/facets/togglable.js'
+import { pasteAsMoveVerb } from '@/paste/moveOnPasteVerb.js'
 import { moveBlockAction, moveBlocksAction } from './moveAction.ts'
 import { moveBlocksContextMenuItem } from './contextMenuItem.ts'
+import { pasteAsMoveImpl } from './pasteAsMoveImpl.ts'
 
 export {
   MOVE_BLOCKS_ACTION_ID,
@@ -47,4 +52,11 @@ export const moveBlocksPlugin: AppExtension = systemToggle({
   // `commandPaletteForBlockAction` does), so without this the move
   // command has no dependable way to be invoked.
   blockContextMenuItemsFacet.of(moveBlocksContextMenuItem, {source: 'move-blocks'}),
+  // Fills core's cut→paste seam (`@/paste/moveOnPasteVerb.js`) so a paste
+  // carrying a cut payload relocates the original blocks (preserving
+  // ids/refs) instead of falling back to a text paste. With this plugin
+  // off, cut still writes the payload (core does that unconditionally) but
+  // every paste degrades to an ordinary text paste — no data loss, just no
+  // move.
+  pasteAsMoveVerb.impl(pasteAsMoveImpl, {source: 'move-blocks'}),
 ])

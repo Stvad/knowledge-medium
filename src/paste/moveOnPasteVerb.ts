@@ -1,0 +1,191 @@
+/**
+ * The "does this paste complete a pending cut-as-move?" seam.
+ *
+ * Core (`cut_selected_blocks` / `cut_block` in `@/shortcuts/defaultShortcuts.js`)
+ * puts a `intent: 'cut'` payload on the clipboard instead of deleting
+ * (`@/paste/clipboardPayload.js`). EVERY paste surface asks "does this
+ * clipboard content carry a cut payload I should complete as a move
+ * instead of pasting text?" before doing anything else —
+ * `defaultShortcuts.js`'s `paste_after_selection` / `paste_before_selection`,
+ * `BlockPasteShellDecorator`, `CodeMirrorContentRenderer`'s editor paste, and
+ * vim-normal-mode's `paste_after` / `paste_before` all call either
+ * `tryPasteAsMove` directly (sibling-only surfaces) or `tryPasteAsMoveAt`
+ * (surfaces that need the same 'visible' placement policy an ordinary paste
+ * there would use). Answering the question requires `moveBlocksTo` (pruning,
+ * ordering, one-undo-step), which lives in the move-blocks PLUGIN
+ * (`src/plugins/move-blocks/moveBlocks.ts`). Core cannot import a plugin
+ * (`boundary/no-core-to-plugin-imports`), so this verb is the inversion: core
+ * declares the seam and calls it by id, the plugin supplies the impl
+ * (`src/plugins/move-blocks/pasteAsMoveImpl.ts`). Same shape as
+ * `pasteDecisionVerb` / `captureMediaVerb` in this same directory.
+ *
+ * With no impl installed (the move-blocks plugin is off, or hasn't resolved
+ * yet), `defaultImpl` always answers "not a move" — every paste behaves
+ * exactly as it did before this seam existed, i.e. an ordinary text paste.
+ */
+import type { Repo } from '@/data/repo.js'
+import type { Block } from '@/data/block.js'
+import type { InsertPosition } from '@/data/mutators.js'
+import { isCollapsedProp } from '@/data/properties.js'
+import { defineVerbFacet } from '@/facets/verbFacet.js'
+import { showError } from '@/utils/toast.js'
+import type { ClipboardPayload } from '@/paste/clipboardPayload.js'
+
+/** Where a completed move would land — the same shape as move-blocks'
+ *  `MoveTarget`, restated here because `InsertPosition` (the only thing it
+ *  actually depends on) is already core (`@/data/mutators.js`). Structurally
+ *  identical, so a plugin's `MoveTarget` value is assignable here with no
+ *  conversion. */
+export interface PasteMoveTarget {
+  readonly parentId: string | null
+  readonly position: InsertPosition
+}
+
+export interface PasteAsMoveInput {
+  readonly repo: Repo
+  readonly target: PasteMoveTarget
+  /** The identity of the blocks on the clipboard, already resolved from
+   *  the paste's own content (`@/paste/clipboardPayload.js`). Passed IN rather
+   *  than looked up here: the caller is the only one holding the paste
+   *  event, and the payload is the whole question of validity — a caller
+   *  with no payload never reaches the verb at all. */
+  readonly payload: ClipboardPayload
+}
+
+/**
+ * Three outcomes, not two. `moved` and `refused` both mean "do not also
+ * text-paste", but they differ in whether anything happened — and a caller
+ * that collapses them mutates UI state for a refusal: `pasteAroundSelection`
+ * cleared the user's selection when a cycle was refused, taking away the
+ * range they needed in order to retry.
+ *
+ *   - `moved`       — blocks relocated. The paste is done.
+ *   - `refused`     — recognised as a cut but declined (cycle, failure).
+ *                     Consumed, nothing changed, UI state untouched.
+ *   - `not-a-move`  — not a cut at all; fall through to a text paste.
+ */
+export type PasteAsMoveResult = 'moved' | 'refused' | 'not-a-move'
+
+export const pasteAsMoveVerb = defineVerbFacet<PasteAsMoveInput, PasteAsMoveResult>({
+  id: 'core.paste-as-move',
+  defaultImpl: () => 'not-a-move' as const,
+  // Effectful (the impl calls `moveBlocksTo`, which writes blocks) — never
+  // re-run the harmless default after a partial effect; see verbFacet's
+  // onError doc. The impl reports its own failures as `refused` with a
+  // toast rather than throwing; a throw here means a genuine bug.
+  onError: 'rethrow',
+})
+
+/** Sibling-insert target anchored on `anchor`: land the moved content
+ *  immediately before or after it, under the same parent.
+ *
+ *  Deliberately NOT exported: it is only correct as the FALLBACK branch of
+ *  `resolvePasteMoveTarget` below. A "sibling" of a scope root sits
+ *  outside the rendered surface entirely. */
+const siblingMoveTarget = (
+  anchor: Block,
+  kind: 'before' | 'after',
+): PasteMoveTarget => ({
+  parentId: anchor.peek()?.parentId ?? null,
+  position: { kind, siblingId: anchor.id },
+})
+
+/** Ask the verb whether `payload` should be completed as a move at
+ *  `target`. `false` whenever there's no live facet runtime yet (very early
+ *  boot) — matches `pasteFromClipboard`'s own fallback for a runtime-less
+ *  Repo — or when the payload came from a COPY rather than a cut.
+ *
+ *  Note there is no text check here, and nothing to short-circuit on empty
+ *  text: the payload either describes this clipboard content or it doesn't,
+ *  and the payload lookup already answered that by content — so a
+ *  cut of a genuinely empty block needs no special handling here, even
+ *  though its text is the empty string every emptiness guard eats. */
+export const tryPasteAsMove = async (
+  repo: Repo,
+  target: PasteMoveTarget,
+  payload: ClipboardPayload | null,
+): Promise<PasteAsMoveResult> => {
+  if (!payload || payload.intent !== 'cut') return 'not-a-move'
+  const runtime = repo.facetRuntime
+  if (!runtime) return 'not-a-move'
+  return pasteAsMoveVerb.run(runtime, { repo, target, payload })
+}
+
+/**
+ * Where a completed move lands, mirroring `resolveRootDestination`
+ * (`@/paste/operations.js`) — the function an ordinary text paste at the
+ * same spot goes through. A move that resolves its target differently
+ * from the paste it replaces puts the blocks somewhere the user didn't
+ * point at, so this is a mirror, not an approximation:
+ *
+ *   rootsAsChildren = targetIsScopeRoot
+ *                  || target.parentId === null
+ *                  || (placement === 'visible' && position === 'after'
+ *                      && targetHasVisibleChildren)
+ *
+ * The two ROOT disjuncts hold for BOTH placements, which is the part
+ * that's easy to get wrong: a `placement: 'sibling'` caller still gets
+ * first-child placement at a scope or workspace root. It has to — a
+ * sibling of the render-scope root sits OUTSIDE the rendered surface, so
+ * the moved blocks leave the source and never visibly arrive (they read
+ * as lost), and a "sibling" of a workspace root is just another root
+ * rather than anything the user pointed at. Only the visible-children
+ * rule is placement-sensitive.
+ *
+ * Read-only (no tx) — the caller commits its own transaction
+ * (`moveBlocksTo`, inside `pasteAsMoveImpl`) once it has the target.
+ */
+export const resolvePasteMoveTarget = async (
+  target: Block,
+  position: 'before' | 'after',
+  scopeRootId: string | undefined,
+  placement: 'visible' | 'sibling' = 'visible',
+): Promise<PasteMoveTarget> => {
+  const data = target.peek() ?? await target.load()
+  const isWorkspaceRoot = (data?.parentId ?? null) === null
+  const targetIsScopeRoot = scopeRootId !== undefined && scopeRootId === target.id
+
+  let rootsAsChildren = targetIsScopeRoot || isWorkspaceRoot
+  if (!rootsAsChildren && placement === 'visible' && position === 'after') {
+    const isCollapsed = target.peekProperty(isCollapsedProp) ?? false
+    rootsAsChildren = !isCollapsed && (await target.childIds.load()).length > 0
+  }
+
+  return rootsAsChildren
+    ? { parentId: target.id, position: { kind: 'first' } }
+    : siblingMoveTarget(target, position)
+}
+
+/** Try to complete `payload` as a move at `position` relative to `target`,
+ *  using the same placement policy an ordinary paste there would use (see
+ *  `resolvePasteMoveTarget`).
+ *
+ *  Skips resolving the placement (an async children query) entirely when
+ *  this paste isn't a cut — the overwhelming majority of pastes — so an
+ *  ordinary paste doesn't pay for it. */
+export const tryPasteAsMoveAt = async (
+  repo: Repo,
+  target: Block,
+  position: 'before' | 'after',
+  scopeRootId: string | undefined,
+  payload: ClipboardPayload | null,
+  placement: 'visible' | 'sibling' = 'visible',
+): Promise<PasteAsMoveResult> => {
+  if (!payload || payload.intent !== 'cut') return 'not-a-move'
+
+  let moveTarget: PasteMoveTarget
+  try {
+    moveTarget = await resolvePasteMoveTarget(target, position, scopeRootId, placement)
+  } catch (error) {
+    // Resolving the placement reads the target and its children, and those
+    // can reject. Reported as HANDLED rather than rethrown or fallen
+    // through: the DOM handlers have already called `preventDefault` and
+    // invoke this via `void`, so a rethrow discards the paste silently,
+    // and a text-paste fallback would parse the cut markdown into new
+    // blocks beside the originals that are still sitting there.
+    console.error('[paste-as-move] could not resolve the move target', error)
+    showError("Couldn't work out where to move the blocks — nothing was moved")
+    return 'refused'
+  }
+  return tryPasteAsMove(repo, moveTarget, payload)
+}

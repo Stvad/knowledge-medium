@@ -16,6 +16,7 @@ import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorConte
 import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHoverCard.js'
 import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
 import { openDialog } from '@/utils/dialogs.js'
+import { writeTextToClipboardBestEffort } from '@/utils/copy.js'
 import { useRef, useMemo, useEffect } from 'react'
 import { Block } from '../../data/block'
 import {
@@ -91,16 +92,21 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
  *
  */
 
+// Every clipboard write goes through `@/utils/copy.js`, never
+// `navigator.clipboard.writeText` directly: a write has to invalidate any
+// cut payload remembered against the text it overwrites, or a later paste
+// resolves that text to the cut and MOVES those blocks instead of pasting
+// the id/ref/embed.
 const copyBlockId = (block: Block) => {
-  navigator.clipboard.writeText(block.id)
+  writeTextToClipboardBestEffort(block.id)
 }
 
 const copyBlockRef = (block: Block) => {
-  navigator.clipboard.writeText(`((${block.id}))`)
+  writeTextToClipboardBestEffort(`((${block.id}))`)
 }
 
 const copyBlockEmbed = (block: Block) => {
-  navigator.clipboard.writeText(`!((${block.id}))`)
+  writeTextToClipboardBestEffort(`!((${block.id}))`)
 }
 
 const zoomIn = (block: Block, workspaceId: string, panelId?: string) => {

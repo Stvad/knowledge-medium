@@ -10,6 +10,7 @@ import {
   type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types.js'
 import { showError, showSuccess } from '@/utils/toast.js'
+import { writeTextToClipboard } from '@/utils/copy.js'
 import { AGENT_PROPS } from './chipState.ts'
 
 export const COPY_AGENT_RESUME_COMMAND_ACTION_ID = 'agent-dispatch.copy-resume-command'
@@ -94,7 +95,11 @@ export const copyAgentResumeCommand = async (block: Block): Promise<void> => {
     if (typeof navigator === 'undefined' || !navigator.clipboard) {
       throw new Error('Clipboard API is unavailable')
     }
-    await navigator.clipboard.writeText(command)
+    // `writeTextToClipboard` (not a raw `navigator.clipboard.writeText`)
+    // clears any pending cut→move first — this copy puts DIFFERENT content
+    // on the clipboard than whatever was cut, which must invalidate the
+    // move the same way every other clipboard write does.
+    await writeTextToClipboard(command)
     showSuccess('Agent resume command copied.')
   } catch {
     showError("Couldn't copy the Agent resume command.")
