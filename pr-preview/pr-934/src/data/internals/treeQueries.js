@@ -1,4 +1,4 @@
-var e=`
+import{buildInClause as e}from"./sqlBinds.js";var t=`
   WITH RECURSIVE subtree AS (
     SELECT *,
            '!' || hex(id) || '/' AS path,
@@ -17,14 +17,14 @@ var e=`
        AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
   )
   SELECT * FROM subtree ORDER BY path
-`,t=e=>{if(e<=0)throw Error(`manyAncestorsSql: idCount must be >= 1`);return`
+`,n=t=>{if(t<=0)throw Error(`manyAncestorsSql: idCount must be >= 1`);return`
     WITH RECURSIVE chain AS (
       SELECT blocks.*,
              blocks.id AS chain_start_id,
              '!' || hex(blocks.id) || '/' AS path,
              0 AS depth
         FROM blocks
-       WHERE blocks.id IN (${Array(e).fill(`?`).join(`, `)}) AND blocks.deleted = 0
+       WHERE blocks.id IN (${e(t)}) AND blocks.deleted = 0
       UNION ALL
       SELECT parent.*,
              chain.chain_start_id,
@@ -38,7 +38,7 @@ var e=`
     )
     SELECT * FROM chain
     ORDER BY chain.chain_start_id, chain.depth ASC
-  `},n=`
+  `},r=`
   WITH RECURSIVE chain AS (
     SELECT id, parent_id,
            '!' || hex(id) || '/' AS path,
@@ -55,7 +55,7 @@ var e=`
        AND INSTR(chain.path, '!' || hex(b.id) || '/') = 0
   )
   SELECT 1 AS hit FROM chain WHERE id = ? LIMIT 1
-`,r=e=>{if(e<=0)throw Error(`cycleScanSql: idCount must be >= 1`);return`
+`,i=e=>{if(e<=0)throw Error(`cycleScanSql: idCount must be >= 1`);return`
     WITH RECURSIVE chain(start_id, id, parent_id, depth) AS (
       SELECT id, id, parent_id, 0
         FROM blocks
@@ -72,15 +72,15 @@ var e=`
     SELECT DISTINCT chain.id AS start_id
       FROM chain
       JOIN cyclic ON cyclic.start_id = chain.start_id
-  `},i=`
+  `},a=`
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
    ORDER BY order_key, id
-`,a=`
+`,o=`
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
    ORDER BY order_key, id
-`,o=e=>`
+`,s=e=>`
      COALESCE(${e}.is_field_form, 0) = 1
      AND ${e}.parent_id IS NOT NULL
      AND (
@@ -96,21 +96,21 @@ var e=`
             AND ${e}.workspace_id = ?
        )
      )
-`,s=`
-   AND NOT (
-${o(`blocks`)}
-   )
 `,c=`
+   AND NOT (
+${s(`blocks`)}
+   )
+`,l=`
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
-${s}
-   ORDER BY order_key, id
-`,l=`
-  SELECT id FROM blocks
-   WHERE parent_id = ? AND deleted = 0
-${s}
+${c}
    ORDER BY order_key, id
 `,u=`
+  SELECT id FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${c}
+   ORDER BY order_key, id
+`,d=`
   WITH RECURSIVE
   subtree AS (
     SELECT *,
@@ -129,9 +129,9 @@ ${s}
        AND subtree.depth < 100
        AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
        AND NOT (
-${o(`child`)}
+${s(`child`)}
        )
   )
   SELECT * FROM subtree ORDER BY path
-`;export{a as CHILDREN_IDS_SQL,i as CHILDREN_SQL,n as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,l as VISIBLE_CHILDREN_IDS_SQL,c as VISIBLE_CHILDREN_SQL,u as VISIBLE_SUBTREE_SQL,r as cycleScanSql,t as manyAncestorsSql,o as recognizedFieldRowSql};
+`;export{o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,t as SUBTREE_SQL,u as VISIBLE_CHILDREN_IDS_SQL,l as VISIBLE_CHILDREN_SQL,d as VISIBLE_SUBTREE_SQL,i as cycleScanSql,n as manyAncestorsSql,s as recognizedFieldRowSql};
 //# sourceMappingURL=treeQueries.js.map

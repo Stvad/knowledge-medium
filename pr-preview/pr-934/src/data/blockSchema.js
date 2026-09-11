@@ -33,23 +33,45 @@ ${i([...e,...l].map(e=>e.definition),6)}
   CREATE INDEX IF NOT EXISTS idx_blocks_reference_target_parent
   ON blocks (workspace_id, reference_target_id, parent_id)
   WHERE deleted = 0 AND reference_target_id IS NOT NULL
-`,_=`
+`,_=`substr(ltrim(content), 1, 1) IN ('(', '[', ':')`,v=`idx_blocks_reference_candidates`,y=`
+  CREATE INDEX IF NOT EXISTS ${v}
+  ON blocks (workspace_id, substr(ltrim(content), 1, 1))
+  WHERE reference_target_id IS NULL AND ${_}
+`,b=`
+  SELECT id, content FROM blocks INDEXED BY ${v}
+   WHERE workspace_id = ?
+     AND reference_target_id IS NULL
+     AND ${_}
+     AND (
+       (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
+       OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+       OR TRIM(content) LIKE '[%](((%)))'
+       OR TRIM(content) LIKE '::%'
+     )
+`,x=`
+  SELECT id, content FROM blocks INDEXED BY ${v}
+   WHERE workspace_id = ?
+     AND reference_target_id IS NULL
+     AND ${_}
+     AND TRIM(content) LIKE '%]]'
+     AND (TRIM(content) LIKE '[[%' OR TRIM(content) LIKE '::[[%')
+`,S=`
   CREATE INDEX IF NOT EXISTS idx_blocks_field_form
   ON blocks (workspace_id, parent_id, reference_target_id)
   WHERE deleted = 0 AND is_field_form = 1
-`,v=`
+`,C=`
   CREATE INDEX IF NOT EXISTS idx_blocks_any_field_form
   ON blocks (workspace_id, parent_id)
   WHERE is_field_form = 1
-`,y=`
+`,w=`
   DROP INDEX IF EXISTS idx_blocks_any_field_form
-`,b=async e=>{let t=await e.getOptional(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_blocks_any_field_form'`);t!==null&&t.sql?.includes(`parent_id`)!==!0&&await e.execute(y)},x={put:{sql:`
+`,T=async e=>{let t=await e.getOptional(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_blocks_any_field_form'`);t!==null&&t.sql?.includes(`parent_id`)!==!0&&await e.execute(w)},E={put:{sql:`
       INSERT OR REPLACE INTO blocks_synced (
 ${i(n,8)}
       ) VALUES (${n.map(()=>`?`).join(`, `)})
-    `,params:n.map(e=>e===`id`?`Id`:{Column:e})},delete:{sql:`DELETE FROM blocks_synced WHERE id = ?`,params:[`Id`]}},S=[{key:`id`,sqlExpression:e=>`${e}.id`},{key:`workspaceId`,sqlExpression:e=>`${e}.workspace_id`},{key:`parentId`,sqlExpression:e=>`${e}.parent_id`},{key:`referenceTargetId`,sqlExpression:e=>`${e}.reference_target_id`},{key:`isFieldForm`,sqlExpression:e=>`json(CASE WHEN ${e}.is_field_form = 1 THEN 'true' ELSE 'false' END)`},{key:`orderKey`,sqlExpression:e=>`${e}.order_key`},{key:`content`,sqlExpression:e=>`${e}.content`},{key:`properties`,sqlExpression:e=>`json(${e}.properties_json)`},{key:`references`,sqlExpression:e=>`json(${e}.references_json)`},{key:`createdAt`,sqlExpression:e=>`${e}.created_at`},{key:`updatedAt`,sqlExpression:e=>`${e}.updated_at`},{key:`userUpdatedAt`,sqlExpression:e=>`coalesce(${e}.user_updated_at, ${e}.updated_at)`},{key:`createdBy`,sqlExpression:e=>`${e}.created_by`},{key:`updatedBy`,sqlExpression:e=>`${e}.updated_by`},{key:`deleted`,sqlExpression:e=>`json(CASE WHEN ${e}.deleted THEN 'true' ELSE 'false' END)`}],C=e=>`
+    `,params:n.map(e=>e===`id`?`Id`:{Column:e})},delete:{sql:`DELETE FROM blocks_synced WHERE id = ?`,params:[`Id`]}},D=[{key:`id`,sqlExpression:e=>`${e}.id`},{key:`workspaceId`,sqlExpression:e=>`${e}.workspace_id`},{key:`parentId`,sqlExpression:e=>`${e}.parent_id`},{key:`referenceTargetId`,sqlExpression:e=>`${e}.reference_target_id`},{key:`isFieldForm`,sqlExpression:e=>`json(CASE WHEN ${e}.is_field_form = 1 THEN 'true' ELSE 'false' END)`},{key:`orderKey`,sqlExpression:e=>`${e}.order_key`},{key:`content`,sqlExpression:e=>`${e}.content`},{key:`properties`,sqlExpression:e=>`json(${e}.properties_json)`},{key:`references`,sqlExpression:e=>`json(${e}.references_json)`},{key:`createdAt`,sqlExpression:e=>`${e}.created_at`},{key:`updatedAt`,sqlExpression:e=>`${e}.updated_at`},{key:`userUpdatedAt`,sqlExpression:e=>`coalesce(${e}.user_updated_at, ${e}.updated_at)`},{key:`createdBy`,sqlExpression:e=>`${e}.created_by`},{key:`updatedBy`,sqlExpression:e=>`${e}.updated_by`},{key:`deleted`,sqlExpression:e=>`json(CASE WHEN ${e}.deleted THEN 'true' ELSE 'false' END)`}],O=e=>`
   json_object(
-${i(S.map(t=>`'${t.key}', ${t.sqlExpression(e)}`),4)}
+${i(D.map(t=>`'${t.key}', ${t.sqlExpression(e)}`),4)}
   )
-`,w=(e,t)=>{if(!e)return t;try{return JSON.parse(e)}catch(e){return console.warn(`Failed to parse stored block JSON`,e),t}},T=e=>e?w(e,null)??void 0:void 0,E=e=>({id:e.id,workspaceId:e.workspace_id,parentId:e.parent_id,referenceTargetId:e.reference_target_id??null,isFieldForm:e.is_field_form===1,orderKey:e.order_key,content:e.content,properties:w(e.properties_json,{}),references:w(e.references_json,[]),createdAt:e.created_at,updatedAt:e.updated_at,userUpdatedAt:e.user_updated_at??e.updated_at,createdBy:e.created_by,updatedBy:e.updated_by,deleted:!!e.deleted}),D=e=>[e.id,e.workspaceId,e.parentId,e.orderKey,e.content,JSON.stringify(e.properties??{}),JSON.stringify(e.references??[]),e.createdAt,e.updatedAt,e.userUpdatedAt,e.createdBy,e.updatedBy,+!!e.deleted,e.referenceTargetId??null,e.isFieldForm?1:null],O=t=>D(t).slice(0,e.length);export{x as BLOCKS_SYNCED_RAW_TABLE,r as BLOCKS_TABLE_COLUMN_NAMES,t as BLOCK_LOCAL_COLUMNS,e as BLOCK_STORAGE_COLUMNS,v as CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,_ as CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,p as CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL,f as CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,g as CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,d as CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,u as CREATE_BLOCKS_SYNCED_TABLE_SQL,s as CREATE_BLOCKS_TABLE_SQL,m as CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,h as CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,a as SELECT_BLOCK_COLUMNS_SQL,l as STAGING_LOCAL_COLUMNS,D as blockToRowParams,O as blockToSyncedRowParams,C as buildBlockSnapshotJsonSql,o as buildQualifiedBlockColumnsSql,b as dropStaleAnyFieldFormIndex,c as ensureBlockLocalColumns,E as parseBlockRow,T as parseBlockSnapshotJson};
+`,k=(e,t)=>{if(!e)return t;try{return JSON.parse(e)}catch(e){return console.warn(`Failed to parse stored block JSON`,e),t}},A=e=>e?k(e,null)??void 0:void 0,j=e=>({id:e.id,workspaceId:e.workspace_id,parentId:e.parent_id,referenceTargetId:e.reference_target_id??null,isFieldForm:e.is_field_form===1,orderKey:e.order_key,content:e.content,properties:k(e.properties_json,{}),references:k(e.references_json,[]),createdAt:e.created_at,updatedAt:e.updated_at,userUpdatedAt:e.user_updated_at??e.updated_at,createdBy:e.created_by,updatedBy:e.updated_by,deleted:!!e.deleted}),M=e=>[e.id,e.workspaceId,e.parentId,e.orderKey,e.content,JSON.stringify(e.properties??{}),JSON.stringify(e.references??[]),e.createdAt,e.updatedAt,e.userUpdatedAt,e.createdBy,e.updatedBy,+!!e.deleted,e.referenceTargetId??null,e.isFieldForm?1:null],N=t=>M(t).slice(0,e.length);export{v as BLOCKS_REFERENCE_CANDIDATES_INDEX,E as BLOCKS_SYNCED_RAW_TABLE,r as BLOCKS_TABLE_COLUMN_NAMES,t as BLOCK_LOCAL_COLUMNS,e as BLOCK_STORAGE_COLUMNS,C as CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,S as CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,p as CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL,f as CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,y as CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,g as CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,d as CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,u as CREATE_BLOCKS_SYNCED_TABLE_SQL,s as CREATE_BLOCKS_TABLE_SQL,m as CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,h as CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,_ as REFERENCE_CANDIDATE_PREFIX_SQL,x as REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL,b as REFERENCE_TARGET_SWEEP_CANDIDATES_SQL,a as SELECT_BLOCK_COLUMNS_SQL,l as STAGING_LOCAL_COLUMNS,M as blockToRowParams,N as blockToSyncedRowParams,O as buildBlockSnapshotJsonSql,o as buildQualifiedBlockColumnsSql,T as dropStaleAnyFieldFormIndex,c as ensureBlockLocalColumns,j as parseBlockRow,A as parseBlockSnapshotJson};
 //# sourceMappingURL=blockSchema.js.map
