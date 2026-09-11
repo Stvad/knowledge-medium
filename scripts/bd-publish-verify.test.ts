@@ -358,6 +358,46 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(shimCalls()).toBe('')
   })
 
+  it('reads back Codex string output and preserves the PostToolUse envelope', () => {
+    const { hook, shimCalls } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { title: 'T', body: 'See #12' },
+        'repos/Stvad/knowledge-medium/issues/12': { title: 'Expected issue', state: 'open' },
+      },
+    })
+    const r = hook(PR_CREATE, null, {
+      hook_event_name: 'PostToolUse',
+      tool_response: url('pull/652'),
+    })
+    expect(r.status).toBe(0)
+    expect(context(r)).toContain('Expected issue')
+    expect(shimCalls()).toContain('gh api repos/Stvad/knowledge-medium/pulls/652')
+    expect(JSON.parse(r.stdout).hookSpecificOutput.hookEventName).toBe('PostToolUse')
+  })
+
+  it('does not attribute a URL from Codex output to a successful publish without exit status', () => {
+    const { hook } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/652': { title: 'Existing PR', body: 'clean' },
+      },
+    })
+    const r = hook(PR_CREATE, null, {
+      hook_event_name: 'PostToolUse',
+      tool_response: `a pull request already exists: ${url('pull/652')}`,
+    })
+    expect(context(r)).toContain('exit status is unavailable')
+    expect(context(r)).toContain('Confirm which before editing anything')
+  })
+
+  it('marks Codex merge-only output as uncertain even without an object URL', () => {
+    const { hook } = makeRepo({})
+    const r = hook('gh pr merge 652 --squash', null, {
+      hook_event_name: 'PostToolUse',
+      tool_response: '✓ Merged pull request #652 (feature)',
+    })
+    expect(context(r)).toContain('exit status is unavailable')
+  })
+
   it('stays silent when the published body is clean', () => {
     const { hook } = makeRepo({
       fixtures: { 'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'clean' } },

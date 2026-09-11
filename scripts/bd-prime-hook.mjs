@@ -14,11 +14,13 @@
 // unparseable output — exits 0; a DB-less clone must not spawn bd at all
 // (the first bd command would create an empty DB that then refuses to pull).
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { initializedDbRoot, isMainModule } from './bd-github-sync.mjs'
 
 // Just under the measured 10,000-char inline limit; the margin absorbs a
 // wrapper-side format tweak without re-measuring the host.
 export const MAX_CONTEXT_CHARS = 9_800
+const MAX_BD_OUTPUT_BYTES = 16 * 1024 * 1024
 
 const PREVIEW_LADDER = [150, 120, 100, 80, 60, 50, 40, 30, 25, 20, 15, 10]
 
@@ -104,15 +106,75 @@ export const transformHookStdout = raw => {
   })
 }
 
+const parseHookEnvelope = raw => {
+  if (!raw) return null
+  try {
+    const envelope = JSON.parse(raw)
+    const context = envelope?.hookSpecificOutput?.additionalContext
+    return typeof context === 'string' && context.trim() ? { envelope, context } : null
+  } catch {
+    return null
+  }
+}
+
+/** Compact a native lifecycle envelope without changing its event or other fields. */
+export const transformCodexHookStdout = (raw, primeRaw) => {
+  const native = parseHookEnvelope(raw)
+  if (!native) return raw
+  const context = parseHookEnvelope(primeRaw)?.context ?? native.context
+  native.envelope.hookSpecificOutput = {
+    ...native.envelope.hookSpecificOutput,
+    additionalContext: buildAdditionalContext(context),
+  }
+  return JSON.stringify(native.envelope)
+}
+
+const runBd = (args, input = undefined) => spawnSync('bd', args, {
+  encoding: 'utf8',
+  input,
+  maxBuffer: MAX_BD_OUTPUT_BYTES,
+  stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+})
+
+const runClaudeSessionStart = () => {
+  const r = runBd(['prime', '--hook-json', '--mcp'])
+  const out = r.status === 0 && !/^Error/m.test(r.stderr ?? '') ? transformHookStdout(r.stdout) : null
+  if (out) process.stdout.write(out)
+}
+
+const runCodexHook = event => {
+  let input = ''
+  try {
+    input = readFileSync(0, 'utf8')
+  } catch {
+    // Hooks should remain best-effort when their host closes stdin early.
+  }
+
+  const native = runBd(['codex-hook', event], input)
+  const nativeRaw = native.stdout ?? ''
+  if (!parseHookEnvelope(nativeRaw)) {
+    if (nativeRaw) process.stdout.write(nativeRaw)
+    return
+  }
+
+  // Native SessionStart currently includes the full prime output. Read a
+  // fresh prime so the existing compact renderer remains the one source of
+  // context formatting, regardless of the lifecycle event being handled.
+  const prime = native.status === 0 && !/^Error/m.test(native.stderr ?? '')
+    ? runBd(['prime', '--hook-json', '--mcp'])
+    : null
+  const compacted = transformCodexHookStdout(
+    nativeRaw,
+    prime?.status === 0 && !/^Error/m.test(prime.stderr ?? '') ? prime.stdout : null,
+  )
+  if (compacted) process.stdout.write(compacted)
+}
+
 if (isMainModule(import.meta.url)) {
   try {
     if (initializedDbRoot()) {
-      const r = spawnSync('bd', ['prime', '--hook-json', '--mcp'], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      const out = r.status === 0 && !/^Error/m.test(r.stderr ?? '') ? transformHookStdout(r.stdout) : null
-      if (out) process.stdout.write(out)
+      if (process.argv[2] === '--codex') runCodexHook(process.argv[3] ?? '')
+      else runClaudeSessionStart()
     }
   } catch (e) {
     console.error(`[bd-prime-hook] ${e?.message ?? e}`)

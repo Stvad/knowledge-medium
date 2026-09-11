@@ -411,15 +411,18 @@ const hookPostPublish = () => {
   }
   const cmd = payload?.tool_input?.command ?? ''
   const failedEvent = payload?.hook_event_name === 'PostToolUseFailure'
-  // The Bash tool merges stderr into tool_response.stdout; on
-  // PostToolUseFailure there is NO tool_response and the output rides inside
-  // the `error` string (both measured 2026-08-20).
+  // String shell responses omit exit status. Their URLs may name existing
+  // objects from a failed command.
+  const unknownOutcome = typeof payload?.tool_response === 'string'
+  // Claude returns merged output in stdout, or in error on PostToolUseFailure.
   const out =
-    typeof payload?.tool_response?.stdout === 'string' && payload.tool_response.stdout
-      ? payload.tool_response.stdout
-      : typeof payload?.error === 'string'
-        ? payload.error
-        : ''
+    unknownOutcome
+      ? payload.tool_response
+      : typeof payload?.tool_response?.stdout === 'string' && payload.tool_response.stdout
+        ? payload.tool_response.stdout
+        : typeof payload?.error === 'string'
+          ? payload.error
+          : ''
   // Empty output is NOT an early exit: a covered publish that printed
   // nothing is precisely a coverage claim that cannot be honoured, and the
   // no-target branch below is what says so. Returning here would make the
@@ -456,14 +459,11 @@ const hookPostPublish = () => {
   const reportIds = !allowsBeadIds(cmd)
   const deadline = Date.now() + DEADLINE_MS
   const notes = []
-  // gh prints existing objects in its ERROR text too ("a pull request for
-  // branch X already exists: <url>"), so on a failure event the objects below
-  // were merely NAMED by the output — attribution is unknown, and the
-  // per-target notes' "already published, fix it now" framing would send the
-  // agent to edit a stranger's object.
-  if (failedEvent && targets.length)
+  // gh errors can name existing objects. Without confirmed success, qualify
+  // the per-target edit suggestions so they cannot authorize changing one.
+  if ((failedEvent || unknownOutcome) && (targets.length || mergedPrs.length))
     notes.push(
-      `the command FAILED, so attribution of the object(s) below is UNKNOWN — an earlier segment may really have published one, and gh also prints EXISTING objects in its error text ("a pull request … already exists: <url>"). Confirm which before editing anything`,
+      `${failedEvent ? 'the command FAILED' : 'the command exit status is unavailable'}, so attribution of the object(s) below is UNKNOWN — an earlier segment may really have published one, and gh also prints EXISTING objects in its error text ("a pull request … already exists: <url>"). Confirm which before editing anything`,
     )
   if (all.length > targets.length)
     notes.push(`only the first ${MAX_TARGETS} of ${all.length} published objects named in the output were verified`)
