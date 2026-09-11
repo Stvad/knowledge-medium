@@ -514,16 +514,21 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
 /** Hold one `core.ancestors` handle per block for as long as the CALLER
  *  renders, whatever it renders.
  *
- *  Not a prefetch — the entries that read these acquire them by key on
- *  their own. This keeps them from being GC'd while the surface that owns
- *  them is collapsed: a collapsed section unmounts its entries, the store
- *  disposes an unobserved handle after its GC window, and
+ *  Why a surface wants it: a collapsed section unmounts its entries, the
+ *  store disposes an unobserved handle after its GC window, and
  *  `LazyViewportMount` remembers which rows were mounted and brings them
  *  straight back — so without this a reopen paints every row without its
- *  breadcrumb and then grows a line under the rows below it.
+ *  breadcrumb and then grows a line under the rows below it. Call it
+ *  OUTSIDE the collapse branch; inside it is a no-op that looks like a
+ *  fix.
  *
- *  Call it OUTSIDE the collapse branch; inside it is a no-op that looks
- *  like a fix. */
+ *  It WALKS every block passed, including ones no one has scrolled to:
+ *  the first subscriber to a cold `LoaderHandle` starts its load, so for
+ *  this store retaining a chain and fetching it are the same act. Accepted
+ *  rather than narrowed — it is one coalesced statement per chunk of 500
+ *  ids, and it is what the flat backlinks panel already did. Retaining
+ *  only the handles a surface has ALREADY resolved would avoid the cold
+ *  ones (#956) at the cost of a retained set that changes as they land. */
 export const useRetainParents = (blocks: readonly Block[]): void => {
   useManyParents(blocks)
 }
