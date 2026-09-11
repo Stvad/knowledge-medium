@@ -10,17 +10,15 @@ import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
 import type { Repo } from '@/data/repo'
-import { recentsNavigationTarget } from './target.js'
+import { openRecentsPage } from './target.js'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
 import { RecentsPageBlockRenderer } from './RecentsPageBlockRenderer.tsx'
 
 export const OPEN_RECENTS_ACTION_ID = 'open_recents'
 
 const openRecents = async (repo: Repo): Promise<void> => {
-  const target = recentsNavigationTarget(repo)
+  const target = await openRecentsPage(repo)
   if (!target) return
-  // Carried on the input rather than awaited first, so the navigation seams
-  // decide before anything is written — see `EnsureNavigationTarget`.
   await navigateFromGlobalCommand(repo, target)
 }
 

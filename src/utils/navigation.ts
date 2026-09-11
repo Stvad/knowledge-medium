@@ -106,18 +106,12 @@ export interface NavigateSidebarStackInput extends NavigateBaseInput {
   sourcePanelId?: string
 }
 
-/** Input to the navigator / global-command entry points: the block to open, an
- *  optional explicit workspace, and — for a row created lazily — an optional
- *  `ensure`. The target panel is resolved by the intent policy and `origin` is
- *  fixed to `'navigator'`, so neither is accepted here (a `Pick` over the base
- *  rather than the base itself, so a dropped field is a type error rather than
- *  a silent no-op). */
-export type GlobalCommandNavigateInput = Pick<NavigateBaseInput, 'blockId' | 'workspaceId'> & {
-  /** Materialize `blockId`'s row, for a page created lazily. When it runs and
-   *  when it is skipped is `EnsureNavigationTarget`'s to say, not this field's
-   *  — the rule lives there so these two declarations cannot drift from it. */
-  ensure?: EnsureNavigationTarget
-}
+/** Input to the navigator / global-command entry points. Deliberately only the
+ *  block (and an optional explicit workspace): the target panel is resolved by
+ *  the intent policy and `origin` is fixed to `'navigator'`, so neither is
+ *  accepted here (a `Pick`, not the full base, so a dropped field is a type
+ *  error rather than a silent no-op). */
+export type GlobalCommandNavigateInput = Pick<NavigateBaseInput, 'blockId' | 'workspaceId'>
 
 /** A `NavigateInput` with the workspace resolved to a concrete id — the form
  *  that flows through the execution pipeline. The workspace is resolved exactly
@@ -634,78 +628,22 @@ const resolveNavigationIntent = (
     : decision
 }
 
-/** Materialize the target block's ROW, for a page created lazily — a system
- *  page `ensureSystemPages` may have SKIPPED, say. The block id must NOT depend
- *  on it: a deterministic id is known before its row exists, which is what lets
- *  a surface ask to open a page it has not created yet.
- *
- *  Runs AFTER the navigation has landed, and only when it landed on exactly the
- *  block and workspace the surface asked for. Both seams can veto or retarget —
- *  `navigationIntentVerb` resolves the gesture, `navigationVerb` executes it —
- *  and running the ensure first puts it on the wrong side of whichever one runs
- *  later, writing for a gesture that then goes nowhere or somewhere else.
- *  Landing first also keeps `navigate` on the call's own turn, so a slow
- *  materialization cannot drop an older navigation on top of a newer gesture.
- *
- *  Accepted: the panel opens a moment before the row does, rather than holding
- *  the gesture until the write lands. A failure leaves the panel on a block that
- *  never arrives, and is logged. */
-export type EnsureNavigationTarget = () => Promise<unknown>
-
-/** The block a surface asked to open, paired with how to materialize its row.
- *  ONE value on purpose: an `ensure` carried separately can end up describing a
- *  different block than the one the pipeline actually navigates to. */
-export interface NavigationTargetEnsure {
-  blockId: string
-  workspaceId: string
-  ensure: EnsureNavigationTarget
-}
-
-/** Navigate, then materialize what it landed on — the ordering both gesture
- *  surfaces share. Compares against `NavigationResult`, which is where the
- *  navigation ACTUALLY went: a veto resolves to `null` and a retarget to some
- *  other block, and neither is ours to create.
- *
- *  `await` inside the try, not `ensure().then(…)`: the catch has to cover a
- *  synchronous throw as well as a rejected promise. */
-const navigateEnsuringTarget = async (
-  repo: Repo,
-  input: NavigateInput,
-  {blockId, workspaceId, ensure}: NavigationTargetEnsure,
-): Promise<NavigationResult | null> => {
-  const landed = await navigate(repo, input)
-  if (!landed || landed.blockId !== blockId || landed.workspaceId !== workspaceId) return landed
-  try {
-    await ensure()
-  } catch (error) {
-    console.error('[navigation] target could not be materialized', error)
-  }
-  return landed
-}
-
 /** Apply a resolved decision to the click that produced it — the single place
  *  that maps an intent outcome onto DOM event handling, so no clickable surface
  *  re-implements the native-vs-veto distinction:
  *    - `passthrough` → decline the event; the browser follows the href.
  *    - `navigate` / `suppress` → own the event (`stopPropagation` +
  *      `preventDefault`); `navigate` then fires the in-app navigation,
- *      `suppress` is a veto no-op.
- *  `target` names a block whose row is created lazily; the navigation is
- *  unchanged and its `ensure` runs afterwards (see `EnsureNavigationTarget`). */
+ *      `suppress` is a veto no-op. */
 export const applyNavigationDecision = (
   repo: Repo,
   e: MouseEvent,
   decision: NavigationDecision,
-  target?: NavigationTargetEnsure,
 ): void => {
   if (decision.kind === 'passthrough') return
   e.stopPropagation()
   e.preventDefault()
-  if (decision.kind !== 'navigate') return
-  const {input} = decision
-  void (target
-    ? navigateEnsuringTarget(repo, input, target)
-    : navigate(repo, input))
+  if (decision.kind === 'navigate') void navigate(repo, decision.input)
 }
 
 /** Resolve a gesture through the intent policy, then execute it. The single
@@ -717,16 +655,12 @@ export const applyNavigationDecision = (
 export const navigateFromGesture = async (
   repo: Repo,
   gesture: NavigationGesture,
-  target?: NavigationTargetEnsure,
 ): Promise<NavigationResult | null> => {
   // Command surfaces have no DOM event to gate, so only the `navigate` decision
   // does anything here; `passthrough` / `suppress` resolve to no navigation.
   // (`resolveNavigationIntent` has already carried the gesture workspace.)
   const decision = resolveNavigationIntent(repo, gesture)
-  if (decision.kind !== 'navigate') return null
-  return target
-    ? navigateEnsuringTarget(repo, decision.input, target)
-    : navigate(repo, decision.input)
+  return decision.kind === 'navigate' ? navigate(repo, decision.input) : null
 }
 
 /** Navigate from a global command (command palette, shortcut, navigator-role
@@ -737,7 +671,7 @@ export const navigateFromGesture = async (
  *  origin defaults to `'navigator'`. */
 export const navigateFromGlobalCommand = (
   repo: Repo,
-  {blockId, workspaceId, ensure}: GlobalCommandNavigateInput,
+  {blockId, workspaceId}: GlobalCommandNavigateInput,
 ): Promise<NavigationResult | null> => {
   const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
   if (!resolvedWorkspaceId) return Promise.resolve(null)
@@ -747,7 +681,7 @@ export const navigateFromGlobalCommand = (
     blockId,
     workspaceId: resolvedWorkspaceId,
     viewport: currentViewport(),
-  }, ensure && {blockId, workspaceId: resolvedWorkspaceId, ensure})
+  })
 }
 
 export const useNavigateFromGlobalCommand = () => {
@@ -818,10 +752,6 @@ export interface OpenBlockContext {
   blockId: string
   /** Defaults to repo.activeWorkspaceId. */
   workspaceId?: string
-  /** Materialize `blockId`'s row, for a page created lazily. When it runs and
-   *  when it is skipped is `EnsureNavigationTarget`'s to say, not this field's
-   *  — the rule lives there so these two declarations cannot drift from it. */
-  ensure?: EnsureNavigationTarget
 }
 
 export interface BlockOpenerOptions {
@@ -838,19 +768,13 @@ export interface BlockOpenerOptions {
  *  fires (e.g. breadcrumb chains, search result lists), use
  *  `useBlockOpener` instead and pass the block at call time. */
 export const useOpenBlock = (
-  target: OpenBlockContext,
+  {blockId, workspaceId}: OpenBlockContext,
   {plainClick = 'follow-link'}: BlockOpenerOptions = {},
 ) => {
   const opener = useBlockOpener({plainClick})
-  // ONE list, feeding both the forwarded context and the deps, so what reaches
-  // the opener and what re-reads it cannot disagree. It is enumerated rather
-  // than `target` itself because callers pass an object literal, which would
-  // rebuild the callback on every render. Every `OpenBlockContext` field must
-  // appear here: one left out is dropped silently, and the type will not say so.
-  const {blockId, workspaceId, ensure} = target
   return useCallback(
-    (e: MouseEvent) => opener(e, {blockId, workspaceId, ensure}),
-    [opener, blockId, workspaceId, ensure],
+    (e: MouseEvent) => opener(e, {blockId, workspaceId}),
+    [opener, blockId, workspaceId],
   )
 }
 
@@ -866,7 +790,7 @@ export const useOpenBlock = (
 export const openBlockFromEvent = (
   repo: Repo,
   e: MouseEvent,
-  {blockId, workspaceId, ensure}: OpenBlockContext,
+  {blockId, workspaceId}: OpenBlockContext,
   {plainClick = 'follow-link', panelId}: {plainClick?: BlockOpenerPlainClick; panelId?: string} = {},
 ): void => {
   const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
@@ -878,13 +802,13 @@ export const openBlockFromEvent = (
     blockId,
     workspaceId: resolvedWorkspaceId,
     viewport: currentViewport(),
-  }), ensure && {blockId, workspaceId: resolvedWorkspaceId, ensure})
+  }))
 }
 
-/** Returns an opener `(event, {blockId, workspaceId?, ensure?}) => void` for
- *  places that resolve the target block from the event (lists, breadcrumbs, map
- *  markers rendered in a loop). Single subscription per component instead of one
- *  hook per item. */
+/** Returns an opener `(event, {blockId, workspaceId?}) => void` for places
+ *  that resolve the target block from the event (lists, breadcrumbs, map
+ *  markers rendered in a loop). Single subscription per component instead
+ *  of one hook per item. */
 export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions = {}) => {
   const repo = useRepo()
   const {panelId} = useBlockContext()
