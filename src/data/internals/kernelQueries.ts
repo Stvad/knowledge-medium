@@ -656,10 +656,26 @@ export const subtreeQuery = defineQuery<
  *  unreachable row declares a dep on a block that is perfectly live — the
  *  depth cap, and the visited-id check on a cycle, where the named parent
  *  is already in the chain. An extra invalidation, no wrong answer. */
-const dependOnUnreachableParent = (ctx: QueryCtx, walk: AncestorWalk): void => {
-  const topmost = walk.chain.length > 0 ? walk.chain[walk.chain.length - 1] : walk.seed
-  const unreachable = topmost?.parent_id
-  if (unreachable) ctx.depend({kind: 'row', id: unreachable})
+const dependOnUnreachableParent = (
+  ctx: QueryCtx,
+  {stoppedAtParentId}: AncestorWalk,
+): void => {
+  if (stoppedAtParentId !== null) ctx.depend({kind: 'row', id: stoppedAtParentId})
+}
+
+export interface AncestorsResult {
+  /** Leaf-to-root, `id` itself excluded. */
+  ancestors: BlockData[]
+  /** The parent the walk could not include, `null` when it reached a
+   *  root. A consumer that renders the chain as a LOCATION needs this:
+   *  a chain cut at the first hop and a root's chain are both `[]`, and
+   *  presenting the first as the second reads as a confident wrong
+   *  answer (see `crumbsFromAncestors`). */
+  stoppedAtParentId: string | null
+}
+
+const ancestorsResultSchema: Schema<AncestorsResult> = {
+  parse: (input) => input as AncestorsResult,
 }
 
 /** Ancestor chain (excludes `id` itself).
@@ -671,15 +687,18 @@ const dependOnUnreachableParent = (ctx: QueryCtx, walk: AncestorWalk): void => {
  *  set-keyed handle for the batched shape. `ancestorWalk` coalesces
  *  the walks that start in the same microtask into one statement, so
  *  that grain costs one round-trip, not one per id. */
-export const ancestorsQuery = defineQuery<{id: string}, BlockData[]>({
+export const ancestorsQuery = defineQuery<{id: string}, AncestorsResult>({
   name: 'core.ancestors',
   argsSchema: z.object({id: z.string()}),
-  resultSchema: blockDataArraySchema,
+  resultSchema: ancestorsResultSchema,
   resolve: async ({id}, ctx) => {
     ctx.depend({kind: 'row', id})
     const walk = await ancestorWalk(ctx.db, id)
     dependOnUnreachableParent(ctx, walk)
-    return ctx.hydrateBlocks(asBlockRows(walk.chain))
+    return {
+      ancestors: ctx.hydrateBlocks(asBlockRows(walk.chain)),
+      stoppedAtParentId: walk.stoppedAtParentId,
+    }
   },
 })
 

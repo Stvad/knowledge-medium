@@ -19,14 +19,15 @@ import { manyAncestorsSql } from './treeQueries'
 export type AncestorChainRow = BlockRow & {chain_start_id: string; depth: number}
 
 /** One block's walk. `chain` is leaf-to-root and excludes the block
- *  itself; `seed` is that block's own row, absent when it does not exist
- *  or is soft-deleted.
+ *  itself.
  *
- *  `seed` is what makes an EMPTY chain readable: a walk stopped at a
- *  parent it cannot see returns the same nothing as a block with no
- *  parent, and the seed's `parent_id` is what separates them. */
+ *  `stoppedAtParentId` is what makes an EMPTY chain readable: a walk
+ *  stopped at a parent it cannot see returns the same nothing as a block
+ *  with no parent, and this names the difference. `null` means the walk
+ *  reached a root — or that the block itself is gone, which names no
+ *  parent either. */
 export interface AncestorWalk {
-  readonly seed: AncestorChainRow | undefined
+  readonly stoppedAtParentId: string | null
   readonly chain: readonly AncestorChainRow[]
 }
 
@@ -38,7 +39,16 @@ export interface AncestorWalk {
 const MAX_IDS_PER_STATEMENT = MAX_IDS_PER_IN_CLAUSE
 
 /** Shared, so an id whose row is gone costs no allocation. */
-const NO_WALK: AncestorWalk = Object.freeze({seed: undefined, chain: Object.freeze([])})
+const NO_WALK: AncestorWalk = Object.freeze({stoppedAtParentId: null, chain: Object.freeze([])})
+
+/** One id's rows, depth-ascending and therefore seed-first. The seed is
+ *  split off the chain, and the topmost row's parent edge is the walk's
+ *  own answer to whether it reached a root: the row it names is missing
+ *  from the result precisely because the walk could not include it. */
+const walkFromRows = (rows: readonly AncestorChainRow[]): AncestorWalk => ({
+  stoppedAtParentId: rows[rows.length - 1].parent_id,
+  chain: rows.slice(1),
+})
 
 /** One id's pending read. Every caller for that id in a tick awaits the
  *  same promise, so settling it settles all of them. */
@@ -92,8 +102,6 @@ class AncestorBatcher {
         const rows = await this.db.getAll<AncestorChainRow>(
           manyAncestorsSql(chunk.length), chunk,
         )
-        // Rows arrive depth-ascending per seed, so the seed (depth 0) is
-        // first and the rest are already leaf-to-root.
         const byStart = new Map<string, AncestorChainRow[]>()
         for (const row of rows) {
           const walk = byStart.get(row.chain_start_id)
@@ -105,9 +113,7 @@ class AncestorBatcher {
         // never sees `undefined` for an id it asked about.
         for (const id of chunk) {
           const rowsForId = byStart.get(id)
-          batch.get(id)!.resolve(rowsForId
-            ? {seed: rowsForId[0], chain: rowsForId.slice(1)}
-            : NO_WALK)
+          batch.get(id)!.resolve(rowsForId ? walkFromRows(rowsForId) : NO_WALK)
         }
       } catch (error) {
         // Scoped to the chunk: an id in a later chunk is a separate
@@ -124,10 +130,11 @@ class AncestorBatcher {
  *  so the walk stays reachable from a resolver holding only `ctx.db`. */
 const batchers = new WeakMap<QueryReadDb, AncestorBatcher>()
 
-/** The walk for `id`: its own row and its leaf-to-root chain, deleted
- *  rows filtered out. Calls for the same id in one microtask are one
- *  read, so the result is shared between those callers — hence `readonly`
- *  throughout, which is the contract and not a formality. */
+/** The walk for `id`: its leaf-to-root chain with deleted rows filtered
+ *  out, and the parent it stopped at if it did. Calls for the same id in
+ *  one microtask are one read, so the result is shared between those
+ *  callers — hence `readonly` throughout, which is the contract and not
+ *  a formality. */
 export const ancestorWalk = (
   db: QueryReadDb,
   id: string,

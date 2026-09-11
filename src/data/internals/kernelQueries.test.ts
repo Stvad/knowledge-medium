@@ -202,14 +202,18 @@ describe('repo.query.ancestors', () => {
     await create({id: 'r'})
     await create({id: 'c', parentId: 'r'})
     await create({id: 'gc', parentId: 'c'})
-    const out = asBlocks(await env.repo.query.ancestors({id: 'gc'}).load())
-    expect(out.map(b => b.id)).toEqual(['c', 'r'])
+    const out = await env.repo.query.ancestors({id: 'gc'}).load()
+    expect(asBlocks(out.ancestors).map(b => b.id)).toEqual(['c', 'r'])
+    expect(out.stoppedAtParentId).toBeNull()
   })
 
   it('returns [] when id has no parent', async () => {
     await create({id: 'r'})
-    const out = asBlocks(await env.repo.query.ancestors({id: 'r'}).load())
-    expect(out).toEqual([])
+    const out = await env.repo.query.ancestors({id: 'r'}).load()
+    expect(asBlocks(out.ancestors)).toEqual([])
+    // What tells this apart from a chain cut at the first hop, which is
+    // also `[]` — the two render differently (`crumbsFromAncestors`).
+    expect(out.stoppedAtParentId).toBeNull()
   })
 
   it('re-resolves when the parent that TRUNCATED the chain comes back', async () => {
@@ -227,9 +231,10 @@ describe('repo.query.ancestors', () => {
 
     const handle = env.repo.query.ancestors({id: 'leaf'})
     const seen: string[][] = []
-    handle.subscribe(chain => seen.push(chain.map(a => a.id)))
+    handle.subscribe(walk => seen.push(walk.ancestors.map(a => a.id)))
     await vi.waitFor(() => expect(handle.status()).toBe('ready'))
-    expect(handle.peek()!.map(a => a.id)).toEqual(['mid'])
+    expect(handle.peek()!.ancestors.map(a => a.id)).toEqual(['mid'])
+    expect(handle.peek()!.stoppedAtParentId).toBe('r')
 
     await env.repo.tx(tx => tx.restore('r'), {scope: ChangeScope.BlockDefault})
 
@@ -246,9 +251,10 @@ describe('repo.query.ancestors', () => {
 
     const handle = env.repo.query.ancestors({id: 'child'})
     const seen: string[][] = []
-    handle.subscribe(chain => seen.push(chain.map(a => a.id)))
+    handle.subscribe(walk => seen.push(walk.ancestors.map(a => a.id)))
     await vi.waitFor(() => expect(handle.status()).toBe('ready'))
-    expect(handle.peek()!.map(a => a.id)).toEqual([])
+    expect(handle.peek()!.ancestors.map(a => a.id)).toEqual([])
+    expect(handle.peek()!.stoppedAtParentId).toBe('top')
 
     await env.repo.tx(tx => tx.restore('top'), {scope: ChangeScope.BlockDefault})
 

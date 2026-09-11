@@ -66,10 +66,12 @@ export interface LinkTargetBlockMatch {
   blockId: string
   content: string
   label: string
-  /** The block's own parent edge. Carried so a consumer showing the
-   *  block's ancestry can tell "this block has no parent" from "its
-   *  parent was excluded from the ancestor walk" — an empty ancestor
-   *  chain looks identical either way (see `crumbsFromAncestors`). */
+  /** The block's own parent edge. Carried because it is settled at first
+   *  paint, which the ancestor walk is not: a consumer can reserve the
+   *  line its crumbs will land on without waiting (see `hasCrumbLine`).
+   *  Not a source of truth about the chain — this rides on a payload with
+   *  no row dep, so a block moved since the query still claims its old
+   *  parent here. */
   parentId: string | null
   /** Raw type ids, for a consumer that wants to show what KIND of thing
    *  the row is alongside where it lives. Free here — these rows are

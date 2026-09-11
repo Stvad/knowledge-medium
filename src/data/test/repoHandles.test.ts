@@ -173,7 +173,7 @@ describe('repo.ancestors(id)', () => {
     await create('b', {parentId: 'a', orderKey: 'b0'})
     const h = env.repo.query.ancestors({id: 'b'})
     const out = await h.load()
-    expect(out.map(x => x.id)).toEqual(['a', 'r'])
+    expect(out.ancestors.map(x => x.id)).toEqual(['a', 'r'])
   })
 
   it('declares row deps on id + every ancestor', async () => {
