@@ -3857,14 +3857,10 @@ export class Repo {
       workspaceId, resolver: this.propertySchemaResolverFor(workspaceId),
     }
 
-    // Candidate prefilter in SQL (index-served, see blockSchema.ts); the real
-    // grammar check is `parseExactReferenceBlockContent` inside
-    // `deriveReferenceTargetId`. `reference_target_id IS NULL` keeps the pass
-    // strictly additive — it never second-guesses a processor- or
-    // arrival-derived value. The `'::%'` probe is the marked-form twin (§7
-    // grammar box): every content-shape prefilter carries it, or a pasted
-    // `::[[future-field]]` (bit-worthy, target unresolvable) would never be
-    // revisited by repair.
+    // Prefilter only (`REFERENCE_TARGET_SWEEP_CANDIDATES_SQL`); the grammar
+    // check is `deriveReferenceTargetId`. `reference_target_id IS NULL` keeps
+    // the pass strictly additive — it never second-guesses a processor- or
+    // arrival-derived value.
     const candidates = await this.db.getAll<{id: string; content: string}>(
       REFERENCE_TARGET_SWEEP_CANDIDATES_SQL,
       [workspaceId],
@@ -4135,13 +4131,8 @@ export class Repo {
       // change nothing any reader observes. That reclaim (with the cell
       // reprojection a raw stamp currently skips) belongs to the auto-claim
       // work that makes definitions name-resolvable.
-      // `'::[[%'` twin: marked alias rows late-bind exactly like unmarked
-      // ones (§7 — the bit is already stamped by derive; this repairs the
-      // target), and a prefilter without the twin would leave a pasted
-      // `::[[future-field]]` bit=1/target-NULL forever once its name mints.
-      // Alias forms ONLY, unlike the sweep's all-forms prefilter: this drain
-      // discards anything that isn't `kind === 'alias'` two lines below, and
-      // an id form can't be one.
+      // Alias forms only (`REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL`): this
+      // drain discards anything that isn't `kind === 'alias'` two lines below.
       const candidates = await this.db.getAll<{id: string; content: string}>(
         REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL,
         [workspaceId],

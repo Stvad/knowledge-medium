@@ -239,18 +239,18 @@ export const CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL = `
   WHERE deleted = 0 AND reference_target_id IS NOT NULL
 `
 
-/** The reference-shaped-content prefilter shared by the derive sweep and the
- *  alias rederive drain (`repo.ts`), and the partial index that serves it.
- *  Both queries otherwise scan every row of a workspace — deleted rows are
- *  included by design, so `idx_blocks_workspace_active` cannot serve them —
- *  for a few dozen candidates: ~1 s of worker time cold on a phone per
- *  session, and again per alias batch. The index holds only rows whose first
- *  non-space character can open a reference form and whose target is still
- *  unresolved (~5 % of a real workspace).
+/** Prefilter shared by the derive sweep and the alias rederive drain
+ *  (`repo.ts`), and the partial index that serves it. Deleted rows are
+ *  included by design (a restored tombstone arrives content-unchanged), so
+ *  `idx_blocks_workspace_active` cannot serve these; this index holds only
+ *  unresolved rows whose first non-space character can open a reference form.
  *
- *  Queries must carry the predicate LITERALLY (the partial-index proof needs
- *  the identical expression) and name the index with `INDEXED BY`: without
- *  statistics the planner picks the full scan on its own. */
+ *  Queries must carry `REFERENCE_CANDIDATE_PREFIX_SQL` literally (the
+ *  partial-index proof) and name the index with `INDEXED BY` — without stats
+ *  the planner keeps the full scan. Changing the predicate or key columns
+ *  needs a new index name or a DROP first: `IF NOT EXISTS` does not reshape an
+ *  existing index, and a query whose predicate no longer proves it fails at
+ *  prepare time ("no query solution") on every upgraded device. */
 export const REFERENCE_CANDIDATE_PREFIX_SQL = `substr(ltrim(content), 1, 1) IN ('(', '[', ':')`
 export const BLOCKS_REFERENCE_CANDIDATES_INDEX = 'idx_blocks_reference_candidates'
 export const CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL = `
@@ -259,10 +259,12 @@ export const CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL = `
   WHERE reference_target_id IS NULL AND ${REFERENCE_CANDIDATE_PREFIX_SQL}
 `
 
-/** Sweep candidates: every reference form, tombstones included (a restored
- *  tombstone arrives content-unchanged, so nothing else would re-derive it).
- *  The real grammar check is `parseExactReferenceBlockContent`; these LIKEs
- *  only prefilter. Lean (id + content): the write phase re-reads in-tx. */
+/** Sweep candidates: every reference form. The LIKEs only prefilter (the
+ *  grammar check is `parseExactReferenceBlockContent`); lean columns because
+ *  the write phase re-reads in-tx. The `'::%'` branch is the marked-form twin
+ *  (§7 grammar box): every content-shape prefilter carries it, or a pasted
+ *  `::[[future-field]]` (bit-worthy, target unresolvable) would never be
+ *  revisited by repair. */
 export const REFERENCE_TARGET_SWEEP_CANDIDATES_SQL = `
   SELECT id, content FROM blocks INDEXED BY ${BLOCKS_REFERENCE_CANDIDATES_INDEX}
    WHERE workspace_id = ?
@@ -276,9 +278,10 @@ export const REFERENCE_TARGET_SWEEP_CANDIDATES_SQL = `
      )
 `
 
-/** Rederive candidates: alias forms only (`[[x]]` and the marked `::[[x]]`
- *  twin) — the drain discards anything that isn't an alias, and an id form
- *  can't be one. */
+/** Rederive candidates: alias forms only — the drain discards anything that
+ *  isn't an alias, and an id form can't be one. The `'::[['` twin is the
+ *  marked alias row, which late-binds exactly like an unmarked one (the bit is
+ *  already stamped; this repairs the target). */
 export const REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL = `
   SELECT id, content FROM blocks INDEXED BY ${BLOCKS_REFERENCE_CANDIDATES_INDEX}
    WHERE workspace_id = ?

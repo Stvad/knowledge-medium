@@ -681,15 +681,16 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
 })
 
 describe('candidate scans', () => {
-  // The index is only useful if SQLite actually plans to it; `INDEXED BY`
-  // makes a query that cannot use it fail loudly, and this pins that both
-  // queries still can (the partial-index predicate must match literally).
-  it('both candidate queries plan to the reference-candidates index', async () => {
+  // Pins that each query's literal predicate still proves the partial index
+  // (`INDEXED BY` throws at prepare time otherwise) and that the plan is an
+  // index SEARCH, not a full-index SCAN. Whether the planner would pick the
+  // index unhinted is not what this checks; the hint is there because it
+  // does not on a real DB without statistics.
+  it('both candidate queries plan to a SEARCH of the reference-candidates index', async () => {
     for (const sql of [REFERENCE_TARGET_SWEEP_CANDIDATES_SQL, REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL]) {
       const plan = (await sharedDb.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${sql}`, ['ws']))
         .map(row => row.detail).join(' | ')
-      expect(plan).toContain(`USING INDEX ${BLOCKS_REFERENCE_CANDIDATES_INDEX}`)
-      expect(plan).not.toContain('SCAN blocks')
+      expect(plan).toContain(`SEARCH blocks USING INDEX ${BLOCKS_REFERENCE_CANDIDATES_INDEX}`)
     }
   })
 })
