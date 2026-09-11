@@ -385,8 +385,10 @@ export const ensurePowerSyncReady = async (
       // per-user resolver the observer deps draw from (`syncObserverDepsFor`).
       const resolver = resolverForUser(userId)
       await db.connect(createPowerSyncConnector({
-        getWorkspaceMode: resolver.getMode,
-        getCek: resolver.getCek,
+        encryption: {
+          getWorkspaceMode: resolver.getMode,
+          getCek: resolver.getCek,
+        },
       }))
     })
     .catch((error) => {
