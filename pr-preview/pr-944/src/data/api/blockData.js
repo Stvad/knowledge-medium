@@ -1,2 +1,0 @@
-var e=e=>{let t=new Set,n=[];for(let r of e){let e=r.sourceField??``,i=`${e}\u0000${r.id}\u0000${r.alias}`;t.has(i)||(t.add(i),n.push(e===``?{id:r.id,alias:r.alias}:{id:r.id,alias:r.alias,sourceField:e}))}return n.sort((e,t)=>{let n=e.sourceField??``,r=t.sourceField??``;return n===r?e.id===t.id?e.alias===t.alias?0:e.alias<t.alias?-1:1:e.id<t.id?-1:1:n<r?-1:1}),n};export{e as normalizeReferences};
-//# sourceMappingURL=blockData.js.map

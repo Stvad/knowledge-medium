@@ -1,2 +1,0 @@
-var e=(e,t)=>{let n=e.properties[t.name];return n===void 0?void 0:t.codec.decode(n)},t=(e,t)=>{let n=e.properties[t.name];return n===void 0?t.defaultValue:t.codec.decode(n)},n=(e,n)=>{try{return t(e,n)}catch{return n.defaultValue}};export{t as decodeRowProperty,e as peekRowProperty,n as safeDecodeRowProperty};
-//# sourceMappingURL=rowProperty.js.map
