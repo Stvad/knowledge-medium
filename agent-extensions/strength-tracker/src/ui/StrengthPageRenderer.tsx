@@ -13,6 +13,7 @@
 import {useEffect, useState} from 'react'
 
 import {DefaultBlockRenderer} from '@/components/renderer/DefaultBlockRenderer.js'
+import {useBlockContext} from '@/context/block.js'
 import {useRepo} from '@/context/repo.js'
 import {getBlockTypes} from '@/data/properties.js'
 import {useWorkspaceId} from '@/hooks/block.js'
@@ -33,6 +34,10 @@ import {useSessionRows} from './decorations/sessionRows'
  *  thought about — differing only in where it stamps: this page, newest
  *  first, because the page is read as a log. */
 const StartSessionButton = ({block}: {block: BlockRendererProps['block']}) => {
+  // The pane this page is rendered in, so the session opens HERE — pressing a
+  // button in a side pane and having the workout appear in the main one is the
+  // one thing this button must not do. See `ShowSessionTarget['panelId']`.
+  const {panelId} = useBlockContext()
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   if (block.repo.isReadOnly) return null
@@ -48,7 +53,7 @@ const StartSessionButton = ({block}: {block: BlockRendererProps['block']}) => {
           event.stopPropagation()
           setBusy(true)
           setProblem(null)
-          runStartSession(block.repo, placeOnPage(block.id))
+          runStartSession(block.repo, placeOnPage(block.id), panelId)
             .catch((error: unknown) => {
               console.error('[strength] could not start the session', error)
               setProblem('Could not start a session — nothing was saved.')

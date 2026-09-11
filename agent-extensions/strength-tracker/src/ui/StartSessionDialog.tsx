@@ -8,6 +8,10 @@
 
 import {useState} from 'react'
 
+import {Button} from '@/components/ui/button.js'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog.js'
 import type {DialogContextProps} from '@/utils/dialogs.js'
 
 import {altOptionKey, type Prescription, type SessionType} from '../engine/types'
@@ -79,109 +83,116 @@ export const StartSessionDialog = ({
     .filter(exercise => exercise.altGroupKey && (exercise.altOptions?.length ?? 0) > 1)
 
   return (
-    <div className="flex max-w-md flex-col gap-4 p-4">
-      <div>
-        <h2 className="text-base font-semibold">Start a session</h2>
-        <p className="text-sm text-muted-foreground">
-          {prescription.offSchedule
-            ? 'Nothing is scheduled today — pick what you are doing.'
-            : `Scheduled for ${prescription.day}.`}
-        </p>
-      </div>
+    // The app's modal chrome, not a bare div: `DialogHost` renders whatever is
+    // queued straight into the app mount point, so a component that brings no
+    // chrome of its own lands as a block of markup stacked above the outline
+    // rather than as a dialog over it.
+    <Dialog open onOpenChange={next => { if (!next) cancel() }}>
+      {/* The lift list is as long as the session is, so the dialog is capped at
+          the viewport and only its BODY scrolls — the picks and the Start
+          button stay put rather than scrolling off the end of the list.
+          `max-h-dvh`/`min-h-0` and not an arbitrary `max-h-[85vh]`: this
+          extension is installed into a client whose CSS was built without it,
+          and only the safelisted utility vocabulary survives that
+          (`src/extension-utilities.css`). */}
+      <DialogContent className="flex max-h-dvh flex-col overflow-hidden">
+        <DialogHeader>
+          <DialogTitle>Start a session</DialogTitle>
+          <DialogDescription>
+            {prescription.offSchedule
+              ? 'Nothing is scheduled today — pick what you are doing.'
+              : `Scheduled for ${prescription.day}.`}
+          </DialogDescription>
+        </DialogHeader>
 
-      {prescription.reentry ? (
-        <p className="rounded border border-border bg-muted/40 p-2 text-xs">
-          {prescription.reentry.banner}
-        </p>
-      ) : null}
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+          {prescription.reentry ? (
+            <p className="rounded border border-border bg-muted/40 p-2 text-xs">
+              {prescription.reentry.banner}
+            </p>
+          ) : null}
 
-      {prescription.notes.length > 0 ? (
-        <ul className="flex list-disc flex-col gap-0.5 pl-4 text-xs text-muted-foreground">
-          {prescription.notes.map(note => <li key={note}>{note}</li>)}
-        </ul>
-      ) : null}
+          {prescription.notes.length > 0 ? (
+            <ul className="flex list-disc flex-col gap-0.5 pl-4 text-xs text-muted-foreground">
+              {prescription.notes.map(note => <li key={note}>{note}</li>)}
+            </ul>
+          ) : null}
 
-      {warnings.length > 0 ? (
-        <ul className="flex flex-col gap-1 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
-          {warnings.map(warning => <li key={warning}>{warning}</li>)}
-        </ul>
-      ) : null}
+          {warnings.length > 0 ? (
+            <ul className="flex flex-col gap-1 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+              {warnings.map(warning => <li key={warning}>{warning}</li>)}
+            </ul>
+          ) : null}
 
-      <div className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Session</span>
-        <Segmented options={SESSIONS} value={session} onChange={setSession}/>
-      </div>
-
-      {groups.map(exercise => {
-        const groupKey = exercise.altGroupKey!
-        const current = choices[groupKey] ?? altOptionKey({
-          name: exercise.exercise,
-          ...(exercise.defId !== undefined ? {defId: exercise.defId} : {}),
-        })
-        return (
-          <div key={groupKey} className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Choose one
-            </span>
-            <Segmented
-              options={(exercise.altOptions ?? []).map(option => ({
-                value: altOptionKey(option),
-                label: option.name,
-              }))}
-              value={current}
-              onChange={next => setChoices(current => ({...current, [groupKey]: next}))}
-            />
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Session</span>
+            <Segmented options={SESSIONS} value={session} onChange={setSession}/>
           </div>
-        )
-      })}
 
-      <div>
-        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {prescription.exercises.length} lifts
-        </span>
-        <ul className="mt-1 flex flex-col gap-0.5 text-sm">
-          {prescription.exercises.map((exercise, index) => (
-            <li key={`${exercise.exercise}-${index}`} className="flex flex-col gap-0.5">
-              <div className="flex justify-between gap-3">
-                <span>{exercise.exercise}</span>
-                <span className="shrink-0 tabular-nums text-muted-foreground">
-                  {exercise.sets}×{exercise.repMax ?? exercise.repMin ?? '?'}
-                  {exercise.weight !== undefined ? ` @ ${exercise.weight}` : ''}
+          {groups.map(exercise => {
+            const groupKey = exercise.altGroupKey!
+            const current = choices[groupKey] ?? altOptionKey({
+              name: exercise.exercise,
+              ...(exercise.defId !== undefined ? {defId: exercise.defId} : {}),
+            })
+            return (
+              <div key={groupKey} className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Choose one
                 </span>
+                <Segmented
+                  options={(exercise.altOptions ?? []).map(option => ({
+                    value: altOptionKey(option),
+                    label: option.name,
+                  }))}
+                  value={current}
+                  onChange={next => setChoices(current => ({...current, [groupKey]: next}))}
+                />
               </div>
-              {/* Where the number came from. The plan's whole point is that it
-                  is never a mystery, and this preview is the only place it is
-                  said now — nothing stamps it onto the blocks. */}
-              <span className="text-xs text-muted-foreground">{exercise.rationale}</span>
-              {exercise.note ? (
-                <span className="text-xs text-muted-foreground">{exercise.note}</span>
-              ) : null}
-              {(exercise.videos ?? []).length > 0 ? (
-                <span className="flex flex-wrap gap-2 text-xs">
-                  {(exercise.videos ?? []).map(video => (
-                    <a key={video.url} href={video.url} target="_blank" rel="noreferrer"
-                      className="underline decoration-dotted">{video.label}</a>
-                  ))}
-                </span>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      </div>
+            )
+          })}
 
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          className="rounded border border-border px-3 py-1.5 text-sm hover:bg-muted"
-          onClick={() => cancel()}
-        >Cancel</button>
-        <button
-          type="button"
-          className="rounded bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
-          onClick={() => resolve({session, choices})}
-        >Start</button>
-      </div>
-    </div>
+          <div>
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {prescription.exercises.length} lifts
+            </span>
+            <ul className="mt-1 flex flex-col gap-0.5 text-sm">
+              {prescription.exercises.map((exercise, index) => (
+                <li key={`${exercise.exercise}-${index}`} className="flex flex-col gap-0.5">
+                  <div className="flex justify-between gap-3">
+                    <span>{exercise.exercise}</span>
+                    <span className="shrink-0 tabular-nums text-muted-foreground">
+                      {exercise.sets}×{exercise.repMax ?? exercise.repMin ?? '?'}
+                      {exercise.weight !== undefined ? ` @ ${exercise.weight}` : ''}
+                    </span>
+                  </div>
+                  {/* Where the number came from. The plan's whole point is that it
+                      is never a mystery, and this preview is the only place it is
+                      said now — nothing stamps it onto the blocks. */}
+                  <span className="text-xs text-muted-foreground">{exercise.rationale}</span>
+                  {exercise.note ? (
+                    <span className="text-xs text-muted-foreground">{exercise.note}</span>
+                  ) : null}
+                  {(exercise.videos ?? []).length > 0 ? (
+                    <span className="flex flex-wrap gap-2 text-xs">
+                      {(exercise.videos ?? []).map(video => (
+                        <a key={video.url} href={video.url} target="_blank" rel="noreferrer"
+                          className="underline decoration-dotted">{video.label}</a>
+                      ))}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => cancel()}>Cancel</Button>
+          <Button onClick={() => resolve({session, choices})}>Start</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 StartSessionDialog.displayName = 'StartSessionDialog'
