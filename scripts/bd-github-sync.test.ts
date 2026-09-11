@@ -930,6 +930,12 @@ describe('mirrorCommentBody', () => {
     expect(leftover).toEqual(['km-abc'])
   })
 
+  it('treats a tilde run mid-line as prose, not a fence', () => {
+    const { body, leftover } = mirrorCommentBody({ ...comment, text: 'See ~~~km-abc~~~ for context, and ~~km-abc~~ struck' }, numbers, hold)
+    expect(body.endsWith('See ~~~#12~~~ for context, and ~~#12~~ struck')).toBe(true)
+    expect(leftover).toEqual([])
+  })
+
   it('recognises tilde fences and fences longer than three backticks', () => {
     const text = 'km-abc first\n~~~\nbd show km-abc\n~~~\nthen km-abc\n````\n```\nbd close km-abc\n```\n````\nlast km-abc'
     const { body } = mirrorCommentBody({ ...comment, text }, numbers, hold)

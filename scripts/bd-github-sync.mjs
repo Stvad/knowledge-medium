@@ -808,11 +808,12 @@ export const mirroredCommentIds = bodies => new Set(bodies.map(b => b.match(MIRR
 // cannot be edited — so those go out and are reported (`leftover`), since
 // the GitHub copy is the one a human can fix. Holding them would hide the
 // whole comment for good.
-// Code kept verbatim: a fence of three or more backticks or tildes closed by
-// the same run, or an inline span delimited by a backtick run of any length
-// (a double-backtick span may carry single backticks). Everything between is
+// Code kept verbatim: a fence of three or more backticks or tildes opened and
+// closed at a line start (Markdown's rule — a tilde run mid-line is prose),
+// or an inline span delimited by a backtick run of any length (a
+// double-backtick span may carry single backticks). Everything between is
 // prose.
-const CODE = /(`{3,}|~{3,})[\s\S]*?\1|(`+)(?:(?!\2)[^\n])+?\2/g
+const CODE = /^[ ]{0,3}(`{3,}|~{3,})[\s\S]*?^[ ]{0,3}\1|(`+)(?:(?!\2)[^\n])+?\2/gm
 export const rewriteBeadIds = (text, numberByBeadId, holdIds) => {
   const unmapped = new Set()
   const rewriteProse = prose =>
