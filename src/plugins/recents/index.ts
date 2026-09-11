@@ -9,7 +9,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { getOrCreateRecentsPage, recentsPageBlockId } from '@/data/recentsPage.js'
-import { navigateFromGlobalCommand } from '@/utils/navigation.js'
+import { activeWorkspaceIdPreferringHash, navigateFromGlobalCommand } from '@/utils/navigation.js'
 import type { Repo } from '@/data/repo'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
 import { RecentsPageBlockRenderer } from './RecentsPageBlockRenderer.tsx'
@@ -24,7 +24,13 @@ export const OPEN_RECENTS_ACTION_ID = 'open_recents'
  *  before anything is written — an ensure run ahead of resolution creates the
  *  page even for a command the policy vetoes. */
 const openRecents = async (repo: Repo): Promise<void> => {
-  const workspaceId = repo.activeWorkspaceId
+  // The HASH, not the pin: during a workspace switch the hash already names the
+  // workspace the user is looking at while `repo.activeWorkspaceId` still names
+  // the previous one, and a command fired in that window would otherwise open —
+  // and now materialize — the workspace they just left. This is what the helper
+  // exists for. (The header button stays on the pin, like every other click
+  // surface; `openBlockFromEvent` resolves it there.)
+  const workspaceId = activeWorkspaceIdPreferringHash(repo)
   if (!workspaceId) return
   await navigateFromGlobalCommand(repo, {
     blockId: recentsPageBlockId(workspaceId),

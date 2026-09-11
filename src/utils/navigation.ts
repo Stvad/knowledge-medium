@@ -843,15 +843,15 @@ export const useOpenBlock = (
   {plainClick = 'follow-link'}: BlockOpenerOptions = {},
 ) => {
   const opener = useBlockOpener({plainClick})
-  // `target` is forwarded WHOLE, so a field added to `OpenBlockContext` reaches
-  // the opener without an edit here — rebuilding it field by field is how
-  // `ensure` came to be silently dropped, a missing behaviour rather than a type
-  // error. Deps stay per-field because callers pass an object literal, which
-  // would otherwise rebuild the callback on every render.
+  // ONE list, feeding both the forwarded context and the deps, so what reaches
+  // the opener and what re-reads it cannot disagree. It is enumerated rather
+  // than `target` itself because callers pass an object literal, which would
+  // rebuild the callback on every render. Keep it in step with
+  // `OpenBlockContext`: a field left out here is dropped silently — that is how
+  // `ensure` was lost — and the type will not tell you.
   const {blockId, workspaceId, ensure} = target
   return useCallback(
-    (e: MouseEvent) => opener(e, target),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: `target` is an unstable literal; its fields are the identity
+    (e: MouseEvent) => opener(e, {blockId, workspaceId, ensure}),
     [opener, blockId, workspaceId, ensure],
   )
 }

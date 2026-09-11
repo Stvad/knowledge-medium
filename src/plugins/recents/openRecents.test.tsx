@@ -16,9 +16,11 @@ import { ChangeScope, type BlockData } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { recentsPageBlockId } from '@/data/recentsPage'
+import { buildAppHash } from '@/utils/routing'
 import type { Repo } from '@/data/repo'
 
 const WS = 'ws-recents-open'
+const SWITCHED_TO_WS = 'ws-recents-switched'
 /** Measured ~200ms; budgeted for the gate's ~6x p99.9 stretch under load. */
 const TIMEOUT_MS = 20_000
 const ENSURE_TIMEOUT_MS = 5_000
@@ -79,6 +81,7 @@ const setup = async (): Promise<Repo> => {
 afterEach(() => {
   cleanup()
   repoRef.current = undefined
+  window.location.hash = ''
 })
 
 /** The Recents row as the DB holds it — `null` while the page has never been
@@ -144,6 +147,19 @@ describe('opening Recents when bootstrap skipped the page', () => {
 
     expect(await repo.redo()).toBe(true)
     expect((await repo.load(blockId))?.content).toBe('edited')
+  }, TIMEOUT_MS)
+
+  it('the command follows the hash, not a pin the workspace switch has not caught up to', async () => {
+    const repo = await setup()
+    // The window in which the hash already names the workspace the user is
+    // looking at and `repo.activeWorkspaceId` still names the one they left.
+    window.location.hash = buildAppHash(SWITCHED_TO_WS)
+
+    await runOpenRecentsCommand(repo)
+
+    expect((await repo.load(recentsPageBlockId(SWITCHED_TO_WS)))?.content).toBe('Recents')
+    expect(await recentsRow(repo)).toBeNull()
+    expect(commandCalls.current).toEqual([recentsPageBlockId(SWITCHED_TO_WS)])
   }, TIMEOUT_MS)
 
   it('a second open reuses the page rather than minting a rival', async () => {
