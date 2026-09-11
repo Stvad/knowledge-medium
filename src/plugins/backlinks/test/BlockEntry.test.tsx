@@ -6,14 +6,22 @@ import type { Block } from '@/data/block'
 import { BlockContextProvider } from '@/context/block'
 import { LazyBlockEntry } from '../BlockEntry.tsx'
 
-const mocks = vi.hoisted(() => ({
-  openBlock: vi.fn(),
-  useParents: vi.fn(() => [] as unknown[]),
-  repo: {
-    activeWorkspaceId: 'workspace',
-    block: vi.fn((id: string) => ({id})),
-  },
-}))
+const NO_PARENTS: unknown[] = []
+
+/** `parents` is the chain the stubbed `useParents` hands back — one
+ *  array instance per test, since the hook is called on every render. */
+const mocks = vi.hoisted(() => {
+  const state = {
+    openBlock: vi.fn(),
+    parents: [] as unknown[],
+    useParents: vi.fn(() => state.parents),
+    repo: {
+      activeWorkspaceId: 'workspace',
+      block: vi.fn((id: string) => ({id})),
+    },
+  }
+  return state
+})
 
 vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => mocks.repo,
@@ -55,16 +63,17 @@ afterEach(() => {
   mocks.openBlock.mockClear()
   mocks.repo.block.mockClear()
   mocks.useParents.mockClear()
+  mocks.parents = NO_PARENTS
 })
 
 describe('BlockEntry breadcrumbs', () => {
   it('routes shift-clicks through the block opener', () => {
     const source = {id: 'source-block'} as Block
-    const parent = {id: 'parent-block'} as Block
+    mocks.parents = [{id: 'parent-block'}]
 
     render(
       <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBlockEntry block={source} initialParents={[parent]} scopeId="test:source-block" />
+        <LazyBlockEntry block={source} scopeId="test:source-block" />
       </BlockContextProvider>,
     )
 
@@ -81,35 +90,27 @@ describe('BlockEntry breadcrumbs', () => {
   })
 })
 
-describe('BlockEntry prefetch hint', () => {
-  // `undefined` and `[]` used to collapse to the same thing, so an entry the
-  // caller's prefetch missed rendered with no breadcrumb, permanently. Both
-  // real call sites pass `map.get(id)`, so a miss is `undefined` — the common
-  // case, not a corner.
-  it('fetches its own ancestors when none were prefetched', () => {
+describe('BlockEntry ancestors', () => {
+  it('re-keys its chain on the block it SHOWS, not the one it was given', () => {
+    // The entry holds one `core.ancestors` handle, keyed by whatever it is
+    // currently showing. Keying it on the block the list handed over would
+    // leave a promoted entry wearing the crumbs of the block it unfurled
+    // out of — the chain above the promoted parent is a different chain.
     const source = {id: 'source-block'} as Block
+    mocks.parents = [{id: 'parent-block'}]
 
     render(
       <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBlockEntry block={source} scopeId="test:no-prefetch" />
+        <LazyBlockEntry block={source} scopeId="test:own-chain" />
       </BlockContextProvider>,
     )
+    expect(mocks.useParents).toHaveBeenCalledWith({id: 'source-block'})
+    mocks.useParents.mockClear()
 
-    expect(mocks.useParents).toHaveBeenCalled()
-  })
+    // A plain primary click on a breadcrumb promotes that segment.
+    fireEvent.click(screen.getByTestId('block-parent-block'))
 
-  it('does NOT fetch when the caller prefetched, even an empty chain', () => {
-    // `[]` is a real answer — a block with no ancestors — and must not be
-    // mistaken for "I didn't look".
-    const source = {id: 'source-block'} as Block
-
-    render(
-      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBlockEntry block={source} initialParents={[]} scopeId="test:empty-prefetch" />
-      </BlockContextProvider>,
-    )
-
-    expect(mocks.useParents).not.toHaveBeenCalled()
+    expect(mocks.useParents).toHaveBeenCalledWith({id: 'parent-block'})
   })
 })
 
@@ -122,11 +123,10 @@ describe('BlockEntry structural-edit scope', () => {
   // which lives outside the panel: present in the DB, nowhere to render.
   it('declares the shown block as the render-scope root for the blocks it renders', () => {
     const source = {id: 'source-block'} as Block
-    const parent = {id: 'parent-block'} as Block
 
     render(
       <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBlockEntry block={source} initialParents={[parent]} scopeId="test:source-block" />
+        <LazyBlockEntry block={source} scopeId="test:source-block" />
       </BlockContextProvider>,
     )
 

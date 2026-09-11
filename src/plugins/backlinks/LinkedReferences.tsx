@@ -1,7 +1,7 @@
 import { useCallback, useState, type MouseEvent } from 'react'
 import { Filter } from 'lucide-react'
 import { Block } from '../../data/block'
-import { useManyParents, useWorkspaceId } from '@/hooks/block.js'
+import { useWorkspaceId } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
 import { useBlockOpener } from '@/utils/navigation.js'
 import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.js'
@@ -54,11 +54,6 @@ function LinkedReferencesInner({
     filterActive ? effectiveFilter : undefined,
   )
   const backlinks = filterActive ? filteredBacklinks : unfilteredBacklinks
-  // Warms one `core.ancestors` handle per backlink, so an entry that
-  // scrolls into view finds its chain already resolved. Entries read the
-  // same handles through `initialParents`; a promoted breadcrumb changes
-  // shownBlock to an id that was not prefetched, which acquires its own.
-  const initialParentsByBacklinkId = useManyParents(backlinks)
   const [open, setOpen] = useState(true)
   const [filtersOpenOverride, setFiltersOpenOverride] = useState<boolean | null>(null)
   const filtersOpen = filtersOpenOverride ?? filterActive
@@ -131,7 +126,6 @@ function LinkedReferencesInner({
                     key={backlinkBlock.id}
                     block={backlinkBlock}
                     scopeId={`flat:${backlinkBlock.id}`}
-                    initialParents={initialParentsByBacklinkId.get(backlinkBlock.id)}
                   />
                 ))}
               </div>

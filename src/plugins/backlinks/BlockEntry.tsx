@@ -40,32 +40,27 @@ const ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 // chosen parent's subtree (which still contains the original backlink
 // as a descendant).
 //
-// Two render paths. A caller that already holds this block's ancestors —
-// because they rode in its own query payload, as grouped-backlinks does, or
-// because it warmed the handles, as the flat panel does — passes them as
-// `initialParents`, and `BlockEntryContent` renders without touching a handle
-// of its own. After the user clicks a breadcrumb the shown block changes, the
-// conditional flips, and `BlockEntryDynamicContent` takes over for the new id.
-//
-// The dynamic path is also the FALLBACK when nothing was supplied, which is
-// why the condition tests `initialParents !== undefined` rather than trusting
-// a default: a missing prefetch must cost a query, not a feature.
+// The chain comes from the entry's own `core.ancestors` handle, keyed by
+// the shown id — so a promote re-keys it, and the walks of every entry
+// that mounts in one commit coalesce into a single statement. An earlier
+// shape took a prefetched chain as a prop and rendered a second component
+// when it was absent; that existed to skip a per-entry query back when the
+// ancestor handle was keyed by the whole id SET.
 
 const BlockEntryContent = ({
   shownBlock,
-  parents,
   onSelect,
   onShowBlock,
   renderScopeId,
 }: {
   shownBlock: Block
-  parents: readonly Block[]
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
   renderScopeId: string
 }) => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
+  const parents = useParents(shownBlock)
 
   const promoteBreadcrumb = useCallback(
     () => promoteClosestBreadcrumb(parents, onShowBlock),
@@ -110,51 +105,18 @@ const BlockEntryContent = ({
   )
 }
 
-const BlockEntryDynamicContent = ({
-  shownBlock,
-  onSelect,
-  onShowBlock,
-  renderScopeId,
-}: {
-  shownBlock: Block
-  onSelect: (parent: Block) => void
-  onShowBlock: (blockId: string) => void
-  renderScopeId: string
-}) => {
-  const parents = useParents(shownBlock)
-  return (
-    <BlockEntryContent
-      shownBlock={shownBlock}
-      parents={parents}
-      onSelect={onSelect}
-      onShowBlock={onShowBlock}
-      renderScopeId={renderScopeId}
-    />
-  )
-}
-
 const BlockEntry = ({
   block,
-  initialParents,
   scopeId,
 }: {
   block: Block
-  /** Prefetched ancestors, when the parent component already has them.
-   *
-   *  A HINT, not a switch. `undefined` means "I don't have them" and this
-   *  fetches its own; `[]` means "this block genuinely has no ancestors". They
-   *  used to collapse to the same thing, which made the optimisation's absence
-   *  silently disable the feature it optimises: both call sites pass
-   *  `map.get(id)`, so every entry the prefetch missed rendered with no
-   *  breadcrumb, permanently, with nothing to indicate it. */
-  initialParents?: readonly Block[]
   scopeId: string
 }) => {
   const repo = useRepo()
   const parentContext = useBlockContext()
   // Promote-in-place state (unfurl an ancestor, with the panel-nav
   // crossfade) shared with the SRS review session.
-  const {shownId, isInitial, promote, showBlock} = usePromotableBreadcrumb(block.id)
+  const {shownId, promote, showBlock} = usePromotableBreadcrumb(block.id)
   const shownBlock = useMemo(() => repo.block(shownId), [repo, shownId])
   const parentRenderScopeId = typeof parentContext.renderScopeId === 'string'
     ? parentContext.renderScopeId
@@ -166,24 +128,12 @@ const BlockEntry = ({
 
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
-      {isInitial && initialParents !== undefined
-        ? (
-            <BlockEntryContent
-              shownBlock={shownBlock}
-              parents={initialParents}
-              onSelect={promote}
-              onShowBlock={showBlock}
-              renderScopeId={renderScopeId}
-            />
-          )
-        : (
-            <BlockEntryDynamicContent
-              shownBlock={shownBlock}
-              onSelect={promote}
-              onShowBlock={showBlock}
-              renderScopeId={renderScopeId}
-            />
-          )}
+      <BlockEntryContent
+        shownBlock={shownBlock}
+        onSelect={promote}
+        onShowBlock={showBlock}
+        renderScopeId={renderScopeId}
+      />
     </div>
   )
 }
@@ -205,11 +155,9 @@ const BlockEntryPlaceholder = ({
 
 export const LazyBlockEntry = ({
   block,
-  initialParents,
   scopeId,
 }: {
   block: Block
-  initialParents?: readonly Block[]
   scopeId: string
 }) => {
   return (
@@ -220,7 +168,7 @@ export const LazyBlockEntry = ({
       overscanPx={ENTRY_OVERSCAN_PX}
       renderPlaceholder={(props) => <BlockEntryPlaceholder {...props} />}
     >
-      <BlockEntry block={block} initialParents={initialParents} scopeId={scopeId} />
+      <BlockEntry block={block} scopeId={scopeId} />
     </LazyViewportMount>
   )
 }

@@ -27,7 +27,6 @@ import { GroupHeaderActionButton } from './GroupHeaderActionButton.tsx'
 interface GroupedBacklinksSnapshot {
   unfilteredBacklinks: Block[]
   grouped: GroupedBacklinksResult
-  initialParentsByBacklinkId: ReadonlyMap<string, Block[]>
 }
 
 interface GroupedQueryArgs {
@@ -76,7 +75,6 @@ const EMPTY_GROUPED_BACKLINKS_SNAPSHOT: GroupedBacklinksSnapshot = {
     unfilteredSourceIds: [],
     sourceParents: [],
   },
-  initialParentsByBacklinkId: new Map(),
 }
 
 const buildGroupedQueryArgs = (
@@ -97,12 +95,6 @@ const snapshotFromGroupedResult = (
 ): GroupedBacklinksSnapshot => ({
   unfilteredBacklinks: grouped.unfilteredSourceIds.map(id => repo.block(id)),
   grouped,
-  initialParentsByBacklinkId: new Map(
-    grouped.sourceParents.map(entry => [
-      entry.sourceId,
-      entry.parentIds.map(parentId => repo.block(parentId)),
-    ]),
-  ),
 })
 
 const currentSourceIdsForGroupedResult = (
@@ -358,11 +350,9 @@ const loadSettledGroupedResultWithRetry = async (
 const GroupItems = ({
   sourceBlocks,
   group,
-  parentsBySourceId,
 }: {
   group: GroupedBacklinkGroup
   sourceBlocks: Block[]
-  parentsBySourceId: ReadonlyMap<string, Block[]>
 }) => {
   const runtime = useAppRuntime()
   const headerActions = runtime.read(groupedBacklinksGroupHeaderActionsFacet)
@@ -402,7 +392,6 @@ const GroupItems = ({
               key={source.id}
               block={source}
               scopeId={`group:${group.groupId}:${source.id}`}
-              initialParents={parentsBySourceId.get(source.id)}
             />
           ))}
         </div>
@@ -413,10 +402,8 @@ const GroupItems = ({
 
 const GroupedReferencesGroup = ({
   group,
-  parentsBySourceId,
 }: {
   group: GroupedBacklinkGroup
-  parentsBySourceId: ReadonlyMap<string, Block[]>
 }) => {
   const repo = useRepo()
   const sourceBlocks = useMemo(
@@ -428,7 +415,6 @@ const GroupedReferencesGroup = ({
     <GroupItems
       group={group}
       sourceBlocks={sourceBlocks}
-      parentsBySourceId={parentsBySourceId}
     />
   )
 }
@@ -679,7 +665,7 @@ function GroupedReferencesView({
   liveUpdates: boolean
   onToggleLiveUpdates: () => void
 }) {
-  const {unfilteredBacklinks, grouped, initialParentsByBacklinkId} = data
+  const {unfilteredBacklinks, grouped} = data
 
   if (unfilteredBacklinks.length === 0) return <BacklinksEmptyState controls={controls}/>
 
@@ -752,7 +738,6 @@ function GroupedReferencesView({
                   <GroupedReferencesGroup
                     key={group.groupId}
                     group={group}
-                    parentsBySourceId={initialParentsByBacklinkId}
                   />
                 ))}
               </div>

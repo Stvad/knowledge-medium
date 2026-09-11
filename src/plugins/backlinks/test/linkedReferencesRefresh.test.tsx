@@ -13,8 +13,12 @@
  *
  * These tests drive the real `LinkedReferences` over a real repo and
  * record what each entry was rendered with on EVERY commit (the flash
- * settles inside `act`, so a post-hoc DOM assertion can't see it). Only
- * the leaf entry renderer is stubbed, to capture its props.
+ * settles inside `act`, so a post-hoc DOM assertion can't see it). The
+ * recorder WRAPS `useParents` rather than replacing it: the entry holds
+ * its own chain now, so there is no prop above it to intercept, and the
+ * hook is the last point where a render and the id it was for are both
+ * in hand. `linkedReferencesBreadcrumbs` owns the other half — that the
+ * chain recorded here reaches the DOM.
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -24,6 +28,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
+import type { ReactNode } from 'react'
 import { queriesFacet, invalidationRulesFacet } from '@/data/facets.js'
 import { referencesInvalidationRule } from '@/plugins/references/invalidation.js'
 import type { AppExtension } from '@/facets/facet.js'
@@ -65,18 +70,32 @@ vi.mock('../useStoredBacklinkFilter.ts', () => ({
   }),
 }))
 
-// The entry renderer is the observation point: `initialParents` is what
-// decides whether the entry paints a breadcrumb line (see BlockEntry →
-// BreadcrumbList, which renders null for an empty chain).
-vi.mock('../BlockEntry.tsx', () => ({
-  LazyBlockEntry: ({block, initialParents}: {
-    block: Block
-    initialParents?: readonly Block[]
-  }) => {
-    const parents = (initialParents ?? []).map(parent => parent.id)
-    state.entryRenders.push({id: block.id, parents})
-    return <div data-testid={`backlink-${block.id}`}>{parents.join('>')}</div>
-  },
+// The observation point. The REAL hook runs — this only records what it
+// returned, per render, against the block it was asked about. An empty
+// chain is what makes the entry paint no breadcrumb line (BlockEntry →
+// PromotableBreadcrumbList renders nothing for one), which is the blank
+// frame these tests hunt.
+vi.mock('@/hooks/block.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/hooks/block')>()
+  return {
+    ...actual,
+    useParents: (block: Block) => {
+      const parents = actual.useParents(block)
+      state.entryRenders.push({id: block.id, parents: parents.map(p => p.id)})
+      return parents
+    },
+  }
+})
+
+// The leaf, so an entry's body is one identifiable node.
+vi.mock('@/components/BlockComponent.tsx', () => ({
+  BlockComponent: ({blockId}: {blockId: string}) => (
+    <span data-testid={`backlink-${blockId}`}>{blockId}</span>
+  ),
+}))
+
+vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
+  LazyViewportMount: ({children}: {children: ReactNode}) => <>{children}</>,
 }))
 
 const backlinksQueryExtension: AppExtension = [
@@ -116,9 +135,11 @@ const createSource = async (id: string) => {
 
 const renderPanel = async (expectedIds: string[]) => {
   const rendered = render(<LinkedReferences block={repo.block(TARGET)}/>)
+  // Fenced on the CHAINS, not just the entries: an assertion about a
+  // breadcrumb never dropping is trivially true before any chain landed.
   await waitFor(() => {
     for (const id of expectedIds) {
-      expect(rendered.getByTestId(`backlink-${id}`).textContent).toBe(`${id}-parent`)
+      expect(rendersFor(id).at(-1)?.parents).toEqual([`${id}-parent`])
     }
   })
   return rendered
