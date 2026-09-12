@@ -1,0 +1,49 @@
+{
+  "timestamp": "2024-03-11T08:00:00.000Z",
+  "app_version": "1.4.0",
+  "sleep": [
+    {
+      "session_end_time": "2024-03-11T07:12:00.000Z",
+      "duration_seconds": 27060,
+      "metadata": {"id": "hc-sleep-main-1"},
+      "stages": [
+        {"stage": "AWAKE", "start_time": "2024-03-10T23:41:00.000Z", "end_time": "2024-03-10T23:50:00.000Z"},
+        {"stage": "LIGHT", "start_time": "2024-03-10T23:50:00.000Z", "end_time": "2024-03-11T01:20:00.000Z"},
+        {"stage": "DEEP", "start_time": "2024-03-11T01:20:00.000Z", "end_time": "2024-03-11T02:10:00.000Z"},
+        {"stage": "REM", "start_time": "2024-03-11T02:10:00.000Z", "end_time": "2024-03-11T02:50:00.000Z"},
+        {"stage": "bogus-stage-code", "start_time": "2024-03-11T02:50:00.000Z", "end_time": "2024-03-11T03:00:00.000Z"},
+        {"stage": "SLEEPING", "start_time": "2024-03-11T03:00:00.000Z", "end_time": "2024-03-11T07:12:00.000Z"}
+      ]
+    },
+    {
+      "start_time": "2024-03-11T14:05:00.000Z",
+      "end_time": "2024-03-11T14:35:00.000Z",
+      "uid": "hc-sleep-nap-1",
+      "stages": [
+        {"stage": 4, "start_time": "2024-03-11T14:05:00.000Z", "end_time": "2024-03-11T14:35:00.000Z"}
+      ]
+    }
+  ],
+  "heart_rate": [
+    {"bpm": 58, "time": "2024-03-11T00:00:00.000Z"},
+    {"bpm": 52, "time": "2024-03-11T02:00:00.000Z"},
+    {"bpm": 61, "time": "2024-03-11T14:20:00.000Z"},
+    {"time": "2024-03-11T05:00:00.000Z"}
+  ],
+  "heart_rate_variability": [
+    {"rmssd_millis": 45.2, "time": "2024-03-11T01:00:00.000Z"},
+    {"rmssd_millis": 51.8, "time": "2024-03-11T05:00:00.000Z"}
+  ],
+  "oxygen_saturation": [
+    {"percentage": 96.5, "time": "2024-03-11T01:00:00.000Z"},
+    {"percentage": 95.0, "time": "2024-03-11T05:00:00.000Z"}
+  ],
+  "skin_temperature": [
+    {"time": "2024-03-11T00:30:00.000Z", "delta_celsius": 0.3},
+    {"time": "2024-03-11T03:30:00.000Z", "delta_celsius": 0.6}
+  ],
+  "respiratory_rate": [
+    {"rate": 14.2, "time": "2024-03-11T01:00:00.000Z"},
+    {"rate": 13.8, "time": "2024-03-11T05:00:00.000Z"}
+  ]
+}
