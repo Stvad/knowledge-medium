@@ -1,6 +1,6 @@
 ---
 name: local-dev-loop
-description: Run the app from the working tree (`pnpm dev`) and drive that tab with the agent bridge, so a `src/` change is verifiable in seconds instead of merge → Pages deploy → CDN → reload. Use when you need to see a core change actually running — pairing a `localdev` CLI profile, choosing which account the dev tab is signed into, or testing service-worker / PWA / base-path behaviour with a real build. NOT needed for pure logic changes a vitest run already covers.
+description: Run the app from the working tree (`pnpm dev`) and drive that tab with the agent bridge, so a `src/` change is verifiable in seconds instead of merge → Pages deploy → CDN → reload. Use when you need to see a core change actually running — pairing a `localdev` CLI profile, choosing which account the dev tab is signed into, or testing service-worker / PWA / base-path behaviour with a real build. Also use when a `src/` edit you already reloaded seems to have no effect — a provider doesn't work, a context is null, state stopped syncing — since that can be an HMR module-identity split, not a bug in your change. NOT needed for pure logic changes a vitest run already covers.
 ---
 
 # Local dev loop for core (`src/`) changes
@@ -87,6 +87,54 @@ also applies component-only modules on its own; `reload` is the fallback that
 always propagates. Changes under `vite-plugins/` or to `vite.config.ts` need a
 dev-server **restart** (Vite does not auto-restart for them), and a restart
 drops the page's HMR socket — reload the tab afterwards.
+
+## Kernel/extension module identity split after a hot update
+
+Unlike the `vite-plugins/`/`vite.config.ts` case above, this throws **no
+error** — state silently stops crossing the kernel/extension boundary (a
+provider/context reads as `null`, a store looks reset, sync "stops
+working"), reading as "my change has no effect," and can also surface later
+as a thrown `useRepo must be used within a RepoContext`.
+
+Detect from eval before chasing a phantom bug — compare a **known singleton
+export**, not the bare namespace object (two URLs always produce two distinct
+namespace wrappers, even when unaffected). This probes one importer/module
+pair only — swap in the module path and a known importer of it to check a
+different pair; an untested edge can be split while this reports `false`.
+(`import.meta` isn't available in eval scope, hence `fetch`-and-regex below
+instead of reading `import.meta.hot` directly.)
+
+```js
+// adapt the module path + a known importer of it
+const importerSrc = await (await fetch('/src/App.js')).text()
+const stamped = importerSrc.match(/\/src\/context\/repo\.js(\?t=\d+)?/)[0]
+const [ext, kernel] = await Promise.all([
+  import('/src/context/repo.js'),  // what an extension's importmap resolves to
+  import(stamped),                 // what the kernel graph currently uses
+])
+return {split: ext.RepoContext !== kernel.RepoContext, stamped}
+```
+
+Same fix as the `vite-plugins/`/`vite.config.ts` case above — a dev-server
+**restart**, but with no error telling you one's needed. Reloading,
+reverting the edit, or re-editing either module again all fail — the
+stamped specifier lives in the process's in-memory graph; only a new
+process resets it.
+
+**Mechanism**: `unifySrcJsUrls.ts` keeps kernel and extension imports of a
+module on one URL so singletons stay one instance (see "Module graph"
+below for what it does). Editing ANY already-loaded `src/` module reachable
+from the kernel's static import graph stamps every kernel importer's
+specifier `?t=<timestamp>` from then on — regardless of export shape:
+confirmed on a component-only module Fast Refresh *did* self-accept
+(`src/components/BlockComponent.tsx`) and a pure-function module with no JSX
+(`src/utils/routing.ts`), both splitting identically. The timestamp itself keeps changing on further
+edits — the only load-bearing fact is that it never cleans until restart.
+Export shape instead gates whether the split is *observable*: it surfaces as
+a bug only when something compares identity across the boundary
+(`createContext()`, a singleton store/Map, `instanceof`), never for
+pure-function/component-only exports, since nothing compares those with
+`===`. (One round of testing; untested: new-file, delete, rename cases.)
 
 ## What does NOT match production
 
