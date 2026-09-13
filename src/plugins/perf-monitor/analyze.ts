@@ -22,7 +22,7 @@ import {
   fanoutRegression,
   median,
   queryRegressions,
-  hasCoalescedSample,
+  clusteredTailMetrics,
   regressionsIn,
   startupRegression,
   type Regression,
@@ -45,10 +45,6 @@ export type UnjudgedReason =
   | 'no-baseline'
   /** Partly judged: incomplete, not clean — the unjudged metric is exactly where a finding could be hiding. */
   | 'partly-judged'
-  /** Every call in the window resolved together, so the sample carries one
-   *  observation, not a distribution — a comparison would rebase the baseline
-   *  on the day request coalescing lands on a query. */
-  | 'coalesced-sample'
 
 export interface PerfAnalysis {
   workspaceId: string
@@ -74,6 +70,12 @@ export interface PerfAnalysis {
   /** Records ON DISK per series, counted only when nothing was judged (`{0,
    *  0}` otherwise). Distinct from `baseline` and from the loaded series length, which is capped. */
   recorded: { interaction: number; startup: number }
+  /** Judged interaction metrics whose p95 rests on a collapsed tail, so `calls`
+   *  overstates how many independent measurements back it. A CAVEAT, carried
+   *  beside whatever verdict was reached rather than as an unjudged reason:
+   *  reasons hold one value, and this coexists with a regression, a clean
+   *  comparison and a partial one alike. */
+  clusteredTail: string[]
   /** Live graph size over the baseline's. Not used to filter or normalize (see `runPerfAnalysis`) — reported so a reader can tell code from data growth. */
   graphGrowth: number | null
 }
@@ -94,10 +96,9 @@ export const unjudgedReason = (
   session.blended ? 'blended-workspaces'
     : anyJudged(results) ? (partlyJudged(results) ? 'partly-judged' : null)
       : awaitingCurrentSample(results) ? 'no-current-sample'
-        : hasCoalescedSample(results) ? 'coalesced-sample'
-          : session.notRecording ? 'not-recording'
-            : lacksBaseline(results) ? 'no-baseline'
-              : 'history-short'
+        : session.notRecording ? 'not-recording'
+          : lacksBaseline(results) ? 'no-baseline'
+            : 'history-short'
 
 /** Is a series waiting on a sample from THIS session, whatever else it
  *  judged? The scheduler needs this even where `reason` doesn't say so.
@@ -175,6 +176,13 @@ export const runPerfAnalysis = async (
   })
   const startupUnjudged = unjudgedReason(startupResults, {})
 
+  // Same attributability gate as the results themselves: blended counters
+  // describe no single workspace, so a caveat drawn from them names nothing.
+  // Load-bearing only in production and NOT pinned by a test: test resolves
+  // never clear the caveat's magnitude floor, so the list is empty either way
+  // here. Removing it fails nothing — do not read that as dead code.
+  const clusteredTail = session.attributable ? clusteredTailMetrics(current) : []
+
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 
   // Only counted in the state that reports them — otherwise unrendered queries.
@@ -204,6 +212,7 @@ export const runPerfAnalysis = async (
       startup: judgedBaselineCount(startupResults),
     },
     regressions,
+    clusteredTail,
     // Derived from what the comparisons consumed, not baseline length alone
     // — else short-post-window history would misreport "no slowdowns".
     ready: { interaction: interactionReady, startup: startupReady },

@@ -13,7 +13,8 @@ import {
   awaitingCurrentSample,
   partlyJudged,
   queryRegressions,
-  isCoalescedSample,
+  hasClusteredTail,
+  clusteredTailMetrics,
   startupRegression,
   MIN_BASELINE_SESSIONS,
   MIN_HISTORY_SESSIONS,
@@ -49,24 +50,24 @@ const sinceRegressed = (
   baseCount = 8,
 ): InteractionComparable[] => [now(), ...history(baseCount, base)]
 
-/** Every call resolved together, so both quantiles are the same observation.
- *  `q` above deliberately never produces this shape (p50 is half of p95). */
-const coalesced = (ms: number, calls = 100) =>
+/** Upper half collapsed to one value. `q` above never produces this shape
+ *  (p50 is half of p95). */
+const clustered = (ms: number, calls = 100) =>
   ({ calls, p50Ms: ms, p95Ms: ms, totalMs: ms * calls })
 
-describe('isCoalescedSample', () => {
-  it('reads one repeated observation as coalesced', () => {
-    expect(isCoalescedSample(coalesced(600))).toBe(true)
+describe('hasClusteredTail', () => {
+  it('spots a collapsed upper half', () => {
+    expect(hasClusteredTail(clustered(600))).toBe(true)
   })
 
-  it('leaves a genuine distribution alone', () => {
-    expect(isCoalescedSample(q(600))).toBe(false)
+  it('leaves a spread distribution alone', () => {
+    expect(hasClusteredTail(q(600))).toBe(false)
   })
 
-  it('does not claim a uniformly fast query is coalesced', () => {
-    // Below the magnitude floor the two are indistinguishable, and this range
-    // is already judged steady — calling it unjudged would report less.
-    expect(isCoalescedSample(coalesced(2))).toBe(false)
+  it('does not flag a uniformly fast query', () => {
+    // Below the magnitude floor everything clusters and is judged steady
+    // anyway, so flagging it would be noise on every verdict.
+    expect(hasClusteredTail(clustered(2))).toBe(false)
   })
 })
 
@@ -176,30 +177,29 @@ describe('queryRegressions', () => {
   })
 })
 
-describe('queryRegressions with coalesced samples', () => {
-  it('does not compare a current sample whose calls all resolved together', () => {
-    // Coalescing PERSISTS once it lands, so it fills the recent window rather
-    // than appearing as one odd session the median smooths away — which is what
-    // turns it into a standing false regression against genuine history.
-    const stalled = () => sample({ queries: { 'core.ancestors': coalesced(600) } })
-    const results = queryRegressions(stalled(), [
-      stalled(),
-      stalled(),
-      ...history(8, () => sample({ queries: { 'core.ancestors': q(10) } })),
-    ])
-    expect(regs(results)).toEqual([])
-    expect(results[0]).toEqual({ status: 'insufficient', reason: 'coalesced-sample' })
+describe('clusteredTailMetrics', () => {
+  it('names the judged metrics whose tail collapsed', () => {
+    expect(clusteredTailMetrics(sample({
+      queries: { 'core.ancestors': clustered(600), 'core.childIds': q(300) },
+    }))).toEqual(['core.ancestors'])
   })
 
-  it('keeps coalesced sessions out of the baseline', () => {
-    // Baseline made only of stalls; judged against them a genuine reading
-    // would be called a regression built on non-measurements.
-    const results = queryRegressions(
-      sample({ queries: { 'core.ancestors': q(1200) } }),
-      history(8, () => sample({ queries: { 'core.ancestors': coalesced(600) } })),
-    )
-    expect(regs(results)).toEqual([])
-    expect(results[0]).toEqual({ status: 'insufficient', reason: 'history' })
+  it('ignores a sample too thin to be judged at all', () => {
+    expect(clusteredTailMetrics(sample({
+      queries: { 'core.ancestors': clustered(600, 3) },
+    }))).toEqual([])
+  })
+
+  it('still COMPARES a clustered metric rather than discarding it', () => {
+    // A collapsed tail and a bimodal split are the same stored shape, so
+    // refusing to judge would suppress real regressions to hide an artifact.
+    const slow = () => sample({ queries: { 'core.ancestors': clustered(600) } })
+    const found = regs(queryRegressions(slow(), [
+      slow(), slow(),
+      ...history(8, () => sample({ queries: { 'core.ancestors': q(10) } })),
+    ]))
+    expect(found).toHaveLength(1)
+    expect(found[0].metric).toBe('query:core.ancestors')
   })
 })
 

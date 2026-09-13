@@ -208,6 +208,33 @@ describe('summarize', () => {
  * togglable — no amount of history helps, and the chip would send the user to
  * wait for something that is never coming.
  */
+describe('the clustered-tail caveat', () => {
+  it('rides along with a regression rather than replacing the verdict', () => {
+    // The realistic case: one metric's tail collapses while others judge
+    // normally. Carried as a reason it would lose to `partly-judged` and never
+    // be seen, which is why it is a note.
+    const v = summarize(analysis({
+      regressions: [regression()],
+      clusteredTail: ['core.ancestors'],
+    }))
+    expect(v.kind).toBe('regressed')
+    expect(v.notes.join(' ')).toContain('core.ancestors')
+    expect(v.notes.join(' ')).toContain('fewer independent measurements')
+  })
+
+  it('survives a partial comparison, which a single-slot reason could not', () => {
+    const v = summarize(analysis({
+      ready: { interaction: true, startup: false },
+      clusteredTail: ['core.ancestors'],
+    }))
+    expect(v.notes.join(' ')).toContain('core.ancestors')
+  })
+
+  it('stays silent when no tail collapsed', () => {
+    expect(summarize(analysis()).notes.join(' ')).not.toContain('independent measurements')
+  })
+})
+
 describe('an unjudged startup series', () => {
   const startupUnjudged = (over: Parameters<typeof analysis>[0]) =>
     summarize(analysis({ ready: { interaction: true, startup: false }, ...over }))

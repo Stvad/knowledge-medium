@@ -23,27 +23,25 @@ const RECENT_WINDOW = 3
 /** Resolves needed before a query's p95 is treated as a measurement. */
 const MIN_CALLS = 20
 
-/** Widest p95/p50 still read as ONE observation rather than a distribution.
- *  Sits in open space: a coalesced sample's two quantiles are the same
- *  resolution to within rounding, while the tightest genuine distribution on
- *  record is an order of magnitude wider. */
-const COALESCED_MAX_RATIO = 1.01
+/** Widest p95/p50 still read as a single clustered value. Sits in open space:
+ *  a collapsed tail's two quantiles agree to within rounding, while the
+ *  tightest genuine distribution on record is an order of magnitude wider. */
+const CLUSTERED_TAIL_MAX_RATIO = 1.01
 
-/** Did every call in this window resolve TOGETHER? Request coalescing (see
- *  `ancestorBatch`) makes N callers await one statement, so each records the
- *  same wall-clock and `calls` counts callers, not measurements.
+/** Does the window's upper half collapse to one value? Request coalescing
+ *  produces this — N callers awaiting one statement all record the same
+ *  wall-clock — but so does any bimodal split: with `sorted[floor(n * q)]`
+ *  percentiles a slow half sets p50 and p95 alike. The two are NOT separable
+ *  from a stored sample, which carries no count of distinct observations.
  *
- *  This defeats `MIN_CALLS`, whose premise is that one resolve is one
- *  measurement: a coalesced sample clears the gate carrying a single
- *  observation repeated, and its "p95" would rebase the metric's baseline the
- *  day coalescing lands on a query. Judged unusable rather than compared.
- *
- *  Floored at `MIN_ABSOLUTE_MS`: below it a genuinely uniform fast query is
- *  indistinguishable from a coalesced one, and `trendRegression` already calls
- *  that range steady — so treating it as unjudged would trade a verdict for a
- *  gap and report less than is known. */
-export const isCoalescedSample = (t: TimingSample): boolean =>
-  t.p50Ms >= MIN_ABSOLUTE_MS && t.p95Ms <= t.p50Ms * COALESCED_MAX_RATIO
+ *  So this is REPORTED and never gates a comparison. `calls` overstating how
+ *  many independent measurements back a p95 is a caveat on the reading; a
+ *  clustered tail is as often the regression worth seeing as an artifact of how
+ *  it was measured, and discarding it would throw away the finding to suppress
+ *  the artifact. Counting observations at the source is the only real fix
+ *  (#958). */
+export const hasClusteredTail = (t: TimingSample): boolean =>
+  t.p50Ms >= MIN_ABSOLUTE_MS && t.p95Ms <= t.p50Ms * CLUSTERED_TAIL_MAX_RATIO
 
 /** STORED sessions either comparison needs before it returns anything: the
  *  baseline, plus what current-window smoothing consumes on top of this
@@ -59,10 +57,7 @@ export type TrendResult =
    *  (live counters, a late-enabled recorder); 'no-baseline' is a FULL history
    *  that happens to be all zeros, where telling the user to keep waiting
    *  points at the one thing that is not the problem. */
-  | {
-      status: 'insufficient'
-      reason: 'history' | 'no-current-sample' | 'no-baseline' | 'coalesced-sample'
-    }
+  | { status: 'insufficient'; reason: 'history' | 'no-current-sample' | 'no-baseline' }
   /** `baselineCount` is sessions actually consumed, not rows loaded — rows with no usable sample are filtered out before the median. */
   | { status: 'steady'; baselineCount: number }
   | { status: 'regressed'; regression: Regression; baselineCount: number }
@@ -72,8 +67,6 @@ const INSUFFICIENT: TrendResult = { status: 'insufficient', reason: 'history' }
 const NO_CURRENT_SAMPLE: TrendResult = { status: 'insufficient', reason: 'no-current-sample' }
 /** History enough, and every session in it zero — there is no ratio to form. */
 const NO_BASELINE: TrendResult = { status: 'insufficient', reason: 'no-baseline' }
-/** This session's sample is one coalesced observation — see `isCoalescedSample`. */
-const COALESCED: TrendResult = { status: 'insufficient', reason: 'coalesced-sample' }
 
 export interface Regression {
   /** Stable machine id, e.g. `query:groupedBacklinks.forBlock`. */
@@ -160,10 +153,14 @@ export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean 
 export const lacksBaseline = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status === 'insufficient' && r.reason === 'no-baseline')
 
-/** At least one metric's current sample was one coalesced observation. `some`,
- *  like its siblings: it names the more specific reason where one exists. */
-export const hasCoalescedSample = (results: readonly TrendResult[]): boolean =>
-  results.some((r) => r.status === 'insufficient' && r.reason === 'coalesced-sample')
+/** Judged metrics whose p95 rests on a collapsed tail, worst-cased by name so
+ *  the verdict can caveat the reading. One owner for the rule, so the analysis
+ *  and any future surface cannot disagree about which metrics qualify. */
+export const clusteredTailMetrics = (current: InteractionComparable): string[] =>
+  Object.entries(current.queries)
+    .filter(([, q]) => q.calls >= MIN_CALLS && hasClusteredTail(q))
+    .map(([name]) => name)
+    .sort()
 
 /** Sessions the THINNEST judged comparison rested on, or 0 if none was
  *  judged — smallest, not largest, so a clean verdict isn't overstated. */
@@ -192,15 +189,9 @@ export const queryRegressions = (
     // Only the data-sufficiency filter here — the magnitude floor is applied by
     // `trendRegression` after the recent median, so one fast session can't drop a sustainably-regressed query.
     if (sample.calls < MIN_CALLS) continue
-    // Reported, not skipped: dropping the query would leave the rest reading as
-    // a clean bill for a metric nobody could judge.
-    if (isCoalescedSample(sample)) { out.push(COALESCED); continue }
-    // A coalesced history row is the same non-measurement, so it is kept out of
-    // BOTH windows — left in the baseline it would set the bar at one session's
-    // stall and call the recovery a regression.
     const measured = (r: InteractionComparable): number | null => {
       const q = r.queries[name]
-      return q !== undefined && q.calls >= MIN_CALLS && !isCoalescedSample(q) ? q.p95Ms : null
+      return q !== undefined && q.calls >= MIN_CALLS ? q.p95Ms : null
     }
     const recent = [sample.p95Ms, ...recentPast.map(measured).filter((v): v is number => v !== null)]
     const baseline = baselineSessions.map(measured).filter((v): v is number => v !== null)

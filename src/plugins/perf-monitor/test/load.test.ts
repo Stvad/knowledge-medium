@@ -357,6 +357,19 @@ describe('loadRecords', () => {
   // is corrupt — and it fails SILENTLY: the comparison's magnitude floor is a
   // `<` test, so a negative median lands under it and is reported steady. A
   // corrupt row would contribute to a clean bill of health.
+  // `p50Ms` is dereferenced by the clustered-tail caveat. Missing, it compares
+  // as NaN — every test false, so the caveat silently never fires; as a numeric
+  // STRING it compares by coercion instead of being rejected; out of order it
+  // reads as a collapsed tail on a row that never had one.
+  it('rejects a timing sample whose p50 is missing, non-numeric or above p95', () => {
+    const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
+    const withQ = (sample: unknown) => ({ ...ok, queries: { 'core.ancestors': sample } })
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: 5, p95Ms: 10 }))).toBe(true)
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p95Ms: 10 }))).toBe(false)
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: '5', p95Ms: 10 }))).toBe(false)
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: 20, p95Ms: 10 }))).toBe(false)
+  })
+
   it('rejects negative counts and durations', () => {
     const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
     expect(isUsableInteractionRecord(ok)).toBe(true)

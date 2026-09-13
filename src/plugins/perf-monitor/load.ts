@@ -31,7 +31,11 @@ const isAbsentOrCount = (v: unknown): boolean => v === undefined || isCount(v)
 const isTimingSample = (v: unknown): boolean =>
   typeof v === 'object' && v !== null &&
   isCount((v as { calls?: unknown }).calls) &&
-  isCount((v as { p95Ms?: unknown }).p95Ms)
+  isCount((v as { p95Ms?: unknown }).p95Ms) &&
+  // `p50Ms` is dereferenced by the clustered-tail caveat, and a numeric STRING
+  // would compare against p95 by coercion rather than being rejected.
+  isCount((v as { p50Ms?: unknown }).p50Ms) &&
+  (v as { p50Ms: number }).p50Ms <= (v as { p95Ms: number }).p95Ms
 
 /** A validator must cover EVERY field a reader dereferences — a missed check
  *  throws (analysis or dialog render) instead of skipping one bad row. Add a

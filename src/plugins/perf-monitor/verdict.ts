@@ -64,10 +64,6 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
   'history-short': (s) => `${s} history still building`,
   'no-baseline': (s) => `no ${s} baseline to compare against (recent sessions all measured zero)`,
   'partly-judged': (s) => `some ${s} metrics could not be judged this session`,
-  // Names the cause rather than the symptom: the reader's next move is to look
-  // at what started coalescing that query, not to wait for more sessions.
-  'coalesced-sample': (s) =>
-    `${s} metrics not comparable this session (calls resolved together, so the sample is one observation)`,
 }
 
 /** Which series went unjudged, and why — one message per series, since the
@@ -77,6 +73,14 @@ const pendingNotes = (analysis: PerfAnalysis): string[] =>
     const reason = analysis.unjudgedBecause[series]
     return reason === null ? [] : [NOTE[reason](series)]
   })
+
+/** Named, not counted: the reader's next move is to look at what collapsed
+ *  THAT query's tail, and a bare count says nothing about where to look.
+ *  Deliberately does not guess coalescing — see `hasClusteredTail`. */
+const clusteredTailNote = (metrics: readonly string[]): string | null =>
+  metrics.length === 0
+    ? null
+    : `${metrics.join(', ')}: p95 rests on a single clustered value, so it is backed by fewer independent measurements than its call count suggests`
 
 /** How much history the comparison actually had.
  *
@@ -126,7 +130,8 @@ export const summarize = (analysis: PerfAnalysis, live: LiveFacts): PerfVerdict 
   // series makes a verdict partial. Folding the two together would report a
   // clean comparison in a read-only workspace as pending.
   const unjudged = pendingNotes(analysis)
-  const notes = [...unjudged, ...(blocked ? [blocked] : [])]
+  const clustered = clusteredTailNote(analysis.clusteredTail)
+  const notes = [...unjudged, ...(clustered ? [clustered] : []), ...(blocked ? [blocked] : [])]
   const growth = graphNote(analysis.graphGrowth)
 
   if (analysis.regressions.length > 0) {
