@@ -67,6 +67,14 @@ import {createServiceWorker} from './worker'
 // install/activate/fetch/message events.
 declare const self: ServiceWorkerGlobalScope
 
+// Boot marks for on-device profiling (ios-device-debug skill): a page asks with
+// `BOOT_MARKS` over a MessageChannel and gets this worker's own start time,
+// when this script finished evaluating, and when the first navigation fetch
+// arrived and was answered — all ms, `timeOrigin` as epoch so the page can
+// place them on its own clock.
+const bootMarks: Record<string, number> = {timeOrigin: performance.timeOrigin, evaluatedAt: 0, firstNavReceivedAt: 0, firstNavAnsweredAt: 0}
+const mark = (name: string): void => { if (!bootMarks[name]) bootMarks[name] = performance.now() }
+
 const sw = createServiceWorker(
   {
     buildId: '__BUILD_ID__',
@@ -103,15 +111,21 @@ const sw = createServiceWorker(
     now: () => Date.now(),
     storage: navigator.storage,
     indexedDB,
+    mark,
   },
 )
 
-// Boot marks for on-device profiling (ios-device-debug skill): a page asks with
-// `BOOT_MARKS` over a MessageChannel and gets this worker's own start time,
-// when this script finished evaluating, and when the first navigation fetch
-// arrived and was answered — all ms, `timeOrigin` as epoch so the page can
-// place them on its own clock.
-const bootMarks = {timeOrigin: performance.timeOrigin, evaluatedAt: 0, firstNavReceivedAt: 0, firstNavAnsweredAt: 0}
+// Storage-init probes, fired at evaluation so their completion times can be
+// read next to the navigation's own cache marks: if IndexedDB opens long
+// before the first cache open completes, the cold-start cost is Cache
+// Storage's; if both wait, it is the origin's storage initialisation.
+void caches.keys().then(() => mark('cachesKeysAt'), () => {})
+try {
+  const probe = indexedDB.open('km-sw-probe')
+  probe.onsuccess = () => { mark('idbOpenedAt'); probe.result.close() }
+  probe.onerror = () => {}
+} catch { /* no IndexedDB in this worker: nothing to probe */ }
+
 
 self.addEventListener('install', (event) => {
   event.waitUntil(sw.install())
@@ -134,8 +148,8 @@ self.addEventListener('fetch', (event) => {
   // to this event's lifetime and can't be dropped by early worker termination.
   const response = sw.handleFetch(event.request, (p) => event.waitUntil(p))
   if (response && event.request.mode === 'navigate' && !bootMarks.firstNavReceivedAt) {
-    bootMarks.firstNavReceivedAt = performance.now()
-    void response.then(() => { bootMarks.firstNavAnsweredAt = performance.now() }, () => {})
+    mark('firstNavReceivedAt')
+    void response.then(() => mark('firstNavAnsweredAt'), () => {})
   }
   if (response) event.respondWith(response)
 })

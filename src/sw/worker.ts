@@ -97,6 +97,8 @@ export interface SwEnv {
       removeEntry: (name: string) => Promise<void>
     }>
   }
+  /** Boot-timeline probe (sw.ts BOOT_MARKS): stamps a named point once. */
+  mark?: (name: string) => void
   /** indexedDB, injected so legacy IndexedDB-backed database cleanup is testable. */
   indexedDB?: {
     databases?: () => Promise<Array<{name?: string | null}>>
@@ -577,7 +579,9 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // 30-min update poll surface that a new build exists so the user can reload.
   const shellCacheFirst = async (request: Request, shellURL: string): Promise<Response> => {
     const cache = await caches.open(SHELL_CACHE)
+    env.mark?.('shellCacheOpenedAt')
     const cached = await cache.match(shellURL)
+    env.mark?.('shellCacheMatchedAt')
     if (cached) return cached
     // Cold miss (install's shell precache didn't land): fetch and seed this
     // generation's shell for next time. Offline with nothing cached rejects —
