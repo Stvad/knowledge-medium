@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { QueryReadDb } from '@/data/api'
 import { ancestorWalk } from './ancestorBatch'
+import { DbMetrics, wrapDbWithMetrics } from './timingMetrics'
 
 interface Statement {
   ids: string[]
@@ -165,5 +166,50 @@ describe('ancestorWalk', () => {
 
     expect(one.statements.map(s => s.ids)).toEqual([['a']])
     expect(other.statements.map(s => s.ids)).toEqual([['b']])
+  })
+})
+
+describe('ancestorWalk shared-work reporting', () => {
+  /** The batcher only reaches the metrics layer through the db it was handed,
+   *  so these cases need the wrapped one a Repo actually passes. */
+  const meteredDb = () => {
+    const {db, statements} = fakeDb()
+    const metrics = new DbMetrics()
+    return {
+      db: wrapDbWithMetrics(db, metrics) as QueryReadDb,
+      statements,
+      shared: () => metrics.contention.snapshot().sharedWork,
+    }
+  }
+
+  it('reports one statement answering several ids as shared work', async () => {
+    const {db, statements, shared} = meteredDb()
+
+    await Promise.all([ancestorWalk(db, 'a'), ancestorWalk(db, 'b')])
+
+    expect(statements.map(s => s.ids)).toEqual([['a', 'b']])
+    // Both callers saw an idle pool and recorded the same wall-clock. Without
+    // this signal each is an independent measurement of a database at rest,
+    // and `calls` counts two where there was one read.
+    expect(shared()).toBeGreaterThan(0)
+  })
+
+  it('reports a second caller for an already-queued id as shared work', async () => {
+    const {db, statements, shared} = meteredDb()
+
+    await Promise.all([ancestorWalk(db, 'a'), ancestorWalk(db, 'a')])
+
+    expect(statements.map(s => s.ids)).toEqual([['a']])
+    expect(shared()).toBeGreaterThan(0)
+  })
+
+  it('reports nothing shared when one caller is answered alone', async () => {
+    const {db, shared} = meteredDb()
+
+    await ancestorWalk(db, 'a')
+
+    // The discriminator has to stay silent here, or every ancestors resolve is
+    // contended and the query keeps no comparable samples at all.
+    expect(shared()).toBe(0)
   })
 })

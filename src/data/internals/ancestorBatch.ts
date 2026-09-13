@@ -14,6 +14,7 @@
 import type { QueryReadDb } from '@/data/api'
 import type { BlockRow } from '@/data/blockSchema'
 import { MAX_IDS_PER_IN_CLAUSE } from './sqlBinds'
+import { contentionFor } from './timingMetrics'
 import { manyAncestorsSql } from './treeQueries'
 
 export type AncestorChainRow = BlockRow & {chain_start_id: string; depth: number}
@@ -69,12 +70,31 @@ class AncestorBatcher {
   /** Ids awaiting the next flush. Same id twice in a tick is one read. */
   private waiting = new Map<string, Pending>()
   private scheduled = false
+  /** Undefined when the db was never wrapped for metrics (fixtures, tests).
+   *  Assigned in the constructor BODY: a field initializer reading `this.db`
+   *  runs before the parameter property exists under `useDefineForClassFields`. */
+  private readonly pool: ReturnType<typeof contentionFor>
 
-  constructor(private readonly db: QueryReadDb) {}
+  constructor(private readonly db: QueryReadDb) {
+    this.pool = contentionFor(db)
+  }
+
+  /** Tell the metrics layer this read is answering more than one caller.
+   *  Without it every one of them looks like an independent measurement of an
+   *  idle database: the pool genuinely was idle for each, and the wall-clock
+   *  they all record is still ONE observation. The batcher is the only place
+   *  that knows the difference. */
+  private noteShared(): void {
+    this.pool?.noteSharedWork()
+  }
 
   walkFor(id: string): Promise<AncestorWalk> {
     const existing = this.waiting.get(id)
-    if (existing) return existing.promise
+    if (existing) {
+      // A second caller for an id already queued — one read, two callers.
+      this.noteShared()
+      return existing.promise
+    }
 
     const entry = pending()
     this.waiting.set(id, entry)
@@ -98,6 +118,8 @@ class AncestorBatcher {
     const ids = [...batch.keys()]
     for (let start = 0; start < ids.length; start += MAX_IDS_PER_STATEMENT) {
       const chunk = ids.slice(start, start + MAX_IDS_PER_STATEMENT)
+      // One statement answering several ids, for the same reason as above.
+      if (chunk.length > 1) this.noteShared()
       try {
         const rows = await this.db.getAll<AncestorChainRow>(
           manyAncestorsSql(chunk.length), chunk,

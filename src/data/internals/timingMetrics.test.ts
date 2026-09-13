@@ -8,9 +8,11 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  DbContention,
   DbMetrics,
   QueryMetrics,
   TimingReservoir,
+  contentionFor,
   wrapDbWithMetrics,
 } from './timingMetrics'
 
@@ -124,9 +126,9 @@ describe('DbMetrics', () => {
 describe('QueryMetrics', () => {
   it('lazily creates per-name reservoirs; unused names absent from snapshot', () => {
     const m = new QueryMetrics()
-    m.record('core.subtree', 12)
-    m.record('core.subtree', 18)
-    m.record('plugin:tasks/dueSoon', 4)
+    m.record('core.subtree', 12, true)
+    m.record('core.subtree', 18, true)
+    m.record('plugin:tasks/dueSoon', 4, true)
     const s = m.snapshot()
     expect(Object.keys(s).sort()).toEqual(['core.subtree', 'plugin:tasks/dueSoon'])
     expect(s['core.subtree'].calls).toBe(2)
@@ -135,12 +137,144 @@ describe('QueryMetrics', () => {
     expect(s['plugin:tasks/dueSoon'].calls).toBe(1)
   })
 
+  it('keeps uncontended resolves in their own reservoir as well as the shared one', () => {
+    const m = new QueryMetrics()
+    m.record('core.ancestors', 5, true)
+    m.record('core.ancestors', 600, false)
+    m.record('core.ancestors', 7, true)
+    const s = m.snapshot()['core.ancestors']
+    // Every resolve is still counted — the queued one is reported, not dropped.
+    expect(s.calls).toBe(3)
+    expect(s.maxMs).toBe(600)
+    // ...but the comparable figure sees only the two that ran unopposed, so a
+    // session that fanned out more does not read as a slower data layer.
+    expect(s.uncontended.calls).toBe(2)
+    expect(s.uncontended.maxMs).toBe(7)
+  })
+
   it('reset() drops empty reservoirs entirely (long-running session does not leak)', () => {
     const m = new QueryMetrics()
-    m.record('core.foo', 1)
+    m.record('core.foo', 1, true)
     expect(Object.keys(m.snapshot())).toContain('core.foo')
     m.reset()
     expect(Object.keys(m.snapshot())).toEqual([])
+  })
+})
+
+describe('DbContention', () => {
+  /** Drives overlap deterministically: every begin/end reads this clock. */
+  const atClock = () => {
+    let t = 0
+    const pool = new DbContention(() => t)
+    return {pool, set: (ms: number) => { t = ms }}
+  }
+
+  it('classifies a call that had the pool to itself as uncontended', () => {
+    const {pool, set} = atClock()
+    const ticket = pool.begin()
+    set(4)
+    expect(pool.end(ticket, 'read')).toBe(4)
+    const s = pool.snapshot()
+    expect(s.calls).toBe(1)
+    expect(s.uncontendedCalls).toBe(1)
+    expect(s.uncontendedRead.calls).toBe(1)
+    expect(s.uncontendedRead.maxMs).toBe(4)
+    expect(s.maxDepth).toBe(1)
+  })
+
+  it('excludes BOTH calls when a second is issued while the first is in flight', () => {
+    const {pool, set} = atClock()
+    const first = pool.begin()
+    set(1)
+    const second = pool.begin()
+    set(10)
+    pool.end(second, 'read')
+    set(12)
+    pool.end(first, 'read')
+    const s = pool.snapshot()
+    expect(s.calls).toBe(2)
+    expect(s.concurrentIssues).toBe(1)
+    expect(s.maxDepth).toBe(2)
+    // The late arrival waited; the early one may not have, but it shared the
+    // pool and we would rather lose a clean sample than keep a queued one.
+    expect(s.uncontendedCalls).toBe(0)
+    expect(s.uncontendedRead.calls).toBe(0)
+  })
+
+  it('counts busy time as the union of in-flight intervals, not the sum of durations', () => {
+    const {pool, set} = atClock()
+    const first = pool.begin()
+    set(1)
+    const second = pool.begin()
+    set(10)
+    pool.end(first, 'read')
+    set(12)
+    pool.end(second, 'read')
+    // Durations sum to 10 + 11 = 21 across an interval that is only 12ms long.
+    // Busy time is the interval; the excess is exactly the overlap that makes
+    // a per-caller wall-clock unusable on its own.
+    expect(pool.snapshot().busyMs).toBe(12)
+  })
+
+  it('reports the pool busy while a call is still open', () => {
+    const {pool, set} = atClock()
+    pool.begin()
+    set(7)
+    expect(pool.snapshot().busyMs).toBe(7)
+  })
+
+  it('excludes a window that a coalescer served shared work during', () => {
+    const {pool, set} = atClock()
+    // Exactly the shape of N callers awaiting one batched statement: the pool
+    // is idle for each of them, and their identical wall-clocks are ONE
+    // observation. Only the coalescer knows, so only it can say.
+    const mark = pool.mark()
+    set(3)
+    pool.noteSharedWork()
+    set(9)
+    expect(pool.wasUncontended(mark)).toBe(false)
+  })
+
+  it('judges a window opened while a call was already in flight as contended', () => {
+    const {pool, set} = atClock()
+    const inFlight = pool.begin()
+    const mark = pool.mark()
+    set(5)
+    pool.end(inFlight, 'read')
+    expect(pool.wasUncontended(mark)).toBe(false)
+  })
+
+  it('keeps uncontended WRITE timings out of the read reservoir', () => {
+    const {pool, set} = atClock()
+    const ticket = pool.begin()
+    set(30)
+    pool.end(ticket, 'write')
+    const s = pool.snapshot()
+    // Counted as a call that ran unopposed, but a write serialises on the
+    // writer connection whatever else is happening, so "unopposed" does not
+    // mean for it what it means for a read.
+    expect(s.uncontendedCalls).toBe(1)
+    expect(s.uncontendedRead.calls).toBe(0)
+  })
+
+  it('reset() keeps in-flight state so a call spanning it still classifies', () => {
+    const {pool, set} = atClock()
+    const spanning = pool.begin()
+    set(2)
+    pool.reset()
+    set(5)
+    const during = pool.begin()
+    set(6)
+    pool.end(during, 'read')
+    set(8)
+    pool.end(spanning, 'read')
+    const s = pool.snapshot()
+    // Two ends against a zeroed counter must not drive depth below zero: a
+    // negative in-flight count would report the pool idle and mark every later
+    // call uncontended.
+    expect(s.maxDepth).toBe(2)
+    expect(s.uncontendedCalls).toBe(0)
+    expect(s.calls).toBe(1)
   })
 })
 
@@ -224,6 +358,42 @@ describe('wrapDbWithMetrics', () => {
     // Each failing call still produced a sample.
     expect(s.getAll.calls).toBe(1)
     expect(s.execute.calls).toBe(1)
+  })
+
+  it('marks sequential reads uncontended and overlapping ones not', async () => {
+    const metrics = new DbMetrics()
+    const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics) as ReturnType<typeof makeFakeDb>
+    await wrapped.getAll('SELECT 1')
+    await wrapped.get('SELECT 2')
+    expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(2)
+    await Promise.all([wrapped.getAll('SELECT 3'), wrapped.getAll('SELECT 4')])
+    const s = metrics.contention.snapshot()
+    expect(s.calls).toBe(4)
+    expect(s.maxDepth).toBe(2)
+    // Still 2: the concurrent pair recorded wall-clocks, and neither is a
+    // measurement of how fast the database is.
+    expect(s.uncontendedRead.calls).toBe(2)
+  })
+
+  it('does not count a transaction\'s inner SQL as competing with the transaction', async () => {
+    const metrics = new DbMetrics()
+    const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics) as ReturnType<typeof makeFakeDb>
+    await wrapped.writeTransaction(async (tx) => {
+      await (tx as {getAll: (sql: string) => Promise<unknown>}).getAll('SELECT 1 inside tx')
+    })
+    const s = metrics.contention.snapshot()
+    // One connection was held, once — the inner read runs inside the
+    // transaction's own ticket, and counting it again would report the
+    // connection competing with itself.
+    expect(s.calls).toBe(1)
+    expect(s.maxDepth).toBe(1)
+  })
+
+  it('exposes the tracker from the wrapped db, so a coalescer can reach it', () => {
+    const metrics = new DbMetrics()
+    const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics)
+    expect(contentionFor(wrapped)).toBe(metrics.contention)
+    expect(contentionFor({})).toBeUndefined()
   })
 
   it('passes through non-timed methods (e.g. onChange, close) via the Proxy', () => {

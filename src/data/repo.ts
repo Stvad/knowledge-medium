@@ -1394,6 +1394,15 @@ export class Repo {
     blockCache: Readonly<Record<string, number>>
     queries: Readonly<Record<string, ReturnType<QueryMetrics['snapshot']>[string]>>
     db: ReturnType<DbMetrics['snapshot']>
+    /** How busy the connection pool was, and the read timings taken while it
+     *  was free. SIBLING of `db` rather than a key inside it: `db` is a uniform
+     *  map of per-method `TimingSnapshot` that its consumers iterate.
+     *
+     *  `dbContention.uncontendedRead` and each `queries[name].uncontended` are
+     *  the only timings here that survive a change in fan-out — everything else
+     *  in `db` and `queries` is wall-clock, which on a busy pool is dominated
+     *  by the queue ahead of the caller rather than by the work. */
+    dbContention: ReturnType<DbMetrics['contention']['snapshot']>
     /** High-water mark across all `repo.tx` calls since the last reset.
      *  Pairs with `db.writeTransaction.maxMs` to attribute outliers to a
      *  concrete description (e.g. 'reproject ref-typed properties after
@@ -1429,6 +1438,7 @@ export class Repo {
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
       db: this.dbMetrics.snapshot(),
+      dbContention: this.dbMetrics.contention.snapshot(),
       slowestTx: Object.freeze({...this.slowestTx}),
       txLog: Object.freeze(this.txLog.map(entry => Object.freeze({...entry}))),
       reprojection: Object.freeze({...this.reprojectionMetrics}),
@@ -5015,6 +5025,13 @@ export class Repo {
           // about. argsSchema.parse and resultSchema.parse run inside
           // the timed window because they're part of the dispatch
           // path's wall-clock cost.
+          //
+          // The wall-clock alone is not comparable between sessions: on a
+          // connection pool shallower than the fan-out, it is mostly the queue
+          // ahead of this resolve, so it moves with render order. `mark` opens
+          // the window that decides whether this particular resolve had the
+          // pool to itself; only those samples mean the same thing twice.
+          const poolMark = this.dbMetrics.contention.mark()
           const t0 = performance.now()
           try {
             const raw = await q.resolve(validated, this.makeQueryCtx(ctx, registry, 0))
@@ -5026,7 +5043,11 @@ export class Repo {
             // handle's subscribers + Suspense throwers.
             return q.resultSchema.parse(raw)
           } finally {
-            this.queryMetrics.record(fullName, performance.now() - t0)
+            this.queryMetrics.record(
+              fullName,
+              performance.now() - t0,
+              this.dbMetrics.contention.wasUncontended(poolMark),
+            )
           }
         },
       }))
