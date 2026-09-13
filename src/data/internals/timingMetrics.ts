@@ -207,6 +207,10 @@ export interface ContentionSnapshot {
  *   - our own calls, timed (`begin`/`end`) — complete;
  *   - the sync engine's, bracketed from its status channel (`beginForeign`) —
  *     a FLOOR, not a complete account: see `watchSyncOccupancy`;
+ *   - NOT anything that reaches the database without going through this proxy:
+ *     a caller holding the raw handle, or one of PowerSync's own helpers, whose
+ *     internal reads no wrapper placed here can see. Closing that needs the
+ *     instrumentation to sit at the adapter instead;
  *   - work one read does on several observers' behalf (`noteSharedWork`) —
  *     approximate in the conservative direction.
  *

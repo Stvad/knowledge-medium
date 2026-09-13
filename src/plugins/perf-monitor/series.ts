@@ -78,8 +78,14 @@ const NO_BASELINE: TrendResult = { status: 'insufficient', reason: 'no-baseline'
 /** Queries WERE measured, and not ONE of them was ever caught with the database
  *  free. Distinct from `no-current-sample`, which says the recorder produced
  *  nothing — and for a query that only ever runs inside a render fan-out this is
- *  the EXPECTED state, not a gap waiting closes. Reporting it as a missing
- *  sample would send a reader to look for a broken recorder.
+ *  the EXPECTED state rather than a fault. Reporting it as a missing sample
+ *  would send a reader to look for a broken recorder.
+ *
+ *  A statement about THIS SESSION SO FAR, not a permanent one. More stored
+ *  history cannot help — that is what separates it from `history` — but a
+ *  quieter stretch later in this same session can, which is why
+ *  `awaitingCurrentSample` counts it and the scheduler keeps rechecking. Do not
+ *  read it as final and remove that retry.
  *
  *  Says NEVER, so it is claimed only when the count is actually zero. A session
  *  holding a handful of clean resolves that merely fall short of `MIN_CALLS` is

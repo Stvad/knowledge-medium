@@ -43,9 +43,11 @@ export type UnjudgedReason =
   | 'history-short'
   /** History enough, and all of it zero — no ratio can be formed, and telling the user to keep waiting points at the one thing that is fine. */
   | 'no-baseline'
-  /** Queries ran, and never with the database to themselves — so none of them
-   *  yields a figure comparable between sessions. Not a gap waiting closes: on
-   *  a fan-out-heavy workload it is the normal state. */
+  /** Queries ran, and not one of them with the database to itself — so none
+   *  yields a figure comparable between sessions. On a fan-out-heavy workload
+   *  that is the normal state, not a fault. Says nothing about the session's
+   *  future: more STORED history cannot help, but a quieter stretch later in
+   *  this session can, and the scheduler treats it as awaited for that reason. */
   | 'never-uncontended'
   /** Partly judged: incomplete, not clean — the unjudged metric is exactly where a finding could be hiding. */
   | 'partly-judged'

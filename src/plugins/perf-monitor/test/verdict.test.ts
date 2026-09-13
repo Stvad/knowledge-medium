@@ -219,6 +219,16 @@ describe('the clustered-tail caveat', () => {
     expect(v.notes.join(' ')).not.toContain('independent')
   })
 
+  it('does not send the reader after a cause the comparison already excluded', () => {
+    // Coalesced callers never reach the samples this caveat describes — they
+    // are filtered at the source. Telling the user to check whether the calls
+    // shared one resolution points them at something that cannot be there, and
+    // a caveat that costs a reader an investigation is worse than none.
+    const notes = summarize(analysis({ clusteredTail: ['core.ancestors'] })).notes.join(' ')
+    expect(notes).not.toContain('shared one resolution')
+    expect(notes).not.toContain('coalesc')
+  })
+
   it('survives a partial comparison, which a single-slot reason could not', () => {
     const v = summarize(analysis({
       ready: { interaction: true, startup: false },
