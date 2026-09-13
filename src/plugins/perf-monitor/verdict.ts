@@ -63,9 +63,11 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
   'not-recording': (s) => `no ${s} record for this session (${s} recording may be off)`,
   'history-short': (s) => `${s} history still building`,
   'no-baseline': (s) => `no ${s} baseline to compare against (recent sessions all measured zero)`,
-  // Says what to do about it, because waiting is NOT what to do: these figures
-  // are only taken while the database is otherwise idle, and a session spent
-  // navigating never is.
+  // "this session" is the whole claim: these figures are only taken while the
+  // database is otherwise idle, and a session spent navigating has not been.
+  // Deliberately does NOT tell the reader to keep waiting for more history —
+  // that is the one thing which cannot help — while the scheduler does keep
+  // rechecking, because a quiet stretch later in this same session can.
   'never-uncontended': (s) =>
     `${s} queries ran, but never with the database free — no comparable timing this session`,
   'partly-judged': (s) => `some ${s} metrics could not be judged this session`,

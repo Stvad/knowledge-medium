@@ -196,9 +196,10 @@ export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean 
 export const lacksBaseline = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status === 'insufficient' && r.reason === 'no-baseline')
 
-/** Nothing comparable was measured, and waiting will not change that on this
- *  workload. `some`, like the two above: it names the more specific reason
- *  where one exists. */
+/** Nothing comparable has been measured YET. More stored history will not
+ *  change that — a quieter stretch in this session still can, which is why
+ *  `awaitingCurrentSample` matches it too. `some`, like the two above: it names
+ *  the more specific reason where one exists. */
 export const lacksUncontendedSamples = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status === 'insufficient' && r.reason === 'never-uncontended')
 
