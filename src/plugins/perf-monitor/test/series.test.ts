@@ -511,6 +511,23 @@ describe('queryRegressions with nothing judgeable', () => {
   // fault — and saying "no usable measurement this session" about a session
   // that measured hundreds of resolves sends a reader to look for a recorder
   // that is working fine.
+  // The dangerous shape is not "nothing was judged" — that is visibly empty.
+  // It is one query judged BESIDE one that could not be, which looks like an
+  // answer: with the judged query steady the verdict reads as a complete clean
+  // comparison, and with nothing left awaiting a sample the monitor stops
+  // rechecking for the rest of the session. The unjudged query is exactly where
+  // a regression would be hiding.
+  it('reports a skipped query even when another one was judged', () => {
+    const base = () => sample({ queries: { steady: q(10), fanout: q(10) } })
+    const now = sample({ queries: { steady: q(10), fanout: noUncontendedSamples(900) } })
+    const results = qr(now, history(20, base))
+
+    expect(partlyJudged(results)).toBe(true)
+    expect(awaitingCurrentSample(results)).toBe(true)
+    expect(results.some((r) => r.status === 'steady')).toBe(true)
+    expect(results.some((r) => r.status === 'insufficient')).toBe(true)
+  })
+
   // "Never" is a stronger claim than "not yet". A session holding a few clean
   // resolves that fall short of the threshold is still accumulating, and
   // telling the user those queries never ran with the database free is simply

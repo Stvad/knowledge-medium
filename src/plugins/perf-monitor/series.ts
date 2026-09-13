@@ -240,11 +240,13 @@ export const queryRegressions = (
   const { recentPast, baselineSessions } = comparisonWindows(history)
   const results: TrendResult[] = []
   const clusteredTail: string[] = []
+  /** Current queries the comparison could not judge. KEPT, not dropped: see below. */
+  const skipped: QueryTimingSample[] = []
   for (const [name, sample] of Object.entries(current.queries)) {
     // Only the data-sufficiency filter here — the magnitude floor is applied by
     // `trendRegression` after the recent median, so one fast session can't drop a sustainably-regressed query.
     const currentSamples = comparableSamples(sample)
-    if (currentSamples === null) continue
+    if (currentSamples === null) { skipped.push(sample); continue }
     // ONE statement of which sessions carry a usable sample for this query,
     // read by both the comparison and the caveat below.
     const sampleIn = (r: InteractionComparable) => comparableSamples(r.queries[name])
@@ -269,19 +271,30 @@ export const queryRegressions = (
       clusteredTail.push(name)
     }
   }
-  // Nothing judged isn't nothing to say: an empty list would leave fan-out
-  // alone in the series, reading as a clean bill nobody actually checked. One aggregate result, not one per skipped query.
+  // A query the comparison could not judge is exactly where a regression can
+  // hide, so being unable to judge one has to SHOW. Dropped silently, a session
+  // where one query is steady and three were unmeasurable reports a complete
+  // clean comparison — and, because nothing is left awaiting a sample, stops
+  // rechecking for the rest of the session.
   //
-  // WHICH nothing, though. Three cases, and only the middle one is `never`:
-  // nothing measured at all; measured with not one clean resolve among them;
-  // or clean resolves that have not yet reached the threshold, which is an
-  // ordinary not-yet and must not be reported as a never.
-  const measured = Object.values(current.queries)
-  const anyClean = measured.some((q) => (q.uncontended?.calls ?? 0) > 0)
+  // Whenever ANY current query is skipped, not only when every one was: the
+  // all-skipped case is not the dangerous one. It is visibly empty. The
+  // dangerous one is a judged query sitting beside an unjudged one, which looks
+  // like an answer.
+  //
+  // One aggregate result rather than one per query — the reader's next move is
+  // the same for all of them, and a result per skipped name would drown the
+  // judged ones. WHICH aggregate, though: `never` is the stronger claim and is
+  // made only when not one of the skipped queries holds a clean resolve;
+  // otherwise they are still accumulating and this is an ordinary not-yet.
+  if (skipped.length > 0) {
+    const anyClean = skipped.some((q) => (q.uncontended?.calls ?? 0) > 0)
+    results.push(anyClean ? NO_CURRENT_SAMPLE : NEVER_UNCONTENDED)
+  }
   return {
-    results: results.length === 0
-      ? [measured.length > 0 && !anyClean ? NEVER_UNCONTENDED : NO_CURRENT_SAMPLE]
-      : results,
+    // Still empty means the session measured no queries at all — no names to
+    // have skipped, so the branch above had nothing to report.
+    results: results.length === 0 ? [NO_CURRENT_SAMPLE] : results,
     clusteredTail: clusteredTail.sort(),
   }
 }
@@ -297,9 +310,10 @@ export const queryRegressions = (
  *  NOT the wall-clock p95 stored beside it, though that is the larger number
  *  and the one a user waited. Wall-clock on a busy pool is mostly the queue
  *  ahead of the caller, so it moves between sessions that behaved identically —
- *  a trend column swinging under a verdict that never moved. `null` where a
- *  session recorded no uncontended sample at all: nothing was measured, rather
- *  than nothing was slow. */
+ *  a trend column swinging under a verdict that never moved. `null` where no
+ *  query has a COMPARISON-ELIGIBLE sample — the same gate as the verdict, which
+ *  a thin handful of clean resolves fails as surely as none at all. Either way
+ *  nothing was judged, rather than nothing being slow. */
 export const slowestQuery = (
   r: { queries: Record<string, QueryTimingSample> },
 ): { name: string; p95Ms: number } | null => {

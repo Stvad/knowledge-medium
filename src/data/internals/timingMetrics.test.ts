@@ -335,6 +335,27 @@ describe('DbContention', () => {
     expect(s.calls).toBe(1)
   })
 
+  it('dirties a window on sync arrival without counting it as a call we issued', () => {
+    const {pool, set} = atClock()
+    const window = pool.openWindow()
+    const ticket = pool.begin()
+    set(1)
+    pool.beginForeign()
+    set(5)
+    pool.endForeign()
+    pool.end(ticket, 'read')
+
+    // Sync joining mid-window disturbs it exactly as one of our own calls
+    // would — for the question a window asks, the two are the same event.
+    expect(pool.closeWindow(window)).toBe(false)
+    const s = pool.snapshot()
+    // But the REPORTED counter says "calls this Repo issued into an occupied
+    // pool", and sync issued none of them. Folding it in lets this exceed
+    // `calls` and stop meaning what it says.
+    expect(s.concurrentIssues).toBe(0)
+    expect(s.calls).toBe(1)
+  })
+
   it('reports whether sync was observable at all', () => {
     const {pool} = atClock()
     // Zero foreign intervals is ambiguous — a quiet session and a session whose

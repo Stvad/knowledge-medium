@@ -127,7 +127,11 @@ export interface ContentionTicket {
 export interface ContentionMark {
   readonly generation: number
   readonly depth: number
-  readonly concurrentIssues: number
+  /** Arrivals into an already-occupied pool, OURS AND THE SYNC ENGINE'S. The
+   *  question a window asks is whether anything joined while it was open, and
+   *  for that the two are the same event. Distinct from the reported
+   *  `concurrentIssues`, which counts only calls this Repo issued. */
+  readonly disturbances: number
   readonly sharedWork: number
 }
 
@@ -142,7 +146,10 @@ export interface ContentionWindow {
 export interface ContentionSnapshot {
   /** Top-level db calls that took a connection since the last reset. */
   readonly calls: number
-  /** Of those, ones issued while the pool was already occupied. */
+  /** Of those, ones issued while the pool was already occupied. Counts REPO
+   *  CALLS only — bracketed sync intervals disturb a window just as much, but
+   *  folding them in here would let this field exceed `calls` and stop meaning
+   *  what it says. */
   readonly concurrentIssues: number
   /** Deepest simultaneous occupancy seen, our calls and observed sync work
    *  together. `1` means nothing ever overlapped. */
@@ -202,8 +209,12 @@ export interface ContentionSnapshot {
  *     approximate in the conservative direction.
  *
  * So "had the pool to itself" means "nothing THIS CAN SEE was competing". The
- * two qualifications above are where that falls short of the literal claim, and
- * both err towards calling a clean window contended rather than the reverse.
+ * two qualifications above are where that falls short, and they fail in
+ * OPPOSITE directions, which is worth keeping straight:
+ *   - shared work over-reports, costing clean samples. Harmless to the figure.
+ *   - sync occupancy under-reports, so a read queued behind unbracketed sync
+ *     work can be admitted as clean. That one can inflate the number, and it is
+ *     the reason the metric is not simply conservative.
  *
  * The classification is CONSERVATIVE in one direction on purpose: a call that
  * overlapped another harmlessly (two reads, two free connections) is excluded
@@ -216,6 +227,7 @@ export class DbContention {
   private busyAccruedMs = 0
   private callsTotal = 0
   private concurrentIssuesTotal = 0
+  private disturbancesTotal = 0
   private maxDepthSeen = 0
   private sharedWorkTotal = 0
   private uncontendedTotal = 0
@@ -238,7 +250,7 @@ export class DbContention {
     return {
       generation: this.generation,
       depth: this.inFlight,
-      concurrentIssues: this.concurrentIssuesTotal,
+      disturbances: this.disturbancesTotal,
       sharedWork: this.sharedWorkTotal,
     }
   }
@@ -269,7 +281,7 @@ export class DbContention {
    *  the metric wrong rather than conservative. */
   private isCleanWindow(mark: ContentionMark): boolean {
     return this.wasUnqueued(mark) &&
-      this.concurrentIssuesTotal === mark.concurrentIssues &&
+      this.disturbancesTotal === mark.disturbances &&
       this.sharedWorkTotal === mark.sharedWork
   }
 
@@ -309,10 +321,13 @@ export class DbContention {
     if (this.openWindows > 1) this.sharedWorkTotal++
   }
 
-  private enter(at: number): ContentionMark {
+  private enter(at: number, ours: boolean): ContentionMark {
     const mark = this.currentMark()
     if (this.inFlight === 0) this.busySince = at
-    else this.concurrentIssuesTotal++
+    else {
+      this.disturbancesTotal++
+      if (ours) this.concurrentIssuesTotal++
+    }
     this.inFlight++
     if (this.inFlight > this.maxDepthSeen) this.maxDepthSeen = this.inFlight
     return mark
@@ -329,7 +344,7 @@ export class DbContention {
   /** Take a connection. Pair with `end` in a `finally`. */
   begin(): ContentionTicket {
     const issuedAt = this.now()
-    const mark = this.enter(issuedAt)
+    const mark = this.enter(issuedAt, true)
     this.callsTotal++
     return {issuedAt, mark}
   }
@@ -351,7 +366,7 @@ export class DbContention {
    *  bracketed from status transitions, not timed, and it bumps no call count —
    *  it is not ours to report as a db call, only to refuse to ignore. */
   beginForeign(): void {
-    this.enter(this.now())
+    this.enter(this.now(), false)
     this.foreignTotal++
   }
 
@@ -380,6 +395,7 @@ export class DbContention {
     this.busySince = this.inFlight > 0 ? this.now() : null
     this.callsTotal = 0
     this.concurrentIssuesTotal = 0
+    this.disturbancesTotal = 0
     this.maxDepthSeen = this.inFlight
     this.sharedWorkTotal = 0
     this.uncontendedTotal = 0
@@ -525,7 +541,7 @@ export class QueryMetrics {
    *  creates a reservoir on first call so unused queries cost nothing.
    *  Capacity defaults to 256 — same as the DbMetrics reservoirs.
    *
-   *  `uncontended` (from `DbContention.wasUncontended`) says the resolve had
+   *  `uncontended` (from `DbContention.closeWindow`) says the resolve had
    *  the connection pool to itself for its whole life. Those samples go to a
    *  SECOND reservoir as well as the first, and that one is the only per-query
    *  timing here a reader can compare across sessions: the rest move with how
