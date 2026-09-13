@@ -11,9 +11,23 @@
  *
  * To let extensions rely on Tailwind the same way first-party code does, we
  * force-generate a broad, stable utility vocabulary here with `@source
- * inline(...)`. These classes ship in the app's CSS unconditionally, so an
- * extension can use standard utilities and they just work — no per-extension
- * rebuild, redeploy, or scanning config.
+ * inline(...)`. These classes ship unconditionally in THIS file's output, so
+ * an extension can use standard utilities and they just work — no
+ * per-extension rebuild, redeploy, or scanning config.
+ *
+ * A SEPARATE ENTRY, NOT PART OF index.css
+ * Its only consumer is dynamically-loaded extensions, which cannot render
+ * before the DB opens — well after first paint — and it dwarfs the rest of the
+ * stylesheet. extensionUtilitiesCss.ts loads it on demand (before an extension
+ * module runs, and once shortly after first paint).
+ *
+ * BUILD SHAPE
+ * `source(none)` turns off automatic content detection for this entry so it
+ * emits ONLY the classes listed below, not a duplicate of what index.css
+ * already generates from the app's source. `@reference` makes index.css's
+ * theme (tokens, the custom dark variant) resolvable here without re-emitting
+ * any of its CSS. Order matters: `@reference` after the utilities import, or
+ * the file emits nothing.
  *
  * SCOPE
  * Base utilities are covered broadly (layout, spacing, sizing, typography,
@@ -26,6 +40,9 @@
  * them from the extension's own compiled output when it ships one; or extend
  * this file. Keep additions grouped and re-measure the output size.
  * ═══════════════════════════════════════════════════════════════════════ */
+
+@import "tailwindcss/utilities" layer(utilities) source(none);
+@reference "./index.css";
 
 /* ── Display / box ─────────────────────────────────────────────────────── */
 @source inline("block inline-block inline flex inline-flex grid inline-grid hidden contents flow-root table table-cell table-row table-caption table-column list-item");

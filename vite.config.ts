@@ -127,18 +127,26 @@ export default defineConfig(({command}) => {
             {
                 name: 'only-main-entry',
                 /**
-                 * Reason for this is that when we have preserveModules, Vite will for some reason will inject
-                 * script tags for all the modules in the project.
-                 * Which is probably not an issue generally, but if we externalize react and react-dom, this results in
-                 * tags that point at /react and don't resolve via import maps.
+                 * `allSrcEntries` makes every src/** file a Rollup input, so the HTML
+                 * entry chunk is "entirely imports" and Vite inlines it, emitting a
+                 * <script type="module"> tag for EVERY chunk in the whole graph
+                 * instead of just the real entry. Keep only the one that actually
+                 * boots the app, src/main.js — matched by path suffix so it works
+                 * under any deploy base path, not by filename alone (hundreds of
+                 * chunks — every package whose main file happens to be named
+                 * index.js — are also literally named "index.js").
                  *
-                 * Keep the actual entry script regardless of whether the app is deployed at / or under a subpath.
-                 * Vite may emit a small index.js entry wrapper which imports src/main.js.
+                 * `order: 'post'` so this runs after Vite has injected the tags
+                 * (transformIndexHtml's default/"normal" tier already does, in this
+                 * Vite version, but pin the order rather than rely on that).
                  */
-                transformIndexHtml(html: string) {
-                    return html.replace(/<script\s+type="module" crossorigin .*?src="([^"]*)".*?><\/script>\s*/g, (match, src) => {
-                        return /(^|\/)(index|src\/main)\.js(?:$|[?#])/.test(src) ? match : '';
-                    })
+                transformIndexHtml: {
+                    order: 'post',
+                    handler(html: string) {
+                        return html.replace(/<script\s+type="module" crossorigin .*?src="([^"]*)".*?><\/script>\s*/g, (match, src) => {
+                            return /\/src\/main\.js(?:$|[?#])/.test(src) ? match : '';
+                        })
+                    },
                 },
             },
             reactImportMapProductionPlugin(),

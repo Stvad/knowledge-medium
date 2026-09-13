@@ -26,6 +26,8 @@ import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
 import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
 import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
 import { markStartup } from '@/utils/startupTimeline.js'
+import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.js'
 
 // `ready`: the workspace materialized and bootstrapped normally. `locked`: the
 // §6 gate intercepted before any bootstrap write — the workspace is e2ee
@@ -234,7 +236,14 @@ const App = () => {
     if (initial.kind !== 'ready') return
     let inner = 0
     const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => markStartup('firstContentPaint'))
+      inner = requestAnimationFrame(() => {
+        markStartup('firstContentPaint')
+        // Warm the dynamic-extension Tailwind safelist now that first paint
+        // is done — extensions can't run before the DB opens anyway, so this
+        // is never on the critical path, but starting it here (rather than
+        // waiting for the first extension to load) keeps it ready in time.
+        scheduleIdle(() => void ensureExtensionUtilitiesCss())
+      })
     })
     return () => {
       cancelAnimationFrame(outer)
