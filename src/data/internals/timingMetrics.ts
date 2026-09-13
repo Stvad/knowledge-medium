@@ -162,12 +162,15 @@ export interface ContentionSnapshot {
    *  like a real distribution of zero-millisecond reads. */
   readonly uncontendedRead: TimingSnapshot
   /** Intervals of database work by the sync engine, which this cannot time but
-   *  can bracket. Zero on a local-only session; zero ALSO when the status
-   *  channel is unavailable, which is why `syncObserved` exists beside it. */
+   *  can bracket. A FLOOR: the engine also touches the database outside the
+   *  intervals its status reports (see `watchSyncOccupancy`). Zero on a
+   *  local-only session; zero ALSO when the status channel is unavailable,
+   *  which is why `syncObserved` exists beside it. */
   readonly foreignIntervals: number
   /** Whether sync activity is being observed at all. False means the samples
    *  above cannot account for it — a caveat on every figure here, not a claim
-   *  that the pool was quiet. */
+   *  that the pool was quiet. True means PARTIALLY accounted for, on the terms
+   *  above. */
   readonly syncObserved: boolean
 }
 
@@ -192,10 +195,15 @@ export interface ContentionSnapshot {
  *
  * Three kinds of occupancy, because a claim about "the pool" has to cover
  * everything on it:
- *   - our own calls, timed (`begin`/`end`);
- *   - the sync engine's, which connects to the raw database before `Repo` wraps
- *     it and so is invisible here — bracketed by status (`beginForeign`);
- *   - work one read does on several observers' behalf (`noteSharedWork`).
+ *   - our own calls, timed (`begin`/`end`) — complete;
+ *   - the sync engine's, bracketed from its status channel (`beginForeign`) —
+ *     a FLOOR, not a complete account: see `watchSyncOccupancy`;
+ *   - work one read does on several observers' behalf (`noteSharedWork`) —
+ *     approximate in the conservative direction.
+ *
+ * So "had the pool to itself" means "nothing THIS CAN SEE was competing". The
+ * two qualifications above are where that falls short of the literal claim, and
+ * both err towards calling a clean window contended rather than the reverse.
  *
  * The classification is CONSERVATIVE in one direction on purpose: a call that
  * overlapped another harmlessly (two reads, two free connections) is excluded
@@ -281,13 +289,22 @@ export class DbContention {
   /** One read answered several callers at once. Called by request coalescers
    *  (`ancestorBatch`), the only place that fact is known.
    *
-   *  Recorded ONLY while more than one observation window is open, and that
-   *  condition is the whole point. A resolver that deliberately asks for many
-   *  ids in one go (`core.manyAncestors`, `core.recentActivity`) is a single
-   *  observation whose batch is its own work; billing it as shared would bar it
-   *  from ever being measured cleanly. What has to be caught is the other
-   *  shape: N separate resolves awaiting one statement, each recording its full
-   *  wall-clock, which is one observation reported N times. */
+   *  Recorded ONLY while more than one observation window is open. A resolver
+   *  that deliberately asks for many ids in one go (`core.manyAncestors`,
+   *  `core.recentActivity`) is a single observation whose batch is its own
+   *  work; billing it as shared would bar it from ever being measured cleanly.
+   *  What has to be caught is the other shape: N separate resolves awaiting one
+   *  statement, each recording its full wall-clock, which is one observation
+   *  reported N times.
+   *
+   *  The window COUNT is an approximation of window PARTICIPATION, and the gap
+   *  is narrow rather than absent: a lone batching resolver is still marked
+   *  shared if any unrelated window happens to be open. Narrow because that
+   *  other window only escapes `concurrentIssues` if it issues no database call
+   *  of its own while this one runs. Knowing exactly which windows a batch
+   *  answered needs the coalescer to be told who is asking, which is a change
+   *  to the query context every resolver sees. Accepted for now; the error is
+   *  conservative, costing clean samples rather than admitting queued ones. */
   noteSharedWork(): void {
     if (this.openWindows > 1) this.sharedWorkTotal++
   }
@@ -423,6 +440,15 @@ const syncBusy = (s: SyncStatus | undefined): boolean =>
  *
  * Transitions, not polling: a burst that begins and ends inside one resolve is
  * invisible to a status read taken at each end of it.
+ *
+ * A FLOOR ON SYNC OCCUPANCY, NOT A COMPLETE ACCOUNT. The engine touches the
+ * database outside the intervals these flags describe: in `@powersync/common`
+ * 1.55.0 the upload path reads the CRUD queue (`nextCrudItem`) BEFORE it sets
+ * `uploading`, and updates the local target with the flag still clear when the
+ * queue is empty. A read landing in one of those gaps is recorded as clean. The
+ * complete fix instruments the adapter PowerSync opens, so that every user of
+ * the connections passes one counter and there is no second channel to trust —
+ * a change to how the local database is constructed, and so not this one.
  *
  * The listener's lifetime is the database's. Nothing detaches it, because the
  * tracker it feeds lives exactly as long — both are created here, once, per

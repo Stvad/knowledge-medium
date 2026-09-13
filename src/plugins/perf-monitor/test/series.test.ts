@@ -511,6 +511,16 @@ describe('queryRegressions with nothing judgeable', () => {
   // fault — and saying "no usable measurement this session" about a session
   // that measured hundreds of resolves sends a reader to look for a recorder
   // that is working fine.
+  // "Never" is a stronger claim than "not yet". A session holding a few clean
+  // resolves that fall short of the threshold is still accumulating, and
+  // telling the user those queries never ran with the database free is simply
+  // false — they did.
+  it('does not call a thin set of clean samples a never', () => {
+    const history20 = history(20, () => sample({ queries: { 'core.ancestors': q(40) } }))
+    const thin = sample({ queries: { 'core.ancestors': q(600, 3) } })
+    expect(qr(thin, history20)[0]).toEqual({ status: 'insufficient', reason: 'no-current-sample' })
+  })
+
   it('separates "measured, never with the database free" from "measured nothing"', () => {
     const history20 = history(20, () => sample({ queries: { 'core.ancestors': q(40) } }))
     const busy = sample({ queries: { 'core.ancestors': noUncontendedSamples(600) } })

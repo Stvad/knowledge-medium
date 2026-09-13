@@ -75,12 +75,16 @@ const INSUFFICIENT: TrendResult = { status: 'insufficient', reason: 'history' }
 const NO_CURRENT_SAMPLE: TrendResult = { status: 'insufficient', reason: 'no-current-sample' }
 /** History enough, and every session in it zero — there is no ratio to form. */
 const NO_BASELINE: TrendResult = { status: 'insufficient', reason: 'no-baseline' }
-/** Queries WERE measured; none of them ever ran with the database free, so
- *  there is nothing comparable to trend. Distinct from `no-current-sample`,
- *  which says the recorder produced nothing — and for a query that only ever
- *  runs inside a render fan-out this is the EXPECTED state, not a gap waiting
- *  closes. Reporting it as a missing sample would send a reader to look for a
- *  broken recorder. */
+/** Queries WERE measured, and not ONE of them was ever caught with the database
+ *  free. Distinct from `no-current-sample`, which says the recorder produced
+ *  nothing — and for a query that only ever runs inside a render fan-out this is
+ *  the EXPECTED state, not a gap waiting closes. Reporting it as a missing
+ *  sample would send a reader to look for a broken recorder.
+ *
+ *  Says NEVER, so it is claimed only when the count is actually zero. A session
+ *  holding a handful of clean resolves that merely fall short of `MIN_CALLS` is
+ *  still accumulating, and reporting that as "never" is a stronger statement
+ *  than the data supports. */
 const NEVER_UNCONTENDED: TrendResult = { status: 'insufficient', reason: 'never-uncontended' }
 
 export interface Regression {
@@ -268,12 +272,15 @@ export const queryRegressions = (
   // Nothing judged isn't nothing to say: an empty list would leave fan-out
   // alone in the series, reading as a clean bill nobody actually checked. One aggregate result, not one per skipped query.
   //
-  // WHICH nothing, though: a session that measured queries and never caught one
-  // with the database free is a different report from one that measured none.
-  const measuredSomething = Object.keys(current.queries).length > 0
+  // WHICH nothing, though. Three cases, and only the middle one is `never`:
+  // nothing measured at all; measured with not one clean resolve among them;
+  // or clean resolves that have not yet reached the threshold, which is an
+  // ordinary not-yet and must not be reported as a never.
+  const measured = Object.values(current.queries)
+  const anyClean = measured.some((q) => (q.uncontended?.calls ?? 0) > 0)
   return {
     results: results.length === 0
-      ? [measuredSomething ? NEVER_UNCONTENDED : NO_CURRENT_SAMPLE]
+      ? [measured.length > 0 && !anyClean ? NEVER_UNCONTENDED : NO_CURRENT_SAMPLE]
       : results,
     clusteredTail: clusteredTail.sort(),
   }

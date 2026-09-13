@@ -47,9 +47,15 @@ export interface TimingSample {
  *  measured", never as zero. */
 export interface QueryTimingSample extends TimingSample {
   uncontended?: {
-    /** Resolves that ran unopposed — also the honest count of INDEPENDENT
-     *  measurements, since coalesced callers (N awaiting one statement, each
-     *  recording its whole wall-clock) never reach here. */
+    /** Samples BACKING the two percentiles: resolves that ran unopposed and are
+     *  still retained in the reservoir, so at most its 256-sample capacity.
+     *  NOT the lifetime count — that keeps climbing while the percentiles stay
+     *  computed over the window, and storing it here would claim thousands of
+     *  samples behind a figure drawn from 256.
+     *
+     *  Also the honest count of INDEPENDENT measurements, since coalesced
+     *  callers (N awaiting one statement, each recording its whole wall-clock)
+     *  never reach here. */
     calls: number
     p50Ms: number
     p95Ms: number
@@ -76,11 +82,12 @@ export interface ContentionSample {
   sharedWork: number
   /** Calls, reads and writes together, that never waited for a connection. */
   uncontendedCalls: number
-  /** How many of those were READS, and so how many samples back the two
-   *  percentiles below. Stored separately because they are a strict subset: a
-   *  session with unqueued writes and no unqueued reads would otherwise read as
-   *  a real distribution of zero-millisecond reads. Zero means the percentiles
-   *  are not measurements. */
+  /** Samples backing the two percentiles below: unqueued READS still retained
+   *  in the reservoir, so at most its capacity rather than the lifetime total.
+   *  Stored separately from `uncontendedCalls` because reads are a strict
+   *  subset of it — a session with unqueued writes and no unqueued reads would
+   *  otherwise read as a real distribution of zero-millisecond reads. Zero
+   *  means the percentiles are not measurements. */
   uncontendedReadCalls: number
   uncontendedReadP50Ms: number
   uncontendedReadP95Ms: number
@@ -208,19 +215,24 @@ const toTimingSample = (t: {
 /** A query sample carries its uncontended subset; a DB-method sample does not.
  *  Written only once there is something to write, so a query never observed
  *  unopposed stores no key rather than a row of zeros a reader could mistake
- *  for a measurement of zero. */
+ *  for a measurement of zero.
+ *
+ *  Gated on the same field it stores. A live reservoir has samples whenever it
+ *  has calls, so gating on either is equivalent today and no test separates
+ *  them — this reads the one whose value is written, so the two cannot drift if
+ *  that ever stops being true. */
 const toQuerySample = (t: {
   calls: number
   p50Ms: number
   p95Ms: number
   totalMs: number
-  uncontended: { calls: number; p50Ms: number; p95Ms: number }
+  uncontended: { sampleCount: number; p50Ms: number; p95Ms: number }
 }): QueryTimingSample => ({
   ...toTimingSample(t),
-  ...(t.uncontended.calls > 0
+  ...(t.uncontended.sampleCount > 0
     ? {
       uncontended: {
-        calls: t.uncontended.calls,
+        calls: t.uncontended.sampleCount,
         p50Ms: round2(t.uncontended.p50Ms),
         p95Ms: round2(t.uncontended.p95Ms),
       },
@@ -235,7 +247,7 @@ const toContentionSample = (c: {
   busyMs: number
   sharedWork: number
   uncontendedCalls: number
-  uncontendedRead: { calls: number; p50Ms: number; p95Ms: number }
+  uncontendedRead: { sampleCount: number; p50Ms: number; p95Ms: number }
   foreignIntervals: number
   syncObserved: boolean
 }): ContentionSample => ({
@@ -245,7 +257,7 @@ const toContentionSample = (c: {
   busyMs: round2(c.busyMs),
   sharedWork: c.sharedWork,
   uncontendedCalls: c.uncontendedCalls,
-  uncontendedReadCalls: c.uncontendedRead.calls,
+  uncontendedReadCalls: c.uncontendedRead.sampleCount,
   uncontendedReadP50Ms: round2(c.uncontendedRead.p50Ms),
   uncontendedReadP95Ms: round2(c.uncontendedRead.p95Ms),
   foreignIntervals: c.foreignIntervals,

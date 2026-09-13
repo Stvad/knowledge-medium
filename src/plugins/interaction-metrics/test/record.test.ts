@@ -46,7 +46,9 @@ beforeEach(async () => {
 })
 afterEach(() => { vi.restoreAllMocks() })
 
-const timing = (over: Partial<{calls: number; p50Ms: number; p95Ms: number; totalMs: number}> = {}) => ({
+const timing = (
+  over: Partial<{calls: number; sampleCount: number; p50Ms: number; p95Ms: number; totalMs: number}> = {},
+) => ({
   calls: 1, sampleCount: 1, meanMs: 1, p50Ms: 1, p95Ms: 1, p99Ms: 1, minMs: 1, maxMs: 1, totalMs: 1, ...over,
 })
 
@@ -55,10 +57,13 @@ const timing = (over: Partial<{calls: number; p50Ms: number; p95Ms: number; tota
  *  one is visible. */
 const queryTiming = (
   over: Partial<{calls: number; p50Ms: number; p95Ms: number; totalMs: number}> = {},
-  uncontendedOver: Partial<{calls: number; p50Ms: number; p95Ms: number}> = {},
+  uncontendedOver: Partial<{calls: number; sampleCount: number; p50Ms: number; p95Ms: number}> = {},
 ) => ({
   ...timing(over),
-  uncontended: timing({ calls: 3, p50Ms: 0.5, p95Ms: 0.75, ...uncontendedOver }),
+  // `calls` (lifetime) deliberately far above `sampleCount` (what the ring
+  // buffer still holds, and what the percentiles are computed from), so a
+  // converter persisting the wrong one is visible rather than plausible.
+  uncontended: timing({ calls: 900, sampleCount: 3, p50Ms: 0.5, p95Ms: 0.75, ...uncontendedOver }),
 })
 
 const metricsFixture = (over: Partial<ReturnType<Repo['metrics']>> = {}): ReturnType<Repo['metrics']> => ({
@@ -75,7 +80,8 @@ const metricsFixture = (over: Partial<ReturnType<Repo['metrics']>> = {}): Return
   db: { writeTransaction: timing({ calls: 7 }) },
   dbContention: {
     calls: 40, concurrentIssues: 11, maxDepth: 4, busyMs: 812.345, sharedWork: 2,
-    uncontendedCalls: 29, uncontendedRead: timing({ calls: 29, p50Ms: 0.6, p95Ms: 1.4 }),
+    uncontendedCalls: 29,
+    uncontendedRead: timing({ calls: 640, sampleCount: 29, p50Ms: 0.6, p95Ms: 1.4 }),
     foreignIntervals: 3, syncObserved: true,
   },
   slowestTx: { description: 'append tag [[Private Page]]', ms: 91 },
@@ -187,7 +193,9 @@ describe('buildInteractionRecord', () => {
 
   it("stores a query's uncontended subset alongside its wall-clock timings", () => {
     const record = buildInteractionRecord(metricsFixture({
-      queries: { 'core.ancestors': queryTiming({ calls: 185, p95Ms: 583 }, { calls: 22, p95Ms: 2.5 }) },
+      queries: {
+        'core.ancestors': queryTiming({ calls: 185, p95Ms: 583 }, { sampleCount: 22, p95Ms: 2.5 }),
+      },
     } as Partial<ReturnType<Repo['metrics']>>), META)
     const stored = record.queries['core.ancestors']
     // What callers actually waited is still recorded — the fix reports the
@@ -195,13 +203,18 @@ describe('buildInteractionRecord', () => {
     expect(stored.calls).toBe(185)
     expect(stored.p95Ms).toBe(583)
     // And beside it, the same query with no queue to be in: the only one of the
-    // two a later session can be compared against.
+    // two a later session can be compared against. 22 is the RETAINED sample
+    // count, not the lifetime 900 — the percentiles are computed over the
+    // window, and storing the lifetime figure would claim hundreds of samples
+    // behind a number drawn from 22.
     expect(stored.uncontended).toEqual({ calls: 22, p50Ms: 0.5, p95Ms: 2.5 })
   })
 
   it('omits the uncontended key for a query never once observed alone', () => {
     const record = buildInteractionRecord(metricsFixture({
-      queries: { 'core.ancestors': queryTiming({ calls: 185 }, { calls: 0, p50Ms: 0, p95Ms: 0 }) },
+      queries: {
+        'core.ancestors': queryTiming({ calls: 185 }, { calls: 0, sampleCount: 0, p50Ms: 0, p95Ms: 0 }),
+      },
     } as Partial<ReturnType<Repo['metrics']>>), META)
     // Absent, not a row of zeros: a reservoir with no samples reports 0 for
     // every percentile, and storing that would be a measurement of zero
@@ -218,7 +231,7 @@ describe('buildInteractionRecord', () => {
       dbContention: {
         calls: 6, concurrentIssues: 0, maxDepth: 1, busyMs: 12, sharedWork: 0,
         uncontendedCalls: 4,
-        uncontendedRead: timing({ calls: 0, p50Ms: 0, p95Ms: 0 }),
+        uncontendedRead: timing({ calls: 0, sampleCount: 0, p50Ms: 0, p95Ms: 0 }),
         foreignIntervals: 0, syncObserved: true,
       },
     } as Partial<ReturnType<Repo['metrics']>>), META)
