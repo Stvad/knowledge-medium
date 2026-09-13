@@ -1,8 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-/* The dynamic-extension Tailwind safelist (extension-utilities.css) is loaded
- * on demand by extensionUtilitiesCss.ts, not imported here: extensions cannot
- * run before the DB opens, well after first paint. */
+/* The dynamic-extension safelist (extension-utilities.css) is loaded on
+ * demand by extensionUtilitiesCss.ts, not imported here. */
 
 @plugin "tailwind-scrollbar";
 

@@ -186,9 +186,8 @@ function resolveCachedModule(
   blockId: string,
   factory: () => Promise<ExtensionModule>,
 ): Promise<ExtensionModule> {
-  // Every module resolution (cache hit or miss) is about to be rendered, so
-  // kick off the Tailwind safelist here rather than only on a compile miss —
-  // fire-and-forget, `once`-deduped, and cheap to call redundantly.
+  // Start the Tailwind safelist load on every resolution, cache hit included;
+  // the runtime apply awaits it before extensions render.
   void ensureExtensionUtilitiesCss()
 
   let modulesForBlock = cache.byBlockAndHash.get(blockId)
