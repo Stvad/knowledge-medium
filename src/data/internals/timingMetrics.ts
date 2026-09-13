@@ -193,8 +193,10 @@ export interface ContentionSnapshot {
  * The answer is SELECTION, not correction: rather than subtract an estimated
  * queue wait, record which observations had no queue and report those
  * separately. `uncontendedRead` and `QueryMetrics`' per-name uncontended
- * reservoir are concurrency-independent because of what they EXCLUDE, so they
+ * reservoir are filtered by OBSERVABLE occupancy, which is what lets them
  * survive a change in fan-out that moves every other timing in this file.
+ * Filtered, not independent: what the filter cannot see it cannot exclude, and
+ * the second qualification below is exactly that case.
  *
  * DECLINED: decomposing each call into service and queue time. It needs a
  * serial FIFO connection, and `repoProvider` opens two on OPFSWriteAheadVFS and

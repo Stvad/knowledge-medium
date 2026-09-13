@@ -1399,7 +1399,8 @@ export class Repo {
      *  map of per-method `TimingSnapshot` that its consumers iterate.
      *
      *  `dbContention.uncontendedRead` and each `queries[name].uncontended` are
-     *  the only timings here that survive a change in fan-out — everything else
+     *  the only timings here that can survive a change in fan-out (as far as the
+     *  pool is observable — see `DbContention`) — everything else
      *  in `db` and `queries` is wall-clock, which on a busy pool is dominated
      *  by the queue ahead of the caller rather than by the work. */
     dbContention: ReturnType<DbMetrics['contention']['snapshot']>

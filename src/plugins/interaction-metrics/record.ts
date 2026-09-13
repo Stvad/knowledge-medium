@@ -70,8 +70,11 @@ export interface QueryTimingSample extends TimingSample {
  *  the comparable ones. */
 export interface ContentionSample {
   calls: number
-  /** Calls issued while another was already in flight — the direct measure of
-   *  how much of this session's timings are queue rather than work. */
+  /** Calls issued while the pool was already occupied. OVERLAP, not measured
+   *  queueing: where the pool has two connections an arriving read can take the
+   *  free one and wait for nothing, and this counts it just the same. Read it
+   *  as how much of the session had contention available to it, never as how
+   *  much recorded time was spent queued. */
   concurrentIssues: number
   maxDepth: number
   /** Union of the intervals with at least one call in flight. Against

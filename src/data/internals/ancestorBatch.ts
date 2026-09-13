@@ -57,13 +57,16 @@ interface Pending {
   promise: Promise<AncestorWalk>
   resolve: (walk: AncestorWalk) => void
   reject: (error: unknown) => void
+  /** How many callers await this id. Counted so the flush can report ONE
+   *  shared read once, rather than once per caller that joined. */
+  callers: number
 }
 
 const pending = (): Pending => {
   let resolve!: (walk: AncestorWalk) => void
   let reject!: (error: unknown) => void
   const promise = new Promise<AncestorWalk>((res, rej) => { resolve = res; reject = rej })
-  return {promise, resolve, reject}
+  return {promise, resolve, reject, callers: 1}
 }
 
 class AncestorBatcher {
@@ -79,11 +82,15 @@ class AncestorBatcher {
     this.pool = contentionFor(db)
   }
 
-  /** Tell the metrics layer this read is answering more than one caller.
+  /** Tell the metrics layer this statement is answering more than one caller.
    *  Without it every one of them looks like an independent measurement of an
    *  idle database: the pool genuinely was idle for each, and the wall-clock
    *  they all record is still ONE observation. The batcher is the only place
-   *  that knows the difference. */
+   *  that knows the difference.
+   *
+   *  Once per STATEMENT, from the flush, because that is what the counter
+   *  counts. Reporting at join time instead said 2 for three resolves sharing
+   *  one id, which is a caller-join count wearing a shared-read count's name. */
   private noteShared(): void {
     this.pool?.noteSharedWork()
   }
@@ -91,8 +98,7 @@ class AncestorBatcher {
   walkFor(id: string): Promise<AncestorWalk> {
     const existing = this.waiting.get(id)
     if (existing) {
-      // A second caller for an id already queued — one read, two callers.
-      this.noteShared()
+      existing.callers++
       return existing.promise
     }
 
@@ -118,8 +124,11 @@ class AncestorBatcher {
     const ids = [...batch.keys()]
     for (let start = 0; start < ids.length; start += MAX_IDS_PER_STATEMENT) {
       const chunk = ids.slice(start, start + MAX_IDS_PER_STATEMENT)
-      // One statement answering several ids, for the same reason as above.
-      if (chunk.length > 1) this.noteShared()
+      // Callers, not ids: three resolves awaiting one id share this statement
+      // exactly as three ids from three resolves do, and both are one read.
+      let callers = 0
+      for (const id of chunk) callers += batch.get(id)!.callers
+      if (callers > 1) this.noteShared()
       try {
         const rows = await this.db.getAll<AncestorChainRow>(
           manyAncestorsSql(chunk.length), chunk,

@@ -39,11 +39,11 @@ const CLUSTERED_TAIL_MAX_RATIO = 1.01
 /** Does the compared window's upper half collapse to one value?
  *
  *  Asked of the UNCONTENDED samples, the ones a comparison consumes. Request
- *  coalescing used to be the leading cause and is no longer a candidate here —
- *  callers sharing one statement are excluded from this distribution at the
- *  source. What remains is a genuinely bimodal workload, where
- *  `sorted[floor(n * q)]` lets a slow half set p50 and p95 alike, and a window
- *  thin enough that its top 5% is one sample.
+ *  coalescing cannot produce this shape in them: callers sharing one statement
+ *  are excluded at the source, before this predicate sees anything. What is
+ *  left is a genuinely bimodal workload, where `sorted[floor(n * q)]` lets a
+ *  slow half set p50 and p95 alike, and a window thin enough that its top 5% is
+ *  one sample.
  *
  *  Still REPORTED and still never gating: a clustered tail is as often the
  *  regression worth seeing as an artifact of how few samples backed it, and

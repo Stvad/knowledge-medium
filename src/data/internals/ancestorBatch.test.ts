@@ -215,6 +215,20 @@ describe('ancestorWalk shared-work reporting', () => {
   // resolver asking the batcher for every id it was handed. The batch is that
   // resolve's OWN work, and calling it shared would bar those queries from ever
   // being measured cleanly — a permanent, silent gap rather than a thin one.
+  it('counts one shared read per statement, not one per caller that joined', async () => {
+    const {db, statements, shared, asResolves} = meteredDb()
+
+    await asResolves(3, () => Promise.all([
+      ancestorWalk(db, 'a'), ancestorWalk(db, 'a'), ancestorWalk(db, 'a'),
+    ]))
+
+    expect(statements.map(s => s.ids)).toEqual([['a']])
+    // One statement was issued, so one shared read happened. Noting it per
+    // JOIN reported two, which is a caller-join count under a shared-read
+    // count's name — and duplicate-id fan-out is the common case, not a corner.
+    expect(shared()).toBe(1)
+  })
+
   it('reports nothing shared when ONE resolve batches many ids', async () => {
     const {db, statements, shared, asResolves} = meteredDb()
 
