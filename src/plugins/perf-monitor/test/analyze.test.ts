@@ -386,6 +386,10 @@ describe('runPerfAnalysis', () => {
     expect(analysis.unjudgedBecause.interaction).toBe('blended-workspaces')
     expect(analysis.regressions.filter((r) => r.metric.startsWith('query:'))).toEqual([])
     expect(analysis.regressions.filter((r) => r.metric.startsWith('fanout:'))).toEqual([])
+    // The caveat is a statement about THIS workspace's queries, so it must go
+    // with the verdicts rather than outlive them — a note naming a query beside
+    // "not comparable this session" points at a trend nobody produced.
+    expect(analysis.clusteredTail).toEqual([])
   })
 
   // The recorder writes on its own schedule. Between the analysis reading who

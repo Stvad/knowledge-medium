@@ -5,7 +5,7 @@
  * a single session fires on every anomaly); MEDIAN NOT MEAN (sessions are
  * heterogeneous; the median tracks the typical one).
  */
-import type { InteractionComparable } from '@/plugins/interaction-metrics/record.js'
+import type { InteractionComparable, TimingSample } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 
 /** Sessions of history required before any comparison is reported — below this the median is one arbitrary session with extra steps. */
@@ -22,6 +22,27 @@ const RECENT_WINDOW = 3
 
 /** Resolves needed before a query's p95 is treated as a measurement. */
 const MIN_CALLS = 20
+
+/** Widest p95/p50 still read as one clustered value — a 1% tolerance, NOT
+ *  equality: stored timings are rounded to 0.01ms, so equality would be a
+ *  stricter claim than this makes. Wide enough to absorb that rounding, far
+ *  narrower than any spread distribution. */
+const CLUSTERED_TAIL_MAX_RATIO = 1.01
+
+/** Does the window's upper half collapse to one value? Request coalescing
+ *  produces this — N callers awaiting one statement all record the same
+ *  wall-clock — but so does any bimodal split: with `sorted[floor(n * q)]`
+ *  percentiles a slow half sets p50 and p95 alike. The two are NOT separable
+ *  from a stored sample, which carries no count of distinct observations.
+ *
+ *  So this is REPORTED and never gates a comparison. `calls` overstating how
+ *  many independent measurements back a p95 is a caveat on the reading; a
+ *  clustered tail is as often the regression worth seeing as an artifact of how
+ *  it was measured, and discarding it would throw away the finding to suppress
+ *  the artifact. Counting observations at the source is the only real fix
+ *  (#958). */
+export const hasClusteredTail = (t: TimingSample): boolean =>
+  t.p50Ms >= MIN_ABSOLUTE_MS && t.p95Ms <= t.p50Ms * CLUSTERED_TAIL_MAX_RATIO
 
 /** STORED sessions either comparison needs before it returns anything: the
  *  baseline, plus what current-window smoothing consumes on top of this
@@ -104,6 +125,18 @@ const trendRegression = (
   }
 }
 
+/** The sessions a per-query comparison reads, in the two roles it reads them
+ *  as. Named once: the caveat reports on exactly what the comparison consumed,
+ *  and a second copy of this slicing is how the two would come to disagree
+ *  about which samples were involved. */
+const comparisonWindows = <T>(history: readonly T[]): {
+  recentPast: readonly T[]
+  baselineSessions: readonly T[]
+} => ({
+  recentPast: history.slice(0, RECENT_WINDOW - 1),
+  baselineSessions: baselineWindow(history),
+})
+
 /** Entries used as BASELINE from a newest-first history. The leading entries
  *  are consumed smoothing "current", so describing the baseline must derive from this same slice. */
 export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
@@ -149,32 +182,56 @@ export const regressionsIn = (results: readonly TrendResult[]): Regression[] =>
 
 /** Per-query p95 regressions, worst ratio first. A query absent from the
  *  baseline is skipped, not infinitely regressed. `recentPast` smooths the current reading. */
+export interface QueryComparison {
+  results: TrendResult[]
+  /** Metrics whose verdict rests on a session with a collapsed tail. Produced
+   *  HERE, from the same walk that judged them, because it is the only place
+   *  that knows which samples a query actually consumed and whether its
+   *  comparison reached a verdict at all — re-deriving either alongside is how
+   *  a caveat comes to qualify a trend that was never produced. */
+  clusteredTail: string[]
+}
+
 export const queryRegressions = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
-): TrendResult[] => {
-  const recentPast = history.slice(0, RECENT_WINDOW - 1)
-  const baselineSessions = baselineWindow(history)
-  const out: TrendResult[] = []
+): QueryComparison => {
+  const { recentPast, baselineSessions } = comparisonWindows(history)
+  const results: TrendResult[] = []
+  const clusteredTail: string[] = []
   for (const [name, sample] of Object.entries(current.queries)) {
     // Only the data-sufficiency filter here — the magnitude floor is applied by
     // `trendRegression` after the recent median, so one fast session can't drop a sustainably-regressed query.
     if (sample.calls < MIN_CALLS) continue
-    const measured = (r: InteractionComparable): number | null => {
+    // ONE statement of which sessions carry a usable sample for this query,
+    // read by both the comparison and the caveat below.
+    const sampleIn = (r: InteractionComparable): TimingSample | null => {
       const q = r.queries[name]
-      return q !== undefined && q.calls >= MIN_CALLS ? q.p95Ms : null
+      return q !== undefined && q.calls >= MIN_CALLS ? q : null
     }
+    const measured = (r: InteractionComparable): number | null => sampleIn(r)?.p95Ms ?? null
     const recent = [sample.p95Ms, ...recentPast.map(measured).filter((v): v is number => v !== null)]
     const baseline = baselineSessions.map(measured).filter((v): v is number => v !== null)
-    out.push(trendRegression(
+    const result = trendRegression(
       { metric: `query:${name}`, label: `${name} p95`, unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
       recent,
       baseline,
-    ))
+    )
+    results.push(result)
+    // Only a comparison that reached a verdict can be qualified: telling a
+    // reader to distrust a trend that was never produced points at nothing.
+    const consumed = [sample, ...[...recentPast, ...baselineSessions].map(sampleIn)]
+    if (result.status !== 'insufficient' &&
+        consumed.some((q) => q !== null && hasClusteredTail(q))) {
+      clusteredTail.push(name)
+    }
   }
   // Nothing judged isn't nothing to say: an empty list would leave fan-out
   // alone in the series, reading as a clean bill nobody actually checked. One aggregate result, not one per skipped query.
-  return out.length === 0 ? [NO_CURRENT_SAMPLE] : out
+  return {
+    results: results.length === 0 ? [NO_CURRENT_SAMPLE] : results,
+    clusteredTail: clusteredTail.sort(),
+  }
 }
 
 /** Handle invalidations per write — catches a bug latency can't see: an

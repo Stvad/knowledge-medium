@@ -202,6 +202,36 @@ describe('summarize', () => {
   })
 })
 
+describe('the clustered-tail caveat', () => {
+  it('rides along with a regression rather than replacing the verdict', () => {
+    // The realistic case: one metric's tail collapses while others judge
+    // normally. Carried as a reason it would lose to `partly-judged` and never
+    // be seen, which is why it is a note.
+    const v = summarize(analysis({
+      regressions: [regression()],
+      clusteredTail: ['core.ancestors'],
+    }))
+    expect(v.kind).toBe('regressed')
+    expect(v.notes.join(' ')).toContain('core.ancestors')
+    expect(v.notes.join(' ')).toContain('within 1% of p50')
+    // The claim the sample cannot support: coalescing and a bimodal workload
+    // produce this shape alike, so the note must not assert independence.
+    expect(v.notes.join(' ')).not.toContain('independent')
+  })
+
+  it('survives a partial comparison, which a single-slot reason could not', () => {
+    const v = summarize(analysis({
+      ready: { interaction: true, startup: false },
+      clusteredTail: ['core.ancestors'],
+    }))
+    expect(v.notes.join(' ')).toContain('core.ancestors')
+  })
+
+  it('stays silent when no tail collapsed', () => {
+    expect(summarize(analysis()).notes.join(' ')).not.toContain('within 1% of p50')
+  })
+})
+
 /**
  * "Still building" is a promise that waiting will resolve it. When this session
  * simply contributed no startup record — the recorder is independently

@@ -74,6 +74,20 @@ const pendingNotes = (analysis: PerfAnalysis): string[] =>
     return reason === null ? [] : [NOTE[reason](series)]
   })
 
+/** Named, not counted: the reader's next move is to look at what collapsed
+ *  THAT query's tail, and a bare count says nothing about where to look.
+ *
+ *  States only what was OBSERVED, and only about the UPPER TAIL: the quantiles
+ *  say nothing about the half below the median, and a bimodal workload whose
+ *  every call is independently timed produces this shape too (see
+ *  `hasClusteredTail`). So no claim about the distribution as a whole, and none
+ *  about how many independent measurements back the p95 — pointing at the
+ *  question is what makes it actionable without answering it. */
+const clusteredTailNote = (metrics: readonly string[]): string | null =>
+  metrics.length === 0
+    ? null
+    : `${metrics.join(', ')}: p95 is within 1% of p50 in at least one session this comparison used, so its upper tail is a single value — check whether those calls shared one resolution before reading the trend`
+
 /** How much history the comparison actually had.
  *
  *  Labelled per series once both were judged: the two fill independently and
@@ -122,7 +136,8 @@ export const summarize = (analysis: PerfAnalysis, live: LiveFacts): PerfVerdict 
   // series makes a verdict partial. Folding the two together would report a
   // clean comparison in a read-only workspace as pending.
   const unjudged = pendingNotes(analysis)
-  const notes = [...unjudged, ...(blocked ? [blocked] : [])]
+  const clustered = clusteredTailNote(analysis.clusteredTail)
+  const notes = [...unjudged, ...(clustered ? [clustered] : []), ...(blocked ? [blocked] : [])]
   const growth = graphNote(analysis.graphGrowth)
 
   if (analysis.regressions.length > 0) {

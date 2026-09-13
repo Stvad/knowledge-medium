@@ -357,6 +357,19 @@ describe('loadRecords', () => {
   // is corrupt — and it fails SILENTLY: the comparison's magnitude floor is a
   // `<` test, so a negative median lands under it and is reported steady. A
   // corrupt row would contribute to a clean bill of health.
+  // `p50Ms` is dereferenced by the clustered-tail caveat. Missing, it compares
+  // as NaN — every test false, so the caveat silently never fires; as a numeric
+  // STRING it compares by coercion instead of being rejected; out of order it
+  // reads as a collapsed tail on a row that never had one.
+  it('rejects a timing sample whose p50 is missing, non-numeric or above p95', () => {
+    const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
+    const withQ = (sample: unknown) => ({ ...ok, queries: { 'core.ancestors': sample } })
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: 5, p95Ms: 10 }))).toBe(true)
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p95Ms: 10 }))).toBe(false)
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: '5', p95Ms: 10 }))).toBe(false)
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: 20, p95Ms: 10 }))).toBe(false)
+  })
+
   it('rejects negative counts and durations', () => {
     const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
     expect(isUsableInteractionRecord(ok)).toBe(true)
@@ -365,7 +378,16 @@ describe('loadRecords', () => {
     // The path that actually produces a negative RATE: a positive denominator
     // with a negative numerator.
     expect(isUsableInteractionRecord({ ...ok, fanout: { loaderInvalidations: -5 } })).toBe(false)
-    expect(isUsableInteractionRecord({ ...ok, queries: { q: { calls: 20, p95Ms: -3 } } }))
+    // A NEGATIVE p95 no longer reaches `isCount(p95Ms)`: p50 is mandatory, so
+    // `p50 <= p95` already implies `p95 >= 0` and rejects first. What that
+    // clause still uniquely catches is a non-finite or non-numeric p95, which
+    // the ordering comparison waves through (everything is <= Infinity, and a
+    // numeric string coerces) — so those are the cases that pin it.
+    expect(isUsableInteractionRecord({ ...ok, queries: { q: { calls: 20, p50Ms: 0, p95Ms: -3 } } }))
+      .toBe(false)
+    expect(isUsableInteractionRecord({ ...ok, queries: { q: { calls: 20, p50Ms: 0, p95Ms: Number.POSITIVE_INFINITY } } }))
+      .toBe(false)
+    expect(isUsableInteractionRecord({ ...ok, queries: { q: { calls: 20, p50Ms: 0, p95Ms: '10' } } }))
       .toBe(false)
     // Zero is a measurement, not corruption.
     expect(isUsableInteractionRecord({ ...ok, writes: 0, fanout: { loaderInvalidations: 0 } }))

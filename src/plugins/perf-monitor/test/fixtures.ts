@@ -19,6 +19,7 @@ export const analysisFixture = (over: Partial<PerfAnalysis> = {}): PerfAnalysis 
     epoch: 0,
     seq: 1,
     regressions: [],
+    clusteredTail: [],
     baseline: { interaction: 12, startup: 12 },
     recorded: { interaction: 12, startup: 12 },
     graphGrowth: null,
