@@ -5,7 +5,10 @@
  * a single session fires on every anomaly); MEDIAN NOT MEAN (sessions are
  * heterogeneous; the median tracks the typical one).
  */
-import type { InteractionComparable, QueryTimingSample } from '@/plugins/interaction-metrics/record.js'
+import type {
+  InteractionComparable,
+  QueryTimingSample,
+} from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 
 /** Sessions of history required before any comparison is reported — below this the median is one arbitrary session with extra steps. */
@@ -249,6 +252,31 @@ export const queryRegressions = (
     results: results.length === 0 ? [NO_CURRENT_SAMPLE] : results,
     clusteredTail: clusteredTail.sort(),
   }
+}
+
+/** The costliest query in a session, by the p95 the comparison actually reads:
+ *  the one measured with the DB connection pool free.
+ *
+ *  Lives HERE, beside `invalidationsPerWrite`, for that function's reason: a
+ *  table charting a different number than the alarm fires on is worse than no
+ *  table, and two definitions of "the slowest query" is how they would come to
+ *  differ.
+ *
+ *  NOT the wall-clock p95 stored beside it, though that is the larger number
+ *  and the one a user waited. Wall-clock on a busy pool is mostly the queue
+ *  ahead of the caller, so it moves between sessions that behaved identically —
+ *  a trend column swinging under a verdict that never moved. `null` where a
+ *  session recorded no uncontended sample at all: nothing was measured, rather
+ *  than nothing was slow. */
+export const slowestQuery = (
+  r: { queries: Record<string, QueryTimingSample> },
+): { name: string; p95Ms: number } | null => {
+  let worst: { name: string; p95Ms: number } | null = null
+  for (const [name, q] of Object.entries(r.queries)) {
+    const p95Ms = q.uncontended?.p95Ms
+    if (p95Ms !== undefined && (!worst || p95Ms > worst.p95Ms)) worst = { name, p95Ms }
+  }
+  return worst
 }
 
 /** Handle invalidations per write — catches a bug latency can't see: an

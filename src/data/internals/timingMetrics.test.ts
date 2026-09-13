@@ -257,6 +257,19 @@ describe('DbContention', () => {
     expect(s.uncontendedRead.calls).toBe(0)
   })
 
+  it('reset() starts busy time over, without back-dating it to a call that began before', () => {
+    const {pool, set} = atClock()
+    pool.begin()
+    set(10)
+    pool.reset()
+    set(15)
+    // 5, not 15: the span begins at the reset. Carrying the open interval's
+    // original start across would charge the new span with time it did not
+    // cover — and a `resetMetrics()` taken to mark a baseline is exactly when
+    // a long-running call is likely to be open.
+    expect(pool.snapshot().busyMs).toBe(5)
+  })
+
   it('reset() keeps in-flight state so a call spanning it still classifies', () => {
     const {pool, set} = atClock()
     const spanning = pool.begin()

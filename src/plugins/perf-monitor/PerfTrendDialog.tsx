@@ -22,7 +22,7 @@ import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { InteractionRecordData } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords, rowTime } from './load.js'
-import { bootstrapGapMs, invalidationsPerWrite, round2 } from './series.js'
+import { bootstrapGapMs, invalidationsPerWrite, round2, slowestQuery } from './series.js'
 import { summarize } from './verdict.js'
 import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysisNow } from './schedule.js'
@@ -44,25 +44,6 @@ const when = (epochMs: number): string =>
   new Date(epochMs).toLocaleString(undefined, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
-
-/** The costliest query in a session, by the p95 the comparison actually reads:
- *  the one measured with the DB connection pool free.
- *
- *  NOT the wall-clock p95 stored beside it, though that is the larger number
- *  and the one a user waited. Wall-clock on a busy pool is mostly the queue
- *  ahead of the caller, so it moves between sessions that behaved identically —
- *  charting it in a trend table would show a column swinging under a verdict
- *  that never moved, which is the same fault as charting a rate the alarm does
- *  not fire on. `—` where a session recorded no uncontended sample: nothing was
- *  measured, rather than nothing was slow. */
-const slowestQuery = (r: InteractionRecordData): { name: string; p95Ms: number } | null => {
-  let worst: { name: string; p95Ms: number } | null = null
-  for (const [name, q] of Object.entries(r.queries)) {
-    const p95Ms = q.uncontended?.p95Ms
-    if (p95Ms !== undefined && (!worst || p95Ms > worst.p95Ms)) worst = { name, p95Ms }
-  }
-  return worst
-}
 
 /** Shares `invalidationsPerWrite` with the comparison rather than recomputing
  *  it: a table charting a different number than the alarm fires on is worse

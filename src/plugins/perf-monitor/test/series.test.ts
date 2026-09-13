@@ -18,6 +18,7 @@ import {
   MIN_BASELINE_SESSIONS,
   MIN_HISTORY_SESSIONS,
   regressionsIn,
+  slowestQuery,
   type TrendResult,
 } from '../series'
 
@@ -206,24 +207,49 @@ describe('queryRegressions', () => {
   })
 })
 
+describe('slowestQuery', () => {
+  // The trend table charts this. It must be the figure the alarm fires on, or
+  // the column moves under a verdict that did not — which is the same fault as
+  // charting a rate the comparison never reads.
+  it('ranks by the uncontended p95, not the wall-clock one stored beside it', () => {
+    // `slow` looks worst on wall-clock (q inflates it 10x over 40 = 400) and is
+    // the faster of the two once the queue is taken out.
+    const r = { queries: { slow: q(4), steady: q(40, 30) } }
+    expect(slowestQuery(r)).toEqual({ name: 'steady', p95Ms: 40 })
+  })
+
+  it('ignores a query with no uncontended sample rather than ranking it at zero', () => {
+    const r = { queries: { unmeasured: noUncontendedSamples(9000), measured: q(3) } }
+    expect(slowestQuery(r)).toEqual({ name: 'measured', p95Ms: 3 })
+  })
+
+  it('reports nothing when no query was ever observed unopposed', () => {
+    expect(slowestQuery({ queries: { a: noUncontendedSamples(500) } })).toBeNull()
+  })
+})
+
 describe('what counts as enough measurements', () => {
   // The defect this whole comparison was rebuilt around: `calls` counts
   // CALLERS. N of them awaiting one coalesced statement each record that
   // statement's whole wall-clock, so a plain call count says twenty
   // measurements where there was one. The gate is applied to the resolves that
   // ran with the pool to themselves, which coalesced callers never are.
+  // Through `sinceRegressed`, so the gate is the ONLY thing standing between
+  // these and a reported regression. Against a history that is merely fast, the
+  // recent window's median suppresses a single slow session on its own — and
+  // the test then stays green with the gate deleted, proving nothing.
   it('does not judge a query whose callers outnumber its independent observations', () => {
     const base = () => sample({ queries: { 'core.ancestors': q(10) } })
-    const busy = sample({ queries: { 'core.ancestors': q(90, 3) } })
-    expect(regs(qr(busy, history(8, base)))).toEqual([])
+    const busy = () => sample({ queries: { 'core.ancestors': q(90, 3) } })
+    expect(regs(qr(busy(), sinceRegressed(busy, base)))).toEqual([])
   })
 
   it('does not judge a query never observed with the pool to itself', () => {
     // Also every record written before the recorder measured this: a missing
     // subset is "not measured", never "measured as fast".
     const base = () => sample({ queries: { slow: q(10) } })
-    const current = sample({ queries: { slow: noUncontendedSamples(900) } })
-    expect(regs(qr(current, history(8, base)))).toEqual([])
+    const current = () => sample({ queries: { slow: noUncontendedSamples(900) } })
+    expect(regs(qr(current(), sinceRegressed(current, base)))).toEqual([])
   })
 
   it('judges one whose uncontended samples clear the bar', () => {
