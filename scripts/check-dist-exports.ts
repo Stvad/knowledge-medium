@@ -57,6 +57,21 @@ const emittedExportNames = (text: string): Set<string> => {
   return names
 }
 
+// Shape gate for the boot-graph chunk (vite.config.ts `bootGraphChunk`): the
+// app entry must be a facade over one `chunks/app-*.js`. If the chunk group
+// were silently inert (no module-graph info at buildEnd, a renamed entry) the
+// build would still succeed and ship ~1,500 boot files again.
+const mainFacade = fs.readFileSync(path.join(distDir, 'src/main.js'), 'utf8').trim()
+if (!/^import\s*"\.\.\/chunks\/app-[^"]+\.js";?$/.test(mainFacade)) {
+  console.error('[check-dist-exports] src/main.js is not a facade over the app chunk:\n' + mainFacade.slice(0, 300))
+  process.exit(1)
+}
+const appChunks = fs.readdirSync(path.join(distDir, 'chunks')).filter(f => /^app-[^.]+\.js$/.test(f))
+if (appChunks.length !== 1) {
+  console.error(`[check-dist-exports] expected one chunks/app-*.js, found ${appChunks.length}`)
+  process.exit(1)
+}
+
 const missing: string[] = []
 const unresolved: string[] = []
 let checked = 0
