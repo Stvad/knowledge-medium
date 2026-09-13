@@ -1,0 +1,2 @@
+import{getPluginPrefsBlock as e}from"../../data/stateBlocks.js";import{EMPTY_GROUPED_BACKLINKS_CONFIG as t,groupedBacklinksDefaultsProp as n,groupedBacklinksPrefsType as r,mergeGroupedBacklinksConfig as i,normalizeGroupedBacklinksConfig as a,selectGroupedBacklinksOverrides as o}from"./config.js";var s=async(s,c,l,u=`user`)=>u&&typeof u==`object`?a(u):u===`none`?t:i((await e(s,c,s.user,r)).peekProperty(n)??n.defaultValue,o(await s.load(l)));export{s as resolveGroupedBacklinksConfig};
+//# sourceMappingURL=resolveConfig.js.map

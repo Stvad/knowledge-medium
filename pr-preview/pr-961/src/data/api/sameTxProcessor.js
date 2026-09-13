@@ -1,0 +1,2 @@
+var e=class extends Error{constructor(e,t,n){super(e),this.code=t,this.meta=n,this.name=`ProcessorRejection`}},t=e=>{if(e.rerunOnDirtyRows&&e.watches.kind!==`field`)throw Error(`Same-tx processor "${e.name}" declares rerunOnDirtyRows but has an event watch — the derivation re-run pass is field-watch only.`);return e};export{e as ProcessorRejection,t as defineSameTxProcessor};
+//# sourceMappingURL=sameTxProcessor.js.map
