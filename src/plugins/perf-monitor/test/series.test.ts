@@ -178,16 +178,44 @@ describe('queryRegressions', () => {
 })
 
 describe('clusteredTailMetrics', () => {
+  const spread = () => sample({ queries: { 'core.ancestors': q(300) } })
+
   it('names the judged metrics whose tail collapsed', () => {
     expect(clusteredTailMetrics(sample({
       queries: { 'core.ancestors': clustered(600), 'core.childIds': q(300) },
-    }))).toEqual(['core.ancestors'])
+    }), history(8, spread))).toEqual(['core.ancestors'])
   })
 
-  it('ignores a sample too thin to be judged at all', () => {
-    expect(clusteredTailMetrics(sample({
-      queries: { 'core.ancestors': clustered(600, 3) },
-    }))).toEqual([])
+  it('ignores a query the comparison never judged, however its history looks', () => {
+    // Too thin to be compared at all, so there is no verdict for a caveat to
+    // qualify — even with every historical session collapsed.
+    expect(clusteredTailMetrics(
+      sample({ queries: { 'core.ancestors': clustered(600, 3) } }),
+      history(8, () => sample({ queries: { 'core.ancestors': clustered(600) } })),
+    )).toEqual([])
+  })
+
+  it('ignores a collapsed historical sample too thin to enter a window', () => {
+    // `measured` skips it, so it contributed to neither window and cannot have
+    // driven or masked the verdict this caveat qualifies.
+    expect(clusteredTailMetrics(
+      spread(),
+      history(8, () => sample({ queries: { 'core.ancestors': clustered(600, 3) } })),
+    )).toEqual([])
+  })
+
+  it('still reports a baseline the comparison rests on after the live sample recovers', () => {
+    // The case a current-sample-only caveat goes quiet on: coalescing stopped,
+    // so today's reading is spread — but the collapsed sessions are still in
+    // the baseline setting the bar this session is judged against.
+    expect(clusteredTailMetrics(spread(), [
+      spread(), spread(),
+      ...history(8, () => sample({ queries: { 'core.ancestors': clustered(600) } })),
+    ])).toEqual(['core.ancestors'])
+  })
+
+  it('stays quiet when every consumed session is spread', () => {
+    expect(clusteredTailMetrics(spread(), history(8, spread))).toEqual([])
   })
 
   it('still COMPARES a clustered metric rather than discarding it', () => {

@@ -219,7 +219,10 @@ describe('the clustered-tail caveat', () => {
     }))
     expect(v.kind).toBe('regressed')
     expect(v.notes.join(' ')).toContain('core.ancestors')
-    expect(v.notes.join(' ')).toContain('fewer independent measurements')
+    expect(v.notes.join(' ')).toContain('p95 equals p50')
+    // The claim the sample cannot support: coalescing and a bimodal workload
+    // produce this shape alike, so the note must not assert independence.
+    expect(v.notes.join(' ')).not.toContain('independent')
   })
 
   it('survives a partial comparison, which a single-slot reason could not', () => {
@@ -231,7 +234,7 @@ describe('the clustered-tail caveat', () => {
   })
 
   it('stays silent when no tail collapsed', () => {
-    expect(summarize(analysis()).notes.join(' ')).not.toContain('independent measurements')
+    expect(summarize(analysis()).notes.join(' ')).not.toContain('p95 equals p50')
   })
 })
 

@@ -124,6 +124,18 @@ const trendRegression = (
   }
 }
 
+/** The sessions a per-query comparison reads, in the two roles it reads them
+ *  as. Named once: the caveat reports on exactly what the comparison consumed,
+ *  and a second copy of this slicing is how the two would come to disagree
+ *  about which samples were involved. */
+const comparisonWindows = <T>(history: readonly T[]): {
+  recentPast: readonly T[]
+  baselineSessions: readonly T[]
+} => ({
+  recentPast: history.slice(0, RECENT_WINDOW - 1),
+  baselineSessions: baselineWindow(history),
+})
+
 /** Entries used as BASELINE from a newest-first history. The leading entries
  *  are consumed smoothing "current", so describing the baseline must derive from this same slice. */
 export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
@@ -153,14 +165,32 @@ export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean 
 export const lacksBaseline = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status === 'insufficient' && r.reason === 'no-baseline')
 
-/** Judged metrics whose p95 rests on a collapsed tail, worst-cased by name so
- *  the verdict can caveat the reading. One owner for the rule, so the analysis
- *  and any future surface cannot disagree about which metrics qualify. */
-export const clusteredTailMetrics = (current: InteractionComparable): string[] =>
-  Object.entries(current.queries)
-    .filter(([, q]) => q.calls >= MIN_CALLS && hasClusteredTail(q))
+/** Judged metrics for which SOME session this comparison consumed has a
+ *  collapsed tail — current, recent or baseline alike.
+ *
+ *  Reads the same windows as `queryRegressions`, not just the live sample:
+ *  once coalescing stops, the collapsed sessions remain in the baseline
+ *  driving or masking the verdict, and a caveat drawn from the current sample
+ *  alone would go quiet exactly when the history is contaminated.
+ *
+ *  Not split by window — a reader's next move is the same either way, and a
+ *  distinction nobody acts on differently is one more thing to keep true. */
+export const clusteredTailMetrics = (
+  current: InteractionComparable,
+  history: readonly InteractionComparable[],
+): string[] => {
+  const { recentPast, baselineSessions } = comparisonWindows(history)
+  const consumed = [current, ...recentPast, ...baselineSessions]
+  return Object.entries(current.queries)
+    .filter(([name, sample]) =>
+      sample.calls >= MIN_CALLS &&
+      consumed.some((session) => {
+        const q = session.queries[name]
+        return q !== undefined && q.calls >= MIN_CALLS && hasClusteredTail(q)
+      }))
     .map(([name]) => name)
     .sort()
+}
 
 /** Sessions the THINNEST judged comparison rested on, or 0 if none was
  *  judged — smallest, not largest, so a clean verdict isn't overstated. */
@@ -182,8 +212,7 @@ export const queryRegressions = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
 ): TrendResult[] => {
-  const recentPast = history.slice(0, RECENT_WINDOW - 1)
-  const baselineSessions = baselineWindow(history)
+  const { recentPast, baselineSessions } = comparisonWindows(history)
   const out: TrendResult[] = []
   for (const [name, sample] of Object.entries(current.queries)) {
     // Only the data-sufficiency filter here — the magnitude floor is applied by

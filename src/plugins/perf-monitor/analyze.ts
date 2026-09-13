@@ -181,7 +181,7 @@ export const runPerfAnalysis = async (
   // Load-bearing only in production and NOT pinned by a test: test resolves
   // never clear the caveat's magnitude floor, so the list is empty either way
   // here. Removing it fails nothing — do not read that as dead code.
-  const clusteredTail = session.attributable ? clusteredTailMetrics(current) : []
+  const clusteredTail = session.attributable ? clusteredTailMetrics(current, history) : []
 
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 
