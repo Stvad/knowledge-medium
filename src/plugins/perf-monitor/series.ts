@@ -298,7 +298,11 @@ export const slowestQuery = (
 ): { name: string; p95Ms: number } | null => {
   let worst: { name: string; p95Ms: number } | null = null
   for (const [name, q] of Object.entries(r.queries)) {
-    const p95Ms = q.uncontended?.p95Ms
+    // The comparison's OWN eligibility rule, not a looser presence check. A
+    // query with one uncontended resolve would otherwise top the table on a
+    // single 500ms outlier while the verdict compares a different,
+    // well-sampled query — the table contradicting the alarm beside it.
+    const p95Ms = comparableSamples(q)?.p95Ms
     if (p95Ms !== undefined && (!worst || p95Ms > worst.p95Ms)) worst = { name, p95Ms }
   }
   return worst

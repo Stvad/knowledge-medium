@@ -74,7 +74,14 @@ export interface ContentionSample {
   busyMs: number
   /** Coalescer flushes that answered more than one caller. */
   sharedWork: number
+  /** Calls, reads and writes together, that never waited for a connection. */
   uncontendedCalls: number
+  /** How many of those were READS, and so how many samples back the two
+   *  percentiles below. Stored separately because they are a strict subset: a
+   *  session with unqueued writes and no unqueued reads would otherwise read as
+   *  a real distribution of zero-millisecond reads. Zero means the percentiles
+   *  are not measurements. */
+  uncontendedReadCalls: number
   uncontendedReadP50Ms: number
   uncontendedReadP95Ms: number
   /** Bracketed intervals of sync-engine database work. */
@@ -228,7 +235,7 @@ const toContentionSample = (c: {
   busyMs: number
   sharedWork: number
   uncontendedCalls: number
-  uncontendedRead: { p50Ms: number; p95Ms: number }
+  uncontendedRead: { calls: number; p50Ms: number; p95Ms: number }
   foreignIntervals: number
   syncObserved: boolean
 }): ContentionSample => ({
@@ -238,6 +245,7 @@ const toContentionSample = (c: {
   busyMs: round2(c.busyMs),
   sharedWork: c.sharedWork,
   uncontendedCalls: c.uncontendedCalls,
+  uncontendedReadCalls: c.uncontendedRead.calls,
   uncontendedReadP50Ms: round2(c.uncontendedRead.p50Ms),
   uncontendedReadP95Ms: round2(c.uncontendedRead.p95Ms),
   foreignIntervals: c.foreignIntervals,

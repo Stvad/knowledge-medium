@@ -153,10 +153,13 @@ export interface ContentionSnapshot {
   readonly busyMs: number
   /** Coalescer flushes that answered more than one open observer. */
   readonly sharedWork: number
-  /** Calls that ran with the pool to themselves. */
+  /** Calls, reads and writes together, that took an empty pool and so never
+   *  waited for a connection. */
   readonly uncontendedCalls: number
-  /** Read timings over the uncontended calls ONLY — the data layer's own
-   *  speed, with every queued sample left out rather than modelled away. */
+  /** Read timings over the unqueued READS only — a strict subset of
+   *  `uncontendedCalls`, so read its own `calls` rather than that number: a
+   *  session with unqueued writes and no unqueued reads would otherwise look
+   *  like a real distribution of zero-millisecond reads. */
   readonly uncontendedRead: TimingSnapshot
   /** Intervals of database work by the sync engine, which this cannot time but
    *  can bracket. Zero on a local-only session; zero ALSO when the status
@@ -232,12 +235,32 @@ export class DbContention {
     }
   }
 
-  /** Was the window opened at `mark` free of competition? Same counter span,
-   *  nothing occupying the pool when it opened, nothing arriving while it was
-   *  open, and no coalesced read answering it alongside another observer. */
-  private isClean(mark: ContentionMark): boolean {
-    return this.generation === mark.generation &&
-      mark.depth === 0 &&
+  /** Did a call issued at `mark` wait for a connection? It did not if the pool
+   *  was empty when it was issued: something arriving LATER queues behind it,
+   *  not ahead of it, so its duration is its own service time whatever happens
+   *  next.
+   *
+   *  Entry conditions ONLY, and that is the point. Judging a call on its whole
+   *  life would censor it in proportion to how long it lived — a slow call has
+   *  more time to be overlapped than a fast one — which biases exactly the tail
+   *  these percentiles exist to report. */
+  private wasUnqueued(mark: ContentionMark): boolean {
+    return this.generation === mark.generation && mark.depth === 0
+  }
+
+  /** Was the OBSERVATION WINDOW opened at `mark` free of competition? A
+   *  stricter question than the one above, because a resolve issues its reads
+   *  over time: its later ones can queue behind traffic that arrived after it
+   *  started, and one that begins just before a burst is billed for the burst.
+   *
+   *  So this does look at the whole window, and that carries a known cost: a
+   *  long resolve is likelier to be censored than a short one, so the surviving
+   *  distribution leans fast and the trend UNDER-reports a regression confined
+   *  to a slow path. Accepted over the alternative — admitting burst-sized
+   *  samples as clean is the defect this whole file exists to end, and it makes
+   *  the metric wrong rather than conservative. Tracked; see the PR. */
+  private isCleanWindow(mark: ContentionMark): boolean {
+    return this.wasUnqueued(mark) &&
       this.concurrentIssuesTotal === mark.concurrentIssues &&
       this.sharedWorkTotal === mark.sharedWork
   }
@@ -252,7 +275,7 @@ export class DbContention {
   /** Close it, and say whether it ran unopposed. */
   closeWindow(window: ContentionWindow): boolean {
     this.openWindows--
-    return this.isClean(window.mark)
+    return this.isCleanWindow(window.mark)
   }
 
   /** One read answered several callers at once. Called by request coalescers
@@ -300,7 +323,7 @@ export class DbContention {
     const completedAt = this.now()
     this.leave(completedAt)
     const durationMs = completedAt - ticket.issuedAt
-    if (this.isClean(ticket.mark)) {
+    if (this.wasUnqueued(ticket.mark)) {
       this.uncontendedTotal++
       if (kind === 'read') this.uncontendedRead.record(durationMs)
     }

@@ -209,11 +209,29 @@ describe('buildInteractionRecord', () => {
     expect(record.queries['core.ancestors'].uncontended).toBeUndefined()
   })
 
+  // `uncontendedCalls` counts reads AND writes; the percentiles come from reads
+  // alone. A session with unqueued writes and no unqueued reads would otherwise
+  // be stored as a positive call count beside two zeros, which reads as a real
+  // distribution of zero-millisecond reads rather than as no reads measured.
+  it('stores the read sample count separately from the all-kinds call count', () => {
+    const record = buildInteractionRecord(metricsFixture({
+      dbContention: {
+        calls: 6, concurrentIssues: 0, maxDepth: 1, busyMs: 12, sharedWork: 0,
+        uncontendedCalls: 4,
+        uncontendedRead: timing({ calls: 0, p50Ms: 0, p95Ms: 0 }),
+        foreignIntervals: 0, syncObserved: true,
+      },
+    } as Partial<ReturnType<Repo['metrics']>>), META)
+    expect(record.dbContention.uncontendedCalls).toBe(4)
+    expect(record.dbContention.uncontendedReadCalls).toBe(0)
+  })
+
   it('stores how contended the connection pool was', () => {
     const record = buildInteractionRecord(metricsFixture(), META)
     expect(record.dbContention).toEqual({
       calls: 40, concurrentIssues: 11, maxDepth: 4, busyMs: 812.35, sharedWork: 2,
-      uncontendedCalls: 29, uncontendedReadP50Ms: 0.6, uncontendedReadP95Ms: 1.4,
+      uncontendedCalls: 29, uncontendedReadCalls: 29,
+      uncontendedReadP50Ms: 0.6, uncontendedReadP95Ms: 1.4,
       foreignIntervals: 3, syncObserved: true,
     })
   })

@@ -223,6 +223,15 @@ describe('slowestQuery', () => {
     expect(slowestQuery(r)).toEqual({ name: 'measured', p95Ms: 3 })
   })
 
+  it('ignores a query too thinly sampled for the comparison to judge', () => {
+    // Presence is not eligibility. A single 500ms resolve would top the table
+    // while the verdict compares a different, well-sampled query — the column
+    // contradicting the alarm beside it, which is the one thing this must not
+    // do. Same threshold, one owner.
+    const r = { queries: { oneOff: q(500, 3), trended: q(9) } }
+    expect(slowestQuery(r)).toEqual({ name: 'trended', p95Ms: 9 })
+  })
+
   it('reports nothing when no query was ever observed unopposed', () => {
     expect(slowestQuery({ queries: { a: noUncontendedSamples(500) } })).toBeNull()
   })

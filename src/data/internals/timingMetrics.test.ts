@@ -182,7 +182,7 @@ describe('DbContention', () => {
     expect(s.maxDepth).toBe(1)
   })
 
-  it('excludes BOTH calls when a second is issued while the first is in flight', () => {
+  it('keeps the call that took an empty pool and drops the one that arrived after', () => {
     const {pool, set} = atClock()
     const first = pool.begin()
     set(1)
@@ -195,10 +195,31 @@ describe('DbContention', () => {
     expect(s.calls).toBe(2)
     expect(s.concurrentIssues).toBe(1)
     expect(s.maxDepth).toBe(2)
-    // The late arrival waited; the early one may not have, but it shared the
-    // pool and we would rather lose a clean sample than keep a queued one.
-    expect(s.uncontendedCalls).toBe(0)
-    expect(s.uncontendedRead.calls).toBe(0)
+    // The late arrival queued behind the early one. The early one waited for
+    // nothing — what arrives afterwards lines up behind it, so its 12ms is its
+    // own service time. Dropping it too would censor calls in proportion to how
+    // long they ran, which is a bias against exactly the slow tail the
+    // percentiles are for.
+    expect(s.uncontendedCalls).toBe(1)
+    expect(s.uncontendedRead.calls).toBe(1)
+    expect(s.uncontendedRead.maxMs).toBe(12)
+  })
+
+  it('still judges an OBSERVATION WINDOW on its whole life, not just its start', () => {
+    const {pool, set} = atClock()
+    // Unlike a single call, a resolve issues reads over time: one that opens on
+    // an idle pool can still have its later reads queue behind traffic that
+    // arrived after it started. A resolve beginning just before a burst is
+    // billed for the burst, and that is the sample that must not be called
+    // clean.
+    const window = pool.openWindow()
+    set(1)
+    const a = pool.begin()
+    const b = pool.begin()
+    set(10)
+    pool.end(b, 'read')
+    pool.end(a, 'read')
+    expect(pool.closeWindow(window)).toBe(false)
   })
 
   it('counts busy time as the union of in-flight intervals, not the sum of durations', () => {
@@ -452,7 +473,7 @@ describe('wrapDbWithMetrics', () => {
     expect(s.execute.calls).toBe(1)
   })
 
-  it('marks sequential reads uncontended and overlapping ones not', async () => {
+  it('keeps sequential reads and the first of an overlapping pair', async () => {
     const metrics = new DbMetrics()
     const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics) as ReturnType<typeof makeFakeDb>
     await wrapped.getAll('SELECT 1')
@@ -462,9 +483,9 @@ describe('wrapDbWithMetrics', () => {
     const s = metrics.contention.snapshot()
     expect(s.calls).toBe(4)
     expect(s.maxDepth).toBe(2)
-    // Still 2: the concurrent pair recorded wall-clocks, and neither is a
-    // measurement of how fast the database is.
-    expect(s.uncontendedRead.calls).toBe(2)
+    // 3, not 4: of the concurrent pair only the one that found the pool empty
+    // is a measurement of how fast the database is. The other waited for it.
+    expect(s.uncontendedRead.calls).toBe(3)
   })
 
   it('does not count a transaction\'s inner SQL as competing with the transaction', async () => {
