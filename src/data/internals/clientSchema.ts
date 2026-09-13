@@ -1302,7 +1302,7 @@ const withTriggerSuspended = async (
   }
 }
 
-export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
+const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   // Tables
   CREATE_TX_CONTEXT_TABLE_SQL,
   SEED_TX_CONTEXT_ROW_SQL,
@@ -1358,7 +1358,44 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   // 2 blocks_synced change-capture triggers (Layout B observer detection)
   CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,
-])
+]
+
+export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate(CLIENT_SCHEMA_BASE_STATEMENTS)
+
+/** The same list split for the boot path: everything that is not a trigger,
+ *  and the trigger CREATE statements by name. Boot recreates a trigger only
+ *  when its stored definition differs (`triggerRecreateStatements`); the
+ *  full DROP + CREATE list above stays the fresh-database path. */
+export const CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS: readonly string[] =
+  CLIENT_SCHEMA_BASE_STATEMENTS.filter(stmt => !CREATE_TRIGGER_NAME_RE.test(stmt))
+export const CLIENT_SCHEMA_TRIGGER_CREATE_SQL: ReadonlyMap<string, string> = new Map(
+  CLIENT_SCHEMA_BASE_STATEMENTS.flatMap(stmt => {
+    const name = stmt.match(CREATE_TRIGGER_NAME_RE)?.[1]
+    return name ? [[name, stmt] as const] : []
+  }),
+)
+
+/** SQLite stores a CREATE statement's text as written, except that it drops
+ *  `IF NOT EXISTS`; whitespace is ours. Compare after both normalizations. */
+const normalizeTriggerSql = (sql: string): string =>
+  sql.replace(/\s+/g, ' ').replace(/CREATE TRIGGER IF NOT EXISTS /i, 'CREATE TRIGGER ').trim()
+
+export const triggerSqlMatches = (stored: string | null | undefined, createSql: string): boolean =>
+  typeof stored === 'string' && normalizeTriggerSql(stored) === normalizeTriggerSql(createSql)
+
+/** DROP + CREATE pairs for every client-schema trigger whose stored definition
+ *  is missing or differs from the code's. Read `stored` from `sqlite_master`,
+ *  not from a version marker: a marker cannot see a trigger a crashed
+ *  `withTriggerSuspended` left dropped. */
+export const triggerRecreateStatements = (stored: ReadonlyMap<string, string>): string[] =>
+  [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL].flatMap(([name, createSql]) =>
+    triggerSqlMatches(stored.get(name), createSql) ? [] : [`DROP TRIGGER IF EXISTS ${name}`, createSql])
+
+export const SELECT_CLIENT_SCHEMA_TRIGGERS_SQL = `
+  SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name IN (${
+    [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL.keys()].map(name => `'${name}'`).join(', ')
+  })
+`
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_row_event_insert',

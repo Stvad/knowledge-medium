@@ -59,6 +59,11 @@ import {
   ANALYZE_OPTIMIZE_SQL,
   runAnalyzeIfStale,
   runAnalyzeNow,
+  CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS,
+  CLIENT_SCHEMA_TRIGGER_CREATE_SQL,
+  SELECT_CLIENT_SCHEMA_TRIGGERS_SQL,
+  triggerRecreateStatements,
+  triggerSqlMatches,
 } from './clientSchema'
 
 interface TestDb {
@@ -1600,5 +1605,46 @@ describe('blocks_synced_changes enqueue-collapse', () => {
       .join(' | ')
     expect(plan).toContain('USING INDEX')
     expect(plan).not.toContain('SCAN')
+  })
+})
+
+describe('boot-path trigger recreate', () => {
+  // SQLite stores the CREATE text as written minus `IF NOT EXISTS`; the
+  // matcher must read that back as "unchanged", and a body edit as "changed".
+  it('matches a stored trigger against its CREATE statement and detects a changed body', () => {
+    const db = new DatabaseSync(':memory:')
+    db.exec('CREATE TABLE t (a INTEGER)')
+    const createSql = `
+      CREATE TRIGGER IF NOT EXISTS t_ai AFTER INSERT ON t
+      BEGIN
+        UPDATE t SET a = NEW.a + 1;
+      END
+    `
+    db.exec(createSql)
+    const stored = (db.prepare(`SELECT sql FROM sqlite_master WHERE name = 't_ai'`).get() as {sql: string}).sql
+    expect(triggerSqlMatches(stored, createSql)).toBe(true)
+    expect(triggerSqlMatches(stored, createSql.replace('+ 1', '+ 2'))).toBe(false)
+    expect(triggerSqlMatches(undefined, createSql)).toBe(false)
+    db.close()
+  })
+
+  it('recreates nothing on a database whose triggers already match, and only the differing ones otherwise', () => {
+    const stored = new Map(
+      h.db.prepare(SELECT_CLIENT_SCHEMA_TRIGGERS_SQL).all()
+        .map(row => [(row as {name: string}).name, (row as {sql: string}).sql] as const),
+    )
+    expect(stored.size).toBe(CLIENT_SCHEMA_TRIGGER_CREATE_SQL.size)
+    expect(triggerRecreateStatements(stored)).toEqual([])
+
+    const [name, createSql] = [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL][0]
+    const drifted = new Map(stored)
+    drifted.delete(name)
+    expect(triggerRecreateStatements(drifted)).toEqual([`DROP TRIGGER IF EXISTS ${name}`, createSql])
+  })
+
+  it('the non-trigger statements plus the trigger statements are exactly the full list', () => {
+    const recreated = [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL].flatMap(([name, sql]) => [`DROP TRIGGER IF EXISTS ${name}`, sql])
+    expect([...CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS, ...recreated].length).toBe(CLIENT_SCHEMA_STATEMENTS.length)
+    expect(new Set([...CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS, ...recreated])).toEqual(new Set(CLIENT_SCHEMA_STATEMENTS))
   })
 })
