@@ -77,16 +77,16 @@ const pendingNotes = (analysis: PerfAnalysis): string[] =>
 /** Named, not counted: the reader's next move is to look at what collapsed
  *  THAT query's tail, and a bare count says nothing about where to look.
  *
- *  States only what was OBSERVED. A collapsed tail is produced by request
- *  coalescing and by a genuinely bimodal workload alike, and the stored sample
- *  cannot tell them apart (see `hasClusteredTail`) — so this must not claim the
- *  p95 is backed by fewer independent measurements, which is true of the first
- *  and false of the second. Naming both candidates is what makes it actionable
- *  without asserting either. */
+ *  States only what was OBSERVED, and only about the UPPER TAIL: the quantiles
+ *  say nothing about the half below the median, and a bimodal workload whose
+ *  every call is independently timed produces this shape too (see
+ *  `hasClusteredTail`). So no claim about the distribution as a whole, and none
+ *  about how many independent measurements back the p95 — pointing at the
+ *  question is what makes it actionable without answering it. */
 const clusteredTailNote = (metrics: readonly string[]): string | null =>
   metrics.length === 0
     ? null
-    : `${metrics.join(', ')}: p95 is within 1% of p50 in at least one session this comparison used, so the distribution there is collapsed — check whether those calls shared one resolution before reading the trend`
+    : `${metrics.join(', ')}: p95 is within 1% of p50 in at least one session this comparison used, so its upper tail is a single value — check whether those calls shared one resolution before reading the trend`
 
 /** How much history the comparison actually had.
  *

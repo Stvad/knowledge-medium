@@ -69,11 +69,13 @@ export interface PerfAnalysis {
   /** Records ON DISK per series, counted only when nothing was judged (`{0,
    *  0}` otherwise). Distinct from `baseline` and from the loaded series length, which is capped. */
   recorded: { interaction: number; startup: number }
-  /** Judged interaction metrics whose p95 rests on a collapsed tail, so `calls`
-   *  overstates how many independent measurements back it. A CAVEAT, carried
-   *  beside whatever verdict was reached rather than as an unjudged reason:
-   *  reasons hold one value, and this coexists with a regression, a clean
-   *  comparison and a partial one alike. */
+  /** Judged interaction metrics with a clustered upper tail — see
+   *  `hasClusteredTail` for exactly what that does and does not establish;
+   *  restating it here is how the two came to disagree.
+   *
+   *  A CAVEAT, carried beside whatever verdict was reached rather than as an
+   *  unjudged reason: reasons hold one value, and this coexists with a
+   *  regression, a clean comparison and a partial one alike. */
   clusteredTail: string[]
   /** Live graph size over the baseline's. Not used to filter or normalize (see `runPerfAnalysis`) — reported so a reader can tell code from data growth. */
   graphGrowth: number | null
@@ -154,8 +156,11 @@ export const runPerfAnalysis = async (
   const current = interactionComparable(metrics)
 
   // Judged, not counted: a record with no writes (or missing paint marks) carries no usable sample.
-  const queries = queryRegressions(current, history)
-  const interactionResults: TrendResult[] = session.attributable
+  // ONE gate for the whole interaction comparison. Blended counters describe no
+  // single workspace, so there is nothing to judge AND nothing to caveat — two
+  // parallel ternaries here would be two chances to forget the second.
+  const queries = session.attributable ? queryRegressions(current, history) : null
+  const interactionResults: TrendResult[] = queries
     ? [...queries.results, fanoutRegression(current, history)]
     : []
   const startupResults: TrendResult[] = [
@@ -176,12 +181,7 @@ export const runPerfAnalysis = async (
   })
   const startupUnjudged = unjudgedReason(startupResults, {})
 
-  // Same attributability gate as the results themselves: blended counters
-  // describe no single workspace, so a caveat drawn from them names nothing.
-  // Load-bearing only in production and NOT pinned by a test: test resolves
-  // never clear the caveat's magnitude floor, so the list is empty either way
-  // here. Removing it fails nothing — do not read that as dead code.
-  const clusteredTail = session.attributable ? queries.clusteredTail : []
+  const clusteredTail = queries?.clusteredTail ?? []
 
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 

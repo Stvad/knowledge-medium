@@ -23,10 +23,10 @@ const RECENT_WINDOW = 3
 /** Resolves needed before a query's p95 is treated as a measurement. */
 const MIN_CALLS = 20
 
-/** Widest p95/p50 still read as a single clustered value — a 1% tolerance, NOT
- *  equality: stored timings are rounded to 0.01ms, so equality is a stricter
- *  claim than this makes. Sits in open space: collapsed tails on record run to
- *  1.0005, the tightest genuine distribution to 1.088. */
+/** Widest p95/p50 still read as one clustered value — a 1% tolerance, NOT
+ *  equality: stored timings are rounded to 0.01ms, so equality would be a
+ *  stricter claim than this makes. Wide enough to absorb that rounding, far
+ *  narrower than any spread distribution. */
 const CLUSTERED_TAIL_MAX_RATIO = 1.01
 
 /** Does the window's upper half collapse to one value? Request coalescing
