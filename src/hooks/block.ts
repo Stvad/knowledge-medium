@@ -522,20 +522,24 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
  *  OUTSIDE the collapse branch; inside it is a no-op that looks like a
  *  fix.
  *
- *  It does NOT walk them. `handle.retain()` holds a handle against GC
- *  without observing it, so a block nobody has scrolled to keeps a cold
- *  handle and its chain is read when its entry mounts. Subscribing here
- *  instead — which is what `useManyParents` does, and what this hook used
- *  to call — would load every chain, because the first subscriber to a cold
- *  handle starts its load.
+ *  It does NOT walk the chains. `handle.retain()` holds a handle against
+ *  GC without observing it, so a block nobody has scrolled to keeps a cold
+ *  handle, and its chain is read when its entry mounts. Not `useManyParents`:
+ *  its subscription loads every chain (the first subscriber to a cold handle
+ *  starts its load), and reading its values re-renders the caller once per
+ *  landing walk for a result this hook discards.
  *
- *  Retaining every id rather than only the resolved ones is what keeps the
- *  retained set STABLE: it is the caller's id list, so the effect runs once
- *  per id-set change instead of re-running as chains land (#956).
+ *  Retaining every id rather than only the resolved ones keeps the retained
+ *  set STABLE: it is the caller's id list, so the effect runs once per
+ *  id-set change instead of re-running as chains land (#956).
  *
- *  The values are deliberately not read. A hook that read them would
- *  re-render the caller when the walks land — on a 480-backlink panel that
- *  is a re-render of 480 entries for a value the caller discards. */
+ *  A chain invalidated while collapsed is re-resolved when its entry
+ *  re-observes it, so a reopen can paint one stale frame first. Accepted:
+ *  staying subscribed to keep it warm only narrows that window — a reload in
+ *  flight still peeks the old value — while costing a re-resolve per retained
+ *  chain on every matching write, which is the zero-listener work the store
+ *  defers on purpose. Painting nothing until fresh is the blank breadcrumb
+ *  this hook exists to prevent. */
 export const useRetainParents = (blocks: readonly Block[]): void => {
   const repo = useRepo()
   const ids = useStableJson(Array.from(new Set(blocks.map(block => block.id))).sort())

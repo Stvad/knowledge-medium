@@ -112,4 +112,38 @@ describe('useRetainParents', () => {
     expect(repo.handleStore.peekHandle(key)).toBe(held)
     expect(held.status()).toBe('ready')
   })
+
+  it('re-resolves a chain that changed while only the retain held it', async () => {
+    // The accepted cost of retaining without observing: an invalidation that
+    // lands while nothing is listening only marks the handle stale (the store
+    // declines to re-resolve for zero listeners), so the reopen can paint the
+    // old chain for a frame. What makes that acceptable is that re-observing
+    // the handle re-resolves it — which is what this pins.
+    await createNested('watched')
+    await create('new-home')
+
+    const rendered = render(<Panel observed="watched" retained={['watched']}/>)
+    await waitFor(() => {
+      expect(rendered.getByTestId('chain-watched').textContent).toBe('watched-parent')
+    })
+
+    // The collapse: the entry goes, the retaining panel stays.
+    rendered.rerender(<Panel retained={['watched']}/>)
+    await act(async () => {
+      await repo.tx(tx => tx.move('watched', {parentId: 'new-home', orderKey: 'key-watched'}), {
+        scope: ChangeScope.BlockDefault,
+      })
+    })
+
+    // Both halves, in order. The invalidation lands synchronously with the
+    // commit, so a peek that still reads the OLD chain here is the store
+    // declining to re-resolve for zero listeners — not the write in flight.
+    expect(ancestorsHandle('watched').peek()?.ancestors.map(a => a.id)).toEqual(['watched-parent'])
+
+    // The reopen.
+    rendered.rerender(<Panel observed="watched" retained={['watched']}/>)
+    await waitFor(() => {
+      expect(rendered.getByTestId('chain-watched').textContent).toBe('new-home')
+    })
+  })
 })
