@@ -92,13 +92,7 @@ const App = () => {
     if (initial.kind !== 'ready') return
     let inner = 0
     const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => {
-        markStartup('firstContentPaint')
-        // Warm the dynamic-extension Tailwind safelist now that first paint
-        // is done — extensions can't run before the DB opens anyway, so this
-        // is never on the critical path, but starting it here (rather than
-        // waiting for the first extension to load) keeps it ready in time.
-      })
+      inner = requestAnimationFrame(() => markStartup('firstContentPaint'))
     })
     return () => {
       cancelAnimationFrame(outer)
