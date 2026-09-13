@@ -126,9 +126,22 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // Vendor URLs are absolute + cross-origin — used verbatim, NOT scope-resolved.
   const PRECACHE_VENDOR = config.precacheVendor
   const SHELL_URL = toScopeUrl('./index.html')
-  // What a cold launch needs before first paint: the shell, the first-paint
-  // assets and the vendor React set. Served from the boot store when present.
-  const BOOT_URLS = new Set<string>([SHELL_URL, ...PRECACHE_ASSETS, ...PRECACHE_VENDOR])
+  // What a cold launch needs before first paint, by the cache install fills:
+  // the shell, the first-paint assets and the vendor React set. Served from
+  // the boot store when present.
+  const BOOT_SET: ReadonlyArray<readonly [cacheName: string, urls: readonly string[]]> = [
+    [SHELL_CACHE, [SHELL_URL]],
+    [ASSET_CACHE, PRECACHE_ASSETS],
+    [VENDOR_CACHE, PRECACHE_VENDOR],
+  ]
+  const BOOT_URLS = new Set<string>(BOOT_SET.flatMap(([, urls]) => urls))
+
+  // Everything a generation occupies: its two caches and its boot-store entries.
+  const deleteGeneration = (id: string) => [
+    caches.delete(`${CACHE_PREFIX}shell-${id}`),
+    caches.delete(`${CACHE_PREFIX}assets-${id}`),
+    env.bootStore?.deletePrefix(bootKeyPrefix(id)).catch(() => undefined),
+  ]
 
   // A production/root SW's scope (…/knowledge-medium/) is a PREFIX of every
   // PR-preview path; see src/sw/preview.ts for why a SW refuses to serve/cache
@@ -303,18 +316,23 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       runPooled(PRECACHE_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache')),
       runPooled(PRECACHE_VENDOR, 16, (u) => fetchInto(vendor, u, 'default')),
     ])
+    // Seed before the rest pass: the boot set is ~7 MB of bodies held in
+    // memory for one write, and install's memory peaks after the full graph.
+    await seedBootStore()
     await runPooled(PRECACHE_REST_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache'))
-    await seedBootStore([[shell, [SHELL_URL]], [assets, PRECACHE_ASSETS], [vendor, PRECACHE_VENDOR]])
   }
 
-  // Copy the boot set out of the just-filled caches. Best effort: a hole here
-  // means that URL boots cache-first, exactly as before the store existed.
-  const seedBootStore = async (sources: ReadonlyArray<readonly [Cache, readonly string[]]>): Promise<void> => {
+  // Copy the boot set out of the just-filled caches, one transaction per
+  // source cache so no more than one cache's bodies are in memory at once.
+  // Best effort: a hole here means that URL boots cache-first, exactly as
+  // before the store existed.
+  const seedBootStore = async (): Promise<void> => {
     const store = env.bootStore
     if (!store) return
     try {
-      const entries: Array<readonly [string, BootEntry]> = []
-      for (const [cache, urls] of sources) {
+      for (const [cacheName, urls] of BOOT_SET) {
+        const cache = await caches.open(cacheName)
+        const entries: Array<readonly [string, BootEntry]> = []
         for (const url of urls) {
           const cached = await cache.match(url)
           if (!cached) continue
@@ -324,8 +342,8 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
             body: await cached.arrayBuffer(),
           }])
         }
+        await store.putAll(entries)
       }
-      await store.putAll(entries)
     } catch {
       // Cache-first still serves every URL; the store is only the fast path.
     }
@@ -374,13 +392,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // no space was ever reclaimed. Deletes don't depend on the trimmed ledger
     // (expiredIds comes from the original), and a failed ledger trim is benign
     // (a few stale ids that the next activate re-trims), so guard it.
-    await Promise.all(
-      expiredIds.flatMap((id) => [
-        caches.delete(`${CACHE_PREFIX}shell-${id}`),
-        caches.delete(`${CACHE_PREFIX}assets-${id}`),
-        env.bootStore?.deletePrefix(bootKeyPrefix(id)).catch(() => undefined),
-      ]),
-    )
+    await Promise.all(expiredIds.flatMap(deleteGeneration))
     if (ledger.length > keepIds.size) {
       try {
         await trimLedger()
@@ -448,7 +460,6 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       ledgers,
       now: sweepNow,
       staleMs: config.staleScopeMs,
-      cachePrefix: CACHE_PREFIX,
       selfScopeUrl: LEDGER_KEY,
     })
     await Promise.all([
@@ -459,10 +470,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
         sweepNow,
         staleMs: config.staleScopeMs,
       }),
-      ...plan.cacheNames.map((name) => caches.delete(name)),
-      // The boot store is one per-origin database shared by every scope, and a
-      // merged preview's worker never runs again to reap its own entries.
-      ...plan.reapIds.map((id) => env.bootStore?.deletePrefix(bootKeyPrefix(id)).catch(() => undefined)),
+      // Caches and boot-store entries alike: the store is one per-origin
+      // database shared by every scope, and a merged preview's worker never
+      // runs again to reap its own.
+      ...plan.reapIds.flatMap(deleteGeneration),
       ...plan.ledgerScopeUrls.map((url) => meta.delete(url)),
     ])
   }

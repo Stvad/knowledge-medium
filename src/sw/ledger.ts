@@ -57,10 +57,8 @@ export interface ScopeLedger extends LedgerEntry {
 }
 
 export interface ReapPlan {
-  /** Generation ids whose caches and boot-store entries are reaped. */
+  /** Generation ids to reap: their caches and boot-store entries. */
   reapIds: string[]
-  /** km-shell-<id> / km-assets-<id> cache names to delete. */
-  cacheNames: string[]
   /** meta-cache ledger keys (scopeUrl) to delete. */
   ledgerScopeUrls: string[]
 }
@@ -87,13 +85,11 @@ export const computeReapableCaches = ({
   ledgers,
   now,
   staleMs,
-  cachePrefix,
   selfScopeUrl,
 }: {
   ledgers: ScopeLedger[]
   now: number
   staleMs: number
-  cachePrefix: string
   /**
    * The sweeping SW's OWN ledger key — never reaped (defensive: at runtime its
    * ledger was just re-stamped on install so it can't be stale, but excluding
@@ -126,7 +122,6 @@ export const computeReapableCaches = ({
 
   return {
     reapIds: [...reapIds],
-    cacheNames: [...reapIds].flatMap((id) => [`${cachePrefix}shell-${id}`, `${cachePrefix}assets-${id}`]),
     ledgerScopeUrls: reapable.map((l) => l.scopeUrl),
   }
 }
