@@ -34,7 +34,28 @@ const qr = (
   ...args: Parameters<typeof queryRegressions>
 ): TrendResult[] => queryRegressions(...args).results
 
-const q = (p95Ms: number, calls = 100) => ({ calls, p50Ms: p95Ms / 2, p95Ms, totalMs: p95Ms * calls })
+/** A query's stored sample. The argument is the UNCONTENDED p95 — the only
+ *  figure the comparison reads — and `uncontendedCalls` the count the gate is
+ *  applied to.
+ *
+ *  The wall-clock fields are deliberately larger on BOTH axes, as a contended
+ *  session really records them: more callers than independent observations, and
+ *  timings inflated by the queue. Nothing here equals its uncontended
+ *  counterpart, so a comparison that read the wall-clock fields instead would
+ *  come out with different numbers and these tests would fail rather than pass
+ *  by coincidence. */
+const q = (p95Ms: number, uncontendedCalls = 100) => ({
+  calls: uncontendedCalls * 10 + 50,
+  p50Ms: p95Ms * 5,
+  p95Ms: p95Ms * 10,
+  totalMs: p95Ms * 10 * (uncontendedCalls * 10 + 50),
+  uncontended: { calls: uncontendedCalls, p50Ms: p95Ms / 2, p95Ms },
+})
+
+/** A query observed plenty of times but never once with the pool to itself —
+ *  also the shape of every record written before the recorder measured it. */
+const noUncontendedSamples = (p95Ms: number, calls = 100) =>
+  ({ calls, p50Ms: p95Ms / 2, p95Ms, totalMs: p95Ms * calls })
 
 const sample = (over: Partial<InteractionComparable> = {}): InteractionComparable => ({
   writes: 100,
@@ -55,24 +76,27 @@ const sinceRegressed = (
   baseCount = 8,
 ): InteractionComparable[] => [now(), ...history(baseCount, base)]
 
-/** Upper half collapsed to one value. `q` above never produces this shape
- *  (p50 is half of p95). */
-const clustered = (ms: number, calls = 100) =>
-  ({ calls, p50Ms: ms, p95Ms: ms, totalMs: ms * calls })
+/** Upper half of the UNCONTENDED window collapsed to one value. `q` above
+ *  never produces that shape (p50 is half of p95), and the wall-clock half here
+ *  stays spread so the caveat cannot pass by reading the wrong one. */
+const clustered = (ms: number, uncontendedCalls = 100) => ({
+  ...q(ms, uncontendedCalls),
+  uncontended: { calls: uncontendedCalls, p50Ms: ms, p95Ms: ms },
+})
 
 describe('hasClusteredTail', () => {
   it('spots a collapsed upper half', () => {
-    expect(hasClusteredTail(clustered(600))).toBe(true)
+    expect(hasClusteredTail(clustered(600).uncontended)).toBe(true)
   })
 
   it('leaves a spread distribution alone', () => {
-    expect(hasClusteredTail(q(600))).toBe(false)
+    expect(hasClusteredTail(q(600).uncontended)).toBe(false)
   })
 
   it('does not flag a uniformly fast query', () => {
     // Below the magnitude floor everything clusters and is judged steady
     // anyway, so flagging it would be noise on every verdict.
-    expect(hasClusteredTail(clustered(2))).toBe(false)
+    expect(hasClusteredTail(clustered(2).uncontended)).toBe(false)
   })
 })
 
@@ -179,6 +203,40 @@ describe('queryRegressions', () => {
     const slow = () => sample({ queries: { a: q(30), b: q(100) } })
     const found = regs(qr(slow(), [slow(), ...history(8, base)]))
     expect(found.map((r) => r.metric)).toEqual(['query:b', 'query:a'])
+  })
+})
+
+describe('what counts as enough measurements', () => {
+  // The defect this whole comparison was rebuilt around: `calls` counts
+  // CALLERS. N of them awaiting one coalesced statement each record that
+  // statement's whole wall-clock, so a plain call count says twenty
+  // measurements where there was one. The gate is applied to the resolves that
+  // ran with the pool to themselves, which coalesced callers never are.
+  it('does not judge a query whose callers outnumber its independent observations', () => {
+    const base = () => sample({ queries: { 'core.ancestors': q(10) } })
+    const busy = sample({ queries: { 'core.ancestors': q(90, 3) } })
+    expect(regs(qr(busy, history(8, base)))).toEqual([])
+  })
+
+  it('does not judge a query never observed with the pool to itself', () => {
+    // Also every record written before the recorder measured this: a missing
+    // subset is "not measured", never "measured as fast".
+    const base = () => sample({ queries: { slow: q(10) } })
+    const current = sample({ queries: { slow: noUncontendedSamples(900) } })
+    expect(regs(qr(current, history(8, base)))).toEqual([])
+  })
+
+  it('judges one whose uncontended samples clear the bar', () => {
+    const base = () => sample({ queries: { slow: q(10) } })
+    const slow = () => sample({ queries: { slow: q(40) } })
+    // Through `sinceRegressed` like the other trend tests: the recent reading
+    // is a median over a window, so one session never swings it.
+    const found = regs(qr(slow(), sinceRegressed(slow, base)))
+    expect(found).toHaveLength(1)
+    // Reported as the uncontended figure, not the wall-clock one the same
+    // sample also carries.
+    expect(found[0].current).toBe(40)
+    expect(found[0].label).toBe('slow p95 (uncontended)')
   })
 })
 

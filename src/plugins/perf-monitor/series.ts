@@ -5,7 +5,7 @@
  * a single session fires on every anomaly); MEDIAN NOT MEAN (sessions are
  * heterogeneous; the median tracks the typical one).
  */
-import type { InteractionComparable, TimingSample } from '@/plugins/interaction-metrics/record.js'
+import type { InteractionComparable, QueryTimingSample } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 
 /** Sessions of history required before any comparison is reported — below this the median is one arbitrary session with extra steps. */
@@ -20,7 +20,11 @@ const MIN_ABSOLUTE_MS = 5
 /** Sessions smoothed into the "current" reading — the detection LAG for a just-landed regression, small enough to still notice within a day. */
 const RECENT_WINDOW = 3
 
-/** Resolves needed before a query's p95 is treated as a measurement. */
+/** UNCONTENDED resolves needed before a query's p95 is treated as a
+ *  measurement. Counted over those, not over every resolve: a caller's
+ *  wall-clock on a busy connection pool is mostly the queue ahead of it, and N
+ *  callers coalesced onto one statement are N copies of one observation. Both
+ *  inflate a plain call count without adding anything to compare. */
 const MIN_CALLS = 20
 
 /** Widest p95/p50 still read as one clustered value — a 1% tolerance, NOT
@@ -29,20 +33,20 @@ const MIN_CALLS = 20
  *  narrower than any spread distribution. */
 const CLUSTERED_TAIL_MAX_RATIO = 1.01
 
-/** Does the window's upper half collapse to one value? Request coalescing
- *  produces this — N callers awaiting one statement all record the same
- *  wall-clock — but so does any bimodal split: with `sorted[floor(n * q)]`
- *  percentiles a slow half sets p50 and p95 alike. The two are NOT separable
- *  from a stored sample, which carries no count of distinct observations.
+/** Does the compared window's upper half collapse to one value?
  *
- *  So this is REPORTED and never gates a comparison. `calls` overstating how
- *  many independent measurements back a p95 is a caveat on the reading; a
- *  clustered tail is as often the regression worth seeing as an artifact of how
- *  it was measured, and discarding it would throw away the finding to suppress
- *  the artifact. Counting observations at the source is the only real fix
- *  (#958). */
-export const hasClusteredTail = (t: TimingSample): boolean =>
-  t.p50Ms >= MIN_ABSOLUTE_MS && t.p95Ms <= t.p50Ms * CLUSTERED_TAIL_MAX_RATIO
+ *  Asked of the UNCONTENDED samples, the ones a comparison consumes. Request
+ *  coalescing used to be the leading cause and is no longer a candidate here —
+ *  callers sharing one statement are excluded from this distribution at the
+ *  source. What remains is a genuinely bimodal workload, where
+ *  `sorted[floor(n * q)]` lets a slow half set p50 and p95 alike, and a window
+ *  thin enough that its top 5% is one sample.
+ *
+ *  Still REPORTED and still never gating: a clustered tail is as often the
+ *  regression worth seeing as an artifact of how few samples backed it, and
+ *  discarding it would throw away the finding to suppress the artifact. */
+export const hasClusteredTail = (u: {p50Ms: number; p95Ms: number}): boolean =>
+  u.p50Ms >= MIN_ABSOLUTE_MS && u.p95Ms <= u.p50Ms * CLUSTERED_TAIL_MAX_RATIO
 
 /** STORED sessions either comparison needs before it returns anything: the
  *  baseline, plus what current-window smoothing consumes on top of this
@@ -180,6 +184,17 @@ export const regressionsIn = (results: readonly TrendResult[]): Regression[] =>
     .flatMap((r) => (r.status === 'regressed' ? [r.regression] : []))
     .sort((a, b) => b.ratio - a.ratio)
 
+/** The subset of a query's stored sample this comparison can use: the resolves
+ *  that ran with the DB connection pool to themselves. ONE definition, so the
+ *  gate, the measurement and the caveat cannot disagree about which samples the
+ *  verdict rested on.
+ *
+ *  Absent on records written before the recorder measured it, and on queries
+ *  never once observed unopposed — both mean "no comparable measurement", which
+ *  is why they read the same way here. */
+const comparableSamples = (q: QueryTimingSample | undefined) =>
+  q?.uncontended !== undefined && q.uncontended.calls >= MIN_CALLS ? q.uncontended : null
+
 /** Per-query p95 regressions, worst ratio first. A query absent from the
  *  baseline is skipped, not infinitely regressed. `recentPast` smooths the current reading. */
 export interface QueryComparison {
@@ -202,25 +217,27 @@ export const queryRegressions = (
   for (const [name, sample] of Object.entries(current.queries)) {
     // Only the data-sufficiency filter here — the magnitude floor is applied by
     // `trendRegression` after the recent median, so one fast session can't drop a sustainably-regressed query.
-    if (sample.calls < MIN_CALLS) continue
+    const currentSamples = comparableSamples(sample)
+    if (currentSamples === null) continue
     // ONE statement of which sessions carry a usable sample for this query,
     // read by both the comparison and the caveat below.
-    const sampleIn = (r: InteractionComparable): TimingSample | null => {
-      const q = r.queries[name]
-      return q !== undefined && q.calls >= MIN_CALLS ? q : null
-    }
+    const sampleIn = (r: InteractionComparable) => comparableSamples(r.queries[name])
     const measured = (r: InteractionComparable): number | null => sampleIn(r)?.p95Ms ?? null
-    const recent = [sample.p95Ms, ...recentPast.map(measured).filter((v): v is number => v !== null)]
+    const recent = [currentSamples.p95Ms, ...recentPast.map(measured).filter((v): v is number => v !== null)]
     const baseline = baselineSessions.map(measured).filter((v): v is number => v !== null)
     const result = trendRegression(
-      { metric: `query:${name}`, label: `${name} p95`, unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
+      // The label says WHICH p95: this is the query measured with no queue to
+      // be in, which is a smaller number than the wall-clock the same session
+      // stores and than what a user waited. Reading one as the other is the
+      // confusion the whole change exists to end.
+      { metric: `query:${name}`, label: `${name} p95 (uncontended)`, unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
       recent,
       baseline,
     )
     results.push(result)
     // Only a comparison that reached a verdict can be qualified: telling a
     // reader to distrust a trend that was never produced points at nothing.
-    const consumed = [sample, ...[...recentPast, ...baselineSessions].map(sampleIn)]
+    const consumed = [currentSamples, ...[...recentPast, ...baselineSessions].map(sampleIn)]
     if (result.status !== 'insufficient' &&
         consumed.some((q) => q !== null && hasClusteredTail(q))) {
       clusteredTail.push(name)

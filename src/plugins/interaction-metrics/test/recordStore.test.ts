@@ -50,6 +50,10 @@ const DATA = {
   recordedAt: 1, startedAt: 0, appVersion: 'v', appSha: 'sha', clientId: 'set-per-test',
   deviceLabel: getDeviceLabel(), sessionMs: 1, blockCount: 1, writes: 1,
   queries: {}, fanout: {}, db: {},
+  dbContention: {
+    calls: 0, concurrentIssues: 0, maxDepth: 0, busyMs: 0, sharedWork: 0,
+    uncontendedCalls: 0, uncontendedReadP50Ms: 0, uncontendedReadP95Ms: 0,
+  },
   handles: { count: 0, totalDeps: 0, maxDeps: 0, p50Deps: 0, p95Deps: 0, topHeavy: [] },
 } satisfies InteractionRecordData
 

@@ -45,12 +45,21 @@ const when = (epochMs: number): string =>
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
 
-/** The costliest query in a session, by p95. The single number that best stands
- *  in for "how did interaction feel" without listing twelve columns. */
+/** The costliest query in a session, by the p95 the comparison actually reads:
+ *  the one measured with the DB connection pool free.
+ *
+ *  NOT the wall-clock p95 stored beside it, though that is the larger number
+ *  and the one a user waited. Wall-clock on a busy pool is mostly the queue
+ *  ahead of the caller, so it moves between sessions that behaved identically —
+ *  charting it in a trend table would show a column swinging under a verdict
+ *  that never moved, which is the same fault as charting a rate the alarm does
+ *  not fire on. `—` where a session recorded no uncontended sample: nothing was
+ *  measured, rather than nothing was slow. */
 const slowestQuery = (r: InteractionRecordData): { name: string; p95Ms: number } | null => {
   let worst: { name: string; p95Ms: number } | null = null
   for (const [name, q] of Object.entries(r.queries)) {
-    if (!worst || q.p95Ms > worst.p95Ms) worst = { name, p95Ms: q.p95Ms }
+    const p95Ms = q.uncontended?.p95Ms
+    if (p95Ms !== undefined && (!worst || p95Ms > worst.p95Ms)) worst = { name, p95Ms }
   }
   return worst
 }
@@ -360,7 +369,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                     <Th>Session</Th><Th>Build</Th><Th>Blocks</Th><Th>Writes</Th>
                     {/* Invalidations per write is the ratio that catches an
                         over-broad invalidation dep, which no latency column can. */}
-                    <Th>Invalidations / write</Th><Th>Slowest query p95</Th>
+                    <Th>Invalidations / write</Th><Th>Slowest query p95 (uncontended)</Th>
                   </tr>
                 </thead>
                 <tbody>
