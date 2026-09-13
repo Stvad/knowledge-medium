@@ -21,6 +21,7 @@ import {
   normalizeLedger,
   type ScopeLedger,
 } from './ledger'
+import { bootKey, bootKeyPrefix, type BootStore } from './bootStore'
 import {isForeignPreviewRequest, PREVIEW_SUBTREE} from './preview'
 import {
   SERVICE_WORKER_META_CACHE,
@@ -99,6 +100,9 @@ export interface SwEnv {
   }
   /** Boot-timeline probe (sw.ts BOOT_MARKS): stamps a named point once. */
   mark?: (name: string) => void
+  /** IndexedDB copy of the boot set, answered before Cache Storage is touched
+   *  (see bootStore.ts). Absent → every request goes cache-first as before. */
+  bootStore?: BootStore
   /** indexedDB, injected so legacy IndexedDB-backed database cleanup is testable. */
   indexedDB?: {
     databases?: () => Promise<Array<{name?: string | null}>>
@@ -121,6 +125,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   const PRECACHE_REST_ASSETS = config.precacheRestAssets.map(toScopeUrl)
   // Vendor URLs are absolute + cross-origin — used verbatim, NOT scope-resolved.
   const PRECACHE_VENDOR = config.precacheVendor
+  const SHELL_URL = toScopeUrl('./index.html')
+  // What a cold launch needs before first paint: the shell, the first-paint
+  // assets and the vendor React set. Served from the boot store when present.
+  const BOOT_URLS = new Set<string>([SHELL_URL, ...PRECACHE_ASSETS, ...PRECACHE_VENDOR])
 
   // A production/root SW's scope (…/knowledge-medium/) is a PREFIX of every
   // PR-preview path; see src/sw/preview.ts for why a SW refuses to serve/cache
@@ -296,6 +304,49 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       runPooled(PRECACHE_VENDOR, 16, (u) => fetchInto(vendor, u, 'default')),
     ])
     await runPooled(PRECACHE_REST_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache'))
+    await seedBootStore([shell, assets, vendor])
+  }
+
+  // Copy the boot set out of the just-filled caches. Best effort: a hole here
+  // means that URL boots cache-first, exactly as before the store existed.
+  const seedBootStore = async (fromCaches: Cache[]): Promise<void> => {
+    const store = env.bootStore
+    if (!store) return
+    try {
+      const entries: Array<readonly [string, {status: number; contentType: string; body: ArrayBuffer}]> = []
+      for (const url of BOOT_URLS) {
+        let cached: Response | undefined
+        for (const cache of fromCaches) {
+          cached = await cache.match(url)
+          if (cached) break
+        }
+        if (!cached) continue
+        entries.push([bootKey(buildId, url), {
+          status: cached.status,
+          contentType: cached.headers.get('content-type') ?? 'application/octet-stream',
+          body: await cached.arrayBuffer(),
+        }])
+      }
+      await store.putAll(entries)
+    } catch {
+      // Cache-first still serves every URL; the store is only the fast path.
+    }
+  }
+
+  const bootStoreFirst = async (url: string, fallback: () => Promise<Response>): Promise<Response> => {
+    const store = env.bootStore
+    if (store && BOOT_URLS.has(url)) {
+      try {
+        const entry = await store.get(bootKey(buildId, url))
+        if (entry) {
+          env.mark?.('bootStoreHitAt')
+          return new Response(entry.body, {status: entry.status, headers: {'content-type': entry.contentType}})
+        }
+      } catch {
+        // fall through to the caches
+      }
+    }
+    return fallback()
   }
 
   const activate = async (): Promise<void> => {
@@ -329,6 +380,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       expiredIds.flatMap((id) => [
         caches.delete(`${CACHE_PREFIX}shell-${id}`),
         caches.delete(`${CACHE_PREFIX}assets-${id}`),
+        env.bootStore?.deletePrefix(bootKeyPrefix(id)).catch(() => undefined) ?? Promise.resolve(),
       ]),
     )
     if (ledger.length > keepIds.size) {
@@ -653,12 +705,12 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     if (isForeignPreviewRequest(OWN_SCOPE_IS_PREVIEW, url.pathname)) return undefined
 
     if (isNavigationRequest(request) && isSameOrigin(url)) {
-      return shellCacheFirst(request, toScopeUrl('./index.html'))
+      return bootStoreFirst(SHELL_URL, () => shellCacheFirst(request, SHELL_URL))
     }
     if (isCacheableAsset(request.destination, url.pathname, isSameOrigin(url))) {
-      return assetCacheFirst(request)
+      return bootStoreFirst(request.url, () => assetCacheFirst(request))
     }
-    if (isVendor(url)) return cacheFirst(request, VENDOR_CACHE)
+    if (isVendor(url)) return bootStoreFirst(request.url, () => cacheFirst(request, VENDOR_CACHE))
     return undefined
   }
 

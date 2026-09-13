@@ -60,6 +60,7 @@
  * SW build. In dev the placeholders are harmless (the SW isn't registered there).
  */
 import {createServiceWorker} from './worker'
+import {idbBootStore} from './bootStore'
 
 // The worker's global scope. `sw.ts` is a module (it imports), so this ambient
 // declaration shadows lib.webworker's generic `self` with the service-worker
@@ -112,19 +113,10 @@ const sw = createServiceWorker(
     storage: navigator.storage,
     indexedDB,
     mark,
+    bootStore: idbBootStore(),
   },
 )
 
-// Storage-init probes, fired at evaluation so their completion times can be
-// read next to the navigation's own cache marks: if IndexedDB opens long
-// before the first cache open completes, the cold-start cost is Cache
-// Storage's; if both wait, it is the origin's storage initialisation.
-void caches.keys().then(() => mark('cachesKeysAt'), () => {})
-try {
-  const probe = indexedDB.open('km-sw-probe')
-  probe.onsuccess = () => { mark('idbOpenedAt'); probe.result.close() }
-  probe.onerror = () => {}
-} catch { /* no IndexedDB in this worker: nothing to probe */ }
 
 
 self.addEventListener('install', (event) => {

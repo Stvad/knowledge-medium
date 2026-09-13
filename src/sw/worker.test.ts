@@ -116,6 +116,21 @@ class MockIndexedDB {
   }
 }
 
+class MockBootStore {
+  entries = new Map<string, {status: number; contentType: string; body: ArrayBuffer}>()
+  failGet = false
+  async get(key: string) {
+    if (this.failGet) throw new Error('simulated idb failure')
+    return this.entries.get(key)
+  }
+  async putAll(list: ReadonlyArray<readonly [string, {status: number; contentType: string; body: ArrayBuffer}]>) {
+    for (const [k, v] of list) this.entries.set(k, v)
+  }
+  async deletePrefix(prefix: string) {
+    for (const k of [...this.entries.keys()]) if (k.startsWith(prefix)) this.entries.delete(k)
+  }
+}
+
 const ORIGIN = 'https://app.example'
 const SCOPE = `${ORIGIN}/knowledge-medium/`
 const DAY = 24 * 60 * 60 * 1000
@@ -795,4 +810,67 @@ describe('touch-on-use keeps a live preview from being reaped', () => {
     expect(extended).toHaveLength(1) // unchanged — a throttled fetch schedules nothing
   })
 
+})
+
+describe('boot store (IndexedDB copy of the boot set)', () => {
+  const withStore = (configOverrides: Partial<SwConfig> = {}) => {
+    const bootStore = new MockBootStore()
+    const built = build(
+      {precacheVendor: ['https://esm.sh/react@19.2.6'], ...configOverrides},
+      async (req) => new Response(`body of ${req.url}`, {status: 200, headers: {'content-type': 'text/javascript'}}),
+      () => NOW,
+      {bootStore},
+    )
+    return {...built, bootStore}
+  }
+
+  it('install copies the shell, first-paint assets and vendor set into the store, keyed by build id', async () => {
+    const {sw, bootStore} = withStore()
+    await sw.install()
+    const keys = [...bootStore.entries.keys()]
+    expect(keys).toContain(`gen1|${abs('./index.html')}`)
+    expect(keys).toContain('gen1|https://app.example/knowledge-medium/src/main.js')
+    expect(keys).toContain('gen1|https://esm.sh/react@19.2.6')
+    expect(keys).not.toContain('gen1|https://app.example/knowledge-medium/src/lazy.js')
+    expect(bootStore.entries.get(`gen1|${abs('./index.html')}`)?.contentType).toBe('text/javascript')
+  })
+
+  it('answers a navigation and a boot-set asset from the store without touching Cache Storage', async () => {
+    const {sw, bootStore, caches} = withStore()
+    await sw.install()
+    const openSpy = vi.spyOn(caches, 'open')
+    const nav = await sw.handleFetch(new Request(abs('./some/route'), {headers: {accept: 'text/html'}}))!
+    expect(await nav.text()).toBe(`body of ${abs('./index.html')}`)
+    const asset = await sw.handleFetch(new Request('https://app.example/knowledge-medium/src/main.js'))!
+    expect(await asset.text()).toBe('body of https://app.example/knowledge-medium/src/main.js')
+    expect(asset.headers.get('content-type')).toBe('text/javascript')
+    expect(openSpy).not.toHaveBeenCalled()
+    void bootStore
+  })
+
+  it('falls back to the caches for a URL outside the boot set, on a miss, and on a store error', async () => {
+    const {sw, bootStore, caches} = withStore()
+    await sw.install()
+    const openSpy = vi.spyOn(caches, 'open')
+    const lazy = await sw.handleFetch(new Request('https://app.example/knowledge-medium/src/lazy.js'))!
+    expect(await lazy.text()).toContain('lazy.js')
+    expect(openSpy).toHaveBeenCalled()
+
+    bootStore.entries.clear()
+    const miss = await sw.handleFetch(new Request(abs('./'), {headers: {accept: 'text/html'}}))!
+    expect(await miss.text()).toBe(`body of ${abs('./index.html')}`)
+
+    await sw.install()
+    bootStore.failGet = true
+    const errored = await sw.handleFetch(new Request(abs('./'), {headers: {accept: 'text/html'}}))!
+    expect(await errored.text()).toBe(`body of ${abs('./index.html')}`)
+  })
+
+  it('activate reaps an expired generation from the store along with its caches', async () => {
+    const {sw, bootStore} = withStore({keepGenerations: 1})
+    await bootStore.putAll([['gen0|https://app.example/knowledge-medium/index.html', {status: 200, contentType: 'text/html', body: new ArrayBuffer(1)}]])
+    await sw.writeLedger(['gen0', 'gen1'])
+    await sw.activate()
+    expect([...bootStore.entries.keys()].some(k => k.startsWith('gen0|'))).toBe(false)
+  })
 })
