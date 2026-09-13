@@ -214,8 +214,9 @@ export interface ContentionSnapshot {
  *     a caller holding the raw handle, or one of PowerSync's own helpers, whose
  *     internal reads no wrapper placed here can see. Closing that needs the
  *     instrumentation to sit at the adapter instead;
- *   - work one read does on several observers' behalf (`noteSharedWork`) —
- *     approximate in the conservative direction.
+ *   - one read answering several CALLERS (`noteSharedWork`), whether or not
+ *     they are separate observations — the batcher cannot tell, and guessing
+ *     was unsound.
  *
  * So "had the pool to itself" means "nothing THIS CAN SEE was competing". The
  * two qualifications above are where that falls short, and they fail in
@@ -390,12 +391,12 @@ export class DbContention {
     this.syncWatched = true
   }
 
-  /** Zero the counters and start a new span. IN-FLIGHT STATE IS KEPT:
-   *  `inFlight` and `openWindows` track work that will still call back, and
-   *  zeroing them would drive the counts negative and mis-classify everything
-   *  after. Work already open settles into the new span, matching
-   *  `resetMetrics`' documented behaviour for the reservoirs — but it is not
-   *  JUDGED in it, which is what `generation` above enforces. */
+  /** Zero the counters and start a new span. `inFlight` IS KEPT: it tracks
+   *  calls that will still call `end`, and zeroing it would drive the count
+   *  negative and mis-classify everything after. Work already open settles into
+   *  the new span, matching `resetMetrics`' documented behaviour for the
+   *  reservoirs — but it is not JUDGED in it, which is what `generation` above
+   *  enforces. */
   reset(): void {
     this.generation++
     this.busyAccruedMs = 0
@@ -560,11 +561,12 @@ export class QueryMetrics {
    *  creates a reservoir on first call so unused queries cost nothing.
    *  Capacity defaults to 256 — same as the DbMetrics reservoirs.
    *
-   *  `uncontended` (from `DbContention.closeWindow`) says the resolve had
-   *  the connection pool to itself for its whole life. Those samples go to a
-   *  SECOND reservoir as well as the first, and that one is the only per-query
-   *  timing here a reader can compare across sessions: the rest move with how
-   *  many other queries a surface happened to fan out alongside this one. */
+   *  `uncontended` (from `DbContention.closeWindow`) says nothing this tracker
+   *  could see competed with the resolve for its whole life — not that nothing
+   *  did. Those samples go to a SECOND reservoir as well as the first, and that
+   *  one is the only per-query timing here a reader can compare across
+   *  sessions: the rest move with how many other queries a surface happened to
+   *  fan out alongside this one. */
   record(queryName: string, ms: number, uncontended: boolean): void {
     let r = this.perName.get(queryName)
     if (!r) {

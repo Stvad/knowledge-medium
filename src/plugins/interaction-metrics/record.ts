@@ -96,11 +96,7 @@ export interface ContentionSample {
   uncontendedReadCalls: number
   uncontendedReadP50Ms: number
   uncontendedReadP95Ms: number
-  /** Bracketed intervals of sync-engine database work. */
   foreignIntervals: number
-  /** Whether sync activity was observable at all this session. FALSE makes
-   *  every figure above a partial account of the pool rather than a complete
-   *  one — read it before reading them. */
   syncObserved: boolean
 }
 
@@ -146,8 +142,10 @@ export interface InteractionRecordData extends InteractionComparable {
    *  session pays the same handful of calls, so they wash out of later
    *  comparisons; expect a large share on a quiet session. */
   db: Record<string, TimingSample>
-  /** Pool occupancy and the uncontended-read distribution — the context that
-   *  says how much of `db` and `queries` above is queue rather than work. */
+  /** Observed pool occupancy and overlap, as context for the timings above.
+   *  NOT a decomposition of them: nothing here says how much of any duration
+   *  was queueing rather than work, and on a two-connection device an
+   *  overlapping call may have waited for nothing at all. */
   dbContention: ContentionSample
   handles: {
     count: number
