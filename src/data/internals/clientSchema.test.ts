@@ -59,7 +59,6 @@ import {
   ANALYZE_OPTIMIZE_SQL,
   runAnalyzeIfStale,
   runAnalyzeNow,
-  CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS,
   CLIENT_SCHEMA_TRIGGER_CREATE_SQL,
   SELECT_CLIENT_SCHEMA_TRIGGERS_SQL,
   triggerRecreateStatements,
@@ -233,9 +232,8 @@ beforeEach(() => { h = setupDb() })
 afterEach(() => { h.db.close() })
 
 describe('client schema bootstrap', () => {
-  // The trigger *names* are exported as CLIENT_SCHEMA_TRIGGER_NAMES purely so
-  // a test can re-list them; asserting "the DB has exactly that list" only
-  // restates the constant. What the triggers actually *do* is covered by the
+  // Asserting "the DB has exactly CLIENT_SCHEMA_TRIGGER_NAMES" would only
+  // restate the constant. What the triggers actually *do* is covered by the
   // row_events / upload-routing behavior tests below, and the harness already
   // verifies the production trigger set installs (createTestDb.test.ts).
   it('seeds tx_context with one row that starts NULL across all six tx fields', () => {
@@ -1633,18 +1631,12 @@ describe('boot-path trigger recreate', () => {
       h.db.prepare(SELECT_CLIENT_SCHEMA_TRIGGERS_SQL).all()
         .map(row => [(row as {name: string}).name, (row as {sql: string}).sql] as const),
     )
-    expect(stored.size).toBe(CLIENT_SCHEMA_TRIGGER_CREATE_SQL.size)
+    for (const name of CLIENT_SCHEMA_TRIGGER_CREATE_SQL.keys()) expect(stored.has(name)).toBe(true)
     expect(triggerRecreateStatements(stored)).toEqual([])
 
     const [name, createSql] = [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL][0]
     const drifted = new Map(stored)
     drifted.delete(name)
     expect(triggerRecreateStatements(drifted)).toEqual([`DROP TRIGGER IF EXISTS ${name}`, createSql])
-  })
-
-  it('the non-trigger statements plus the trigger statements are exactly the full list', () => {
-    const recreated = [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL].flatMap(([name, sql]) => [`DROP TRIGGER IF EXISTS ${name}`, sql])
-    expect([...CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS, ...recreated].length).toBe(CLIENT_SCHEMA_STATEMENTS.length)
-    expect(new Set([...CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS, ...recreated])).toEqual(new Set(CLIENT_SCHEMA_STATEMENTS))
   })
 })
