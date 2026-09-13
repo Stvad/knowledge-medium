@@ -77,6 +77,12 @@ export interface ContentionSample {
   uncontendedCalls: number
   uncontendedReadP50Ms: number
   uncontendedReadP95Ms: number
+  /** Bracketed intervals of sync-engine database work. */
+  foreignIntervals: number
+  /** Whether sync activity was observable at all this session. FALSE makes
+   *  every figure above a partial account of the pool rather than a complete
+   *  one — read it before reading them. */
+  syncObserved: boolean
 }
 
 /** The subset of a sample a trend actually compares — split out so a live
@@ -223,6 +229,8 @@ const toContentionSample = (c: {
   sharedWork: number
   uncontendedCalls: number
   uncontendedRead: { p50Ms: number; p95Ms: number }
+  foreignIntervals: number
+  syncObserved: boolean
 }): ContentionSample => ({
   calls: c.calls,
   concurrentIssues: c.concurrentIssues,
@@ -232,6 +240,8 @@ const toContentionSample = (c: {
   uncontendedCalls: c.uncontendedCalls,
   uncontendedReadP50Ms: round2(c.uncontendedRead.p50Ms),
   uncontendedReadP95Ms: round2(c.uncontendedRead.p95Ms),
+  foreignIntervals: c.foreignIntervals,
+  syncObserved: c.syncObserved,
 })
 
 /**

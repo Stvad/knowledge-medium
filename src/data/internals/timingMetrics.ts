@@ -116,65 +116,83 @@ export interface ContentionTicket {
   readonly mark: ContentionMark
 }
 
-/** The counters a window is judged against. Taken before the window opens and
- *  handed back to `wasUncontended` after it closes — a window is clean only if
- *  none of these moved while it was open. */
+/** The counters a window is judged against: taken when it opens, compared when
+ *  it closes. A window is clean only if none of them moved.
+ *
+ *  `generation` is what makes the comparison an IDENTITY rather than an
+ *  arithmetic coincidence. `resetMetrics()` zeroes the counters while windows
+ *  are open, after which they climb again and can pass back through the value a
+ *  live mark holds — a contended window reading as clean. A window that spans a
+ *  reset is not judgeable, and this is how it says so. */
 export interface ContentionMark {
-  /** Calls in flight when the window opened. */
+  readonly generation: number
   readonly depth: number
   readonly concurrentIssues: number
   readonly sharedWork: number
 }
 
-/** Frozen summary returned by `DbContention.snapshot()`. Every field is an
- *  OBSERVATION of the pool, not a model of it — see the class comment for why
- *  that distinction is the whole point. */
+/** An open query-resolve window. Distinct from a `ContentionTicket`: a ticket
+ *  OCCUPIES the pool, a window merely OBSERVES it, and the count of open
+ *  windows is what decides whether coalesced work was actually shared. */
+export interface ContentionWindow {
+  readonly mark: ContentionMark
+}
+
+/** Frozen summary returned by `DbContention.snapshot()`. */
 export interface ContentionSnapshot {
   /** Top-level db calls that took a connection since the last reset. */
   readonly calls: number
-  /** Of those, ones issued while another was already in flight. */
+  /** Of those, ones issued while the pool was already occupied. */
   readonly concurrentIssues: number
-  /** Deepest simultaneous in-flight count seen. `1` means nothing ever
-   *  overlapped; higher means callers were competing for connections. */
+  /** Deepest simultaneous occupancy seen, our calls and observed sync work
+   *  together. `1` means nothing ever overlapped. */
   readonly maxDepth: number
-  /** Union of the intervals during which at least one call was in flight —
-   *  NOT the sum of call durations, which double-counts overlap. Pair with a
-   *  window's elapsed time to see how much of it the database was idle for. */
+  /** Union of the intervals during which the pool was occupied — NOT the sum
+   *  of call durations, which double-counts overlap. Against a window's elapsed
+   *  time, how much of it the database was idle for. */
   readonly busyMs: number
-  /** Flushes by a request coalescer that served more than one caller (see
-   *  `noteSharedWork`). Each one is work whose cost N callers all record. */
+  /** Coalescer flushes that answered more than one open observer. */
   readonly sharedWork: number
   /** Calls that ran with the pool to themselves. */
   readonly uncontendedCalls: number
   /** Read timings over the uncontended calls ONLY — the data layer's own
    *  speed, with every queued sample left out rather than modelled away. */
   readonly uncontendedRead: TimingSnapshot
+  /** Intervals of database work by the sync engine, which this cannot time but
+   *  can bracket. Zero on a local-only session; zero ALSO when the status
+   *  channel is unavailable, which is why `syncObserved` exists beside it. */
+  readonly foreignIntervals: number
+  /** Whether sync activity is being observed at all. False means the samples
+   *  above cannot account for it — a caveat on every figure here, not a claim
+   *  that the pool was quiet. */
+  readonly syncObserved: boolean
 }
 
 /**
- * In-flight bookkeeping for the database connection pool, and the one question
+ * Occupancy bookkeeping for the database connection pool, and the one question
  * it exists to answer: DID THIS WINDOW HAVE THE POOL TO ITSELF?
  *
  * A caller's wall-clock is request→resolution, so on a pool with fewer
- * connections than callers it is dominated by the queue ahead of it. Measured
- * 2026-09-13 on a live client: 268 reads recorded 23,116ms inside a 6,005ms
- * window — 3.85x the elapsed time, which only overlapping waits can produce.
- * A figure like that moves when render order changes, so every verdict built on
- * it does too.
+ * connections than callers it is dominated by the queue ahead of it rather than
+ * by the work. A figure like that moves when render order changes, and so does
+ * every verdict built on it.
  *
- * The fix here is SELECTION, not correction: rather than subtract an estimated
+ * The answer is SELECTION, not correction: rather than subtract an estimated
  * queue wait, record which observations had no queue and report those
  * separately. `uncontendedRead` and `QueryMetrics`' per-name uncontended
- * reservoir are concurrency-independent because of what they exclude, so they
+ * reservoir are concurrency-independent because of what they EXCLUDE, so they
  * survive a change in fan-out that moves every other timing in this file.
  *
- * DELIBERATELY NO MODEL OF THE POOL. An earlier draft decomposed each call into
- * service and queue time by assuming one serial FIFO connection. That premise
- * is false: `repoProvider` opens `1 + ADDITIONAL_READERS` connections on
- * OPFSWriteAheadVFS and one on the others, and measurement on a two-connection
- * client showed reads running 2-way parallel while writes serialised on the
- * writer — so the decomposition would have been silently wrong on the devices
- * it was written for. Every field above holds whatever the pool's shape is.
+ * DECLINED: decomposing each call into service and queue time. It needs a
+ * serial FIFO connection, and `repoProvider` opens two on OPFSWriteAheadVFS and
+ * one elsewhere — so the split would be wrong, silently, on some devices.
+ *
+ * Three kinds of occupancy, because a claim about "the pool" has to cover
+ * everything on it:
+ *   - our own calls, timed (`begin`/`end`);
+ *   - the sync engine's, which connects to the raw database before `Repo` wraps
+ *     it and so is invisible here — bracketed by status (`beginForeign`);
+ *   - work one read does on several observers' behalf (`noteSharedWork`).
  *
  * The classification is CONSERVATIVE in one direction on purpose: a call that
  * overlapped another harmlessly (two reads, two free connections) is excluded
@@ -190,6 +208,12 @@ export class DbContention {
   private maxDepthSeen = 0
   private sharedWorkTotal = 0
   private uncontendedTotal = 0
+  private foreignTotal = 0
+  private openWindows = 0
+  /** Bumped by `reset()`. Marks from an earlier span are not comparable to the
+   *  current counters, whatever they now read. */
+  private generation = 0
+  private syncWatched = false
   /** Uncontended read timings. Writes are excluded — they serialise on the
    *  writer connection whatever else is happening, so "had the pool to itself"
    *  does not mean for them what it means for a read. */
@@ -199,43 +223,73 @@ export class DbContention {
    *  production caller takes the default. */
   constructor(private readonly now: () => number = () => performance.now()) {}
 
-  /** Counters as they stand. Hand the result to `wasUncontended` once the
-   *  window you are judging has closed. */
-  mark(): ContentionMark {
+  private currentMark(): ContentionMark {
     return {
+      generation: this.generation,
       depth: this.inFlight,
       concurrentIssues: this.concurrentIssuesTotal,
       sharedWork: this.sharedWorkTotal,
     }
   }
 
-  /** Did the window opened at `mark` run without competition? Nothing was in
-   *  flight when it opened, nothing arrived while it was open, and no coalesced
-   *  flush served a second caller during it. */
-  wasUncontended(mark: ContentionMark): boolean {
-    return mark.depth === 0 &&
+  /** Was the window opened at `mark` free of competition? Same counter span,
+   *  nothing occupying the pool when it opened, nothing arriving while it was
+   *  open, and no coalesced read answering it alongside another observer. */
+  private isClean(mark: ContentionMark): boolean {
+    return this.generation === mark.generation &&
+      mark.depth === 0 &&
       this.concurrentIssuesTotal === mark.concurrentIssues &&
       this.sharedWorkTotal === mark.sharedWork
   }
 
-  /** One caller's cost was paid by work done for several. Called by request
-   *  coalescers (`ancestorBatch`) when a flush serves more than one caller —
-   *  the ONE place that fact is known. Without it N callers awaiting a single
-   *  statement each look like an independent, uncontended measurement of it:
-   *  the pool really was idle for each of them, and the figure they all record
-   *  is still one observation, not N. */
+  /** Open an observation window for one query resolve. Pair with
+   *  `closeWindow` in a `finally`. */
+  openWindow(): ContentionWindow {
+    this.openWindows++
+    return {mark: this.currentMark()}
+  }
+
+  /** Close it, and say whether it ran unopposed. */
+  closeWindow(window: ContentionWindow): boolean {
+    this.openWindows--
+    return this.isClean(window.mark)
+  }
+
+  /** One read answered several callers at once. Called by request coalescers
+   *  (`ancestorBatch`), the only place that fact is known.
+   *
+   *  Recorded ONLY while more than one observation window is open, and that
+   *  condition is the whole point. A resolver that deliberately asks for many
+   *  ids in one go (`core.manyAncestors`, `core.recentActivity`) is a single
+   *  observation whose batch is its own work; billing it as shared would bar it
+   *  from ever being measured cleanly. What has to be caught is the other
+   *  shape: N separate resolves awaiting one statement, each recording its full
+   *  wall-clock, which is one observation reported N times. */
   noteSharedWork(): void {
-    this.sharedWorkTotal++
+    if (this.openWindows > 1) this.sharedWorkTotal++
+  }
+
+  private enter(at: number): ContentionMark {
+    const mark = this.currentMark()
+    if (this.inFlight === 0) this.busySince = at
+    else this.concurrentIssuesTotal++
+    this.inFlight++
+    if (this.inFlight > this.maxDepthSeen) this.maxDepthSeen = this.inFlight
+    return mark
+  }
+
+  private leave(at: number): void {
+    this.inFlight--
+    if (this.inFlight === 0 && this.busySince !== null) {
+      this.busyAccruedMs += at - this.busySince
+      this.busySince = null
+    }
   }
 
   /** Take a connection. Pair with `end` in a `finally`. */
   begin(): ContentionTicket {
     const issuedAt = this.now()
-    const mark = this.mark()
-    if (this.inFlight === 0) this.busySince = issuedAt
-    else this.concurrentIssuesTotal++
-    this.inFlight++
-    if (this.inFlight > this.maxDepthSeen) this.maxDepthSeen = this.inFlight
+    const mark = this.enter(issuedAt)
     this.callsTotal++
     return {issuedAt, mark}
   }
@@ -244,24 +298,44 @@ export class DbContention {
    *  records one duration from one pair of clock reads. */
   end(ticket: ContentionTicket, kind: 'read' | 'write'): number {
     const completedAt = this.now()
-    this.inFlight--
-    if (this.inFlight === 0 && this.busySince !== null) {
-      this.busyAccruedMs += completedAt - this.busySince
-      this.busySince = null
-    }
+    this.leave(completedAt)
     const durationMs = completedAt - ticket.issuedAt
-    if (this.wasUncontended(ticket.mark)) {
+    if (this.isClean(ticket.mark)) {
       this.uncontendedTotal++
       if (kind === 'read') this.uncontendedRead.record(durationMs)
     }
     return durationMs
   }
 
-  /** Zero the counters. IN-FLIGHT STATE IS KEPT: `inFlight` tracks calls that
-   *  will still call `end`, and zeroing it would drive the count negative and
-   *  mis-classify everything after. Calls already open settle into the new
-   *  span, matching `resetMetrics`' documented behaviour for the reservoirs. */
+  /** The sync engine is working on the same connections. Occupancy only: it is
+   *  bracketed from status transitions, not timed, and it bumps no call count —
+   *  it is not ours to report as a db call, only to refuse to ignore. */
+  beginForeign(): void {
+    this.enter(this.now())
+    this.foreignTotal++
+  }
+
+  endForeign(): void {
+    this.leave(this.now())
+  }
+
+  /** Whether sync activity reaches this tracker at all. */
+  observingSync(): boolean {
+    return this.syncWatched
+  }
+
+  markSyncObserved(): void {
+    this.syncWatched = true
+  }
+
+  /** Zero the counters and start a new span. IN-FLIGHT STATE IS KEPT:
+   *  `inFlight` and `openWindows` track work that will still call back, and
+   *  zeroing them would drive the counts negative and mis-classify everything
+   *  after. Work already open settles into the new span, matching
+   *  `resetMetrics`' documented behaviour for the reservoirs — but it is not
+   *  JUDGED in it, which is what `generation` above enforces. */
   reset(): void {
+    this.generation++
     this.busyAccruedMs = 0
     this.busySince = this.inFlight > 0 ? this.now() : null
     this.callsTotal = 0
@@ -269,6 +343,7 @@ export class DbContention {
     this.maxDepthSeen = this.inFlight
     this.sharedWorkTotal = 0
     this.uncontendedTotal = 0
+    this.foreignTotal = 0
     this.uncontendedRead.reset()
   }
 
@@ -283,6 +358,8 @@ export class DbContention {
       sharedWork: this.sharedWorkTotal,
       uncontendedCalls: this.uncontendedTotal,
       uncontendedRead: this.uncontendedRead.snapshot(),
+      foreignIntervals: this.foreignTotal,
+      syncObserved: this.syncWatched,
     })
   }
 }
@@ -297,6 +374,53 @@ const contentionByDb = new WeakMap<object, DbContention>()
  *  fixtures pass raw databases). */
 export const contentionFor = (db: unknown): DbContention | undefined =>
   typeof db === 'object' && db !== null ? contentionByDb.get(db) : undefined
+
+/** The PowerSync status surface, structurally — same defensive shape as
+ *  `firstSync.ts`, so this module still pulls no PowerSync types. */
+interface SyncStatusDb {
+  currentStatus?: SyncStatus
+  registerListener?: (l: {statusChanged?: (s: SyncStatus) => void}) => () => void
+}
+interface SyncStatus {
+  dataFlowStatus?: {downloading?: boolean; uploading?: boolean}
+}
+
+const syncBusy = (s: SyncStatus | undefined): boolean =>
+  s?.dataFlowStatus?.downloading === true || s?.dataFlowStatus?.uploading === true
+
+/**
+ * Bracket the sync engine's database work as pool occupancy.
+ *
+ * Without this the tracker sees only calls made through the Repo's proxy, and
+ * the sync engine is not one of them: `repoProvider` connects it to the RAW
+ * database before `Repo` ever wraps it. Its downloads and uploads run on the
+ * same connections, so a read queued behind them would be recorded as having
+ * had the pool to itself — the same queue-as-latency defect this whole file
+ * exists to end, re-entering through the one door the proxy does not cover.
+ *
+ * Transitions, not polling: a burst that begins and ends inside one resolve is
+ * invisible to a status read taken at each end of it.
+ *
+ * The listener's lifetime is the database's. Nothing detaches it, because the
+ * tracker it feeds lives exactly as long — both are created here, once, per
+ * wrapped db.
+ */
+const watchSyncOccupancy = (db: unknown, pool: DbContention): void => {
+  const statusDb = db as SyncStatusDb
+  if (typeof statusDb.registerListener !== 'function') return
+  let open = false
+  const apply = (status: SyncStatus | undefined): void => {
+    const busy = syncBusy(status)
+    if (busy === open) return
+    open = busy
+    if (busy) pool.beginForeign()
+    else pool.endForeign()
+  }
+  pool.markSyncObserved()
+  statusDb.registerListener({statusChanged: apply})
+  // Sync may already be running when the Repo is built.
+  apply(statusDb.currentStatus)
+}
 
 /** Aggregate timings for every PowerSyncDb call that flows through the
  *  Repo (`getAll`, `getOptional`, `get`, `execute`, `writeTransaction`).
@@ -490,6 +614,9 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
   // Keyed by the PROXY, not the raw db: `contentionFor` is looked up from the
   // same object a resolver holds as `ctx.db`.
   contentionByDb.set(proxy, pool)
+  // Watched on the RAW db: the sync engine was connected to it before this
+  // wrapper existed, and the status channel lives there.
+  watchSyncOccupancy(db, pool)
   return proxy
 }
 

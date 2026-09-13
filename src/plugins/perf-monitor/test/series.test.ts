@@ -497,6 +497,19 @@ describe('queryRegressions with nothing judgeable', () => {
     expect(results[0]).toMatchObject({ status: 'insufficient' })
     expect(partlyJudged([...results, { status: 'steady', baselineCount: 12 }])).toBe(true)
   })
+
+  // The expected report for a query that only runs inside a fan-out, not a
+  // fault — and saying "no usable measurement this session" about a session
+  // that measured hundreds of resolves sends a reader to look for a recorder
+  // that is working fine.
+  it('separates "measured, never with the database free" from "measured nothing"', () => {
+    const history20 = history(20, () => sample({ queries: { 'core.ancestors': q(40) } }))
+    const busy = sample({ queries: { 'core.ancestors': noUncontendedSamples(600) } })
+    expect(qr(busy, history20)[0]).toEqual({ status: 'insufficient', reason: 'never-uncontended' })
+
+    const silent = sample({ queries: {} })
+    expect(qr(silent, history20)[0]).toEqual({ status: 'insufficient', reason: 'no-current-sample' })
+  })
 })
 
 /**

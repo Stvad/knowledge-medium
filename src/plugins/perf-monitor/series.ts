@@ -65,7 +65,7 @@ export type TrendResult =
    *  (live counters, a late-enabled recorder); 'no-baseline' is a FULL history
    *  that happens to be all zeros, where telling the user to keep waiting
    *  points at the one thing that is not the problem. */
-  | { status: 'insufficient'; reason: 'history' | 'no-current-sample' | 'no-baseline' }
+  | { status: 'insufficient'; reason: 'history' | 'no-current-sample' | 'no-baseline' | 'never-uncontended' }
   /** `baselineCount` is sessions actually consumed, not rows loaded — rows with no usable sample are filtered out before the median. */
   | { status: 'steady'; baselineCount: number }
   | { status: 'regressed'; regression: Regression; baselineCount: number }
@@ -75,6 +75,13 @@ const INSUFFICIENT: TrendResult = { status: 'insufficient', reason: 'history' }
 const NO_CURRENT_SAMPLE: TrendResult = { status: 'insufficient', reason: 'no-current-sample' }
 /** History enough, and every session in it zero — there is no ratio to form. */
 const NO_BASELINE: TrendResult = { status: 'insufficient', reason: 'no-baseline' }
+/** Queries WERE measured; none of them ever ran with the database free, so
+ *  there is nothing comparable to trend. Distinct from `no-current-sample`,
+ *  which says the recorder produced nothing — and for a query that only ever
+ *  runs inside a render fan-out this is the EXPECTED state, not a gap waiting
+ *  closes. Reporting it as a missing sample would send a reader to look for a
+ *  broken recorder. */
+const NEVER_UNCONTENDED: TrendResult = { status: 'insufficient', reason: 'never-uncontended' }
 
 export interface Regression {
   /** Stable machine id, e.g. `query:groupedBacklinks.forBlock`. */
@@ -162,16 +169,28 @@ export const partlyJudged = (results: readonly TrendResult[]): boolean =>
  *  — missing NOW, not necessarily forever. `some`, and deliberately no
  *  `anyJudged` guard: a set with one metric judged and another awaiting its
  *  sample is exactly what the scheduler must come back to, and requiring
- *  nothing to have been judged would stop it rechecking the unmeasured one. */
+ *  nothing to have been judged would stop it rechecking the unmeasured one.
+ *
+ *  `never-uncontended` counts: a session that has only navigated has no
+ *  comparable timing YET, and the quiet stretch that produces one may still be
+ *  coming. Leaving it out would stop the scheduler exactly where rechecking is
+ *  the thing most likely to pay. */
 export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean =>
   results.length > 0 &&
-  results.some((r) => r.status === 'insufficient' && r.reason === 'no-current-sample')
+  results.some((r) => r.status === 'insufficient' &&
+    (r.reason === 'no-current-sample' || r.reason === 'never-uncontended'))
 
 /** Nothing judged, and at least one metric had a full but all-zero baseline —
  *  the gap waiting cannot close. `some`, like `awaitingCurrentSample`: it names
  *  the more specific reason where one exists. */
 export const lacksBaseline = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status === 'insufficient' && r.reason === 'no-baseline')
+
+/** Nothing comparable was measured, and waiting will not change that on this
+ *  workload. `some`, like the two above: it names the more specific reason
+ *  where one exists. */
+export const lacksUncontendedSamples = (results: readonly TrendResult[]): boolean =>
+  results.some((r) => r.status === 'insufficient' && r.reason === 'never-uncontended')
 
 /** Sessions the THINNEST judged comparison rested on, or 0 if none was
  *  judged — smallest, not largest, so a clean verdict isn't overstated. */
@@ -248,8 +267,14 @@ export const queryRegressions = (
   }
   // Nothing judged isn't nothing to say: an empty list would leave fan-out
   // alone in the series, reading as a clean bill nobody actually checked. One aggregate result, not one per skipped query.
+  //
+  // WHICH nothing, though: a session that measured queries and never caught one
+  // with the database free is a different report from one that measured none.
+  const measuredSomething = Object.keys(current.queries).length > 0
   return {
-    results: results.length === 0 ? [NO_CURRENT_SAMPLE] : results,
+    results: results.length === 0
+      ? [measuredSomething ? NEVER_UNCONTENDED : NO_CURRENT_SAMPLE]
+      : results,
     clusteredTail: clusteredTail.sort(),
   }
 }

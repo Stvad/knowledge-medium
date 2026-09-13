@@ -5028,10 +5028,10 @@ export class Repo {
           //
           // The wall-clock alone is not comparable between sessions: on a
           // connection pool shallower than the fan-out, it is mostly the queue
-          // ahead of this resolve, so it moves with render order. `mark` opens
-          // the window that decides whether this particular resolve had the
-          // pool to itself; only those samples mean the same thing twice.
-          const poolMark = this.dbMetrics.contention.mark()
+          // ahead of this resolve, so it moves with render order. This window
+          // decides whether this particular resolve had the pool to itself;
+          // only those samples mean the same thing twice.
+          const poolWindow = this.dbMetrics.contention.openWindow()
           const t0 = performance.now()
           try {
             const raw = await q.resolve(validated, this.makeQueryCtx(ctx, registry, 0))
@@ -5046,7 +5046,7 @@ export class Repo {
             this.queryMetrics.record(
               fullName,
               performance.now() - t0,
-              this.dbMetrics.contention.wasUncontended(poolMark),
+              this.dbMetrics.contention.closeWindow(poolWindow),
             )
           }
         },

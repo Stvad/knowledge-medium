@@ -76,6 +76,7 @@ const metricsFixture = (over: Partial<ReturnType<Repo['metrics']>> = {}): Return
   dbContention: {
     calls: 40, concurrentIssues: 11, maxDepth: 4, busyMs: 812.345, sharedWork: 2,
     uncontendedCalls: 29, uncontendedRead: timing({ calls: 29, p50Ms: 0.6, p95Ms: 1.4 }),
+    foreignIntervals: 3, syncObserved: true,
   },
   slowestTx: { description: 'append tag [[Private Page]]', ms: 91 },
   txLog: [{ description: 'rename property Secret', ms: 12 }],
@@ -213,6 +214,7 @@ describe('buildInteractionRecord', () => {
     expect(record.dbContention).toEqual({
       calls: 40, concurrentIssues: 11, maxDepth: 4, busyMs: 812.35, sharedWork: 2,
       uncontendedCalls: 29, uncontendedReadP50Ms: 0.6, uncontendedReadP95Ms: 1.4,
+      foreignIntervals: 3, syncObserved: true,
     })
   })
 

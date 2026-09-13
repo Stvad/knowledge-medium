@@ -53,6 +53,7 @@ const DATA = {
   dbContention: {
     calls: 0, concurrentIssues: 0, maxDepth: 0, busyMs: 0, sharedWork: 0,
     uncontendedCalls: 0, uncontendedReadP50Ms: 0, uncontendedReadP95Ms: 0,
+    foreignIntervals: 0, syncObserved: false,
   },
   handles: { count: 0, totalDeps: 0, maxDeps: 0, p50Deps: 0, p95Deps: 0, topHeavy: [] },
 } satisfies InteractionRecordData

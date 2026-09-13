@@ -223,25 +223,104 @@ describe('DbContention', () => {
     expect(pool.snapshot().busyMs).toBe(7)
   })
 
-  it('excludes a window that a coalescer served shared work during', () => {
+  it('excludes windows that a coalescer served shared work across', () => {
     const {pool, set} = atClock()
-    // Exactly the shape of N callers awaiting one batched statement: the pool
+    // Exactly the shape of N resolves awaiting one batched statement: the pool
     // is idle for each of them, and their identical wall-clocks are ONE
     // observation. Only the coalescer knows, so only it can say.
-    const mark = pool.mark()
+    const first = pool.openWindow()
+    const second = pool.openWindow()
     set(3)
     pool.noteSharedWork()
     set(9)
-    expect(pool.wasUncontended(mark)).toBe(false)
+    expect(pool.closeWindow(first)).toBe(false)
+    expect(pool.closeWindow(second)).toBe(false)
+  })
+
+  it('lets a lone observer keep its batch: shared work needs a second window', () => {
+    const {pool, set} = atClock()
+    // `core.manyAncestors` asks the batcher for every id it was given, inside
+    // ONE resolve. That batch is its own work, not work shared with another
+    // observation — billing it as shared would bar the query from ever being
+    // measured cleanly.
+    const only = pool.openWindow()
+    set(3)
+    pool.noteSharedWork()
+    set(9)
+    expect(pool.closeWindow(only)).toBe(true)
   })
 
   it('judges a window opened while a call was already in flight as contended', () => {
     const {pool, set} = atClock()
     const inFlight = pool.begin()
-    const mark = pool.mark()
+    const window = pool.openWindow()
     set(5)
     pool.end(inFlight, 'read')
-    expect(pool.wasUncontended(mark)).toBe(false)
+    expect(pool.closeWindow(window)).toBe(false)
+  })
+
+  it('refuses to judge a window that spans a reset, however the counters land', () => {
+    const {pool, set} = atClock()
+    // The counters are zeroed under the open window and then climb back through
+    // the values it holds. Without a span identity they compare EQUAL and a
+    // thoroughly contended window reads as clean.
+    const contended = pool.begin()
+    set(1)
+    const other = pool.begin()
+    pool.end(other, 'read')
+    pool.end(contended, 'read')
+    const window = pool.openWindow()
+    set(2)
+    pool.reset()
+    const a = pool.begin()
+    const b = pool.begin()
+    set(4)
+    pool.end(b, 'read')
+    pool.end(a, 'read')
+    expect(pool.closeWindow(window)).toBe(false)
+  })
+
+  it('keeps the uncontended count consistent with the call count across a reset', () => {
+    const {pool, set} = atClock()
+    const spanning = pool.begin()
+    pool.reset()
+    set(5)
+    pool.end(spanning, 'read')
+    const s = pool.snapshot()
+    // A call that began in the previous span is not one of this span's calls,
+    // so it must not be one of this span's uncontended ones either — a
+    // snapshot reading `calls: 0` beside `uncontendedCalls: 1` describes a
+    // measurement that did not happen here.
+    expect(s.calls).toBe(0)
+    expect(s.uncontendedCalls).toBe(0)
+  })
+
+  it('treats bracketed sync work as occupying the pool', () => {
+    const {pool, set} = atClock()
+    // The sync engine connects to the raw database before the Repo wraps it, so
+    // its reads and writes never reach `begin`. They are on the same
+    // connections regardless, and a read queued behind them is not a clean
+    // measurement of anything.
+    pool.beginForeign()
+    const ticket = pool.begin()
+    set(20)
+    pool.end(ticket, 'read')
+    pool.endForeign()
+    const s = pool.snapshot()
+    expect(s.uncontendedRead.calls).toBe(0)
+    expect(s.maxDepth).toBe(2)
+    expect(s.foreignIntervals).toBe(1)
+    // Occupancy only: sync work is not ours to report as a db call.
+    expect(s.calls).toBe(1)
+  })
+
+  it('reports whether sync was observable at all', () => {
+    const {pool} = atClock()
+    // Zero foreign intervals is ambiguous — a quiet session and a session whose
+    // status channel never reached us look identical. This names the difference.
+    expect(pool.snapshot().syncObserved).toBe(false)
+    pool.markSyncObserved()
+    expect(pool.snapshot().syncObserved).toBe(true)
   })
 
   it('keeps uncontended WRITE timings out of the read reservoir', () => {

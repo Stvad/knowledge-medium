@@ -175,38 +175,61 @@ describe('ancestorWalk shared-work reporting', () => {
   const meteredDb = () => {
     const {db, statements} = fakeDb()
     const metrics = new DbMetrics()
+    const pool = metrics.contention
     return {
       db: wrapDbWithMetrics(db, metrics) as QueryReadDb,
       statements,
-      shared: () => metrics.contention.snapshot().sharedWork,
+      pool,
+      shared: () => pool.snapshot().sharedWork,
+      /** Run `walk` as N concurrent query resolves would — each an observation
+       *  window of its own, which is what makes a shared statement shared. */
+      asResolves: async <T>(n: number, walk: () => Promise<T>) => {
+        const windows = Array.from({length: n}, () => pool.openWindow())
+        try { return await walk() } finally { windows.forEach(w => pool.closeWindow(w)) }
+      },
     }
   }
 
-  it('reports one statement answering several ids as shared work', async () => {
-    const {db, statements, shared} = meteredDb()
+  it('reports one statement answering several separate resolves as shared work', async () => {
+    const {db, statements, shared, asResolves} = meteredDb()
 
-    await Promise.all([ancestorWalk(db, 'a'), ancestorWalk(db, 'b')])
+    await asResolves(2, () => Promise.all([ancestorWalk(db, 'a'), ancestorWalk(db, 'b')]))
 
     expect(statements.map(s => s.ids)).toEqual([['a', 'b']])
-    // Both callers saw an idle pool and recorded the same wall-clock. Without
-    // this signal each is an independent measurement of a database at rest,
-    // and `calls` counts two where there was one read.
+    // Both resolves saw an idle pool and recorded the same wall-clock. Without
+    // this signal each is an independent measurement of a database at rest, and
+    // the call count says two where there was one read.
     expect(shared()).toBeGreaterThan(0)
   })
 
-  it('reports a second caller for an already-queued id as shared work', async () => {
-    const {db, statements, shared} = meteredDb()
+  it('reports a second resolve joining an already-queued id as shared work', async () => {
+    const {db, statements, shared, asResolves} = meteredDb()
 
-    await Promise.all([ancestorWalk(db, 'a'), ancestorWalk(db, 'a')])
+    await asResolves(2, () => Promise.all([ancestorWalk(db, 'a'), ancestorWalk(db, 'a')]))
 
     expect(statements.map(s => s.ids)).toEqual([['a']])
     expect(shared()).toBeGreaterThan(0)
   })
 
-  it('reports nothing shared when one caller is answered alone', async () => {
-    const {db, shared} = meteredDb()
+  // `core.manyAncestors` and `core.recentActivity` both do exactly this: one
+  // resolver asking the batcher for every id it was handed. The batch is that
+  // resolve's OWN work, and calling it shared would bar those queries from ever
+  // being measured cleanly — a permanent, silent gap rather than a thin one.
+  it('reports nothing shared when ONE resolve batches many ids', async () => {
+    const {db, statements, shared, asResolves} = meteredDb()
 
-    await ancestorWalk(db, 'a')
+    await asResolves(1, () => Promise.all([
+      ancestorWalk(db, 'a'), ancestorWalk(db, 'b'), ancestorWalk(db, 'c'),
+    ]))
+
+    expect(statements.map(s => s.ids)).toEqual([['a', 'b', 'c']])
+    expect(shared()).toBe(0)
+  })
+
+  it('reports nothing shared when one caller is answered alone', async () => {
+    const {db, shared, asResolves} = meteredDb()
+
+    await asResolves(1, () => ancestorWalk(db, 'a'))
 
     // The discriminator has to stay silent here, or every ancestors resolve is
     // contended and the query keeps no comparable samples at all.

@@ -63,6 +63,11 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
   'not-recording': (s) => `no ${s} record for this session (${s} recording may be off)`,
   'history-short': (s) => `${s} history still building`,
   'no-baseline': (s) => `no ${s} baseline to compare against (recent sessions all measured zero)`,
+  // Says what to do about it, because waiting is NOT what to do: these figures
+  // are only taken while the database is otherwise idle, and a session spent
+  // navigating never is.
+  'never-uncontended': (s) =>
+    `${s} queries ran, but never with the database free — no comparable timing this session`,
   'partly-judged': (s) => `some ${s} metrics could not be judged this session`,
 }
 
