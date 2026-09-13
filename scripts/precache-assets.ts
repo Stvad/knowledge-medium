@@ -48,6 +48,16 @@ const EXCLUDE_PATHS = new Set(['sw.js'])
 export const isPrecacheableAsset = (relPath: string): boolean =>
   ASSET_EXTENSION.test(relPath) && !EXCLUDE_PATHS.has(relPath)
 
+/** The local-database worker's graph, which a cold launch needs before first
+ *  paint but which no HTML tag names: the DB and VFS-probe worker scripts, the
+ *  VFS variants the app can select (`src/data/localDbVfs.ts`), and the
+ *  matching wa-sqlite builds with their wasm. The `mc-` (cipher) builds are
+ *  never selected (no `encryptionKey` is passed) and stay in the rest list.
+ *  Dist-relative POSIX paths in, the matching subset out. */
+const BOOT_WORKER_ASSET = /^assets\/(?:[^/]+\.worker-[^/]+\.js|(?:OPFSCoopSyncVFS|OPFSWriteAheadVFS|FacadeVFS)-[^/]+\.js|wa-sqlite(?:-async)?-[^/]+\.(?:js|wasm))$/
+export const bootWorkerAssets = (allFiles: readonly string[]): string[] =>
+  allFiles.filter(rel => BOOT_WORKER_ASSET.test(rel)).sort()
+
 /**
  * Partition the emitted graph into the "rest" precache list — every
  * precacheable asset that is NOT already in the first-paint set. The SW installs
