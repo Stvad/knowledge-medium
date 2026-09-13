@@ -258,7 +258,7 @@ export class DbContention {
    *  distribution leans fast and the trend UNDER-reports a regression confined
    *  to a slow path. Accepted over the alternative — admitting burst-sized
    *  samples as clean is the defect this whole file exists to end, and it makes
-   *  the metric wrong rather than conservative. Tracked; see the PR. */
+   *  the metric wrong rather than conservative. */
   private isCleanWindow(mark: ContentionMark): boolean {
     return this.wasUnqueued(mark) &&
       this.concurrentIssuesTotal === mark.concurrentIssues &&
