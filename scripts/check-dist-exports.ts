@@ -1,6 +1,7 @@
 /**
- * Post-build gate: every export the extension API catalog names must survive
- * into the emitted module.
+ * Post-build gate, two contracts: every export the extension API catalog names
+ * must survive into the emitted module, and the boot graph must have bundled
+ * into one chunk (the shape gate at the end).
  *
  * The failure is SILENT: every module is a build entry written to its own
  * path whether or not its exports survived, so a dropped export leaves the
@@ -23,10 +24,12 @@ import { extensionApiCatalog } from '../src/extensions/apiCatalog'
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const distDir = path.join(rootDir, 'dist')
 
-if (!fs.existsSync(distDir)) {
-  console.error('[check-dist-exports] no dist/ — run the build first')
+const fail = (message: string): never => {
+  console.error(`[check-dist-exports] ${message}`)
   process.exit(1)
 }
+
+if (!fs.existsSync(distDir)) fail('no dist/ — run the build first')
 
 /** Public names in a module's `export{…}` clauses.
  *
@@ -55,27 +58,6 @@ const emittedExportNames = (text: string): Set<string> => {
     }
   }
   return names
-}
-
-// Shape gate for the boot-graph chunk (vite.config.ts `codeSplitting`): the app
-// entry must be a facade over one `chunks/app-*.js`, and the HTML must load one
-// module script. If the chunk group were silently inert (a renamed entry, an
-// option rename) the build would still succeed and ship ~1,500 boot files.
-const mainFacade = fs.readFileSync(path.join(distDir, 'src/main.js'), 'utf8')
-  .replace(/\/\/#\s*sourceMappingURL=.*$/m, '').trim()
-if (!/^import\s*["']\.\.\/chunks\/app-[^"']+\.js["'];?$/.test(mainFacade)) {
-  console.error('[check-dist-exports] src/main.js is not a facade over the app chunk:\n' + mainFacade.slice(0, 300))
-  process.exit(1)
-}
-const appChunks = fs.readdirSync(path.join(distDir, 'chunks')).filter(f => /^app-[^.]+\.js$/.test(f))
-if (appChunks.length !== 1) {
-  console.error(`[check-dist-exports] expected one chunks/app-*.js, found ${appChunks.length}`)
-  process.exit(1)
-}
-const moduleScripts = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8').match(/<script[^>]*type="module"[^>]*>/g) ?? []
-if (moduleScripts.length !== 1) {
-  console.error(`[check-dist-exports] expected one <script type="module"> in index.html, found ${moduleScripts.length}`)
-  process.exit(1)
 }
 
 const missing: string[] = []
@@ -109,3 +91,23 @@ if (missing.length) {
 if (unresolved.length || missing.length) process.exit(1)
 
 console.log(`[check-dist-exports] ${checked} cataloged exports present across ${extensionApiCatalog.length} modules.`)
+
+// Shape gate for the boot-graph chunk (vite.config.ts `codeSplitting`): the app
+// entry must be a facade over one `chunks/app-*.js`, and the HTML must load one
+// module script. If the chunk group were silently inert (a renamed entry, an
+// option rename) the build would still succeed and ship ~1,500 boot files.
+const mainFacade = fs.readFileSync(path.join(distDir, 'src/main.js'), 'utf8')
+  .replace(/\/\/#\s*sourceMappingURL=.*$/m, '').trim()
+if (!/^import\s*["']\.\.\/chunks\/app-[^"']+\.js["'];?$/.test(mainFacade)) {
+  fail('src/main.js is not a facade over the app chunk:\n' + mainFacade.slice(0, 300))
+}
+const appChunks = fs.readdirSync(path.join(distDir, 'chunks')).filter(f => /^app-[^.]+\.js$/.test(f))
+if (appChunks.length !== 1) fail(`expected one chunks/app-*.js, found ${appChunks.length}`)
+// The group captures the entry's static closure recursively; were that off,
+// the chunk would hold main.tsx alone (a few KB) behind the same facade.
+const appChunkBytes = fs.statSync(path.join(distDir, 'chunks', appChunks[0])).size
+if (appChunkBytes < 1_000_000) fail(`chunks/${appChunks[0]} is ${appChunkBytes} bytes; the boot graph did not bundle into it`)
+const moduleScripts = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8').match(/<script[^>]*type="module"[^>]*>/g) ?? []
+if (moduleScripts.length !== 1) fail(`expected one <script type="module"> in index.html, found ${moduleScripts.length}`)
+
+console.log(`[check-dist-exports] boot shape: one app chunk, a facade entry, one module script.`)
