@@ -89,8 +89,7 @@ class AncestorBatcher {
    *  that knows the difference.
    *
    *  Once per STATEMENT, from the flush, because that is what the counter
-   *  counts. Reporting at join time instead said 2 for three resolves sharing
-   *  one id, which is a caller-join count wearing a shared-read count's name. */
+   *  counts — not once per caller that joined, which would count joins. */
   private noteShared(): void {
     this.pool?.noteSharedWork()
   }

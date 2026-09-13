@@ -154,9 +154,11 @@ export interface ContentionSnapshot {
   /** Deepest simultaneous occupancy seen, our calls and observed sync work
    *  together. `1` means nothing ever overlapped. */
   readonly maxDepth: number
-  /** Union of the intervals during which the pool was occupied — NOT the sum
-   *  of call durations, which double-counts overlap. Against a window's elapsed
-   *  time, how much of it the database was idle for. */
+  /** Union of the intervals during which the pool was occupied by anything this
+   *  tracker saw — our calls AND bracketed sync work, which starts an interval
+   *  of its own. NOT the sum of call durations, which double-counts overlap.
+   *  Against elapsed time it bounds how much of a window the database was idle
+   *  for, from below: unobserved work looks like idleness here too. */
   readonly busyMs: number
   /** Coalescer flushes that answered more than one open observer. */
   readonly sharedWork: number

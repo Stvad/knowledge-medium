@@ -64,39 +64,35 @@ export interface QueryTimingSample extends TimingSample {
   }
 }
 
-/** How busy the DB connection pool was over the session. Stored for diagnosis,
- *  and NOT compared by `series.ts`: like `db`, these are page totals that
- *  include the recorder's own reads — and since the recorder samples on idle,
- *  its own uncontended reads land squarely in `uncontendedRead`, which on a
- *  quiet session is most of it. The per-query `uncontended` samples above are
- *  the comparable ones. */
+/** A session's `ContentionSnapshot`, flattened for storage.
+ *
+ *  EVERY FIELD BELOW MEANS WHAT IT MEANS ON `ContentionSnapshot`, and that
+ *  declaration is the one place their semantics are written down — including
+ *  what each can and cannot claim about a pool this tracker only partly
+ *  observes. Restating any of it here is how the two came to disagree: a
+ *  correction lands on one copy and the other keeps the old claim.
+ *
+ *  What IS specific to storage is documented here, and nothing else.
+ *
+ *  Stored for diagnosis and NOT compared by `series.ts`: like `db`, these are
+ *  page totals including the recorder's own reads, and since it samples on idle
+ *  its own reads land squarely among the uncontended ones — on a quiet session,
+ *  most of them. The per-query `uncontended` samples above are the comparable
+ *  ones. */
 export interface ContentionSample {
   calls: number
-  /** Calls issued while the pool was already occupied. OVERLAP, not measured
-   *  queueing: where the pool has two connections an arriving read can take the
-   *  free one and wait for nothing, and this counts it just the same. Read it
-   *  as how much of the session had contention available to it, never as how
-   *  much recorded time was spent queued. */
   concurrentIssues: number
   maxDepth: number
-  /** Union of the intervals with at least one call in flight. Against
-   *  `sessionMs` this says how much of the session the database was idle for;
-   *  against the sum of the timings above, how much of them was overlap. */
   busyMs: number
-  /** Coalescer flushes that answered more than one caller. */
   sharedWork: number
-  /** Calls, reads and writes together, issued into an EMPTY pool. A lower
-   *  bound on "never waited" rather than a count of it: where the pool has two
-   *  connections a call arriving alongside one other can take the free
-   *  connection and wait for nothing, and this leaves it out. Same direction as
-   *  `concurrentIssues` above, which counts that call as overlap. */
   uncontendedCalls: number
-  /** Samples backing the two percentiles below: unqueued READS still retained
-   *  in the reservoir, so at most its capacity rather than the lifetime total.
-   *  Stored separately from `uncontendedCalls` because reads are a strict
-   *  subset of it — a session with unqueued writes and no unqueued reads would
-   *  otherwise read as a real distribution of zero-millisecond reads. Zero
-   *  means the percentiles are not measurements. */
+  /** Flattened from the reservoir's `sampleCount`, not its lifetime `calls`:
+   *  the percentiles below are computed over what the buffer still holds, and
+   *  the lifetime figure would claim thousands of samples behind a number drawn
+   *  from at most its capacity. Kept separate from `uncontendedCalls` because
+   *  reads are a strict subset of it — a session with unqueued writes and no
+   *  unqueued reads would otherwise store as a real distribution of
+   *  zero-millisecond reads. Zero means the percentiles are not measurements. */
   uncontendedReadCalls: number
   uncontendedReadP50Ms: number
   uncontendedReadP95Ms: number
