@@ -669,13 +669,17 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
    *  Occupancy without a timing: the duration is the caller's work, not a
    *  statement's cost, and averaging an export into a latency reservoir would
    *  say nothing about either. */
-  const heldLock = <R>(
+  const heldLock = async <R>(
     take: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>,
     fn: (tx: unknown) => Promise<R>,
   ): Promise<R> => {
     const ticket = pool.begin()
     try {
-      return take(fn)
+      // AWAITED, not returned: a bare `return take(fn)` runs the `finally` the
+      // moment the promise is handed back, and the lock is held for as long as
+      // it is PENDING. Releasing occupancy there reports the pool free for the
+      // entire operation this exists to observe.
+      return await take(fn)
     } finally {
       pool.end(ticket, 'write')
     }

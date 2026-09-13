@@ -614,7 +614,13 @@ describe('wrapDbWithMetrics', () => {
     // checkpoint and a copy of the whole database. Passing through untracked,
     // a read issued during one starts at depth zero and is recorded as having
     // had the pool to itself while it waits behind the export.
-    base.writeLock = async <R,>(fn: (tx: unknown) => Promise<R>): Promise<R> => fn({})
+    // Acquires the connection BEFORE running the callback, as the real one
+    // does. A fake that invokes it synchronously lets the read land before a
+    // mistakenly-early release and reports clean either way.
+    base.writeLock = async <R,>(fn: (tx: unknown) => Promise<R>): Promise<R> => {
+      await sleep(1)
+      return fn({})
+    }
     const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb> & {
       writeLock: <R>(fn: (tx: unknown) => Promise<R>) => Promise<R>
     }
@@ -627,6 +633,9 @@ describe('wrapDbWithMetrics', () => {
 
     expect(duringLock).toBe(0)
     expect(metrics.contention.snapshot().maxDepth).toBe(2)
+    // And the lock is only released once its work is done, not when its promise
+    // is handed over.
+    expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(0)
   })
 
   it('leaves a lock the database does not have absent rather than inventing it', () => {
