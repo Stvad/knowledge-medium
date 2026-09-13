@@ -522,15 +522,31 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
  *  OUTSIDE the collapse branch; inside it is a no-op that looks like a
  *  fix.
  *
- *  It WALKS every block passed, including ones no one has scrolled to:
- *  the first subscriber to a cold `LoaderHandle` starts its load, so for
- *  this store retaining a chain and fetching it are the same act. Accepted
- *  rather than narrowed — it is one coalesced statement per chunk of 500
- *  ids, and it is what the flat backlinks panel already did. Retaining
- *  only the handles a surface has ALREADY resolved would avoid the cold
- *  ones (#956) at the cost of a retained set that changes as they land. */
+ *  It does NOT walk them. `handle.retain()` holds a handle against GC
+ *  without observing it, so a block nobody has scrolled to keeps a cold
+ *  handle and its chain is read when its entry mounts. Subscribing here
+ *  instead — which is what `useManyParents` does, and what this hook used
+ *  to call — would load every chain, because the first subscriber to a cold
+ *  handle starts its load.
+ *
+ *  Retaining every id rather than only the resolved ones is what keeps the
+ *  retained set STABLE: it is the caller's id list, so the effect runs once
+ *  per id-set change instead of re-running as chains land (#956).
+ *
+ *  The values are deliberately not read. A hook that read them would
+ *  re-render the caller when the walks land — on a 480-backlink panel that
+ *  is a re-render of 480 entries for a value the caller discards. */
 export const useRetainParents = (blocks: readonly Block[]): void => {
-  useManyParents(blocks)
+  const repo = useRepo()
+  const ids = useStableJson(Array.from(new Set(blocks.map(block => block.id))).sort())
+  useEffect(() => {
+    // Acquired here rather than from a render-phase memo: `retain()` is a
+    // silent no-op on a disposed handle, and only a handle the store just
+    // handed back is guaranteed live.
+    const handles = ids.map(id => repo.query.ancestors({id}))
+    for (const handle of handles) handle.retain()
+    return () => { for (const handle of handles) handle.release() }
+  }, [ids, repo])
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in

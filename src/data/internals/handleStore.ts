@@ -970,6 +970,17 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     void this.runLoader(batch).catch(() => {/* error on handle */})
   }
 
+  /** Hold this handle against GC WITHOUT observing it: no load starts and
+   *  no listener is registered, so a retained-but-unobserved handle stays
+   *  `'idle'` until something actually asks for its value.
+   *
+   *  That distinction is the point of the pair being callable from outside:
+   *  `subscribe` is the only OTHER way to keep a handle alive, and its first
+   *  subscriber starts a load — so a surface that wants a chain to survive an
+   *  unmount had no way to say so without also fetching it. `useRetainParents`
+   *  is that caller. Balance every `retain()` with exactly one `release()`;
+   *  both no-op on a disposed handle, so an unbalanced pair leaks nothing but
+   *  also holds nothing. */
   retain(): void {
     if (this.disposed) return
     this.refCount++
