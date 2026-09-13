@@ -593,11 +593,14 @@ export interface QueryTimingSnapshot extends TimingSnapshot {
  *  pull the full type — `wrapDbWithMetrics` returns whatever it was
  *  given, with timing-instrumented call sites. */
 interface TimedDb {
-  writeTransaction<R>(fn: (tx: TimedTxDb) => Promise<R>): Promise<R>
+  /** `options` carries the caller's lock options (a timeout, today). Typed as
+   *  `unknown` and forwarded untouched: a wrapper that drops an argument it
+   *  does not understand changes behaviour it was only supposed to time. */
+  writeTransaction<R>(fn: (tx: TimedTxDb) => Promise<R>, options?: unknown): Promise<R>
   /** Held for the caller's whole callback. Not every database exposes them, so
    *  both are optional and wrapped only when present. */
-  writeLock?<R>(fn: (tx: unknown) => Promise<R>): Promise<R>
-  readLock?<R>(fn: (tx: unknown) => Promise<R>): Promise<R>
+  writeLock?<R>(fn: (tx: unknown) => Promise<R>, options?: unknown): Promise<R>
+  readLock?<R>(fn: (tx: unknown) => Promise<R>, options?: unknown): Promise<R>
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
@@ -649,9 +652,12 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
     }
   }
 
-  const timedWriteTransaction = <R>(fn: (tx: TimedTxDb) => Promise<R>): Promise<R> =>
+  const timedWriteTransaction = <R>(
+    fn: (tx: TimedTxDb) => Promise<R>,
+    options?: unknown,
+  ): Promise<R> =>
     timed('write', metrics.writeTransaction, () =>
-      db.writeTransaction(async (tx: TimedTxDb): Promise<R> => fn(wrappedTx(tx))))
+      db.writeTransaction(async (tx: TimedTxDb): Promise<R> => fn(wrappedTx(tx)), options))
 
   const timedGetAll = <T>(sql: string, params?: unknown[]): Promise<T[]> =>
     timed('read', metrics.getAll, () => db.getAll<T>(sql, params))
@@ -675,7 +681,7 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
    *  statement's cost, and averaging an export into a latency reservoir would
    *  say nothing about either. */
   const heldLock = async <R>(
-    take: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>,
+    take: (fn: (tx: unknown) => Promise<R>) => Promise<R>,
     fn: (tx: unknown) => Promise<R>,
   ): Promise<R> => {
     const ticket = pool.begin()
@@ -699,12 +705,12 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
     // Only when the underlying database has them; otherwise leave the key
     // absent so the Proxy reports them missing exactly as it did before.
     ...(typeof db.writeLock === 'function'
-      ? {writeLock: <R>(fn: (tx: unknown) => Promise<R>) =>
-        heldLock((inner) => db.writeLock!(inner), fn)}
+      ? {writeLock: <R>(fn: (tx: unknown) => Promise<R>, options?: unknown) =>
+        heldLock((inner) => db.writeLock!(inner, options), fn)}
       : {}),
     ...(typeof db.readLock === 'function'
-      ? {readLock: <R>(fn: (tx: unknown) => Promise<R>) =>
-        heldLock((inner) => db.readLock!(inner), fn)}
+      ? {readLock: <R>(fn: (tx: unknown) => Promise<R>, options?: unknown) =>
+        heldLock((inner) => db.readLock!(inner, options), fn)}
       : {}),
   }
 

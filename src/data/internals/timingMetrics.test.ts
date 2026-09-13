@@ -638,6 +638,33 @@ describe('wrapDbWithMetrics', () => {
     expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(0)
   })
 
+  it('forwards lock and transaction options instead of swallowing them', async () => {
+    const metrics = new DbMetrics()
+    const seen: unknown[] = []
+    const base = makeFakeDb() as ReturnType<typeof makeFakeDb> & Record<string, unknown>
+    base.writeLock = async <R,>(fn: (tx: unknown) => Promise<R>, o?: unknown): Promise<R> => {
+      seen.push(o); return fn({})
+    }
+    base.readLock = async <R,>(fn: (tx: unknown) => Promise<R>, o?: unknown): Promise<R> => {
+      seen.push(o); return fn({})
+    }
+    base.writeTransaction = async <R,>(fn: (tx: unknown) => Promise<R>, o?: unknown): Promise<R> => {
+      seen.push(o); return fn({execute: async () => ({}), getAll: async () => [],
+        getOptional: async () => null, get: async () => ({})})
+    }
+    const wrapped = wrapDbWithMetrics(base, metrics) as Record<string, (
+      fn: (tx: unknown) => Promise<unknown>, options?: unknown,
+    ) => Promise<unknown>>
+
+    await wrapped.writeLock(async () => 1, {timeoutMs: 11})
+    await wrapped.readLock(async () => 2, {timeoutMs: 22})
+    await wrapped.writeTransaction(async () => 3, {timeoutMs: 33})
+
+    // A timeout the caller asked for and the wrapper ate means waiting forever
+    // where the caller wrote a deadline. Timing a call must not change it.
+    expect(seen).toEqual([{timeoutMs: 11}, {timeoutMs: 22}, {timeoutMs: 33}])
+  })
+
   it('leaves a lock the database does not have absent rather than inventing it', () => {
     const metrics = new DbMetrics()
     const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics) as Record<string, unknown>
