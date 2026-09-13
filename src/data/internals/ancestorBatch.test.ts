@@ -229,7 +229,12 @@ describe('ancestorWalk shared-work reporting', () => {
     expect(shared()).toBe(1)
   })
 
-  it('reports nothing shared when ONE resolve batches many ids', async () => {
+  // `core.manyAncestors` and `core.recentActivity` both do exactly this: one
+  // resolver asking the batcher for every id it was handed. That batch IS the
+  // resolve's own work, and reporting it costs those queries their clean
+  // samples — accepted, because from here it is indistinguishable from the case
+  // below, and letting it through would record a shared read as a clean one.
+  it('reports shared work even when the callers may all be one resolve', async () => {
     const {db, statements, shared, asResolves} = meteredDb()
 
     await asResolves(1, () => Promise.all([
@@ -237,7 +242,21 @@ describe('ancestorWalk shared-work reporting', () => {
     ]))
 
     expect(statements.map(s => s.ids)).toEqual([['a', 'b', 'c']])
-    expect(shared()).toBe(0)
+    expect(shared()).toBe(1)
+  })
+
+  // The caller with no observation window at all — `Repo.load` with ancestors
+  // goes through this batcher outside any query. The window open across that
+  // flush absorbed its id, so it must not come out clean.
+  it('reports shared work when a caller outside any window joins the batch', async () => {
+    const {db, shared, pool} = meteredDb()
+
+    const window = pool.openWindow()
+    await Promise.all([ancestorWalk(db, 'a'), ancestorWalk(db, 'b')])
+    const clean = pool.closeWindow(window)
+
+    expect(shared()).toBe(1)
+    expect(clean).toBe(false)
   })
 
   it('reports nothing shared when one caller is answered alone', async () => {

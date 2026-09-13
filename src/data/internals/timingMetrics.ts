@@ -136,8 +136,7 @@ export interface ContentionMark {
 }
 
 /** An open query-resolve window. Distinct from a `ContentionTicket`: a ticket
- *  OCCUPIES the pool, a window merely OBSERVES it, and the count of open
- *  windows is what decides whether coalesced work was actually shared. */
+ *  OCCUPIES the pool, a window merely OBSERVES it. */
 export interface ContentionWindow {
   readonly mark: ContentionMark
 }
@@ -160,7 +159,7 @@ export interface ContentionSnapshot {
    *  Against elapsed time it bounds how much of a window the database was idle
    *  for, from below: unobserved work looks like idleness here too. */
   readonly busyMs: number
-  /** Coalescer flushes that answered more than one open observer. */
+  /** Coalescer flushes that answered more than one caller. */
   readonly sharedWork: number
   /** Calls, reads and writes together, issued into an OBSERVABLY empty pool.
    *  Not a guarantee they did not wait: what this cannot see it cannot count,
@@ -171,9 +170,9 @@ export interface ContentionSnapshot {
    *  session with unqueued writes and no unqueued reads would otherwise look
    *  like a real distribution of zero-millisecond reads. */
   readonly uncontendedRead: TimingSnapshot
-  /** Intervals of database work by the sync engine, which this cannot time but
-   *  can bracket. A FLOOR: the engine also touches the database outside the
-   *  intervals its status reports (see `watchSyncOccupancy`). Zero on a
+  /** Intervals during which the sync engine reported itself active. NOT a
+   *  measure of its database work — it reports network time too, and touches
+   *  the database outside what it reports (see `watchSyncOccupancy`). Zero on a
    *  local-only session; zero ALSO when the status channel is unavailable,
    *  which is why `syncObserved` exists beside it. */
   readonly foreignIntervals: number
@@ -209,7 +208,8 @@ export interface ContentionSnapshot {
  * everything on it:
  *   - our own calls, timed (`begin`/`end`) — complete;
  *   - the sync engine's, bracketed from its status channel (`beginForeign`) —
- *     a FLOOR, not a complete account: see `watchSyncOccupancy`;
+ *     wrong in both directions, deliberately biased towards over-bracketing:
+ *     see `watchSyncOccupancy`;
  *   - NOT anything that reaches the database without going through this proxy:
  *     a caller holding the raw handle, or one of PowerSync's own helpers, whose
  *     internal reads no wrapper placed here can see. Closing that needs the
@@ -241,7 +241,6 @@ export class DbContention {
   private sharedWorkTotal = 0
   private uncontendedTotal = 0
   private foreignTotal = 0
-  private openWindows = 0
   /** Bumped by `reset()`. Marks from an earlier span are not comparable to the
    *  current counters, whatever they now read. */
   private generation = 0
@@ -297,37 +296,36 @@ export class DbContention {
   /** Open an observation window for one query resolve. Pair with
    *  `closeWindow` in a `finally`. */
   openWindow(): ContentionWindow {
-    this.openWindows++
     return {mark: this.currentMark()}
   }
 
   /** Close it, and say whether anything observable competed with it. */
   closeWindow(window: ContentionWindow): boolean {
-    this.openWindows--
     return this.isCleanWindow(window.mark)
   }
 
   /** One read answered several callers at once. Called by request coalescers
-   *  (`ancestorBatch`), the only place that fact is known.
+   *  (`ancestorBatch`), the only place that fact is known. Every window open
+   *  across it is disqualified: N callers awaiting one statement each record
+   *  its full wall-clock, which is one observation reported N times.
    *
-   *  Recorded ONLY while more than one observation window is open. A resolver
-   *  that deliberately asks for many ids in one go (`core.manyAncestors`,
-   *  `core.recentActivity`) is a single observation whose batch is its own
-   *  work; billing it as shared would bar it from ever being measured cleanly.
-   *  What has to be caught is the other shape: N separate resolves awaiting one
-   *  statement, each recording its full wall-clock, which is one observation
-   *  reported N times.
+   *  UNCONDITIONAL, and that costs something deliberately. A resolver batching
+   *  many ids for its own single resolve (`core.manyAncestors`,
+   *  `core.recentActivity`) is one observation whose batch is its own work, and
+   *  it is disqualified anyway — so those queries keep no clean samples.
    *
-   *  The window COUNT is an approximation of window PARTICIPATION, and the gap
-   *  is narrow rather than absent: a lone batching resolver is still marked
-   *  shared if any unrelated window happens to be open. Narrow because that
-   *  other window only escapes `concurrentIssues` if it issues no database call
-   *  of its own while this one runs. Knowing exactly which windows a batch
-   *  answered needs the coalescer to be told who is asking, which is a change
-   *  to the query context every resolver sees. Accepted for now; the error is
-   *  conservative, costing clean samples rather than admitting queued ones. */
+   *  The alternative was to skip this when only one observation window is open,
+   *  which reads window COUNT as window PARTICIPATION. That is not sound: a
+   *  batch can be shared with a caller that has no window at all — `Repo.load`
+   *  with `ancestors` goes through the same batcher outside any query — and
+   *  then a query absorbs another caller's ids and records the enlarged
+   *  duration as clean. Admitting a shared sample is the failure this whole
+   *  file exists to prevent, and no amount of coverage is worth it.
+   *
+   *  Getting those queries back needs the coalescer to be told WHO is asking,
+   *  so participation can be compared instead of counted. */
   noteSharedWork(): void {
-    if (this.openWindows > 1) this.sharedWorkTotal++
+    this.sharedWorkTotal++
   }
 
   private enter(at: number, ours: boolean): ContentionMark {
@@ -466,14 +464,26 @@ const syncBusy = (s: SyncStatus | undefined): boolean =>
  * Transitions, not polling: a burst that begins and ends inside one resolve is
  * invisible to a status read taken at each end of it.
  *
- * A FLOOR ON SYNC OCCUPANCY, NOT A COMPLETE ACCOUNT. The engine touches the
- * database outside the intervals these flags describe: in `@powersync/common`
- * 1.55.0 the upload path reads the CRUD queue (`nextCrudItem`) BEFORE it sets
- * `uploading`, and updates the local target with the flag still clear when the
- * queue is empty. A read landing in one of those gaps is recorded as clean. The
- * complete fix instruments the adapter PowerSync opens, so that every user of
- * the connections passes one counter and there is no second channel to trust —
- * a change to how the local database is constructed, and so not this one.
+ * THESE FLAGS ARE NOT A MEASURE OF DATABASE WORK, and the bracket is wrong in
+ * BOTH directions rather than merely incomplete:
+ *   - too little. The engine touches the database outside the intervals they
+ *     describe — the upload path reads the CRUD queue before raising
+ *     `uploading`, and updates the local target with it still clear when the
+ *     queue is empty. A read landing in one of those gaps is recorded clean.
+ *   - too much. `uploading` is raised for the whole of `uploadCrud`, which in
+ *     this app is mostly waiting on network calls while no local connection is
+ *     held at all. Windows through that wait are rejected, and the busy time
+ *     and depth recorded here include it.
+ *
+ * Kept because the two errors are not equally bad: over-bracketing costs clean
+ * samples, under-bracketing admits a queued one, and only the second makes a
+ * figure wrong rather than scarce. Read the occupancy numbers as OBSERVED SYNC
+ * ACTIVITY, network time and all — not as database occupancy.
+ *
+ * The fix for both is to instrument the adapter PowerSync opens, where the
+ * database boundary actually is: every user of the connections passes one
+ * counter, and there is no status channel to interpret. That changes how the
+ * local database is constructed, and so is not this change.
  *
  * The listener's lifetime is the database's. Nothing detaches it, because the
  * tracker it feeds lives exactly as long — both are created here, once, per
@@ -618,12 +628,17 @@ interface TimedTxDb {
 }
 
 /** Wrap a `PowerSyncDb` with timing instrumentation. Returns a Proxy
- *  over the input — five methods (`getAll`, `getOptional`, `get`,
- *  `execute`, `writeTransaction`) are intercepted and timed; everything
- *  else (`onChange`, `close`, …) passes through to the original db.
- *  This means consumers like `exportSqliteDb` that need
- *  PowerSyncDatabase-only methods continue to work without us
- *  re-declaring them.
+ *  over the input. Intercepted:
+ *    - `getAll`, `getOptional`, `get`, `execute`, `writeTransaction` — timed
+ *      into their own reservoirs and counted as pool occupancy;
+ *    - `writeLock`, `readLock`, when the database has them — counted as
+ *      occupancy only, since their duration is the caller's work.
+ *  Every interception forwards the caller's arguments untouched, lock options
+ *  included: timing a call must not change it.
+ *
+ *  Everything else (`onChange`, `close`, …) passes through to the original db,
+ *  so consumers like `exportSqliteDb` that need PowerSyncDatabase-only methods
+ *  keep working without us re-declaring them.
  *
  *  `writeTransaction` also wraps the LockContext passed to the callback
  *  so tx-internal SQL is timed under the same metrics buckets.

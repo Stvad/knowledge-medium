@@ -258,17 +258,21 @@ describe('DbContention', () => {
     expect(pool.closeWindow(second)).toBe(false)
   })
 
-  it('lets a lone observer keep its batch: shared work needs a second window', () => {
+  it('disqualifies even a lone observer, because a batch can be shared with a caller that has no window', () => {
     const {pool, set} = atClock()
-    // `core.manyAncestors` asks the batcher for every id it was given, inside
-    // ONE resolve. That batch is its own work, not work shared with another
-    // observation — billing it as shared would bar the query from ever being
-    // measured cleanly.
+    // A resolver batching ids for its own single resolve is disqualified along
+    // with everyone else, and that costs those queries their clean samples.
+    // Deliberate: skipping this when only one window is open reads window COUNT
+    // as window PARTICIPATION, and a batch can be shared with a caller that has
+    // no window at all — `Repo.load` with ancestors uses the same batcher
+    // outside any query. The query would then absorb its ids and record the
+    // enlarged duration as clean, which is the one outcome that makes the
+    // figure wrong rather than merely scarce.
     const only = pool.openWindow()
     set(3)
     pool.noteSharedWork()
     set(9)
-    expect(pool.closeWindow(only)).toBe(true)
+    expect(pool.closeWindow(only)).toBe(false)
   })
 
   it('judges a window opened while a call was already in flight as contended', () => {
