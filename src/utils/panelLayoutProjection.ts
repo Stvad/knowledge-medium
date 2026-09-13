@@ -973,10 +973,34 @@ export const reconcilePanelRows = async (
   /** Checked at the tx's entry and exits; a mid-tx cancellation ABORTS the
    *  whole reconcile (rows roll back) via ReconcileCancelled. */
   isCancelled?: () => boolean,
+  /** The session subtree if the caller already loaded it, so the no-op check
+   *  costs no extra read. */
+  knownRows?: readonly BlockData[],
 ): Promise<{changed: boolean}> => {
   const targetSlots: LayoutSlot[] = targetSlotsOrBlockIds.map(slot =>
     typeof slot === 'string' ? {kind: 'leaf', blockId: slot} : slot,
   )
+
+  // A no-op reconcile must not cost a write transaction (the tx's journal
+  // writes are unconditional, so a same-as-current URL on iOS boot would
+  // otherwise pay OPFS commit cost for nothing). Check outside any tx
+  // whether rows already match: 'exact' slot equality covers the per-leaf
+  // property pass below, plus the same dangling-active-pointer condition
+  // the hygiene branch re-checks. Re-verified against a fresh read inside
+  // the tx in case a concurrent write lands between this read and the tx.
+  const preRows = knownRows ?? await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+  const preParent = preRows.find(row => row.id === layoutSessionBlock.id)
+  if (preParent) {
+    const preActivePanelId = sessionActivePanelId(preParent)
+    const activePointerValid = preActivePanelId === undefined || preRows.some(row => row.id === preActivePanelId)
+    if (
+      activePointerValid &&
+      sameLayoutSlots(layoutSlotsFromRows(layoutSessionBlock.id, preRows), targetSlots, 'exact')
+    ) {
+      return {changed: false}
+    }
+  }
+
   const targetBlockIds = flattenSlots(targetSlots)
   const deletedPanelRowIds: string[] = []
   // panelHistory is NON-transactional, so nothing inside the tx may mutate
@@ -1344,7 +1368,7 @@ export const applyCurrentLayoutUrl = async ({
 
   let changed: boolean
   try {
-    ({changed} = await reconcilePanelRows(repo, layoutSessionBlock, targetSlots, isCancelled))
+    ({changed} = await reconcilePanelRows(repo, layoutSessionBlock, targetSlots, isCancelled, currentRows))
   } catch (error) {
     // Cancellation observed INSIDE the tx aborted it — rows rolled back,
     // nothing to canonicalize, and the URL belongs to whoever cancelled us.

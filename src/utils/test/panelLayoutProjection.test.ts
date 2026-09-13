@@ -820,6 +820,53 @@ describe('applyCurrentLayoutUrl', () => {
   })
 })
 
+describe('reconcilePanelRows: no-op guard', () => {
+  it('does not open a tx when rows already match the target slots and active pointer', async () => {
+    await createPanelRows(['a', 'b'])
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const result = await reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
+      expect(result).toEqual({changed: false})
+      expect(txSpy).not.toHaveBeenCalled()
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+
+  it('positive control: a differing target still opens exactly one tx', async () => {
+    await createPanelRows(['a', 'b'])
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const result = await reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'c'])
+      expect(result).toEqual({changed: true})
+      expect(txSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+
+  it('still opens a tx to clear a dangling active-panel pointer even though slots already match exactly', async () => {
+    // 'exact' slot equality alone would miss this: neither side marks any
+    // leaf `active` (the target URL carries none, and the dangling pointer
+    // matches no current row either), so the guard must also re-run the
+    // hygiene branch's own check — a real row-property write is still
+    // needed even though it isn't counted as a layout change.
+    await createPanelRows(['a', 'b'])
+    await env.repo.tx(async tx => {
+      await tx.setProperty(env.layoutSessionBlockId, activePanelIdProp, 'ghost-row-id')
+    }, {scope: ChangeScope.UiState, description: 'stale active pointer probe'})
+
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const result = await reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
+      expect(result).toEqual({changed: false})
+      expect(txSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+})
+
 describe('reconcilePanelRows failure safety', () => {
   it('keeps panel history for rows whose delete is rolled back by a mid-tx throw', async () => {
     await createPanelRows(['a', 'b'])
