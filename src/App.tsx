@@ -234,9 +234,7 @@ const App = () => {
     if (initial.kind !== 'ready') return
     let inner = 0
     const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => {
-        markStartup('firstContentPaint')
-      })
+      inner = requestAnimationFrame(() => markStartup('firstContentPaint'))
     })
     return () => {
       cancelAnimationFrame(outer)

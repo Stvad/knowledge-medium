@@ -18,8 +18,8 @@
  * A SEPARATE ENTRY, NOT PART OF index.css
  * Its only consumer is dynamically-loaded extensions, which cannot render
  * before the DB opens — well after first paint — and it dwarfs the rest of the
- * stylesheet. extensionUtilitiesCss.ts loads it on demand (before an extension
- * module runs, and once shortly after first paint).
+ * stylesheet. extensionUtilitiesCss.ts loads it on demand: the extension
+ * compile path starts the load and the runtime apply waits for it.
  *
  * BUILD SHAPE
  * `source(none)` turns off automatic content detection for this entry so it
