@@ -981,13 +981,12 @@ export const reconcilePanelRows = async (
     typeof slot === 'string' ? {kind: 'leaf', blockId: slot} : slot,
   )
 
-  // A no-op reconcile must not cost a write transaction (the tx's journal
-  // writes are unconditional, so a same-as-current URL on iOS boot would
-  // otherwise pay OPFS commit cost for nothing). Check outside any tx
-  // whether rows already match: 'exact' slot equality covers the per-leaf
-  // property pass below, plus the same dangling-active-pointer condition
-  // the hygiene branch re-checks. Re-verified against a fresh read inside
-  // the tx in case a concurrent write lands between this read and the tx.
+  // A no-op reconcile must not open a tx (its journal writes are
+  // unconditional). 'exact' slot equality covers the per-leaf pass below; the
+  // dangling-active-pointer check is repeated because 'exact' cannot see it.
+  // This read is the query cache, not the write lock: a write still in flight
+  // is not seen, and the outbound projection then reconciles the URL to what
+  // it committed. Rows that differ reach the tx, which re-reads under the lock.
   const preRows = knownRows ?? await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
   const preParent = preRows.find(row => row.id === layoutSessionBlock.id)
   if (preParent) {
