@@ -15,7 +15,7 @@ import {globSync} from 'node:fs'
 
 /** Every internal module as a Rollup input, so an extension can import ANY of
  *  them at its stable `@/` path and get its full export surface. The boot
- *  graph itself is bundled into one chunk (`bootGraphChunk` below); each of
+ *  graph itself is bundled into one chunk (`codeSplitting` below); each of
  *  these entries then emits as a thin facade re-exporting from it, so the
  *  importmap contract holds while the browser loads ~3 files at boot instead
  *  of ~1,500 (the per-file loader cost, not JS linking, was ~0.5 s of an
@@ -60,37 +60,6 @@ const allSrcEntries = (rootDir: string): Record<string, string> => {
         return [posix.replace(/\.(tsx?|js)$/, ''), path.resolve(rootDir, file)]
     }))
 }
-
-/** The modules statically reachable from the app entry, recorded when the
- *  module graph is complete so the chunk assignment can bundle exactly the
- *  boot graph. Anything reached only through `import()` (babel, the media
- *  players, the authoring catalog, worker scripts) stays its own file, so a
- *  lazy boundary in the source is still a lazy boundary in the build. */
-const bootGraph = new Set<string>()
-const bootGraphChunk = (rootDir: string): Plugin => ({
-    name: 'boot-graph-chunk',
-    apply: 'build',
-    buildEnd() {
-        bootGraph.clear()
-        const entry = path.resolve(rootDir, 'src/main.tsx')
-        const queue = [entry]
-        bootGraph.add(entry)
-        while (queue.length > 0) {
-            const id = queue.pop()!
-            const info = this.getModuleInfo(id)
-            if (!info) continue
-            for (const dep of info.importedIds) {
-                if (!bootGraph.has(dep)) {
-                    bootGraph.add(dep)
-                    queue.push(dep)
-                }
-            }
-        }
-        if (bootGraph.size < 100) {
-            this.error(`boot graph walk found only ${bootGraph.size} modules; the app chunk would be empty`)
-        }
-    },
-})
 
 type RollupLogLike = {
     code?: string
@@ -160,38 +129,6 @@ export default defineConfig(({command}) => {
             externalize({
                 externals: [isReactImportExternal],
             }),
-            bootGraphChunk(__dirname),
-            {
-                name: 'only-main-entry',
-                /**
-                 * `allSrcEntries` makes every src/** file a Rollup input, so the HTML
-                 * entry chunk is "entirely imports" and Vite inlines it, emitting a
-                 * <script type="module"> tag for EVERY entry in the whole graph
-                 * instead of just the real one. Keep only the one that actually
-                 * boots the app — matched by path suffix so it works under any
-                 * deploy base path, and never a module under src/, node_modules/
-                 * or chunks/ (hundreds of those are literally named "index.js").
-                 *
-                 * `order: 'post'` so this runs after Vite has injected the tags
-                 * (transformIndexHtml's default/"normal" tier already does, in this
-                 * Vite version, but pin the order rather than rely on that).
-                 */
-                transformIndexHtml: {
-                    order: 'post',
-                    handler(html: string) {
-                        return html.replace(/<script\s+type="module" crossorigin .*?src="([^"]*)".*?><\/script>\s*/g, (match, src) => {
-                            // The real entry is either the HTML entry chunk at the
-                            // deploy root (`<base>index.js`, when Vite does not inline
-                            // it) or `src/main.js` (when it does); never a module
-                            // under src/, node_modules/ or chunks/.
-                            const isEntry =
-                                /\/src\/main\.js(?:$|[?#])/.test(src) ||
-                                (/(?:^|\/)index\.js(?:$|[?#])/.test(src) && !/\/(?:src|node_modules|chunks|assets)\//.test(src));
-                            return isEntry ? match : '';
-                        })
-                    },
-                },
-            },
             reactImportMapProductionPlugin(),
             // Substitutes the theme-boot placeholder tokens in index.html's
             // pre-paint script with the source-of-truth values from
@@ -270,10 +207,14 @@ export default defineConfig(({command}) => {
                     entryFileNames: '[name].js',
                     chunkFileNames: 'chunks/[name]-[hash].js',
                     assetFileNames: '[name][extname]',
-                    advancedChunks: {
+                    codeSplitting: {
                         minSize: 0,
                         minShareCount: 1,
-                        groups: [{name: 'app', minSize: 0, test: (id: string) => bootGraph.has(id)}],
+                        // The static closure of the entry: rolldown captures a matched
+                        // module's static dependencies recursively by default and stops
+                        // at import(), so a lazy boundary in the source is one in the
+                        // build. The emitted shape is gated by scripts/check-dist-exports.ts.
+                        groups: [{name: 'app', minSize: 0, test: (id: string) => id === path.resolve(__dirname, 'src/main.tsx')}],
                     },
                 },
                 preserveEntrySignatures: 'strict', // Preserves the signature of the entry point

@@ -2,10 +2,10 @@
  * Post-build gate: every export the extension API catalog names must survive
  * into the emitted module.
  *
- * The failure is SILENT: `preserveModules` writes each module to its own path
- * whether or not its exports survived, so a dropped export leaves the file —
- * and the extension's `import` — perfectly resolvable, just missing the
- * binding.
+ * The failure is SILENT: every module is a build entry written to its own
+ * path whether or not its exports survived, so a dropped export leaves the
+ * file — and the extension's `import` — perfectly resolvable, just missing
+ * the binding.
  *
  * It has to run against `dist/`. `apiCatalog.test.ts` makes the same assertion
  * under vitest, which resolves source, where no tree-shaking has happened;
@@ -57,18 +57,24 @@ const emittedExportNames = (text: string): Set<string> => {
   return names
 }
 
-// Shape gate for the boot-graph chunk (vite.config.ts `bootGraphChunk`): the
-// app entry must be a facade over one `chunks/app-*.js`. If the chunk group
-// were silently inert (no module-graph info at buildEnd, a renamed entry) the
-// build would still succeed and ship ~1,500 boot files again.
-const mainFacade = fs.readFileSync(path.join(distDir, 'src/main.js'), 'utf8').trim()
-if (!/^import\s*"\.\.\/chunks\/app-[^"]+\.js";?$/.test(mainFacade)) {
+// Shape gate for the boot-graph chunk (vite.config.ts `codeSplitting`): the app
+// entry must be a facade over one `chunks/app-*.js`, and the HTML must load one
+// module script. If the chunk group were silently inert (a renamed entry, an
+// option rename) the build would still succeed and ship ~1,500 boot files.
+const mainFacade = fs.readFileSync(path.join(distDir, 'src/main.js'), 'utf8')
+  .replace(/\/\/#\s*sourceMappingURL=.*$/m, '').trim()
+if (!/^import\s*["']\.\.\/chunks\/app-[^"']+\.js["'];?$/.test(mainFacade)) {
   console.error('[check-dist-exports] src/main.js is not a facade over the app chunk:\n' + mainFacade.slice(0, 300))
   process.exit(1)
 }
 const appChunks = fs.readdirSync(path.join(distDir, 'chunks')).filter(f => /^app-[^.]+\.js$/.test(f))
 if (appChunks.length !== 1) {
   console.error(`[check-dist-exports] expected one chunks/app-*.js, found ${appChunks.length}`)
+  process.exit(1)
+}
+const moduleScripts = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8').match(/<script[^>]*type="module"[^>]*>/g) ?? []
+if (moduleScripts.length !== 1) {
+  console.error(`[check-dist-exports] expected one <script type="module"> in index.html, found ${moduleScripts.length}`)
   process.exit(1)
 }
 
