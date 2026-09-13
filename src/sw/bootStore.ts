@@ -8,7 +8,7 @@
  * Entries are keyed by build id, so a worker only ever serves its own
  * generation's bytes and the activate GC reaps a generation by prefix.
  */
-import { IdbKeyedStore } from '../utils/idbKeyedStore'
+import { IdbKeyedStore, idbKeyPrefix, idbRecordId } from '../utils/idbKeyedStore'
 
 export interface BootEntry {
   status: number
@@ -22,8 +22,8 @@ export interface BootStore {
   deletePrefix(prefix: string): Promise<void>
 }
 
-export const bootKeyPrefix = (buildId: string): string => `${buildId}|`
-export const bootKey = (buildId: string, url: string): string => `${bootKeyPrefix(buildId)}${url}`
+export const bootKeyPrefix = (buildId: string): string => idbKeyPrefix(buildId)
+export const bootKey = (buildId: string, url: string): string => idbRecordId(buildId, url)
 
 export const idbBootStore = (): BootStore => {
   const store = new IdbKeyedStore('km-boot', 'entries')

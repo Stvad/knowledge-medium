@@ -92,17 +92,17 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
 
   it('keeps a FRESH preview scope (touched within the window)', () => {
     const plan = reap([{scopeUrl: preview(310), ids: ['pv3'], updatedAt: NOW - 3 * DAY}])
-    expect(plan).toEqual({cacheNames: [], ledgerScopeUrls: []})
+    expect(plan).toEqual({reapIds: [], cacheNames: [], ledgerScopeUrls: []})
   })
 
   it('NEVER reaps the production scope, even if ancient', () => {
     const plan = reap([{scopeUrl: prod, ids: ['prod1'], updatedAt: NOW - 999 * DAY}])
-    expect(plan).toEqual({cacheNames: [], ledgerScopeUrls: []})
+    expect(plan).toEqual({reapIds: [], cacheNames: [], ledgerScopeUrls: []})
   })
 
   it('does not reap a legacy (untimestamped) preview ledger — staleness is unprovable', () => {
     const plan = reap([{scopeUrl: preview(311), ids: ['pv4'], updatedAt: undefined}])
-    expect(plan).toEqual({cacheNames: [], ledgerScopeUrls: []})
+    expect(plan).toEqual({reapIds: [], cacheNames: [], ledgerScopeUrls: []})
   })
 
   it('shared-sha protection: a cache a KEPT ledger still references is not deleted', () => {
@@ -127,7 +127,7 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
       cachePrefix: PREFIX,
       selfScopeUrl: self,
     })
-    expect(plan).toEqual({cacheNames: [], ledgerScopeUrls: []})
+    expect(plan).toEqual({reapIds: [], cacheNames: [], ledgerScopeUrls: []})
   })
 
   it('reaps multiple stale previews together', () => {

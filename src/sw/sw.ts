@@ -5,8 +5,8 @@
  *   - BUILD_ID (injected per build) namespaces this generation's caches:
  *     km-shell-<id> (HTML shell + icons) and km-assets-<id> (JS/CSS/fonts).
  *   - Same-origin app assets are served CACHE-FIRST with no revalidation.
- *     The Vite preserveModules build emits modules at UNHASHED, stable URLs
- *     (so plugins can import them through the import map), which means a
+ *     The build emits every module at an UNHASHED, stable URL (so plugins
+ *     can import them through the import map), which means a
  *     URL's *bytes* differ between deploys. Pinning each generation to its
  *     own cache and never overwriting an entry in place is what keeps a
  *     generation internally consistent — a page only ever sees the single
@@ -113,7 +113,11 @@ const sw = createServiceWorker(
     storage: navigator.storage,
     indexedDB,
     mark,
-    bootStore: idbBootStore(),
+    // WebKit only: the ~600 ms it saves is WebKit's Cache Storage start-up
+    // cost, and a synthesised Response forfeits Chromium's V8 code cache,
+    // which only rides on a `cache.match()` response. Every iOS browser is
+    // WebKit; desktop Chrome and Android are not.
+    bootStore: /AppleWebKit/.test(navigator.userAgent) && !/Chrom/.test(navigator.userAgent) ? idbBootStore() : undefined,
   },
 )
 
@@ -146,4 +150,4 @@ self.addEventListener('fetch', (event) => {
   if (response) event.respondWith(response)
 })
 
-bootMarks.evaluatedAt = performance.now()
+mark('evaluatedAt')

@@ -1,6 +1,7 @@
 import {describe, expect, it, vi} from 'vitest'
 import {createServiceWorker, type SwConfig, type SwEnv} from './worker'
 import {previewDatabaseRecordUrl} from './previewDatabases'
+import {bootKey} from './bootStore'
 
 // --- in-memory CacheStorage mock -------------------------------------------
 // Enough of the Cache / CacheStorage surface for the worker: open/keys/has/
@@ -828,15 +829,15 @@ describe('boot store (IndexedDB copy of the boot set)', () => {
     const {sw, bootStore} = withStore()
     await sw.install()
     const keys = [...bootStore.entries.keys()]
-    expect(keys).toContain(`gen1|${abs('./index.html')}`)
-    expect(keys).toContain('gen1|https://app.example/knowledge-medium/src/main.js')
-    expect(keys).toContain('gen1|https://esm.sh/react@19.2.6')
-    expect(keys).not.toContain('gen1|https://app.example/knowledge-medium/src/lazy.js')
-    expect(bootStore.entries.get(`gen1|${abs('./index.html')}`)?.contentType).toBe('text/javascript')
+    expect(keys).toContain(bootKey('gen1', abs('./index.html')))
+    expect(keys).toContain(bootKey('gen1', 'https://app.example/knowledge-medium/src/main.js'))
+    expect(keys).toContain(bootKey('gen1', 'https://esm.sh/react@19.2.6'))
+    expect(keys).not.toContain(bootKey('gen1', 'https://app.example/knowledge-medium/src/lazy.js'))
+    expect(bootStore.entries.get(bootKey('gen1', abs('./index.html')))?.contentType).toBe('text/javascript')
   })
 
   it('answers a navigation and a boot-set asset from the store without touching Cache Storage', async () => {
-    const {sw, bootStore, caches} = withStore()
+    const {sw, caches} = withStore()
     await sw.install()
     const openSpy = vi.spyOn(caches, 'open')
     const nav = await sw.handleFetch(new Request(abs('./some/route'), {headers: {accept: 'text/html'}}))!
@@ -845,7 +846,6 @@ describe('boot store (IndexedDB copy of the boot set)', () => {
     expect(await asset.text()).toBe('body of https://app.example/knowledge-medium/src/main.js')
     expect(asset.headers.get('content-type')).toBe('text/javascript')
     expect(openSpy).not.toHaveBeenCalled()
-    void bootStore
   })
 
   it('falls back to the caches for a URL outside the boot set, on a miss, and on a store error', async () => {
@@ -868,9 +868,26 @@ describe('boot store (IndexedDB copy of the boot set)', () => {
 
   it('activate reaps an expired generation from the store along with its caches', async () => {
     const {sw, bootStore} = withStore({keepGenerations: 1})
-    await bootStore.putAll([['gen0|https://app.example/knowledge-medium/index.html', {status: 200, contentType: 'text/html', body: new ArrayBuffer(1)}]])
+    await bootStore.putAll([[bootKey('gen0', abs('./index.html')), {status: 200, contentType: 'text/html', body: new ArrayBuffer(1)}]])
     await sw.writeLedger(['gen0', 'gen1'])
     await sw.activate()
-    expect([...bootStore.entries.keys()].some(k => k.startsWith('gen0|'))).toBe(false)
+    expect(bootStore.entries.has(bootKey('gen0', abs('./index.html')))).toBe(false)
+  })
+
+  it('the stale-preview sweep reaps a merged preview’s entries too, and keeps a live scope’s', async () => {
+    const {sw, bootStore, caches} = withStore()
+    const previewLedger = (n: number) => `${ORIGIN}/knowledge-medium/pr-preview/pr-${n}/__km_generations__`
+    const meta = await caches.open('km-meta')
+    meta.store.set(previewLedger(1), new Response(JSON.stringify({ids: ['pvStale'], updatedAt: NOW - 15 * DAY})))
+    meta.store.set(previewLedger(2), new Response(JSON.stringify({ids: ['pvFresh'], updatedAt: NOW - DAY})))
+    const entry = {status: 200, contentType: 'text/html', body: new ArrayBuffer(1)}
+    await bootStore.putAll([
+      [bootKey('pvStale', `${ORIGIN}/knowledge-medium/pr-preview/pr-1/index.html`), entry],
+      [bootKey('pvFresh', `${ORIGIN}/knowledge-medium/pr-preview/pr-2/index.html`), entry],
+    ])
+    await sw.install()
+    await sw.activate()
+    expect([...bootStore.entries.keys()].some(k => k.startsWith(bootKey('pvStale', '')))).toBe(false)
+    expect([...bootStore.entries.keys()].some(k => k.startsWith(bootKey('pvFresh', '')))).toBe(true)
   })
 })

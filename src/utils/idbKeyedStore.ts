@@ -90,7 +90,20 @@ export class IdbKeyedStore {
             db.createObjectStore(this.storeName)
           }
         }
-        request.onsuccess = () => resolve(request.result)
+        request.onsuccess = () => {
+          const db = request.result
+          // The browser can close a connection behind us (storage pressure,
+          // eviction) and a later `open` at a higher version asks this one
+          // to step aside; either way drop the cached handle so the next op
+          // reopens instead of throwing InvalidStateError for the rest of
+          // the page's (or service worker's) lifetime.
+          db.onclose = () => { this.dbPromise = null }
+          db.onversionchange = () => {
+            db.close()
+            this.dbPromise = null
+          }
+          resolve(db)
+        }
         request.onerror = () => reject(request.error)
       }).catch((err: unknown) => {
         // Don't cache a rejected open: a transient failure (storage pressure, a
@@ -214,10 +227,13 @@ export class IdbKeyedStore {
 
   /**
    * Delete every record whose key starts with `prefix`, in one commit-durable
-   * readwrite transaction. Sugar over {@link scanByPrefix}.
+   * readwrite transaction. One ranged delete rather than a value cursor: a
+   * cursor deserialises every record in the store to test its key, and some
+   * stores hold multi-MB records. The range relies on prefixes being ASCII
+   * (`idbKeyPrefix` percent-encodes; build ids are hex) — a key that begins
+   * with `prefix` sorts between `prefix` and `prefix + '\uffff'`.
    */
   async deleteByPrefix(prefix: string): Promise<void> {
-    // eslint-disable-next-line no-restricted-syntax -- programmatic delete: IndexedDB cursor, not a Block
-    await this.scanByPrefix('readwrite', prefix, cursor => cursor.delete())
+    await this.tx('readwrite', store => store.delete(IDBKeyRange.bound(prefix, prefix + '\uffff')))
   }
 }

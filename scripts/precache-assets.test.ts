@@ -110,17 +110,24 @@ describe('bootWorkerAssets', () => {
       'src/main.js',
       'wa-sqlite.wasm',
     ]
-    expect(bootWorkerAssets(files)).toEqual([
+    expect(new Set(bootWorkerAssets(files))).toEqual(new Set([
       'assets/FacadeVFS-BssyCf6W.js',
       'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
       'assets/OPFSWriteAheadVFS-DVmrx1MA.js',
-      'assets/SharedSyncImplementation.worker-DLI2cC4_.js',
       'assets/WASQLiteDB.worker-1pScv-ee.js',
       'assets/wa-sqlite-Di4Pf_yS.js',
       'assets/wa-sqlite-XZW__iJk.wasm',
       'assets/wa-sqlite-async-B563xfYH.js',
       'assets/wa-sqlite-async-rHzzC98y.wasm',
       'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
-    ])
+    ]))
+  })
+
+  it('fails the build when a required member of the DB worker graph is not emitted under its pinned name', () => {
+    expect(() => bootWorkerAssets([
+      'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
+      'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
+      'assets/wa-sqlite-XZW__iJk.wasm',
+    ])).toThrow(/WASQLiteDB/)
   })
 })

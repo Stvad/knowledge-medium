@@ -21,7 +21,7 @@ import {
   normalizeLedger,
   type ScopeLedger,
 } from './ledger'
-import { bootKey, bootKeyPrefix, type BootStore } from './bootStore'
+import { bootKey, bootKeyPrefix, type BootEntry, type BootStore } from './bootStore'
 import {isForeignPreviewRequest, PREVIEW_SUBTREE} from './preview'
 import {
   SERVICE_WORKER_META_CACHE,
@@ -271,9 +271,9 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       fetch(new Request(url, {cache: mode}))
         .then((res) => (res && res.ok ? cache.put(url, res) : null))
         .catch(() => null)
-    // Both lists are large (the minified build first-paints ~200 <script> tags;
-    // the rest is the full module graph), so fan every fetch through a bounded
-    // pool instead of opening hundreds/thousands of connections at once.
+    // The rest list is the full module graph (~1,500 files), so fan every
+    // fetch through a bounded pool instead of opening that many connections
+    // at once.
     const runPooled = async (
       items: string[],
       limit: number,
@@ -304,28 +304,26 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       runPooled(PRECACHE_VENDOR, 16, (u) => fetchInto(vendor, u, 'default')),
     ])
     await runPooled(PRECACHE_REST_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache'))
-    await seedBootStore([shell, assets, vendor])
+    await seedBootStore([[shell, [SHELL_URL]], [assets, PRECACHE_ASSETS], [vendor, PRECACHE_VENDOR]])
   }
 
   // Copy the boot set out of the just-filled caches. Best effort: a hole here
   // means that URL boots cache-first, exactly as before the store existed.
-  const seedBootStore = async (fromCaches: Cache[]): Promise<void> => {
+  const seedBootStore = async (sources: ReadonlyArray<readonly [Cache, readonly string[]]>): Promise<void> => {
     const store = env.bootStore
     if (!store) return
     try {
-      const entries: Array<readonly [string, {status: number; contentType: string; body: ArrayBuffer}]> = []
-      for (const url of BOOT_URLS) {
-        let cached: Response | undefined
-        for (const cache of fromCaches) {
-          cached = await cache.match(url)
-          if (cached) break
+      const entries: Array<readonly [string, BootEntry]> = []
+      for (const [cache, urls] of sources) {
+        for (const url of urls) {
+          const cached = await cache.match(url)
+          if (!cached) continue
+          entries.push([bootKey(buildId, url), {
+            status: cached.status,
+            contentType: cached.headers.get('content-type') ?? 'application/octet-stream',
+            body: await cached.arrayBuffer(),
+          }])
         }
-        if (!cached) continue
-        entries.push([bootKey(buildId, url), {
-          status: cached.status,
-          contentType: cached.headers.get('content-type') ?? 'application/octet-stream',
-          body: await cached.arrayBuffer(),
-        }])
       }
       await store.putAll(entries)
     } catch {
@@ -380,7 +378,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       expiredIds.flatMap((id) => [
         caches.delete(`${CACHE_PREFIX}shell-${id}`),
         caches.delete(`${CACHE_PREFIX}assets-${id}`),
-        env.bootStore?.deletePrefix(bootKeyPrefix(id)).catch(() => undefined) ?? Promise.resolve(),
+        env.bootStore?.deletePrefix(bootKeyPrefix(id)).catch(() => undefined),
       ]),
     )
     if (ledger.length > keepIds.size) {
@@ -462,6 +460,9 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
         staleMs: config.staleScopeMs,
       }),
       ...plan.cacheNames.map((name) => caches.delete(name)),
+      // The boot store is one per-origin database shared by every scope, and a
+      // merged preview's worker never runs again to reap its own entries.
+      ...plan.reapIds.map((id) => env.bootStore?.deletePrefix(bootKeyPrefix(id)).catch(() => undefined)),
       ...plan.ledgerScopeUrls.map((url) => meta.delete(url)),
     ])
   }

@@ -57,6 +57,8 @@ export interface ScopeLedger extends LedgerEntry {
 }
 
 export interface ReapPlan {
+  /** Generation ids whose caches and boot-store entries are reaped. */
+  reapIds: string[]
   /** km-shell-<id> / km-assets-<id> cache names to delete. */
   cacheNames: string[]
   /** meta-cache ledger keys (scopeUrl) to delete. */
@@ -123,6 +125,7 @@ export const computeReapableCaches = ({
   }
 
   return {
+    reapIds: [...reapIds],
     cacheNames: [...reapIds].flatMap((id) => [`${cachePrefix}shell-${id}`, `${cachePrefix}assets-${id}`]),
     ledgerScopeUrls: reapable.map((l) => l.scopeUrl),
   }
