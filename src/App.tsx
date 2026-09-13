@@ -1,5 +1,5 @@
-// App is a BOOT SHIM — do not grow it. It owns workspace resolution
-// (getInitialLayout + its cache), the §6 access gates, the TTI mark, the
+// App is a BOOT SHIM — do not grow it. It owns the first read of the boot
+// layout (src/bootstrap/initialLayout.ts), the §6 access gates, the TTI mark, the
 // always-on hash watcher, reactive role tracking, and provisioning the
 // layout-root seam value (LayoutRootContext). New app-root behavior goes into
 // an overridable seam instead — a block renderer (like TopLevelRenderer), a
@@ -11,8 +11,8 @@ import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@powersync/react'
 import { useRepo } from '@/context/repo.js'
 import { useSearchParam } from 'react-use'
-import { hasRemoteSyncConfig } from '@/services/powersync.js'
 import { useIsLocalOnly } from '@/components/Login.js'
+import { remoteSyncEnabled } from '@/services/powersync.js'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.js'
 import { layoutWorkspaceChanged } from '@/utils/routing.js'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
@@ -40,11 +40,8 @@ const App = () => {
     version: 0,
   }))
   const safeMode = hasSafeModeSearchParam(useSearchParam('safeMode'))
-  // hasRemoteSyncConfig is the build-time signal; localOnly is the runtime
-  // override (the user clicked "Use without sync" on the login screen).
-  // Both close the door on Supabase RPCs, so AND them together once here.
   const localOnly = useIsLocalOnly()
-  const useRemoteSync = hasRemoteSyncConfig && !localOnly
+  const useRemoteSync = remoteSyncEnabled(localOnly)
 
   const initial = use(
     getInitialLayout(repo, hashSnapshot.hash, useRemoteSync, hashSnapshot.version),

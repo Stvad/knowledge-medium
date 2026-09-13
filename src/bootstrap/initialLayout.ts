@@ -1,15 +1,12 @@
 /**
  * Boot layout resolution: which workspace this run lands on, the §6 access
- * gate, then the bootstrap writes — in that fixed order, because each phase
- * depends on the last (the gate must decide BEFORE any write, or those writes
- * land plaintext into an encrypted-but-locked workspace).
+ * gate, then the bootstrap writes — in that fixed order, because the gate must
+ * decide BEFORE any write (those writes would otherwise land plaintext into an
+ * encrypted-but-locked workspace).
  *
- * The result is cached per (repo, hash, sync mode, navigation version) and the
- * cached promise is stamped fulfilled on resolution so `use()` reads it
- * synchronously (`resolvedThenable.ts`): the boot path prepares it before the
- * React tree renders (`prepareInitialLayout`), and a cache hit must never cost
- * a Suspense fallback — React 19 holds a retry commit until 300 ms after the
- * last fallback flip.
+ * The boot path prepares the result before the React tree renders
+ * (`prepareInitialLayout`) so App's first `use()` is a cache hit and mounts no
+ * Suspense fallback (see resolvedThenable.ts).
  */
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
@@ -19,7 +16,7 @@ import { resolveWorkspaceEntry } from '@/sync/keys/resolveWorkspaceEntry.js'
 import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
 import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
 import { markStartup } from '@/utils/startupTimeline.js'
-import { stampFulfilled } from '@/utils/resolvedThenable.js'
+import { memoizeAsync } from '@/utils/memoize.js'
 
 export const getCurrentHash = (): string =>
   typeof window === 'undefined' ? '' : window.location.hash
@@ -35,17 +32,6 @@ export type InitialLayout =
     }
   | {kind: 'waiting'; workspaceId: string}
 
-const INITIAL_LAYOUT_CACHE_LIMIT = 64
-const initialLayoutCache = new Map<string, Promise<InitialLayout>>()
-
-// The bootstrap pipeline's composing function: it owns the phase ORDERING that
-// was previously encoded only in comments. Three extracted phases run in a fixed
-// sequence — resolve the workspace, clear the §6 access gate, then run the
-// bootstrap writes — because each depends on the last: the gate must decide
-// BEFORE any write (those writes would otherwise land plaintext into an
-// encrypted-but-locked workspace). First-run seeding now lives in the
-// onboarding plugin's landing resolver, invoked from within
-// `bootstrapWorkspace`'s landing step.
 export const resolveInitialLayout = async (
   repo: Repo,
   requestedHash: string,
@@ -129,33 +115,16 @@ const initialLayoutCacheKey = (
     navigationVersion,
   ].join(':')
 
-export const getInitialLayout = (
-  repo: Repo,
-  requestedHash: string,
-  useRemoteSync: boolean,
-  navigationVersion: number,
-  resolver: typeof resolveInitialLayout = resolveInitialLayout,
-): Promise<InitialLayout> => {
-  const key = initialLayoutCacheKey(repo, requestedHash, useRemoteSync, navigationVersion)
-  const cached = initialLayoutCache.get(key)
-  if (cached) {
-    initialLayoutCache.delete(key)
-    initialLayoutCache.set(key, cached)
-    return cached
-  }
-
-  const promise = resolver(repo, requestedHash, useRemoteSync)
-  initialLayoutCache.set(key, promise)
-  void promise.then(value => stampFulfilled(promise, value), () => {})
-  if (initialLayoutCache.size > INITIAL_LAYOUT_CACHE_LIMIT) {
-    const oldest = initialLayoutCache.keys().next().value
-    if (oldest) initialLayoutCache.delete(oldest)
-  }
-  void promise.catch(() => {
-    if (initialLayoutCache.get(key) === promise) initialLayoutCache.delete(key)
-  })
-  return promise
-}
+/** Memoized per (repo, hash, sync mode, navigation version): the entry is
+ *  stamped fulfilled on resolution so `use()` reads a hit synchronously, and a
+ *  rejected one is evicted so the next lookup retries. */
+export const getInitialLayout = memoizeAsync(
+  (repo: Repo, requestedHash: string, useRemoteSync: boolean, navigationVersion: number): Promise<InitialLayout> => {
+    void navigationVersion // part of the key only: a bump forces a fresh resolution
+    return resolveInitialLayout(repo, requestedHash, useRemoteSync)
+  },
+  initialLayoutCacheKey,
+)
 
 
 // The hash each repo's boot layout was prepared for. App must key its first
@@ -164,7 +133,7 @@ export const getInitialLayout = (
 const preparedHashes = new Map<number, string>()
 
 /** Resolve the boot layout ahead of the first render so App's `use()` hits a
- *  fulfilled cache entry. Failures are left to that lookup to surface. */
+ *  fulfilled cache entry. */
 export const prepareInitialLayout = (repo: Repo, useRemoteSync: boolean): Promise<InitialLayout> => {
   const hash = getCurrentHash()
   preparedHashes.set(repo.instanceId, hash)
