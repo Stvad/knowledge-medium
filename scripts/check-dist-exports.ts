@@ -96,6 +96,9 @@ console.log(`[check-dist-exports] ${checked} cataloged exports present across ${
 // entry must be a facade over one `chunks/app-*.js`, and the HTML must load one
 // module script. If the chunk group were silently inert (a renamed entry, an
 // option rename) the build would still succeed and ship ~1,500 boot files.
+for (const rel of ['src/main.js', 'chunks', 'index.html']) {
+  if (!fs.existsSync(path.join(distDir, rel))) fail(`dist/${rel} is missing`)
+}
 const mainFacade = fs.readFileSync(path.join(distDir, 'src/main.js'), 'utf8')
   .replace(/\/\/#\s*sourceMappingURL=.*$/m, '').trim()
 if (!/^import\s*["']\.\.\/chunks\/app-[^"']+\.js["'];?$/.test(mainFacade)) {
