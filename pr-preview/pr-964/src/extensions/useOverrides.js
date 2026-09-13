@@ -1,0 +1,2 @@
+import{appRuntimeUpdateEvent as e}from"../facets/runtimeEvents.js";import{readOverridesCache as t}from"./overridesCache.js";import{useEffect as n,useMemo as r,useState as i}from"react";var a=`initial-load`,o=o=>{let[s,c]=i(a);return n(()=>{let t=e=>{let t=e.detail;c(t??new Date().toISOString())};return window.addEventListener(e,t),()=>window.removeEventListener(e,t)},[]),{overrides:r(()=>o?t(o):new Map,[o,s]),generation:s}};export{o as useOverrides};
+//# sourceMappingURL=useOverrides.js.map

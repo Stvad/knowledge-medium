@@ -1,0 +1,2 @@
+import{useHandle as e}from"../../../hooks/block.js";import{BACKLINKS_COUNT_FOR_BLOCK_QUERY as t}from"./countQuery.js";import{c as n}from"react/compiler-runtime";var r=(r,a)=>{let o=n(5),s;o[0]!==r.id||o[1]!==r.repo.query||o[2]!==a?(s=r.repo.query[t]({workspaceId:a,id:r.id}),o[0]=r.id,o[1]=r.repo.query,o[2]=a,o[3]=s):s=o[3];let c;return o[4]===Symbol.for(`react.memo_cache_sentinel`)?(c={selector:i},o[4]=c):c=o[4],e(s,c)};function i(e){return e??0}export{r as useBacklinkCount};
+//# sourceMappingURL=useBacklinkCount.js.map

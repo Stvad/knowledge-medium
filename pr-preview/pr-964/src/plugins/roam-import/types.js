@@ -1,0 +1,2 @@
+var e=e=>{if(!e||typeof e!=`object`)return{};let t={};for(let[n,r]of Object.entries(e))n.startsWith(`:`)&&(n===`:block/props`||n===`:block/refs`||n===`:create/user`||n===`:edit/user`||n===`:block/uid`||n===`:log/id`||n===`:children/view-type`||(t[n]=r));return t};export{e as getExtraRoamProps};
+//# sourceMappingURL=types.js.map

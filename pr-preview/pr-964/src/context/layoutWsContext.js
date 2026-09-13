@@ -1,0 +1,2 @@
+import{buildAppHashInContext as e,buildLayoutFromSlots as t}from"../utils/routing.js";import{createContext as n,useContext as r}from"react";import{c as i}from"react/compiler-runtime";var a=n(null),o=(n,r,i)=>n===null?e(r,i):t(r,i?[{kind:`leaf`,blockId:i}]:[],n.workspaceId===r?n.wsContext:void 0),s=(e,t)=>{let n=i(4),s=r(a),c;return n[0]!==t||n[1]!==s||n[2]!==e?(c=o(s,e,t),n[0]=t,n[1]=s,n[2]=e,n[3]=c):c=n[3],c};export{a as LayoutWsContext,o as appHashForSession,s as useAppHashInContext};
+//# sourceMappingURL=layoutWsContext.js.map

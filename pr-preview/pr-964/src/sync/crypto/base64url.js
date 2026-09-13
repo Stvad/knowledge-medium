@@ -1,0 +1,2 @@
+import{base64urlnopad as e}from"../../../node_modules/.pnpm/@scure_base@2.2.0/node_modules/@scure/base/index.js";var t=t=>e.encode(t),n=t=>{try{return Uint8Array.from(e.decode(t))}catch(e){throw Error(`base64url: invalid input`,{cause:e})}};export{n as base64UrlToBytes,t as bytesToBase64Url};
+//# sourceMappingURL=base64url.js.map
