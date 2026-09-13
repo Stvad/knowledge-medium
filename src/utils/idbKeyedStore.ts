@@ -240,6 +240,7 @@ export class IdbKeyedStore {
    */
   async deleteByPrefix(prefix: string): Promise<void> {
     const last = prefix.charCodeAt(prefix.length - 1)
+    if (last === 0xffff) throw new Error('deleteByPrefix: the prefix has no successor')
     const upper = prefix.slice(0, -1) + String.fromCharCode(last + 1)
     await this.tx('readwrite', store => store.delete(IDBKeyRange.bound(prefix, upper, false, true)))
   }
