@@ -41,6 +41,19 @@ describe('summarize', () => {
     expect(blended.notes.join(' ')).not.toContain('interaction history still building')
   })
 
+  // A user-facing claim about the DATABASE is one nothing here measured. The
+  // classifier rejects a query that opens while anything else is in flight,
+  // which on a two-connection device can be one the second reader served with
+  // no wait at all — so this reason is reached while the database had capacity
+  // to spare. Report what was seen, not what the hardware was doing.
+  it('reports the never-uncontended state as observed, not as the database being busy', () => {
+    const notes = summarize(analysis({
+      unjudgedBecause: { interaction: 'never-uncontended', startup: null },
+    })).notes.join(' ')
+    expect(notes).toContain('seen running without other database activity')
+    expect(notes).not.toContain('database free')
+  })
+
   // The interaction recorder is togglable independently of the monitor, so its
   // series can be permanently short while everything else looks healthy.
   // "Still building" is then a remedy that never arrives.

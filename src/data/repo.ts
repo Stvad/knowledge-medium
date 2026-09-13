@@ -5030,7 +5030,7 @@ export class Repo {
           // The wall-clock alone is not comparable between sessions: on a
           // connection pool shallower than the fan-out, it is mostly the queue
           // ahead of this resolve, so it moves with render order. This window
-          // decides whether this particular resolve had the pool to itself;
+          // decides whether anything observable competed with this resolve;
           // only those samples mean the same thing twice.
           const poolWindow = this.dbMetrics.contention.openWindow()
           const t0 = performance.now()

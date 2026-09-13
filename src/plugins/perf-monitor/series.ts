@@ -218,7 +218,7 @@ export const regressionsIn = (results: readonly TrendResult[]): Regression[] =>
     .sort((a, b) => b.ratio - a.ratio)
 
 /** The subset of a query's stored sample this comparison can use: the resolves
- *  that ran with the DB connection pool to themselves. ONE definition, so the
+ *  that ran with no competition the tracker could see. ONE definition, so the
  *  gate, the measurement and the caveat cannot disagree about which samples the
  *  verdict rested on.
  *
