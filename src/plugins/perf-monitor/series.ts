@@ -5,7 +5,7 @@
  * a single session fires on every anomaly); MEDIAN NOT MEAN (sessions are
  * heterogeneous; the median tracks the typical one).
  */
-import type { InteractionComparable } from '@/plugins/interaction-metrics/record.js'
+import type { InteractionComparable, TimingSample } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 
 /** Sessions of history required before any comparison is reported — below this the median is one arbitrary session with extra steps. */
@@ -23,6 +23,28 @@ const RECENT_WINDOW = 3
 /** Resolves needed before a query's p95 is treated as a measurement. */
 const MIN_CALLS = 20
 
+/** Widest p95/p50 still read as ONE observation rather than a distribution.
+ *  Sits in open space: a coalesced sample's two quantiles are the same
+ *  resolution to within rounding, while the tightest genuine distribution on
+ *  record is an order of magnitude wider. */
+const COALESCED_MAX_RATIO = 1.01
+
+/** Did every call in this window resolve TOGETHER? Request coalescing (see
+ *  `ancestorBatch`) makes N callers await one statement, so each records the
+ *  same wall-clock and `calls` counts callers, not measurements.
+ *
+ *  This defeats `MIN_CALLS`, whose premise is that one resolve is one
+ *  measurement: a coalesced sample clears the gate carrying a single
+ *  observation repeated, and its "p95" would rebase the metric's baseline the
+ *  day coalescing lands on a query. Judged unusable rather than compared.
+ *
+ *  Floored at `MIN_ABSOLUTE_MS`: below it a genuinely uniform fast query is
+ *  indistinguishable from a coalesced one, and `trendRegression` already calls
+ *  that range steady — so treating it as unjudged would trade a verdict for a
+ *  gap and report less than is known. */
+export const isCoalescedSample = (t: TimingSample): boolean =>
+  t.p50Ms >= MIN_ABSOLUTE_MS && t.p95Ms <= t.p50Ms * COALESCED_MAX_RATIO
+
 /** STORED sessions either comparison needs before it returns anything: the
  *  baseline, plus what current-window smoothing consumes on top of this
  *  session's own sample. One number, because both comparisons put this session
@@ -37,7 +59,10 @@ export type TrendResult =
    *  (live counters, a late-enabled recorder); 'no-baseline' is a FULL history
    *  that happens to be all zeros, where telling the user to keep waiting
    *  points at the one thing that is not the problem. */
-  | { status: 'insufficient'; reason: 'history' | 'no-current-sample' | 'no-baseline' }
+  | {
+      status: 'insufficient'
+      reason: 'history' | 'no-current-sample' | 'no-baseline' | 'coalesced-sample'
+    }
   /** `baselineCount` is sessions actually consumed, not rows loaded — rows with no usable sample are filtered out before the median. */
   | { status: 'steady'; baselineCount: number }
   | { status: 'regressed'; regression: Regression; baselineCount: number }
@@ -47,6 +72,8 @@ const INSUFFICIENT: TrendResult = { status: 'insufficient', reason: 'history' }
 const NO_CURRENT_SAMPLE: TrendResult = { status: 'insufficient', reason: 'no-current-sample' }
 /** History enough, and every session in it zero — there is no ratio to form. */
 const NO_BASELINE: TrendResult = { status: 'insufficient', reason: 'no-baseline' }
+/** This session's sample is one coalesced observation — see `isCoalescedSample`. */
+const COALESCED: TrendResult = { status: 'insufficient', reason: 'coalesced-sample' }
 
 export interface Regression {
   /** Stable machine id, e.g. `query:groupedBacklinks.forBlock`. */
@@ -133,6 +160,11 @@ export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean 
 export const lacksBaseline = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status === 'insufficient' && r.reason === 'no-baseline')
 
+/** At least one metric's current sample was one coalesced observation. `some`,
+ *  like its siblings: it names the more specific reason where one exists. */
+export const hasCoalescedSample = (results: readonly TrendResult[]): boolean =>
+  results.some((r) => r.status === 'insufficient' && r.reason === 'coalesced-sample')
+
 /** Sessions the THINNEST judged comparison rested on, or 0 if none was
  *  judged — smallest, not largest, so a clean verdict isn't overstated. */
 export const judgedBaselineCount = (results: readonly TrendResult[]): number => {
@@ -160,9 +192,15 @@ export const queryRegressions = (
     // Only the data-sufficiency filter here — the magnitude floor is applied by
     // `trendRegression` after the recent median, so one fast session can't drop a sustainably-regressed query.
     if (sample.calls < MIN_CALLS) continue
+    // Reported, not skipped: dropping the query would leave the rest reading as
+    // a clean bill for a metric nobody could judge.
+    if (isCoalescedSample(sample)) { out.push(COALESCED); continue }
+    // A coalesced history row is the same non-measurement, so it is kept out of
+    // BOTH windows — left in the baseline it would set the bar at one session's
+    // stall and call the recovery a regression.
     const measured = (r: InteractionComparable): number | null => {
       const q = r.queries[name]
-      return q !== undefined && q.calls >= MIN_CALLS ? q.p95Ms : null
+      return q !== undefined && q.calls >= MIN_CALLS && !isCoalescedSample(q) ? q.p95Ms : null
     }
     const recent = [sample.p95Ms, ...recentPast.map(measured).filter((v): v is number => v !== null)]
     const baseline = baselineSessions.map(measured).filter((v): v is number => v !== null)

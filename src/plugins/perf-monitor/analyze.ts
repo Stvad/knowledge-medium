@@ -22,6 +22,7 @@ import {
   fanoutRegression,
   median,
   queryRegressions,
+  hasCoalescedSample,
   regressionsIn,
   startupRegression,
   type Regression,
@@ -44,6 +45,10 @@ export type UnjudgedReason =
   | 'no-baseline'
   /** Partly judged: incomplete, not clean — the unjudged metric is exactly where a finding could be hiding. */
   | 'partly-judged'
+  /** Every call in the window resolved together, so the sample carries one
+   *  observation, not a distribution — a comparison would rebase the baseline
+   *  on the day request coalescing lands on a query. */
+  | 'coalesced-sample'
 
 export interface PerfAnalysis {
   workspaceId: string
@@ -89,9 +94,10 @@ export const unjudgedReason = (
   session.blended ? 'blended-workspaces'
     : anyJudged(results) ? (partlyJudged(results) ? 'partly-judged' : null)
       : awaitingCurrentSample(results) ? 'no-current-sample'
-        : session.notRecording ? 'not-recording'
-          : lacksBaseline(results) ? 'no-baseline'
-            : 'history-short'
+        : hasCoalescedSample(results) ? 'coalesced-sample'
+          : session.notRecording ? 'not-recording'
+            : lacksBaseline(results) ? 'no-baseline'
+              : 'history-short'
 
 /** Is a series waiting on a sample from THIS session, whatever else it
  *  judged? The scheduler needs this even where `reason` doesn't say so.

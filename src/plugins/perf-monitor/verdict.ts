@@ -64,6 +64,10 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
   'history-short': (s) => `${s} history still building`,
   'no-baseline': (s) => `no ${s} baseline to compare against (recent sessions all measured zero)`,
   'partly-judged': (s) => `some ${s} metrics could not be judged this session`,
+  // Names the cause rather than the symptom: the reader's next move is to look
+  // at what started coalescing that query, not to wait for more sessions.
+  'coalesced-sample': (s) =>
+    `${s} metrics not comparable this session (calls resolved together, so the sample is one observation)`,
 }
 
 /** Which series went unjudged, and why — one message per series, since the
