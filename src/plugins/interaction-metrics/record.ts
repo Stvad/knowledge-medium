@@ -40,15 +40,17 @@ export interface TimingSample {
  *  free. The wall-clock fields above are what callers actually waited; on a
  *  pool shallower than a render's fan-out they are mostly the queue ahead of
  *  the caller, so they move with render order and CANNOT be compared between
- *  sessions. `uncontended` is the same query measured with no queue to be in —
- *  fewer samples, but the same thing twice.
+ *  sessions. `uncontended` is the same query measured with no queue THIS CAN
+ *  SEE — fewer samples, and comparable to the same subset in another session
+ *  rather than to a guarantee. What the tracker cannot observe (see
+ *  `DbContention`) it cannot filter out.
  *
  *  ABSENT on records written before this existed; read a missing field as "not
  *  measured", never as zero. */
 export interface QueryTimingSample extends TimingSample {
   uncontended?: {
-    /** Samples BACKING the two percentiles: resolves that ran unopposed and are
-     *  still retained in the reservoir, so at most its 256-sample capacity.
+    /** Samples BACKING the two percentiles: resolves that met the filter above
+     *  and are still retained in the reservoir, so at most its 256-sample capacity.
      *  NOT the lifetime count — that keeps climbing while the percentiles stay
      *  computed over the window, and storing it here would claim thousands of
      *  samples behind a figure drawn from 256.

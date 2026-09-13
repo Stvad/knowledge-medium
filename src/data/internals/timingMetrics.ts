@@ -160,10 +160,11 @@ export interface ContentionSnapshot {
   readonly busyMs: number
   /** Coalescer flushes that answered more than one open observer. */
   readonly sharedWork: number
-  /** Calls, reads and writes together, that took an empty pool and so never
-   *  waited for a connection. */
+  /** Calls, reads and writes together, issued into an OBSERVABLY empty pool.
+   *  Not a guarantee they did not wait: what this cannot see it cannot count,
+   *  and the sync engine's work outside its status intervals is exactly that. */
   readonly uncontendedCalls: number
-  /** Read timings over the unqueued READS only — a strict subset of
+  /** Read timings over those READS only — a strict subset of
    *  `uncontendedCalls`, so read its own `calls` rather than that number: a
    *  session with unqueued writes and no unqueued reads would otherwise look
    *  like a real distribution of zero-millisecond reads. */
@@ -298,7 +299,7 @@ export class DbContention {
     return {mark: this.currentMark()}
   }
 
-  /** Close it, and say whether it ran unopposed. */
+  /** Close it, and say whether anything observable competed with it. */
   closeWindow(window: ContentionWindow): boolean {
     this.openWindows--
     return this.isCleanWindow(window.mark)
@@ -508,8 +509,8 @@ export class DbMetrics {
    *  `mutate.setContent` typically registers 1 writeTransaction sample
    *  AND a handful of `getAll`/`execute` samples for the inner work. */
   readonly writeTransaction = new TimingReservoir()
-  /** Which of the timings above were taken with the pool to themselves, and
-   *  how busy the pool was. Surfaced separately from `snapshot()` — the
+  /** Which of the timings above were taken with the pool observably free, and
+   *  how busy it was. Surfaced separately from `snapshot()` — the
    *  per-method record is a uniform map of `TimingSnapshot`, and its consumers
    *  iterate it. */
   readonly contention = new DbContention()
@@ -578,7 +579,7 @@ export class QueryMetrics {
   }
 }
 
-/** One query's timings: every resolve, plus the subset that ran unopposed.
+/** One query's timings, plus the subset that ran with no OBSERVED competition.
  *  `uncontended.calls` is also the honest answer to "how many independent
  *  measurements back this?" — coalesced callers never reach it. */
 export interface QueryTimingSnapshot extends TimingSnapshot {
