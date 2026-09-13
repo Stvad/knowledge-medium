@@ -481,6 +481,90 @@ describe('wrapDbWithMetrics', () => {
     expect(s.maxDepth).toBe(1)
   })
 
+  /** A db that reports sync activity the way PowerSync does. */
+  const syncingDb = (initial?: {downloading?: boolean; uploading?: boolean}) => {
+    const base = makeFakeDb() as ReturnType<typeof makeFakeDb> & {
+      currentStatus?: unknown
+      registerListener?: unknown
+    }
+    let notify: ((s: unknown) => void) | undefined
+    base.currentStatus = initial ? {dataFlowStatus: initial} : undefined
+    base.registerListener = (l: {statusChanged?: (s: unknown) => void}) => {
+      notify = l.statusChanged
+      return () => {}
+    }
+    return {
+      base,
+      set: (flow: {downloading?: boolean; uploading?: boolean}) =>
+        notify?.({dataFlowStatus: flow}),
+    }
+  }
+
+  it('treats a read taken during sync as contended', async () => {
+    const {base, set} = syncingDb()
+    const metrics = new DbMetrics()
+    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb>
+    await wrapped.getAll('before sync')
+    expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(1)
+
+    set({downloading: true})
+    await wrapped.getAll('during sync')
+    set({downloading: false})
+    await wrapped.getAll('after sync')
+
+    const s = metrics.contention.snapshot()
+    // The sync engine is on the same connections but never calls through this
+    // proxy, so without the bracket the middle read would look like a clean
+    // measurement of an idle database.
+    expect(s.uncontendedRead.calls).toBe(2)
+    expect(s.foreignIntervals).toBe(1)
+    expect(s.syncObserved).toBe(true)
+  })
+
+  it('brackets an upload as well as a download', async () => {
+    const {base, set} = syncingDb()
+    const metrics = new DbMetrics()
+    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb>
+    set({uploading: true})
+    await wrapped.getAll('during upload')
+    expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(0)
+  })
+
+  it('brackets sync already in progress when the Repo is built', async () => {
+    const {base} = syncingDb({downloading: true})
+    const metrics = new DbMetrics()
+    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb>
+    await wrapped.getAll('during the sync that was already running')
+    expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(0)
+  })
+
+  it('opens one bracket per sync episode, however often the status repeats', async () => {
+    const {base, set} = syncingDb()
+    const metrics = new DbMetrics()
+    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb>
+    // PowerSync republishes its status on every change, most of which do not
+    // flip these flags. Bracketing each one would open occupancy that
+    // never closes, and the pool would read as permanently busy for the rest of
+    // the session — every later read contended, with no way back.
+    set({downloading: true})
+    set({downloading: true})
+    set({downloading: true})
+    set({downloading: false})
+    await wrapped.getAll('after the episode')
+    const s = metrics.contention.snapshot()
+    expect(s.foreignIntervals).toBe(1)
+    expect(s.uncontendedRead.calls).toBe(1)
+  })
+
+  it('says when sync is not observable at all', () => {
+    const metrics = new DbMetrics()
+    // A fake db with no status channel — and a local-only session, which has no
+    // sync engine to watch. Zero foreign intervals means different things in
+    // the two cases, and only this field separates them.
+    wrapDbWithMetrics(makeFakeDb(), metrics)
+    expect(metrics.contention.snapshot().syncObserved).toBe(false)
+  })
+
   it('exposes the tracker from the wrapped db, so a coalescer can reach it', () => {
     const metrics = new DbMetrics()
     const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics)
