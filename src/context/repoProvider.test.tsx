@@ -34,8 +34,9 @@ describe('RepoProvider', () => {
     expect(screen.queryByText('suspense-fallback-mounted')).toBeNull()
   })
 
-  it('throws a rejected boot into the enclosing error boundary', async () => {
-    const boot = createRepoBoot(async () => {}, () => Promise.reject(new Error('boot failed')))
+  it('throws a rejected boot into the enclosing error boundary without booting again', async () => {
+    const init = vi.fn(() => Promise.reject(new Error('boot failed')))
+    const boot = createRepoBoot(async () => {}, init)
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     render(
       <ErrorBoundary fallbackRender={({error}) => <div>caught:{(error as Error).message}</div>}>
@@ -43,6 +44,9 @@ describe('RepoProvider', () => {
       </ErrorBoundary>,
     )
     expect(await screen.findByText('caught:boot failed')).toBeTruthy()
+    // memoizeAsync evicts the rejected entry; the throwing render must not
+    // look the boot up again.
+    expect(init).toHaveBeenCalledTimes(1)
     spy.mockRestore()
   })
 })

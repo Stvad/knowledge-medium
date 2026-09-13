@@ -117,13 +117,15 @@ const initialLayoutCacheKey = (
 
 /** Memoized per (repo, hash, sync mode, navigation version): the entry is
  *  stamped fulfilled on resolution so `use()` reads a hit synchronously, and a
- *  rejected one is evicted so the next lookup retries. */
+ *  rejected one is evicted so the next lookup retries. Bounded: the version
+ *  bumps on every cross-workspace navigation, and each entry retains a Block. */
 export const getInitialLayout = memoizeAsync(
   (repo: Repo, requestedHash: string, useRemoteSync: boolean, navigationVersion: number): Promise<InitialLayout> => {
     void navigationVersion // part of the key only: a bump forces a fresh resolution
     return resolveInitialLayout(repo, requestedHash, useRemoteSync)
   },
   initialLayoutCacheKey,
+  64,
 )
 
 

@@ -121,18 +121,21 @@ export function RepoProvider({children, boot = bareBoot}: { children: ReactNode;
   // Waits as plain state, not through `use()`: a Suspense fallback here would
   // be the fallback flip that throttles the layout commit (see createRepoBoot).
   // `memoizeAsync` stamps the promise with React's fulfilled protocol on settle.
-  const promise = boot(user, remoteSyncEnabled(localOnly)) as FulfilledThenable<Repo>
-  const ready = promise.status === 'fulfilled'
   const [, bump] = useReducer((n: number) => n + 1, 0)
   const [failure, setFailure] = useState<{reason: unknown} | null>(null)
+  // Not looked up again once it failed: memoizeAsync evicts a rejected entry,
+  // so the render that throws to the boundary would otherwise start a second
+  // boot (workspace bootstrap writes included) nobody observes.
+  const promise = failure ? null : boot(user, remoteSyncEnabled(localOnly)) as FulfilledThenable<Repo>
+  const ready = promise?.status === 'fulfilled'
   useEffect(() => {
-    if (ready) return
+    if (!promise || ready) return
     let live = true
     void promise.then(() => { if (live) bump() }, (reason: unknown) => { if (live) setFailure({reason}) })
     return () => { live = false }
   }, [promise, ready])
   if (failure) throw failure.reason
-  if (!ready) return <SuspenseFallback/>
+  if (!promise || !ready) return <SuspenseFallback/>
   const repoInstance = promise.value as Repo
 
   return (
