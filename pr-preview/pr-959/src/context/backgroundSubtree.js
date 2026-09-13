@@ -1,2 +1,0 @@
-import{createContext as e,useContext as t}from"react";import{c as n}from"react/compiler-runtime";import{jsx as r}from"react/jsx-runtime";var i=e(!1);function a(){return t(i)}function o(e){let a=n(3),{background:o,children:s}=e,c=t(i)||o,l;return a[0]!==s||a[1]!==c?(l=r(i.Provider,{value:c,children:s}),a[0]=s,a[1]=c,a[2]=l):l=a[2],l}export{i as BackgroundSubtreeContext,o as BackgroundSubtreeProvider,a as useIsBackgroundSubtree};
-//# sourceMappingURL=backgroundSubtree.js.map

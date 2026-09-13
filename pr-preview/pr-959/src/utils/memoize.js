@@ -1,2 +1,0 @@
-import e from"../../node_modules/.pnpm/lodash-es@4.18.1/node_modules/lodash-es/memoize.js";import{stampFulfilled as t}from"./resolvedThenable.js";var n=(t,n)=>e(t,n),r=(n,r)=>{let i=e(((...e)=>{let a=r(...e),o=n(...e);if(o.status===`fulfilled`)return o;let s=o.catch(e=>{throw i.cache.delete(a),e});return s.then(e=>{t(s,e)},()=>{}),s}),r);return i};export{n as memoize,r as memoizeAsync};
-//# sourceMappingURL=memoize.js.map
