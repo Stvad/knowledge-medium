@@ -378,7 +378,16 @@ describe('loadRecords', () => {
     // The path that actually produces a negative RATE: a positive denominator
     // with a negative numerator.
     expect(isUsableInteractionRecord({ ...ok, fanout: { loaderInvalidations: -5 } })).toBe(false)
-    expect(isUsableInteractionRecord({ ...ok, queries: { q: { calls: 20, p95Ms: -3 } } }))
+    // A NEGATIVE p95 no longer reaches `isCount(p95Ms)`: p50 is mandatory, so
+    // `p50 <= p95` already implies `p95 >= 0` and rejects first. What that
+    // clause still uniquely catches is a non-finite or non-numeric p95, which
+    // the ordering comparison waves through (everything is <= Infinity, and a
+    // numeric string coerces) — so those are the cases that pin it.
+    expect(isUsableInteractionRecord({ ...ok, queries: { q: { calls: 20, p50Ms: 0, p95Ms: -3 } } }))
+      .toBe(false)
+    expect(isUsableInteractionRecord({ ...ok, queries: { q: { calls: 20, p50Ms: 0, p95Ms: Number.POSITIVE_INFINITY } } }))
+      .toBe(false)
+    expect(isUsableInteractionRecord({ ...ok, queries: { q: { calls: 20, p50Ms: 0, p95Ms: '10' } } }))
       .toBe(false)
     // Zero is a measurement, not corruption.
     expect(isUsableInteractionRecord({ ...ok, writes: 0, fanout: { loaderInvalidations: 0 } }))

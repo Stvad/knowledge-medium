@@ -22,7 +22,6 @@ import {
   fanoutRegression,
   median,
   queryRegressions,
-  clusteredTailMetrics,
   regressionsIn,
   startupRegression,
   type Regression,
@@ -155,8 +154,9 @@ export const runPerfAnalysis = async (
   const current = interactionComparable(metrics)
 
   // Judged, not counted: a record with no writes (or missing paint marks) carries no usable sample.
+  const queries = queryRegressions(current, history)
   const interactionResults: TrendResult[] = session.attributable
-    ? [...queryRegressions(current, history), fanoutRegression(current, history)]
+    ? [...queries.results, fanoutRegression(current, history)]
     : []
   const startupResults: TrendResult[] = [
     startupRegression(startup.map((r) => r.record), thisBoot),
@@ -181,7 +181,7 @@ export const runPerfAnalysis = async (
   // Load-bearing only in production and NOT pinned by a test: test resolves
   // never clear the caveat's magnitude floor, so the list is empty either way
   // here. Removing it fails nothing — do not read that as dead code.
-  const clusteredTail = session.attributable ? clusteredTailMetrics(current, history) : []
+  const clusteredTail = session.attributable ? queries.clusteredTail : []
 
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 

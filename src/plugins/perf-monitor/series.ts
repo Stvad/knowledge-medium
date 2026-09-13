@@ -23,9 +23,10 @@ const RECENT_WINDOW = 3
 /** Resolves needed before a query's p95 is treated as a measurement. */
 const MIN_CALLS = 20
 
-/** Widest p95/p50 still read as a single clustered value. Sits in open space:
- *  a collapsed tail's two quantiles agree to within rounding, while the
- *  tightest genuine distribution on record is an order of magnitude wider. */
+/** Widest p95/p50 still read as a single clustered value — a 1% tolerance, NOT
+ *  equality: stored timings are rounded to 0.01ms, so equality is a stricter
+ *  claim than this makes. Sits in open space: collapsed tails on record run to
+ *  1.0005, the tightest genuine distribution to 1.088. */
 const CLUSTERED_TAIL_MAX_RATIO = 1.01
 
 /** Does the window's upper half collapse to one value? Request coalescing
@@ -165,33 +166,6 @@ export const awaitingCurrentSample = (results: readonly TrendResult[]): boolean 
 export const lacksBaseline = (results: readonly TrendResult[]): boolean =>
   results.some((r) => r.status === 'insufficient' && r.reason === 'no-baseline')
 
-/** Judged metrics for which SOME session this comparison consumed has a
- *  collapsed tail — current, recent or baseline alike.
- *
- *  Reads the same windows as `queryRegressions`, not just the live sample:
- *  once coalescing stops, the collapsed sessions remain in the baseline
- *  driving or masking the verdict, and a caveat drawn from the current sample
- *  alone would go quiet exactly when the history is contaminated.
- *
- *  Not split by window — a reader's next move is the same either way, and a
- *  distinction nobody acts on differently is one more thing to keep true. */
-export const clusteredTailMetrics = (
-  current: InteractionComparable,
-  history: readonly InteractionComparable[],
-): string[] => {
-  const { recentPast, baselineSessions } = comparisonWindows(history)
-  const consumed = [current, ...recentPast, ...baselineSessions]
-  return Object.entries(current.queries)
-    .filter(([name, sample]) =>
-      sample.calls >= MIN_CALLS &&
-      consumed.some((session) => {
-        const q = session.queries[name]
-        return q !== undefined && q.calls >= MIN_CALLS && hasClusteredTail(q)
-      }))
-    .map(([name]) => name)
-    .sort()
-}
-
 /** Sessions the THINNEST judged comparison rested on, or 0 if none was
  *  judged — smallest, not largest, so a clean verdict isn't overstated. */
 export const judgedBaselineCount = (results: readonly TrendResult[]): number => {
@@ -208,31 +182,56 @@ export const regressionsIn = (results: readonly TrendResult[]): Regression[] =>
 
 /** Per-query p95 regressions, worst ratio first. A query absent from the
  *  baseline is skipped, not infinitely regressed. `recentPast` smooths the current reading. */
+export interface QueryComparison {
+  results: TrendResult[]
+  /** Metrics whose verdict rests on a session with a collapsed tail. Produced
+   *  HERE, from the same walk that judged them, because it is the only place
+   *  that knows which samples a query actually consumed and whether its
+   *  comparison reached a verdict at all — re-deriving either alongside is how
+   *  a caveat comes to qualify a trend that was never produced. */
+  clusteredTail: string[]
+}
+
 export const queryRegressions = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
-): TrendResult[] => {
+): QueryComparison => {
   const { recentPast, baselineSessions } = comparisonWindows(history)
-  const out: TrendResult[] = []
+  const results: TrendResult[] = []
+  const clusteredTail: string[] = []
   for (const [name, sample] of Object.entries(current.queries)) {
     // Only the data-sufficiency filter here — the magnitude floor is applied by
     // `trendRegression` after the recent median, so one fast session can't drop a sustainably-regressed query.
     if (sample.calls < MIN_CALLS) continue
-    const measured = (r: InteractionComparable): number | null => {
+    // ONE statement of which sessions carry a usable sample for this query,
+    // read by both the comparison and the caveat below.
+    const sampleIn = (r: InteractionComparable): TimingSample | null => {
       const q = r.queries[name]
-      return q !== undefined && q.calls >= MIN_CALLS ? q.p95Ms : null
+      return q !== undefined && q.calls >= MIN_CALLS ? q : null
     }
+    const measured = (r: InteractionComparable): number | null => sampleIn(r)?.p95Ms ?? null
     const recent = [sample.p95Ms, ...recentPast.map(measured).filter((v): v is number => v !== null)]
     const baseline = baselineSessions.map(measured).filter((v): v is number => v !== null)
-    out.push(trendRegression(
+    const result = trendRegression(
       { metric: `query:${name}`, label: `${name} p95`, unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
       recent,
       baseline,
-    ))
+    )
+    results.push(result)
+    // Only a comparison that reached a verdict can be qualified: telling a
+    // reader to distrust a trend that was never produced points at nothing.
+    const consumed = [sample, ...[...recentPast, ...baselineSessions].map(sampleIn)]
+    if (result.status !== 'insufficient' &&
+        consumed.some((q) => q !== null && hasClusteredTail(q))) {
+      clusteredTail.push(name)
+    }
   }
   // Nothing judged isn't nothing to say: an empty list would leave fan-out
   // alone in the series, reading as a clean bill nobody actually checked. One aggregate result, not one per skipped query.
-  return out.length === 0 ? [NO_CURRENT_SAMPLE] : out
+  return {
+    results: results.length === 0 ? [NO_CURRENT_SAMPLE] : results,
+    clusteredTail: clusteredTail.sort(),
+  }
 }
 
 /** Handle invalidations per write — catches a bug latency can't see: an

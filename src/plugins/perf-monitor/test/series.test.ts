@@ -14,7 +14,6 @@ import {
   partlyJudged,
   queryRegressions,
   hasClusteredTail,
-  clusteredTailMetrics,
   startupRegression,
   MIN_BASELINE_SESSIONS,
   MIN_HISTORY_SESSIONS,
@@ -28,6 +27,12 @@ import {
 const regs = (results: TrendResult[] | TrendResult) =>
   regressionsIn(Array.isArray(results) ? results : [results])
 const reg = (result: TrendResult) => regs(result)[0] ?? null
+
+/** Just the comparison's results. Most of these tests predate the caveat it
+ *  now returns alongside them. */
+const qr = (
+  ...args: Parameters<typeof queryRegressions>
+): TrendResult[] => queryRegressions(...args).results
 
 const q = (p95Ms: number, calls = 100) => ({ calls, p50Ms: p95Ms / 2, p95Ms, totalMs: p95Ms * calls })
 
@@ -82,7 +87,7 @@ describe('median', () => {
 describe('queryRegressions', () => {
   it('flags a query whose p95 doubled against the trailing median', () => {
     const slow = () => sample({ queries: { 'backlinks.forBlock': q(40) } })
-    const found = regs(queryRegressions(slow(), sinceRegressed(slow, sample)))
+    const found = regs(qr(slow(), sinceRegressed(slow, sample)))
     expect(found).toHaveLength(1)
     expect(found[0]).toMatchObject({
       metric: 'query:backlinks.forBlock', baseline: 10, current: 40, ratio: 4,
@@ -92,13 +97,13 @@ describe('queryRegressions', () => {
   // A newly mounted surface is not a regression. Reporting one as infinitely
   // regressed is how an alarm teaches its reader to ignore it.
   it('ignores a query with no baseline rather than treating it as regressed', () => {
-    const found = regs(queryRegressions(sample({ queries: { 'brandNew.query': q(500) } }), history(8, sample)))
+    const found = regs(qr(sample({ queries: { 'brandNew.query': q(500) } }), history(8, sample)))
     expect(found).toEqual([])
   })
 
   it('ignores a query too fast to feel, however much it grew', () => {
     const base = () => sample({ queries: { tiny: q(0.1) } })
-    expect(regs(queryRegressions(sample({ queries: { tiny: q(4) } }), history(8, base)))).toEqual([])
+    expect(regs(qr(sample({ queries: { tiny: q(4) } }), history(8, base)))).toEqual([])
   })
 
   // The magnitude floor belongs after the recent median. Applied to the live
@@ -109,7 +114,7 @@ describe('queryRegressions', () => {
     const slow = () => sample({ queries: { 'backlinks.forBlock': q(40) } })
     const base = () => sample({ queries: { 'backlinks.forBlock': q(10) } })
     // The live session recovers below the floor; the two before it did not.
-    const found = regs(queryRegressions(
+    const found = regs(qr(
       sample({ queries: { 'backlinks.forBlock': q(1) } }),
       [slow(), slow(), ...history(8, base)],
     ))
@@ -119,7 +124,7 @@ describe('queryRegressions', () => {
 
   it('ignores a query with too few resolves to have a distribution', () => {
     const base = () => sample({ queries: { rare: q(10, 100) } })
-    expect(regs(queryRegressions(sample({ queries: { rare: q(90, 3) } }), history(8, base)))).toEqual([])
+    expect(regs(qr(sample({ queries: { rare: q(90, 3) } }), history(8, base)))).toEqual([])
   })
 
   it('reports nothing until the baseline is long enough to be one', () => {
@@ -127,10 +132,10 @@ describe('queryRegressions', () => {
     // One history entry is consumed smoothing the current reading, so the
     // baseline the comparison sees is one shorter than the history given.
     expect(
-      regs(queryRegressions(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS))),
+      regs(qr(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS))),
     ).toEqual([])
     expect(
-      regs(queryRegressions(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS + 1))),
+      regs(qr(slow(), sinceRegressed(slow, sample, MIN_BASELINE_SESSIONS + 1))),
     ).toHaveLength(1)
   })
 
@@ -138,7 +143,7 @@ describe('queryRegressions', () => {
   // is reported once it is the MAJORITY of the recent window, not on its first
   // session.
   it('does not fire on a single anomalous session', () => {
-    const found = regs(queryRegressions(
+    const found = regs(qr(
       sample({ queries: { 'backlinks.forBlock': q(400) } }),
       history(10, sample),
     ))
@@ -152,7 +157,7 @@ describe('queryRegressions', () => {
     const withQ = () => sample({ queries: { seasonal: q(10) } })
     const without = () => sample({ queries: { other: q(10) } })
     // Present now and in the old baseline, absent from the two most recent.
-    const found = regs(queryRegressions(
+    const found = regs(qr(
       sample({ queries: { seasonal: q(90) } }),
       [without(), without(), ...history(8, withQ)],
     ))
@@ -164,7 +169,7 @@ describe('queryRegressions', () => {
   // comparison that could never have run.
   it('starts comparing at exactly the advertised history length', () => {
     const slow = () => sample({ queries: { 'backlinks.forBlock': q(80) } })
-    const at = (n: number) => regs(queryRegressions(slow(), sinceRegressed(slow, sample, n - 1)))
+    const at = (n: number) => regs(qr(slow(), sinceRegressed(slow, sample, n - 1)))
     expect(at(MIN_HISTORY_SESSIONS - 1)).toEqual([])
     expect(at(MIN_HISTORY_SESSIONS)).toHaveLength(1)
   })
@@ -172,57 +177,63 @@ describe('queryRegressions', () => {
   it('orders the worst ratio first', () => {
     const base = () => sample({ queries: { a: q(10), b: q(10) } })
     const slow = () => sample({ queries: { a: q(30), b: q(100) } })
-    const found = regs(queryRegressions(slow(), [slow(), ...history(8, base)]))
+    const found = regs(qr(slow(), [slow(), ...history(8, base)]))
     expect(found.map((r) => r.metric)).toEqual(['query:b', 'query:a'])
   })
 })
 
-describe('clusteredTailMetrics', () => {
+describe('the clustered-tail caveat', () => {
   const spread = () => sample({ queries: { 'core.ancestors': q(300) } })
+  const caveat = (...args: Parameters<typeof queryRegressions>): string[] =>
+    queryRegressions(...args).clusteredTail
 
-  it('names the judged metrics whose tail collapsed', () => {
-    expect(clusteredTailMetrics(sample({
+  it('names a judged metric whose tail collapsed', () => {
+    expect(caveat(sample({
       queries: { 'core.ancestors': clustered(600), 'core.childIds': q(300) },
     }), history(8, spread))).toEqual(['core.ancestors'])
   })
 
-  it('ignores a query the comparison never judged, however its history looks', () => {
-    // Too thin to be compared at all, so there is no verdict for a caveat to
-    // qualify — even with every historical session collapsed.
-    expect(clusteredTailMetrics(
+  it('reports a baseline the comparison rests on after the live sample recovers', () => {
+    // Coalescing stopped, so today's reading is spread — but the collapsed
+    // sessions are still in the baseline setting the bar.
+    expect(caveat(spread(), [
+      spread(), spread(),
+      ...history(8, () => sample({ queries: { 'core.ancestors': clustered(600) } })),
+    ])).toEqual(['core.ancestors'])
+  })
+
+  it('says nothing about a query whose comparison reached no verdict', () => {
+    // Enough live calls to be walked, nowhere near enough history to judge.
+    // Qualifying a trend that was never produced points the reader at nothing.
+    const results = queryRegressions(
+      sample({ queries: { 'core.ancestors': clustered(600) } }),
+      history(2, spread),
+    )
+    expect(results.results.every((r) => r.status === 'insufficient')).toBe(true)
+    expect(results.clusteredTail).toEqual([])
+  })
+
+  it('ignores a query too thin to be walked at all', () => {
+    expect(caveat(
       sample({ queries: { 'core.ancestors': clustered(600, 3) } }),
       history(8, () => sample({ queries: { 'core.ancestors': clustered(600) } })),
     )).toEqual([])
   })
 
   it('ignores a collapsed historical sample too thin to enter a window', () => {
-    // `measured` skips it, so it contributed to neither window and cannot have
-    // driven or masked the verdict this caveat qualifies.
-    expect(clusteredTailMetrics(
+    expect(caveat(
       spread(),
       history(8, () => sample({ queries: { 'core.ancestors': clustered(600, 3) } })),
     )).toEqual([])
   })
 
-  it('still reports a baseline the comparison rests on after the live sample recovers', () => {
-    // The case a current-sample-only caveat goes quiet on: coalescing stopped,
-    // so today's reading is spread — but the collapsed sessions are still in
-    // the baseline setting the bar this session is judged against.
-    expect(clusteredTailMetrics(spread(), [
-      spread(), spread(),
-      ...history(8, () => sample({ queries: { 'core.ancestors': clustered(600) } })),
-    ])).toEqual(['core.ancestors'])
-  })
-
   it('stays quiet when every consumed session is spread', () => {
-    expect(clusteredTailMetrics(spread(), history(8, spread))).toEqual([])
+    expect(caveat(spread(), history(8, spread))).toEqual([])
   })
 
   it('still COMPARES a clustered metric rather than discarding it', () => {
-    // A collapsed tail and a bimodal split are the same stored shape, so
-    // refusing to judge would suppress real regressions to hide an artifact.
     const slow = () => sample({ queries: { 'core.ancestors': clustered(600) } })
-    const found = regs(queryRegressions(slow(), [
+    const found = regs(qr(slow(), [
       slow(), slow(),
       ...history(8, () => sample({ queries: { 'core.ancestors': q(10) } })),
     ]))
@@ -394,7 +405,7 @@ describe('partlyJudged', () => {
 describe('queryRegressions with nothing judgeable', () => {
   it('says so rather than returning nothing', () => {
     const quiet = sample({ queries: { 'backlinks.forBlock': q(40, 3) } })
-    const results = queryRegressions(quiet, history(20, () => sample({
+    const results = qr(quiet, history(20, () => sample({
       queries: { 'backlinks.forBlock': q(40) },
     })))
 

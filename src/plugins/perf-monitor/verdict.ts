@@ -86,7 +86,7 @@ const pendingNotes = (analysis: PerfAnalysis): string[] =>
 const clusteredTailNote = (metrics: readonly string[]): string | null =>
   metrics.length === 0
     ? null
-    : `${metrics.join(', ')}: p95 equals p50 in at least one session this comparison used, so the distribution there is collapsed — check whether those calls shared one resolution before reading the trend`
+    : `${metrics.join(', ')}: p95 is within 1% of p50 in at least one session this comparison used, so the distribution there is collapsed — check whether those calls shared one resolution before reading the trend`
 
 /** How much history the comparison actually had.
  *

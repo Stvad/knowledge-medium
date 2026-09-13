@@ -34,6 +34,11 @@ const isTimingSample = (v: unknown): boolean =>
   isCount((v as { p95Ms?: unknown }).p95Ms) &&
   // `p50Ms` is dereferenced by the clustered-tail caveat, and a numeric STRING
   // would compare against p95 by coercion rather than being rejected.
+  //
+  // The pair is not redundant, but it is not symmetric either: with `p50Ms`
+  // mandatory the ordering clause already implies `p95Ms >= 0`, so the p95
+  // `isCount` above now earns its place only on non-finite and non-numeric
+  // values. Both are pinned by cases chosen for that.
   isCount((v as { p50Ms?: unknown }).p50Ms) &&
   (v as { p50Ms: number }).p50Ms <= (v as { p95Ms: number }).p95Ms
 

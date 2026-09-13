@@ -202,12 +202,6 @@ describe('summarize', () => {
   })
 })
 
-/**
- * "Still building" is a promise that waiting will resolve it. When this session
- * simply contributed no startup record — the recorder is independently
- * togglable — no amount of history helps, and the chip would send the user to
- * wait for something that is never coming.
- */
 describe('the clustered-tail caveat', () => {
   it('rides along with a regression rather than replacing the verdict', () => {
     // The realistic case: one metric's tail collapses while others judge
@@ -219,7 +213,7 @@ describe('the clustered-tail caveat', () => {
     }))
     expect(v.kind).toBe('regressed')
     expect(v.notes.join(' ')).toContain('core.ancestors')
-    expect(v.notes.join(' ')).toContain('p95 equals p50')
+    expect(v.notes.join(' ')).toContain('within 1% of p50')
     // The claim the sample cannot support: coalescing and a bimodal workload
     // produce this shape alike, so the note must not assert independence.
     expect(v.notes.join(' ')).not.toContain('independent')
@@ -234,10 +228,16 @@ describe('the clustered-tail caveat', () => {
   })
 
   it('stays silent when no tail collapsed', () => {
-    expect(summarize(analysis()).notes.join(' ')).not.toContain('p95 equals p50')
+    expect(summarize(analysis()).notes.join(' ')).not.toContain('within 1% of p50')
   })
 })
 
+/**
+ * "Still building" is a promise that waiting will resolve it. When this session
+ * simply contributed no startup record — the recorder is independently
+ * togglable — no amount of history helps, and the chip would send the user to
+ * wait for something that is never coming.
+ */
 describe('an unjudged startup series', () => {
   const startupUnjudged = (over: Parameters<typeof analysis>[0]) =>
     summarize(analysis({ ready: { interaction: true, startup: false }, ...over }))
