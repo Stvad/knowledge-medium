@@ -63,18 +63,19 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
   'not-recording': (s) => `no ${s} record for this session (${s} recording may be off)`,
   'history-short': (s) => `${s} history still building`,
   'no-baseline': (s) => `no ${s} baseline to compare against (recent sessions all measured zero)`,
-  // Reports what was SEEN, not what the database was doing. The classifier
-  // rejects a query that opens while anything else is in flight, which on a
-  // two-connection device can be a query the second reader served without any
-  // wait at all — so a session reaches this while the database had capacity to
-  // spare. Claiming it was never free would be a statement about the hardware
-  // that nothing here measured.
+  // Names the OUTCOME, not a cause. The classifier rejects a sample for several
+  // different reasons — something else in flight, a coalesced read answering
+  // more than one caller, a window spanning a counter reset — and only the
+  // first is other activity. A lone resolver batching its own ids is rejected
+  // with the database completely quiet, so a message about other activity
+  // would send that reader looking for something that was never there. Saying
+  // what the comparison got, rather than why, is true in every case.
   //
   // Deliberately does NOT tell the reader to keep waiting for more history —
   // that is the one thing which cannot help — while the scheduler does keep
   // rechecking, because a quiet stretch later in this same session can.
   'never-uncontended': (s) =>
-    `${s} queries ran; none was seen running without other database activity — no comparable timing this session`,
+    `${s} queries ran, but none produced a comparison-eligible timing this session`,
   'partly-judged': (s) => `some ${s} metrics could not be judged this session`,
 }
 

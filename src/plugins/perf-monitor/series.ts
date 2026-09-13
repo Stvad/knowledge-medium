@@ -75,11 +75,14 @@ const INSUFFICIENT: TrendResult = { status: 'insufficient', reason: 'history' }
 const NO_CURRENT_SAMPLE: TrendResult = { status: 'insufficient', reason: 'no-current-sample' }
 /** History enough, and every session in it zero — there is no ratio to form. */
 const NO_BASELINE: TrendResult = { status: 'insufficient', reason: 'no-baseline' }
-/** Queries WERE measured, and not ONE of them was ever caught with the database
- *  free. Distinct from `no-current-sample`, which says the recorder produced
- *  nothing — and for a query that only ever runs inside a render fan-out this is
- *  the EXPECTED state rather than a fault. Reporting it as a missing sample
- *  would send a reader to look for a broken recorder.
+/** Queries WERE measured, and not ONE of them cleared the filter. Several
+ *  different things reject a sample — competing traffic, a coalesced read
+ *  answering more than one caller, a window spanning a counter reset — so this
+ *  reports the outcome and not a cause. Distinct from `no-current-sample`,
+ *  which says the recorder produced nothing; for a query that only runs inside
+ *  a render fan-out, or only ever through the batcher, this is the EXPECTED
+ *  state rather than a fault, and reporting it as a missing sample would send a
+ *  reader to look for a broken recorder.
  *
  *  A statement about THIS SESSION SO FAR, not a permanent one. More stored
  *  history cannot help — that is what separates it from `history` — but a
