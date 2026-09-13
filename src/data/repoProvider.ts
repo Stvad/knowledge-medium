@@ -405,6 +405,9 @@ export const ensurePowerSyncReady = async (
 // The trailing sentinel proves the LAST statement ran: an adapter that stepped
 // only the first would return no row, and on an upgrading device every earlier
 // statement is an IF NOT EXISTS no-op, so nothing else would notice.
+// The adapter returns the FIRST column-bearing result set, so the sentinel
+// proves completion only while no batched statement returns rows (no SELECT,
+// PRAGMA or RETURNING in a batch).
 export const BATCH_SENTINEL_SQL = 'SELECT 1 AS ok'
 const runBatch = async (
   execute: (sql: string) => Promise<{rows?: {length: number}}>,
@@ -470,6 +473,7 @@ export const initializeClientSchema = async (db: SchemaDb): Promise<void> => {
   await dropStaleAnyFieldFormIndex(db)
   await runDdl(db, [
     CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
+    CREATE_WORKSPACES_TABLE_SQL,
   ])
   // Idempotent local migration: add `group_id` to an existing
   // tx_context / row_events (undo grouping, issue #306). MUST run
@@ -486,9 +490,6 @@ export const initializeClientSchema = async (db: SchemaDb): Promise<void> => {
   // backfill. See hydration-staleness-fix-handoff.md step 3.
   await ensureBlockUserUpdatedAtColumn(db)
 
-  await runDdl(db, [
-    CREATE_WORKSPACES_TABLE_SQL,
-  ])
   // Idempotent local migration: add the E2EE columns to an existing
   // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
   // above is a no-op when the table already exists). §7 / e2ee-design.
