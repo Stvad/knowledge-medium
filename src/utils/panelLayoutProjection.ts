@@ -112,6 +112,12 @@ export const sessionActivePanelId = (row: BlockData | undefined): string | undef
   return activePanelIdProp.codec.decode(stored)
 }
 
+/** The session points at a panel row that is not in its subtree. */
+const hasDanglingActivePanel = (session: BlockData, rows: readonly BlockData[]): boolean => {
+  const activePanelId = sessionActivePanelId(session)
+  return activePanelId !== undefined && !rows.some(row => row.id === activePanelId)
+}
+
 export const panelBlockIds = (rows: readonly BlockData[]): string[] =>
   rows.map(panelBlockId).filter((id): id is string => Boolean(id))
 
@@ -982,18 +988,16 @@ export const reconcilePanelRows = async (
   )
 
   // A no-op reconcile must not open a tx (its journal writes are
-  // unconditional). 'exact' slot equality covers the per-leaf pass below; the
-  // dangling-active-pointer check is repeated because 'exact' cannot see it.
+  // unconditional). 'exact' slot equality covers the per-leaf pass below;
+  // a dangling active pointer is the one write 'exact' cannot see.
   // This read is the query cache, not the write lock: a write still in flight
   // is not seen, and the outbound projection then reconciles the URL to what
   // it committed. Rows that differ reach the tx, which re-reads under the lock.
   const preRows = knownRows ?? await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
   const preParent = preRows.find(row => row.id === layoutSessionBlock.id)
   if (preParent) {
-    const preActivePanelId = sessionActivePanelId(preParent)
-    const activePointerValid = preActivePanelId === undefined || preRows.some(row => row.id === preActivePanelId)
     if (
-      activePointerValid &&
+      !hasDanglingActivePanel(preParent, preRows) &&
       sameLayoutSlots(layoutSlotsFromRows(layoutSessionBlock.id, preRows), targetSlots, 'exact')
     ) {
       return {changed: false}
@@ -1056,9 +1060,9 @@ export const reconcilePanelRows = async (
           await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, urlActiveRowId)
           wrote = true
         }
-      } else if (activePanelId !== undefined && !currentRows.some(row => row.id === activePanelId)) {
-        // Stale-pointer hygiene (kept from the old equal-path repair): a
-        // dangling active id is cleared. Not counted as a layout change.
+      } else if (hasDanglingActivePanel(parent, currentRows)) {
+        // Stale-pointer hygiene: a dangling active id is cleared. Not counted
+        // as a layout change.
         await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, undefined)
       }
       if (isCancelled?.()) throw new ReconcileCancelled()
