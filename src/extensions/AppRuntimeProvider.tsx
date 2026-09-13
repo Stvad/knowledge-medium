@@ -177,7 +177,12 @@ export function AppRuntimeProvider({
         // stylesheet must not hold the runtime hostage. A workspace with no
         // dynamic extensions starts the load here instead and waits once;
         // the apply changes nothing visible there.
-        await Promise.race([ensureExtensionUtilitiesCss(), new Promise(resolve => setTimeout(resolve, SAFELIST_WAIT_MS))])
+        let waitTimer: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([
+          ensureExtensionUtilitiesCss(),
+          new Promise(resolve => { waitTimer = setTimeout(resolve, SAFELIST_WAIT_MS) }),
+        ])
+        clearTimeout(waitTimer)
 
         if (!cancelled) {
           // Publish both maps atomically now that the resolve is complete.
