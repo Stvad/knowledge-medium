@@ -181,8 +181,10 @@ describe('ancestorWalk shared-work reporting', () => {
       statements,
       pool,
       shared: () => pool.snapshot().sharedWork,
-      /** Run `walk` as N concurrent query resolves would — each an observation
-       *  window of its own, which is what makes a shared statement shared. */
+      /** Run `walk` as N concurrent query resolves would, each with an
+       *  observation window of its own so the result can be judged. The COUNT
+       *  decides nothing: a shared statement disqualifies every window across
+       *  it, one or many. */
       asResolves: async <T>(n: number, walk: () => Promise<T>) => {
         const windows = Array.from({length: n}, () => pool.openWindow())
         try { return await walk() } finally { windows.forEach(w => pool.closeWindow(w)) }
@@ -211,10 +213,6 @@ describe('ancestorWalk shared-work reporting', () => {
     expect(shared()).toBeGreaterThan(0)
   })
 
-  // `core.manyAncestors` and `core.recentActivity` both do exactly this: one
-  // resolver asking the batcher for every id it was handed. The batch is that
-  // resolve's OWN work, and calling it shared would bar those queries from ever
-  // being measured cleanly — a permanent, silent gap rather than a thin one.
   it('counts one shared read per statement, not one per caller that joined', async () => {
     const {db, statements, shared, asResolves} = meteredDb()
 
