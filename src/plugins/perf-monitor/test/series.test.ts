@@ -528,6 +528,19 @@ describe('queryRegressions with nothing judgeable', () => {
     expect(results.some((r) => r.status === 'insufficient')).toBe(true)
   })
 
+  // "Never" describes the SESSION, so it has to be read off the whole session.
+  // A query with clean samples but too little history to judge still ran with
+  // the database free; saying never beside it is simply false.
+  it('does not claim never when a judged-eligible query did run cleanly', () => {
+    const thin = history(2, () => sample({ queries: { fresh: q(10), fanout: q(10) } }))
+    const now = sample({ queries: { fresh: q(10), fanout: noUncontendedSamples(900) } })
+    const results = qr(now, thin)
+
+    expect(results.every((r) => r.status === 'insufficient')).toBe(true)
+    expect(results.some((r) => r.status === 'insufficient' && r.reason === 'never-uncontended'))
+      .toBe(false)
+  })
+
   // "Never" is a stronger claim than "not yet". A session holding a few clean
   // resolves that fall short of the threshold is still accumulating, and
   // telling the user those queries never ran with the database free is simply

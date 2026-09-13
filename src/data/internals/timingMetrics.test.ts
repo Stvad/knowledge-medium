@@ -607,6 +607,36 @@ describe('wrapDbWithMetrics', () => {
     expect(metrics.contention.snapshot().syncObserved).toBe(false)
   })
 
+  it('counts a raw write lock as holding the pool', async () => {
+    const metrics = new DbMetrics()
+    const base = makeFakeDb() as ReturnType<typeof makeFakeDb> & {writeLock?: unknown}
+    // The SQLite export takes this lock directly and holds it across a
+    // checkpoint and a copy of the whole database. Passing through untracked,
+    // a read issued during one starts at depth zero and is recorded as having
+    // had the pool to itself while it waits behind the export.
+    base.writeLock = async <R,>(fn: (tx: unknown) => Promise<R>): Promise<R> => fn({})
+    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb> & {
+      writeLock: <R>(fn: (tx: unknown) => Promise<R>) => Promise<R>
+    }
+
+    let duringLock = 0
+    await wrapped.writeLock(async () => {
+      await wrapped.getAll('SELECT 1 during the export')
+      duringLock = metrics.contention.snapshot().uncontendedRead.calls
+    })
+
+    expect(duringLock).toBe(0)
+    expect(metrics.contention.snapshot().maxDepth).toBe(2)
+  })
+
+  it('leaves a lock the database does not have absent rather than inventing it', () => {
+    const metrics = new DbMetrics()
+    const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics) as Record<string, unknown>
+    // A fake or a database without these must not suddenly appear to have them
+    // — callers feature-detect the method before using it.
+    expect(wrapped.writeLock).toBeUndefined()
+  })
+
   it('exposes the tracker from the wrapped db, so a coalescer can reach it', () => {
     const metrics = new DbMetrics()
     const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics)

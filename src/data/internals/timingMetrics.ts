@@ -589,6 +589,10 @@ export interface QueryTimingSnapshot extends TimingSnapshot {
  *  given, with timing-instrumented call sites. */
 interface TimedDb {
   writeTransaction<R>(fn: (tx: TimedTxDb) => Promise<R>): Promise<R>
+  /** Held for the caller's whole callback. Not every database exposes them, so
+   *  both are optional and wrapped only when present. */
+  writeLock?<R>(fn: (tx: unknown) => Promise<R>): Promise<R>
+  readLock?<R>(fn: (tx: unknown) => Promise<R>): Promise<R>
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
@@ -656,12 +660,43 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
   const timedExecute = (sql: string, params?: unknown[]): Promise<unknown> =>
     timed('write', metrics.execute, () => db.execute(sql, params))
 
+  /** A raw lock occupies a connection for as long as its callback runs, which
+   *  for the SQLite export is a checkpoint plus a copy of the whole database.
+   *  Left passing through, a query issued during one of those starts at depth
+   *  zero and is recorded as having had the pool to itself while it is in fact
+   *  waiting behind it.
+   *
+   *  Occupancy without a timing: the duration is the caller's work, not a
+   *  statement's cost, and averaging an export into a latency reservoir would
+   *  say nothing about either. */
+  const heldLock = <R>(
+    take: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>,
+    fn: (tx: unknown) => Promise<R>,
+  ): Promise<R> => {
+    const ticket = pool.begin()
+    try {
+      return take(fn)
+    } finally {
+      pool.end(ticket, 'write')
+    }
+  }
+
   const overrides: Record<string, unknown> = {
     writeTransaction: timedWriteTransaction,
     getAll: timedGetAll,
     getOptional: timedGetOptional,
     get: timedGet,
     execute: timedExecute,
+    // Only when the underlying database has them; otherwise leave the key
+    // absent so the Proxy reports them missing exactly as it did before.
+    ...(typeof db.writeLock === 'function'
+      ? {writeLock: <R>(fn: (tx: unknown) => Promise<R>) =>
+        heldLock((inner) => db.writeLock!(inner), fn)}
+      : {}),
+    ...(typeof db.readLock === 'function'
+      ? {readLock: <R>(fn: (tx: unknown) => Promise<R>) =>
+        heldLock((inner) => db.readLock!(inner), fn)}
+      : {}),
   }
 
   // Proxy delegates everything else to the underlying db. Bind any

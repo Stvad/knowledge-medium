@@ -83,7 +83,11 @@ export interface ContentionSample {
   busyMs: number
   /** Coalescer flushes that answered more than one caller. */
   sharedWork: number
-  /** Calls, reads and writes together, that never waited for a connection. */
+  /** Calls, reads and writes together, issued into an EMPTY pool. A lower
+   *  bound on "never waited" rather than a count of it: where the pool has two
+   *  connections a call arriving alongside one other can take the free
+   *  connection and wait for nothing, and this leaves it out. Same direction as
+   *  `concurrentIssues` above, which counts that call as overlap. */
   uncontendedCalls: number
   /** Samples backing the two percentiles below: unqueued READS still retained
    *  in the reservoir, so at most its capacity rather than the lifetime total.
@@ -220,10 +224,10 @@ const toTimingSample = (t: {
  *  unopposed stores no key rather than a row of zeros a reader could mistake
  *  for a measurement of zero.
  *
- *  Gated on the same field it stores. A live reservoir has samples whenever it
- *  has calls, so gating on either is equivalent today and no test separates
- *  them — this reads the one whose value is written, so the two cannot drift if
- *  that ever stops being true. */
+ *  Gated on the same field it stores, so the condition and the value written
+ *  cannot disagree about whether there was anything to write. Defence in depth:
+ *  a reservoir holds samples whenever it has recorded calls, so the two agree
+ *  by construction. */
 const toQuerySample = (t: {
   calls: number
   p50Ms: number

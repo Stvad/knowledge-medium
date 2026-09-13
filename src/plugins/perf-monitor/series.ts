@@ -288,7 +288,12 @@ export const queryRegressions = (
   // made only when not one of the skipped queries holds a clean resolve;
   // otherwise they are still accumulating and this is an ordinary not-yet.
   if (skipped.length > 0) {
-    const anyClean = skipped.some((q) => (q.uncontended?.calls ?? 0) > 0)
+    // Asked of EVERY current query, not just the skipped ones. A query with
+    // clean samples but too little history to judge still ran with the database
+    // free, and reporting `never` beside it would be false about the session as
+    // a whole — which is what this aggregate describes.
+    const anyClean = Object.values(current.queries)
+      .some((q) => (q.uncontended?.calls ?? 0) > 0)
     results.push(anyClean ? NO_CURRENT_SAMPLE : NEVER_UNCONTENDED)
   }
   return {
