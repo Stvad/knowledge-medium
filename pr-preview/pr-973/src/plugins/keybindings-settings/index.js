@@ -1,1 +1,1 @@
-import{Fb as e,Ib as t,it as n}from"../../../chunks/app-CosqX2T4.js";export{e as keybindingOverridesProp,t as keybindingsPrefsType,n as keybindingsSettingsPlugin};
+import{Fb as e,Ib as t,it as n}from"../../../chunks/app-BnR4oLpO.js";export{e as keybindingOverridesProp,t as keybindingsPrefsType,n as keybindingsSettingsPlugin};

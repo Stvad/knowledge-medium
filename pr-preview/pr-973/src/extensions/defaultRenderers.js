@@ -1,1 +1,1 @@
-import{dT as e,fT as t,uT as n}from"../../chunks/app-CosqX2T4.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
+import{dT as e,fT as t,uT as n}from"../../chunks/app-BnR4oLpO.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};

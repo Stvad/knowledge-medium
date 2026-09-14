@@ -1,1 +1,1 @@
-import{fF as e,pF as t}from"../../../chunks/app-CosqX2T4.js";export{e as mergeReferrers,t as wikilinkSourcesByContent};
+import{fF as e,pF as t}from"../../../chunks/app-BnR4oLpO.js";export{e as mergeReferrers,t as wikilinkSourcesByContent};

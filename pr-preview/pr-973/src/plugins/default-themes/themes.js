@@ -1,1 +1,1 @@
-import{D_ as e,O_ as t,f_ as n}from"../../../chunks/app-CosqX2T4.js";export{e as DEFAULT_THEME_ID_DARK,t as DEFAULT_THEME_ID_LIGHT,n as defaultThemeContributions};
+import{D_ as e,O_ as t,f_ as n}from"../../../chunks/app-BnR4oLpO.js";export{e as DEFAULT_THEME_ID_DARK,t as DEFAULT_THEME_ID_LIGHT,n as defaultThemeContributions};
