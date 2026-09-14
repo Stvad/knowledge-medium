@@ -1,0 +1,1 @@
+import{fA as e}from"../../chunks/app-Bg-aarYj.js";export{e as buildPropertyPanelSections};

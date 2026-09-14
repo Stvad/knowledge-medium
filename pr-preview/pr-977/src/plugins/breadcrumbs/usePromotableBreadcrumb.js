@@ -1,0 +1,1 @@
+import{Dg as e}from"../../../chunks/app-Bg-aarYj.js";export{e as usePromotableBreadcrumb};

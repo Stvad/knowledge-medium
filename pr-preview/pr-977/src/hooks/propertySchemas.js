@@ -1,0 +1,1 @@
+import{XN as e}from"../../chunks/app-Bg-aarYj.js";export{e as usePropertySchemas};

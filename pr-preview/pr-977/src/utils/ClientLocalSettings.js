@@ -1,0 +1,1 @@
+import{lT as e,uT as t}from"../../chunks/app-Bg-aarYj.js";export{e as ClientLocalSettings,t as clientLocalSettings};
