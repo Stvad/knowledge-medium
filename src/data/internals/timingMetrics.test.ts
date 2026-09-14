@@ -7,10 +7,13 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { makeFakeStack } from '@/data/test/fakePowerSyncStack'
 import {
+  attachDbMetrics,
   DbContention,
   DbMetrics,
   QueryMetrics,
+  registerContention,
   TimingReservoir,
   contentionFor,
   wrapDbWithMetrics,
@@ -162,10 +165,14 @@ describe('QueryMetrics', () => {
 })
 
 describe('DbContention', () => {
-  /** Drives overlap deterministically: every begin/end reads this clock. */
+  /** Drives overlap deterministically: every begin/end reads this clock.
+   *  Marked observed because these tests drive `begin`/`end` themselves, which
+   *  is what an instrumented adapter does; without it the tracker correctly
+   *  refuses to judge anything (see `poolInstrumentation.test.ts`). */
   const atClock = () => {
     let t = 0
     const pool = new DbContention(() => t)
+    pool.markPoolObserved()
     return {pool, set: (ms: number) => { t = ms }}
   }
 
@@ -498,58 +505,41 @@ describe('wrapDbWithMetrics', () => {
     expect(s.execute.calls).toBe(1)
   })
 
-  it('keeps sequential reads and the first of an overlapping pair', async () => {
-    const metrics = new DbMetrics()
-    const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics) as ReturnType<typeof makeFakeDb>
-    await wrapped.getAll('SELECT 1')
-    await wrapped.get('SELECT 2')
-    expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(2)
-    await Promise.all([wrapped.getAll('SELECT 3'), wrapped.getAll('SELECT 4')])
-    const s = metrics.contention.snapshot()
-    expect(s.calls).toBe(4)
-    expect(s.maxDepth).toBe(2)
-    // 3, not 4: of the concurrent pair only the one that found the pool empty
-    // is a measurement of how fast the database is. The other waited for it.
-    expect(s.uncontendedRead.calls).toBe(3)
-  })
-
-  it('does not count a transaction\'s inner SQL as competing with the transaction', async () => {
-    const metrics = new DbMetrics()
-    const wrapped = wrapDbWithMetrics(makeFakeDb(), metrics) as ReturnType<typeof makeFakeDb>
-    await wrapped.writeTransaction(async (tx) => {
-      await (tx as {getAll: (sql: string) => Promise<unknown>}).getAll('SELECT 1 inside tx')
-    })
-    const s = metrics.contention.snapshot()
-    // One connection was held, once — the inner read runs inside the
-    // transaction's own ticket, and counting it again would report the
-    // connection competing with itself.
-    expect(s.calls).toBe(1)
-    expect(s.maxDepth).toBe(1)
-  })
-
-  /** A db that reports sync activity the way PowerSync does. */
-  const syncingDb = (initial?: {downloading?: boolean; uploading?: boolean}) => {
-    const base = makeFakeDb() as ReturnType<typeof makeFakeDb> & {
-      currentStatus?: unknown
-      registerListener?: unknown
-    }
-    let notify: ((s: unknown) => void) | undefined
-    base.currentStatus = initial ? {dataFlowStatus: initial} : undefined
-    base.registerListener = (l: {statusChanged?: (s: unknown) => void}) => {
-      notify = l.statusChanged
-      return () => {}
-    }
+  /** The sync bracket is the one signal about work that never reaches the
+   *  adapter, so these drive the whole stack: a read only classifies as clean
+   *  if it actually took a connection. */
+  const syncing = (initial?: {downloading?: boolean; uploading?: boolean}) => {
+    const stack = makeFakeStack({syncing: initial})
+    // Registered against the DATABASE, as `repoProvider` does — that is what
+    // attaches the sync watcher, and doing it here rather than in the wrapper
+    // is what keeps it to one per database.
+    registerContention(stack.db, stack.pool)
+    const metered = attachDbMetrics(stack.db)
     return {
-      base,
-      set: (flow: {downloading?: boolean; uploading?: boolean}) =>
-        notify?.({dataFlowStatus: flow}),
+      wrapped: metered.db as ReturnType<typeof makeFakeDb>,
+      metrics: metered.metrics,
+      set: stack.setSyncStatus,
     }
   }
 
+  it('brackets a sync episode once however many Repos attach to the database', () => {
+    // `initRepo` keys on the sync mode while `getPowerSyncDb` keys on the user,
+    // so two Repos can share one database and one tracker. A watcher attached
+    // per Repo would bracket every transition twice: doubled intervals, and a
+    // depth that reports competition nothing produced.
+    const stack = makeFakeStack()
+    registerContention(stack.db, stack.pool)
+    attachDbMetrics(stack.db)
+    attachDbMetrics(stack.db)
+    stack.setSyncStatus({downloading: true})
+    stack.setSyncStatus({downloading: false})
+    const s = stack.pool.snapshot()
+    expect(s.foreignIntervals).toBe(1)
+    expect(s.maxDepth).toBe(1)
+  })
+
   it('treats a read taken during sync as contended', async () => {
-    const {base, set} = syncingDb()
-    const metrics = new DbMetrics()
-    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb>
+    const {wrapped, metrics, set} = syncing()
     await wrapped.getAll('before sync')
     expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(1)
 
@@ -568,26 +558,20 @@ describe('wrapDbWithMetrics', () => {
   })
 
   it('brackets an upload as well as a download', async () => {
-    const {base, set} = syncingDb()
-    const metrics = new DbMetrics()
-    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb>
+    const {wrapped, metrics, set} = syncing()
     set({uploading: true})
     await wrapped.getAll('during upload')
     expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(0)
   })
 
   it('brackets sync already in progress when the Repo is built', async () => {
-    const {base} = syncingDb({downloading: true})
-    const metrics = new DbMetrics()
-    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb>
+    const {wrapped, metrics} = syncing({downloading: true})
     await wrapped.getAll('during the sync that was already running')
     expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(0)
   })
 
   it('opens one bracket per sync episode, however often the status repeats', async () => {
-    const {base, set} = syncingDb()
-    const metrics = new DbMetrics()
-    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb>
+    const {wrapped, metrics, set} = syncing()
     // PowerSync republishes its status on every change, most of which do not
     // flip these flags. Bracketing each one would open occupancy that
     // never closes, and the pool would read as permanently busy for the rest of
@@ -603,43 +587,12 @@ describe('wrapDbWithMetrics', () => {
   })
 
   it('says when sync is not observable at all', () => {
-    const metrics = new DbMetrics()
-    // A fake db with no status channel — and a local-only session, which has no
+    // A db with no status channel — and a local-only session, which has no
     // sync engine to watch. Zero foreign intervals means different things in
     // the two cases, and only this field separates them.
-    wrapDbWithMetrics(makeFakeDb(), metrics)
-    expect(metrics.contention.snapshot().syncObserved).toBe(false)
-  })
-
-  it('counts a raw write lock as holding the pool', async () => {
-    const metrics = new DbMetrics()
-    const base = makeFakeDb() as ReturnType<typeof makeFakeDb> & {writeLock?: unknown}
-    // The SQLite export takes this lock directly and holds it across a
-    // checkpoint and a copy of the whole database. Passing through untracked,
-    // a read issued during one starts at depth zero and is recorded as having
-    // had the pool to itself while it waits behind the export.
-    // Acquires the connection BEFORE running the callback, as the real one
-    // does. A fake that invokes it synchronously lets the read land before a
-    // mistakenly-early release and reports clean either way.
-    base.writeLock = async <R,>(fn: (tx: unknown) => Promise<R>): Promise<R> => {
-      await sleep(1)
-      return fn({})
-    }
-    const wrapped = wrapDbWithMetrics(base, metrics) as ReturnType<typeof makeFakeDb> & {
-      writeLock: <R>(fn: (tx: unknown) => Promise<R>) => Promise<R>
-    }
-
-    let duringLock = 0
-    await wrapped.writeLock(async () => {
-      await wrapped.getAll('SELECT 1 during the export')
-      duringLock = metrics.contention.snapshot().uncontendedRead.calls
-    })
-
-    expect(duringLock).toBe(0)
-    expect(metrics.contention.snapshot().maxDepth).toBe(2)
-    // And the lock is only released once its work is done, not when its promise
-    // is handed over.
-    expect(metrics.contention.snapshot().uncontendedRead.calls).toBe(0)
+    const stack = makeFakeStack({withSyncChannel: false})
+    registerContention(stack.db, stack.pool)
+    expect(stack.pool.snapshot().syncObserved).toBe(false)
   })
 
   it('forwards lock and transaction options instead of swallowing them', async () => {
@@ -665,7 +618,9 @@ describe('wrapDbWithMetrics', () => {
     await wrapped.writeTransaction(async () => 3, {timeoutMs: 33})
 
     // A timeout the caller asked for and the wrapper ate means waiting forever
-    // where the caller wrote a deadline. Timing a call must not change it.
+    // where the caller wrote a deadline. Timing a call must not change it —
+    // and neither must passing one through: the locks reach the database
+    // untouched now that occupancy is counted a layer below.
     expect(seen).toEqual([{timeoutMs: 11}, {timeoutMs: 22}, {timeoutMs: 33}])
   })
 
@@ -675,6 +630,22 @@ describe('wrapDbWithMetrics', () => {
     // A fake or a database without these must not suddenly appear to have them
     // — callers feature-detect the method before using it.
     expect(wrapped.writeLock).toBeUndefined()
+  })
+
+  it('reports the tracker the database\'s adapter feeds, not a fresh one', () => {
+    // The whole instrument hangs off this. Given its own tracker instead, a
+    // Repo reports counters nothing writes to — which looks exactly like a
+    // database that was never touched, and every window reads as clean.
+    const stack = makeFakeStack()
+    registerContention(stack.db, stack.pool)
+    const metered = attachDbMetrics(stack.db)
+    expect(metered.metrics.contention).toBe(stack.pool)
+    expect(contentionFor(metered.db)).toBe(stack.pool)
+  })
+
+  it('gives a database with no instrumented adapter a tracker that judges nothing', () => {
+    const metered = attachDbMetrics(makeFakeDb())
+    expect(metered.metrics.contention.observingPool()).toBe(false)
   })
 
   it('exposes the tracker from the wrapped db, so a coalescer can reach it', () => {

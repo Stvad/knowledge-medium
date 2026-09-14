@@ -76,9 +76,9 @@ import {
 } from './internals/handleStore'
 import { jsonPathForProperty, normalizeTypedBlockQuery } from './internals/typedBlockQuery'
 import {
+  attachDbMetrics,
   DbMetrics,
   QueryMetrics,
-  wrapDbWithMetrics,
 } from './internals/timingMetrics'
 import {
   startBlocksSyncedObserver,
@@ -748,8 +748,12 @@ export class Repo {
   readonly handleStore: HandleStore = new HandleStore()
   /** Per-PowerSyncDb-call timings (getAll / getOptional / get /
    *  execute / writeTransaction). Populated by the metrics-wrapping
-   *  proxy installed around `this.db` at construction. */
-  readonly dbMetrics = new DbMetrics()
+   *  proxy installed around `this.db` at construction.
+   *
+   *  Assigned in the constructor, not here: its contention tracker belongs to
+   *  the DATABASE (the adapter feeds it, and that was opened before this Repo),
+   *  so it can only be resolved once `opts.db` is in hand. */
+  readonly dbMetrics: DbMetrics
   /** Committed transactions NOT flagged `telemetry`, and the handle fan-out
    *  they caused. Counted HERE rather than reconstructed by a consumer from
    *  before/after snapshots: a consumer's window spans its own awaits, so it
@@ -1087,7 +1091,12 @@ export class Repo {
     // want timings (or use `repo.runQuery` / `repo.tx` which already
     // route through it). The wrapper has the same shape, so existing
     // type contracts hold.
-    this.db = wrapDbWithMetrics(opts.db, this.dbMetrics) as PowerSyncDb
+    // One call: the contention tracker the wrapped db publishes and the one
+    // reported by `metrics()` must be the same object, and `attachDbMetrics` is
+    // where that is decided.
+    const metered = attachDbMetrics(opts.db)
+    this.dbMetrics = metered.metrics
+    this.db = metered.db as PowerSyncDb
     // Marker stores need the wrapped `this.db`, so they're built here
     // rather than as field initializers (which run before the body).
     this.reprojectionMarkers = new MarkerStore(
