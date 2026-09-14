@@ -833,6 +833,28 @@ describe('reconcilePanelRows: no-op guard', () => {
     }
   })
 
+  it('opens a tx while another write is in flight, even though the cached rows already match', async () => {
+    await createPanelRows(['a', 'b'])
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    // An uncommitted layout write: the query cache still shows ['a', 'b'].
+    const inFlight = env.repo.tx(async tx => {
+      await gate
+      const rows = await tx.childrenOf(env.layoutSessionBlockId)
+      await tx.delete(rows[1].id)
+    }, {scope: ChangeScope.UiState, description: 'in-flight layout write'})
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const pending = reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
+      await vi.waitFor(() => expect(txSpy).toHaveBeenCalledTimes(1))
+      release()
+      await inFlight
+      expect(await pending).toEqual({changed: true})
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+
   it('positive control: a differing target still opens exactly one tx', async () => {
     await createPanelRows(['a', 'b'])
     const txSpy = vi.spyOn(env.repo, 'tx')

@@ -2036,7 +2036,29 @@ export class Repo {
    *  Listeners (`onUserError`) fire on translated ProcessorRejections
    *  here so the toast layer sees collisions from undo/redo replay,
    *  not just from `repo.tx` directly. */
+  private writesInFlight = 0
+
+  /** A write transaction has been requested and has not settled. A reader
+   *  deciding from the query cache that nothing needs writing must not while
+   *  this is true: the cache shows the state before that write. */
+  get hasWriteInFlight(): boolean {
+    return this.writesInFlight > 0
+  }
+
   private async _runAndDispatch<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+    isReplay = false,
+  ) {
+    this.writesInFlight++
+    try {
+      return await this._runAndDispatchInner(fn, opts, isReplay)
+    } finally {
+      this.writesInFlight--
+    }
+  }
+
+  private async _runAndDispatchInner<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
     isReplay = false,
