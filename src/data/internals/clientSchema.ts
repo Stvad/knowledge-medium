@@ -1375,9 +1375,16 @@ export const CLIENT_SCHEMA_TRIGGER_CREATE_SQL: ReadonlyMap<string, string> = new
 )
 
 /** SQLite stores a CREATE statement's text as written, except that it drops
- *  `IF NOT EXISTS`; whitespace is ours. Compare after both normalizations. */
+ *  `IF NOT EXISTS`; whitespace outside string literals is ours. Compare after
+ *  both normalizations. Whitespace inside a `'…'` literal is part of the
+ *  trigger's behaviour (a RAISE message) and is kept. */
 const normalizeTriggerSql = (sql: string): string =>
-  sql.replace(/\s+/g, ' ').replace(/CREATE TRIGGER IF NOT EXISTS /i, 'CREATE TRIGGER ').trim()
+  sql
+    .split(/('(?:[^']|'')*')/)
+    .map((part, index) => (index % 2 === 1 ? part : part.replace(/\s+/g, ' ')))
+    .join('')
+    .replace(/CREATE TRIGGER IF NOT EXISTS /i, 'CREATE TRIGGER ')
+    .trim()
 
 export const triggerSqlMatches = (stored: string | null | undefined, createSql: string): boolean =>
   typeof stored === 'string' && normalizeTriggerSql(stored) === normalizeTriggerSql(createSql)

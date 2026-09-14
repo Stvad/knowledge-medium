@@ -1624,6 +1624,12 @@ describe('boot-path trigger recreate', () => {
     expect(triggerSqlMatches(undefined, createSql)).toBe(false)
   })
 
+  it('keeps whitespace inside a string literal significant while ignoring it elsewhere', () => {
+    const createSql = `CREATE TRIGGER t_raise BEFORE INSERT ON t BEGIN SELECT RAISE(ABORT, 'two  spaces'); END`
+    expect(triggerSqlMatches(createSql.replace('BEGIN SELECT', 'BEGIN\n  SELECT'), createSql)).toBe(true)
+    expect(triggerSqlMatches(createSql.replace('two  spaces', 'two spaces'), createSql)).toBe(false)
+  })
+
   it('recreates nothing on a database whose triggers already match, and only the differing ones otherwise', () => {
     const stored = new Map(
       h.db.prepare(SELECT_CLIENT_SCHEMA_TRIGGERS_SQL).all()
