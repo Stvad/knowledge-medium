@@ -1,1 +1,1 @@
-import{FX as e,IX as t,LX as n,NX as r,PX as i}from"../../chunks/app-DXNmrXLD.js";export{r as deviceSurface,i as getClientId,e as getDeviceLabel,t as isClientIdPersistent,n as resetClientIdCache};
+import{BX as e,LX as t,RX as n,VX as r,zX as i}from"../../chunks/app-BLDZlR1p.js";export{t as deviceSurface,n as getClientId,i as getDeviceLabel,e as isClientIdPersistent,r as resetClientIdCache};

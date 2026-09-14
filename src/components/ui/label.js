@@ -1,1 +1,1 @@
-import{$v as e}from"../../../chunks/app-DXNmrXLD.js";export{e as Label};
+import{$v as e}from"../../../chunks/app-BLDZlR1p.js";export{e as Label};

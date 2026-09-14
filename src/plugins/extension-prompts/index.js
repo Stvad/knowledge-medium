@@ -1,1 +1,1 @@
-import{SC as e,xC as t}from"../../../chunks/app-DXNmrXLD.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
+import{SC as e,xC as t}from"../../../chunks/app-BLDZlR1p.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

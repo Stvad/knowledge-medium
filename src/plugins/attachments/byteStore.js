@@ -1,1 +1,1 @@
-import{cp as e,dp as t,fp as n,lp as r,pp as i,up as a}from"../../../chunks/app-DXNmrXLD.js";export{e as ASSETS_ROOT,r as InMemoryByteStore,a as OpfsByteStore,t as assetPathSegments,n as createByteStore,i as getByteStore};
+import{cp as e,dp as t,fp as n,lp as r,pp as i,up as a}from"../../../chunks/app-BLDZlR1p.js";export{e as ASSETS_ROOT,r as InMemoryByteStore,a as OpfsByteStore,t as assetPathSegments,n as createByteStore,i as getByteStore};

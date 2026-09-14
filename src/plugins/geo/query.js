@@ -1,1 +1,1 @@
-import{AI as e,kI as t}from"../../../chunks/app-DXNmrXLD.js";export{t as PLACES_UNDER_BLOCK_QUERY,e as placesUnderBlockQuery};
+import{AI as e,kI as t}from"../../../chunks/app-BLDZlR1p.js";export{t as PLACES_UNDER_BLOCK_QUERY,e as placesUnderBlockQuery};

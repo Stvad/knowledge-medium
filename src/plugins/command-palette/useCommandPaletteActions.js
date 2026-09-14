@@ -1,1 +1,1 @@
-import{Yb as e}from"../../../chunks/app-DXNmrXLD.js";export{e as useCommandPaletteActions};
+import{Yb as e}from"../../../chunks/app-BLDZlR1p.js";export{e as useCommandPaletteActions};

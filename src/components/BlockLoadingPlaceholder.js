@@ -1,1 +1,1 @@
-import{dT as e}from"../../chunks/app-DXNmrXLD.js";export{e as BlockLoadingPlaceholder};
+import{dT as e}from"../../chunks/app-BLDZlR1p.js";export{e as BlockLoadingPlaceholder};

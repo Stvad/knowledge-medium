@@ -1,1 +1,1 @@
-import{Ga as e,Ua as t,Wa as n}from"../../../chunks/app-DXNmrXLD.js";export{t as archiveSrsBlock,n as srsSwipeRightDecorator,e as srsTodoCycleDecorators};
+import{Ga as e,Ua as t,Wa as n}from"../../../chunks/app-BLDZlR1p.js";export{t as archiveSrsBlock,n as srsSwipeRightDecorator,e as srsTodoCycleDecorators};

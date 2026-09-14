@@ -1,1 +1,1 @@
-import{Xp as e,cm as t,dm as n,lm as r,um as i}from"../../../chunks/app-DXNmrXLD.js";export{r as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,n as TUTORIAL_VIM_TITLE,e as onboardingPlugin,t as seedTutorial};
+import{Xp as e,cm as t,dm as n,lm as r,um as i}from"../../../chunks/app-BLDZlR1p.js";export{r as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,n as TUTORIAL_VIM_TITLE,e as onboardingPlugin,t as seedTutorial};

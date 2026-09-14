@@ -1,1 +1,1 @@
-import{FC as e,NC as t,PC as n}from"../../../chunks/app-DXNmrXLD.js";export{t as ExtensionPromptDismissalStore,n as extensionPromptDismissals,e as useExtensionPromptDismissals};
+import{FC as e,NC as t,PC as n}from"../../../chunks/app-BLDZlR1p.js";export{t as ExtensionPromptDismissalStore,n as extensionPromptDismissals,e as useExtensionPromptDismissals};

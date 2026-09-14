@@ -1,1 +1,1 @@
-import{Dp as e,Ep as t,Op as n}from"../../../chunks/app-DXNmrXLD.js";export{t as VideoNotesLayout,e as VideoNotesRenderer,n as videoNotesLayoutContribution};
+import{Dp as e,Ep as t,Op as n}from"../../../chunks/app-BLDZlR1p.js";export{t as VideoNotesLayout,e as VideoNotesRenderer,n as videoNotesLayoutContribution};

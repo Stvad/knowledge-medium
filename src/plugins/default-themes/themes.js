@@ -1,1 +1,1 @@
-import{M_ as e,g_ as t,j_ as n}from"../../../chunks/app-DXNmrXLD.js";export{n as DEFAULT_THEME_ID_DARK,e as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions};
+import{M_ as e,g_ as t,j_ as n}from"../../../chunks/app-BLDZlR1p.js";export{n as DEFAULT_THEME_ID_DARK,e as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions};

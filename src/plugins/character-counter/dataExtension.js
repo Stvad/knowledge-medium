@@ -1,1 +1,1 @@
-import{XL as e}from"../../../chunks/app-DXNmrXLD.js";export{e as characterCounterDataExtension};
+import{XL as e}from"../../../chunks/app-BLDZlR1p.js";export{e as characterCounterDataExtension};

@@ -1,1 +1,1 @@
-import{Fm as e}from"../../../chunks/app-DXNmrXLD.js";export{e as SpatialNavigationShellDecorator};
+import{Fm as e}from"../../../chunks/app-BLDZlR1p.js";export{e as SpatialNavigationShellDecorator};
