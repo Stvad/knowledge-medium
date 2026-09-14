@@ -1,1 +1,1 @@
-import{Eg as e}from"../../../../chunks/app--zSBvUYF.js";export{e as createEncryptedWorkspace};
+import{l_ as e}from"../../../../chunks/app-Dy_aWdOf.js";export{e as createEncryptedWorkspace};

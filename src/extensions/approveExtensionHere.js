@@ -1,1 +1,1 @@
-import{IC as e}from"../../chunks/app--zSBvUYF.js";export{e as approveExtensionHere};
+import{yw as e}from"../../chunks/app-Dy_aWdOf.js";export{e as approveExtensionHere};
