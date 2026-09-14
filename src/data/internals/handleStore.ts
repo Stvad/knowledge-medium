@@ -516,7 +516,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // handle would live forever — e.g. an abandoned React concurrent-render
     // lookup whose subscribe effect never commits, or a query handle left
     // orphaned at an old key by a registry-epoch bump. Schedule the normal
-    // gcTimeMs sweep now; the first `retain()` (load/subscribe) cancels it.
+    // gcTimeMs sweep now; the first `retain()`, whoever takes it, cancels it.
     // (Skip for gcTimeMs<=0: that's the synchronous-dispose test config, and
     // disposing here would race `getOrCreate`'s not-yet-inserted entry.)
     const gcMs = this.store.getGcTimeMs()
@@ -977,11 +977,12 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  no listener is registered, so a retained-but-unobserved handle stays
    *  `'idle'` until something actually asks for its value.
    *
-   *  That distinction is the point of the pair being callable from outside:
-   *  `subscribe` is the only OTHER way to keep a handle alive, and its first
-   *  subscriber starts a load — so a surface that wants a chain to survive an
-   *  unmount had no way to say so without also fetching it. `useRetainParents`
-   *  is that caller.
+   *  That distinction is the point of the pair being callable from outside.
+   *  Of the other two reference kinds a load's is transient (given back on
+   *  settle), which leaves subscribing as the only way to hold a handle open
+   *  — and its first subscriber starts a load, so a surface that wanted a
+   *  chain to survive an unmount had no way to say so without also fetching
+   *  it. `useRetainParents` is that caller.
    *
    *  Balance every `retain()` with exactly one `release()`: an unmatched
    *  `retain()` on a live handle cancels its GC sweep and never reschedules
