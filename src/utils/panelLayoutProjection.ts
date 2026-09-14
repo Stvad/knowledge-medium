@@ -112,6 +112,12 @@ export const sessionActivePanelId = (row: BlockData | undefined): string | undef
   return activePanelIdProp.codec.decode(stored)
 }
 
+/** The session points at a panel row that is not in its subtree. */
+const hasDanglingActivePanel = (session: BlockData, rows: readonly BlockData[]): boolean => {
+  const activePanelId = sessionActivePanelId(session)
+  return activePanelId !== undefined && !rows.some(row => row.id === activePanelId)
+}
+
 export const panelBlockIds = (rows: readonly BlockData[]): string[] =>
   rows.map(panelBlockId).filter((id): id is string => Boolean(id))
 
@@ -973,10 +979,34 @@ export const reconcilePanelRows = async (
   /** Checked at the tx's entry and exits; a mid-tx cancellation ABORTS the
    *  whole reconcile (rows roll back) via ReconcileCancelled. */
   isCancelled?: () => boolean,
+  /** The session subtree if the caller already loaded it, so the no-op check
+   *  costs no extra read. */
+  knownRows?: readonly BlockData[],
 ): Promise<{changed: boolean}> => {
   const targetSlots: LayoutSlot[] = targetSlotsOrBlockIds.map(slot =>
     typeof slot === 'string' ? {kind: 'leaf', blockId: slot} : slot,
   )
+
+  // A no-op reconcile must not open a tx (its journal writes are
+  // unconditional). 'exact' slot equality covers the per-leaf pass below;
+  // a dangling active pointer is the one write 'exact' cannot see.
+  // This read is the query cache, not the write lock, so any write in flight
+  // on the database (a transaction, a sync materialization) disqualifies it:
+  // a Back navigation racing an uncommitted layout write would otherwise be
+  // skipped as already applied, and that write's outbound projection would
+  // then push its layout over the user's URL. Rows that differ reach the tx,
+  // which re-reads under the lock.
+  const preRows = knownRows ?? await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+  const preParent = preRows.find(row => row.id === layoutSessionBlock.id)
+  if (preParent && !repo.hasWriteInFlight) {
+    if (
+      !hasDanglingActivePanel(preParent, preRows) &&
+      sameLayoutSlots(layoutSlotsFromRows(layoutSessionBlock.id, preRows), targetSlots, 'exact')
+    ) {
+      return {changed: false}
+    }
+  }
+
   const targetBlockIds = flattenSlots(targetSlots)
   const deletedPanelRowIds: string[] = []
   // panelHistory is NON-transactional, so nothing inside the tx may mutate
@@ -1033,9 +1063,9 @@ export const reconcilePanelRows = async (
           await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, urlActiveRowId)
           wrote = true
         }
-      } else if (activePanelId !== undefined && !currentRows.some(row => row.id === activePanelId)) {
-        // Stale-pointer hygiene (kept from the old equal-path repair): a
-        // dangling active id is cleared. Not counted as a layout change.
+      } else if (hasDanglingActivePanel(parent, currentRows)) {
+        // Stale-pointer hygiene: a dangling active id is cleared. Not counted
+        // as a layout change.
         await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, undefined)
       }
       if (isCancelled?.()) throw new ReconcileCancelled()
@@ -1344,7 +1374,7 @@ export const applyCurrentLayoutUrl = async ({
 
   let changed: boolean
   try {
-    ({changed} = await reconcilePanelRows(repo, layoutSessionBlock, targetSlots, isCancelled))
+    ({changed} = await reconcilePanelRows(repo, layoutSessionBlock, targetSlots, isCancelled, currentRows))
   } catch (error) {
     // Cancellation observed INSIDE the tx aborted it — rows rolled back,
     // nothing to canonicalize, and the URL belongs to whoever cancelled us.

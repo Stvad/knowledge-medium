@@ -137,6 +137,8 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   // ── TS-private internals — not part of the facade consumer surface ──
   _replay: 'private (undo/redo internals; reached only via delegated undo/redo)',
   _runAndDispatch: 'private (reached only via overridden tx/undo/redo, this = real repo)',
+  _runAndDispatchInner: 'private (reached only via _runAndDispatch, this = real repo)',
+  hasWriteInFlight: 'getter read (two counters, both written on the real repo)',
   buildAliasCollisionRejection: 'private',
   dispatchMutator: 'private (overridden run/mutate pass groupId explicitly)',
   dispatchQuery: 'private',
@@ -193,6 +195,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   inFlightOperatorBackfills: 'data field — a Set of in-flight keys; holds no reference to the Repo',
+  requestedWrites: 'data field — a counter written only by _runAndDispatch on the real repo',
   _propertyDefinitionRegistry: 'data field',
   _previousPropertyDefinitionRegistry: 'data field',
   _typeDefinitionRegistry: 'data field',

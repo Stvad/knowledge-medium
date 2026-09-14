@@ -2021,6 +2021,18 @@ export class Repo {
     })
   }
 
+  private requestedWrites = 0
+
+  /** A write on this repo's database has been requested and has not settled:
+   *  a repo transaction from the moment it is asked for (it waits for
+   *  definition readiness before it reaches the database), or any write
+   *  transaction on the shared handle (sync materialization, a backfill). A
+   *  reader deciding from the query cache that nothing needs writing must
+   *  not while this is true: the cache shows the state before that write. */
+  get hasWriteInFlight(): boolean {
+    return this.requestedWrites > 0 || this.dbMetrics.writesInFlight > 0
+  }
+
   /** Shared `runTx` + processor-dispatch path. Used by both `tx`
    *  (records on undo stack) and `_replay` (does not).
    *
@@ -2037,6 +2049,19 @@ export class Repo {
    *  here so the toast layer sees collisions from undo/redo replay,
    *  not just from `repo.tx` directly. */
   private async _runAndDispatch<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+    isReplay = false,
+  ) {
+    this.requestedWrites++
+    try {
+      return await this._runAndDispatchInner(fn, opts, isReplay)
+    } finally {
+      this.requestedWrites--
+    }
+  }
+
+  private async _runAndDispatchInner<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
     isReplay = false,
