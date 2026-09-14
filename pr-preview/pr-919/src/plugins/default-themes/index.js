@@ -1,1 +1,1 @@
-import{Q_ as e,Z_ as t,mv as n,pv as r}from"../../../chunks/app-C-Xtdwey.js";export{r as DEFAULT_THEME_ID_DARK,n as DEFAULT_THEME_ID_LIGHT,e as defaultThemeContributions,t as defaultThemesPlugin};
+import{Q_ as e,Z_ as t,mv as n,pv as r}from"../../../chunks/app-Dphcj_GJ.js";export{r as DEFAULT_THEME_ID_DARK,n as DEFAULT_THEME_ID_LIGHT,e as defaultThemeContributions,t as defaultThemesPlugin};

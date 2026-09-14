@@ -1,1 +1,1 @@
-import{xg as e}from"../../../chunks/app-C-Xtdwey.js";export{e as mobileBottomNavItemsFacet};
+import{xg as e}from"../../../chunks/app-Dphcj_GJ.js";export{e as mobileBottomNavItemsFacet};

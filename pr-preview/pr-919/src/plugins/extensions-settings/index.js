@@ -1,1 +1,1 @@
-import{dw as e,gt as t,uw as n}from"../../../chunks/app-C-Xtdwey.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
+import{dw as e,gt as t,uw as n}from"../../../chunks/app-Dphcj_GJ.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

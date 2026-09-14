@@ -1,1 +1,1 @@
-import{ca as e,da as t,la as n,ua as r}from"../../../chunks/app-C-Xtdwey.js";export{e as extractBlockDetails,n as parseRejectionError,r as shortenId,t as summarizeOp};
+import{ca as e,da as t,la as n,ua as r}from"../../../chunks/app-Dphcj_GJ.js";export{e as extractBlockDetails,n as parseRejectionError,r as shortenId,t as summarizeOp};

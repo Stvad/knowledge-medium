@@ -1,1 +1,1 @@
-import{jg as e}from"../../../chunks/app-C-Xtdwey.js";export{e as BreadcrumbList};
+import{jg as e}from"../../../chunks/app-Dphcj_GJ.js";export{e as BreadcrumbList};

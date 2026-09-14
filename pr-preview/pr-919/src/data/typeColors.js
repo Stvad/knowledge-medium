@@ -1,1 +1,1 @@
-import{nC as e,rC as t,tC as n}from"../../chunks/app-C-Xtdwey.js";export{n as DEFAULT_TYPE_COLORS,e as defaultTypeColor,t as pickLeastUsedTypeColor};
+import{nC as e,rC as t,tC as n}from"../../chunks/app-Dphcj_GJ.js";export{n as DEFAULT_TYPE_COLORS,e as defaultTypeColor,t as pickLeastUsedTypeColor};

@@ -1,1 +1,1 @@
-import{MR as e}from"../../../chunks/app-C-Xtdwey.js";export{e as characterCounterDataExtension};
+import{MR as e}from"../../../chunks/app-Dphcj_GJ.js";export{e as characterCounterDataExtension};

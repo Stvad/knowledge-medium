@@ -1,1 +1,1 @@
-import{$g as e,e_ as t,t_ as n}from"../../../chunks/app-C-Xtdwey.js";export{e as getOrCreateShortcutsBlock,t as journalShortcutBlockId,n as shortcutsBlockId};
+import{$g as e,e_ as t,t_ as n}from"../../../chunks/app-Dphcj_GJ.js";export{e as getOrCreateShortcutsBlock,t as journalShortcutBlockId,n as shortcutsBlockId};

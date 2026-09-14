@@ -1,1 +1,1 @@
-import{$x as e}from"../../../chunks/app-C-Xtdwey.js";export{e as CommandPaletteHeaderItem};
+import{$x as e}from"../../../chunks/app-Dphcj_GJ.js";export{e as CommandPaletteHeaderItem};

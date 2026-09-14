@@ -1,1 +1,1 @@
-import{Cu as e}from"../../../../chunks/app-C-Xtdwey.js";export{e as inlineBacklinkCountsExtension};
+import{Cu as e}from"../../../../chunks/app-Dphcj_GJ.js";export{e as inlineBacklinkCountsExtension};

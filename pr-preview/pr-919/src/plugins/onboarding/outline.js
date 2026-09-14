@@ -1,1 +1,1 @@
-import{Gm as e,Jm as t,Km as n,Ym as r,qm as i}from"../../../chunks/app-C-Xtdwey.js";export{e as EXTENSIONS_PAGE_TITLE,n as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,t as extensionsPageOutline,r as tutorialOutline};
+import{Gm as e,Jm as t,Km as n,Ym as r,qm as i}from"../../../chunks/app-Dphcj_GJ.js";export{e as EXTENSIONS_PAGE_TITLE,n as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,t as extensionsPageOutline,r as tutorialOutline};
