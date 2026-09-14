@@ -1,1 +1,0 @@
-import{JN as e,YN as t}from"../../../chunks/app-Cp-3cls-.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

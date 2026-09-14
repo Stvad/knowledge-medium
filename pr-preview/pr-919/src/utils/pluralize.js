@@ -1,1 +1,0 @@
-import{by as e,yy as t}from"../../chunks/app-Cp-3cls-.js";export{t as agree,e as pluralize};

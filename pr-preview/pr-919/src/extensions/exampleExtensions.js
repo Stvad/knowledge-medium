@@ -1,1 +1,0 @@
-import{FC as e,PC as t}from"../../chunks/app-Cp-3cls-.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

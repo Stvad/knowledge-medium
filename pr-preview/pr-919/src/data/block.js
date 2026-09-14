@@ -1,1 +1,0 @@
-import{CG as e,wG as t}from"../../chunks/app-Cp-3cls-.js";export{e as Block,t as requireLoadedBlock};

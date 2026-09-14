@@ -1,1 +1,0 @@
-import{A as e,IR as t,LR as n,M as r,N as i,P as a,PR as o,RR as s}from"../../../chunks/app-Cp-3cls-.js";export{o as CHAR_COUNTER_TYPE,r as RAW_CHARACTER_COUNT_PROFILE_ID,a as charCountDisplay,t as charLimitProp,n as charProfileProp,s as charScopeProp,i as characterCountProfilesFacet,e as characterCounterPlugin};

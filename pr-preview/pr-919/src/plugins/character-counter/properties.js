@@ -1,1 +1,0 @@
-import{IR as e,LR as t,RR as n}from"../../../chunks/app-Cp-3cls-.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};

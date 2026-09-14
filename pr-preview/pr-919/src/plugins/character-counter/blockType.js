@@ -1,1 +1,0 @@
-import{FR as e,PR as t}from"../../../chunks/app-Cp-3cls-.js";export{t as CHAR_COUNTER_TYPE,e as CHAR_COUNTER_TYPE_CONTRIBUTIONS};

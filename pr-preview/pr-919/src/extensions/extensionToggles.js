@@ -1,1 +1,0 @@
-import{ST as e,bT as t,xT as n,yT as r}from"../../chunks/app-Cp-3cls-.js";export{r as extensionDisplayName,t as extensionName,n as userExtensionShellToggle,e as userExtensionToggle};

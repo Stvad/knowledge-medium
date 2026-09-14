@@ -1,1 +1,0 @@
-import{$G as e,QG as t,eK as n,nK as r,rK as i,tK as a}from"../../chunks/app-Cp-3cls-.js";export{t as USER_SCHEMAS_PROJECTOR_ID,e as UserSchemasService,n as isRegistrablePropertyName,a as propertySchemaNameRejection,r as tryBuildSchema,i as userSchemasProjector};

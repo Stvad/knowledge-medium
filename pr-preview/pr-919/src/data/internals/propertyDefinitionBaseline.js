@@ -1,1 +1,0 @@
-import{HH as e,VH as t}from"../../../chunks/app-Cp-3cls-.js";export{t as observePropertyDefinitionCodecs,e as recordAppliedPropertyDefinitionCodecs};

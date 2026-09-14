@@ -1,1 +1,0 @@
-import{Fx as e,Ix as t,Lx as n,Rx as r}from"../../../chunks/app-Cp-3cls-.js";export{e as COMMAND_PALETTE_ACTION_ID,t as COMMAND_PALETTE_CONTEXT,n as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,r as commandPaletteActionContext};

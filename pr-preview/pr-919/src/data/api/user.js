@@ -1,1 +1,0 @@
-import{B0 as e,H0 as t,V0 as n}from"../../../chunks/app-Cp-3cls-.js";export{e as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,t as systemAuthor};

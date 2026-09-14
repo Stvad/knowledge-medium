@@ -1,1 +1,0 @@
-import{lT as e,uT as t}from"../../chunks/app-Cp-3cls-.js";export{e as ClientLocalSettings,t as clientLocalSettings};
