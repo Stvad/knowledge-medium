@@ -978,9 +978,14 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  `subscribe` is the only OTHER way to keep a handle alive, and its first
    *  subscriber starts a load — so a surface that wants a chain to survive an
    *  unmount had no way to say so without also fetching it. `useRetainParents`
-   *  is that caller. Balance every `retain()` with exactly one `release()`;
-   *  both no-op on a disposed handle, so an unbalanced pair leaks nothing but
-   *  also holds nothing. */
+   *  is that caller.
+   *
+   *  Balance every `retain()` with exactly one `release()`: an unmatched
+   *  `retain()` on a live handle cancels its GC sweep and never reschedules
+   *  one, pinning that store entry for the life of the store. Both calls
+   *  no-op once the handle is DISPOSED — which means only that a pair
+   *  arriving after disposal neither holds it nor corrupts the count, not
+   *  that imbalance is safe. */
   retain(): void {
     if (this.disposed) return
     this.refCount++
