@@ -1,1 +1,1 @@
-import{_w as e,gw as t,hw as n}from"../../../chunks/app-Dphcj_GJ.js";export{n as ExtensionPromptDismissalStore,t as extensionPromptDismissals,e as useExtensionPromptDismissals};
+import{_w as e,gw as t,vw as n}from"../../../chunks/app-Cp-3cls-.js";export{t as ExtensionPromptDismissalStore,e as extensionPromptDismissals,n as useExtensionPromptDismissals};

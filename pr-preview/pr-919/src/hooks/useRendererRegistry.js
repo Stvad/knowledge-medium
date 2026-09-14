@@ -1,1 +1,1 @@
-import{JT as e,XT as t,YT as n}from"../../chunks/app-Dphcj_GJ.js";export{t as defaultRegistry,e as refreshRendererRegistry,n as useRenderer};
+import{XT as e,YT as t,ZT as n}from"../../chunks/app-Cp-3cls-.js";export{n as defaultRegistry,t as refreshRendererRegistry,e as useRenderer};

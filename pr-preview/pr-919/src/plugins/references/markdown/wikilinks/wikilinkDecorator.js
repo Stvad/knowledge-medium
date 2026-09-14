@@ -1,1 +1,1 @@
-import{Sb as e,bb as t,xb as n}from"../../../../../chunks/app-Dphcj_GJ.js";export{t as isWikilinkDisplayParts,n as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};
+import{Cb as e,Sb as t,xb as n}from"../../../../../chunks/app-Cp-3cls-.js";export{n as isWikilinkDisplayParts,t as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};

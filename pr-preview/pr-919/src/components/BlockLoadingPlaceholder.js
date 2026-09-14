@@ -1,1 +1,1 @@
-import{qT as e}from"../../chunks/app-Dphcj_GJ.js";export{e as BlockLoadingPlaceholder};
+import{JT as e}from"../../chunks/app-Cp-3cls-.js";export{e as BlockLoadingPlaceholder};

@@ -1,1 +1,1 @@
-import{vx as e}from"../../../chunks/app-Dphcj_GJ.js";export{e as openKeybindingsSettingsAction};
+import{yx as e}from"../../../chunks/app-Cp-3cls-.js";export{e as openKeybindingsSettingsAction};
