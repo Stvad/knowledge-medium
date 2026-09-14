@@ -332,13 +332,31 @@ export const SELECT_USER_PAGE_IDS_SQL = `
  *  The walk deliberately does NOT filter `deleted = 0` — sync-apply
  *  permits a live child under a tombstoned parent, so stopping at a
  *  tombstone would leak a state row into the feed. The outer query
- *  still filters deleted rows out of the result. */
+ *  still filters deleted rows out of the result.
+ *
+ *  Which is why the descent is TWO recursive terms rather than one
+ *  `deleted`-blind join: the only `parent_id`-leading indexes are the
+ *  complementary partials `idx_blocks_parent_order` (`deleted = 0`) and
+ *  `idx_blocks_parent_deleted` (`deleted = 1`). A step carrying no
+ *  `deleted` term proves neither, so SQLite scans every row of `blocks`
+ *  once per iteration — and because the scan holds the connection, the
+ *  writes queued behind it (a ref picker's own pick) never commit either.
+ *  Each arm carries its predicate literally, which is the partial-index
+ *  proof; `recentUserBlocksPlan.test.ts` pins that the walk stays a
+ *  SEARCH. `deleted` is `NOT NULL DEFAULT 0` and only ever written as 0 or
+ *  1, so the two arms are the whole table — the pair of partial indexes
+ *  already rests on that. */
 export const SELECT_RECENT_USER_BLOCKS_SQL = `
   WITH RECURSIVE user_state(id) AS (
     SELECT value FROM json_each(?)
     UNION
     SELECT b.id FROM blocks b
       JOIN user_state ON b.parent_id = user_state.id
+     WHERE b.deleted = 0
+    UNION
+    SELECT b.id FROM blocks b
+      JOIN user_state ON b.parent_id = user_state.id
+     WHERE b.deleted = 1
   )
   SELECT ${buildQualifiedBlockColumnsSql('blocks')}
   FROM blocks
