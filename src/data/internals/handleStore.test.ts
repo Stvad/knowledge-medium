@@ -480,6 +480,32 @@ describe('LoaderHandle GC', () => {
     await vi.waitFor(() => expect(seen.length).toBeGreaterThan(before))
   })
 
+  it('an unmatched retain pins the handle; the matching release frees it', async () => {
+    // The cost of `retain()` being callable from outside: it is the caller's
+    // job to balance it. An unmatched one cancels the GC sweep and schedules
+    // no replacement, so the entry outlives every sweep — which is why the
+    // contract at its declaration says imbalance is a leak rather than a
+    // no-op.
+    const sched = manualScheduler()
+    const store = makeStore(100, sched)
+    const { loader } = collectingLoader([1, 2, 3])
+    const h = store.getOrCreate('retain:pinned', () =>
+      new LoaderHandle({ store, key: 'retain:pinned', loader }),
+    )
+    await h.load()
+    h.retain()
+
+    sched.flush(10_000)
+    expect(h.status()).toBe('ready')
+    expect(store.peekHandle('retain:pinned')).toBe(h)
+
+    // …and the balancing release puts it back on the GC path.
+    h.release()
+    sched.flush(10_000)
+    expect(h.status()).toBe('disposed')
+    expect(store.peekHandle('retain:pinned')).toBeUndefined()
+  })
+
   it('a disposed handle resolves to the live one at its key', async () => {
     // The holder cannot always re-acquire — React Compiler output memoizes
     // the factory call — so the handle resolves itself instead of dead-ending.

@@ -740,8 +740,8 @@ export class Repo {
   private readonly blockFacades = new Map<string, Block>()
   /** Handle registry for query-backed collection factories: `children`,
    *  `subtree`, `ancestors`, plugin queries, etc. Identity rule:
-   *  same key → same LoaderHandle instance. GC after `gcTimeMs` of
-   *  zero subscribers + zero in-flight loads. The store also walks
+   *  same key → same LoaderHandle instance. GC `gcTimeMs` after a handle's
+   *  last reference drops (`LoaderHandle.refCount`). The store also walks
    *  invalidation: TxEngine fast path + the Layout B sync observer
    *  call `handleStore.invalidate({…})` to fan out to dep-matching
    *  handles. */

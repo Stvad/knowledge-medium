@@ -522,15 +522,35 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
  *  OUTSIDE the collapse branch; inside it is a no-op that looks like a
  *  fix.
  *
- *  It WALKS every block passed, including ones no one has scrolled to:
- *  the first subscriber to a cold `LoaderHandle` starts its load, so for
- *  this store retaining a chain and fetching it are the same act. Accepted
- *  rather than narrowed — it is one coalesced statement per chunk of 500
- *  ids, and it is what the flat backlinks panel already did. Retaining
- *  only the handles a surface has ALREADY resolved would avoid the cold
- *  ones (#956) at the cost of a retained set that changes as they land. */
+ *  It does NOT walk the chains. `handle.retain()` holds a handle against
+ *  GC without observing it, so a block nobody has scrolled to keeps a cold
+ *  handle, and its chain is read when its entry mounts. Not `useManyParents`:
+ *  its subscription loads every chain (the first subscriber to a cold handle
+ *  starts its load), and reading its values re-renders the caller once per
+ *  landing walk for a result this hook discards.
+ *
+ *  Retaining every id rather than only the resolved ones keeps the retained
+ *  set STABLE: it is the caller's id list, so the effect runs once per
+ *  id-set change instead of re-running as chains land (#956).
+ *
+ *  A chain invalidated while collapsed is re-resolved when its entry
+ *  re-observes it, so a reopen can paint one stale frame first. Accepted:
+ *  staying subscribed to keep it warm only narrows that window — a reload in
+ *  flight still peeks the old value — while costing a re-resolve per retained
+ *  chain on every matching write, which is the zero-listener work the store
+ *  defers on purpose. Painting nothing until fresh is the blank breadcrumb
+ *  this hook exists to prevent. */
 export const useRetainParents = (blocks: readonly Block[]): void => {
-  useManyParents(blocks)
+  const repo = useRepo()
+  const ids = useStableJson(Array.from(new Set(blocks.map(block => block.id))).sort())
+  useEffect(() => {
+    // Acquired here rather than from a render-phase memo: `retain()` is a
+    // silent no-op on a disposed handle, and only a handle the store just
+    // handed back is guaranteed live.
+    const handles = ids.map(id => repo.query.ancestors({id}))
+    for (const handle of handles) handle.retain()
+    return () => { for (const handle of handles) handle.release() }
+  }, [ids, repo])
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
