@@ -59,6 +59,10 @@ import {
   ANALYZE_OPTIMIZE_SQL,
   runAnalyzeIfStale,
   runAnalyzeNow,
+  CLIENT_SCHEMA_TRIGGER_CREATE_SQL,
+  SELECT_CLIENT_SCHEMA_TRIGGERS_SQL,
+  triggerRecreateStatements,
+  triggerSqlMatches,
 } from './clientSchema'
 
 interface TestDb {
@@ -228,9 +232,8 @@ beforeEach(() => { h = setupDb() })
 afterEach(() => { h.db.close() })
 
 describe('client schema bootstrap', () => {
-  // The trigger *names* are exported as CLIENT_SCHEMA_TRIGGER_NAMES purely so
-  // a test can re-list them; asserting "the DB has exactly that list" only
-  // restates the constant. What the triggers actually *do* is covered by the
+  // Asserting "the DB has exactly CLIENT_SCHEMA_TRIGGER_NAMES" would only
+  // restate the constant. What the triggers actually *do* is covered by the
   // row_events / upload-routing behavior tests below, and the harness already
   // verifies the production trigger set installs (createTestDb.test.ts).
   it('seeds tx_context with one row that starts NULL across all six tx fields', () => {
@@ -1600,5 +1603,44 @@ describe('blocks_synced_changes enqueue-collapse', () => {
       .join(' | ')
     expect(plan).toContain('USING INDEX')
     expect(plan).not.toContain('SCAN')
+  })
+})
+
+describe('boot-path trigger recreate', () => {
+  // SQLite stores the CREATE text as written minus `IF NOT EXISTS`; the
+  // matcher must read that back as "unchanged", and a body edit as "changed".
+  it('matches a stored trigger against its CREATE statement and detects a changed body', () => {
+    h.db.exec('CREATE TABLE t (a INTEGER)')
+    const createSql = `
+      CREATE TRIGGER IF NOT EXISTS t_ai AFTER INSERT ON t
+      BEGIN
+        UPDATE t SET a = NEW.a + 1;
+      END
+    `
+    h.db.exec(createSql)
+    const stored = (h.db.prepare(`SELECT sql FROM sqlite_master WHERE name = 't_ai'`).get() as {sql: string}).sql
+    expect(triggerSqlMatches(stored, createSql)).toBe(true)
+    expect(triggerSqlMatches(stored, createSql.replace('+ 1', '+ 2'))).toBe(false)
+    expect(triggerSqlMatches(undefined, createSql)).toBe(false)
+  })
+
+  it('keeps whitespace inside a string literal significant while ignoring it elsewhere', () => {
+    const createSql = `CREATE TRIGGER t_raise BEFORE INSERT ON t BEGIN SELECT RAISE(ABORT, 'two  spaces'); END`
+    expect(triggerSqlMatches(createSql.replace('BEGIN SELECT', 'BEGIN\n  SELECT'), createSql)).toBe(true)
+    expect(triggerSqlMatches(createSql.replace('two  spaces', 'two spaces'), createSql)).toBe(false)
+  })
+
+  it('recreates nothing on a database whose triggers already match, and only the differing ones otherwise', () => {
+    const stored = new Map(
+      h.db.prepare(SELECT_CLIENT_SCHEMA_TRIGGERS_SQL).all()
+        .map(row => [(row as {name: string}).name, (row as {sql: string}).sql] as const),
+    )
+    for (const name of CLIENT_SCHEMA_TRIGGER_CREATE_SQL.keys()) expect(stored.has(name)).toBe(true)
+    expect(triggerRecreateStatements(stored)).toEqual([])
+
+    const [name, createSql] = [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL][0]
+    const drifted = new Map(stored)
+    drifted.delete(name)
+    expect(triggerRecreateStatements(drifted)).toEqual([`DROP TRIGGER IF EXISTS ${name}`, createSql])
   })
 })

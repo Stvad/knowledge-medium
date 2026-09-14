@@ -1262,13 +1262,14 @@ export const RECORD_PROPERTY_DEFINITION_BASELINE_SQL = `
 // ignores the new definition. So a client whose local DB was bootstrapped
 // before a trigger's body changed keeps running the stale one forever.
 //
-// Force every CREATE TRIGGER to re-apply from current source by prepending a
-// `DROP TRIGGER IF EXISTS <name>` before it. This is self-maintaining: any
-// future trigger body change auto-installs on next startup, with no per-change
-// migration to remember. Only triggers are force-recreated — tables and indexes
-// keep `IF NOT EXISTS` (dropping a table would destroy data). A dropped trigger
-// is free to rebuild, and the bootstrap runs before the repo serves any write,
-// so there is no window where a write misses its trigger.
+// So triggers are re-applied from current source: `CLIENT_SCHEMA_STATEMENTS`
+// prepends `DROP TRIGGER IF EXISTS <name>` to every CREATE TRIGGER (the
+// fresh-database and test path), and the boot path drops + recreates only the
+// triggers whose `sqlite_master` text differs (`triggerRecreateStatements`).
+// Either way a body change installs on next startup with no per-change
+// migration. Only triggers are recreated — tables and indexes keep
+// `IF NOT EXISTS` (dropping a table would destroy data). The bootstrap runs
+// before the repo serves any write, so no write misses its trigger.
 const CREATE_TRIGGER_NAME_RE = /^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)/i
 
 const withTriggerRecreate = (statements: readonly string[]): string[] =>
@@ -1285,9 +1286,9 @@ const withTriggerRecreate = (statements: readonly string[]): string[] =>
  *  `DISABLE TRIGGER`, so drop+recreate is the equivalent; pass the same
  *  `CREATE` constant the bootstrap installs so the recreated trigger can't
  *  drift. This is the client analog of the server backfill's `DISABLE TRIGGER`
- *  bracketing, and the same drop-then-recreate move {@link withTriggerRecreate}
- *  already does to every trigger on boot. Bootstrap-only: there is no
- *  write-serving window in which the trigger is absent. */
+ *  bracketing. Bootstrap-only: there is no write-serving window in which the
+ *  trigger is absent, and the boot path's drift check re-installs the
+ *  trigger if this bracket dies between the DROP and the CREATE. */
 const withTriggerSuspended = async (
   db: {execute: (sql: string) => Promise<unknown>},
   triggerName: string,
@@ -1302,7 +1303,7 @@ const withTriggerSuspended = async (
   }
 }
 
-export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
+const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   // Tables
   CREATE_TX_CONTEXT_TABLE_SQL,
   SEED_TX_CONTEXT_ROW_SQL,
@@ -1358,31 +1359,47 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   // 2 blocks_synced change-capture triggers (Layout B observer detection)
   CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,
-])
+]
 
-export const CLIENT_SCHEMA_TRIGGER_NAMES = [
-  'blocks_row_event_insert',
-  'blocks_row_event_update',
-  'blocks_row_event_delete',
-  'blocks_upload_insert',
-  'blocks_upload_update',
-  'blocks_parent_workspace_check_insert',
-  'blocks_parent_workspace_check_update',
-  'blocks_parent_not_deleted_check_insert',
-  'blocks_parent_not_deleted_check_update',
-  'blocks_alias_insert',
-  'blocks_alias_update',
-  'blocks_alias_delete',
-  'block_aliases_workspace_alias_unique',
-  'blocks_type_insert',
-  'blocks_type_update',
-  'blocks_type_delete',
-  'blocks_fts_insert',
-  'blocks_fts_update',
-  'blocks_fts_delete',
-  'blocks_synced_changes_insert',
-  'blocks_synced_changes_delete',
-] as const
+export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate(CLIENT_SCHEMA_BASE_STATEMENTS)
+
+/** The same list split for the boot path: everything that is not a trigger,
+ *  and the trigger CREATE statements by name. */
+export const CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS: readonly string[] =
+  CLIENT_SCHEMA_BASE_STATEMENTS.filter(stmt => !CREATE_TRIGGER_NAME_RE.test(stmt))
+export const CLIENT_SCHEMA_TRIGGER_CREATE_SQL: ReadonlyMap<string, string> = new Map(
+  CLIENT_SCHEMA_BASE_STATEMENTS.flatMap(stmt => {
+    const name = stmt.match(CREATE_TRIGGER_NAME_RE)?.[1]
+    return name ? [[name, stmt] as const] : []
+  }),
+)
+
+/** SQLite stores a CREATE statement's text as written, except that it drops
+ *  `IF NOT EXISTS`; whitespace outside string literals is ours. Compare after
+ *  both normalizations. Whitespace inside a `'…'` literal is part of the
+ *  trigger's behaviour (a RAISE message) and is kept. */
+const normalizeTriggerSql = (sql: string): string =>
+  sql
+    .split(/('(?:[^']|'')*')/)
+    .map((part, index) => (index % 2 === 1 ? part : part.replace(/\s+/g, ' ')))
+    .join('')
+    .replace(/CREATE TRIGGER IF NOT EXISTS /i, 'CREATE TRIGGER ')
+    .trim()
+
+export const triggerSqlMatches = (stored: string | null | undefined, createSql: string): boolean =>
+  typeof stored === 'string' && normalizeTriggerSql(stored) === normalizeTriggerSql(createSql)
+
+/** DROP + CREATE pairs for every client-schema trigger whose stored definition
+ *  is missing or differs from the code's. Read `stored` from `sqlite_master`,
+ *  not from a version marker: a marker cannot see a trigger a crashed
+ *  `withTriggerSuspended` left dropped. */
+export const triggerRecreateStatements = (stored: ReadonlyMap<string, string>): string[] =>
+  [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL].flatMap(([name, createSql]) =>
+    triggerSqlMatches(stored.get(name), createSql) ? [] : [`DROP TRIGGER IF EXISTS ${name}`, createSql])
+
+export const SELECT_CLIENT_SCHEMA_TRIGGERS_SQL = `SELECT name, sql FROM sqlite_master WHERE type = 'trigger'`
+
+export const CLIENT_SCHEMA_TRIGGER_NAMES: readonly string[] = [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL.keys()]
 
 interface ClientSchemaBootstrapDb {
   execute: (sql: string, params?: unknown[]) => Promise<unknown>
