@@ -1,1 +1,1 @@
-import{cG as e,dG as t,lG as n,oG as r,sG as i,uG as a}from"../../chunks/app-Bn-dZ-ry.js";export{r as USER_SCHEMAS_PROJECTOR_ID,i as UserSchemasService,e as isRegistrablePropertyName,n as propertySchemaNameRejection,a as tryBuildSchema,t as userSchemasProjector};
+import{cG as e,dG as t,lG as n,oG as r,sG as i,uG as a}from"../../chunks/app-qPj2AGSq.js";export{r as USER_SCHEMAS_PROJECTOR_ID,i as UserSchemasService,e as isRegistrablePropertyName,n as propertySchemaNameRejection,a as tryBuildSchema,t as userSchemasProjector};

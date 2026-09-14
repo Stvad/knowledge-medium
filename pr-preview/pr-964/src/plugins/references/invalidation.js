@@ -1,1 +1,1 @@
-import{MP as e,NP as t}from"../../../chunks/app-Bn-dZ-ry.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};
+import{MP as e,NP as t}from"../../../chunks/app-qPj2AGSq.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};

@@ -1,1 +1,1 @@
-import{Cp as e,Sp as t,wp as n}from"../../../chunks/app-Bn-dZ-ry.js";export{t as VideoNotesLayout,e as VideoNotesRenderer,n as videoNotesLayoutContribution};
+import{Cp as e,Sp as t,wp as n}from"../../../chunks/app-qPj2AGSq.js";export{t as VideoNotesLayout,e as VideoNotesRenderer,n as videoNotesLayoutContribution};

@@ -1,1 +1,1 @@
-import{Cw as e,Sw as t}from"../../chunks/app-Bn-dZ-ry.js";export{t as ClientLocalSettings,e as clientLocalSettings};
+import{Cw as e,Sw as t}from"../../chunks/app-qPj2AGSq.js";export{t as ClientLocalSettings,e as clientLocalSettings};
