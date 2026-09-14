@@ -765,6 +765,33 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
   return proxy
 }
 
+/** Everything a `Repo` needs to measure one database: the tracker its adapter
+ *  feeds, the per-method reservoirs, and the view of the database that fills
+ *  them. */
+export interface MeteredDb {
+  readonly metrics: DbMetrics
+  readonly db: unknown
+}
+
+/**
+ * Pair a database with its metrics.
+ *
+ * ONE CALL, because the two halves have to agree and nothing else makes them:
+ * the tracker a resolver reaches through `ctx.db` and the tracker
+ * `repo.metrics()` reports are the same object only if the lookup that finds it
+ * and the wrapper that publishes it are given the same answer. Done separately
+ * they can differ, and the failure is silent — the Repo reports a tracker
+ * nothing writes to, which reads as a database that was never touched.
+ *
+ * A database whose adapter was never instrumented gets a tracker of its own
+ * that stays unfed, and `DbContention` then declines to judge anything rather
+ * than calling every sample clean.
+ */
+export const attachDbMetrics = (rawDb: unknown): MeteredDb => {
+  const metrics = new DbMetrics(contentionFor(rawDb))
+  return {metrics, db: wrapDbWithMetrics(rawDb, metrics)}
+}
+
 /** LockContext-shape wrapper used inside writeTransaction. Same idea
  *  as wrapDbWithMetrics: time every read/exec call going through the
  *  tx so `mutate.X` shows up under both `writeTransaction` (wall) and

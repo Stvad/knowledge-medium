@@ -123,8 +123,10 @@ describe('instrumentAdapter', () => {
     expect(db.name).toBe('fake.db')
     expect(typeof db.refreshSchema).toBe('function')
     expect(db instanceof (raw.constructor as new () => unknown)).toBe(true)
-    // A write through the wrapper lands on the adapter, not on the wrapper,
-    // so a reader holding the original still sees it.
+    // Pins Proxy semantics rather than a clause of ours: a write through the
+    // wrapper must land on the adapter, so a reader holding the original still
+    // sees it. Free from the default `set` behaviour today, and this is what
+    // catches a hand-written trap that drops the receiver later.
     ;(db as unknown as {marker?: string}).marker = 'set'
     expect((raw as unknown as {marker?: string}).marker).toBe('set')
   })

@@ -9,9 +9,11 @@
 import { describe, expect, it } from 'vitest'
 import { makeFakeStack } from '@/data/test/fakePowerSyncStack'
 import {
+  attachDbMetrics,
   DbContention,
   DbMetrics,
   QueryMetrics,
+  registerContention,
   TimingReservoir,
   contentionFor,
   wrapDbWithMetrics,
@@ -608,6 +610,22 @@ describe('wrapDbWithMetrics', () => {
     // A fake or a database without these must not suddenly appear to have them
     // — callers feature-detect the method before using it.
     expect(wrapped.writeLock).toBeUndefined()
+  })
+
+  it('reports the tracker the database\'s adapter feeds, not a fresh one', () => {
+    // The whole instrument hangs off this. Given its own tracker instead, a
+    // Repo reports counters nothing writes to — which looks exactly like a
+    // database that was never touched, and every window reads as clean.
+    const stack = makeFakeStack()
+    registerContention(stack.db, stack.pool)
+    const metered = attachDbMetrics(stack.db)
+    expect(metered.metrics.contention).toBe(stack.pool)
+    expect(contentionFor(metered.db)).toBe(stack.pool)
+  })
+
+  it('gives a database with no instrumented adapter a tracker that judges nothing', () => {
+    const metered = attachDbMetrics(makeFakeDb())
+    expect(metered.metrics.contention.observingPool()).toBe(false)
   })
 
   it('exposes the tracker from the wrapped db, so a coalescer can reach it', () => {

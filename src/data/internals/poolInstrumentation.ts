@@ -52,8 +52,12 @@ type Lock = <T>(fn: (tx: LockContext) => Promise<T>, options?: DBLockOptions) =>
  * load-bearing: the mixin's `getAll` reaches its connection as `this.readLock`,
  * so the interception only applies if `this` is the wrapper. A delegate that
  * forwarded `getAll` to the inner adapter would run the inner `readLock` and
- * count nothing. Property writes forward to the target so the adapter's own
- * state never lands on the wrapper instead.
+ * count nothing.
+ *
+ * Only `get` is trapped. A `set` trap would be redundant — the default already
+ * defines the property on the target, so the adapter's own writes reach it and
+ * stay visible to anything holding the original — and adding one that forgot
+ * the receiver would be how that stops being true.
  */
 export const instrumentAdapter = (adapter: DBAdapter, pool: DbContention): DBAdapter => {
   pool.markPoolObserved()
@@ -84,12 +88,6 @@ export const instrumentAdapter = (adapter: DBAdapter, pool: DbContention): DBAda
       // into the interception above. No receiver so an accessor still reads the
       // real adapter's own state rather than resolving back through here.
       return Reflect.get(target, prop)
-    },
-    set(target, prop, value) {
-      // Forwarded so the adapter's own writes land on the adapter. Left to the
-      // default, they would land on the proxy and shadow it from every reader
-      // that holds the original.
-      return Reflect.set(target, prop, value)
     },
   }) as DBAdapter
 }
