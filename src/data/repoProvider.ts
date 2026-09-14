@@ -241,8 +241,13 @@ const buildPowerSyncDb = (userId: string) => {
   // something?" is answered at the boundary every user of the pool crosses
   // rather than at one of the several doors into it. Wrapping the FACTORY
   // rather than the opened adapter because PowerSync opens it itself; the
-  // adapter is otherwise never in our hands. Records nothing until a `Repo`
-  // reads it, and changes nothing about how the database is opened.
+  // adapter is otherwise never in our hands.
+  //
+  // Counting STARTS HERE, not when a Repo attaches: PowerSync begins its own
+  // init from the constructor, and `ensurePowerSyncReady` runs the schema DDL
+  // before any Repo exists. All of that is real work on these connections and
+  // lands in the first snapshot — read `busyMs` and `maxDepth` as spanning the
+  // database's life, the same way the per-method timings are page totals.
   const contention = new DbContention()
   const db = new PowerSyncDatabase({
     schema: appSchema,

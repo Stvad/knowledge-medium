@@ -510,13 +510,33 @@ describe('wrapDbWithMetrics', () => {
    *  if it actually took a connection. */
   const syncing = (initial?: {downloading?: boolean; uploading?: boolean}) => {
     const stack = makeFakeStack({syncing: initial})
-    const metrics = new DbMetrics(stack.pool)
+    // Registered against the DATABASE, as `repoProvider` does — that is what
+    // attaches the sync watcher, and doing it here rather than in the wrapper
+    // is what keeps it to one per database.
+    registerContention(stack.db, stack.pool)
+    const metered = attachDbMetrics(stack.db)
     return {
-      wrapped: wrapDbWithMetrics(stack.db, metrics) as ReturnType<typeof makeFakeDb>,
-      metrics,
+      wrapped: metered.db as ReturnType<typeof makeFakeDb>,
+      metrics: metered.metrics,
       set: stack.setSyncStatus,
     }
   }
+
+  it('brackets a sync episode once however many Repos attach to the database', () => {
+    // `initRepo` keys on the sync mode while `getPowerSyncDb` keys on the user,
+    // so two Repos can share one database and one tracker. A watcher attached
+    // per Repo would bracket every transition twice: doubled intervals, and a
+    // depth that reports competition nothing produced.
+    const stack = makeFakeStack()
+    registerContention(stack.db, stack.pool)
+    attachDbMetrics(stack.db)
+    attachDbMetrics(stack.db)
+    stack.setSyncStatus({downloading: true})
+    stack.setSyncStatus({downloading: false})
+    const s = stack.pool.snapshot()
+    expect(s.foreignIntervals).toBe(1)
+    expect(s.maxDepth).toBe(1)
+  })
 
   it('treats a read taken during sync as contended', async () => {
     const {wrapped, metrics, set} = syncing()
@@ -567,12 +587,12 @@ describe('wrapDbWithMetrics', () => {
   })
 
   it('says when sync is not observable at all', () => {
-    const metrics = new DbMetrics()
     // A db with no status channel — and a local-only session, which has no
     // sync engine to watch. Zero foreign intervals means different things in
     // the two cases, and only this field separates them.
-    wrapDbWithMetrics(makeFakeStack({withSyncChannel: false}).db, metrics)
-    expect(metrics.contention.snapshot().syncObserved).toBe(false)
+    const stack = makeFakeStack({withSyncChannel: false})
+    registerContention(stack.db, stack.pool)
+    expect(stack.pool.snapshot().syncObserved).toBe(false)
   })
 
   it('forwards lock and transaction options instead of swallowing them', async () => {

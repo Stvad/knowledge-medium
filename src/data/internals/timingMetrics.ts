@@ -127,10 +127,11 @@ export interface ContentionTicket {
 export interface ContentionMark {
   readonly generation: number
   readonly depth: number
-  /** Arrivals into an already-occupied pool, OURS AND THE SYNC ENGINE'S. The
-   *  question a window asks is whether anything joined while it was open, and
-   *  for that the two are the same event. Distinct from the reported
-   *  `concurrentIssues`, which counts only calls this Repo issued. */
+  /** Arrivals into an already-occupied pool, DATABASE CALLS AND BRACKETED SYNC
+   *  INTERVALS alike. The question a window asks is whether anything joined
+   *  while it was open, and for that the two are the same event. Distinct from
+   *  the reported `concurrentIssues`, which counts only real calls, so that it
+   *  cannot exceed `calls`. */
   readonly disturbances: number
   readonly sharedWork: number
 }
@@ -145,10 +146,11 @@ export interface ContentionWindow {
 export interface ContentionSnapshot {
   /** Top-level db calls that took a connection since the last reset. */
   readonly calls: number
-  /** Of those, ones issued while the pool was already occupied. Counts REPO
-   *  CALLS only — bracketed sync intervals disturb a window just as much, but
-   *  folding them in here would let this field exceed `calls` and stop meaning
-   *  what it says. */
+  /** Of those, the ones issued while the pool was already occupied. Counts
+   *  DATABASE CALLS only, so it stays a subset of `calls` — bracketed sync
+   *  intervals disturb a window just as much, but folding them in here would
+   *  let this field exceed `calls` and stop meaning what it says. `calls` minus
+   *  this is `uncontendedCalls`: every call is one or the other. */
   readonly concurrentIssues: number
   /** Deepest simultaneous occupancy seen, our calls and observed sync work
    *  together. `1` means nothing ever overlapped. */
@@ -343,12 +345,16 @@ export class DbContention {
     this.sharedWorkTotal++
   }
 
-  private enter(at: number, ours: boolean): ContentionMark {
+  /** `isCall` separates a real database call from a bracketed sync interval.
+   *  Both occupy the pool and both disturb an open window; only the first is
+   *  counted in `calls`, so only the first may be counted in
+   *  `concurrentIssues`. */
+  private enter(at: number, isCall: boolean): ContentionMark {
     const mark = this.currentMark()
     if (this.inFlight === 0) this.busySince = at
     else {
       this.disturbancesTotal++
-      if (ours) this.concurrentIssuesTotal++
+      if (isCall) this.concurrentIssuesTotal++
     }
     this.inFlight++
     if (this.inFlight > this.maxDepthSeen) this.maxDepthSeen = this.inFlight
@@ -458,12 +464,19 @@ export class DbContention {
  *  without the Repo threading a sink through every query signature. */
 const contentionByDb = new WeakMap<object, DbContention>()
 
-/** Publish the tracker an instrumented adapter feeds, against the database it
- *  was opened for. Called by `repoProvider` at construction, so a `Repo` built
- *  on that database later finds it with `contentionFor` instead of starting a
- *  second one nothing writes to. */
+/** Establish `pool` as the tracker for `db`, and attach the feeds that belong
+ *  to the DATABASE rather than to any one `Repo` reading it.
+ *
+ *  Called once by `repoProvider`, where the database is constructed. That is
+ *  the scope both things have: a `Repo` attaching later adopts the tracker
+ *  through `contentionFor`, and two Repos over one database — which
+ *  `initRepo` allows, since it keys on the sync mode and `getPowerSyncDb` does
+ *  not — share it. Registering the sync watcher on attach instead would give
+ *  that shared tracker one listener per Repo, and every status transition would
+ *  bracket the pool twice. */
 export const registerContention = (db: object, pool: DbContention): void => {
   contentionByDb.set(db, pool)
+  watchSyncOccupancy(db, pool)
 }
 
 /** The tracker for `db`, or undefined if it was never wrapped (tests and
@@ -758,10 +771,10 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
   })
   // Also keyed by the PROXY: `contentionFor` is looked up both from the raw
   // database (by `Repo`, to find the tracker its adapter feeds) and from the
-  // object a resolver holds as `ctx.db`, which is this one.
+  // object a resolver holds as `ctx.db`, which is this one. Nothing else is
+  // attached here — a wrapper is per-Repo, and everything that feeds the
+  // tracker is per-database (see `registerContention`).
   contentionByDb.set(proxy, metrics.contention)
-  // Watched on the RAW db: the status channel lives there.
-  watchSyncOccupancy(db, metrics.contention)
   return proxy
 }
 

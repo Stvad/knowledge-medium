@@ -121,13 +121,21 @@ export const makeFakeStack = (opts: {
       adapter.readLock(fn, options as never),
   }
 
-  let notify: ((s: unknown) => void) | undefined
+  // A LIST, as PowerSync's own observer keeps: overwriting would silently
+  // collapse two registrations into one, and a test asserting that a database
+  // is watched only once would pass however many watchers attached.
+  const listeners: Array<(s: unknown) => void> = []
   if (opts.withSyncChannel !== false) {
     const channel = db as FakeSyncChannel
     channel.currentStatus = opts.syncing ? {dataFlowStatus: opts.syncing} : undefined
     channel.registerListener = (l) => {
-      notify = l.statusChanged
-      return () => {}
+      const fn = l.statusChanged
+      if (!fn) return () => {}
+      listeners.push(fn)
+      return () => {
+        const i = listeners.indexOf(fn)
+        if (i >= 0) listeners.splice(i, 1)
+      }
     }
   }
 
@@ -136,6 +144,8 @@ export const makeFakeStack = (opts: {
     adapter,
     db,
     pool,
-    setSyncStatus: (flow) => notify?.({dataFlowStatus: flow}),
+    setSyncStatus: (flow) => {
+      for (const l of [...listeners]) l({dataFlowStatus: flow})
+    },
   }
 }

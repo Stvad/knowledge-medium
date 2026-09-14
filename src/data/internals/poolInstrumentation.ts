@@ -2,10 +2,9 @@
  * Occupancy counting at the database boundary.
  *
  * `DbContention` answers "did this window have the pool to itself?", and that
- * answer is only as good as its coverage of who is ON the pool. Counting at the
- * Repo's proxy covered the calls the Repo makes and nothing else — three
- * separate review rounds each found a different user it missed, which is a
- * layering problem rather than three bugs (#965).
+ * answer is only as good as its coverage of who is ON the pool. Counting above
+ * the adapter covers the calls that layer sees and nothing else, and several
+ * things use these connections without passing it (#965).
  *
  * `DBAdapter` is where the database work actually happens, and PowerSync routes
  * everything through it: `AbstractPowerSyncDatabase.getAll` / `get` /
