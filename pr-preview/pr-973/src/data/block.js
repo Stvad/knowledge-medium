@@ -1,1 +1,1 @@
-import{NW as e,PW as t}from"../../chunks/app-BnR4oLpO.js";export{e as Block,t as requireLoadedBlock};
+import{NW as e,PW as t}from"../../chunks/app-B8V1zqyq.js";export{e as Block,t as requireLoadedBlock};

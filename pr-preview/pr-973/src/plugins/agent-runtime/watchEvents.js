@@ -1,1 +1,1 @@
-import{il as e,rl as t}from"../../../chunks/app-BnR4oLpO.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};
+import{il as e,rl as t}from"../../../chunks/app-B8V1zqyq.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};

@@ -1,1 +1,1 @@
-import{NI as e,PI as t}from"../../../chunks/app-BnR4oLpO.js";export{e as getOrCreateLocationsPage,t as locationsPageBlockId};
+import{NI as e,PI as t}from"../../../chunks/app-B8V1zqyq.js";export{e as getOrCreateLocationsPage,t as locationsPageBlockId};
