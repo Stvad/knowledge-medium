@@ -1,1 +1,1 @@
-import{GT as e}from"../../chunks/app-Dy_aWdOf.js";export{e as LazyBlockComponent};
+import{GT as e}from"../../chunks/app-BKslgBgA.js";export{e as LazyBlockComponent};

@@ -1,1 +1,1 @@
-import{AE as e,ME as t,jE as n}from"../../chunks/app-Dy_aWdOf.js";export{e as deleteBlockThroughUi,n as deleteBlocksThroughUi,t as ensureDeletableThroughUi};
+import{AE as e,ME as t,jE as n}from"../../chunks/app-BKslgBgA.js";export{e as deleteBlockThroughUi,n as deleteBlocksThroughUi,t as ensureDeletableThroughUi};

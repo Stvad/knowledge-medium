@@ -1,1 +1,1 @@
-import{Fk as e,Ik as t}from"../../chunks/app-Dy_aWdOf.js";export{e as isFocalRender,t as useIsFocalRender};
+import{Fk as e,Ik as t}from"../../chunks/app-BKslgBgA.js";export{e as isFocalRender,t as useIsFocalRender};
