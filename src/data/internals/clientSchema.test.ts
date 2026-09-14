@@ -1610,20 +1610,18 @@ describe('boot-path trigger recreate', () => {
   // SQLite stores the CREATE text as written minus `IF NOT EXISTS`; the
   // matcher must read that back as "unchanged", and a body edit as "changed".
   it('matches a stored trigger against its CREATE statement and detects a changed body', () => {
-    const db = new DatabaseSync(':memory:')
-    db.exec('CREATE TABLE t (a INTEGER)')
+    h.db.exec('CREATE TABLE t (a INTEGER)')
     const createSql = `
       CREATE TRIGGER IF NOT EXISTS t_ai AFTER INSERT ON t
       BEGIN
         UPDATE t SET a = NEW.a + 1;
       END
     `
-    db.exec(createSql)
-    const stored = (db.prepare(`SELECT sql FROM sqlite_master WHERE name = 't_ai'`).get() as {sql: string}).sql
+    h.db.exec(createSql)
+    const stored = (h.db.prepare(`SELECT sql FROM sqlite_master WHERE name = 't_ai'`).get() as {sql: string}).sql
     expect(triggerSqlMatches(stored, createSql)).toBe(true)
     expect(triggerSqlMatches(stored, createSql.replace('+ 1', '+ 2'))).toBe(false)
     expect(triggerSqlMatches(undefined, createSql)).toBe(false)
-    db.close()
   })
 
   it('recreates nothing on a database whose triggers already match, and only the differing ones otherwise', () => {
