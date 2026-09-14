@@ -1,2 +1,0 @@
-function e(e,t,n){let r=new Set(t.map(n)),i=new Set;for(let t=e.length-1;t>=0;t--){let a=n(e[t]);r.has(a)?i.add(a):e.splice(t,1)}for(let r of t){let t=n(r);i.has(t)||e.push(r)}}var t=e=>{if(!Array.isArray(e))return[];let t=[],n=new Set;for(let r of e){if(typeof r!=`string`)continue;let e=r.trim();!e||n.has(e)||(n.add(e),t.push(e))}return t};export{e as reconcileList,t as uniqueStrings};
-//# sourceMappingURL=array.js.map

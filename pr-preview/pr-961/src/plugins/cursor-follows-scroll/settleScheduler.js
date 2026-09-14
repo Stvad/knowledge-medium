@@ -1,2 +1,0 @@
-var e=e=>{let t=null,n=()=>{t&&clearTimeout(t),t=null};return{schedule:r=>{n(),t=setTimeout(()=>{t=null,e()},r)},runNow:()=>{n(),e()},cancel:n}};export{e as createSettleScheduler};
-//# sourceMappingURL=settleScheduler.js.map

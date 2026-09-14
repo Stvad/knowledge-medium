@@ -1,2 +1,0 @@
-"use client";import{__exportAll as e}from"../../../_virtual/_rolldown/runtime.js";import{Content as t,Root as n,Trigger as r}from"../../../node_modules/.pnpm/@radix-ui_react-collapsible@1.1.12_@types_react-dom@19.2.3_@types_react@19.2.15__@types_d89708b7ed8245c56b43530577e15530/node_modules/@radix-ui/react-collapsible/dist/index.js";var i=e({Collapsible:()=>a,CollapsibleContent:()=>s,CollapsibleTrigger:()=>o}),a=n,o=r,s=t;export{a as Collapsible,s as CollapsibleContent,o as CollapsibleTrigger,i as collapsible_exports};
-//# sourceMappingURL=collapsible.js.map

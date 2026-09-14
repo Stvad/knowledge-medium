@@ -1,2 +1,0 @@
-import{dedupById as e,defineFacet as t}from"../../facets/facet.js";var n=e=>typeof e==`object`&&!!e,r=e=>n(e)&&typeof e.id==`string`&&typeof e.component==`function`,i=t({id:`left-sidebar.sections`,combine:e(`left-sidebar.sections`),validate:r});export{r as isLeftSidebarSectionContribution,i as leftSidebarSectionsFacet};
-//# sourceMappingURL=facet.js.map
