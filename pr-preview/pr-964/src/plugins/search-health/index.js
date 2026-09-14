@@ -1,2 +1,1 @@
-import{searchSourceHealthFacet as e}from"../../data/facets.js";import{diagnosticsFacet as t}from"../diagnostics/facet.js";import{recordSearchSourceHealth as n,searchSourceHealthSnapshot as r,subscribeSearchSourceHealth as i}from"./store.js";var a={id:`search-health`,label:`Search`,subscribe:i,getSnapshot:r},o=[e.of({id:`search-health`,report:n},{source:`search-health`}),t.of(a,{source:`search-health`})];export{a as searchHealthDiagnosticSource,o as searchHealthExtension};
-//# sourceMappingURL=index.js.map
+import{ni as e,ti as t}from"../../../chunks/app-Bn-dZ-ry.js";export{t as searchHealthDiagnosticSource,e as searchHealthExtension};

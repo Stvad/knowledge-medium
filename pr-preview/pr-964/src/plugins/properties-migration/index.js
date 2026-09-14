@@ -1,1 +1,1 @@
-import{migratePropertiesToBlocksAction as e}from"./action.js";import{propertiesMigrationPlugin as t}from"./plugin.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};
+import{Er as e,wr as t}from"../../../chunks/app-Bn-dZ-ry.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

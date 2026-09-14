@@ -1,2 +1,1 @@
-import{topLevelBlockIdProp as e}from"../data/properties.js";import{useBlockContext as t}from"../context/block.js";import{useUIStateProperty as n}from"../data/globalState.js";var r=r=>{let[i]=n(e),{isNestedSurface:a}=t();return r.id===i&&!a},i=e=>e.isTopLevel&&!e.blockContext?.isNestedSurface;export{i as isFocalRender,r as useIsFocalRender};
-//# sourceMappingURL=useIsFocalRender.js.map
+import{JO as e,YO as t}from"../../chunks/app-Bn-dZ-ry.js";export{e as isFocalRender,t as useIsFocalRender};

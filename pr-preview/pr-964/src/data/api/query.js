@@ -1,2 +1,1 @@
-var e=e=>e;export{e as defineQuery};
-//# sourceMappingURL=query.js.map
+import{Q1 as e}from"../../../chunks/app-Bn-dZ-ry.js";export{e as defineQuery};

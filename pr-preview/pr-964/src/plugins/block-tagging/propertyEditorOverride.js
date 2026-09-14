@@ -1,2 +1,1 @@
-import{definePropertyEditorOverride as e}from"../../data/api/propertySchema.js";import"../../data/api/index.js";import{blockTagsConfigProp as t}from"./config.js";import{BlockTagsConfigEditor as n}from"./BlockTagsConfigEditor.js";var r=e(t,{label:`Block tags`,Editor:n});export{r as blockTagsConfigUi};
-//# sourceMappingURL=propertyEditorOverride.js.map
+import{yo as e}from"../../../chunks/app-Bn-dZ-ry.js";export{e as blockTagsConfigUi};

@@ -1,2 +1,1 @@
-var e=()=>typeof document>`u`?null:document.querySelector(`[data-layout-session-active]`)??document.querySelector(`[data-layout-session-id]`);export{e as activeLayoutSessionElement};
-//# sourceMappingURL=layoutSessionDom.js.map
+import{VS as e}from"../../chunks/app-Bn-dZ-ry.js";export{e as activeLayoutSessionElement};

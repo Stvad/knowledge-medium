@@ -1,2 +1,1 @@
-var e=async e=>{try{await e.close()}catch{try{await e.database.close()}catch(e){console.warn(`[db-recovery] adapter close fallback failed after close() rejected:`,e)}}};export{e as releasePowerSyncConnection};
-//# sourceMappingURL=releasePowerSyncConnection.js.map
+import{Rz as e}from"../../chunks/app-Bn-dZ-ry.js";export{e as releasePowerSyncConnection};

@@ -1,2 +1,1 @@
-var e=e=>e;export{e as definePostCommitProcessor};
-//# sourceMappingURL=processor.js.map
+import{o0 as e}from"../../../chunks/app-Bn-dZ-ry.js";export{e as definePostCommitProcessor};

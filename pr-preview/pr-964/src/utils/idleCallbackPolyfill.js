@@ -1,2 +1,1 @@
-var e=50,t=()=>{let t=globalThis;typeof t.requestIdleCallback!=`function`&&(t.requestIdleCallback=t=>{let n=Date.now();return setTimeout(()=>t({didTimeout:!1,timeRemaining:()=>Math.max(0,e-(Date.now()-n))}),1)},t.cancelIdleCallback=e=>clearTimeout(e))};export{t as installIdleCallbackPolyfill};
-//# sourceMappingURL=idleCallbackPolyfill.js.map
+import{t as e}from"../../chunks/app-Bn-dZ-ry.js";export{e as installIdleCallbackPolyfill};

@@ -1,2 +1,1 @@
-var e={string:`Plain`,list:`Options`,date:`Date`,number:`Number`,boolean:`Checkbox`,object:`Object`,enum:`Choice`,url:`URL`,ref:`Reference`,refList:`References`},t=t=>e[t]??t;export{t as propertyShapeLabel};
-//# sourceMappingURL=shapes.js.map
+import{pN as e}from"../../../chunks/app-Bn-dZ-ry.js";export{e as propertyShapeLabel};

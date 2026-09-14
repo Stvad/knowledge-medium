@@ -1,2 +1,1 @@
-var e=e=>e;export{e as defineMutator};
-//# sourceMappingURL=mutator.js.map
+import{s0 as e}from"../../../chunks/app-Bn-dZ-ry.js";export{e as defineMutator};

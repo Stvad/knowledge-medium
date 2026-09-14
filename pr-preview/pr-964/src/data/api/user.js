@@ -1,2 +1,1 @@
-var e=`system:`,t=t=>`${e}${t}`,n=t=>t.startsWith(e);export{e as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,t as systemAuthor};
-//# sourceMappingURL=user.js.map
+import{J1 as e,K1 as t,q1 as n}from"../../../chunks/app-Bn-dZ-ry.js";export{t as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,e as systemAuthor};

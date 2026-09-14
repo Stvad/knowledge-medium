@@ -1,2 +1,1 @@
-var e=e=>e.isBreadcrumb?`breadcrumb`:e.isBacklink?`backlink`:e.isEmbedded?`embedded`:e.isNestedSurface?`nested`:`outline`;export{e as surfaceFromContext};
-//# sourceMappingURL=surface.js.map
+import{Mm as e}from"../../../chunks/app-Bn-dZ-ry.js";export{e as surfaceFromContext};

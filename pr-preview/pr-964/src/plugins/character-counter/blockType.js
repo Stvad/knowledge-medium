@@ -1,2 +1,1 @@
-import{seedType as e}from"../../data/typeSeeds.js";import"../../data/api/index.js";import{charLimitProp as t,charProfileProp as n,charScopeProp as r}from"./properties.js";var i=`char-counter`,a=[e({seedKey:`system:character-counter/type/char-counter`,revision:1,id:i,label:`Character counter`,description:"Shows a live character count below the block. Set an optional limit to see `count / limit` and an over-limit warning.",properties:[t,r,n]})];export{i as CHAR_COUNTER_TYPE,a as CHAR_COUNTER_TYPE_CONTRIBUTIONS};
-//# sourceMappingURL=blockType.js.map
+import{GL as e,KL as t}from"../../../chunks/app-Bn-dZ-ry.js";export{e as CHAR_COUNTER_TYPE,t as CHAR_COUNTER_TYPE_CONTRIBUTIONS};
