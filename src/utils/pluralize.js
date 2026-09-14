@@ -1,2 +1,1 @@
-var e=(e,t,n=`${t}s`)=>`${e} ${e===1?t:n}`,t=(e,t,n)=>e===1?t:n;export{t as agree,e as pluralize};
-//# sourceMappingURL=pluralize.js.map
+import{Mv as e,Nv as t}from"../../chunks/app-CGIA7roj.js";export{e as agree,t as pluralize};

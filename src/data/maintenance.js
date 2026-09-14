@@ -1,1 +1,1 @@
-import{runAnalyzeIfStale as e,runAnalyzeNow as t}from"./internals/clientSchema.js";export{e as runAnalyzeIfStale,t as runAnalyzeNow};
+import{FU as e,IU as t}from"../../chunks/app-CGIA7roj.js";export{e as runAnalyzeIfStale,t as runAnalyzeNow};

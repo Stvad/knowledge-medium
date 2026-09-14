@@ -1,2 +1,1 @@
-var e=[`-wa0`,`-wa1`],t=`-journal`,n=[t,`-wal`,`-shm`],r=[...n,...e];export{r as DB_FILE_SIBLING_SUFFIXES,n as SQLITE_JOURNAL_SUFFIXES,t as SQLITE_ROLLBACK_JOURNAL_SUFFIX,e as WRITE_AHEAD_SIDECAR_SUFFIXES};
-//# sourceMappingURL=dbFileSiblings.js.map
+import{AB as e,MB as t,NB as n,jB as r}from"../../chunks/app-CGIA7roj.js";export{e as DB_FILE_SIBLING_SUFFIXES,r as SQLITE_JOURNAL_SUFFIXES,t as SQLITE_ROLLBACK_JOURNAL_SUFFIX,n as WRITE_AHEAD_SIDECAR_SUFFIXES};

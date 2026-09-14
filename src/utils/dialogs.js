@@ -1,2 +1,1 @@
-import{CallbackSet as e}from"./callbackSet.js";var t=0,n=new e(`dialogs`),r=[],i=(e,i)=>new Promise(a=>{let o=++t,s={id:o,Component:e,props:i??{},finalize:e=>{r=r.filter(e=>e.id!==o),a(e),n.notify()}};r=[...r,s],n.notify()}),a=()=>r,o=e=>n.add(e),s=()=>{let e=r;r=[],t=0;for(let t of e)t.finalize(null);n.notify()},c=(e,t)=>a().some(n=>n.Component===e&&n.props.workspaceId===(t??void 0));export{s as __resetDialogsForTests,a as getDialogQueue,c as isDialogOpenForWorkspace,i as openDialog,o as subscribeDialogs};
-//# sourceMappingURL=dialogs.js.map
+import{AE as e,ME as t,OE as n,jE as r,kE as i}from"../../chunks/app-CGIA7roj.js";export{n as __resetDialogsForTests,i as getDialogQueue,e as isDialogOpenForWorkspace,r as openDialog,t as subscribeDialogs};

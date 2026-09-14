@@ -1,2 +1,1 @@
-var e=`core.blockMerged`,t=`core.blockDeleted`;export{t as CORE_BLOCK_DELETED_EVENT,e as CORE_BLOCK_MERGED_EVENT};
-//# sourceMappingURL=events.js.map
+import{c0 as e,l0 as t}from"../../../chunks/app-CGIA7roj.js";export{e as CORE_BLOCK_DELETED_EVENT,t as CORE_BLOCK_MERGED_EVENT};

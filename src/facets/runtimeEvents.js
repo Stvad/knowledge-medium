@@ -1,2 +1,1 @@
-var e=`app-runtime-update`,t=()=>{window.dispatchEvent(new CustomEvent(e,{detail:new Date().toISOString()}))};export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};
-//# sourceMappingURL=runtimeEvents.js.map
+import{_N as e,gN as t}from"../../chunks/app-CGIA7roj.js";export{t as appRuntimeUpdateEvent,e as refreshAppRuntime};

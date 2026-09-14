@@ -1,2 +1,1 @@
-import{BlockRefAncestorsContext as e}from"./cycleGuardContext.js";import{useContext as t}from"react";var n=()=>t(e);export{n as useBlockRefAncestors};
-//# sourceMappingURL=useBlockRefAncestors.js.map
+import{aS as e}from"../../../chunks/app-CGIA7roj.js";export{e as useBlockRefAncestors};

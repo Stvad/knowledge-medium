@@ -1,2 +1,1 @@
-var e={hideFromCompletion:!0,hideFromBlockDisplay:!0};export{e as INFRASTRUCTURE_TYPE_DISPLAY};
-//# sourceMappingURL=blockType.js.map
+import{X0 as e}from"../../../chunks/app-CGIA7roj.js";export{e as INFRASTRUCTURE_TYPE_DISPLAY};

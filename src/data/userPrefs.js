@@ -1,2 +1,1 @@
-var e=`user-prefs`,t=`ui-state`,n=[t,e];export{t as UI_STATE_PATH_PART,e as USER_PREFS_PATH_PART,n as USER_STATE_ROOT_PATHS};
-//# sourceMappingURL=userPrefs.js.map
+import{_Q as e,gQ as t,vQ as n}from"../../chunks/app-CGIA7roj.js";export{t as UI_STATE_PATH_PART,e as USER_PREFS_PATH_PART,n as USER_STATE_ROOT_PATHS};

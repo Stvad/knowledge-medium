@@ -1,2 +1,1 @@
-import{createContext as e}from"react";var t=e(null);export{t as LayoutRootContext};
-//# sourceMappingURL=layoutRootContext.js.map
+import{yT as e}from"../../../chunks/app-CGIA7roj.js";export{e as LayoutRootContext};

@@ -1,2 +1,1 @@
-import{definitionSeedsFacet as e}from"../../data/facets.js";import{agentSubtreeKeyProp as t}from"./schema.js";var n=[e.of(t,{source:`agent-runtime`})];export{n as agentRuntimeDataExtension};
-//# sourceMappingURL=dataExtension.js.map
+import{mz as e}from"../../../chunks/app-CGIA7roj.js";export{e as agentRuntimeDataExtension};

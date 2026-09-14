@@ -1,2 +1,1 @@
-import{dedupById as e,defineFacet as t}from"../../facets/facet.js";import{isActionRefContribution as n}from"../../shortcuts/actionRefItems.js";var r=t({id:`mobile-bottom-nav.items`,combine:e(`mobile-bottom-nav.items`),validate:n});export{r as mobileBottomNavItemsFacet};
-//# sourceMappingURL=facet.js.map
+import{Fh as e}from"../../../chunks/app-CGIA7roj.js";export{e as mobileBottomNavItemsFacet};

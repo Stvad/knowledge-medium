@@ -1,2 +1,1 @@
-var e=(e,t)=>({id:e.id,label:t,hideFromPicker:!0}),t=(e,t)=>{if(e.id!==t.id)throw Error(`ValuePreset id mismatch: core ${JSON.stringify(e.id)} vs presentation ${JSON.stringify(t.id)}`);return{...t,...e}},n=(e,n)=>({core:e,presentation:n,preset:t(e,n)});export{e as defineHiddenPresetPresentation,n as defineSplitPreset,t as joinValuePreset};
-//# sourceMappingURL=valuePresets.js.map
+import{H1 as e,U1 as t,V1 as n}from"../../../chunks/app-CGIA7roj.js";export{n as defineHiddenPresetPresentation,e as defineSplitPreset,t as joinValuePreset};
