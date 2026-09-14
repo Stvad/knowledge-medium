@@ -1,1 +1,1 @@
-import{Fc as e,Ic as t,Lc as n,Rc as r}from"../../../chunks/app-BnxTzVqY.js";export{e as PROVENANCE_BLOCKS_PER_KEY,t as PROVENANCE_KEY_LIMIT,n as auditPropertyRegistration,r as describeUnregisteredProperty};
+import{Fc as e,Ic as t,Lc as n,Rc as r}from"../../../chunks/app-CosqX2T4.js";export{e as PROVENANCE_BLOCKS_PER_KEY,t as PROVENANCE_KEY_LIMIT,n as auditPropertyRegistration,r as describeUnregisteredProperty};

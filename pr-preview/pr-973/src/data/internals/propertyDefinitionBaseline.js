@@ -1,1 +1,1 @@
-import{QV as e,ZV as t}from"../../../chunks/app-BnxTzVqY.js";export{t as observePropertyDefinitionCodecs,e as recordAppliedPropertyDefinitionCodecs};
+import{QV as e,ZV as t}from"../../../chunks/app-CosqX2T4.js";export{t as observePropertyDefinitionCodecs,e as recordAppliedPropertyDefinitionCodecs};

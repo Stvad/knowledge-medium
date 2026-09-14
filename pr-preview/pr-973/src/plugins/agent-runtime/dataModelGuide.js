@@ -1,1 +1,1 @@
-import{dl as e}from"../../../chunks/app-BnxTzVqY.js";export{e as DATA_MODEL_GUIDE};
+import{dl as e}from"../../../chunks/app-CosqX2T4.js";export{e as DATA_MODEL_GUIDE};
