@@ -52,18 +52,23 @@ const lockContext = (sql: string[], lock: string): LockContext => {
 export const makeFakeAdapter = (): FakeAdapter => {
   const locks: string[] = []
   const sql: string[] = []
+  // Reached through `this`, deliberately: the real pool finds its connections
+  // on its own instance, so a wrapper that invoked these as bare references
+  // would break in production while a closure-based fake stayed green.
   class Pool {
     name = 'fake.db'
+    readonly locks = locks
+    readonly sql = sql
     close() {}
     async refreshSchema() {}
     registerListener() { return () => {} }
     async readLock<T>(fn: (tx: LockContext) => Promise<T>): Promise<T> {
-      locks.push('read')
-      return fn(lockContext(sql, 'read'))
+      this.locks.push('read')
+      return fn(lockContext(this.sql, 'read'))
     }
     async writeLock<T>(fn: (tx: LockContext) => Promise<T>): Promise<T> {
-      locks.push('write')
-      return fn(lockContext(sql, 'write'))
+      this.locks.push('write')
+      return fn(lockContext(this.sql, 'write'))
     }
   }
   const Adapter = DBAdapterDefaultMixin(Pool)

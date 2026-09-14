@@ -41,8 +41,6 @@ import type { DBAdapter, DBLockOptions, LockContext, SQLOpenFactory } from '@pow
 import type { DbContention } from './timingMetrics.js'
 
 /** The two methods every other one funnels through. */
-type LockName = 'readLock' | 'writeLock'
-
 type Lock = <T>(fn: (tx: LockContext) => Promise<T>, options?: DBLockOptions) => Promise<T>
 
 /**
@@ -61,23 +59,24 @@ type Lock = <T>(fn: (tx: LockContext) => Promise<T>, options?: DBLockOptions) =>
  */
 export const instrumentAdapter = (adapter: DBAdapter, pool: DbContention): DBAdapter => {
   pool.markPoolObserved()
-  const held = (name: LockName, kind: 'read' | 'write'): Lock =>
-    async <T>(fn: (tx: LockContext) => Promise<T>, options?: DBLockOptions): Promise<T> => {
-      const ticket = pool.begin()
-      try {
-        // AWAITED, not returned: a bare `return take(...)` runs the `finally`
-        // when the promise is handed back, and the connection is held for as
-        // long as it is PENDING. Releasing there reports the pool free for the
-        // whole operation this exists to observe.
-        return await (adapter[name] as Lock)(fn, options)
-      } finally {
-        pool.end(ticket, kind)
-      }
+  const held = async <T>(kind: 'read' | 'write', take: () => Promise<T>): Promise<T> => {
+    const ticket = pool.begin()
+    try {
+      // AWAITED, not returned: a bare `return take()` runs the `finally` when
+      // the promise is handed back, and the connection is held for as long as
+      // it is PENDING. Releasing there reports the pool free for the whole
+      // operation this exists to observe.
+      return await take()
+    } finally {
+      pool.end(ticket, kind)
     }
+  }
 
-  const overrides: Record<LockName, Lock> = {
-    readLock: held('readLock', 'read'),
-    writeLock: held('writeLock', 'write'),
+  // Called as methods ON the adapter, not through a looked-up reference: the
+  // real implementation reaches its connections through `this`.
+  const overrides: Record<'readLock' | 'writeLock', Lock> = {
+    readLock: (fn, options) => held('read', () => adapter.readLock(fn, options)),
+    writeLock: (fn, options) => held('write', () => adapter.writeLock(fn, options)),
   }
 
   return new Proxy(adapter, {
