@@ -63,6 +63,19 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
   'not-recording': (s) => `no ${s} record for this session (${s} recording may be off)`,
   'history-short': (s) => `${s} history still building`,
   'no-baseline': (s) => `no ${s} baseline to compare against (recent sessions all measured zero)`,
+  // Names the OUTCOME, not a cause. The classifier rejects a sample for several
+  // different reasons — something else in flight, a coalesced read answering
+  // more than one caller, a window spanning a counter reset — and only the
+  // first is other activity. A lone resolver batching its own ids is rejected
+  // with the database completely quiet, so a message about other activity
+  // would send that reader looking for something that was never there. Saying
+  // what the comparison got, rather than why, is true in every case.
+  //
+  // Deliberately does NOT tell the reader to keep waiting for more history —
+  // that is the one thing which cannot help — while the scheduler does keep
+  // rechecking, because a quiet stretch later in this same session can.
+  'never-uncontended': (s) =>
+    `${s} queries ran, but none produced a comparison-eligible timing this session`,
   'partly-judged': (s) => `some ${s} metrics could not be judged this session`,
 }
 
@@ -77,16 +90,15 @@ const pendingNotes = (analysis: PerfAnalysis): string[] =>
 /** Named, not counted: the reader's next move is to look at what collapsed
  *  THAT query's tail, and a bare count says nothing about where to look.
  *
- *  States only what was OBSERVED, and only about the UPPER TAIL: the quantiles
- *  say nothing about the half below the median, and a bimodal workload whose
- *  every call is independently timed produces this shape too (see
- *  `hasClusteredTail`). So no claim about the distribution as a whole, and none
- *  about how many independent measurements back the p95 — pointing at the
- *  question is what makes it actionable without answering it. */
+ *  States only what was OBSERVED, and only about the UPPER TAIL — the quantiles
+ *  say nothing about the half below the median. It must also point at causes
+ *  the comparison has not already ruled out: coalesced callers are excluded
+ *  from these samples at the source, so sending a reader to check whether the
+ *  calls shared one resolution sends them after something that cannot be there. */
 const clusteredTailNote = (metrics: readonly string[]): string | null =>
   metrics.length === 0
     ? null
-    : `${metrics.join(', ')}: p95 is within 1% of p50 in at least one session this comparison used, so its upper tail is a single value — check whether those calls shared one resolution before reading the trend`
+    : `${metrics.join(', ')}: p95 is within 1% of p50 in at least one session this comparison used, so its upper tail is a single value — likely a workload with two distinct speeds, or too few clean samples for the top 5% to be more than one of them`
 
 /** How much history the comparison actually had.
  *

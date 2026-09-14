@@ -18,6 +18,7 @@ import {
   MIN_BASELINE_SESSIONS,
   MIN_HISTORY_SESSIONS,
   regressionsIn,
+  slowestQuery,
   type TrendResult,
 } from '../series'
 
@@ -34,7 +35,28 @@ const qr = (
   ...args: Parameters<typeof queryRegressions>
 ): TrendResult[] => queryRegressions(...args).results
 
-const q = (p95Ms: number, calls = 100) => ({ calls, p50Ms: p95Ms / 2, p95Ms, totalMs: p95Ms * calls })
+/** A query's stored sample. The argument is the UNCONTENDED p95 — the only
+ *  figure the comparison reads — and `uncontendedCalls` the count the gate is
+ *  applied to.
+ *
+ *  The wall-clock fields are deliberately larger on BOTH axes, as a contended
+ *  session really records them: more callers than independent observations, and
+ *  timings inflated by the queue. Nothing here equals its uncontended
+ *  counterpart, so a comparison that read the wall-clock fields instead would
+ *  come out with different numbers and these tests would fail rather than pass
+ *  by coincidence. */
+const q = (p95Ms: number, uncontendedCalls = 100) => ({
+  calls: uncontendedCalls * 10 + 50,
+  p50Ms: p95Ms * 5,
+  p95Ms: p95Ms * 10,
+  totalMs: p95Ms * 10 * (uncontendedCalls * 10 + 50),
+  uncontended: { calls: uncontendedCalls, p50Ms: p95Ms / 2, p95Ms },
+})
+
+/** A query observed plenty of times but never once with the pool to itself —
+ *  also the shape of every record written before the recorder measured it. */
+const noUncontendedSamples = (p95Ms: number, calls = 100) =>
+  ({ calls, p50Ms: p95Ms / 2, p95Ms, totalMs: p95Ms * calls })
 
 const sample = (over: Partial<InteractionComparable> = {}): InteractionComparable => ({
   writes: 100,
@@ -55,24 +77,27 @@ const sinceRegressed = (
   baseCount = 8,
 ): InteractionComparable[] => [now(), ...history(baseCount, base)]
 
-/** Upper half collapsed to one value. `q` above never produces this shape
- *  (p50 is half of p95). */
-const clustered = (ms: number, calls = 100) =>
-  ({ calls, p50Ms: ms, p95Ms: ms, totalMs: ms * calls })
+/** Upper half of the UNCONTENDED window collapsed to one value. `q` above
+ *  never produces that shape (p50 is half of p95), and the wall-clock half here
+ *  stays spread so the caveat cannot pass by reading the wrong one. */
+const clustered = (ms: number, uncontendedCalls = 100) => ({
+  ...q(ms, uncontendedCalls),
+  uncontended: { calls: uncontendedCalls, p50Ms: ms, p95Ms: ms },
+})
 
 describe('hasClusteredTail', () => {
   it('spots a collapsed upper half', () => {
-    expect(hasClusteredTail(clustered(600))).toBe(true)
+    expect(hasClusteredTail(clustered(600).uncontended)).toBe(true)
   })
 
   it('leaves a spread distribution alone', () => {
-    expect(hasClusteredTail(q(600))).toBe(false)
+    expect(hasClusteredTail(q(600).uncontended)).toBe(false)
   })
 
   it('does not flag a uniformly fast query', () => {
     // Below the magnitude floor everything clusters and is judged steady
     // anyway, so flagging it would be noise on every verdict.
-    expect(hasClusteredTail(clustered(2))).toBe(false)
+    expect(hasClusteredTail(clustered(2).uncontended)).toBe(false)
   })
 })
 
@@ -179,6 +204,74 @@ describe('queryRegressions', () => {
     const slow = () => sample({ queries: { a: q(30), b: q(100) } })
     const found = regs(qr(slow(), [slow(), ...history(8, base)]))
     expect(found.map((r) => r.metric)).toEqual(['query:b', 'query:a'])
+  })
+})
+
+describe('slowestQuery', () => {
+  // The trend table charts this. It must be the figure the alarm fires on, or
+  // the column moves under a verdict that did not — which is the same fault as
+  // charting a rate the comparison never reads.
+  it('ranks by the uncontended p95, not the wall-clock one stored beside it', () => {
+    // `slow` looks worst on wall-clock (q inflates it 10x over 40 = 400) and is
+    // the faster of the two once the queue is taken out.
+    const r = { queries: { slow: q(4), steady: q(40, 30) } }
+    expect(slowestQuery(r)).toEqual({ name: 'steady', p95Ms: 40 })
+  })
+
+  it('ignores a query with no uncontended sample rather than ranking it at zero', () => {
+    const r = { queries: { unmeasured: noUncontendedSamples(9000), measured: q(3) } }
+    expect(slowestQuery(r)).toEqual({ name: 'measured', p95Ms: 3 })
+  })
+
+  it('ignores a query too thinly sampled for the comparison to judge', () => {
+    // Presence is not eligibility. A single 500ms resolve would top the table
+    // while the verdict compares a different, well-sampled query — the column
+    // contradicting the alarm beside it, which is the one thing this must not
+    // do. Same threshold, one owner.
+    const r = { queries: { oneOff: q(500, 3), trended: q(9) } }
+    expect(slowestQuery(r)).toEqual({ name: 'trended', p95Ms: 9 })
+  })
+
+  it('reports nothing when no query was ever observed unopposed', () => {
+    expect(slowestQuery({ queries: { a: noUncontendedSamples(500) } })).toBeNull()
+  })
+})
+
+describe('what counts as enough measurements', () => {
+  // The defect this whole comparison was rebuilt around: `calls` counts
+  // CALLERS. N of them awaiting one coalesced statement each record that
+  // statement's whole wall-clock, so a plain call count says twenty
+  // measurements where there was one. The gate is applied to the resolves that
+  // ran with the pool to themselves, which coalesced callers never are.
+  // Through `sinceRegressed`, so the gate is the ONLY thing standing between
+  // these and a reported regression. Against a history that is merely fast, the
+  // recent window's median suppresses a single slow session on its own — and
+  // the test then stays green with the gate deleted, proving nothing.
+  it('does not judge a query whose callers outnumber its independent observations', () => {
+    const base = () => sample({ queries: { 'core.ancestors': q(10) } })
+    const busy = () => sample({ queries: { 'core.ancestors': q(90, 3) } })
+    expect(regs(qr(busy(), sinceRegressed(busy, base)))).toEqual([])
+  })
+
+  it('does not judge a query never observed with the pool to itself', () => {
+    // Also every record written before the recorder measured this: a missing
+    // subset is "not measured", never "measured as fast".
+    const base = () => sample({ queries: { slow: q(10) } })
+    const current = () => sample({ queries: { slow: noUncontendedSamples(900) } })
+    expect(regs(qr(current(), sinceRegressed(current, base)))).toEqual([])
+  })
+
+  it('judges one whose uncontended samples clear the bar', () => {
+    const base = () => sample({ queries: { slow: q(10) } })
+    const slow = () => sample({ queries: { slow: q(40) } })
+    // Through `sinceRegressed` like the other trend tests: the recent reading
+    // is a median over a window, so one session never swings it.
+    const found = regs(qr(slow(), sinceRegressed(slow, base)))
+    expect(found).toHaveLength(1)
+    // Reported as the uncontended figure, not the wall-clock one the same
+    // sample also carries.
+    expect(found[0].current).toBe(40)
+    expect(found[0].label).toBe('slow p95 (uncontended)')
   })
 })
 
@@ -412,6 +505,59 @@ describe('queryRegressions with nothing judgeable', () => {
     expect(results).toHaveLength(1)
     expect(results[0]).toMatchObject({ status: 'insufficient' })
     expect(partlyJudged([...results, { status: 'steady', baselineCount: 12 }])).toBe(true)
+  })
+
+  // The expected report for a query that only runs inside a fan-out, not a
+  // fault — and saying "no usable measurement this session" about a session
+  // that measured hundreds of resolves sends a reader to look for a recorder
+  // that is working fine.
+  // The dangerous shape is not "nothing was judged" — that is visibly empty.
+  // It is one query judged BESIDE one that could not be, which looks like an
+  // answer: with the judged query steady the verdict reads as a complete clean
+  // comparison, and with nothing left awaiting a sample the monitor stops
+  // rechecking for the rest of the session. The unjudged query is exactly where
+  // a regression would be hiding.
+  it('reports a skipped query even when another one was judged', () => {
+    const base = () => sample({ queries: { steady: q(10), fanout: q(10) } })
+    const now = sample({ queries: { steady: q(10), fanout: noUncontendedSamples(900) } })
+    const results = qr(now, history(20, base))
+
+    expect(partlyJudged(results)).toBe(true)
+    expect(awaitingCurrentSample(results)).toBe(true)
+    expect(results.some((r) => r.status === 'steady')).toBe(true)
+    expect(results.some((r) => r.status === 'insufficient')).toBe(true)
+  })
+
+  // "Never" describes the SESSION, so it has to be read off the whole session.
+  // A query with clean samples but too little history to judge still ran with
+  // the database free; saying never beside it is simply false.
+  it('does not claim never when a judged-eligible query did run cleanly', () => {
+    const thin = history(2, () => sample({ queries: { fresh: q(10), fanout: q(10) } }))
+    const now = sample({ queries: { fresh: q(10), fanout: noUncontendedSamples(900) } })
+    const results = qr(now, thin)
+
+    expect(results.every((r) => r.status === 'insufficient')).toBe(true)
+    expect(results.some((r) => r.status === 'insufficient' && r.reason === 'never-uncontended'))
+      .toBe(false)
+  })
+
+  // "Never" is a stronger claim than "not yet". A session holding a few clean
+  // resolves that fall short of the threshold is still accumulating, and
+  // telling the user those queries never ran with the database free is simply
+  // false — they did.
+  it('does not call a thin set of clean samples a never', () => {
+    const history20 = history(20, () => sample({ queries: { 'core.ancestors': q(40) } }))
+    const thin = sample({ queries: { 'core.ancestors': q(600, 3) } })
+    expect(qr(thin, history20)[0]).toEqual({ status: 'insufficient', reason: 'no-current-sample' })
+  })
+
+  it('separates "measured, never with the database free" from "measured nothing"', () => {
+    const history20 = history(20, () => sample({ queries: { 'core.ancestors': q(40) } }))
+    const busy = sample({ queries: { 'core.ancestors': noUncontendedSamples(600) } })
+    expect(qr(busy, history20)[0]).toEqual({ status: 'insufficient', reason: 'never-uncontended' })
+
+    const silent = sample({ queries: {} })
+    expect(qr(silent, history20)[0]).toEqual({ status: 'insufficient', reason: 'no-current-sample' })
   })
 })
 

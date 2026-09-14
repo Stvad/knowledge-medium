@@ -370,6 +370,32 @@ describe('loadRecords', () => {
     expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: 20, p95Ms: 10 }))).toBe(false)
   })
 
+  // The uncontended subset is what the comparison now reads, so every failure
+  // mode pinned above for the outer distribution applies to it too — and it is
+  // nested one level deeper, where a validator that only walked the outer
+  // fields would wave it through and let the reader throw or compare garbage.
+  it('checks a present uncontended subset as strictly as the sample around it', () => {
+    const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
+    const withQ = (uncontended: unknown) =>
+      ({ ...ok, queries: { 'core.ancestors': { calls: 200, p50Ms: 5, p95Ms: 10, uncontended } } })
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: 1, p95Ms: 2 }))).toBe(true)
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p95Ms: 2 }))).toBe(false)
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: 3, p95Ms: 2 }))).toBe(false)
+    expect(isUsableInteractionRecord(withQ({ calls: -1, p50Ms: 1, p95Ms: 2 }))).toBe(false)
+    expect(isUsableInteractionRecord(withQ({ calls: 20, p50Ms: 1, p95Ms: '2' }))).toBe(false)
+    expect(isUsableInteractionRecord(withQ(null))).toBe(false)
+  })
+
+  // Absent is the shape of every record written before this was measured, and
+  // of any query never once observed alone. Rejecting those would discard the
+  // history the comparison needs to build a baseline from.
+  it('accepts a sample with no uncontended subset at all', () => {
+    const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
+    expect(isUsableInteractionRecord(
+      { ...ok, queries: { 'core.ancestors': { calls: 200, p50Ms: 5, p95Ms: 10 } } },
+    )).toBe(true)
+  })
+
   it('rejects negative counts and durations', () => {
     const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
     expect(isUsableInteractionRecord(ok)).toBe(true)

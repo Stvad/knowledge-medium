@@ -28,7 +28,11 @@ import {
 const isCount = (v: unknown): boolean => Number.isFinite(v) && (v as number) >= 0
 const isAbsentOrCount = (v: unknown): boolean => v === undefined || isCount(v)
 
-const isTimingSample = (v: unknown): boolean =>
+/** One distribution's three dereferenced fields. ONE owner: a query sample
+ *  carries two of these — its wall-clock and its uncontended subset — and a
+ *  second copy of the rule is how the two would come to be validated
+ *  differently. */
+const isDistribution = (v: unknown): boolean =>
   typeof v === 'object' && v !== null &&
   isCount((v as { calls?: unknown }).calls) &&
   isCount((v as { p95Ms?: unknown }).p95Ms) &&
@@ -41,6 +45,16 @@ const isTimingSample = (v: unknown): boolean =>
   // values. Both are pinned by cases chosen for that.
   isCount((v as { p50Ms?: unknown }).p50Ms) &&
   (v as { p50Ms: number }).p50Ms <= (v as { p95Ms: number }).p95Ms
+
+/** A stored query sample: its wall-clock distribution, plus the uncontended
+ *  subset when the session recorded one. ABSENT is valid — records predate the
+ *  field, and a query never observed alone stores none — but a PRESENT one is
+ *  dereferenced by the comparison and the caveat, so it is checked as strictly
+ *  as the outer distribution. */
+const isTimingSample = (v: unknown): boolean =>
+  isDistribution(v) &&
+  ((v as { uncontended?: unknown }).uncontended === undefined ||
+    isDistribution((v as { uncontended: unknown }).uncontended))
 
 /** A validator must cover EVERY field a reader dereferences — a missed check
  *  throws (analysis or dialog render) instead of skipping one bad row. Add a
