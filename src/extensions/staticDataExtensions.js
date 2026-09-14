@@ -1,1 +1,1 @@
-import{hP as e}from"../../chunks/app-BdSkQsDZ.js";export{e as staticDataExtensions};
+import{hP as e}from"../../chunks/app-EseZEEZM.js";export{e as staticDataExtensions};

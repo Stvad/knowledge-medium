@@ -1,1 +1,1 @@
-import{LC as e}from"../../../chunks/app-BdSkQsDZ.js";export{e as appUpdatePromptExtension};
+import{LC as e}from"../../../chunks/app-EseZEEZM.js";export{e as appUpdatePromptExtension};

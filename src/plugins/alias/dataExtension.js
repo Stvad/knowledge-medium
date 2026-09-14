@@ -1,1 +1,1 @@
-import{az as e}from"../../../chunks/app-BdSkQsDZ.js";export{e as aliasDataExtension};
+import{az as e}from"../../../chunks/app-EseZEEZM.js";export{e as aliasDataExtension};
