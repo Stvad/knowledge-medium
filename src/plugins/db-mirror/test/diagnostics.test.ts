@@ -79,6 +79,14 @@ describe('the mirror diagnostic', () => {
     expect(snapshot?.summary).toBe('Database mirror cannot identify this database')
   })
 
+  it('reports copies this device was allowed to delete and could not', () => {
+    // Governed, readable, and still there: `unmanagedCopies` stays zero, so
+    // this is the only field that can see a lock making every run add a copy
+    // and remove none.
+    const stuck = state({status: {lastMirrorAt: Date.now(), unprunableCopies: 2}})
+    expect(diagnose(stuck)?.summary).toBe('Database mirror cannot delete its old copies')
+  })
+
   it('reports a folder accumulating copies nothing will ever prune', () => {
     // Unmanaged copies have no ceiling of their own; the commonest source is a
     // cloud folder evicting older entries, which adds one per run forever.

@@ -87,7 +87,7 @@ describe('runDbMirror', () => {
       exportToFile,
     })
 
-    expect(outcome).toEqual({kind: 'skipped-unchanged', marker: MARKER, pruned: [], unmanaged: 0})
+    expect(outcome).toEqual({kind: 'skipped-unchanged', marker: MARKER, pruned: [], unmanaged: 0, unprunable: 0})
     expect(exportToFile).not.toHaveBeenCalled()
     expect(dir.names()).toEqual([previous])
   })
@@ -555,11 +555,14 @@ describe('runDbMirror', () => {
 
       const outcome = await run({directory: dir.asHandle(), keepCount: 1})
 
-      // Swallowed, not reported: nothing in the outcome says a delete failed.
+      // The COPY survives a failed delete — but the failure is counted, because
+      // a lock that keeps rejecting makes every run add a copy and remove none,
+      // and these copies are governed and readable so nothing else notices.
       expect(outcome).toMatchObject({
         kind: 'mirrored',
         filename: dbMirrorFilename(DB, INSTALL_A, CURRENT, AT, TOKEN),
         pruned: [],
+        unprunable: 1,
       })
     })
   })

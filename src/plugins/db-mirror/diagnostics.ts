@@ -114,6 +114,18 @@ export const dbMirrorDiagnostic = (
     // every field still holds the last good run's values.
     return warn('Database mirror has not run recently', `${describeLastCopy(state)}. The app has not been idle long enough to take another.`)
   }
+  if ((state.status.unprunableCopies ?? 0) > 0) {
+    // Distinct from the pile-up below, because the remedy is: these copies ARE
+    // this device's to delete and it could not. Something is holding them open,
+    // so every run adds one and removes none while every other field reads
+    // healthy.
+    return warn(
+      'Database mirror cannot delete its old copies',
+      `${state.status.unprunableCopies ?? 0} older ${(state.status.unprunableCopies ?? 0) === 1 ? 'copy is' : 'copies are'} ` +
+      'in use by something else, so the folder keeps growing past the number you asked to keep. ' +
+      'A cloud client syncing the folder is the usual cause.',
+    )
+  }
   if (unmanagedIsPilingUp(state)) {
     // Copies the keep count does not govern have no ceiling of their own, and
     // the commonest source — entries this device cannot open, on a cloud folder

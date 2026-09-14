@@ -64,13 +64,24 @@ export type DbMirrorOutcome =
       marker: string | undefined
       pruned: readonly string[]
       unmanaged: number
+      /** Copies this run was allowed to delete and could not. A cloud client or
+       *  another process holding old files open makes every run add a copy and
+       *  remove none, and the folder then grows past the keep count with every
+       *  other signal reading healthy. */
+      unprunable: number
       /** Whether the bytes on disk were read back and matched. False when the
        *  entry could not be opened afterwards — the copy is probably fine, but
        *  nothing here saw it, so the caller must not record it as the copy the
        *  next skip will look for. */
       verified: boolean
     }
-  | {kind: 'skipped-unchanged'; marker: string; pruned: readonly string[]; unmanaged: number}
+  | {
+      kind: 'skipped-unchanged'
+      marker: string
+      pruned: readonly string[]
+      unmanaged: number
+      unprunable: number
+    }
   | {kind: 'permission-lost'; permission: PermissionState}
 
 export interface DbMirrorRunOptions {
@@ -208,8 +219,9 @@ const prune = async (
    *  names. Not optional: every caller has one, and an omitted argument would
    *  silently reintroduce the clock-skew deletion this protects against. */
   protectedName: string,
-): Promise<readonly string[]> => {
+): Promise<{removed: readonly string[]; unprunable: number}> => {
   const removed: string[] = []
+  let attempted = 0
   try {
     const copies = governed.filter(copy => copy.name !== protectedName)
     // The protected copy occupies one of the slots, so only the rest compete.
@@ -226,13 +238,14 @@ const prune = async (
         .sort((a, b) => b.at - a.at || b.name.localeCompare(a.name))
         .slice(keep),
     ]
+    attempted = doomed.length
     for (const copy of doomed) {
       if (await removeQuietly(directory, copy.name)) removed.push(copy.name)
     }
   } catch (err) {
     console.warn('[db-mirror] could not prune older copies', err)
   }
-  return removed
+  return {removed, unprunable: attempted - removed.length}
 }
 
 /** Residue from a run that died between claiming the name and writing the
@@ -366,13 +379,15 @@ export const runDbMirror = async ({
     // too: otherwise lowering the keep count never takes effect while the
     // database sits unchanged, and a pruning failure is never retried.
     if (present) {
+      const swept = await prune(directory, governed, keepCount, lastCopy.filename)
       return {
         kind: 'skipped-unchanged',
         marker,
         unmanaged,
+        unprunable: swept.unprunable,
         // The copy the marker points at is the current one here, and the same
         // clock skew that could delete a freshly written copy could delete this.
-        pruned: await prune(directory, governed, keepCount, lastCopy.filename),
+        pruned: swept.removed,
       }
     }
   }
@@ -404,6 +419,7 @@ export const runDbMirror = async ({
   }
 
   const {governed, unmanaged} = await survey(filename)
+  const swept = await prune(directory, governed, keepCount, filename)
   return {
     kind: 'mirrored',
     filename,
@@ -411,6 +427,7 @@ export const runDbMirror = async ({
     marker,
     unmanaged,
     verified: written !== undefined,
-    pruned: await prune(directory, governed, keepCount, filename),
+    unprunable: swept.unprunable,
+    pruned: swept.removed,
   }
 }

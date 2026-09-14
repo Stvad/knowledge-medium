@@ -95,6 +95,13 @@ export interface DbMirrorScheduleDeps {
   now?: () => number
 }
 
+/** The controls of a started effect, and its identity. A run can outlive the
+ *  effect that started it, so anything shared it touches afterwards compares
+ *  against the CURRENT one rather than assuming it is still that. */
+interface LiveEffect {
+  resume: (delayMs: number) => void
+}
+
 export interface DbMirrorSchedule {
   effect: AppEffect
   /** Run once, now, from a user gesture. Re-arms the loop from this run. */
@@ -121,7 +128,7 @@ export const createDbMirrorSchedule = ({
   now = Date.now,
 }: DbMirrorScheduleDeps = {}): DbMirrorSchedule => {
   /** The running effect's controls, or null while no effect is started. */
-  let live: {resume: (delayMs: number) => void} | null = null
+  let live: LiveEffect | null = null
   /** ONE copy at a time IN THIS TAB. The loop cannot overlap itself, but
    *  "Mirror now" can land in the middle of a scheduled run, so a second caller
    *  joins the run already going. Keyed by user: signing out in local-only mode
@@ -210,6 +217,15 @@ export const createDbMirrorSchedule = ({
     // `lastCheckedAt` deferred the first copy into the new folder for a whole
     // interval. The store rejects the write if the folder has moved on.
     const ifDirectoryEpoch = state.directoryEpoch
+    /** Every verdict this run records, pinned to the folder it was started
+     *  against. A bare `conclude` is reachable from here and would silently
+     *  drop that pin — the throw path did exactly that, so a failure copying
+     *  into the OLD folder could land on the NEW folder's freshly cleared
+     *  status, or overwrite a good verdict from it. */
+    const concludeHere = (
+      kind: DbMirrorVerdict,
+      patch: Parameters<DbMirrorStore['recordStatus']>[1] = {},
+    ): Promise<void> => conclude(userId, at, kind, patch, {ifDirectoryEpoch})
     // Every path that turns mirroring on is a persisting write, and those mint
     // the install id — so reaching here without one means a half-written
     // record. Minting it now rather than carrying an "install unknown" state
@@ -254,12 +270,13 @@ export const createDbMirrorSchedule = ({
         lastFilename: undefined,
         lastBytes: undefined,
         unmanagedCopies: undefined,
+        unprunableCopies: undefined,
       })
     }
     // An empty log is the one case that warrants no copy at all; an unreadable
     // one still takes a copy. `readDatabaseIncarnation` owns why they differ.
     if (reading.kind === 'empty') {
-      await conclude(userId, at, 'no-identity')
+      await concludeHere('no-identity')
       return {outcome: {kind: 'no-identity'}, intervalMs}
     }
 
@@ -317,9 +334,10 @@ export const createDbMirrorSchedule = ({
       if (outcome === null) return {outcome: {kind: 'busy-elsewhere'}, intervalMs}
       switch (outcome.kind) {
         case 'mirrored':
-          await conclude(userId, at, 'mirrored', {
+          await concludeHere('mirrored', {
             incarnation,
             unmanagedCopies: outcome.unmanaged,
+            unprunableCopies: outcome.unprunable,
             permissionLost: false,
             // Only a copy we read back is recorded AS the copy. An unverified
             // one is probably fine, but claiming it would have the chip assert
@@ -336,24 +354,25 @@ export const createDbMirrorSchedule = ({
                   lastBytes: outcome.bytes,
                 }
               : {}),
-          }, {ifDirectoryEpoch})
+          })
           break
         case 'skipped-unchanged':
           // Reaching here means the permission held and the folder was read, so
           // any recorded failure describes a state that is over — leaving it
           // would have the chip report a paused mirror that is running fine.
-          await conclude(userId, at, 'skipped-unchanged', {
+          await concludeHere('skipped-unchanged', {
             lastCheckedAt: at,
             unmanagedCopies: outcome.unmanaged,
+            unprunableCopies: outcome.unprunable,
             permissionLost: false,
-          }, {ifDirectoryEpoch})
+          })
           break
         case 'permission-lost':
-          await conclude(userId, at, 'permission-lost', {
+          await concludeHere('permission-lost', {
             permissionLost: true,
             lastError: PERMISSION_LOST_MESSAGE,
             lastErrorAt: at,
-          }, {ifDirectoryEpoch})
+          })
           break
         default: {
           // Exhaustiveness: a new outcome kind is a compile error here rather
@@ -365,7 +384,7 @@ export const createDbMirrorSchedule = ({
       }
       return {outcome, intervalMs}
     } catch (err) {
-      await conclude(userId, at, 'failed', {
+      await concludeHere('failed', {
         // The permission check happens before the copy and returns rather than
         // throwing, so a throw here is some OTHER failure — a full disk, a
         // vanished drive. Leaving a stale permission flag set would have the
@@ -380,6 +399,11 @@ export const createDbMirrorSchedule = ({
       throw err
     }
   }
+
+  /** Stop future callers joining the run in flight, without disturbing the run
+   *  itself — its own `finally` then finds the slot already taken from it and
+   *  leaves whatever replaced it alone. */
+  const detachInFlight = (): void => { inFlight = null }
 
   const performDbMirror = (repo: Repo, force = false): Promise<DbMirrorRunReport> => {
     if (inFlight?.userId === repo.user.id) return inFlight.run
@@ -415,7 +439,7 @@ export const createDbMirrorSchedule = ({
   }
 
   /** The part of `start` that has a loop to tear down if it fails. */
-  const startWatching = (repo: Repo, loop: LoopHandle): (() => void) => {
+  const startWatching = (repo: Repo, loop: LoopHandle, mine: LiveEffect): (() => void) => {
     // Publish the persisted state at once. Until something loads it the
     // snapshot is null and the health chip has nothing to show, so a
     // permission or disk failure recorded in a previous session would stay
@@ -423,7 +447,7 @@ export const createDbMirrorSchedule = ({
     // idle main thread and may never come in a busy session.
     store
       .load(repo.user.id)
-      .then(state => {
+      .then(async state => {
         // The reconciler restarts every effect when the WORKSPACE changes,
         // and this feature is per-database rather than per-workspace — so a
         // fresh first delay each time would let someone who switches
@@ -432,6 +456,15 @@ export const createDbMirrorSchedule = ({
         // own floor, which exists to stay clear of boot.
         const {lastCheckedAt} = state.status
         if (lastCheckedAt === undefined) return
+        // And only when it describes the database in front of us. After a wipe
+        // or an import, IndexedDB still holds the PREVIOUS database's
+        // timestamp, and deferring to it parks the first tick up to a whole
+        // interval out — a week at the longest cadence. `mirrorOnce` is what
+        // clears that stale record, so trusting it here postpones the very run
+        // that would fix it, through exactly the window in which no copy of the
+        // new database exists and the settings surface still names the old one.
+        const reading = await readDatabaseIncarnation(repo)
+        if (reading.kind !== 'known' || state.status.incarnation !== reading.id) return
         const intervalMs = state.settings.intervalMinutes * 60_000
         // Clamped at BOTH ends. A `lastCheckedAt` written while the device
         // clock was fast makes `due` arbitrarily large, and the loop would then
@@ -454,8 +487,21 @@ export const createDbMirrorSchedule = ({
     // interval here would push a fresh session's first copy a whole cadence
     // out.
     let armedFor = store.getSnapshot()?.settings.intervalMinutes
+    let watchedFolder = store.getSnapshot()?.directoryEpoch
     const stopWatching = store.subscribe(() => {
-      const minutes = store.getSnapshot()?.settings.intervalMinutes
+      const snapshot = store.getSnapshot()
+      // A run started against the PREVIOUS folder answers a question about a
+      // folder nobody is looking at any more. Detaching it is what stops the
+      // next tick JOINING it on a matching user id and adopting its `mirrored`
+      // verdict — and its full interval — for a folder it never wrote a byte
+      // to, which left the newly chosen one empty for up to a week. The run
+      // itself continues and its own status write is refused by the epoch.
+      const folder = snapshot?.directoryEpoch
+      if (folder !== watchedFolder) {
+        watchedFolder = folder
+        detachInFlight()
+      }
+      const minutes = snapshot?.settings.intervalMinutes
       if (minutes === undefined || minutes === armedFor) return
       const baseline = armedFor === undefined
       armedFor = minutes
@@ -465,7 +511,6 @@ export const createDbMirrorSchedule = ({
     // LAST, after everything above that can throw: a `start` that throws has no
     // disposer recorded, so a `live` published before the throw would outlive
     // the loop it points at and contradict its own declaration.
-    const mine = {resume: (delayMs: number) => loop.rearmIn(delayMs)}
     live = mine
 
     return () => {
@@ -486,6 +531,17 @@ export const createDbMirrorSchedule = ({
   const effect: AppEffect = {
     id: 'db-mirror.schedule',
     start: ({repo}) => {
+      // THIS effect's identity, created before the loop so the tick body can
+      // ask whether it is still the live one. Stopping an effect does not
+      // recall a run already in flight — `loop.stop` cancels a pending timer
+      // and nothing more — so a continuation can outlive its effect by minutes.
+      // Everything shared it might touch on the way out is gated on this: the
+      // re-arm, and the module-global health channel, where a stale error
+      // otherwise sits against the NEW account's mirror until its first idle
+      // tick, which a busy session may never give.
+      const mine: LiveEffect = {resume: () => {}}
+      const isLive = (): boolean => live === mine
+
       // Reporting the tick's own outcome, not just the run's: `mirrorOnce`
       // records a failure to the store, but a failure to READ the store cannot
       // be recorded there at all, and that is the one that would otherwise
@@ -496,11 +552,11 @@ export const createDbMirrorSchedule = ({
           try {
             const report = await performDbMirror(repo)
             consecutiveFailures = 0
-            dbMirrorRuntimeHealth.report(undefined)
+            if (isLive()) dbMirrorRuntimeHealth.report(undefined)
             return delayFor(report)
           } catch (err) {
             consecutiveFailures += 1
-            dbMirrorRuntimeHealth.report(describeError(err))
+            if (isLive()) dbMirrorRuntimeHealth.report(describeError(err))
             // Handled rather than rethrown, because the backoff is a function
             // of how many times this has failed and the job's own
             // `onFailureDelayMs` is a constant. The warning it would have
@@ -513,13 +569,14 @@ export const createDbMirrorSchedule = ({
         // delay, so nothing on the remaining path can throw.
         {onFailureDelayMs: FAILURE_RETRY_MS},
       )
+      mine.resume = (delayMs: number) => loop.rearmIn(delayMs)
 
       // Everything below can throw before the disposer exists — the effect
       // runtime records `cleanup: undefined` for a `start` that threw, so the
       // loop would be armed with nothing able to stop it, ticking against a
       // repo that may since have been replaced.
       try {
-        return startWatching(repo, loop)
+        return startWatching(repo, loop, mine)
       } catch (err) {
         loop.stop()
         throw err

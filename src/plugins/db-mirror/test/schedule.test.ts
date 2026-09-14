@@ -103,6 +103,7 @@ const MIRRORED: DbMirrorOutcome = {
   marker: '42',
   pruned: [],
   unmanaged: 0,
+  unprunable: 0,
   verified: true,
 }
 
@@ -268,7 +269,7 @@ describe('the mirror schedule', () => {
     // nothing looking wrong — the gate and the staleness test both read a
     // negative age as recent.
     await enable()
-    await store.recordStatus(USER, {lastCheckedAt: NOW + 4 * 365 * 24 * 3_600_000})
+    await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: NOW + 4 * 365 * 24 * 3_600_000})
 
     const {job} = build()
 
@@ -590,7 +591,7 @@ describe('the mirror schedule', () => {
     const {job} = build()
     await job.body!()
 
-    outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: [], unmanaged: 0}]
+    outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: [], unmanaged: 0, unprunable: 0}]
     clock = NOW + INTERVAL_MS
     await job.body!()
 
@@ -674,7 +675,7 @@ describe('the mirror schedule', () => {
       await job.body!()
       expect((await store.load(USER)).status.permissionLost).toBe(true)
 
-      outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: [], unmanaged: 0}]
+      outcomes = [{kind: 'skipped-unchanged', marker: '42', pruned: [], unmanaged: 0, unprunable: 0}]
       await job.body!()
 
       const {status} = await store.load(USER)
@@ -830,6 +831,112 @@ describe('the mirror schedule', () => {
     clock += 60_000
     await job.body!()
     expect(mirror).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not defer the first tick to a timestamp from a database that is gone', async () => {
+    // After a wipe or an import, IndexedDB still holds the PREVIOUS database's
+    // `lastCheckedAt`. Trusting it at startup parks the first tick up to a
+    // whole interval out — a week at the longest cadence — and `mirrorOnce` is
+    // the only thing that clears the stale record, so the wait postpones the
+    // very run that would fix it.
+    await enable()
+    await store.recordStatus(USER, {
+      incarnation: 'a-database-that-is-gone',
+      lastCheckedAt: NOW - 60_000,
+    })
+
+    // Fence on the INCARNATION READ, not on the snapshot: the load publishes
+    // before the continuation reads the incarnation, so waiting for a non-null
+    // snapshot lets the assertion run before the branch under test is reached
+    // — and it then passes with the check deleted.
+    const reads = vi.spyOn((repo as unknown as {db: {getAll: (sql: string) => Promise<unknown>}}).db, 'getAll')
+    const {job} = build()
+
+    await vi.waitFor(() =>
+      expect(reads.mock.calls.some(([sql]) => String(sql).includes('ORDER BY id LIMIT 1'))).toBe(true),
+    )
+    // No re-arm at all: the job's own short first delay stands.
+    expect(job.rearms).toEqual([])
+    reads.mockRestore()
+  })
+
+  it('does not record a failure against a folder the user has since replaced', async () => {
+    // The successful paths were pinned to the folder they copied into; the
+    // throw path was not, so a failure copying into the OLD folder could land
+    // on the NEW folder's freshly cleared status — or overwrite a good verdict
+    // from it.
+    await enable()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    mirror.mockImplementationOnce(async () => { await held; throw new Error('the old drive is full') })
+    const {job} = build()
+
+    const inFlight = job.body!()
+    await vi.waitFor(() => expect(mirror).toHaveBeenCalled())
+    await store.setDirectory(USER, {kind: 'directory', name: 'Elsewhere'} as never)
+    release()
+    await inFlight
+
+    const {status} = await store.load(USER)
+    expect(status.lastError).toBeUndefined()
+    expect(status.lastOutcome).toBeUndefined()
+  })
+
+  it('does not let a tick join a run started against the previous folder', async () => {
+    // Joining on a matching user id alone made the resumed tick adopt the old
+    // run's `mirrored` verdict AND its full interval, so the newly chosen
+    // folder could sit without a copy for up to a week — even though the old
+    // run's own status write was correctly refused.
+    await enable()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    mirror.mockImplementationOnce(async () => { await held; return MIRRORED })
+    const {job} = build()
+
+    const stale = job.body!()
+    await vi.waitFor(() => expect(mirror).toHaveBeenCalledTimes(1))
+    await store.setDirectory(USER, {kind: 'directory', name: 'Elsewhere'} as never)
+
+    // A tick after the folder change starts its own run rather than joining.
+    const fresh = job.body!()
+    await vi.waitFor(() => expect(mirror).toHaveBeenCalledTimes(2))
+
+    release()
+    await Promise.all([stale, fresh])
+  })
+
+  it('does not report health from a run that outlived its effect', async () => {
+    // `loop.stop` cancels a pending timer and nothing more, so a copy in flight
+    // keeps going after teardown. Its failure was landing on the module-global
+    // channel after a replacement effect had started, showing the previous
+    // account's error against the new account's mirror.
+    await enable()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    mirror.mockImplementationOnce(async () => { await held; throw new Error('alice’s drive is full') })
+    const {job, stop} = build()
+
+    const stale = job.body!()
+    await vi.waitFor(() => expect(mirror).toHaveBeenCalled())
+    stop?.()
+    build()
+    release()
+    await stale
+
+    expect(dbMirrorRuntimeHealth.getSnapshot()).toBeUndefined()
+  })
+
+  it('records copies it was allowed to delete and could not', async () => {
+    // A lock another process keeps on the old files makes every run add a copy
+    // and remove none. Those copies are governed and readable, so `unmanaged`
+    // stays zero and nothing else notices the folder growing.
+    await enable()
+    outcomes = [{...MIRRORED, unprunable: 2}]
+    const {job} = build()
+
+    await job.body!()
+
+    expect((await store.load(USER)).status.unprunableCopies).toBe(2)
   })
 
   it('does not let a failed run defer the retry it just asked for', async () => {
@@ -1065,7 +1172,7 @@ describe('the mirror schedule', () => {
       const {job} = build()
       await vi.waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
 
-      await store.recordStatus(USER, {lastCheckedAt: 1})
+      await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: 1})
 
       expect(job.rearms).toEqual([])
     })
@@ -1078,7 +1185,7 @@ describe('the mirror schedule', () => {
       // first delay each time would let someone who switches often postpone
       // mirroring for good.
       await enable()
-      await store.recordStatus(USER, {lastCheckedAt: NOW - 30 * 60_000})
+      await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: NOW - 30 * 60_000})
       store = createDbMirrorStore()
       const {job} = build()
 
@@ -1090,7 +1197,7 @@ describe('the mirror schedule', () => {
 
     it('never comes due sooner than the job\u2019s own floor', async () => {
       await enable()
-      await store.recordStatus(USER, {lastCheckedAt: NOW - 10 * 60 * 60_000})
+      await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: NOW - 10 * 60 * 60_000})
       store = createDbMirrorStore()
       const {job} = build()
 

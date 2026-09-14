@@ -86,6 +86,11 @@ export interface DbMirrorStatus {
    *  in `mirror.ts` for which those are. Recorded so a folder holding more
    *  files than the user asked for has a reason they can see. */
   unmanagedCopies?: number
+  /** Copies the last run was allowed to delete and could not. A lock a cloud
+   *  client or another process keeps on the old files makes every run add one
+   *  and remove none — the folder grows past the keep count while every other
+   *  field reads healthy, because these copies ARE governed and readable. */
+  unprunableCopies?: number
   /** What the last run that reached a conclusion concluded, and when.
    *
    *  Unlike {@link lastCheckedAt} this is written by EVERY terminal outcome,
@@ -171,6 +176,7 @@ const normalizeStatus = (value: unknown): DbMirrorStatus => {
     lastFilename: typeof raw.lastFilename === 'string' ? raw.lastFilename : undefined,
     lastBytes: isFiniteNumber(raw.lastBytes) ? raw.lastBytes : undefined,
     unmanagedCopies: isFiniteNumber(raw.unmanagedCopies) ? raw.unmanagedCopies : undefined,
+    unprunableCopies: isFiniteNumber(raw.unprunableCopies) ? raw.unprunableCopies : undefined,
     lastOutcome:
       typeof raw.lastOutcome === 'string' && VERDICTS.has(raw.lastOutcome)
         ? raw.lastOutcome
