@@ -50,10 +50,9 @@ export const memoizeAsync = <F extends (...args: never[]) => Promise<unknown>>(
     // the very thing it exists to avoid.
     if (result.status === 'fulfilled') return result
     const guarded: FulfilledThenable<unknown> = result.catch((err: unknown) => {
-      // Unconditional: an entry a retry has already replaced could be evicted
-      // here too, and the only cost is running an idempotent `ensure` twice.
-      // Checking identity first would be a guard nothing can pin.
-      memoized.cache.delete(key)
+      // Only this entry: a bounded cache can have evicted and re-created the
+      // key while this promise was pending, and the newer entry stays.
+      if (memoized.cache.get(key) === guarded) memoized.cache.delete(key)
       throw err
     })
     // Stamp on settle, as React does for a promise it has tracked, for the
