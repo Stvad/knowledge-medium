@@ -11,6 +11,7 @@
  *   - `src/extensions/compiledModuleCache.ts` (approved/compiled extensions)
  *   - `src/sync/keys/keyStore.ts` (per-device workspace keys — browser-only path)
  *   - `src/plugins/attachments/uploadStore.ts` (the byte-upload staging queue)
+ *   - `src/plugins/db-mirror/store.ts` (the mirror's folder handle and settings)
  *   - `src/sw/bootStore.ts` (the service worker's boot set)
  *   - `src/utils/dbForensics.ts`
  *
