@@ -1,1 +1,1 @@
-import{Gu as e,Uu as t,Wu as n}from"../../chunks/app-CGIA7roj.js";export{t as backlinkCompletionSource,n as createBacklinkAutocomplete,e as isInsideBacklinkBrackets};
+import{Gu as e,Uu as t,Wu as n}from"../../chunks/app-BdSkQsDZ.js";export{t as backlinkCompletionSource,n as createBacklinkAutocomplete,e as isInsideBacklinkBrackets};

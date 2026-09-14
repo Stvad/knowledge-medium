@@ -1,1 +1,1 @@
-import{Bu as e,Vu as t}from"../../../chunks/app-CGIA7roj.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};
+import{Bu as e,Vu as t}from"../../../chunks/app-BdSkQsDZ.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};

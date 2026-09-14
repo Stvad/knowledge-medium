@@ -1,1 +1,1 @@
-import{yt as e}from"../../../chunks/app-CGIA7roj.js";export{e as ExtensionsSettings};
+import{yt as e}from"../../../chunks/app-BdSkQsDZ.js";export{e as ExtensionsSettings};

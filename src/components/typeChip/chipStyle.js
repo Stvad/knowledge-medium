@@ -1,1 +1,1 @@
-import{mS as e}from"../../../chunks/app-CGIA7roj.js";export{e as chipStyle};
+import{mS as e}from"../../../chunks/app-BdSkQsDZ.js";export{e as chipStyle};

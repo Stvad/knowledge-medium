@@ -1,1 +1,1 @@
-import{Ru as e}from"../../../../../chunks/app-CGIA7roj.js";export{e as blockrefMarkdownExtension};
+import{Ru as e}from"../../../../../chunks/app-BdSkQsDZ.js";export{e as blockrefMarkdownExtension};

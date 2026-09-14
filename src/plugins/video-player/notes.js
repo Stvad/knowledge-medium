@@ -1,1 +1,1 @@
-import{Fp as e,Ip as t,Lp as n,Pp as r}from"../../../chunks/app-CGIA7roj.js";export{r as closeVideoNotesView,e as ensureEditableVideoNoteChild,t as enterVideoNotesView,n as focusVideoNote};
+import{Fp as e,Ip as t,Lp as n,Pp as r}from"../../../chunks/app-BdSkQsDZ.js";export{r as closeVideoNotesView,e as ensureEditableVideoNoteChild,t as enterVideoNotesView,n as focusVideoNote};

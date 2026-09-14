@@ -1,1 +1,1 @@
-import{Fq as e,Iq as t}from"../../chunks/app-CGIA7roj.js";export{e as parsePropertyDefinitionMetadata,t as propertySchemaOriginForSeedKey};
+import{Fq as e,Iq as t}from"../../chunks/app-BdSkQsDZ.js";export{e as parsePropertyDefinitionMetadata,t as propertySchemaOriginForSeedKey};

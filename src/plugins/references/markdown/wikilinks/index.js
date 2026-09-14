@@ -1,1 +1,1 @@
-import{Fu as e}from"../../../../../chunks/app-CGIA7roj.js";export{e as wikilinkMarkdownExtension};
+import{Fu as e}from"../../../../../chunks/app-BdSkQsDZ.js";export{e as wikilinkMarkdownExtension};

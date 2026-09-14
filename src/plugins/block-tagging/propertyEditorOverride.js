@@ -1,1 +1,1 @@
-import{yo as e}from"../../../chunks/app-CGIA7roj.js";export{e as blockTagsConfigUi};
+import{yo as e}from"../../../chunks/app-BdSkQsDZ.js";export{e as blockTagsConfigUi};

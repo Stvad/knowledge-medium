@@ -1,1 +1,1 @@
-import{gz as e}from"../../../chunks/app-CGIA7roj.js";export{e as agentDispatchCompanionDataExtension};
+import{gz as e}from"../../../chunks/app-BdSkQsDZ.js";export{e as agentDispatchCompanionDataExtension};
