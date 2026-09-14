@@ -717,7 +717,13 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     if (isForeignPreviewRequest(OWN_SCOPE_IS_PREVIEW, url.pathname)) return undefined
 
     if (isNavigationRequest(request) && isSameOrigin(url)) {
-      return bootStoreFirst(SHELL_URL, () => shellCacheFirst(request, SHELL_URL))
+      // A synthesised Response carries no URL, so only the shell's own path
+      // (the app's start URL) takes the store; a deeper path keeps the cached
+      // response, whose URL is the shell's, for relative resolution.
+      if (url.pathname === scopeURL.pathname || url.href.split(/[?#]/)[0] === SHELL_URL) {
+        return bootStoreFirst(SHELL_URL, () => shellCacheFirst(request, SHELL_URL))
+      }
+      return shellCacheFirst(request, SHELL_URL)
     }
     if (isCacheableAsset(request.destination, url.pathname, isSameOrigin(url))) {
       return bootStoreFirst(request.url, () => assetCacheFirst(request))

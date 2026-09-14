@@ -840,12 +840,21 @@ describe('boot store (IndexedDB copy of the boot set)', () => {
     const {sw, caches} = withStore()
     await sw.install()
     const openSpy = vi.spyOn(caches, 'open')
-    const nav = await sw.handleFetch(new Request(abs('./some/route'), {headers: {accept: 'text/html'}}))!
+    const nav = await sw.handleFetch(new Request(abs('./'), {headers: {accept: 'text/html'}}))!
     expect(await nav.text()).toBe(`body of ${abs('./index.html')}`)
     const asset = await sw.handleFetch(new Request('https://app.example/knowledge-medium/src/main.js'))!
     expect(await asset.text()).toBe('body of https://app.example/knowledge-medium/src/main.js')
     expect(asset.headers.get('content-type')).toBe('text/javascript')
     expect(openSpy).not.toHaveBeenCalled()
+  })
+
+  it('serves a deeper navigation path from the shell cache, whose response carries the shell URL', async () => {
+    const {sw, caches} = withStore()
+    await sw.install()
+    const openSpy = vi.spyOn(caches, 'open')
+    const nav = await sw.handleFetch(new Request(abs('./some/route'), {headers: {accept: 'text/html'}}))!
+    expect(await nav.text()).toBe(`body of ${abs('./index.html')}`)
+    expect(openSpy).toHaveBeenCalled()
   })
 
   it('falls back to the caches for a URL outside the boot set, on a miss, and on a store error', async () => {
