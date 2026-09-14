@@ -6,7 +6,7 @@
  *   - Identity rule: same key (`(name, stable typed serialization(args))`)
  *     → same handle instance returned from `getOrCreate`.
  *   - Ref-count GC: handles dispose `gcTimeMs` after refCount reaches zero
- *     (drained subscribers + drained in-flight loads).
+ *     (what counts as a reference: `LoaderHandle.refCount`).
  *   - Invalidation index: handles declare `Dependency`s during `resolve`;
  *     the store walks an inverted index when `invalidate(change)` fires.
  *
@@ -16,7 +16,8 @@
  *   - peek / load / subscribe / read / status (the Handle<T> surface),
  *   - structural diffing (lodash.isEqual default; spec §9.4),
  *   - dependency declaration via a `ResolveContext` passed to the loader,
- *   - retain/release wiring on subscribe/unsubscribe so the store can GC.
+ *   - retain/release wiring on subscribe/unsubscribe, and the same pair
+ *     exposed so a caller can hold a handle without observing it.
  *
  * Block does NOT register here — it has its own row-grain subscription
  * via BlockCache.subscribe and is identity-stable through `Repo.blockFacades`.
@@ -93,11 +94,10 @@ interface RegisteredHandle {
   /** Called when GC fires — handle clears its state, the store removes
    *  the entry from the registry. */
   dispose: () => void
-  /** Called from the store when the first subscriber is added or a load
-   *  starts; cancels any pending GC. */
+  /** Take one reference; cancels any pending GC. Who holds one and why is
+   *  `LoaderHandle.refCount`; the external-hold case is `LoaderHandle.retain`. */
   retain: () => void
-  /** Called when the last subscriber drops or a load completes; if
-   *  refCount reaches zero, schedules dispose. */
+  /** Drop one reference; schedules dispose once none are left. */
   release: () => void
   /** Called for every change that flows through `store.invalidate(...)`,
    *  regardless of whether `matches` returned true. The handle records
@@ -450,7 +450,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  caller `await` the same promise React threw. */
   private suspendingPromise: Promise<T> | null = null
 
-  /** Ref count = subscribers + inflight (1 if loading). Drives GC. */
+  /** Live references; the handle collects `gcTimeMs` after this reaches zero.
+   *  THREE kinds of holder, not two: one per subscriber, one while a load is
+   *  in flight, and one per explicit external hold (`retain()`). Do not read
+   *  a non-zero count as proof that a listener or a loader is behind it. */
   private refCount = 0
   private cancelGc: (() => void) | null = null
   /** One-way. Nothing ever clears it — a disposed handle becomes a permanent
