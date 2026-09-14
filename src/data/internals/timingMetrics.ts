@@ -586,6 +586,15 @@ export class DbMetrics {
     this.contention = contention
   }
 
+  /** ACCEPTED: the reservoirs are this Repo's, the tracker is the DATABASE's, so
+   *  a reset here starts a new contention span for every Repo attached to that
+   *  database while only this one's `metricsEpoch` moves. Another Repo's next
+   *  snapshot can pair fresh `dbContention` with old-span `db` and `queries`.
+   *  Rejected: notifying every attached Repo, which needs a per-database
+   *  registry and lifetimes to serve a debug-only entry point — nothing
+   *  compares contention across spans (`series.ts` reads none of it). Query
+   *  windows open across the reset are discarded by `generation`, which is the
+   *  conservative answer and not part of this. */
   reset(): void {
     this.getAll.reset()
     this.getOptional.reset()
