@@ -581,6 +581,10 @@ export class DbMetrics {
    *  without one still works and reports no clean samples at all — see
    *  `DbContention`'s `poolWatched`. */
   readonly contention: DbContention
+  /** Write transactions requested on the wrapped handle and not yet settled:
+   *  repo transactions, sync materialization, backfills alike. Not a metric;
+   *  `reset` leaves it alone. */
+  writesInFlight = 0
 
   constructor(contention: DbContention = new DbContention()) {
     this.contention = contention
@@ -732,12 +736,18 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
     }
   }
 
-  const timedWriteTransaction = <R>(
+  const timedWriteTransaction = async <R>(
     fn: (tx: TimedTxDb) => Promise<R>,
     options?: unknown,
-  ): Promise<R> =>
-    timed(metrics.writeTransaction, () =>
-      db.writeTransaction(async (tx: TimedTxDb): Promise<R> => fn(wrappedTx(tx)), options))
+  ): Promise<R> => {
+    metrics.writesInFlight++
+    try {
+      return await timed(metrics.writeTransaction, () =>
+        db.writeTransaction(async (tx: TimedTxDb): Promise<R> => fn(wrappedTx(tx)), options))
+    } finally {
+      metrics.writesInFlight--
+    }
+  }
 
   const timedGetAll = <T>(sql: string, params?: unknown[]): Promise<T[]> =>
     timed(metrics.getAll, () => db.getAll<T>(sql, params))

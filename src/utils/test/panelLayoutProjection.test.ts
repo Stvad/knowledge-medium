@@ -855,6 +855,23 @@ describe('reconcilePanelRows: no-op guard', () => {
     }
   })
 
+  it('opens a tx while a raw database write is in flight (the sync materialization shape)', async () => {
+    await createPanelRows(['a', 'b'])
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const inFlight = env.repo.db.writeTransaction(async () => { await gate })
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const pending = reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
+      await vi.waitFor(() => expect(txSpy).toHaveBeenCalledTimes(1))
+      release()
+      await inFlight
+      await pending
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+
   it('positive control: a differing target still opens exactly one tx', async () => {
     await createPanelRows(['a', 'b'])
     const txSpy = vi.spyOn(env.repo, 'tx')

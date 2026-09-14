@@ -990,11 +990,12 @@ export const reconcilePanelRows = async (
   // A no-op reconcile must not open a tx (its journal writes are
   // unconditional). 'exact' slot equality covers the per-leaf pass below;
   // a dangling active pointer is the one write 'exact' cannot see.
-  // This read is the query cache, not the write lock, so a write in flight
-  // disqualifies it: a Back navigation racing an uncommitted layout write
-  // would otherwise be skipped as already applied, and that write's outbound
-  // projection would then push its layout over the user's URL. Rows that
-  // differ reach the tx, which re-reads under the lock.
+  // This read is the query cache, not the write lock, so any write in flight
+  // on the database (a transaction, a sync materialization) disqualifies it:
+  // a Back navigation racing an uncommitted layout write would otherwise be
+  // skipped as already applied, and that write's outbound projection would
+  // then push its layout over the user's URL. Rows that differ reach the tx,
+  // which re-reads under the lock.
   const preRows = knownRows ?? await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
   const preParent = preRows.find(row => row.id === layoutSessionBlock.id)
   if (preParent && !repo.hasWriteInFlight) {
