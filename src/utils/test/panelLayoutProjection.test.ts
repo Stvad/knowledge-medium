@@ -855,6 +855,24 @@ describe('reconcilePanelRows: no-op guard', () => {
     }
   })
 
+  it('counts a repo transaction as in flight from its request, before it reaches the database', async () => {
+    // A transaction waits for definition readiness before it touches the
+    // database; hold that wait so the request is pending with no db write.
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    expect(env.repo.activeWorkspaceId).toBeTruthy()
+    const held = vi.spyOn(env.repo, 'whenPropertyDefinitionsReady').mockImplementation(() => gate)
+    try {
+      const requested = env.repo.tx(async () => {}, {scope: ChangeScope.UiState, description: 'requested write'})
+      expect(env.repo.hasWriteInFlight).toBe(true)
+      release()
+      await requested
+      expect(env.repo.hasWriteInFlight).toBe(false)
+    } finally {
+      held.mockRestore()
+    }
+  })
+
   it('opens a tx while a raw database write is in flight (the sync materialization shape)', async () => {
     await createPanelRows(['a', 'b'])
     let release!: () => void
