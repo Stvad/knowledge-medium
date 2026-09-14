@@ -206,25 +206,28 @@ export interface ContentionSnapshot {
  *
  * Three kinds of occupancy, because a claim about "the pool" has to cover
  * everything on it:
- *   - our own calls, timed (`begin`/`end`) — complete;
+ *   - every call that crosses the database adapter (`begin`/`end`, fed by
+ *     `instrumentAdapter`) — complete for this tab, whoever made it: the Repo,
+ *     PowerSync's own helpers, a caller holding the raw handle;
  *   - the sync engine's, bracketed from its status channel (`beginForeign`) —
  *     wrong in both directions, deliberately biased towards over-bracketing:
  *     see `watchSyncOccupancy`;
- *   - NOT anything that reaches the database without going through this proxy:
- *     a caller holding the raw handle, or one of PowerSync's own helpers, whose
- *     internal reads no wrapper placed here can see. Closing that needs the
- *     instrumentation to sit at the adapter instead;
  *   - one read answering several CALLERS (`noteSharedWork`), whether or not
  *     they are separate observations — the batcher cannot tell, and guessing
  *     was unsound.
  *
- * So "had the pool to itself" means "nothing THIS CAN SEE was competing". The
- * two qualifications above are where that falls short, and they fail in
- * OPPOSITE directions, which is worth keeping straight:
+ * So "had the pool to itself" means "nothing THIS CAN SEE was competing", and
+ * what it cannot see is everything using these connections from ANOTHER
+ * CONTEXT: the sync engine in its SharedWorker, and every other tab of the same
+ * workspace. That is a property of how the database is shared, not a gap in
+ * this file, and it bounds what any in-tab instrument can claim.
+ *
+ * The qualifications fail in OPPOSITE directions, which is worth keeping
+ * straight:
  *   - shared work over-reports, costing clean samples. Harmless to the figure.
- *   - sync occupancy under-reports, so a read queued behind unbracketed sync
- *     work can be admitted as clean. That one can inflate the number, and it is
- *     the reason the metric is not simply conservative.
+ *   - work from another context under-reports, so a read queued behind it can
+ *     be admitted as clean. That one can inflate the number, and it is the
+ *     reason the metric is not simply conservative.
  *
  * The classification is CONSERVATIVE in one direction on purpose: a call that
  * overlapped another harmlessly (two reads, two free connections) is excluded
@@ -246,6 +249,17 @@ export class DbContention {
    *  current counters, whatever they now read. */
   private generation = 0
   private syncWatched = false
+  /** Whether the database adapter is feeding `begin`/`end` at all. FALSE makes
+   *  every classification below negative rather than trivially positive: an
+   *  uninstrumented stack never occupies the pool, so depth is permanently zero
+   *  and every read and every window would be reported as having had the
+   *  database to itself. That is the one failure mode worth being loud about,
+   *  and it is silent — the numbers look like a very quiet session.
+   *
+   *  Not stored with the samples, unlike `syncObserved`: `repoProvider` is the
+   *  only place the app opens a database and it always instruments, so a record
+   *  would carry a constant. The flag exists for stacks assembled by hand. */
+  private poolWatched = false
   /** Uncontended read timings. Writes are excluded — they serialise on the
    *  writer connection whatever else is happening, so "had the pool to itself"
    *  does not mean for them what it means for a read. */
@@ -274,7 +288,7 @@ export class DbContention {
    *  more time to be overlapped than a fast one — which biases exactly the tail
    *  these percentiles exist to report. */
   private wasUnqueued(mark: ContentionMark): boolean {
-    return this.generation === mark.generation && mark.depth === 0
+    return this.poolWatched && this.generation === mark.generation && mark.depth === 0
   }
 
   /** Was the OBSERVATION WINDOW opened at `mark` free of competition? A
@@ -391,6 +405,16 @@ export class DbContention {
     this.syncWatched = true
   }
 
+  /** Whether database work reaches this tracker at all. Called by
+   *  `instrumentAdapter`, which is the only thing that feeds `begin`/`end`. */
+  observingPool(): boolean {
+    return this.poolWatched
+  }
+
+  markPoolObserved(): void {
+    this.poolWatched = true
+  }
+
   /** Zero the counters and start a new span. `inFlight` IS KEPT: it tracks
    *  calls that will still call `end`, and zeroing it would drive the count
    *  negative and mis-classify everything after. Work already open settles into
@@ -434,6 +458,14 @@ export class DbContention {
  *  without the Repo threading a sink through every query signature. */
 const contentionByDb = new WeakMap<object, DbContention>()
 
+/** Publish the tracker an instrumented adapter feeds, against the database it
+ *  was opened for. Called by `repoProvider` at construction, so a `Repo` built
+ *  on that database later finds it with `contentionFor` instead of starting a
+ *  second one nothing writes to. */
+export const registerContention = (db: object, pool: DbContention): void => {
+  contentionByDb.set(db, pool)
+}
+
 /** The tracker for `db`, or undefined if it was never wrapped (tests and
  *  fixtures pass raw databases). */
 export const contentionFor = (db: unknown): DbContention | undefined =>
@@ -455,12 +487,14 @@ const syncBusy = (s: SyncStatus | undefined): boolean =>
 /**
  * Bracket the sync engine's database work as pool occupancy.
  *
- * Without this the tracker sees only calls made through the Repo's proxy, and
- * the sync engine is not one of them: `repoProvider` connects it to the RAW
- * database before `Repo` ever wraps it. Its downloads and uploads run on the
- * same connections, so a read queued behind them would be recorded as having
- * had the pool to itself — the same queue-as-latency defect this whole file
- * exists to end, re-entering through the one door the proxy does not cover.
+ * The sync engine does not pass the instrumented adapter, and CANNOT be made
+ * to. With `enableMultiTabs` PowerSync runs it in a SharedWorker, which takes a
+ * MessagePort from `shareConnection()` and builds its own client against the
+ * database worker; nothing it does reaches this tab's adapter. Its downloads
+ * and uploads run on the same connections, so a read queued behind them would
+ * be recorded as having had the pool to itself — the same queue-as-latency
+ * defect this whole file exists to end, re-entering through the one door no
+ * wrapper in this tab covers. Hence a second, worse signal.
  *
  * Transitions, not polling: a burst that begins and ends inside one resolve is
  * invisible to a status read taken at each end of it.
@@ -481,10 +515,11 @@ const syncBusy = (s: SyncStatus | undefined): boolean =>
  * figure wrong rather than scarce. Read the occupancy numbers as OBSERVED SYNC
  * ACTIVITY, network time and all — not as database occupancy.
  *
- * The fix for both is to instrument the adapter PowerSync opens, where the
- * database boundary actually is: every user of the connections passes one
- * counter, and there is no status channel to interpret. That changes how the
- * local database is constructed, and so is not this change.
+ * There is no better signal available from here. Instrumenting the adapter
+ * (`instrumentAdapter`) fixed the layer for everything running in this tab, and
+ * the sync engine is the case it does not reach: closing this would mean
+ * measuring inside the shared worker, or from the database worker both sides
+ * talk to.
  *
  * The listener's lifetime is the database's. Nothing detaches it, because the
  * tracker it feeds lives exactly as long — both are created here, once, per
@@ -525,8 +560,18 @@ export class DbMetrics {
   /** Which of the timings above were taken with the pool observably free, and
    *  how busy it was. Surfaced separately from `snapshot()` — the
    *  per-method record is a uniform map of `TimingSnapshot`, and its consumers
-   *  iterate it. */
-  readonly contention = new DbContention()
+   *  iterate it.
+   *
+   *  PASSED IN, because the thing that feeds it is opened before any Repo
+   *  exists: `repoProvider` creates the tracker, hands it to the adapter it
+   *  instruments, and registers it against the database. A `DbMetrics` built
+   *  without one still works and reports no clean samples at all — see
+   *  `DbContention`'s `poolWatched`. */
+  readonly contention: DbContention
+
+  constructor(contention: DbContention = new DbContention()) {
+    this.contention = contention
+  }
 
   reset(): void {
     this.getAll.reset()
@@ -611,10 +656,6 @@ interface TimedDb {
    *  `unknown` and forwarded untouched: a wrapper that drops an argument it
    *  does not understand changes behaviour it was only supposed to time. */
   writeTransaction<R>(fn: (tx: TimedTxDb) => Promise<R>, options?: unknown): Promise<R>
-  /** Held for the caller's whole callback. Not every database exposes them, so
-   *  both are optional and wrapped only when present. */
-  writeLock?<R>(fn: (tx: unknown) => Promise<R>, options?: unknown): Promise<R>
-  readLock?<R>(fn: (tx: unknown) => Promise<R>, options?: unknown): Promise<R>
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
@@ -630,15 +671,12 @@ interface TimedTxDb {
 }
 
 /** Wrap a `PowerSyncDb` with timing instrumentation. Returns a Proxy
- *  over the input. Intercepted:
- *    - `getAll`, `getOptional`, `get`, `execute`, `writeTransaction` — timed
- *      into their own reservoirs and counted as pool occupancy;
- *    - `writeLock`, `readLock`, when the database has them — counted as
- *      occupancy only, since their duration is the caller's work.
- *  Every interception forwards the caller's arguments untouched, lock options
- *  included: timing a call must not change it.
+ *  over the input. Intercepted: `getAll`, `getOptional`, `get`, `execute`,
+ *  `writeTransaction` — timed into their own reservoirs. Every interception
+ *  forwards the caller's arguments untouched, lock options included: timing a
+ *  call must not change it.
  *
- *  Everything else (`onChange`, `close`, …) passes through to the original db,
+ *  Everything else (`onChange`, `close`, `readLock`, …) passes through to the original db,
  *  so consumers like `exportSqliteDb` that need PowerSyncDatabase-only methods
  *  keep working without us re-declaring them.
  *
@@ -651,23 +689,24 @@ interface TimedTxDb {
 export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown => {
   const db = rawDb as TimedDb
   const wrappedTx = wrapTxDb.bind(null, metrics)
-  const pool = metrics.contention
 
-  /** Every top-level call holds a connection for its whole life, so each one
-   *  is timed through the pool: one ticket, one duration, one classification.
-   *  Calls made through the LockContext INSIDE a writeTransaction are not —
-   *  they run within the transaction's own ticket, and counting them again
-   *  would report a connection competing with itself. */
-  const timed = async <R>(
-    kind: 'read' | 'write',
-    reservoir: TimingReservoir,
-    run: () => Promise<R>,
-  ): Promise<R> => {
-    const ticket = pool.begin()
+  /** TIMING ONLY. Occupancy is counted a layer down, by `instrumentAdapter` on
+   *  the adapter PowerSync opens — the boundary every user of the connections
+   *  crosses, including the ones that never reach this proxy. Bracketing here
+   *  as well would count each of these calls twice, and this is also the wrong
+   *  place to take the reading: every method below waits on `waitForReady`
+   *  before it reaches a connection, so a mark taken here describes the pool as
+   *  it was some time before the call was actually issued.
+   *
+   *  What this layer alone knows is WHICH CALL this is, which is why the
+   *  per-method reservoirs stay. Calls made through the LockContext inside a
+   *  writeTransaction are timed under their own buckets by `wrapTxDb`. */
+  const timed = async <R>(reservoir: TimingReservoir, run: () => Promise<R>): Promise<R> => {
+    const t0 = performance.now()
     try {
       return await run()
     } finally {
-      reservoir.record(pool.end(ticket, kind))
+      reservoir.record(performance.now() - t0)
     }
   }
 
@@ -675,62 +714,32 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
     fn: (tx: TimedTxDb) => Promise<R>,
     options?: unknown,
   ): Promise<R> =>
-    timed('write', metrics.writeTransaction, () =>
+    timed(metrics.writeTransaction, () =>
       db.writeTransaction(async (tx: TimedTxDb): Promise<R> => fn(wrappedTx(tx)), options))
 
   const timedGetAll = <T>(sql: string, params?: unknown[]): Promise<T[]> =>
-    timed('read', metrics.getAll, () => db.getAll<T>(sql, params))
+    timed(metrics.getAll, () => db.getAll<T>(sql, params))
 
   const timedGetOptional = <T>(sql: string, params?: unknown[]): Promise<T | null> =>
-    timed('read', metrics.getOptional, () => db.getOptional<T>(sql, params))
+    timed(metrics.getOptional, () => db.getOptional<T>(sql, params))
 
   const timedGet = <T>(sql: string, params?: unknown[]): Promise<T> =>
-    timed('read', metrics.get, () => db.get<T>(sql, params))
+    timed(metrics.get, () => db.get<T>(sql, params))
 
   const timedExecute = (sql: string, params?: unknown[]): Promise<unknown> =>
-    timed('write', metrics.execute, () => db.execute(sql, params))
+    timed(metrics.execute, () => db.execute(sql, params))
 
-  /** A raw lock occupies a connection for as long as its callback runs, which
-   *  for the SQLite export is a checkpoint plus a copy of the whole database.
-   *  Left passing through, a query issued during one of those starts at depth
-   *  zero and is recorded as having had the pool to itself while it is in fact
-   *  waiting behind it.
-   *
-   *  Occupancy without a timing: the duration is the caller's work, not a
-   *  statement's cost, and averaging an export into a latency reservoir would
-   *  say nothing about either. */
-  const heldLock = async <R>(
-    take: (fn: (tx: unknown) => Promise<R>) => Promise<R>,
-    fn: (tx: unknown) => Promise<R>,
-  ): Promise<R> => {
-    const ticket = pool.begin()
-    try {
-      // AWAITED, not returned: a bare `return take(fn)` runs the `finally` the
-      // moment the promise is handed back, and the lock is held for as long as
-      // it is PENDING. Releasing occupancy there reports the pool free for the
-      // entire operation this exists to observe.
-      return await take(fn)
-    } finally {
-      pool.end(ticket, 'write')
-    }
-  }
-
+  // `writeLock` / `readLock` pass straight through. A held lock occupies a
+  // connection for as long as its callback runs — the SQLite export holds one
+  // across a checkpoint and a copy of the whole database — and that occupancy
+  // is now recorded where the lock is actually taken, for every caller rather
+  // than only the ones holding this proxy.
   const overrides: Record<string, unknown> = {
     writeTransaction: timedWriteTransaction,
     getAll: timedGetAll,
     getOptional: timedGetOptional,
     get: timedGet,
     execute: timedExecute,
-    // Only when the underlying database has them; otherwise leave the key
-    // absent so the Proxy reports them missing exactly as it did before.
-    ...(typeof db.writeLock === 'function'
-      ? {writeLock: <R>(fn: (tx: unknown) => Promise<R>, options?: unknown) =>
-        heldLock((inner) => db.writeLock!(inner, options), fn)}
-      : {}),
-    ...(typeof db.readLock === 'function'
-      ? {readLock: <R>(fn: (tx: unknown) => Promise<R>, options?: unknown) =>
-        heldLock((inner) => db.readLock!(inner, options), fn)}
-      : {}),
   }
 
   // Proxy delegates everything else to the underlying db. Bind any
@@ -747,12 +756,12 @@ export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown =
       return value
     },
   })
-  // Keyed by the PROXY, not the raw db: `contentionFor` is looked up from the
-  // same object a resolver holds as `ctx.db`.
-  contentionByDb.set(proxy, pool)
-  // Watched on the RAW db: the sync engine was connected to it before this
-  // wrapper existed, and the status channel lives there.
-  watchSyncOccupancy(db, pool)
+  // Also keyed by the PROXY: `contentionFor` is looked up both from the raw
+  // database (by `Repo`, to find the tracker its adapter feeds) and from the
+  // object a resolver holds as `ctx.db`, which is this one.
+  contentionByDb.set(proxy, metrics.contention)
+  // Watched on the RAW db: the status channel lives there.
+  watchSyncOccupancy(db, metrics.contention)
   return proxy
 }
 

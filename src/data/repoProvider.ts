@@ -21,6 +21,8 @@
  */
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
+import { instrumentOpenFactory } from './internals/poolInstrumentation.js'
+import { DbContention, registerContention } from './internals/timingMetrics.js'
 import {
   asLostWriteAheadSupport,
   markDbOpenFailure,
@@ -235,18 +237,27 @@ const buildPowerSyncDb = (userId: string) => {
     throw new Error('getPowerSyncDb called before ensurePowerSyncReady resolved the local DB VFS')
   }
   const connections = vfs === WASQLiteVFS.OPFSWriteAheadVFS ? 1 + ADDITIONAL_READERS : 1
-  return new PowerSyncDatabase({
+  // Counts connection acquisitions, so that "was this query queued behind
+  // something?" is answered at the boundary every user of the pool crosses
+  // rather than at one of the several doors into it. Wrapping the FACTORY
+  // rather than the opened adapter because PowerSync opens it itself; the
+  // adapter is otherwise never in our hands. Records nothing until a `Repo`
+  // reads it, and changes nothing about how the database is opened.
+  const contention = new DbContention()
+  const db = new PowerSyncDatabase({
     schema: appSchema,
-    database: new WASQLiteOpenFactory({
+    database: instrumentOpenFactory(new WASQLiteOpenFactory({
       dbFilename,
       vfs,
       additionalReaders: ADDITIONAL_READERS,
       cacheSizeKb: Math.floor(TOTAL_PAGE_CACHE_KB / connections),
-    }),
+    }), contention),
     flags: {
       enableMultiTabs: true,
     },
   })
+  registerContention(db, contention)
+  return db
 }
 
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
