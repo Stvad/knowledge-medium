@@ -18,6 +18,7 @@ import {
   awaitingCurrentSample,
   judgedBaselineCount,
   lacksBaseline,
+  lacksUncontendedSamples,
   baselineWindow,
   fanoutRegression,
   median,
@@ -42,6 +43,15 @@ export type UnjudgedReason =
   | 'history-short'
   /** History enough, and all of it zero — no ratio can be formed, and telling the user to keep waiting points at the one thing that is fine. */
   | 'no-baseline'
+  /** Queries ran, and not one of them produced a sample the comparison can use
+   *  — so none yields a figure comparable between sessions. The OUTCOME, not a
+   *  cause: the classifier rejects for competing traffic, for a coalesced read
+   *  answering several callers, and for a window spanning a counter reset, and
+   *  a session can reach this with the database entirely quiet. On a fan-out-heavy workload
+   *  that is the normal state, not a fault. Says nothing about the session's
+   *  future: more STORED history cannot help, but a quieter stretch later in
+   *  this session can, and the scheduler treats it as awaited for that reason. */
+  | 'never-uncontended'
   /** Partly judged: incomplete, not clean — the unjudged metric is exactly where a finding could be hiding. */
   | 'partly-judged'
 
@@ -69,6 +79,14 @@ export interface PerfAnalysis {
   /** Records ON DISK per series, counted only when nothing was judged (`{0,
    *  0}` otherwise). Distinct from `baseline` and from the loaded series length, which is capped. */
   recorded: { interaction: number; startup: number }
+  /** Judged interaction metrics with a clustered upper tail — see
+   *  `hasClusteredTail` for exactly what that does and does not establish;
+   *  restating it here is how the two came to disagree.
+   *
+   *  A CAVEAT, carried beside whatever verdict was reached rather than as an
+   *  unjudged reason: reasons hold one value, and this coexists with a
+   *  regression, a clean comparison and a partial one alike. */
+  clusteredTail: string[]
   /** Live graph size over the baseline's. Not used to filter or normalize (see `runPerfAnalysis`) — reported so a reader can tell code from data growth. */
   graphGrowth: number | null
 }
@@ -81,17 +99,25 @@ export type PerfComparison = Omit<PerfAnalysis, 'run'>
  *  matters: blended disqualifies first; something judged isn't thereby clean
  *  (a steady query beside an unratable fan-out would otherwise hide the
  *  unratable result); a missing current sample then outranks short history —
- *  it names the more specific gap, where pointing at history that wasn't short sends nobody anywhere. */
+ *  it names the more specific gap, where pointing at history that wasn't short sends nobody anywhere.
+ *
+ *  `never-uncontended` outranks `no-current-sample` for that same reason, and
+ *  its POSITION is load-bearing rather than incidental: `awaitingCurrentSample`
+ *  deliberately matches both, since the scheduler must keep rechecking either,
+ *  so the more specific test has to be asked first or it can never be reached.
+ *  "measured, but nothing the comparison can use" and "nothing measured" send
+ *  a reader to opposite places. */
 export const unjudgedReason = (
   results: readonly TrendResult[],
   session: { blended?: boolean; notRecording?: boolean },
 ): UnjudgedReason | null =>
   session.blended ? 'blended-workspaces'
     : anyJudged(results) ? (partlyJudged(results) ? 'partly-judged' : null)
-      : awaitingCurrentSample(results) ? 'no-current-sample'
-        : session.notRecording ? 'not-recording'
-          : lacksBaseline(results) ? 'no-baseline'
-            : 'history-short'
+      : lacksUncontendedSamples(results) ? 'never-uncontended'
+        : awaitingCurrentSample(results) ? 'no-current-sample'
+          : session.notRecording ? 'not-recording'
+            : lacksBaseline(results) ? 'no-baseline'
+              : 'history-short'
 
 /** Is a series waiting on a sample from THIS session, whatever else it
  *  judged? The scheduler needs this even where `reason` doesn't say so.
@@ -148,8 +174,12 @@ export const runPerfAnalysis = async (
   const current = interactionComparable(metrics)
 
   // Judged, not counted: a record with no writes (or missing paint marks) carries no usable sample.
-  const interactionResults: TrendResult[] = session.attributable
-    ? [...queryRegressions(current, history), fanoutRegression(current, history)]
+  // ONE gate for the whole interaction comparison. Blended counters describe no
+  // single workspace, so there is nothing to judge AND nothing to caveat — two
+  // parallel ternaries here would be two chances to forget the second.
+  const queries = session.attributable ? queryRegressions(current, history) : null
+  const interactionResults: TrendResult[] = queries
+    ? [...queries.results, fanoutRegression(current, history)]
     : []
   const startupResults: TrendResult[] = [
     startupRegression(startup.map((r) => r.record), thisBoot),
@@ -168,6 +198,8 @@ export const runPerfAnalysis = async (
     notRecording: pageRecordFor(repo, workspaceId) === null,
   })
   const startupUnjudged = unjudgedReason(startupResults, {})
+
+  const clusteredTail = queries?.clusteredTail ?? []
 
   const regressions = regressionsIn([...interactionResults, ...startupResults])
 
@@ -198,6 +230,7 @@ export const runPerfAnalysis = async (
       startup: judgedBaselineCount(startupResults),
     },
     regressions,
+    clusteredTail,
     // Derived from what the comparisons consumed, not baseline length alone
     // — else short-post-window history would misreport "no slowdowns".
     ready: { interaction: interactionReady, startup: startupReady },

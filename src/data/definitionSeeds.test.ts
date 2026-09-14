@@ -111,18 +111,6 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
   await repo.ensureSystemPages(WS)
 })
-// An abandoned Repo is not inert: the `ensureSystemPages` tx above primes the
-// property registry, which schedules a seed pass that PARKS on
-// `awaitLocalMemberRole` holding a `workspace_members` subscription on the
-// SHARED db. Left pinned, every earlier test's Repo wakes on a later test's
-// membership INSERT and materializes into a database `resetTestDb` has since
-// emptied. Unpinning aborts the parked generation; the assertion is the pin.
-afterEach(async () => {
-  repo.setActiveWorkspaceId(null)
-  // 2s against a measured ~56ms worst case for the abort to clear the set.
-  await vi.waitFor(() => expect(outstandingSeedPasses()).toBe(0), {timeout: 2_000, interval: 10})
-})
-
 /** Seed-materialization passes `repo` still has scheduled or in flight. */
 const outstandingSeedPasses = (): number => (repo as unknown as {
   pendingSeedMaterializationWorkspaces: Set<string>

@@ -42,6 +42,7 @@ import {
   CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
   dropStaleAnyFieldFormIndex,
+  CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -63,6 +64,7 @@ import {
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureClientSchemaStateValueColumn,
   ensureStagingNeedsApplyColumn,
   ensureUndoGroupIdColumns,
 } from '@/data/internals/clientSchema'
@@ -383,8 +385,10 @@ export const ensurePowerSyncReady = async (
       // per-user resolver the observer deps draw from (`syncObserverDepsFor`).
       const resolver = resolverForUser(userId)
       await db.connect(createPowerSyncConnector({
-        getWorkspaceMode: resolver.getMode,
-        getCek: resolver.getCek,
+        encryption: {
+          getWorkspaceMode: resolver.getMode,
+          getCek: resolver.getCek,
+        },
       }))
     })
     .catch((error) => {
@@ -433,6 +437,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // index is created after so it exists on upgrading devices too.
   await ensureBlockLocalColumns(powerSyncDb)
   await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
   await dropStaleAnyFieldFormIndex(powerSyncDb)
   await powerSyncDb.execute(CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL)
@@ -504,6 +509,9 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     ...backfillDb,
     getAll: <T,>(sql: string) => powerSyncDb.getAll<T>(sql),
   })
+  // Same position, same reason: it ALTERs `client_schema_state`, which the
+  // loop above creates.
+  await ensureClientSchemaStateValueColumn(powerSyncDb)
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)

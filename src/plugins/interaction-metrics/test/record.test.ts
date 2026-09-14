@@ -46,8 +46,24 @@ beforeEach(async () => {
 })
 afterEach(() => { vi.restoreAllMocks() })
 
-const timing = (over: Partial<{calls: number; p50Ms: number; p95Ms: number; totalMs: number}> = {}) => ({
+const timing = (
+  over: Partial<{calls: number; sampleCount: number; p50Ms: number; p95Ms: number; totalMs: number}> = {},
+) => ({
   calls: 1, sampleCount: 1, meanMs: 1, p50Ms: 1, p95Ms: 1, p99Ms: 1, minMs: 1, maxMs: 1, totalMs: 1, ...over,
+})
+
+/** A query's snapshot carries the uncontended subset a DB-method one does not.
+ *  Distinct values from the wall-clock half, so a converter copying the wrong
+ *  one is visible. */
+const queryTiming = (
+  over: Partial<{calls: number; p50Ms: number; p95Ms: number; totalMs: number}> = {},
+  uncontendedOver: Partial<{calls: number; sampleCount: number; p50Ms: number; p95Ms: number}> = {},
+) => ({
+  ...timing(over),
+  // `calls` (lifetime) deliberately far above `sampleCount` (what the ring
+  // buffer still holds, and what the percentiles are computed from), so a
+  // converter persisting the wrong one is visible rather than plausible.
+  uncontended: timing({ calls: 900, sampleCount: 3, p50Ms: 0.5, p95Ms: 0.75, ...uncontendedOver }),
 })
 
 const metricsFixture = (over: Partial<ReturnType<Repo['metrics']>> = {}): ReturnType<Repo['metrics']> => ({
@@ -62,6 +78,12 @@ const metricsFixture = (over: Partial<ReturnType<Repo['metrics']>> = {}): Return
   blockCache: {},
   queries: {},
   db: { writeTransaction: timing({ calls: 7 }) },
+  dbContention: {
+    calls: 40, concurrentIssues: 11, maxDepth: 4, busyMs: 812.345, sharedWork: 2,
+    uncontendedCalls: 29,
+    uncontendedRead: timing({ calls: 640, sampleCount: 29, p50Ms: 0.6, p95Ms: 1.4 }),
+    foreignIntervals: 3, syncObserved: true,
+  },
   slowestTx: { description: 'append tag [[Private Page]]', ms: 91 },
   txLog: [{ description: 'rename property Secret', ms: 12 }],
   reprojection: {
@@ -162,16 +184,74 @@ describe('buildInteractionRecord', () => {
   // expensive the comparison meets a name it has never seen and reads it as a
   // newly mounted surface rather than a regression.
   it('keeps every measured query, including the cheap ones', () => {
-    const queries: Record<string, ReturnType<typeof timing>> = {}
-    for (let i = 0; i < 20; i++) queries[`q${i}`] = timing({ totalMs: i })
+    const queries: Record<string, ReturnType<typeof queryTiming>> = {}
+    for (let i = 0; i < 20; i++) queries[`q${i}`] = queryTiming({ totalMs: i })
     const record = buildInteractionRecord(metricsFixture({ queries } as Partial<ReturnType<Repo['metrics']>>), META)
     expect(Object.keys(record.queries)).toHaveLength(20)
     expect(record.queries.q0).toBeDefined()
   })
 
+  it("stores a query's uncontended subset alongside its wall-clock timings", () => {
+    const record = buildInteractionRecord(metricsFixture({
+      queries: {
+        'core.ancestors': queryTiming({ calls: 185, p95Ms: 583 }, { sampleCount: 22, p95Ms: 2.5 }),
+      },
+    } as Partial<ReturnType<Repo['metrics']>>), META)
+    const stored = record.queries['core.ancestors']
+    // What callers actually waited is still recorded — the fix reports the
+    // queue rather than hiding it.
+    expect(stored.calls).toBe(185)
+    expect(stored.p95Ms).toBe(583)
+    // And beside it, the same query with no queue to be in: the only one of the
+    // two a later session can be compared against. 22 is the RETAINED sample
+    // count, not the lifetime 900 — the percentiles are computed over the
+    // window, and storing the lifetime figure would claim hundreds of samples
+    // behind a number drawn from 22.
+    expect(stored.uncontended).toEqual({ calls: 22, p50Ms: 0.5, p95Ms: 2.5 })
+  })
+
+  it('omits the uncontended key for a query never once observed alone', () => {
+    const record = buildInteractionRecord(metricsFixture({
+      queries: {
+        'core.ancestors': queryTiming({ calls: 185 }, { calls: 0, sampleCount: 0, p50Ms: 0, p95Ms: 0 }),
+      },
+    } as Partial<ReturnType<Repo['metrics']>>), META)
+    // Absent, not a row of zeros: a reservoir with no samples reports 0 for
+    // every percentile, and storing that would be a measurement of zero
+    // milliseconds rather than the absence of a measurement.
+    expect(record.queries['core.ancestors'].uncontended).toBeUndefined()
+  })
+
+  // `uncontendedCalls` counts reads AND writes; the percentiles come from reads
+  // alone. A session with unqueued writes and no unqueued reads would otherwise
+  // be stored as a positive call count beside two zeros, which reads as a real
+  // distribution of zero-millisecond reads rather than as no reads measured.
+  it('stores the read sample count separately from the all-kinds call count', () => {
+    const record = buildInteractionRecord(metricsFixture({
+      dbContention: {
+        calls: 6, concurrentIssues: 0, maxDepth: 1, busyMs: 12, sharedWork: 0,
+        uncontendedCalls: 4,
+        uncontendedRead: timing({ calls: 0, sampleCount: 0, p50Ms: 0, p95Ms: 0 }),
+        foreignIntervals: 0, syncObserved: true,
+      },
+    } as Partial<ReturnType<Repo['metrics']>>), META)
+    expect(record.dbContention.uncontendedCalls).toBe(4)
+    expect(record.dbContention.uncontendedReadCalls).toBe(0)
+  })
+
+  it('stores how contended the connection pool was', () => {
+    const record = buildInteractionRecord(metricsFixture(), META)
+    expect(record.dbContention).toEqual({
+      calls: 40, concurrentIssues: 11, maxDepth: 4, busyMs: 812.35, sharedWork: 2,
+      uncontendedCalls: 29, uncontendedReadCalls: 29,
+      uncontendedReadP50Ms: 0.6, uncontendedReadP95Ms: 1.4,
+      foreignIntervals: 3, syncObserved: true,
+    })
+  })
+
   it('bounds the stored set so a pathological session cannot grow the record', () => {
-    const queries: Record<string, ReturnType<typeof timing>> = {}
-    for (let i = 0; i < 200; i++) queries[`q${i}`] = timing({ totalMs: i })
+    const queries: Record<string, ReturnType<typeof queryTiming>> = {}
+    for (let i = 0; i < 200; i++) queries[`q${i}`] = queryTiming({ totalMs: i })
     const record = buildInteractionRecord(metricsFixture({ queries } as Partial<ReturnType<Repo['metrics']>>), META)
     expect(Object.keys(record.queries)).toHaveLength(64)
   })
@@ -185,8 +265,8 @@ describe('buildInteractionRecord', () => {
   it('stores the same query names whatever the timings did', () => {
     const names = Array.from({ length: 200 }, (_, i) => `q${i}`)
     const recordFor = (cost: (i: number) => number): string[] => {
-      const queries: Record<string, ReturnType<typeof timing>> = {}
-      names.forEach((n, i) => { queries[n] = timing({ totalMs: cost(i) }) })
+      const queries: Record<string, ReturnType<typeof queryTiming>> = {}
+      names.forEach((n, i) => { queries[n] = queryTiming({ totalMs: cost(i) }) })
       return Object.keys(
         buildInteractionRecord(metricsFixture({ queries } as Partial<ReturnType<Repo['metrics']>>), META).queries,
       ).sort()

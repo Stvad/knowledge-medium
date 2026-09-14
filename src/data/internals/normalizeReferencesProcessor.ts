@@ -14,6 +14,7 @@ import {
   type AnySameTxProcessor,
 } from '@/data/api'
 import { BLOCK_TYPE_KERNEL_PROCESSORS } from './blockTypeTypeifyProcessor'
+import { MERGE_TYPE_MEMBERSHIP_KERNEL_PROCESSORS } from './mergeTypeMembershipProcessor'
 import { DERIVE_REFERENCE_TARGET_PROCESSOR } from './referenceTargetProcessor'
 import {
   MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
@@ -80,6 +81,12 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
 // reconciliation.
 export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
   ...BLOCK_TYPE_KERNEL_PROCESSORS,
+  // Merge membership-retarget is a raw `types` cell write, so it must precede
+  // MATERIALIZE for the same reason typeify does: on a child-backed workspace
+  // the retargeted cell has to reach the value children in THIS tx, not on some
+  // later unrelated edit. It reads the pre-merge membership index rather than
+  // the rows it writes, so it is order-independent among its neighbours here.
+  ...MERGE_TYPE_MEMBERSHIP_KERNEL_PROCESSORS,
   MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
   DERIVE_REFERENCE_TARGET_PROCESSOR,
   PROJECT_PROPERTY_CHILDREN_PROCESSOR,

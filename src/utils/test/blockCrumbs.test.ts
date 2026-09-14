@@ -33,15 +33,15 @@ const ancestor = (
   deleted: false,
 } as unknown as BlockData)
 
-/** The common case: a nested block whose chain we're rendering. `parentId`
- *  is what tells a genuine root from a block whose parent was excluded
- *  from the walk, so it has to be explicit at every call site. */
-const crumbsOf = (ancestors: BlockData[], parentId: string | null = 'parent') =>
-  crumbsFromAncestors(ancestors, {workspaceId: WS, parentId})
+/** The common case: a chain that reached a root. `stoppedAtParentId` is
+ *  the walk's own report of where it stopped, and the only thing that
+ *  tells a root from a chain cut short — so a cut case passes it. */
+const crumbsOf = (ancestors: BlockData[], stoppedAtParentId: string | null = null) =>
+  crumbsFromAncestors(ancestors, {workspaceId: WS, stoppedAtParentId})
 
 describe('crumbsFromAncestors', () => {
   it('reads root-first, reversing the leaf-to-root chain the query returns', () => {
-    // core.manyAncestors returns depth-ascending (immediate parent first).
+    // core.ancestors returns depth-ascending (immediate parent first).
     const crumbs = crumbsOf([
       ancestor('parent', 'Meeting notes', {parentId: 'grandparent'}),
       ancestor('grandparent', 'Q3', {parentId: 'root'}),
@@ -123,7 +123,7 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     // gone.
     const crumbs = crumbsOf([
       ancestor('parent', 'Meeting notes', {parentId: 'deleted-section'}),
-    ])
+    ], 'deleted-section')
 
     expect(crumbs).toEqual(['…', 'Meeting notes'])
   })
@@ -132,8 +132,8 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     // The likeliest cut of all — `core.restore` brings back one block and
     // leaves a live child under a tombstone — and the one an empty
     // ancestors array cannot express on its own: a genuine top-level
-    // block returns exactly the same `[]`. Only the block's own parent
-    // edge separates them, so it is the thing that must decide.
+    // block returns exactly the same `[]`. Only the walk's own report
+    // separates them, so it is the thing that must decide.
     expect(crumbsOf([], 'deleted-parent')).toEqual(['…'])
   })
 
@@ -144,9 +144,10 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
   })
 
   it('shows only the marker when the chain leaves the workspace at once', () => {
+    // Cut by the workspace boundary ALONE: the walk itself reached a root.
     expect(crumbsFromAncestors(
       [ancestor('foreign', 'Other workspace page', {workspaceId: 'ws-2'})],
-      {workspaceId: WS, parentId: 'foreign'},
+      {workspaceId: WS, stoppedAtParentId: null},
     )).toEqual(['…'])
   })
 
@@ -157,7 +158,7 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     const crumbs = crumbsFromAncestors([
       ancestor('parent', 'My section', {parentId: 'foreign-root'}),
       ancestor('foreign-root', 'Someone else private page', {workspaceId: 'ws-2'}),
-    ], {workspaceId: WS, parentId: 'parent'})
+    ], {workspaceId: WS, stoppedAtParentId: null})
 
     expect(crumbs).toEqual(['…', 'My section'])
   })
@@ -166,7 +167,7 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     const deep = Array.from({length: 8}, (_, i) =>
       ancestor(`a${i}`, `level ${i}`, {parentId: `a${i + 1}`}))
 
-    expect(crumbsOf(deep)).toEqual(['…', 'level 2', 'level 1', 'level 0'])
+    expect(crumbsOf(deep, 'a8')).toEqual(['…', 'level 2', 'level 1', 'level 0'])
   })
 })
 

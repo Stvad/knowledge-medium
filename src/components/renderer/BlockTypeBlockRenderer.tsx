@@ -39,6 +39,7 @@ import {
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
+import { trimIfEdited } from '@/utils/nameFieldCommit.js'
 
 export const writeBlockTypeLabel = async (
   block: Block,
@@ -184,7 +185,15 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
     setDraftDescription(description)
   }
 
-  const writeLabel = useCallback(async (next: string) => {
+  const writeLabel = useCallback(async (draft: string) => {
+    const next = trimIfEdited(draft, label)
+    // Nothing to commit. Not redundant with the writer's own no-op, which
+    // needs the label AND the `content` it mirrors into to BOTH match: with
+    // those two diverged, a bare focus-and-leave rewrote `content` (and, for
+    // a row carrying no alias yet, seeded one). Losing those incidental
+    // repairs is the point — repair belongs to a processor, not to whoever
+    // last tabbed through the field.
+    if (next === label) return
     const currentContent = data?.content ?? ''
     try {
       await writeBlockTypeLabel(block, label, currentContent, next)
@@ -282,7 +291,7 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
           placeholder="type label"
           readOnly={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftLabel(e.target.value)}
-          onBlur={() => { void writeLabel(draftLabel.trim()) }}
+          onBlur={() => { void writeLabel(draftLabel) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()

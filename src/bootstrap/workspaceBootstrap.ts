@@ -140,9 +140,10 @@ export const bootstrapWorkspace = async ({
   // own rows. Marker-gated once per workspace, deferred off this critical path.
   repo.scheduleWorkspaceRefBackfill(workspaceId)
 
-  // One-time catch-up derive of the LOCAL `reference_target_id` column for
-  // rows that predate it. Marker-gated per workspace,
-  // deferred off this critical path; placed after `whenPropertyDefinitionsReady`
+  // Catch-up derive of the LOCAL `reference_target_id` column for rows that
+  // predate it. Once per SESSION per workspace (an in-memory gate, not a
+  // persisted marker — every boot re-scans), deferred off this critical path;
+  // placed after `whenPropertyDefinitionsReady`
   // above so the `[[name]]` tier resolves against the primed name-winner map.
   repo.scheduleReferenceTargetDerivePass(workspaceId)
 

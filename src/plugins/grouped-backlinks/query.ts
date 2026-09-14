@@ -38,6 +38,14 @@ import {
 
 export const GROUPED_BACKLINKS_FOR_BLOCK_QUERY = 'groupedBacklinks.forBlock'
 
+/** A source and its ancestry, root-first.
+ *
+ *  Two readers, neither of them the grouping: `parentIds` is the chain
+ *  each entry PAINTS for as long as that source is the block it shows —
+ *  captured here, so a paused panel keeps the ancestry its grouping was
+ *  built from — and `sourceId` is what the sticky-claim pass reads as the
+ *  current source set. Grouping itself reads the context chain from its
+ *  own candidates SQL and never looks here. */
 export interface GroupedBacklinkSourceParents {
   sourceId: string
   parentIds: string[]
@@ -149,7 +157,8 @@ const resolveSourceParents = async (
   // core.manyAncestors returns one entry per input id (input order), each
   // with the leaf-to-root chain (depth-asc, excluding self) as hydrated
   // BlockData — the same ordering manyAncestorsSql produced. deps:'none'
-  // because the context-node deps are declared explicitly below.
+  // because the context-node deps declared below are the point of the walk;
+  // grouping itself reads the context chain from its own candidates SQL.
   const entries = await ctx.run('core.manyAncestors', {ids: sourceIds}, {deps: 'none'})
   for (const sourceId of sourceIds) dependOnSourceContextNode(ctx, workspaceId, sourceId)
   for (const entry of entries) {

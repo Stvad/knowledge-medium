@@ -49,6 +49,7 @@ vi.mock('@/data/internals/propertyCellBackfill', () => ({
 }))
 
 import type { Repo } from '@/data/repo'
+import { claimStub } from './claimStub.ts'
 import { migratePropertiesToBlocksAction } from '../action.ts'
 
 const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCellBackfillProgress => ({
@@ -70,10 +71,10 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
     isReadOnly: false,
     workspaceViewGap: async () => null,
     undoManagerFor: () => ({clear: () => {}}),
-    runWorkspaceBackfillNow: async () => {
+    withOperatorBackfillClaim: claimStub(async () => {
       emit?.(reported)
       return {outcome: 'ran' as const, undoHistoryCleared: false}
-    },
+    }),
   } as unknown as Repo
   await migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
 }

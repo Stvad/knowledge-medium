@@ -67,7 +67,6 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
   const DAY = 24 * 60 * 60 * 1000
   const STALE_MS = 14 * DAY
   const NOW = 1_700_000_000_000
-  const PREFIX = 'km-'
   const prod = 'https://stvad.github.io/knowledge-medium/__km_generations__'
   const preview = (n: number) =>
     `https://stvad.github.io/knowledge-medium/pr-preview/pr-${n}/__km_generations__`
@@ -76,7 +75,6 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
       ledgers,
       now: NOW,
       staleMs: STALE_MS,
-      cachePrefix: PREFIX,
     })
 
   it('reaps a stale preview scope: its generation caches AND its ledger entry', () => {
@@ -84,25 +82,23 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
       {scopeUrl: prod, ids: ['prod1', 'prod2'], updatedAt: NOW - DAY},
       {scopeUrl: preview(309), ids: ['pv1', 'pv2'], updatedAt: NOW - 15 * DAY},
     ])
-    expect(plan.cacheNames.sort()).toEqual(
-      ['km-assets-pv1', 'km-assets-pv2', 'km-shell-pv1', 'km-shell-pv2'].sort(),
-    )
+    expect(plan.reapIds.sort()).toEqual(['pv1', 'pv2'])
     expect(plan.ledgerScopeUrls).toEqual([preview(309)])
   })
 
   it('keeps a FRESH preview scope (touched within the window)', () => {
     const plan = reap([{scopeUrl: preview(310), ids: ['pv3'], updatedAt: NOW - 3 * DAY}])
-    expect(plan).toEqual({cacheNames: [], ledgerScopeUrls: []})
+    expect(plan).toEqual({reapIds: [], ledgerScopeUrls: []})
   })
 
   it('NEVER reaps the production scope, even if ancient', () => {
     const plan = reap([{scopeUrl: prod, ids: ['prod1'], updatedAt: NOW - 999 * DAY}])
-    expect(plan).toEqual({cacheNames: [], ledgerScopeUrls: []})
+    expect(plan).toEqual({reapIds: [], ledgerScopeUrls: []})
   })
 
   it('does not reap a legacy (untimestamped) preview ledger — staleness is unprovable', () => {
     const plan = reap([{scopeUrl: preview(311), ids: ['pv4'], updatedAt: undefined}])
-    expect(plan).toEqual({cacheNames: [], ledgerScopeUrls: []})
+    expect(plan).toEqual({reapIds: [], ledgerScopeUrls: []})
   })
 
   it('shared-sha protection: a cache a KEPT ledger still references is not deleted', () => {
@@ -113,8 +109,7 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
       {scopeUrl: prod, ids: ['shared', 'prod2'], updatedAt: NOW - DAY},
       {scopeUrl: preview(312), ids: ['shared', 'pvOnly'], updatedAt: NOW - 30 * DAY},
     ])
-    expect(plan.cacheNames.sort()).toEqual(['km-assets-pvOnly', 'km-shell-pvOnly'].sort())
-    expect(plan.cacheNames).not.toContain('km-shell-shared')
+    expect(plan.reapIds).toEqual(['pvOnly'])
     expect(plan.ledgerScopeUrls).toEqual([preview(312)])
   })
 
@@ -124,10 +119,9 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
       ledgers: [{scopeUrl: self, ids: ['selfId'], updatedAt: NOW - 99 * DAY}],
       now: NOW,
       staleMs: STALE_MS,
-      cachePrefix: PREFIX,
       selfScopeUrl: self,
     })
-    expect(plan).toEqual({cacheNames: [], ledgerScopeUrls: []})
+    expect(plan).toEqual({reapIds: [], ledgerScopeUrls: []})
   })
 
   it('reaps multiple stale previews together', () => {
@@ -135,9 +129,7 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
       {scopeUrl: preview(1), ids: ['a'], updatedAt: NOW - 20 * DAY},
       {scopeUrl: preview(2), ids: ['b'], updatedAt: NOW - 20 * DAY},
     ])
-    expect(plan.cacheNames.sort()).toEqual(
-      ['km-assets-a', 'km-assets-b', 'km-shell-a', 'km-shell-b'].sort(),
-    )
+    expect(plan.reapIds.sort()).toEqual(['a', 'b'])
     expect(plan.ledgerScopeUrls.sort()).toEqual([preview(1), preview(2)].sort())
   })
 })

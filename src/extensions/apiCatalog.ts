@@ -234,8 +234,8 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     importPath: '@/data/stateBlocks.js',
     description: 'System state-block accessors (user, prefs, plugin prefs / UI-state, layout session). layoutSessionBlockIdForKey / layoutSessionsContainerBlockId are the canonical session-key → block-id derivations for out-of-core session hosts — never re-derive the uuid chain.',
     exports: [
-      'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUserBlock',
-      'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
+      'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUIStateBlock',
+      'getUserBlock', 'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
     ],
     types: [],
   },
@@ -350,6 +350,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     importPath: '@/context/repo.js',
     description: 'useRepo hook — the live Repo from inside a mounted (appMountsFacet) component.',
     exports: ['useRepo'],
+    types: [],
+  },
+  {
+    category: 'react',
+    importPath: '@/context/block.js',
+    description: 'useBlockContext hook — which pane / surface / scope the block being rendered sits in.',
+    exports: ['useBlockContext'],
     types: [],
   },
   {

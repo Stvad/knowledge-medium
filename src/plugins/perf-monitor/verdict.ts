@@ -63,6 +63,19 @@ const NOTE: Record<UnjudgedReason, (series: 'interaction' | 'startup') => string
   'not-recording': (s) => `no ${s} record for this session (${s} recording may be off)`,
   'history-short': (s) => `${s} history still building`,
   'no-baseline': (s) => `no ${s} baseline to compare against (recent sessions all measured zero)`,
+  // Names the OUTCOME, not a cause. The classifier rejects a sample for several
+  // different reasons — something else in flight, a coalesced read answering
+  // more than one caller, a window spanning a counter reset — and only the
+  // first is other activity. A lone resolver batching its own ids is rejected
+  // with the database completely quiet, so a message about other activity
+  // would send that reader looking for something that was never there. Saying
+  // what the comparison got, rather than why, is true in every case.
+  //
+  // Deliberately does NOT tell the reader to keep waiting for more history —
+  // that is the one thing which cannot help — while the scheduler does keep
+  // rechecking, because a quiet stretch later in this same session can.
+  'never-uncontended': (s) =>
+    `${s} queries ran, but none produced a comparison-eligible timing this session`,
   'partly-judged': (s) => `some ${s} metrics could not be judged this session`,
 }
 
@@ -73,6 +86,19 @@ const pendingNotes = (analysis: PerfAnalysis): string[] =>
     const reason = analysis.unjudgedBecause[series]
     return reason === null ? [] : [NOTE[reason](series)]
   })
+
+/** Named, not counted: the reader's next move is to look at what collapsed
+ *  THAT query's tail, and a bare count says nothing about where to look.
+ *
+ *  States only what was OBSERVED, and only about the UPPER TAIL — the quantiles
+ *  say nothing about the half below the median. It must also point at causes
+ *  the comparison has not already ruled out: coalesced callers are excluded
+ *  from these samples at the source, so sending a reader to check whether the
+ *  calls shared one resolution sends them after something that cannot be there. */
+const clusteredTailNote = (metrics: readonly string[]): string | null =>
+  metrics.length === 0
+    ? null
+    : `${metrics.join(', ')}: p95 is within 1% of p50 in at least one session this comparison used, so its upper tail is a single value — likely a workload with two distinct speeds, or too few clean samples for the top 5% to be more than one of them`
 
 /** How much history the comparison actually had.
  *
@@ -122,7 +148,8 @@ export const summarize = (analysis: PerfAnalysis, live: LiveFacts): PerfVerdict 
   // series makes a verdict partial. Folding the two together would report a
   // clean comparison in a read-only workspace as pending.
   const unjudged = pendingNotes(analysis)
-  const notes = [...unjudged, ...(blocked ? [blocked] : [])]
+  const clustered = clusteredTailNote(analysis.clusteredTail)
+  const notes = [...unjudged, ...(clustered ? [clustered] : []), ...(blocked ? [blocked] : [])]
   const growth = graphNote(analysis.graphGrowth)
 
   if (analysis.regressions.length > 0) {

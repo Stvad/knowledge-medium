@@ -41,6 +41,25 @@ describe('summarize', () => {
     expect(blended.notes.join(' ')).not.toContain('interaction history still building')
   })
 
+  // Two claims this note must not make, both of which it made at some point.
+  // It cannot say the database was busy: the classifier rejects a query that
+  // opens while anything else is in flight, which on a two-connection device
+  // can be one the second reader served with no wait at all. And it cannot
+  // blame other activity at all: a lone resolver batching its own ids through
+  // the coalescer is rejected with the database completely quiet, so that
+  // reader would go looking for something that was never there.
+  //
+  // What survives both is the outcome — nothing the comparison can use — which
+  // is true however the sample was rejected.
+  it('reports the never-uncontended state as an outcome, not as a cause', () => {
+    const notes = summarize(analysis({
+      unjudgedBecause: { interaction: 'never-uncontended', startup: null },
+    })).notes.join(' ')
+    expect(notes).toContain('comparison-eligible')
+    expect(notes).not.toContain('database free')
+    expect(notes).not.toContain('other database activity')
+  })
+
   // The interaction recorder is togglable independently of the monitor, so its
   // series can be permanently short while everything else looks healthy.
   // "Still building" is then a remedy that never arrives.
@@ -199,6 +218,46 @@ describe('summarize', () => {
     expect(v.kind).toBe('regressed')
     expect(v.headline).toContain('9×')
     expect(v.notes.join(' ')).toContain('40% larger')
+  })
+})
+
+describe('the clustered-tail caveat', () => {
+  it('rides along with a regression rather than replacing the verdict', () => {
+    // The realistic case: one metric's tail collapses while others judge
+    // normally. Carried as a reason it would lose to `partly-judged` and never
+    // be seen, which is why it is a note.
+    const v = summarize(analysis({
+      regressions: [regression()],
+      clusteredTail: ['core.ancestors'],
+    }))
+    expect(v.kind).toBe('regressed')
+    expect(v.notes.join(' ')).toContain('core.ancestors')
+    expect(v.notes.join(' ')).toContain('within 1% of p50')
+    // The claim the sample cannot support: coalescing and a bimodal workload
+    // produce this shape alike, so the note must not assert independence.
+    expect(v.notes.join(' ')).not.toContain('independent')
+  })
+
+  it('does not send the reader after a cause the comparison already excluded', () => {
+    // Coalesced callers never reach the samples this caveat describes — they
+    // are filtered at the source. Telling the user to check whether the calls
+    // shared one resolution points them at something that cannot be there, and
+    // a caveat that costs a reader an investigation is worse than none.
+    const notes = summarize(analysis({ clusteredTail: ['core.ancestors'] })).notes.join(' ')
+    expect(notes).not.toContain('shared one resolution')
+    expect(notes).not.toContain('coalesc')
+  })
+
+  it('survives a partial comparison, which a single-slot reason could not', () => {
+    const v = summarize(analysis({
+      ready: { interaction: true, startup: false },
+      clusteredTail: ['core.ancestors'],
+    }))
+    expect(v.notes.join(' ')).toContain('core.ancestors')
+  })
+
+  it('stays silent when no tail collapsed', () => {
+    expect(summarize(analysis()).notes.join(' ')).not.toContain('within 1% of p50')
   })
 })
 

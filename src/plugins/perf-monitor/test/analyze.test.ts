@@ -386,6 +386,10 @@ describe('runPerfAnalysis', () => {
     expect(analysis.unjudgedBecause.interaction).toBe('blended-workspaces')
     expect(analysis.regressions.filter((r) => r.metric.startsWith('query:'))).toEqual([])
     expect(analysis.regressions.filter((r) => r.metric.startsWith('fanout:'))).toEqual([])
+    // The caveat is a statement about THIS workspace's queries, so it must go
+    // with the verdicts rather than outlive them — a note naming a query beside
+    // "not comparable this session" points at a trend nobody produced.
+    expect(analysis.clusteredTail).toEqual([])
   })
 
   // The recorder writes on its own schedule. Between the analysis reading who
@@ -476,6 +480,18 @@ describe('unjudgedReason', () => {
   const judged = { status: 'steady', baselineCount: 12 } as const
   const shortHistory = { status: 'insufficient', reason: 'history' } as const
   const noSample = { status: 'insufficient', reason: 'no-current-sample' } as const
+  const neverClean = { status: 'insufficient', reason: 'never-uncontended' } as const
+
+  // POSITION, not merely presence. `awaitingCurrentSample` matches
+  // `never-uncontended` too — the scheduler has to keep rechecking either — so
+  // asking the general test first would make this reason unreachable and report
+  // "nothing measured" for a session that measured plenty. The two send a
+  // reader to opposite places: one to look for a broken recorder, the other to
+  // understand that these figures are only taken while the database is idle.
+  it('names never-uncontended ahead of the missing-sample reason that also matches it', () => {
+    expect(unjudgedReason([neverClean], {})).toBe('never-uncontended')
+    expect(unjudgedReason([neverClean, noSample], {})).toBe('never-uncontended')
+  })
 
   it('is null only when everything was judged', () => {
     expect(unjudgedReason([judged, judged], {})).toBeNull()

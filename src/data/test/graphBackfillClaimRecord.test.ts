@@ -108,25 +108,25 @@ describe('the completion record across two databases', () => {
   it('tells a second device the pass is already done', async () => {
     const {a, b, server} = await setup()
 
-    expect(await claimFor(a, 'device-a').tryClaim(WS, 'done-v1')).toBe(true)
+    expect(await claimFor(a, 'device-a').tryClaim(WS, 'done-v1')).toBe('minted')
     await claimFor(a, 'device-a').markComplete(WS, 'done-v1')
     await sync([a, b], server)
 
     // B is a different client entirely — it must read A's completion, not
     // its own absence of one.
-    expect(await claimFor(b, 'device-b').tryClaim(WS, 'done-v1')).toBe(false)
+    expect(await claimFor(b, 'device-b').tryClaim(WS, 'done-v1')).toBe('declined')
   }, 20_000)
 
   it('leaves a released claim reclaimable on the other device', async () => {
     const {a, b, server} = await setup()
 
-    expect(await claimFor(a, 'device-a').tryClaim(WS, 'rel-v1')).toBe(true)
+    expect(await claimFor(a, 'device-a').tryClaim(WS, 'rel-v1')).toBe('minted')
     // A aborts and hands the claim back.
     await claimFor(a, 'device-a').releaseClaim(WS, 'rel-v1')
     await sync([a, b], server)
 
     // The work still needs doing, so B must be able to take it — a released
     // claim that read as held would strand the migration for the graph.
-    expect(await claimFor(b, 'device-b').tryClaim(WS, 'rel-v1')).toBe(true)
+    expect(await claimFor(b, 'device-b').tryClaim(WS, 'rel-v1')).toBe('minted')
   }, 20_000)
 })

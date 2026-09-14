@@ -6,7 +6,7 @@
  *   - Identity rule: same key (`(name, stable typed serialization(args))`)
  *     → same handle instance returned from `getOrCreate`.
  *   - Ref-count GC: handles dispose `gcTimeMs` after refCount reaches zero
- *     (drained subscribers + drained in-flight loads).
+ *     (what counts as a reference: `LoaderHandle.refCount`).
  *   - Invalidation index: handles declare `Dependency`s during `resolve`;
  *     the store walks an inverted index when `invalidate(change)` fires.
  *
@@ -16,7 +16,8 @@
  *   - peek / load / subscribe / read / status (the Handle<T> surface),
  *   - structural diffing (lodash.isEqual default; spec §9.4),
  *   - dependency declaration via a `ResolveContext` passed to the loader,
- *   - retain/release wiring on subscribe/unsubscribe so the store can GC.
+ *   - retain/release wiring on subscribe/unsubscribe, and the same pair
+ *     exposed so a caller can hold a handle without observing it.
  *
  * Block does NOT register here — it has its own row-grain subscription
  * via BlockCache.subscribe and is identity-stable through `Repo.blockFacades`.
@@ -93,11 +94,10 @@ interface RegisteredHandle {
   /** Called when GC fires — handle clears its state, the store removes
    *  the entry from the registry. */
   dispose: () => void
-  /** Called from the store when the first subscriber is added or a load
-   *  starts; cancels any pending GC. */
+  /** Take one reference; cancels any pending GC. Who holds one and why is
+   *  `LoaderHandle.refCount`; the external-hold case is `LoaderHandle.retain`. */
   retain: () => void
-  /** Called when the last subscriber drops or a load completes; if
-   *  refCount reaches zero, schedules dispose. */
+  /** Drop one reference; schedules dispose once none are left. */
   release: () => void
   /** Called for every change that flows through `store.invalidate(...)`,
    *  regardless of whether `matches` returned true. The handle records
@@ -450,7 +450,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  caller `await` the same promise React threw. */
   private suspendingPromise: Promise<T> | null = null
 
-  /** Ref count = subscribers + inflight (1 if loading). Drives GC. */
+  /** Live references; the handle collects `gcTimeMs` after this reaches zero.
+   *  THREE kinds of holder, not two: one per subscriber, one while a load is
+   *  in flight, and one per explicit external hold (`retain()`). Do not read
+   *  a non-zero count as proof that a listener or a loader is behind it. */
   private refCount = 0
   private cancelGc: (() => void) | null = null
   /** One-way. Nothing ever clears it — a disposed handle becomes a permanent
@@ -513,7 +516,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // handle would live forever — e.g. an abandoned React concurrent-render
     // lookup whose subscribe effect never commits, or a query handle left
     // orphaned at an old key by a registry-epoch bump. Schedule the normal
-    // gcTimeMs sweep now; the first `retain()` (load/subscribe) cancels it.
+    // gcTimeMs sweep now; the first `retain()`, whoever takes it, cancels it.
     // (Skip for gcTimeMs<=0: that's the synchronous-dispose test config, and
     // disposing here would race `getOrCreate`'s not-yet-inserted entry.)
     const gcMs = this.store.getGcTimeMs()
@@ -868,8 +871,13 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   subscribe(listener: (value: T) => void): Unsubscribe {
     if (this.disposed) return this.resolveLive().subscribe(listener)
+    // The unsubscribe below releases only when its delete SUCCEEDS, so a
+    // repeated listener that retained twice could never release twice —
+    // it would pin the handle at refCount >= 1 forever, past every GC.
+    // Reachable via `useHandles` over a list with a repeated id.
+    const alreadyListening = this.listeners.has(listener)
     this.listeners.add(listener)
-    this.retain()
+    if (!alreadyListening) this.retain()
     // First subscriber kicks off a load if we're idle, OR if the handle
     // was marked stale while sitting at refCount=0 (a deferred
     // invalidation skipped the eager reload). Without this, the new
@@ -965,6 +973,23 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     void this.runLoader(batch).catch(() => {/* error on handle */})
   }
 
+  /** Hold this handle against GC WITHOUT observing it: no load starts and
+   *  no listener is registered, so a retained-but-unobserved handle stays
+   *  `'idle'` until something actually asks for its value.
+   *
+   *  That distinction is the point of the pair being callable from outside.
+   *  Of the other two reference kinds a load's is transient (given back on
+   *  settle), which leaves subscribing as the only way to hold a handle open
+   *  — and its first subscriber starts a load, so a surface that wanted a
+   *  chain to survive an unmount had no way to say so without also fetching
+   *  it. `useRetainParents` is that caller.
+   *
+   *  Balance every `retain()` with exactly one `release()`: an unmatched
+   *  `retain()` on a live handle cancels its GC sweep and never reschedules
+   *  one, pinning that store entry for the life of the store. Both calls
+   *  no-op once the handle is DISPOSED — which means only that a pair
+   *  arriving after disposal neither holds it nor corrupts the count, not
+   *  that imbalance is safe. */
   retain(): void {
     if (this.disposed) return
     this.refCount++

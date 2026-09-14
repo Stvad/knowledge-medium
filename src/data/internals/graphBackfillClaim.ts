@@ -23,7 +23,7 @@
  */
 
 import { ChangeScope, type Tx } from '@/data/api'
-import type { BackfillCompletionClaim } from '@/data/facets'
+import type { BackfillCompletionClaim, ClaimAttempt } from '@/data/facets'
 import { keyAtStart } from '@/data/orderKey'
 import { MIGRATION_CLAIM_TYPE } from '@/data/blockTypes'
 import { classifyOccupant, stateChildBlockId } from '@/data/derivedIds'
@@ -180,7 +180,7 @@ export const createGraphBackfillClaim = (
     await deps.ensureHome(workspaceId)
 
     const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId, workspaceId), deps.claimantId)
-    if (first === 'back-off') return false
+    if (first === 'back-off') return 'declined'
     // A recorded completion stops an UNATTENDED pass, which is its job. It
     // must not stop a human who deliberately asked for one: this seam's passes
     // are idempotent per row, so a redundant run is a scan and no writes, while
@@ -188,7 +188,7 @@ export const createGraphBackfillClaim = (
     // its cursor, a legacy value repaired since — is unmigrated forever. The
     // claim's safety property is mutual exclusion (`back-off`, above), and
     // that still holds.
-    if (first === 'already-complete' && !opts?.reclaimCompleted) return false
+    if (first === 'already-complete' && !opts?.reclaimCompleted) return 'declined'
     // `proceed` means a claim here already names us — normally our own from a
     // previous operator run of the same pass. Taken at face value: there is
     // nothing to wait for, because nothing arbitrates (see the module header).
@@ -211,7 +211,11 @@ export const createGraphBackfillClaim = (
     // the row exists and carries a completion stamp, which has to be replaced
     // by a fresh claim or `markComplete` would be re-stamping someone else's
     // record of a run that is not this one.
-    const won = first === 'proceed' ? true : await deps.tx(async tx => {
+    // `proceed` writes NOTHING — a live claim already names us. Reported as
+    // `inherited` rather than as a win: this claimant is a browser profile, so
+    // the row may be a sibling TAB's live claim, and a caller that released it
+    // would delete a claim somebody is still writing under.
+    const won: ClaimAttempt = first === 'proceed' ? 'inherited' : await deps.tx(async tx => {
       // Re-checked inside the WRITING tx against this row: the read above
       // happened outside it, and a peer's claim can arrive in between.
       const existing = await tx.get(claimId)
@@ -234,10 +238,10 @@ export const createGraphBackfillClaim = (
         const live = claimFromProperties(existing.properties)
         if (live !== null
             && !(opts?.reclaimCompleted === true && live.completedAt !== undefined)) {
-          return false
+          return 'declined'
         }
         await tx.update(claimId, {properties: claimProperties})
-        return true
+        return 'minted'
       }
       if (existing?.deleted) {
         // Restore, don't create: deleting the claim is the documented
@@ -254,7 +258,7 @@ export const createGraphBackfillClaim = (
         // deliberately deleted a claim.
         await tx.restore(claimId, {content: backfillId})
         await tx.update(claimId, {properties: claimProperties})
-        return true
+        return 'minted'
       }
       // `systemMint` (stamp 0) like every other deterministic-id creator.
       // Without it this is a nonzero-stamp mint of a shared id, which
@@ -271,7 +275,7 @@ export const createGraphBackfillClaim = (
         content: backfillId,
         properties: claimProperties,
       }, {systemMint: true})
-      return true
+      return 'minted'
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `claim backfill ${backfillId}`})
 
@@ -326,6 +330,11 @@ export const createGraphBackfillClaim = (
       // today the difference is unobservable. Preserving it needs a second
       // key carried through the reclaim — worth it only once something reads
       // "was this graph migrated" as durable state (km-bmka).
+      //
+      // `Repo.withOperatorBackfillClaim` WIDENED this: it reclaims before its
+      // body writes, so any pre-pass abort — a synthesis that threw, a flip
+      // that was refused — now reaches this delete with the prior completion
+      // stamp already overwritten. Same residual, more ways in.
       await tx.delete(claimId)
     }, {scope: ChangeScope.BlockDefault, skipUndo: true,
         description: `release backfill claim ${backfillId}`})

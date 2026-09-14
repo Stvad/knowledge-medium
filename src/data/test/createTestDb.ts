@@ -44,6 +44,7 @@ import {
   CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
   dropStaleAnyFieldFormIndex,
+  CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -52,10 +53,12 @@ import {
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
+  PROPERTY_DEFINITION_BASELINE_PREFIX,
   RECONCILE_RESCAN_MARKER_PREFIX,
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
+  ensureClientSchemaStateValueColumn,
   ensureStagingNeedsApplyColumn,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
@@ -123,6 +126,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // production upgrade ordering so the harness exercises the same path.
   await ensureBlockLocalColumns(db)
   await db.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
   await dropStaleAnyFieldFormIndex(db)
   await db.execute(CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL)
@@ -152,6 +156,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
     ...backfillDb,
     getAll: <T,>(sql: string) => db.getAll<T>(sql),
   })
+  await ensureClientSchemaStateValueColumn(db)
   await db.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
@@ -188,6 +193,8 @@ const getTemplateFingerprint = (): string => {
   hash.update(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
   hash.update('\0')
@@ -345,8 +352,8 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
     )
     for (const table of existing(RESET_CONTENT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
     for (const table of existing(RESET_AUDIT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
-    // Clear per-test dynamic markers — reprojection (schema-swap catch-up) and
-    // workspace backfills — so each is re-detected per test. A freshly-opened
+    // Clear the per-test dynamic rows — the catch-up markers and the
+    // definitions baseline — so each is re-detected per test. A freshly-opened
     // harness has none of these; we keep only the alias/type/FTS/ANALYZE
     // markers from template init.
     if (present.has('client_schema_state')) {
@@ -358,6 +365,9 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
       )
       await tx.execute(
         `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
+      )
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${PROPERTY_DEFINITION_BASELINE_PREFIX}%'`,
       )
     }
     // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id

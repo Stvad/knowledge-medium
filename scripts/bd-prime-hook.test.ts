@@ -8,6 +8,7 @@ import {
     MAX_CONTEXT_CHARS,
     buildAdditionalContext,
     parsePrimeContext,
+    transformCodexHookStdout,
     transformHookStdout,
 } from './bd-prime-hook.mjs'
 
@@ -157,13 +158,51 @@ describe('transformHookStdout', () => {
     })
 })
 
+describe('transformCodexHookStdout', () => {
+    it('compacts additionalContext while preserving the native envelope', () => {
+        const native = JSON.stringify({
+            continue: true,
+            systemMessage: 'lifecycle state updated',
+            hookSpecificOutput: {
+                hookEventName: 'PreCompact',
+                additionalContext: 'native context',
+                metadata: { source: 'bd' },
+            },
+        })
+        const out = JSON.parse(transformCodexHookStdout(native, wrap(makeContext([['feedback_alpha', 'preview']]))))
+        expect(out).toEqual({
+            continue: true,
+            systemMessage: 'lifecycle state updated',
+            hookSpecificOutput: {
+                hookEventName: 'PreCompact',
+                additionalContext: expect.stringContaining('feedback_alpha'),
+                metadata: { source: 'bd' },
+            },
+        })
+    })
+
+    it('passes the native output through without context and falls back when prime has none', () => {
+        const native = '{"hookSpecificOutput":{"hookEventName":"PostCompact"}}\n'
+        expect(transformCodexHookStdout(native, wrap(makeContext([['feedback_alpha', 'preview']])))).toBe(native)
+        const withContext = wrap(makeContext([['feedback_alpha', 'preview']]))
+        const fallback = JSON.parse(transformCodexHookStdout(withContext, ''))
+        expect(fallback.hookSpecificOutput.hookEventName).toBe('SessionStart')
+        expect(fallback.hookSpecificOutput.additionalContext).toContain('feedback_alpha')
+    })
+})
+
 // Process-level pins: the DB-existence gate (a bd invocation in a fresh clone
 // would CREATE an empty DB) and the never-break-session-start contract.
 // Measured ~150ms per spawn solo; budgeted for the 6x load stretch.
 describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
     const script = fileURLToPath(new URL('./bd-prime-hook.mjs', import.meta.url))
 
-    const makeRepo = (opts: { dbReady: boolean; primeStdout?: string; primeStderr?: string }) => {
+    const makeRepo = (opts: {
+        dbReady: boolean
+        primeStdout?: string
+        primeStderr?: string
+        codexStdout?: string
+    }) => {
         const repo = mkdtempSync(join(tmpdir(), 'bd-prime-hook-'))
         spawnSync('git', ['init', '-q'], { cwd: repo })
         mkdirSync(join(repo, '.beads'))
@@ -176,17 +215,25 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         writeFileSync(fixture, opts.primeStdout ?? '')
         const stderrFixture = join(repo, 'prime-stderr.txt')
         writeFileSync(stderrFixture, opts.primeStderr ?? '')
+        const codexFixture = join(repo, 'codex-fixture.txt')
+        writeFileSync(codexFixture, opts.codexStdout ?? '')
+        const codexInput = join(repo, 'codex-input.txt')
         // --version must answer with real text: initializedDbRoot treats empty
         // stdout as "bd missing", which would turn dbReady repos DB-less and
         // make the assertions vacuous.
         writeFileSync(
             join(shimDir, 'bd'),
-            `#!/bin/sh\necho "bd $@" >> "${shimLog}"\ncase "$1" in\n  --version) echo "bd-shim 0.0.0";;\n  prime) cat "${fixture}"; cat "${stderrFixture}" >&2;;\nesac\nexit 0\n`,
+            `#!/bin/sh\necho "bd $@" >> "${shimLog}"\ncase "$1" in\n  --version) echo "bd-shim 0.0.0";;\n  codex-hook) cat > "${codexInput}"; cat "${codexFixture}";;\n  prime) cat "${fixture}"; cat "${stderrFixture}" >&2;;\nesac\nexit 0\n`,
         )
         chmodSync(join(shimDir, 'bd'), 0o755)
         const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH}` }
-        const run = () => spawnSync('node', [script], { cwd: repo, env, encoding: 'utf8' })
-        return { run, shimCalls: () => readFileSync(shimLog, 'utf8') }
+        const run = (args: string[] = [], input = '') =>
+            spawnSync('node', [script, ...args], { cwd: repo, env, input, encoding: 'utf8' })
+        return {
+            run,
+            shimCalls: () => readFileSync(shimLog, 'utf8'),
+            codexInput: () => readFileSync(codexInput, 'utf8'),
+        }
     }
 
     it('exits 0 with no output in a DB-less clone, WITHOUT ever spawning bd', () => {
@@ -211,6 +258,76 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         expect(parsed.hookSpecificOutput.additionalContext).not.toContain('SESSION CLOSE PROTOCOL')
         expect(shimCalls()).toContain('bd --version')
         expect(shimCalls()).toContain('bd prime --hook-json --mcp')
+    })
+
+    it('forwards the Codex event and stdin, then compacts native context in place', () => {
+        const native = JSON.stringify({
+            continue: true,
+            systemMessage: 'state updated',
+            hookSpecificOutput: {
+                hookEventName: 'PreCompact',
+                additionalContext: 'native full context',
+                metadata: { event: 'PreCompact' },
+            },
+        })
+        const { run, shimCalls, codexInput } = makeRepo({
+            dbReady: true,
+            codexStdout: native,
+            primeStdout: wrap(makeContext([['feedback_alpha', 'preview']])),
+        })
+        const r = run(['--codex', 'PreCompact'], '{"prompt":"keep this payload"}')
+        expect(r.status).toBe(0)
+        const parsed = JSON.parse(r.stdout)
+        expect(parsed).toMatchObject({
+            continue: true,
+            systemMessage: 'state updated',
+            hookSpecificOutput: {
+                hookEventName: 'PreCompact',
+                metadata: { event: 'PreCompact' },
+            },
+        })
+        expect(parsed.hookSpecificOutput.additionalContext).toContain('feedback_alpha')
+        expect(codexInput()).toBe('{"prompt":"keep this payload"}')
+        expect(shimCalls()).toContain('bd codex-hook PreCompact')
+        expect(shimCalls()).toContain('bd prime --hook-json --mcp')
+    })
+
+    it('passes a native lifecycle result without context unchanged and does not prime again', () => {
+        const native = '{"hookSpecificOutput":{"hookEventName":"PostCompact"},"continue":true}\n'
+        const { run, shimCalls } = makeRepo({ dbReady: true, codexStdout: native })
+        const r = run(['--codex', 'PostCompact'], '{}')
+        expect(r.status).toBe(0)
+        expect(r.stdout).toBe(native)
+        expect(shimCalls()).toContain('bd codex-hook PostCompact')
+        expect(shimCalls()).not.toContain('bd prime --hook-json --mcp')
+    })
+
+    it('bounds native context when the compacting prime fails', () => {
+        const native = JSON.stringify({
+            hookSpecificOutput: {
+                hookEventName: 'SessionStart',
+                additionalContext: `## Persistent Memories (188)\n\n${'x'.repeat(590_000)}`,
+            },
+            continue: true,
+        })
+        const { run } = makeRepo({
+            dbReady: true,
+            codexStdout: native,
+            primeStderr: 'Error: memory table read failed\n',
+        })
+        const r = run(['--codex', 'SessionStart'], '{}')
+        expect(r.status).toBe(0)
+        const parsed = JSON.parse(r.stdout)
+        expect(parsed.hookSpecificOutput.hookEventName).toBe('SessionStart')
+        expect(parsed.hookSpecificOutput.additionalContext.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS)
+    })
+
+    it('does not invoke any bd command for Codex in a DB-less clone', () => {
+        const { run, shimCalls } = makeRepo({ dbReady: false, codexStdout: 'should not run' })
+        const r = run(['--codex', 'SessionStart'], '{}')
+        expect(r.status).toBe(0)
+        expect(r.stdout).toBe('')
+        expect(shimCalls()).toBe('')
     })
 
     it('exits 0 quietly when bd prime reports an error (bd prints Error and exits 0)', () => {

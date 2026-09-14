@@ -87,6 +87,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
   propertySchemaResolverFor: 'read — returns a resolver bound to an existing immutable snapshot',
   whenPropertyDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
+  whenTypeDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
   assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
@@ -106,6 +107,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   awaitReprojections: 'drains a shared job object',
   awaitSeedMaterialization: 'drains a shared job object',
   awaitPropertyDefinitionMigrations: 'drains a shared job object',
+  awaitPropertyDefinitionBaselines: 'drains a shared promise chain',
   awaitReferenceTargetDerive: 'drains a shared job object',
   awaitWorkspaceBackfills: 'drains a shared job object',
   awaitDeferredWork: 'awaits the drainers above; assigns no Repo fields',
@@ -153,10 +155,14 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   drainNameRederives: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   runWorkspaceBackfillNow: 'operator entry point; runs through the same private runner, writes only via the DELEGATED tx',
+  withOperatorBackfillClaim: 'operator entry point; the claim and the body write only via the DELEGATED tx',
+  runClaimedOperatorBackfill: 'private; the claimed half of the operator entry point',
+  takeBackfillClaim: 'private; the pre-claim gate plus the same claim seam runWorkspaceBackfills already reaches',
   propertyRegistryReadyFor: 'read — inspects the registry snapshots; assigns nothing',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
   schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
+  syncPropertyDefinitionBaseline: 'invoked by constructor-bound facetBridge',
   scheduleReferenceTargetNameRederive: 'invoked by constructor-bound facetBridge',
   stampReferenceTargets: 'private; raw source-NULL writes via schedule-driven jobs',
   reprojectOwnersOfStampedFieldRows: 'private; reached only from stampReferenceTargets (schedule-driven jobs)',
@@ -253,6 +259,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   pendingNameRederives: 'shared Map (session bookkeeping)',
   nameRederiveDrainScheduled: 'shared Set (session bookkeeping)',
   propertyDefinitionMigrationJobs: 'shared job queue (enqueued via constructor-bound facetBridge)',
+  propertyDefinitionBaselineWork: 'data field — a promise the chain replaces; captures no repo beyond the constructor-bound facetBridge path that appends to it',
 }
 
 let sharedDb: TestDb
