@@ -1,0 +1,1 @@
+import{pt as e}from"../../../chunks/app-BnxTzVqY.js";export{e as extensionsDataExtension};

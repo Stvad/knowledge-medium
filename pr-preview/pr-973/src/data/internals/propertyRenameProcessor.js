@@ -1,0 +1,1 @@
+import{bG as e,xG as t,yG as n}from"../../../chunks/app-BnxTzVqY.js";export{n as MIGRATE_PROPERTY_RENAME_PROCESSOR,e as MIGRATE_PROPERTY_RENAME_PROCESSOR_NAME,t as propertyRenameSameTxProcessors};

@@ -1,0 +1,1 @@
+import{CC as e,EC as t,TC as n,wC as r}from"../../../chunks/app-BnxTzVqY.js";export{e as extensionsOverridesPresetCore,r as extensionsOverridesProp,n as extensionsPrefsType,t as overridesCodec};

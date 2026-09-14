@@ -1,0 +1,1 @@
+import{gz as e}from"../../../chunks/app-BnxTzVqY.js";export{e as agentDispatchCompanionDataExtension};

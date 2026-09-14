@@ -1,0 +1,1 @@
+import{Nc as e,Pc as t}from"../../chunks/app-BnxTzVqY.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};

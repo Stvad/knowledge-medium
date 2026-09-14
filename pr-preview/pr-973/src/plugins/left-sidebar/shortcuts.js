@@ -1,0 +1,1 @@
+import{hg as e,mg as t,pg as n}from"../../../chunks/app-BnxTzVqY.js";export{n as getOrCreateShortcutsBlock,t as journalShortcutBlockId,e as shortcutsBlockId};

@@ -1,0 +1,1 @@
+import{_v as e}from"../../chunks/app-BnxTzVqY.js";export{e as useAncestorCrumbs};
