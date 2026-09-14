@@ -1,1 +1,0 @@
-import{FC as e,IC as t,NC as n,PC as r}from"../../chunks/app-B8V1zqyq.js";export{n as ExtensionApprovalStatusProvider,r as ExtensionApprovalStatusStore,e as useExtensionApprovalStatus,t as useExtensionApprovalStatuses};

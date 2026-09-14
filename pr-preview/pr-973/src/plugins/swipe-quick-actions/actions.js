@@ -1,1 +1,0 @@
-import{Gx as e,Kx as t,Ux as n,Wx as r}from"../../../chunks/app-B8V1zqyq.js";export{n as DEFAULT_QUICK_ACTION_ITEMS,r as SWIPE_RIGHT_BLOCK_ACTION_ID,e as isQuickActionItem,t as quickActionItemsFacet};
