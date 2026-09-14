@@ -3,11 +3,10 @@
  * Index guard for the user-state descent in `SELECT_RECENT_USER_BLOCKS_SQL`.
  *
  * The walk must include tombstones, and the only `parent_id`-leading indexes
- * are partial (`deleted = 0` / `deleted = 1`). A recursive step carrying no
- * `deleted` term proves neither predicate, so SQLite full-scans `blocks` once
- * per iteration — on a 350k-row workspace the query stops finishing at all, and
- * because it holds the connection every write queued behind it (the ref
- * picker's own pick) silently never commits.
+ * are partial (`deleted = 0` / `deleted = 1`). A recursive step that proves
+ * neither predicate gets no index and scans `blocks` once per iteration — a
+ * plan this query's own results cannot be told apart from a fast one, which
+ * is why the guard reads the plan instead.
  */
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'

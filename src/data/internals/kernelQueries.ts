@@ -337,15 +337,11 @@ export const SELECT_USER_PAGE_IDS_SQL = `
  *  Which is why the descent is TWO recursive terms rather than one
  *  `deleted`-blind join: the only `parent_id`-leading indexes are the
  *  complementary partials `idx_blocks_parent_order` (`deleted = 0`) and
- *  `idx_blocks_parent_deleted` (`deleted = 1`). A step carrying no
- *  `deleted` term proves neither, so SQLite scans every row of `blocks`
- *  once per iteration — and because the scan holds the connection, the
- *  writes queued behind it (a ref picker's own pick) never commit either.
- *  Each arm carries its predicate literally, which is the partial-index
- *  proof; `recentUserBlocksPlan.test.ts` pins that the walk stays a
- *  SEARCH. `deleted` is `NOT NULL DEFAULT 0` and only ever written as 0 or
- *  1, so the two arms are the whole table — the pair of partial indexes
- *  already rests on that. */
+ *  `idx_blocks_parent_deleted` (`deleted = 1`), so each arm must carry its
+ *  `deleted` predicate literally as the partial-index proof. A step that
+ *  proves neither gets no index and scans every row of `blocks`, once per
+ *  iteration. The two arms are the whole table: `deleted` is `NOT NULL
+ *  DEFAULT 0` and only ever written as 0 or 1. */
 export const SELECT_RECENT_USER_BLOCKS_SQL = `
   WITH RECURSIVE user_state(id) AS (
     SELECT value FROM json_each(?)
