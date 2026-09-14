@@ -31,10 +31,14 @@ export const memoize = <F extends (...args: never[]) => unknown>(
  * the same promise across renders and re-suspends forever on a new one.
  *
  * The resolver is REQUIRED here, unlike above: evicting needs the key.
+ *
+ * `maxEntries` bounds the cache, oldest entry out first, for a key space that
+ * grows with use (a navigation counter, a hash) rather than with the data.
  */
 export const memoizeAsync = <F extends (...args: never[]) => Promise<unknown>>(
   fn: F,
   resolver: (...args: Parameters<F>) => unknown,
+  maxEntries?: number,
 ): F => {
   // NOT async: an async wrapper would re-wrap the return and drop the
   // fulfilled stamp the fast path below preserves.
@@ -46,10 +50,9 @@ export const memoizeAsync = <F extends (...args: never[]) => Promise<unknown>>(
     // the very thing it exists to avoid.
     if (result.status === 'fulfilled') return result
     const guarded: FulfilledThenable<unknown> = result.catch((err: unknown) => {
-      // Unconditional: an entry a retry has already replaced could be evicted
-      // here too, and the only cost is running an idempotent `ensure` twice.
-      // Checking identity first would be a guard nothing can pin.
-      memoized.cache.delete(key)
+      // Only this entry: a bounded cache can have evicted and re-created the
+      // key while this promise was pending, and the newer entry stays.
+      if (memoized.cache.get(key) === guarded) memoized.cache.delete(key)
       throw err
     })
     // Stamp on settle, as React does for a promise it has tracked, for the
@@ -61,5 +64,24 @@ export const memoizeAsync = <F extends (...args: never[]) => Promise<unknown>>(
     void guarded.then(value => { stampFulfilled(guarded, value) }, () => {})
     return guarded
   }) as F, resolver)
+  if (maxEntries !== undefined) memoized.cache = boundedCache(maxEntries)
   return memoized as F
+}
+
+/** The subset of lodash's MapCache that `memoize` calls, over an insertion-ordered
+ *  Map that drops its oldest entry past `limit`. */
+const boundedCache = (limit: number): typeof lodashMemoize.Cache extends new () => infer C ? C : never => {
+  const map = new Map<unknown, unknown>()
+  const cache = {
+    has: (key: unknown) => map.has(key),
+    get: (key: unknown) => map.get(key),
+    delete: (key: unknown) => map.delete(key),
+    clear: () => { map.clear() },
+    set(key: unknown, value: unknown) {
+      map.set(key, value)
+      if (map.size > limit) map.delete(map.keys().next().value)
+      return cache
+    },
+  }
+  return cache as never
 }

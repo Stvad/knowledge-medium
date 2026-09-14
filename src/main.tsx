@@ -9,7 +9,8 @@ import { createRoot } from 'react-dom/client'
 import { ErrorBoundary } from 'react-error-boundary'
 import './index.css'
 import App from './App.tsx'
-import { RepoProvider } from '@/context/repo.js'
+import { RepoProvider, createRepoBoot } from '@/context/repo.js'
+import { prepareInitialLayout } from '@/bootstrap/initialLayout.js'
 import { Login } from '@/components/Login.js'
 import { SuspenseFallback } from '@/components/util/suspense.js'
 import { BootstrapErrorFallback, LocalDbCorruptionSentinel } from '@/components/util/error.js'
@@ -57,6 +58,10 @@ void requestPersistentStorage()
 // truth for "what mounts at the app root". Bootstrap errors before
 // the runtime is up still flow through ErrorBoundary →
 // BootstrapErrorFallback below, not via toast.
+// Boot resolves the layout before the tree renders (no Suspense fallback on
+// the boot path); see composeBoot.
+const boot = createRepoBoot(prepareInitialLayout)
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Suspense fallback={<SuspenseFallback/>}>
@@ -65,7 +70,7 @@ createRoot(document.getElementById('root')!).render(
           {/* Routes a RUNTIME sync-apply corruption (which opens fine, so it
               never throws through init) into this same boundary → recovery UI. */}
           <LocalDbCorruptionSentinel />
-          <RepoProvider>
+          <RepoProvider boot={boot}>
             <Suspense fallback={<SuspenseFallback/>}>
               <App/>
             </Suspense>

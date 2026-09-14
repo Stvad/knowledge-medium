@@ -41,6 +41,11 @@ export const MAX_PATCHES_PER_SUPABASE_RPC = 500
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
 export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig
 
+/** Whether a session syncs: the build has the remote config and the user did
+ *  not choose local-only. The boot and App's layout cache key must derive this
+ *  the same way for App's first lookup to hit the prepared entry. */
+export const remoteSyncEnabled = (localOnly: boolean): boolean => hasRemoteSyncConfig && !localOnly
+
 type BlockUploadPayload = Record<string, unknown> & {id: string}
 
 export type CompactedBlockOperation =

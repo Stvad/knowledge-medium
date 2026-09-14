@@ -74,6 +74,35 @@ describe('memoizeAsync', () => {
     expect(entry.value).toBe('a!')
   })
 
+  it('with maxEntries drops the oldest entry once the bound is passed', async () => {
+    let calls = 0
+    const fn = memoizeAsync(async (key: string) => { calls++; return key }, key => key, 2)
+    await fn('a')
+    await fn('b')
+    await fn('a') // a hit: still cached
+    await fn('c') // pushes 'a' out
+    await fn('a')
+    expect(calls).toBe(4)
+  })
+
+  it('a superseded pending entry that rejects does not evict the newer one', async () => {
+    let rejectFirst!: (err: Error) => void
+    let calls = 0
+    const fn = memoizeAsync((key: string) => {
+      calls++
+      return calls === 1
+        ? new Promise<string>((_, reject) => { rejectFirst = reject })
+        : Promise.resolve(key)
+    }, key => key, 1)
+    const first = fn('a')
+    await fn('b') // evicts the pending 'a'
+    const second = fn('a')
+    expect(second).not.toBe(first)
+    rejectFirst(new Error('late'))
+    await expect(first).rejects.toThrow('late')
+    expect(fn('a')).toBe(second)
+  })
+
   it('keeps entries for other keys when one rejects', async () => {
     const fn = vi.fn(async (key: string) => {
       if (key === 'bad') throw new Error('nope')
