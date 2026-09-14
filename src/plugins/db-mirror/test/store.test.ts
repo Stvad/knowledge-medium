@@ -56,7 +56,7 @@ describe('db-mirror store', () => {
       const minted = (await store.updateSettings(USER, {enabled: true})).installId
       expect(minted).toEqual(expect.any(String))
 
-      await store.recordStatus(USER, {lastMarker: '1'})
+      await store.recordStatus(USER, {lastMarker: '1'}, {ifDirectoryEpoch: undefined})
 
       expect((await createDbMirrorStore().load(USER)).installId).toBe(minted)
     })
@@ -142,7 +142,7 @@ describe('db-mirror store', () => {
       permissionLost: true,
       lastError: 'the grant lapsed',
       lastErrorAt: 1,
-    })
+    }, {ifDirectoryEpoch: undefined})
 
     const state = await store.setDirectory(USER, fakeDirectory('Elsewhere'))
 
@@ -182,7 +182,7 @@ describe('db-mirror store', () => {
     // it as a copy at an unknown time. One owner, so neither has to.
     await store.load(USER)
 
-    const {status} = await store.recordStatus(USER, {lastMirrorAt: Number.NaN, lastBytes: 512})
+    const {status} = await store.recordStatus(USER, {lastMirrorAt: Number.NaN, lastBytes: 512}, {ifDirectoryEpoch: undefined})
 
     expect(status.lastMirrorAt).toBeUndefined()
     expect(status.lastBytes).toBe(512)
@@ -190,7 +190,7 @@ describe('db-mirror store', () => {
 
   it('records a success and clears the previous failure', async () => {
     await store.load(USER)
-    await store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 1, permissionLost: true})
+    await store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 1, permissionLost: true}, {ifDirectoryEpoch: undefined})
     const state = await store.recordStatus(USER, {
       lastMirrorAt: 100,
       lastMarker: '42',
@@ -199,7 +199,7 @@ describe('db-mirror store', () => {
       lastError: undefined,
       lastErrorAt: undefined,
       permissionLost: false,
-    })
+    }, {ifDirectoryEpoch: undefined})
 
     expect(state.status).toEqual({
       lastMirrorAt: 100,
@@ -212,8 +212,8 @@ describe('db-mirror store', () => {
 
   it('remembers the last success when a later run fails', async () => {
     await store.load(USER)
-    await store.recordStatus(USER, {lastMirrorAt: 100, lastMarker: '42'})
-    const state = await store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 200})
+    await store.recordStatus(USER, {lastMirrorAt: 100, lastMarker: '42'}, {ifDirectoryEpoch: undefined})
+    const state = await store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 200}, {ifDirectoryEpoch: undefined})
 
     expect(state.status).toMatchObject({lastMirrorAt: 100, lastMarker: '42', lastError: 'quota'})
   })
@@ -228,7 +228,7 @@ describe('db-mirror store', () => {
 
     await Promise.all([
       tabA.updateSettings(USER, {enabled: true}),
-      tabB.recordStatus(USER, {lastMarker: '42'}),
+      tabB.recordStatus(USER, {lastMarker: '42'}, {ifDirectoryEpoch: undefined}),
     ])
 
     const reopened = await createDbMirrorStore().load(USER)
@@ -244,7 +244,11 @@ describe('db-mirror store', () => {
     await store.load('bob')
     const bobs = store.getSnapshot()
 
-    await store.recordStatus('alice', {lastMarker: '42', lastFilename: 'alices-copy.db'})
+    await store.recordStatus(
+      'alice',
+      {lastMarker: '42', lastFilename: 'alices-copy.db'},
+      {ifDirectoryEpoch: undefined},
+    )
 
     expect(store.getSnapshot()).toBe(bobs)
     expect(store.getSnapshot()?.status.lastMarker).toBeUndefined()
@@ -260,7 +264,7 @@ describe('db-mirror store', () => {
     await tabA.load(USER)
     await tabB.load(USER)
 
-    await tabB.recordStatus(USER, {lastError: 'the disk is full', lastErrorAt: 1})
+    await tabB.recordStatus(USER, {lastError: 'the disk is full', lastErrorAt: 1}, {ifDirectoryEpoch: undefined})
 
     await vi.waitFor(() => expect(tabA.getSnapshot()?.status.lastError).toBe('the disk is full'))
   })

@@ -18,6 +18,7 @@ import {
   BUSY_RETRY_MS,
   createDbMirrorSchedule,
   FAILURE_RETRY_MS,
+  NO_IDENTITY_RETRY_MS,
   PERMISSION_LOST_MESSAGE,
 } from '../schedule.js'
 import {dbMirrorRuntimeHealth} from '../runtimeHealth.js'
@@ -195,7 +196,7 @@ describe('the mirror schedule', () => {
       lastFilename: 'old.db',
       lastBytes: 4096,
       lastMarker: '42',
-    })
+    }, {ifDirectoryEpoch: undefined})
     outcomes = [{kind: 'permission-lost', permission: 'prompt'}]
     const {job} = build()
 
@@ -235,7 +236,7 @@ describe('the mirror schedule', () => {
       lastOutcome: 'mirrored',
       lastMirrorAt: NOW - 3_600_000,
       lastFilename: 'old.db',
-    })
+    }, {ifDirectoryEpoch: undefined})
     const {job} = build({identifiable: false})
 
     await job.body!()
@@ -253,7 +254,7 @@ describe('the mirror schedule', () => {
     // that had reached a perfectly good verdict — the inference that recording
     // verdicts was introduced to replace.
     await enable()
-    await store.recordStatus(USER, {lastError: 'the disk was full last week', lastErrorAt: 1})
+    await store.recordStatus(USER, {lastError: 'the disk was full last week', lastErrorAt: 1}, {ifDirectoryEpoch: undefined})
     const {job} = build({identifiable: false})
 
     await job.body!()
@@ -269,7 +270,7 @@ describe('the mirror schedule', () => {
     // nothing looking wrong — the gate and the staleness test both read a
     // negative age as recent.
     await enable()
-    await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: NOW + 4 * 365 * 24 * 3_600_000})
+    await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: NOW + 4 * 365 * 24 * 3_600_000}, {ifDirectoryEpoch: undefined})
 
     const {job} = build()
 
@@ -319,7 +320,7 @@ describe('the mirror schedule', () => {
       incarnation: 'a-database-that-is-gone',
       lastMarker: '42',
       lastFilename: 'old.db',
-    })
+    }, {ifDirectoryEpoch: undefined})
     const {job} = build()
 
     await job.body!()
@@ -359,7 +360,9 @@ describe('the mirror schedule', () => {
     const next = await job.body!()
 
     expect(mirror).not.toHaveBeenCalled()
-    expect(next).toBe(INTERVAL_MS)
+    // A short retry, not the cadence: sync repopulates the log seconds later
+    // and nothing else re-arms the job when it does.
+    expect(next).toBe(NO_IDENTITY_RETRY_MS)
   })
 
   it('does not record a completed check when it could not identify the database', async () => {
@@ -412,7 +415,7 @@ describe('the mirror schedule', () => {
       await store.recordStatus(USER, {
         incarnation: 'a-database-that-is-gone',
         lastCheckedAt: NOW,
-      })
+      }, {ifDirectoryEpoch: undefined})
       const {job} = build()
 
       await job.body!()
@@ -843,7 +846,7 @@ describe('the mirror schedule', () => {
     await store.recordStatus(USER, {
       incarnation: 'a-database-that-is-gone',
       lastCheckedAt: NOW - 60_000,
-    })
+    }, {ifDirectoryEpoch: undefined})
 
     // Fence on the INCARNATION READ, not on the snapshot: the load publishes
     // before the continuation reads the incarnation, so waiting for a non-null
@@ -937,6 +940,106 @@ describe('the mirror schedule', () => {
     await job.body!()
 
     expect((await store.load(USER)).status.unprunableCopies).toBe(2)
+  })
+
+  it('re-arms this tab when another one chooses a folder or turns mirroring on', async () => {
+    // The settings surface re-arms only its OWN realm. Every other tab hears
+    // about the change through the store's broadcast and has no other signal,
+    // so anything this subscriber ignores leaves them on a delay chosen before
+    // the change — a week on the longest cadence, with the new folder empty.
+    await enable()
+    const {job} = build()
+    await vi.waitFor(() => expect(store.getSnapshot()?.settings.enabled).toBe(true))
+    job.rearms.length = 0
+
+    await store.setDirectory(USER, {kind: 'directory', name: 'Elsewhere'} as never)
+
+    // Due NOW, not one cadence from now.
+    await vi.waitFor(() => expect(job.rearms.at(-1)?.delayMs).toBe(0))
+  })
+
+  it('re-arms this tab when another one turns mirroring on', async () => {
+    await store.load(USER)
+    await store.setDirectory(USER, {kind: 'directory', name: 'Backups'} as never)
+    const {job} = build()
+    await vi.waitFor(() => expect(store.getSnapshot()).not.toBeNull())
+    job.rearms.length = 0
+
+    await store.updateSettings(USER, {enabled: true})
+
+    await vi.waitFor(() => expect(job.rearms.at(-1)?.delayMs).toBe(0))
+  })
+
+  it('does not clear a stale record against a folder the user has since replaced', async () => {
+    // The clearing write is a status write like any other. Unpinned, a run that
+    // loaded the OLD folder and then found its record stale wipes what a run
+    // against the NEW folder has already written.
+    await enable()
+    await store.recordStatus(
+      USER,
+      {incarnation: 'a-database-that-is-gone', lastOutcome: 'mirrored', lastFilename: 'old.db'},
+      {ifDirectoryEpoch: undefined},
+    )
+    const {job} = build()
+
+    // Between this run's load and its clearing write, the user picks a new
+    // folder and a run against it records a copy. Asserting the NEW record
+    // survives, not that the old one is gone: clearing writes `undefined`,
+    // which `setDirectory`'s own reset also produces, so an absence assertion
+    // cannot tell the two apart.
+    const reads = vi.spyOn((repo as unknown as {db: {getAll: (sql: string) => Promise<unknown>}}).db, 'getAll')
+    reads.mockImplementationOnce(async (sql: string) => {
+      await store.setDirectory(USER, {kind: 'directory', name: 'Elsewhere'} as never)
+      await store.recordStatus(
+        USER,
+        {lastFilename: 'copy-in-the-new-folder.db', lastOutcome: 'mirrored'},
+        {ifDirectoryEpoch: (await store.load(USER)).directoryEpoch},
+      )
+      return sql.includes('ORDER BY id LIMIT 1') ? [{born: 1700000000000}] : [{marker: 1}]
+    })
+    await job.body!()
+    reads.mockRestore()
+
+    expect((await store.load(USER)).status.lastFilename).toBe('copy-in-the-new-folder.db')
+  })
+
+  it('keeps widening the retry across the effect restarts a workspace change causes', async () => {
+    // The reconciler restarts every effect on a workspace change. A per-effect
+    // counter made every attempt a first attempt, so a destination that always
+    // reaches the export's deadline held the write lock for most of each cycle
+    // forever instead of backing off.
+    await enable()
+    outcomes = [new Error('the drive is full')]
+    const {schedule, job, stop} = build()
+    clock += INTERVAL_MS
+    expect(await job.body!()).toBe(FAILURE_RETRY_MS)
+
+    // What the reconciler does on a workspace change: same schedule, the effect
+    // stopped and started again.
+    stop?.()
+    schedule.effect.start({repo} as unknown as AppEffectContext)
+
+    clock += INTERVAL_MS
+    expect(await job.body!()).toBe(2 * FAILURE_RETRY_MS)
+  })
+
+  it('does not report a healthy mirror when it could not record a no-copy verdict', async () => {
+    // Dropping a status write is cheap for a completed copy — the next run just
+    // copies again. For a verdict that wrote NOTHING it leaves the last healthy
+    // record standing, so the chip reports a mirror that is fine while nothing
+    // is being written.
+    await enable()
+    const {job} = build({
+      store: {
+        ...store,
+        recordStatus: async () => { throw new Error('the origin is over quota') },
+      },
+      identifiable: false,
+    })
+
+    await job.body!()
+
+    expect(dbMirrorRuntimeHealth.getSnapshot()).toBe('the origin is over quota')
   })
 
   it('does not let a failed run defer the retry it just asked for', async () => {
@@ -1172,7 +1275,7 @@ describe('the mirror schedule', () => {
       const {job} = build()
       await vi.waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
 
-      await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: 1})
+      await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: 1}, {ifDirectoryEpoch: undefined})
 
       expect(job.rearms).toEqual([])
     })
@@ -1185,7 +1288,7 @@ describe('the mirror schedule', () => {
       // first delay each time would let someone who switches often postpone
       // mirroring for good.
       await enable()
-      await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: NOW - 30 * 60_000})
+      await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: NOW - 30 * 60_000}, {ifDirectoryEpoch: undefined})
       store = createDbMirrorStore()
       const {job} = build()
 
@@ -1197,7 +1300,7 @@ describe('the mirror schedule', () => {
 
     it('never comes due sooner than the job\u2019s own floor', async () => {
       await enable()
-      await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: NOW - 10 * 60 * 60_000})
+      await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: NOW - 10 * 60 * 60_000}, {ifDirectoryEpoch: undefined})
       store = createDbMirrorStore()
       const {job} = build()
 
@@ -1219,7 +1322,7 @@ describe('the mirror schedule', () => {
     // Otherwise the health chip has nothing to show until the first scheduled
     // run, which waits for a genuinely idle main thread and may never come.
     await enable()
-    await store.recordStatus(USER, {permissionLost: true, lastError: 'the grant lapsed', lastErrorAt: 1})
+    await store.recordStatus(USER, {permissionLost: true, lastError: 'the grant lapsed', lastErrorAt: 1}, {ifDirectoryEpoch: undefined})
     store = createDbMirrorStore()
     build()
 

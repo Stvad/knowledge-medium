@@ -76,8 +76,11 @@ vi.mock('../store.js', async (importOriginal) => {
         store().updateSettings(userId, patch),
       setDirectory: (userId: string, directory: Parameters<DbMirrorStore['setDirectory']>[1]) =>
         store().setDirectory(userId, directory),
-      recordStatus: (userId: string, patch: Parameters<DbMirrorStore['recordStatus']>[1]) =>
-        store().recordStatus(userId, patch),
+      recordStatus: (
+        userId: string,
+        patch: Parameters<DbMirrorStore['recordStatus']>[1],
+        opts: Parameters<DbMirrorStore['recordStatus']>[2],
+      ) => store().recordStatus(userId, patch, opts),
       getSnapshot: () => store().getSnapshot(),
       subscribe: (listener: () => void) => store().subscribe(listener),
     } satisfies DbMirrorStore,
@@ -173,7 +176,7 @@ describe('DbMirrorSettingsDialog', () => {
 
   it('changing the folder clears the previous folder’s failure and restarts the loop', async () => {
     await store.setDirectory(USER, fakeDirectory('Backups'))
-    await store.recordStatus(USER, {permissionLost: true, lastError: 'the grant lapsed', lastErrorAt: 1})
+    await store.recordStatus(USER, {permissionLost: true, lastError: 'the grant lapsed', lastErrorAt: 1}, {ifDirectoryEpoch: undefined})
     mocks.chooseMirrorDirectory.mockResolvedValue(fakeDirectory('Elsewhere'))
     renderDialog()
     await waitForLoaded()
@@ -272,7 +275,7 @@ describe('DbMirrorSettingsDialog', () => {
       permissionLost: true,
       lastError: 'This browser no longer has permission to write to the chosen folder.',
       lastErrorAt: 1,
-    })
+    }, {ifDirectoryEpoch: undefined})
     mocks.requestDirectoryPermission.mockResolvedValue('granted')
 
     renderDialog()
@@ -312,6 +315,36 @@ describe('DbMirrorSettingsDialog', () => {
     expect(mocks.resume).not.toHaveBeenCalled()
   })
 
+  it('does not clear a failure belonging to a folder chosen while it was asking', async () => {
+    // The browser prompt is asynchronous and another tab can choose a different
+    // folder while it is open. Clearing unconditionally wipes a real error the
+    // NEW folder has just recorded, hiding it until the next scheduled run.
+    await store.updateSettings(USER, {enabled: true})
+    await store.setDirectory(USER, fakeDirectory('Backups'))
+    await store.recordStatus(USER, {permissionLost: true, lastError: 'the grant lapsed'}, {ifDirectoryEpoch: undefined})
+    renderDialog()
+    await waitForLoaded()
+
+    let release!: (value: PermissionState) => void
+    mocks.requestDirectoryPermission.mockReturnValue(
+      new Promise<PermissionState>(resolve => { release = resolve }),
+    )
+    fireEvent.click(screen.getByRole('button', {name: /grant access again/i}))
+    await waitFor(() => expect(mocks.requestDirectoryPermission).toHaveBeenCalled())
+
+    // The folder moves on, and a run against it records a real failure.
+    await store.setDirectory(USER, fakeDirectory('Elsewhere'))
+    await store.recordStatus(
+      USER,
+      {lastError: 'the new drive is full'},
+      {ifDirectoryEpoch: (await store.load(USER)).directoryEpoch},
+    )
+    release('granted')
+
+    await waitFor(() => expect(mocks.requestDirectoryPermission).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(store.getSnapshot()?.status.lastError).toBe('the new drive is full'))
+  })
+
   it('a re-grant the browser refuses leaves the flag set', async () => {
     const directory = fakeDirectory('Backups')
     await store.setDirectory(USER, directory)
@@ -319,7 +352,7 @@ describe('DbMirrorSettingsDialog', () => {
       permissionLost: true,
       lastError: 'This browser no longer has permission to write to the chosen folder.',
       lastErrorAt: 1,
-    })
+    }, {ifDirectoryEpoch: undefined})
     mocks.requestDirectoryPermission.mockResolvedValue('denied')
 
     renderDialog()

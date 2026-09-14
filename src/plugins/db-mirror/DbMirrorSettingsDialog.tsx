@@ -167,6 +167,11 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
   const handleGrantAgain = (): void => {
     const directory = state?.directory
     if (!directory) return
+    // Captured WITH the handle: the browser prompt is asynchronous, and another
+    // tab can choose a different folder while it is open. Clearing the failure
+    // unconditionally would then wipe a real error the new folder had just
+    // recorded, hiding it until the next scheduled run.
+    const ifDirectoryEpoch = state?.directoryEpoch
     setGranting(true)
     requestDirectoryPermission(directory)
       .then(async result => {
@@ -175,7 +180,7 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
             permissionLost: false,
             lastError: undefined,
             lastErrorAt: undefined,
-          }))
+          }, {ifDirectoryEpoch}))
           if (cleared) dbMirrorSchedule.resume()
         } else {
           showError('The browser refused to grant access to the folder again.')

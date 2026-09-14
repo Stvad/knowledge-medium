@@ -29,6 +29,7 @@ import {withMirrorRunLock} from './runLock.js'
 import {
   DB_MIRROR_DEFAULTS,
   dbMirrorStore,
+  type DbMirrorState,
   type DbMirrorStore,
   type DbMirrorVerdict,
 } from './store.js'
@@ -66,6 +67,13 @@ export const BUSY_RETRY_MS = 5 * 60_000
 const remainingIn = (elapsed: number | undefined, window: number): number | undefined =>
   elapsed !== undefined && elapsed >= 0 && elapsed < window ? window - elapsed : undefined
 
+/** A database whose log is still empty. Transient by nature — it is the window
+ *  between a wipe or an import and sync writing the first event — so it gets a
+ *  short retry like the busy path rather than the full cadence, which on a
+ *  weekly setting left the warning up and no copy taken for a week after sync
+ *  had already finished. Nothing else re-arms the job when sync completes. */
+export const NO_IDENTITY_RETRY_MS = 60_000
+
 export const PERMISSION_LOST_MESSAGE =
   'This browser no longer has permission to write to the chosen folder, so no copies are ' +
   'being made. Open the mirror settings to grant it again.'
@@ -85,6 +93,13 @@ export interface DbMirrorRunReport {
   outcome: DbMirrorTickResult
   /** Wall clock the loop should wait before the next run. */
   intervalMs: number
+  /** Set when the run reached a verdict but could not RECORD it. Dropping a
+   *  status write is cheap for a completed copy — the marker goes unrecorded
+   *  and the next run copies again, the safe direction. It is not cheap for a
+   *  verdict that produced NO copy: the persisted status then still describes
+   *  the last healthy run, so the chip reports a mirror that is fine while
+   *  nothing is being written. The tick surfaces this instead of clearing. */
+  bookkeepingFailed?: string
 }
 
 export interface DbMirrorScheduleDeps {
@@ -137,6 +152,14 @@ export const createDbMirrorSchedule = ({
    *  theirs. Other TABS are excluded by `withMirrorRunLock`. */
   let inFlight: {userId: string; run: Promise<DbMirrorRunReport>} | null = null
 
+  /** Consecutive failures, kept OUTSIDE the effect. The reconciler restarts
+   *  every effect on a workspace change, so a per-effect counter made every
+   *  attempt a first attempt for anyone who switches workspaces at all — the
+   *  ladder never widened, and a destination that always reaches the export's
+   *  three-minute deadline then held the write lock for most of every cycle.
+   *  Any run that gets through resets it. */
+  let consecutiveFailures = 0
+
   /** The interval this schedule last actually READ, for the failure path —
    *  which has no report to take one from, and must not go back to storage that
    *  may be what failed. Remembered rather than re-derived from the snapshot,
@@ -152,12 +175,14 @@ export const createDbMirrorSchedule = ({
   const recordStatus = async (
     userId: string,
     patch: Parameters<DbMirrorStore['recordStatus']>[1],
-    opts?: {ifDirectoryEpoch?: number},
-  ): Promise<void> => {
+    opts: {ifDirectoryEpoch: number | undefined},
+  ): Promise<string | undefined> => {
     try {
       await store.recordStatus(userId, patch, opts)
+      return undefined
     } catch (err) {
       console.warn('[db-mirror] could not record the run status', err)
+      return describeError(err)
     }
   }
 
@@ -172,9 +197,9 @@ export const createDbMirrorSchedule = ({
     userId: string,
     at: number,
     kind: DbMirrorVerdict,
-    patch: Parameters<DbMirrorStore['recordStatus']>[1] = {},
-    opts?: {ifDirectoryEpoch?: number},
-  ): Promise<void> =>
+    patch: Parameters<DbMirrorStore['recordStatus']>[1],
+    opts: {ifDirectoryEpoch: number | undefined},
+  ): Promise<string | undefined> =>
     recordStatus(userId, {
       // A run that reached a verdict at all got past the permission check and
       // the folder, so any failure on the record describes a state that is
@@ -225,13 +250,15 @@ export const createDbMirrorSchedule = ({
     const concludeHere = (
       kind: DbMirrorVerdict,
       patch: Parameters<DbMirrorStore['recordStatus']>[1] = {},
-    ): Promise<void> => conclude(userId, at, kind, patch, {ifDirectoryEpoch})
+    ): Promise<string | undefined> => conclude(userId, at, kind, patch, {ifDirectoryEpoch})
     // Every path that turns mirroring on is a persisting write, and those mint
     // the install id — so reaching here without one means a half-written
     // record. Minting it now rather than carrying an "install unknown" state
     // through the run is what keeps ownership decidable: a copy whose install
     // group we do not recognise is a copy nothing can ever reclaim.
-    const installId = state.installId ?? (await store.recordStatus(userId, {})).installId
+    // Not folder-scoped: it mints an id and touches no status field.
+    const installId =
+      state.installId ?? (await store.recordStatus(userId, {}, {ifDirectoryEpoch: undefined})).installId
     // Unreachable through the real store, which mints on every persisting
     // write; this is the narrowing, and a loud answer for an injected store
     // that does not.
@@ -271,13 +298,13 @@ export const createDbMirrorSchedule = ({
         lastBytes: undefined,
         unmanagedCopies: undefined,
         unprunableCopies: undefined,
-      })
+      }, {ifDirectoryEpoch})
     }
     // An empty log is the one case that warrants no copy at all; an unreadable
     // one still takes a copy. `readDatabaseIncarnation` owns why they differ.
     if (reading.kind === 'empty') {
-      await concludeHere('no-identity')
-      return {outcome: {kind: 'no-identity'}, intervalMs}
+      const bookkeepingFailed = await concludeHere('no-identity')
+      return {outcome: {kind: 'no-identity'}, intervalMs, bookkeepingFailed}
     }
 
     // The interval belongs to the DEVICE, not to this tab's timer: every tab
@@ -313,6 +340,7 @@ export const createDbMirrorSchedule = ({
     if (dueInMs !== undefined) return {outcome: {kind: 'too-soon', dueInMs}, intervalMs}
 
     try {
+      let bookkeepingFailed: string | undefined
       const outcome = await withRunLock(dbFilenameForUser(userId), () => mirror({
         repo,
         directory,
@@ -368,7 +396,7 @@ export const createDbMirrorSchedule = ({
           })
           break
         case 'permission-lost':
-          await concludeHere('permission-lost', {
+          bookkeepingFailed = await concludeHere('permission-lost', {
             permissionLost: true,
             lastError: PERMISSION_LOST_MESSAGE,
             lastErrorAt: at,
@@ -382,7 +410,7 @@ export const createDbMirrorSchedule = ({
           console.warn('[db-mirror] unhandled run outcome', unhandled)
         }
       }
-      return {outcome, intervalMs}
+      return {outcome, intervalMs, bookkeepingFailed}
     } catch (err) {
       await concludeHere('failed', {
         // The permission check happens before the copy and returns rather than
@@ -433,6 +461,8 @@ export const createDbMirrorSchedule = ({
       // on a fixed retry that would land early and take a second copy.
       case 'too-soon':
         return report.outcome.dueInMs
+      case 'no-identity':
+        return Math.min(NO_IDENTITY_RETRY_MS, report.intervalMs)
       default:
         return report.intervalMs
     }
@@ -486,26 +516,42 @@ export const createDbMirrorSchedule = ({
     // armed on the job's own short first delay, and re-arming it to the full
     // interval here would push a fresh session's first copy a whole cadence
     // out.
-    let armedFor = store.getSnapshot()?.settings.intervalMinutes
-    let watchedFolder = store.getSnapshot()?.directoryEpoch
+    /** Everything about the settings that decides WHEN the next copy is due.
+     *  The settings surface re-arms the tab it runs in; the store's broadcast is
+     *  what carries the change to the others, and they have no other way to
+     *  hear it — so anything left out here leaves every OTHER tab sitting on a
+     *  delay chosen before the change, which on a weekly cadence is a week with
+     *  the newly chosen folder empty. */
+    const eligibilityOf = (state: DbMirrorState | null) => ({
+      interval: state?.settings.intervalMinutes,
+      enabled: state?.settings.enabled,
+      folder: state?.directoryEpoch,
+    })
+    let armedFor = eligibilityOf(store.getSnapshot())
     const stopWatching = store.subscribe(() => {
-      const snapshot = store.getSnapshot()
+      const next = eligibilityOf(store.getSnapshot())
+      if (next.interval === undefined) return
       // A run started against the PREVIOUS folder answers a question about a
       // folder nobody is looking at any more. Detaching it is what stops the
       // next tick JOINING it on a matching user id and adopting its `mirrored`
       // verdict — and its full interval — for a folder it never wrote a byte
-      // to, which left the newly chosen one empty for up to a week. The run
-      // itself continues and its own status write is refused by the epoch.
-      const folder = snapshot?.directoryEpoch
-      if (folder !== watchedFolder) {
-        watchedFolder = folder
-        detachInFlight()
-      }
-      const minutes = snapshot?.settings.intervalMinutes
-      if (minutes === undefined || minutes === armedFor) return
-      const baseline = armedFor === undefined
-      armedFor = minutes
-      if (!baseline) loop.rearmIn(minutes * 60_000)
+      // to. The run itself continues, and its own status write is refused by
+      // the epoch.
+      if (next.folder !== armedFor.folder) detachInFlight()
+      const changed =
+        next.interval !== armedFor.interval ||
+        next.enabled !== armedFor.enabled ||
+        next.folder !== armedFor.folder
+      // The FIRST reading is a baseline, not a change: the loop has just been
+      // armed on the job's own short first delay, and re-arming it to the full
+      // interval here would push a fresh session's first copy a cadence out.
+      const baseline = armedFor.interval === undefined
+      const onlyTheInterval = next.folder === armedFor.folder && next.enabled === armedFor.enabled
+      armedFor = next
+      if (!changed || baseline) return
+      // A new folder or a fresh opt-in is due NOW, not one cadence from now;
+      // only a changed interval re-times the schedule that is already running.
+      loop.rearmIn(onlyTheInterval ? next.interval * 60_000 : 0)
     })
 
     // LAST, after everything above that can throw: a `start` that throws has no
@@ -546,13 +592,12 @@ export const createDbMirrorSchedule = ({
       // records a failure to the store, but a failure to READ the store cannot
       // be recorded there at all, and that is the one that would otherwise
       // leave the chip claiming a healthy mirror forever.
-      let consecutiveFailures = 0
       const loop = job.start(
         async () => {
           try {
             const report = await performDbMirror(repo)
             consecutiveFailures = 0
-            if (isLive()) dbMirrorRuntimeHealth.report(undefined)
+            if (isLive()) dbMirrorRuntimeHealth.report(report.bookkeepingFailed)
             return delayFor(report)
           } catch (err) {
             consecutiveFailures += 1

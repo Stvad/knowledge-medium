@@ -218,11 +218,18 @@ export interface DbMirrorStore {
   setDirectory: (userId: string, directory: FileSystemDirectoryHandle | undefined) => Promise<DbMirrorState>
   /** `ifDirectoryEpoch` makes the write conditional on the folder not having
    *  changed since the caller read it. Checked INSIDE the transaction, because
-   *  the whole point is that time passes between the two. */
+   *  the whole point is that time passes between the two.
+   *
+   *  REQUIRED, not optional, and that is a fix for the class rather than for a
+   *  case: three review rounds each found another write that had quietly
+   *  omitted it and could land a stale run's verdict on the folder the user had
+   *  just chosen. Omitting it is now a compile error, so every call site — and
+   *  every future one — has to say which it is. `undefined` means "not
+   *  folder-scoped", as a statement rather than as a default. */
   recordStatus: (
     userId: string,
     patch: DbMirrorStatus,
-    opts?: {ifDirectoryEpoch?: number},
+    opts: {ifDirectoryEpoch: number | undefined},
   ) => Promise<DbMirrorState>
   /** The last loaded state, or null before the first load. Stable BETWEEN
    *  writes, which is what `useSyncExternalStore` needs; a re-read publishes a
@@ -364,7 +371,7 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
       })),
     recordStatus: (userId, patch, opts) =>
       update(userId, state =>
-        opts?.ifDirectoryEpoch !== undefined && state.directoryEpoch !== opts.ifDirectoryEpoch
+        opts.ifDirectoryEpoch !== undefined && state.directoryEpoch !== opts.ifDirectoryEpoch
           ? state
           : {...state, status: normalizeStatus({...state.status, ...patch})},
       ),
