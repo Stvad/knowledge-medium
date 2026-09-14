@@ -1,1 +1,0 @@
-import{Bc as e,Gc as t,Hc as n,Kc as r,Uc as i,Vc as a,Wc as o,zc as s}from"../../../chunks/app-D4rzBr2O.js";export{s as PROVE_DISTINCT_VALUE_LIMIT,e as applyPropertyDefinitionSynthesis,a as flipBlockedBySynthesis,n as keyCannotBeDefined,i as planPropertyDefinitionSynthesis,o as provePresetId,t as resolveSynthesisNamespace,r as synthesizedPropertyDefinitionBlockId};

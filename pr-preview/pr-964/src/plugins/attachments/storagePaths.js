@@ -1,1 +1,0 @@
-import{hp as e,mp as t}from"../../../chunks/app-D4rzBr2O.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};

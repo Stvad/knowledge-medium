@@ -1,1 +1,0 @@
-import{Jl as e,Kl as t,Xl as n,Yl as r,ql as i}from"../../../chunks/app-D4rzBr2O.js";export{t as DEFAULT_BACKLINKS_VIEW_ID,i as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,r as backlinksViewProp,n as defaultBacklinksViewIdForBlock};

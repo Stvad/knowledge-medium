@@ -1,1 +1,0 @@
-import{Kp as e,am as t,im as n,om as r,sm as i}from"../../../chunks/app-D4rzBr2O.js";export{t as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,e as onboardingPlugin,n as seedTutorial};

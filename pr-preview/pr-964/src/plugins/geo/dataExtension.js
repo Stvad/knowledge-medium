@@ -1,1 +1,0 @@
-import{SI as e}from"../../../chunks/app-D4rzBr2O.js";export{e as geoDataExtension};

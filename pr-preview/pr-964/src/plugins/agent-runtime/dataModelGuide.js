@@ -1,1 +1,0 @@
-import{dl as e}from"../../../chunks/app-D4rzBr2O.js";export{e as DATA_MODEL_GUIDE};
