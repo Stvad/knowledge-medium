@@ -1,8 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-/* Force-generated utility vocabulary so dynamically-loaded extensions
- * (whose source Tailwind never scans) can rely on standard classes. */
-@import "./extension-utilities.css";
+/* The dynamic-extension safelist (extension-utilities.css) is loaded on
+ * demand by extensionUtilitiesCss.ts, not imported here. */
 
 @plugin "tailwind-scrollbar";
 

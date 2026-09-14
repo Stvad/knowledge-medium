@@ -4,6 +4,7 @@ import {
   type CompiledModuleCache,
   type CompiledRecord,
 } from '@/extensions/compiledModuleCache.js'
+import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.js'
 
 // Bump when the Babel preset list / transform options change so older
 // cache entries (in-memory OR persisted) don't deliver wrong-shaped
@@ -185,6 +186,10 @@ function resolveCachedModule(
   blockId: string,
   factory: () => Promise<ExtensionModule>,
 ): Promise<ExtensionModule> {
+  // Start the Tailwind safelist load on every resolution, cache hit included;
+  // the runtime apply awaits it before extensions render.
+  void ensureExtensionUtilitiesCss()
+
   let modulesForBlock = cache.byBlockAndHash.get(blockId)
   if (!modulesForBlock) {
     modulesForBlock = new Map()

@@ -127,6 +127,7 @@ const internalModuleIndex = import.meta.glob([
   '/src/shortcuts/**/*.{ts,tsx}',
   '/src/utils/**/*.{ts,tsx}',
   '!/src/**/*.test.{ts,tsx}',
+  '!/src/**/*.d.ts',
   '!/src/**/test/**/*.{ts,tsx}',
   // The worked examples are guidance inlined above as text, not modules an
   // extension should import. Both families, and any future one.

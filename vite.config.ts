@@ -14,7 +14,12 @@ import {globSync} from 'node:fs'
 
 
 /** Every internal module as a Rollup input, so an extension can import ANY of
- *  them and get its full export surface.
+ *  them at its stable `@/` path and get its full export surface. The boot
+ *  graph itself is bundled into one chunk (`codeSplitting` below); each of
+ *  these entries then emits as a thin facade re-exporting from it, so the
+ *  importmap contract holds while the browser loads ~3 files at boot instead
+ *  of ~1,500 (the per-file loader cost, not JS linking, was ~0.5 s of an
+ *  iPhone cold launch).
  *
  *  `preserveEntrySignatures` protects ENTRY points only, so a non-entry module
  *  keeps just the exports something imports across a module boundary (the
@@ -124,23 +129,6 @@ export default defineConfig(({command}) => {
             externalize({
                 externals: [isReactImportExternal],
             }),
-            {
-                name: 'only-main-entry',
-                /**
-                 * Reason for this is that when we have preserveModules, Vite will for some reason will inject
-                 * script tags for all the modules in the project.
-                 * Which is probably not an issue generally, but if we externalize react and react-dom, this results in
-                 * tags that point at /react and don't resolve via import maps.
-                 *
-                 * Keep the actual entry script regardless of whether the app is deployed at / or under a subpath.
-                 * Vite may emit a small index.js entry wrapper which imports src/main.js.
-                 */
-                transformIndexHtml(html: string) {
-                    return html.replace(/<script\s+type="module" crossorigin .*?src="([^"]*)".*?><\/script>\s*/g, (match, src) => {
-                        return /(^|\/)(index|src\/main)\.js(?:$|[?#])/.test(src) ? match : '';
-                    })
-                },
-            },
             reactImportMapProductionPlugin(),
             // Substitutes the theme-boot placeholder tokens in index.html's
             // pre-paint script with the source-of-truth values from
@@ -212,12 +200,22 @@ export default defineConfig(({command}) => {
                 // main: path.resolve(__dirname, 'src/main.tsx'),
                 // },
                 output: {
-                    preserveModules: true, // Preserves the module structure
-                    preserveModulesRoot: process.cwd(),
-                    // Set file naming without hashes.
+                    // Entries (every src/** file, see allSrcEntries) keep their
+                    // stable unhashed paths; the code itself lives in the `app`
+                    // chunk they re-export from. Dynamic-only modules get
+                    // rolldown's default chunking under chunks/.
                     entryFileNames: '[name].js',
-                    chunkFileNames: '[name].js',
+                    chunkFileNames: 'chunks/[name]-[hash].js',
                     assetFileNames: '[name][extname]',
+                    codeSplitting: {
+                        minSize: 0,
+                        minShareCount: 1,
+                        // The static closure of the entry: rolldown captures a matched
+                        // module's static dependencies recursively by default and stops
+                        // at import(), so a lazy boundary in the source is one in the
+                        // build. The emitted shape is gated by scripts/check-dist-exports.ts.
+                        groups: [{name: 'app', minSize: 0, test: (id: string) => id === path.resolve(__dirname, 'src/main.tsx')}],
+                    },
                 },
                 preserveEntrySignatures: 'strict', // Preserves the signature of the entry point
             },
