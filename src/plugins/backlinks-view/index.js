@@ -1,1 +1,1 @@
-import{kl as e}from"../../../chunks/app-EseZEEZM.js";export{e as backlinksViewPlugin};
+import{Nl as e}from"../../../chunks/app-DXNmrXLD.js";export{e as backlinksViewPlugin};

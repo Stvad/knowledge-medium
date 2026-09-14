@@ -1,1 +1,1 @@
-import{Ew as e}from"../../chunks/app-EseZEEZM.js";export{e as dynamicExtensionsExtension};
+import{Aw as e}from"../../chunks/app-DXNmrXLD.js";export{e as dynamicExtensionsExtension};

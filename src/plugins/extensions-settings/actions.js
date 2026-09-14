@@ -1,1 +1,1 @@
-import{SC as e,xC as t}from"../../../chunks/app-EseZEEZM.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
+import{EC as e,TC as t}from"../../../chunks/app-DXNmrXLD.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

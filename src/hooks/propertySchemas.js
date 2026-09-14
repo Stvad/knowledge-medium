@@ -1,1 +1,1 @@
-import{lN as e}from"../../chunks/app-EseZEEZM.js";export{e as usePropertySchemas};
+import{pN as e}from"../../chunks/app-DXNmrXLD.js";export{e as usePropertySchemas};

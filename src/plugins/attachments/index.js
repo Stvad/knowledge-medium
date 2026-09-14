@@ -1,1 +1,1 @@
-import{xd as e}from"../../../chunks/app-EseZEEZM.js";export{e as attachmentsPlugin};
+import{Td as e}from"../../../chunks/app-DXNmrXLD.js";export{e as attachmentsPlugin};

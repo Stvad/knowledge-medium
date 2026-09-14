@@ -1,1 +1,1 @@
-import{ID as e}from"../../chunks/app-EseZEEZM.js";export{e as useShortcutSurfaceActivations};
+import{BD as e}from"../../chunks/app-DXNmrXLD.js";export{e as useShortcutSurfaceActivations};

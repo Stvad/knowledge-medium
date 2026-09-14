@@ -1,1 +1,1 @@
-import{Ak as e,jk as t}from"../../../chunks/app-EseZEEZM.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
+import{Fk as e,Pk as t}from"../../../chunks/app-DXNmrXLD.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

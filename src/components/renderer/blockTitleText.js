@@ -1,1 +1,1 @@
-import{vO as e,yO as t}from"../../../chunks/app-EseZEEZM.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};
+import{CO as e,SO as t}from"../../../chunks/app-DXNmrXLD.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

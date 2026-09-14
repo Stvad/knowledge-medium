@@ -1,1 +1,1 @@
-import{BT as e,HT as t,VT as n}from"../../../chunks/app-EseZEEZM.js";export{e as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,t as writeBlockTypeLabel};
+import{GT as e,KT as t,WT as n}from"../../../chunks/app-DXNmrXLD.js";export{n as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,t as writeBlockTypeLabel};

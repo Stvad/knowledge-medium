@@ -1,1 +1,1 @@
-import{G_ as e}from"../../../chunks/app-EseZEEZM.js";export{e as openRecentsPage};
+import{Y_ as e}from"../../../chunks/app-DXNmrXLD.js";export{e as openRecentsPage};

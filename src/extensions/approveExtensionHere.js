@@ -1,1 +1,1 @@
-import{MC as e}from"../../chunks/app-EseZEEZM.js";export{e as approveExtensionHere};
+import{IC as e}from"../../chunks/app-DXNmrXLD.js";export{e as approveExtensionHere};

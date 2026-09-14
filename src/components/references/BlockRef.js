@@ -1,1 +1,1 @@
-import{B_ as e}from"../../../chunks/app-EseZEEZM.js";export{e as BlockRef};
+import{W_ as e}from"../../../chunks/app-DXNmrXLD.js";export{e as BlockRef};

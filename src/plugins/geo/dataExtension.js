@@ -1,1 +1,1 @@
-import{SI as e}from"../../../chunks/app-EseZEEZM.js";export{e as geoDataExtension};
+import{OI as e}from"../../../chunks/app-DXNmrXLD.js";export{e as geoDataExtension};

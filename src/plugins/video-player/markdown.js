@@ -1,1 +1,1 @@
-import{_p as e}from"../../../chunks/app-EseZEEZM.js";export{e as videoPlayerMarkdownExtension};
+import{xp as e}from"../../../chunks/app-DXNmrXLD.js";export{e as videoPlayerMarkdownExtension};

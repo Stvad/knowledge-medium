@@ -1,1 +1,1 @@
-import{Er as e,wr as t}from"../../../chunks/app-EseZEEZM.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};
+import{Ar as e,Or as t}from"../../../chunks/app-DXNmrXLD.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

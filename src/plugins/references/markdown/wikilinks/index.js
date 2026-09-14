@@ -1,1 +1,1 @@
-import{Fu as e}from"../../../../../chunks/app-EseZEEZM.js";export{e as wikilinkMarkdownExtension};
+import{zu as e}from"../../../../../chunks/app-DXNmrXLD.js";export{e as wikilinkMarkdownExtension};

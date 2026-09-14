@@ -1,1 +1,1 @@
-import{Fy as e,Iy as t,Py as n}from"../../../../../chunks/app-EseZEEZM.js";export{n as isWikilinkDisplayParts,e as resolveWikilinkDisplay,t as wikilinkDisplayDecoratorFacet};
+import{By as e,Ry as t,zy as n}from"../../../../../chunks/app-DXNmrXLD.js";export{t as isWikilinkDisplayParts,n as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};

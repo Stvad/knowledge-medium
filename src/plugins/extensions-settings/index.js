@@ -1,1 +1,1 @@
-import{TC as e,ft as t,wC as n}from"../../../chunks/app-EseZEEZM.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
+import{OC as e,gt as t,kC as n}from"../../../chunks/app-DXNmrXLD.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

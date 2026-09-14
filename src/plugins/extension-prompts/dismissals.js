@@ -1,1 +1,1 @@
-import{AC as e,jC as t,kC as n}from"../../../chunks/app-EseZEEZM.js";export{n as ExtensionPromptDismissalStore,e as extensionPromptDismissals,t as useExtensionPromptDismissals};
+import{FC as e,NC as t,PC as n}from"../../../chunks/app-DXNmrXLD.js";export{t as ExtensionPromptDismissalStore,n as extensionPromptDismissals,e as useExtensionPromptDismissals};

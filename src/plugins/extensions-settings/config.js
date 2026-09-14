@@ -1,1 +1,1 @@
-import{CC as e,EC as t,TC as n,wC as r}from"../../../chunks/app-EseZEEZM.js";export{e as extensionsOverridesPresetCore,r as extensionsOverridesProp,n as extensionsPrefsType,t as overridesCodec};
+import{AC as e,DC as t,OC as n,kC as r}from"../../../chunks/app-DXNmrXLD.js";export{t as extensionsOverridesPresetCore,n as extensionsOverridesProp,r as extensionsPrefsType,e as overridesCodec};

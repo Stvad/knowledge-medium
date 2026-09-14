@@ -1,1 +1,1 @@
-import{am as e,cm as t,lm as n,om as r,sm as i}from"../../../chunks/app-EseZEEZM.js";export{e as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,t as extensionsPageOutline,n as tutorialOutline};
+import{dm as e,fm as t,lm as n,pm as r,um as i}from"../../../chunks/app-DXNmrXLD.js";export{n as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,e as TUTORIAL_VIM_TITLE,t as extensionsPageOutline,r as tutorialOutline};

@@ -1,1 +1,1 @@
-import{aW as e,cW as t,iW as n,lW as r,oW as i,rW as a,sW as o}from"../../../chunks/app-EseZEEZM.js";export{a as ENVELOPE_PREFIX,n as GCM_TAG_BYTES,e as NONCE_BYTES,i as SCHEMA_VERSION,o as decodeEnvelope,t as encodeEnvelope,r as hasEnvelopePrefix};
+import{dW as e,fW as t,gW as n,hW as r,mW as i,pW as a,uW as o}from"../../../chunks/app-DXNmrXLD.js";export{o as ENVELOPE_PREFIX,e as GCM_TAG_BYTES,t as NONCE_BYTES,a as SCHEMA_VERSION,i as decodeEnvelope,r as encodeEnvelope,n as hasEnvelopePrefix};

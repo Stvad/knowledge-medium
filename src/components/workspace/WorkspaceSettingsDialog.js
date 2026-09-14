@@ -1,1 +1,1 @@
-import{bg as e}from"../../../chunks/app-EseZEEZM.js";export{e as WorkspaceSettingsDialog};
+import{wg as e}from"../../../chunks/app-DXNmrXLD.js";export{e as WorkspaceSettingsDialog};

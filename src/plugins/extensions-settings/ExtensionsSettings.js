@@ -1,1 +1,1 @@
-import{yt as e}from"../../../chunks/app-EseZEEZM.js";export{e as ExtensionsSettings};
+import{Ct as e}from"../../../chunks/app-DXNmrXLD.js";export{e as ExtensionsSettings};

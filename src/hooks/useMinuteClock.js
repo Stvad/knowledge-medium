@@ -1,1 +1,1 @@
-import{U_ as e}from"../../chunks/app-EseZEEZM.js";export{e as useMinuteClock};
+import{q_ as e}from"../../chunks/app-DXNmrXLD.js";export{e as useMinuteClock};

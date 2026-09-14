@@ -1,1 +1,1 @@
-import{XV as e,YV as t}from"../../../chunks/app-EseZEEZM.js";export{t as observePropertyDefinitionCodecs,e as recordAppliedPropertyDefinitionCodecs};
+import{nH as e,rH as t}from"../../../chunks/app-DXNmrXLD.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};
