@@ -36,6 +36,70 @@ export interface TimingSample {
   totalMs: number
 }
 
+/** A query's timings, plus the subset taken while the DB connection pool was
+ *  free. The wall-clock fields above are what callers actually waited; on a
+ *  pool shallower than a render's fan-out they are mostly the queue ahead of
+ *  the caller, so they move with render order and CANNOT be compared between
+ *  sessions. `uncontended` is the same query measured with no queue THIS CAN
+ *  SEE — fewer samples, and comparable to the same subset in another session
+ *  rather than to a guarantee. What the tracker cannot observe (see
+ *  `DbContention`) it cannot filter out.
+ *
+ *  ABSENT on records written before this existed; read a missing field as "not
+ *  measured", never as zero. */
+export interface QueryTimingSample extends TimingSample {
+  uncontended?: {
+    /** Samples BACKING the two percentiles: resolves that met the filter above
+     *  and are still retained in the reservoir, so at most its 256-sample capacity.
+     *  NOT the lifetime count — that keeps climbing while the percentiles stay
+     *  computed over the window, and storing it here would claim thousands of
+     *  samples behind a figure drawn from 256.
+     *
+     *  Also the honest count of INDEPENDENT measurements, since coalesced
+     *  callers (N awaiting one statement, each recording its whole wall-clock)
+     *  never reach here. */
+    calls: number
+    p50Ms: number
+    p95Ms: number
+  }
+}
+
+/** A session's `ContentionSnapshot`, flattened for storage.
+ *
+ *  EVERY FIELD BELOW MEANS WHAT IT MEANS ON `ContentionSnapshot`, and that
+ *  declaration is the one place their semantics are written down — including
+ *  what each can and cannot claim about a pool this tracker only partly
+ *  observes. Restating any of it here is how the two came to disagree: a
+ *  correction lands on one copy and the other keeps the old claim.
+ *
+ *  What IS specific to storage is documented here, and nothing else.
+ *
+ *  Stored for diagnosis and NOT compared by `series.ts`: like `db`, these are
+ *  page totals including the recorder's own reads, and since it samples on idle
+ *  its own reads land squarely among the uncontended ones — on a quiet session,
+ *  most of them. The per-query `uncontended` samples above are the comparable
+ *  ones. */
+export interface ContentionSample {
+  calls: number
+  concurrentIssues: number
+  maxDepth: number
+  busyMs: number
+  sharedWork: number
+  uncontendedCalls: number
+  /** Flattened from the reservoir's `sampleCount`, not its lifetime `calls`:
+   *  the percentiles below are computed over what the buffer still holds, and
+   *  the lifetime figure would claim thousands of samples behind a number drawn
+   *  from at most its capacity. Kept separate from `uncontendedCalls` because
+   *  reads are a strict subset of it — a session with unqueued writes and no
+   *  unqueued reads would otherwise store as a real distribution of
+   *  zero-millisecond reads. Zero means the percentiles are not measurements. */
+  uncontendedReadCalls: number
+  uncontendedReadP50Ms: number
+  uncontendedReadP95Ms: number
+  foreignIntervals: number
+  syncObserved: boolean
+}
+
 /** The subset of a sample a trend actually compares — split out so a live
  *  `repo.metrics()` snapshot can be compared to stored history without a write+readback round trip first. */
 export interface InteractionComparable {
@@ -48,7 +112,7 @@ export interface InteractionComparable {
    *  transaction's synchronous fan-out. ACCEPTED: noise on a busy session, but
    *  can dominate the idle sessions this recorder actually samples — read a
    *  low-`writes` session's p95 with that in mind. */
-  queries: Record<string, TimingSample>
+  queries: Record<string, QueryTimingSample>
   /** `handleStore` fan-out counters attributable to a transaction's own
    *  invalidation walk (flat map, bounded). Settle-path counters
    *  (`notifiesFired`, `reloadsAfterSettle`) are ABSENT, not zero — bumped
@@ -78,6 +142,11 @@ export interface InteractionRecordData extends InteractionComparable {
    *  session pays the same handful of calls, so they wash out of later
    *  comparisons; expect a large share on a quiet session. */
   db: Record<string, TimingSample>
+  /** Observed pool occupancy and overlap, as context for the timings above.
+   *  NOT a decomposition of them: nothing here says how much of any duration
+   *  was queueing rather than work, and on a two-connection device an
+   *  overlapping call may have waited for nothing at all. */
+  dbContention: ContentionSample
   handles: {
     count: number
     totalDeps: number
@@ -146,6 +215,58 @@ const toTimingSample = (t: {
   totalMs: round2(t.totalMs),
 })
 
+/** A query sample carries its uncontended subset; a DB-method sample does not.
+ *  Written only once there is something to write, so a query never observed
+ *  unopposed stores no key rather than a row of zeros a reader could mistake
+ *  for a measurement of zero.
+ *
+ *  Gated on the same field it stores, so the condition and the value written
+ *  cannot disagree about whether there was anything to write. Defence in depth:
+ *  a reservoir holds samples whenever it has recorded calls, so the two agree
+ *  by construction. */
+const toQuerySample = (t: {
+  calls: number
+  p50Ms: number
+  p95Ms: number
+  totalMs: number
+  uncontended: { sampleCount: number; p50Ms: number; p95Ms: number }
+}): QueryTimingSample => ({
+  ...toTimingSample(t),
+  ...(t.uncontended.sampleCount > 0
+    ? {
+      uncontended: {
+        calls: t.uncontended.sampleCount,
+        p50Ms: round2(t.uncontended.p50Ms),
+        p95Ms: round2(t.uncontended.p95Ms),
+      },
+    }
+    : {}),
+})
+
+const toContentionSample = (c: {
+  calls: number
+  concurrentIssues: number
+  maxDepth: number
+  busyMs: number
+  sharedWork: number
+  uncontendedCalls: number
+  uncontendedRead: { sampleCount: number; p50Ms: number; p95Ms: number }
+  foreignIntervals: number
+  syncObserved: boolean
+}): ContentionSample => ({
+  calls: c.calls,
+  concurrentIssues: c.concurrentIssues,
+  maxDepth: c.maxDepth,
+  busyMs: round2(c.busyMs),
+  sharedWork: c.sharedWork,
+  uncontendedCalls: c.uncontendedCalls,
+  uncontendedReadCalls: c.uncontendedRead.sampleCount,
+  uncontendedReadP50Ms: round2(c.uncontendedRead.p50Ms),
+  uncontendedReadP95Ms: round2(c.uncontendedRead.p95Ms),
+  foreignIntervals: c.foreignIntervals,
+  syncObserved: c.syncObserved,
+})
+
 /**
  * Recover the query name from a HandleStore key
  * (`query:<name>@<registryEpoch>[:<serialized args>]`). PRIVACY boundary:
@@ -161,14 +282,14 @@ export const queryNameFromHandleKey = (key: string): string =>
 export const interactionComparable = (
   metrics: ReturnType<Repo['metrics']>,
 ): InteractionComparable => {
-  const queries: Record<string, TimingSample> = {}
+  const queries: Record<string, QueryTimingSample> = {}
   // Ordered by NAME, not cost: a cost-ranked truncation would drop exactly
   // the queries this catches — one that was cheap and became expensive has
   // no baseline, so a stable selector is what keeps history comparable.
   for (const [name, timing] of Object.entries(metrics.queries)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .slice(0, MAX_QUERIES)) {
-    queries[name] = toTimingSample(timing)
+    queries[name] = toQuerySample(timing)
   }
   return {
     // `excludingTelemetry`, not page totals: the Repo already excludes the
@@ -208,6 +329,7 @@ export const buildInteractionRecord = (
     blockCount: meta.blockCount,
     ...interactionComparable(metrics),
     db,
+    dbContention: toContentionSample(metrics.dbContention),
     handles: {
       count: inventory.handleCount,
       totalDeps: inventory.totalDeps,

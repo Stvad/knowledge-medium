@@ -14,6 +14,7 @@
 import type { QueryReadDb } from '@/data/api'
 import type { BlockRow } from '@/data/blockSchema'
 import { MAX_IDS_PER_IN_CLAUSE } from './sqlBinds'
+import { contentionFor } from './timingMetrics'
 import { manyAncestorsSql } from './treeQueries'
 
 export type AncestorChainRow = BlockRow & {chain_start_id: string; depth: number}
@@ -56,25 +57,49 @@ interface Pending {
   promise: Promise<AncestorWalk>
   resolve: (walk: AncestorWalk) => void
   reject: (error: unknown) => void
+  /** How many callers await this id. Counted so the flush can report ONE
+   *  shared read once, rather than once per caller that joined. */
+  callers: number
 }
 
 const pending = (): Pending => {
   let resolve!: (walk: AncestorWalk) => void
   let reject!: (error: unknown) => void
   const promise = new Promise<AncestorWalk>((res, rej) => { resolve = res; reject = rej })
-  return {promise, resolve, reject}
+  return {promise, resolve, reject, callers: 1}
 }
 
 class AncestorBatcher {
   /** Ids awaiting the next flush. Same id twice in a tick is one read. */
   private waiting = new Map<string, Pending>()
   private scheduled = false
+  /** Undefined when the db was never wrapped for metrics (fixtures, tests).
+   *  Assigned in the constructor BODY: a field initializer reading `this.db`
+   *  runs before the parameter property exists under `useDefineForClassFields`. */
+  private readonly pool: ReturnType<typeof contentionFor>
 
-  constructor(private readonly db: QueryReadDb) {}
+  constructor(private readonly db: QueryReadDb) {
+    this.pool = contentionFor(db)
+  }
+
+  /** Tell the metrics layer this statement is answering more than one caller.
+   *  Without it every one of them looks like an independent measurement of an
+   *  idle database: the pool genuinely was idle for each, and the wall-clock
+   *  they all record is still ONE observation. The batcher is the only place
+   *  that knows the difference.
+   *
+   *  Once per STATEMENT, from the flush, because that is what the counter
+   *  counts — not once per caller that joined, which would count joins. */
+  private noteShared(): void {
+    this.pool?.noteSharedWork()
+  }
 
   walkFor(id: string): Promise<AncestorWalk> {
     const existing = this.waiting.get(id)
-    if (existing) return existing.promise
+    if (existing) {
+      existing.callers++
+      return existing.promise
+    }
 
     const entry = pending()
     this.waiting.set(id, entry)
@@ -98,6 +123,11 @@ class AncestorBatcher {
     const ids = [...batch.keys()]
     for (let start = 0; start < ids.length; start += MAX_IDS_PER_STATEMENT) {
       const chunk = ids.slice(start, start + MAX_IDS_PER_STATEMENT)
+      // Callers, not ids: three resolves awaiting one id share this statement
+      // exactly as three ids from three resolves do, and both are one read.
+      let callers = 0
+      for (const id of chunk) callers += batch.get(id)!.callers
+      if (callers > 1) this.noteShared()
       try {
         const rows = await this.db.getAll<AncestorChainRow>(
           manyAncestorsSql(chunk.length), chunk,

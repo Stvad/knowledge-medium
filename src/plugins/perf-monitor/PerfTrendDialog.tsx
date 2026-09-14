@@ -22,7 +22,7 @@ import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { InteractionRecordData } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords, rowTime } from './load.js'
-import { bootstrapGapMs, invalidationsPerWrite, round2 } from './series.js'
+import { bootstrapGapMs, invalidationsPerWrite, round2, slowestQuery } from './series.js'
 import { summarize } from './verdict.js'
 import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysisNow } from './schedule.js'
@@ -44,16 +44,6 @@ const when = (epochMs: number): string =>
   new Date(epochMs).toLocaleString(undefined, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
-
-/** The costliest query in a session, by p95. The single number that best stands
- *  in for "how did interaction feel" without listing twelve columns. */
-const slowestQuery = (r: InteractionRecordData): { name: string; p95Ms: number } | null => {
-  let worst: { name: string; p95Ms: number } | null = null
-  for (const [name, q] of Object.entries(r.queries)) {
-    if (!worst || q.p95Ms > worst.p95Ms) worst = { name, p95Ms: q.p95Ms }
-  }
-  return worst
-}
 
 /** Shares `invalidationsPerWrite` with the comparison rather than recomputing
  *  it: a table charting a different number than the alarm fires on is worse
@@ -360,7 +350,7 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                     <Th>Session</Th><Th>Build</Th><Th>Blocks</Th><Th>Writes</Th>
                     {/* Invalidations per write is the ratio that catches an
                         over-broad invalidation dep, which no latency column can. */}
-                    <Th>Invalidations / write</Th><Th>Slowest query p95</Th>
+                    <Th>Invalidations / write</Th><Th>Slowest query p95 (uncontended)</Th>
                   </tr>
                 </thead>
                 <tbody>
