@@ -1,1 +1,1 @@
-import{IV as e}from"../../chunks/app-BLDZlR1p.js";export{e as FacetBridge};
+import{RV as e}from"../../chunks/app--zSBvUYF.js";export{e as FacetBridge};

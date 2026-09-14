@@ -1,1 +1,1 @@
-import{OI as e}from"../../../chunks/app-BLDZlR1p.js";export{e as geoDataExtension};
+import{AI as e}from"../../../chunks/app--zSBvUYF.js";export{e as geoDataExtension};

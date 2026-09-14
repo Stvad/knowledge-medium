@@ -1,1 +1,1 @@
-import{$u as e,Qu as t}from"../../../chunks/app-BLDZlR1p.js";export{t as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,e as moveBlocksContextMenuItem};
+import{$u as e,Qu as t}from"../../../chunks/app--zSBvUYF.js";export{t as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,e as moveBlocksContextMenuItem};

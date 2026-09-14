@@ -1,1 +1,1 @@
-import{SP as e}from"../../../chunks/app-BLDZlR1p.js";export{e as todoDataExtension};
+import{wP as e}from"../../../chunks/app--zSBvUYF.js";export{e as todoDataExtension};

@@ -1,1 +1,1 @@
-import{Dx as e,Jx as t,Ox as n,Sx as r,Xx as i}from"../../../chunks/app-BLDZlR1p.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,t as SWIPE_RIGHT_BLOCK_ACTION_ID,e as SwipeActionMenu,i as quickActionItemsFacet,r as swipeQuickActionsPlugin};
+import{Dx as e,Jx as t,Ox as n,Sx as r,Xx as i}from"../../../chunks/app--zSBvUYF.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,t as SWIPE_RIGHT_BLOCK_ACTION_ID,e as SwipeActionMenu,i as quickActionItemsFacet,r as swipeQuickActionsPlugin};

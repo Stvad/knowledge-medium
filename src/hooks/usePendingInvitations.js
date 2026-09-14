@@ -1,1 +1,1 @@
-import{Qg as e}from"../../chunks/app-BLDZlR1p.js";export{e as usePendingInvitations};
+import{Qg as e}from"../../chunks/app--zSBvUYF.js";export{e as usePendingInvitations};

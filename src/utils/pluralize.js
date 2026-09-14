@@ -1,1 +1,1 @@
-import{Iv as e,Lv as t}from"../../chunks/app-BLDZlR1p.js";export{e as agree,t as pluralize};
+import{Iv as e,Lv as t}from"../../chunks/app--zSBvUYF.js";export{e as agree,t as pluralize};

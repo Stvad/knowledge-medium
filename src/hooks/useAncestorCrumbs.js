@@ -1,1 +1,1 @@
-import{xv as e}from"../../chunks/app-BLDZlR1p.js";export{e as useAncestorCrumbs};
+import{xv as e}from"../../chunks/app--zSBvUYF.js";export{e as useAncestorCrumbs};
