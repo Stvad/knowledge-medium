@@ -1,2 +1,1 @@
-var e=`app-runtime-update`,t=()=>{window.dispatchEvent(new CustomEvent(e,{detail:new Date().toISOString()}))};export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};
-//# sourceMappingURL=runtimeEvents.js.map
+import{nP as e,rP as t}from"../../chunks/app-C-Xtdwey.js";export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};

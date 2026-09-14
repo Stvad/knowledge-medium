@@ -1,2 +1,1 @@
-import{blockBulletClassFacet as e,blockTextClassFacet as t}from"../../extensions/blockInteraction.js";var n=e=>e.isFocal||e.aliases.length===0?null:`page-name-text`,r=e=>e.aliases.length===0?null:`page-bullet`,i=t.of(n,{source:`alias`}),a=e.of(r,{source:`alias`});export{r as aliasPageBullet,a as aliasPageBulletContribution,n as aliasPageStyling,i as aliasPageStylingContribution};
-//# sourceMappingURL=pageStyling.js.map
+import{$d as e,Qd as t,ef as n,tf as r}from"../../../chunks/app-C-Xtdwey.js";export{t as aliasPageBullet,e as aliasPageBulletContribution,n as aliasPageStyling,r as aliasPageStylingContribution};

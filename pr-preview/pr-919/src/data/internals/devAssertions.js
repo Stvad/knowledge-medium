@@ -1,2 +1,1 @@
-var e=!1,t=()=>e,n=t=>{e=t};export{t as devAssertionsEnabled,n as setDevAssertionsEnabled};
-//# sourceMappingURL=devAssertions.js.map
+import{Mq as e,jq as t}from"../../../chunks/app-C-Xtdwey.js";export{t as devAssertionsEnabled,e as setDevAssertionsEnabled};

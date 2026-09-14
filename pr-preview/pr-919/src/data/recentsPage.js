@@ -1,2 +1,1 @@
-import{RECENTS_PAGE_TYPE as e}from"./blockTypes.js";import{getOrCreateKernelPage as t,kernelPageBlockId as n}from"./kernelPage.js";var r=`4f2c8d61-1a35-4a90-8b6f-2a3a0c8d9b41`,i=`Recents`,a=e=>n(e,r),o=(n,a)=>t(n,a,{namespace:r,alias:i,markerType:e});export{o as getOrCreateRecentsPage,a as recentsPageBlockId};
-//# sourceMappingURL=recentsPage.js.map
+import{dq as e,uq as t}from"../../chunks/app-C-Xtdwey.js";export{t as getOrCreateRecentsPage,e as recentsPageBlockId};

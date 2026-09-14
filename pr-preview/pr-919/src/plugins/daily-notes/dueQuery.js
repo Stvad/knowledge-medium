@@ -1,2 +1,1 @@
-import{dailyNoteDateProp as e}from"./schema.js";var t=(e=new Date)=>{let t=new Date(e.getFullYear(),e.getMonth(),e.getDate());return t.setDate(t.getDate()+1),new Date(Date.UTC(t.getFullYear(),t.getMonth(),t.getDate()))},n=(n,r)=>({[n]:{target:{[e.name]:{lt:t(r)}}}});export{t as dueBoundary,n as dueByDailyNoteRef};
-//# sourceMappingURL=dueQuery.js.map
+import{no as e,ro as t}from"../../../chunks/app-C-Xtdwey.js";export{e as dueBoundary,t as dueByDailyNoteRef};

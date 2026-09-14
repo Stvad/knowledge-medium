@@ -1,2 +1,1 @@
-import{defineVariantFacet as e}from"../../facets/variantFacet.js";var t=e({id:`backlinks-view.variants`});export{t as backlinksViewFacet};
-//# sourceMappingURL=facet.js.map
+import{sd as e}from"../../../chunks/app-C-Xtdwey.js";export{e as backlinksViewFacet};

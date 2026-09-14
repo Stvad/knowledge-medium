@@ -1,2 +1,1 @@
-var e=e=>`km-db-mirror-run:${e}`,t=()=>globalThis.navigator?.locks,n=async(n,r)=>{let i=t();return i?i.request(e(n),{ifAvailable:!0},async e=>e?r():null):r()};export{n as withMirrorRunLock};
-//# sourceMappingURL=runLock.js.map
+import{Gr as e}from"../../../chunks/app-C-Xtdwey.js";export{e as withMirrorRunLock};

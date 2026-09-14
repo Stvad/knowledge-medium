@@ -1,2 +1,1 @@
-import{definitionSeedsFacet as e}from"../../data/facets.js";import{agentProtocolSeeds as t}from"./schema.js";var n=`agent-dispatch-companion`,r=t.map(t=>e.of(t,{source:n}));export{r as agentDispatchCompanionDataExtension};
-//# sourceMappingURL=dataExtension.js.map
+import{iB as e}from"../../../chunks/app-C-Xtdwey.js";export{e as agentDispatchCompanionDataExtension};

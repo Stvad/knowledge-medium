@@ -1,2 +1,1 @@
-import{useSyncExternalStore as e}from"react";var t=6e4,n=e=>{let n=window.setInterval(e,t);return()=>window.clearInterval(n)},r=()=>Math.floor(Date.now()/t)*t,i=()=>0,a=()=>e(n,r,i);export{a as useMinuteClock};
-//# sourceMappingURL=useMinuteClock.js.map
+import{kv as e}from"../../chunks/app-C-Xtdwey.js";export{e as useMinuteClock};

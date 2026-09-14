@@ -1,2 +1,1 @@
-import{createContext as e}from"react";var t=e(null);export{t as LayoutRootContext};
-//# sourceMappingURL=layoutRootContext.js.map
+import{aE as e}from"../../../chunks/app-C-Xtdwey.js";export{e as LayoutRootContext};

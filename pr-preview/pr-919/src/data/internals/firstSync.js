@@ -1,2 +1,1 @@
-var e=e=>e?.connected===!0&&e.dataFlowStatus?.downloading!==!0&&e.dataFlowStatus?.downloadError==null,t=(t,n)=>{if(typeof t.registerListener!=`function`||e(t.currentStatus))return n(),()=>{};let r=!1,i=t.registerListener({statusChanged:t=>{r||!e(t)||(r=!0,i(),n())}});return i},n=(e,t)=>{if(e.currentStatus?.hasSynced||typeof e.registerListener!=`function`)return t(),()=>{};let n=e.registerListener({statusChanged:e=>{e.hasSynced&&(n(),t())}});return n};export{n as onFirstSync,t as onSyncSettled};
-//# sourceMappingURL=firstSync.js.map
+import{Nq as e,Pq as t}from"../../../chunks/app-C-Xtdwey.js";export{e as onFirstSync,t as onSyncSettled};

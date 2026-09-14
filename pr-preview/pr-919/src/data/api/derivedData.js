@@ -1,2 +1,1 @@
-var e=({prior:e,recomputed:t,keyOf:n,retain:r=()=>!0})=>{let i=new Set(t.map(n)),a=e.filter(e=>!i.has(n(e))&&r(e));return[...t,...a]},t=`\0`,n=e=>`${e.sourceField??``}${t}${e.id}`;export{n as derivedRefKey,e as reconcileDerived};
-//# sourceMappingURL=derivedData.js.map
+import{$0 as e,e2 as t}from"../../../chunks/app-C-Xtdwey.js";export{e as derivedRefKey,t as reconcileDerived};

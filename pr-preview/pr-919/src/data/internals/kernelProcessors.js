@@ -1,2 +1,1 @@
-import{ALIAS_CLAIM_REDERIVE_PROCESSOR as e}from"./aliasClaimRederiveProcessor.js";var t=[e];export{t as KERNEL_PROCESSORS};
-//# sourceMappingURL=kernelProcessors.js.map
+import{wK as e}from"../../../chunks/app-C-Xtdwey.js";export{e as KERNEL_PROCESSORS};

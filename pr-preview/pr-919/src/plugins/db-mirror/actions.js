@@ -1,2 +1,1 @@
-import{HardDriveDownload as e}from"../../../node_modules/.pnpm/lucide-react@1.12.0_react@19.2.6/node_modules/lucide-react/dist/esm/icons/hard-drive-download.js";import{ActionContextTypes as t}from"../../shortcuts/types.js";import{openDialog as n}from"../../utils/dialogs.js";import{DbMirrorSettingsDialog as r}from"./DbMirrorSettingsDialog.js";import{OPEN_DB_MIRROR_SETTINGS_ACTION_ID as i}from"./diagnostics.js";var a={id:i,description:`Mirror database to a folder (backup settings)`,context:t.GLOBAL,icon:e,handler:()=>{n(r)}};export{a as openDbMirrorSettingsAction};
-//# sourceMappingURL=actions.js.map
+import{Mr as e}from"../../../chunks/app-C-Xtdwey.js";export{e as openDbMirrorSettingsAction};

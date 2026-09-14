@@ -1,2 +1,1 @@
-var e={hideFromCompletion:!0,hideFromBlockDisplay:!0};export{e as INFRASTRUCTURE_TYPE_DISPLAY};
-//# sourceMappingURL=blockType.js.map
+import{z2 as e}from"../../../chunks/app-C-Xtdwey.js";export{e as INFRASTRUCTURE_TYPE_DISPLAY};

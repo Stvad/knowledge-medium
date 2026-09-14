@@ -1,2 +1,1 @@
-var e=`system:`,t=t=>`${e}${t}`,n=t=>t.startsWith(e);export{e as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,t as systemAuthor};
-//# sourceMappingURL=user.js.map
+import{F0 as e,I0 as t,L0 as n}from"../../../chunks/app-C-Xtdwey.js";export{e as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,n as systemAuthor};

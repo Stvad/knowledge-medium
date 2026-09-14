@@ -1,2 +1,1 @@
-import{SpatialNavigationShellDecorator as e}from"./ShellDecorator.js";var t=()=>e;export{t as spatialNavigationShellDecorator};
-//# sourceMappingURL=shell.js.map
+import{gh as e}from"../../../chunks/app-C-Xtdwey.js";export{e as spatialNavigationShellDecorator};

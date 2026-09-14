@@ -1,0 +1,1 @@
+import{RH as e,zH as t}from"../../../chunks/app-C-Xtdwey.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};

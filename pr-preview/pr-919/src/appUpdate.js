@@ -1,2 +1,1 @@
-import{useSyncExternalStore as e}from"react";var t=!1,n=new Set,r=()=>t,i=e=>(n.add(e),()=>n.delete(e)),a={isAvailable:r,subscribe:i,markAvailable(){if(!t){t=!0;for(let e of n)e()}},reload(){typeof window<`u`&&window.location.reload()}},o=()=>e(i,r,s);function s(){return!1}export{a as appUpdate,o as useAppUpdateAvailable};
-//# sourceMappingURL=appUpdate.js.map
+import{Fw as e,Pw as t}from"../chunks/app-C-Xtdwey.js";export{t as appUpdate,e as useAppUpdateAvailable};

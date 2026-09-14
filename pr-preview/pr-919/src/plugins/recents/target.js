@@ -1,0 +1,1 @@
+import{jv as e}from"../../../chunks/app-C-Xtdwey.js";export{e as openRecentsPage};

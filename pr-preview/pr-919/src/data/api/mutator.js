@@ -1,2 +1,1 @@
-var e=e=>e;export{e as defineMutator};
-//# sourceMappingURL=mutator.js.map
+import{X0 as e}from"../../../chunks/app-C-Xtdwey.js";export{e as defineMutator};

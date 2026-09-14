@@ -1,2 +1,1 @@
-var e=e=>({gesture:e.gesture,phase:e.phase??`commit`}),t=(e,t)=>e.gesture===t.gesture&&e.phase===t.phase;export{e as gestureBindingDescriptor,t as matchesGestureEvent};
-//# sourceMappingURL=gestureBinding.js.map
+import{Hw as e,Vw as t}from"../../chunks/app-C-Xtdwey.js";export{t as gestureBindingDescriptor,e as matchesGestureEvent};

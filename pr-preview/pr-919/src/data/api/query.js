@@ -1,2 +1,1 @@
-var e=e=>e;export{e as defineQuery};
-//# sourceMappingURL=query.js.map
+import{V0 as e}from"../../../chunks/app-C-Xtdwey.js";export{e as defineQuery};

@@ -1,2 +1,1 @@
-var e=(e,t)=>e===t?t:e.trim();export{e as trimIfEdited};
-//# sourceMappingURL=nameFieldCommit.js.map
+import{vA as e}from"../../chunks/app-C-Xtdwey.js";export{e as trimIfEdited};
