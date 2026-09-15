@@ -120,7 +120,7 @@ const refSchemasFor = (
 // exempt from orphan cleanup — the daily branch, referencesProcessor.ts:146-172).
 // 'January 5th, 2026' is the LONG-FORM daily title: its literal alias is a
 // distinct claimable name from the ISO the daily seat claims, covering the
-// per-mark write-phase recheck in applySourcePlan (Codex round 3).
+// per-mark write-phase recheck in applySourcePlan.
 const ALIAS_POOL = ['ax', 'ay', 'Inbox', '2026-01-05', 'January 5th, 2026'] as const
 
 // Bracket shrapnel: content the parser must treat as inert (or not —
@@ -528,8 +528,8 @@ describe('references pipeline sequences', () => {
   }, fuzzTestTimeout())
 
   // Non-vacuity canary for the `reviewerScope`/`relatedScope` axis
-  // (#435 item 6, cedcb65c2; Codex review, comment 3672657045). At
-  // fuzzParams(8) with the fixed smoke seed, none of the 8 generated
+  // (#435 item 6). At fuzzParams(8) with the fixed smoke seed, none of
+  // the 8 generated
   // cases happens to bind a non-BlockDefault reviewer/related value on
   // a block a later valid `merge` retargets — the sequences containing
   // `merge` either lack a prior scoped property write or target only
@@ -757,6 +757,113 @@ describe('references pipeline sequences', () => {
       await auditOrFail(sharedDb.db, repo)
       const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
       expect(inspected, 'sweep inspected the long-form date binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // A target restored under a different alias must not keep its old
+  // inbound bindings. The rename ladder cannot cover this — it diffs LIVE
+  // rows, and while the target was a tombstone its inbound edges were the
+  // retained residual, correct to leave alone — so `collectRestorePlans`
+  // invalidates them at the restore instead.
+  it('a restore under a different alias rebinds referrers to the real claimant', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const bindingOf = async (sourceId: string, alias: string) => {
+        const row = await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [sourceId])
+        return (JSON.parse(row!.references_json) as Array<{id: string; alias: string}>)
+          .find(r => r.alias === alias)?.id
+      }
+
+      // A referrer mints the "Inbox" seat and binds to it.
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'see [[Inbox]]',
+      })
+      await flush()
+      const seat0 = computeAliasSeatId('Inbox', WS)
+      expect(await bindingOf(referrer, 'Inbox'), 'referrer bound the seat').toBe(seat0)
+
+      // Delete it, rename it while tombstoned, restore it. Each step is a
+      // legal mutation; none of them re-fires the referrer's parse.
+      await repo.mutate.delete({id: seat0})
+      await flush()
+      await repo.mutate.setProperty({id: seat0, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.restore({id: seat0})
+      await flush()
+
+      // The re-parse rebinds to whoever owns "Inbox" now — the next seat
+      // slot, since slot 0 is held by a live row claiming something else.
+      const claimant = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, 'Inbox'])
+      expect(claimant?.block_id, 'a live block claims Inbox again').not.toBe(seat0)
+      expect(await bindingOf(referrer, 'Inbox'), 'referrer follows the claimant')
+        .toBe(claimant?.block_id)
+
+      // The referrer's own text is untouched — the repair invalidates the
+      // edge, it never rewrites someone else's content.
+      const content = await sharedDb.db.getOptional<{content: string}>(
+        'SELECT content FROM blocks WHERE id = ?', [referrer])
+      expect(content?.content, 'referrer content untouched').toBe('see [[Inbox]]')
+
+      await auditOrFail(sharedDb.db, repo)
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected the rebound binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // The mirror: a restore under the SAME name must not touch its
+  // referrers at all. Asserted on `updated_at` rather than on the
+  // binding, because dropping the edge and letting `parseReferences`
+  // rebuild an identical one leaves the binding assertion green
+  // (measured) — only the write itself witnesses the churn, and
+  // `skipMetadata` still ratchets `updated_at`, so it sees every write.
+  it('a restore under the same alias leaves referrer bindings alone', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const owner = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'owner',
+      })
+      await repo.mutate.setProperty({id: owner, schema: aliasesProp, value: ['ax']})
+      await flush()
+      const referrer = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'see [[ax]]',
+      })
+      await flush()
+      const referrerRow = () => sharedDb.db.getOptional<{updated_at: number; references_json: string}>(
+        'SELECT updated_at, references_json FROM blocks WHERE id = ?', [referrer])
+      const settled = (await referrerRow())!
+
+      await repo.mutate.delete({id: owner})
+      await flush()
+      // The alias round-trip on the TOMBSTONE pins WHERE the restore
+      // branch sits. Above the `row.after.deleted` skip it fires on this
+      // write instead, dropping the residual while the target is still
+      // deleted — the delete-direction behaviour §11 group 2 / #383
+      // defers — and the referrer's re-parse then mints a seat that makes
+      // the restore below fail the uniqueness trigger.
+      await repo.mutate.setProperty({id: owner, schema: aliasesProp, value: ['bx']})
+      await flush()
+      await repo.mutate.setProperty({id: owner, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.restore({id: owner})
+      await flush()
+
+      const after = (await referrerRow())!
+      const refs = JSON.parse(after.references_json) as Array<{id: string; alias: string}>
+      expect(refs.find(r => r.alias === 'ax')?.id, 'binding survives the round trip').toBe(owner)
+      expect(after.updated_at, 'nothing rewrote the referrer').toBe(settled.updated_at)
+      await auditOrFail(sharedDb.db, repo)
     } finally {
       vi.clearAllTimers()
       vi.useRealTimers()

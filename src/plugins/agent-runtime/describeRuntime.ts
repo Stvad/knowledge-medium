@@ -2,10 +2,7 @@ import { FacetRuntime } from '@/facets/facet.js'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { Repo } from '@/data/repo'
 import { truncate } from '@/utils/string'
-import {
-  describeAuthoringCatalog,
-  type AuthoringCatalog,
-} from './authoringCatalog.ts'
+import type { AuthoringCatalog } from './authoringCatalog.ts'
 import {
   extensionApiCatalog,
   extensionApiRuntimeExports,
@@ -22,6 +19,11 @@ import {
   getCommandMeta,
   type KnownCommandType,
 } from '@knowledge-medium/agent-cli/protocol'
+
+// Dynamic on purpose: the catalog embeds a glob of the app's module graph
+// (~1 MB built) that only the describe commands read; a static import here
+// puts it in every device's boot graph.
+const loadAuthoringCatalog = () => import('./authoringCatalog.ts')
 
 interface ContextDependencySchema {
   acceptedKeys: readonly string[]
@@ -432,15 +434,14 @@ export const describeRuntime = async (
       : describeFacets(context.runtime)
         .filter(facet => matchesAnyFilter(filters.facets, facet.id)),
     apiSurface,
-    authoring: describeAuthoringCatalog({
+    authoring: (await loadAuthoringCatalog()).describeAuthoringCatalog({
       guides: filters.guides,
       modules: filters.modules,
       components: filters.components,
-      // In brief mode, suppress the module/component glob dumps —
-      // they're 150KB of internal paths the agent doesn't need while
-      // reading a guide. The guide's `preferredModules` field already
-      // names what matters.
-      omitDiscoverableModules: briefMode,
+      // In brief mode, suppress the module/component glob dumps — 150KB of
+      // internal paths the agent doesn't need while reading a guide. The
+      // guide's `preferredModules` field already names what matters.
+      brief: briefMode,
     }, context.document),
     ...(includeDataModel ? {dataModel: DATA_MODEL_GUIDE} : {}),
   }
@@ -458,7 +459,7 @@ export const describeRuntimeSummary = async (
 ): Promise<RuntimeSummary> => {
   const apiSurface = getApiSurface()
   const renderers = Object.keys(context.renderers)
-  const authoring = describeAuthoringCatalog({}, context.document)
+  const authoring = (await loadAuthoringCatalog()).describeAuthoringCatalog({}, context.document)
 
   return {
     activeWorkspaceId: context.repo.activeWorkspaceId,

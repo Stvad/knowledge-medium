@@ -1,4 +1,4 @@
-/**
+/*
  * Shared scaffolding for the app's keyed, single-object-store IndexedDB stores.
  *
  * Several stores follow the same shape: one named DB holding one object store,
@@ -11,6 +11,9 @@
  *   - `src/extensions/compiledModuleCache.ts` (approved/compiled extensions)
  *   - `src/sync/keys/keyStore.ts` (per-device workspace keys — browser-only path)
  *   - `src/plugins/attachments/uploadStore.ts` (the byte-upload staging queue)
+ *   - `src/plugins/db-mirror/store.ts` (the mirror's folder handle and settings)
+ *   - `src/sw/bootStore.ts` (the service worker's boot set)
+ *   - `src/utils/dbForensics.ts`
  *
  * Records are stored under an opaque string key; {@link idbRecordId} builds a
  * collision-free `(owner, id)` composite for the stores that namespace records
@@ -82,7 +85,7 @@ export class IdbKeyedStore {
 
   private openDb(): Promise<IDBDatabase> {
     if (!this.dbPromise) {
-      this.dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+      const opened: Promise<IDBDatabase> = new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open(this.dbName, this.version)
         request.onupgradeneeded = () => {
           const db = request.result
@@ -90,16 +93,32 @@ export class IdbKeyedStore {
             db.createObjectStore(this.storeName)
           }
         }
-        request.onsuccess = () => resolve(request.result)
+        request.onsuccess = () => {
+          const db = request.result
+          // The browser can close a connection behind us (storage pressure,
+          // eviction) and a later `open` at a higher version asks this one
+          // to step aside; either way drop the cached handle so the next op
+          // reopens instead of throwing InvalidStateError for the rest of
+          // the page's (or service worker's) lifetime.
+          // Guarded on identity: a late event from a superseded connection
+          // must not drop the current one.
+          db.onclose = () => { if (this.dbPromise === opened) this.dbPromise = null }
+          db.onversionchange = () => {
+            db.close()
+            if (this.dbPromise === opened) this.dbPromise = null
+          }
+          resolve(db)
+        }
         request.onerror = () => reject(request.error)
       }).catch((err: unknown) => {
         // Don't cache a rejected open: a transient failure (storage pressure, a
         // racing version upgrade) would otherwise wedge every later op on this
         // instance forever. Clear the handle so the next call retries a fresh
         // open.
-        this.dbPromise = null
+        if (this.dbPromise === opened) this.dbPromise = null
         throw err
       })
+      this.dbPromise = opened
     }
     return this.dbPromise
   }
@@ -164,9 +183,9 @@ export class IdbKeyedStore {
   /**
    * Walk every record whose key starts with `prefix` (the per-owner namespace
    * from {@link idbKeyPrefix}), calling `visit` with each matching cursor, in one
-   * commit-durable transaction. A plain `startsWith` over the (small) store avoids
-   * IDBKeyRange string-bound subtleties; the `:`-delimited prefix is collision-free
-   * across owners, so a scan never reaches a sibling owner. `visit` is synchronous
+   * commit-durable transaction. A value cursor, because `visit` reads
+   * `cursor.value`; the `:`-delimited prefix is collision-free across owners, so
+   * a scan never reaches a sibling owner. `visit` is synchronous
    * (it runs in the cursor's `onsuccess`, while the tx is active) and may read
    * `cursor.value` or, in a `'readwrite'` scan, `cursor.delete()`; accumulate into
    * a variable it closes over. If `visit` throws, the scan aborts (rolling back a
@@ -214,10 +233,16 @@ export class IdbKeyedStore {
 
   /**
    * Delete every record whose key starts with `prefix`, in one commit-durable
-   * readwrite transaction. Sugar over {@link scanByPrefix}.
+   * readwrite transaction. One ranged delete rather than a value cursor: a
+   * cursor deserialises every record in the store to test its key, and some
+   * stores hold multi-MB records. The range is exactly "starts with": every
+   * key from `prefix` up to, excluding, the prefix with its last code unit
+   * incremented.
    */
   async deleteByPrefix(prefix: string): Promise<void> {
-    // eslint-disable-next-line no-restricted-syntax -- programmatic delete: IndexedDB cursor, not a Block
-    await this.scanByPrefix('readwrite', prefix, cursor => cursor.delete())
+    const last = prefix.charCodeAt(prefix.length - 1)
+    if (last === 0xffff) throw new Error('deleteByPrefix: the prefix has no successor')
+    const upper = prefix.slice(0, -1) + String.fromCharCode(last + 1)
+    await this.tx('readwrite', store => store.delete(IDBKeyRange.bound(prefix, upper, false, true)))
   }
 }

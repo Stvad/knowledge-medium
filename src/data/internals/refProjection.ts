@@ -106,8 +106,7 @@ export const projectedRefsForField = (
  *     Properties`); this guards the narrower race where a name was ref-typed at
  *     schedule time but vanished from the live registry by run time (a plugin
  *     toggled off, ?safeMode, or an async user/import schema mid-republish).
- *     Stripping that field is exactly the silent-deletion vector that wiped
- *     ~10k `next-review-date` backlinks on SRS toggle-off.
+ *     Stripping that field silently deletes backlinks.
  *
  *  The caller passes a *workspace-correct* `currentSchemas`: the live registry
  *  only while still on the scan's workspace, else the scheduled snapshot (see

@@ -9,7 +9,57 @@ import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
 import {resolveAppVersion} from './scripts/app-version'
+import {globSync} from 'node:fs'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
+
+
+/** Every internal module as a Rollup input, so an extension can import ANY of
+ *  them at its stable `@/` path and get its full export surface. The boot
+ *  graph itself is bundled into one chunk (`codeSplitting` below); each of
+ *  these entries then emits as a thin facade re-exporting from it, so the
+ *  importmap contract holds while the browser loads ~3 files at boot instead
+ *  of ~1,500 (the per-file loader cost, not JS linking, was ~0.5 s of an
+ *  iPhone cold launch).
+ *
+ *  `preserveEntrySignatures` protects ENTRY points only, so a non-entry module
+ *  keeps just the exports something imports across a module boundary (the
+ *  resulting silence is why scripts/check-dist-exports.ts exists). Globbed
+ *  rather than driven off `apiCatalog`: that catalog is a discovery surface,
+ *  not a whitelist. */
+const allSrcEntries = (rootDir: string): Record<string, string> => {
+    const files = globSync('src/**/*.{ts,tsx,js}', {
+        cwd: rootDir,
+        exclude: [
+            // `*.test.*` also covers the fuzz suites: docs/fuzzing.md fixes them
+            // as `*.fuzz.test.ts`, so a bare `*.fuzz.*` pattern matched nothing.
+            '**/test/**', '**/*.test.*', '**/*.d.ts',
+            // Example sources are imported as TEXT (`?raw`) and already emitted
+            // by that import. Adding them as entries compiles a second copy and
+            // Rollup dedups the name to `<name>2.js` — pure duplication.
+            '**/examples/**',
+            // The service worker's own graph, built by vite.sw.config.ts. Scoped
+            // to those four roots, NOT all of src/sw: previewDatabases.ts is
+            // client-graph code (src/data/localDbStorage.ts imports it) and
+            // excluding the directory wholesale left it emitting 3 of its 5
+            // exports — the very bug this input list exists to prevent.
+            'src/sw/{sw,worker,ledger,preview}.ts',
+        ],
+        // Accepted: this also makes src/minimal-editor.tsx an entry, the script
+        // for a second page that is not itself a build input, so it emits with
+        // nothing importing it. Kept rather than special-cased — it IS an
+        // internal module, and carving out page bootstraps would reintroduce
+        // the per-file judgement this list exists to avoid. ~1 KB.
+    })
+    return Object.fromEntries(files.map((file: string) => {
+        // globSync yields platform separators; the entry KEY becomes the emitted
+        // path, which the page importmap resolves as a URL, so it must be POSIX.
+        const posix = file.split(path.sep).join('/')
+        // Strip .js too, not just .ts/.tsx: Rollup appends .js to the key, so
+        // leaving it on a plain-JS module emits `<name>.js.js` and the importmap
+        // path 404s — worse than the dropped export this list exists to prevent.
+        return [posix.replace(/\.(tsx?|js)$/, ''), path.resolve(rootDir, file)]
+    }))
+}
 
 type RollupLogLike = {
     code?: string
@@ -79,23 +129,6 @@ export default defineConfig(({command}) => {
             externalize({
                 externals: [isReactImportExternal],
             }),
-            {
-                name: 'only-main-entry',
-                /**
-                 * Reason for this is that when we have preserveModules, Vite will for some reason will inject
-                 * script tags for all the modules in the project.
-                 * Which is probably not an issue generally, but if we externalize react and react-dom, this results in
-                 * tags that point at /react and don't resolve via import maps.
-                 *
-                 * Keep the actual entry script regardless of whether the app is deployed at / or under a subpath.
-                 * Vite may emit a small index.js entry wrapper which imports src/main.js.
-                 */
-                transformIndexHtml(html: string) {
-                    return html.replace(/<script\s+type="module" crossorigin .*?src="([^"]*)".*?><\/script>\s*/g, (match, src) => {
-                        return /(^|\/)(index|src\/main)\.js(?:$|[?#])/.test(src) ? match : '';
-                    })
-                },
-            },
             reactImportMapProductionPlugin(),
             // Substitutes the theme-boot placeholder tokens in index.html's
             // pre-paint script with the source-of-truth values from
@@ -156,6 +189,10 @@ export default defineConfig(({command}) => {
                 },
                 // Mark react and react-dom subpaths as external to rely on the import map.
                 external: isReactImportExternal,
+                input: {
+                    index: path.resolve(__dirname, 'index.html'),
+                    ...allSrcEntries(__dirname),
+                },
                 // input: '/src/main.tsx',
                 // input: {
                 //     index: path.resolve(__dirname, 'index.html'),
@@ -163,12 +200,22 @@ export default defineConfig(({command}) => {
                 // main: path.resolve(__dirname, 'src/main.tsx'),
                 // },
                 output: {
-                    preserveModules: true, // Preserves the module structure
-                    preserveModulesRoot: process.cwd(),
-                    // Set file naming without hashes.
+                    // Entries (every src/** file, see allSrcEntries) keep their
+                    // stable unhashed paths; the code itself lives in the `app`
+                    // chunk they re-export from. Dynamic-only modules get
+                    // rolldown's default chunking under chunks/.
                     entryFileNames: '[name].js',
-                    chunkFileNames: '[name].js',
+                    chunkFileNames: 'chunks/[name]-[hash].js',
                     assetFileNames: '[name][extname]',
+                    codeSplitting: {
+                        minSize: 0,
+                        minShareCount: 1,
+                        // The static closure of the entry: rolldown captures a matched
+                        // module's static dependencies recursively by default and stops
+                        // at import(), so a lazy boundary in the source is one in the
+                        // build. The emitted shape is gated by scripts/check-dist-exports.ts.
+                        groups: [{name: 'app', minSize: 0, test: (id: string) => id === path.resolve(__dirname, 'src/main.tsx')}],
+                    },
                 },
                 preserveEntrySignatures: 'strict', // Preserves the signature of the entry point
             },

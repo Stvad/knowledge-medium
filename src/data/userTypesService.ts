@@ -15,7 +15,7 @@
  *  membership ids and `getTypeBlockId` reads that registry.
  *
  *  Deliberately narrow: NO synchronous-append / withProvisional path.
- *  See user-defined-types/design.html §Lessons from PR #50 — callers
+ *  See docs/user-defined-types/design.html §Lessons from `withProvisionalSchema` — callers
  *  that need an in-tx dependent on a freshly-registered type use a
  *  two-tx flow (commit the type-definition block; wait for the
  *  subscription rebuild via `repo.onTypesChange`; then open the

@@ -42,8 +42,9 @@ export const pushRecentBlockId = (uiStateBlock: Block, blockId: string): void =>
 export interface RecentItem {
   blockId: string
   label: string
-  /** Needed to tell a top-level block from one whose parent is gone when
-   *  the ancestor walk comes back empty — see `crumbsFromAncestors`. */
+  /** Whether the row RESERVES a crumb line at first paint, before any
+   *  walk has landed — see `hasCrumbLine`. Settled at paint, which the
+   *  crumbs themselves are not. */
   parentId: string | null
   typeIds: readonly string[]
 }

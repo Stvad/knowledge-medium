@@ -40,6 +40,7 @@ vi.mock('@/utils/navigation.js', () => ({
 // run headless.
 vi.mock('@/utils/toast.js', () => ({
   showProgress: () => ({done: vi.fn(), fail: vi.fn()}),
+  showError: vi.fn(),
 }))
 
 vi.mock('../action.ts', async importOriginal => {

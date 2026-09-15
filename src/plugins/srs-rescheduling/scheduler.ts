@@ -76,8 +76,8 @@ const enforceLimits = ({interval, factor}: SrsParams): SrsParams => ({
 // A non-positive stored interval (corrupted/imported data) is an
 // ABSORBING state under every multiplicative arm — 0×factor = 0, so
 // HARD/GOOD/EASY/SOONER never rebuild it and the card stays perpetually
-// due while the buttons advertise real intervals (adversarial review on
-// PR #384). Rescue the multiplication BASE to 1 day for those inputs
+// due while the buttons advertise real intervals. Rescue the multiplication
+// BASE to 1 day for those inputs
 // only; legitimate small positives (e.g. SOONER's 0.75 of a 1-day card)
 // pass through untouched.
 const rebuildBase = (interval: number): number => (interval > 0 ? interval : 1)

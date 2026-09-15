@@ -10,8 +10,9 @@ import preferCallbackSet from './eslint-rules/prefer-callback-set.js'
 import childView from './eslint-rules/child-view.js'
 import noRawSyncedTableWrites from './eslint-rules/no-raw-synced-table-writes.js'
 import kernelPluginBoundary from './eslint-rules/kernel-plugin-boundary.js'
+import commentHygiene from './eslint-rules/comment-hygiene.js'
 
-// DI-lens audit (PR #357) / follow-up (PR #424): every ambient-global
+// DI-lens audit and its follow-up: every ambient-global
 // restriction the audit produced now lives in ambientAccessors.data.js and
 // runs through the one generic `ambient/ambient-accessors` rule below —
 // adding a restriction is a table edit (or, for a tagged export, just an
@@ -135,7 +136,7 @@ export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
   // you opt in (eslint-config-flat-gitignore), so list ephemeral / agent
   // dirs explicitly. .claude/worktrees/ and .codex/worktrees/ in particular
-  // contain full repo copies (from Claude Code and Codex agent runs) that
+  // contain full repo copies from agent runs that
   // shouldn't be re-linted. docs/**/*.ts are design-sketch
   // files (typechecked via docs/tsconfig.json) — they intentionally have
   // unused stub params and let-vs-const looseness so the prose stays
@@ -145,6 +146,21 @@ export default tseslint.config(
   // standalone ES modules — espree rejects the top-level `return`. Same
   // "runtime code, not a module" carve-out as agent-extensions/**.
   { ignores: ['dist', '**/dist/**', '.claude/**', '.codex/**', '.playwright-mcp/**', 'tmp/**', 'docs/**', 'agent-extensions/**', '**/*.eval.js'] },
+  {
+    // Every module the toolchain accepts, tooling included: eslint-rules/ and
+    // scripts/ held 8 of the 34 invisible-JSDoc blocks the rule was written for.
+    files: ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'],
+    plugins: {comments: commentHygiene},
+    rules: {
+      'comments/no-invisible-jsdoc': 'error',
+      'comments/no-review-provenance': 'error',
+    },
+  },
+  {
+    // These drive the agent product whose name the rule otherwise reads as a reviewer's.
+    files: ['packages/agent-dispatch/**', 'src/plugins/agent-dispatch-companion/**'],
+    rules: {'comments/no-review-provenance': ['error', {reviewers: []}]},
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     // `.mts`/`.cts`/`.jsx` are here so the TypeScript parser actually covers
@@ -201,7 +217,7 @@ export default tseslint.config(
       // must opt in explicitly with an inline disable + justification
       // (see runtimeEvents.ts / propertyNavigation.ts / agent-runtime).
       'no-restricted-syntax': ['error', b3CustomEventRestriction],
-      // DI-lens audit (PR #357) / table-driven follow-up (PR #424): see
+      // DI-lens audit and its table-driven follow-up: see
       // ambientAccessors.data.js for the restrictions themselves
       // (getActiveUserId, getLayoutSessionId, navigator.platform, the
       // mobile breakpoint literal) and their allowlists.
@@ -214,7 +230,7 @@ export default tseslint.config(
     },
   },
   {
-    // Child-visibility guardrail (PR #288/#386). `tx.childrenOf` /
+    // Child-visibility guardrail. `tx.childrenOf` /
     // `repo.query.{children,subtree,childIds}` default to the structural
     // everything-view (hidden property field-row machinery included); the
     // visible/outline view is opt-in (`hidePropertyChildren` / the

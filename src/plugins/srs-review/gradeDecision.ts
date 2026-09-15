@@ -15,15 +15,6 @@ import {
   srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
 
-/** Whether a block is still a live, schedulable review card — mirrors the
- *  deck's membership conditions (`buildDueCardsQuery`): it must carry the SRS
- *  type AND a non-empty next-review date AND not be archived.
- *
- *  Every read is inside the try, `getBlockTypes` included: it decodes strictly
- *  and a malformed `types` value would otherwise throw out of a grade handler
- *  (same hazard `selectNewCards` guards against). Unreadable state means "not
- *  a live card", which routes to the conservative branch rather than crashing
- *  the session. */
 /** Does the block carry the SRS type — i.e. has it been enrolled at all?
  *  Tolerant of a malformed `types` value (reads as "not enrolled" rather than
  *  throwing out of a render or a grade handler). */
@@ -35,6 +26,15 @@ export const carriesSrsType = (data: BlockData): boolean => {
   }
 }
 
+/** Whether a block is still a live, schedulable review card — mirrors the
+ *  deck's membership conditions (`buildDueCardsQuery`): it must carry the SRS
+ *  type AND a non-empty next-review date AND not be archived.
+ *
+ *  Every read is inside the try, `getBlockTypes` included: it decodes strictly
+ *  and a malformed `types` value would otherwise throw out of a grade handler
+ *  (same hazard `selectNewCards` guards against). Unreadable state means "not
+ *  a live card", which routes to the conservative branch rather than crashing
+ *  the session. */
 export const isLiveSrsCard = (data: BlockData): boolean => {
   try {
     if (!carriesSrsType(data)) return false

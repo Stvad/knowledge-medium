@@ -96,23 +96,14 @@ export interface ProcessorReadDb {
   get<T>(sql: string, params?: unknown[]): Promise<T>
 }
 
-/** Processor context (v4.32). The framework no longer auto-opens a tx;
- *  the processor decides.
- *
- *  - `db`: raw SQL for committed-state reads. The originating user tx
- *    is committed before `apply` fires, so reads see committed state.
- *    No writer is open at this surface unless the processor opens one
- *    itself via `repo.tx`, so reads don't queue behind a writer.
- *  - `repo`: full `Repo` — open a write tx (`repo.tx(fn, {scope})`)
- *    when/if the processor decides to write, invoke other mutators via
- *    `repo.mutate.*`, run registered queries.
- *    Imported here as a type-only reference; type cycles via `import
- *    type` are erased at compile time so there's no runtime cycle. */
+/** Processor context. The framework does not open a tx; the processor opens
+ *  its own if it writes. */
 export interface ProcessorCtx {
   /** Raw SQL for committed-state reads. The narrow shape is deliberate:
    *  `.execute()` / `.writeTransaction()` are absent so accidental writes
    *  through this handle are compile-time errors. Writes go through
-   *  `ctx.repo.tx(...)`. */
+   *  `ctx.repo.tx(...)`. No writer is open at this surface unless the
+   *  processor opens one itself, so reads don't queue behind a writer. */
   db: ProcessorReadDb
   /** Full `Repo` — open a write tx when needed, invoke mutators, run
    *  kernel queries. */

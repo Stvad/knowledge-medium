@@ -372,7 +372,7 @@ describe('replay ordering vs alias-uniqueness trigger', () => {
   // block_aliases_workspace_alias_unique trigger when the source is
   // applied while the target still owns the merged alias. The replay
   // worklist retries constraint-aborted rows after the releasing row
-  // lands. (Codex review find on PR #371.)
+  // lands.
   it('undoes and redoes a merge where both blocks own aliases', async () => {
     await seedRoot(env.repo, 'root')
     const a = await env.repo.mutate.createChild({parentId: 'root', content: 'A'})

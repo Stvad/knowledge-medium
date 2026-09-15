@@ -1,10 +1,8 @@
 /**
  * Narrow-dep invalidation for kernel queries.
  *
- * Replaces a handful of `{kind:'workspace', workspaceId}` deps that used to
- * fire on every write in the workspace (including UiState focus writes,
- * which is what drove the navigation perf regression) with channels keyed
- * to the dimensions each query actually filters on.
+ * Each channel is keyed to a dimension a query actually filters on, so a
+ * UiState write does not wake every workspace-scoped handle.
  *
  * Channels emitted by this rule:
  *

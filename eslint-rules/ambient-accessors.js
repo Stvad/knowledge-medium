@@ -3,7 +3,7 @@
  * channel" restriction, driven by the table in ambientAccessors.data.js
  * (see that file for the entry shapes and how it's maintained).
  *
- * Replaces the DI-lens audit's (PR #357 / PR #424) per-global
+ * Replaces the DI-lens audit's per-global
  * eslint.config.js entries — a no-restricted-imports `paths` pair for
  * getActiveUserId, a no-restricted-syntax selector each for
  * navigator.platform and the mobile-breakpoint literal — with ONE rule

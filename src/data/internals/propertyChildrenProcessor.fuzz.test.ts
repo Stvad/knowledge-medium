@@ -224,7 +224,7 @@ const runCase = async ({kind, values}: {kind: Kind; values: unknown[]}): Promise
   // gated by it. The event baselines further down are no substitute
   // either way: they're captured AFTER this call, so a leak here is
   // invisible to them. Snapshot both rows' update-event counts BEFORE the
-  // call instead (Codex review, comment 3676658264).
+  // call instead.
   const beforeMaterialize = {
     field: await updateEventCount(fieldRowId),
     value: await updateEventCount(valueRowId),

@@ -50,7 +50,9 @@ const openStrengthLogAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
     // the honest outcome when the page has never been made.
     if (repo.isReadOnly) {
       const existing = await findStrengthLogPage(repo, workspaceId)
-      if (existing) await showSession(repo, workspaceId, existing, 'the log page is there')
+      if (existing) {
+        await showSession(repo, {workspaceId, blockId: existing, what: 'the log page is there'})
+      }
       return
     }
     // The page AND its settings block. Creating only the page left a fresh
@@ -66,7 +68,9 @@ const openStrengthLogAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
     // write from every panel that renders the page, in every tab, including
     // one you merely navigated past. Reading still bootstraps nothing.
     const {pageId} = await ensureStrengthHome(repo, workspaceId)
-    await showSession(repo, workspaceId, pageId, 'the log page is ready')
+    // No `panelId`: this one IS a global command, so it lands where the app
+    // sends commands rather than in whichever pane happened to have focus.
+    await showSession(repo, {workspaceId, blockId: pageId, what: 'the log page is ready'})
   },
 }
 

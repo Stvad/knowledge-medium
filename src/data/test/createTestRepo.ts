@@ -5,16 +5,27 @@
  * runtime (plus any extra `extensions`), and the Layout B sync observer left
  * OFF by default.
  *
- * Leaving the observer off is the structural fix for the leak most call sites
- * paper over with `afterEach(() => repo.stopSyncObserver())`: the observer
- * holds a live `db.onChange` subscription on the SHARED db, so a per-test Repo
- * that starts it must dispose it or the subscription outlives the test. Unit
- * tests that don't drive sync don't need the observer at all.
+ * Leaving the observer off keeps unit tests that never drive sync off a live
+ * `db.onChange` subscription on the SHARED db.
  *
  * Pairs with the shared-db pattern (AGENTS.md): one `createTestDb()` in
  * `beforeAll`, `resetTestDb()` in `beforeEach`, a fresh `createTestRepo()` per
  * test for registry / cache / handle-store isolation. For sync-materialization
- * tests, pass `startSyncObserver: true` and stop it in your own cleanup.
+ * tests, pass `startSyncObserver: true`.
+ *
+ * RELEASED WHEN ITS TEST ENDS — a Repo built here during a test is enrolled in
+ * that test's scope (`testRepoScope.ts`), which stops its observer and unpins
+ * its workspace once the test finishes, so nothing it scheduled can write into
+ * the next test's database (#813). The `afterEach(() => repo.stopSyncObserver())`
+ * many call sites carry still runs, and runs first; it is now belt-and-braces.
+ * A harness that stays on a hand-rolled `new Repo` wraps the construction —
+ * `trackTestRepo(new Repo({…}))` — for the same cover.
+ *
+ * The scope covers a Repo built INSIDE a test — which, at runtime, includes
+ * every one built in a `beforeEach` or in a helper those call. A Repo built in
+ * `beforeAll` or at module scope is deliberately left alone: it exists to be
+ * shared across the file, and releasing it after the first test would break
+ * that. Such a file releases its own Repo in `afterAll`, before the db closes.
  *
  * CAVEAT — last-write-wins observer tests: the default `now` is a deterministic
  * counter starting at 1.7e12, NOT `Date.now`. A sync-observer test whose
@@ -38,13 +49,18 @@
  * sharing one db in the same test will therefore mint COLLIDING block ids and
  * tx-seqs. A two-device/convergence test must give at least one Repo distinct
  * generators, e.g. `newId: uuidv4` (see globalState.test.ts / mutators.test.ts).
+ * Tx ids are the exception: `Repo` mints those as uuids independently of
+ * `newId` (#866), so no arrangement of Repos can collide on the
+ * `command_events.tx_id` primary key.
  */
 
 import type { User } from '@/data/api/user.js'
 import { BlockCache } from '@/data/blockCache'
+import type { BackfillCompletionClaim } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { Repo, type RepoOptions } from '@/data/repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 export interface CreateTestRepoOptions {
   /** The shared PowerSync db from `createTestDb()`. */
@@ -58,8 +74,18 @@ export interface CreateTestRepoOptions {
   user?: User
   /** Start the Layout B sync observer. Default FALSE — see the module doc. */
   startSyncObserver?: boolean
+  /** Materialization POLICY for the observer (the §6 mode/key resolver).
+   *  Omitted, the Repo falls back to plaintext copy-through with no key; pass
+   *  one to exercise a locked/e2ee workspace through the Repo surface. */
+  syncObserverDeps?: RepoOptions['syncObserverDeps']
   /** Forward Repo's construction-time kernel runtime install. Default true. */
   installKernelRuntime?: boolean
+  /** Override the workspace-backfill sync gate (default: opens immediately). */
+  backfillSyncGate?: (cb: () => void) => () => void
+  /** Override the migration-completion claim (default: a local stand-in that
+   *  writes the same `client_schema_state` keys the marker store used, so tests
+   *  can assert on completion without a synced implementation existing). */
+  backfillCompletionClaim?: BackfillCompletionClaim
   /** Reject `BlockDefault` / `References` writes (read-only mode). Default false. */
   isReadOnly?: boolean
   /** Override the deterministic generators. Defaults are monotonic counters so
@@ -105,10 +131,50 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     newTxSeq: opts.newTxSeq ?? (() => ++txSeqCursor),
     isReadOnly: opts.isReadOnly,
     startSyncObserver: opts.startSyncObserver ?? false,
+    syncObserverDeps: opts.syncObserverDeps,
     installKernelRuntime: opts.installKernelRuntime,
+    // `createTestDb` opens a real PowerSyncDatabase with no backend
+    // connector, so the production gate (connected && !downloading) would
+    // never open and every backfill would hang. Default to an immediate
+    // gate; tests that exercise the gating itself inject their own.
+    backfillSyncGate: opts.backfillSyncGate ?? ((cb) => { cb(); return () => {} }),
+    // Production REFUSES without a claim (completion must be recorded once per
+    // graph, and no synced store exists yet). Tests get a local stand-in so the
+    // runner's own machinery stays exercised; it deliberately does NOT model
+    // cross-device visibility, which is the part slice C has to build.
+    // `in` rather than `??` so a test can pass `undefined` to mean "none
+    // configured" and exercise the refusal, instead of silently getting the stub.
+    backfillCompletionClaim: 'backfillCompletionClaim' in opts ? opts.backfillCompletionClaim : {
+      // `reclaimCompleted` mirrors the production claim: a recorded completion
+      // stops an unattended pass, never a human who asked for one. A stub that
+      // ignored it made every operator re-run read as "already done", which is
+      // the behaviour under test for anything the pass can miss.
+      // `minted` rather than `inherited` for every win: this stand-in writes a
+      // marker row on `markComplete` and has no notion of a claim it could
+      // inherit, so a caller that gated its release on `minted` would never
+      // release under it. The inherit path is the real claim's, and
+      // `graphBackfillClaim.test.ts` covers it.
+      tryClaim: async (ws: string, id: string, claimOpts?: {reclaimCompleted?: boolean}) =>
+        claimOpts?.reclaimCompleted === true
+        || (await opts.db.getOptional<{key: string}>(
+          'SELECT key FROM client_schema_state WHERE key = ?', [`workspace_backfill:${ws}:${id}`],
+        )) === null
+          ? 'minted' as const
+          : 'declined' as const,
+      markComplete: async (ws: string, id: string) => {
+        // A backfill marker's payload is its PRESENCE; the table's `value`
+        // column belongs to the rows that carry one and must stay NULL here.
+        await opts.db.execute(
+          'INSERT OR REPLACE INTO client_schema_state (key, completed_at) VALUES (?, ?)',
+          [`workspace_backfill:${ws}:${id}`, Date.now()],
+        )
+      },
+      releaseClaim: async () => {},
+    },
   })
   if (opts.extensions?.length) {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, ...opts.extensions]))
   }
+  trackTestRepo(repo)
   return { repo, cache }
 }

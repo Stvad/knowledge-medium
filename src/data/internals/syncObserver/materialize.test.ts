@@ -65,6 +65,99 @@ const racingDb = (real: PowerSyncDb, raceOnce: () => Promise<unknown>): PowerSyn
   }) as PowerSyncDb
 }
 
+/** The staging row's `needs_apply` flag — the drain's durable record of what it
+ *  has and has not applied, which every one-way pass refuses on. */
+const needsApply = async (id: string): Promise<number | null> =>
+  (await env.db.getOptional<{needs_apply: number}>(
+    'SELECT needs_apply FROM blocks_synced WHERE id = ?', [id],
+  ))?.needs_apply ?? null
+
+describe('materializeStagingRows — the needs_apply flag', () => {
+  it('leaves the flag on a version that landed after this pass read the row', async () => {
+    // Phase 1 reads staging OUTSIDE the write lock. A delivery that lands in
+    // that window has already reset the flag — correctly, for a version nobody
+    // has judged — and clearing by id alone would wipe that reset and leave the
+    // newer row reading as applied while `blocks` holds the older content.
+    await stageRow(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+
+    const out = await materializeStagingRows(
+      racingDb(env.db, () => stageRow(blockData({ id: 'b1', content: 'v2', updatedAt: 9 }))),
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.applied).toEqual(['b1'])          // v1 went in, as it always did
+    expect(out.resolved).toEqual([])             // but nothing was marked applied
+    expect(await needsApply('b1')).toBe(1)
+  })
+
+  it('puts the flag BACK when a row it ruled invisible becomes visible again', async () => {
+    // The exemption is a decision about the current state, not a one-way
+    // ratchet. A staged tombstone whose local row is also gone shows the block
+    // to nobody, so the drain clears it — but if the local row comes back and
+    // the tombstone still cannot be applied, that is a real gap again, and
+    // nothing but this re-examines it short of a fresh delivery.
+    await stageRow(blockData({ id: 'b1', deleted: true, updatedAt: 5 }))
+    const deferred = { getMaterializability: constMat('defer'), getCek: noKey }
+
+    const first = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deferred)
+    expect(first.resolved).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(0)
+
+    await seedLocalBlock(blockData({ id: 'b1', content: 'restored' }))
+    const second = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deferred)
+
+    expect(second.resolved).toEqual([])
+    // And it SAYS it put the flag back. This is the direction that makes a
+    // rematerialization leave the gap bigger than it found it, so an operator
+    // watching the count go up has something to attribute it to.
+    expect(second.reflagged).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(1)
+  })
+
+  it('clears the flag for a re-delivery `blocks` already holds, even while deferring', async () => {
+    // Whether `blocks` is behind is answerable without knowing whether the
+    // workspace can be materialized: equal NONZERO stamps mean identical
+    // content (I1), so this row has nothing to apply on any path. Left flagged
+    // it would be a durable gap with nothing in flight — and `defer` is not
+    // only the locked-workspace case, it is also where a failed key-store read
+    // lands, so an ordinary re-delivery can arrive in that window.
+    await seedLocalBlock(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+    await stageRow(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('defer'), getCek: noKey },
+    )
+
+    expect(out.deferred).toEqual(['b1'])
+    expect(out.resolved).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(0)
+  })
+
+  it('does not re-report a row whose flag was already clear', async () => {
+    // `resolved` is the flag MOVING, not the decision that would have moved it.
+    // The re-pass is the normal shape of a workspace rematerialization at
+    // `scope: 'all'`, where every row is re-judged and almost none are behind —
+    // counting decisions there would report a settled workspace as one this
+    // pass had just repaired in full, which is the opposite diagnosis.
+    await seedLocalBlock(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+    await stageRow(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+    const deps = { getMaterializability: constMat('copy'), getCek: noKey }
+
+    const first = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+    expect(first.resolved).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(0)
+
+    // Same row, same decision, nothing left to clear.
+    const second = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+    expect(second.skippedStale).toEqual(['b1'])
+    expect(second.resolved).toEqual([])
+    expect(await needsApply('b1')).toBe(0)
+  })
+})
+
 describe('materializeStagingRows — copy-through (plaintext workspace)', () => {
   it('copies a staged plaintext row into blocks verbatim, with no upload echo', async () => {
     await stageRow(blockData({ content: 'plain text', properties: { alias: ['Inbox'] } }))

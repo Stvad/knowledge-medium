@@ -19,6 +19,12 @@ import {
   getDialogQueue,
   subscribeDialogs,
 } from '@/utils/dialogs.js'
+import { useActionContext } from '@/shortcuts/useActionContext.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+
+/** The context carries no actions, so it needs nothing beyond what
+ *  `useActionContext` supplies itself. Hoisted for a stable identity. */
+const NO_DEPS = {}
 
 export const DialogHost = () => {
   const queue = useSyncExternalStore(
@@ -26,6 +32,13 @@ export const DialogHost = () => {
     getDialogQueue,
     getDialogQueue,
   )
+
+  // Modal while anything is open, so the surface underneath stops claiming
+  // keys meant for the dialog — Enter on a confirm button would otherwise still
+  // match the editor's split binding, which keeps its context active behind the
+  // modal. One activation here rather than per dialog: every `openDialog`
+  // caller has the same exposure and none of them should have to know it.
+  useActionContext(ActionContextTypes.DIALOG, NO_DEPS, queue.length > 0)
 
   return (
     <>

@@ -291,7 +291,7 @@ export const forgetPayload = (text: string): void => {
   remembered.delete(fnv1a32Hex(text))
 }
 
-/**
+/*
  * Two readers, chosen by what the CALLER can see — never by inspecting
  * the content:
  *

@@ -1,10 +1,10 @@
-/**
+/*
  * Types for the off-path attachments ciphertext audit (design §10.1 / §17).
  *
  * The audit verifies that every object under an E2EE-workspace prefix in the
  * `attachments` bucket is an `encb:v1:` ciphertext envelope — a tripwire that
  * turns an honest-client regression (uploading plaintext) from silent into loud.
- * The logic here is pure and injected via {@link AuditIO}, so it is unit-tested
+ * The logic here is pure and injected via AuditIO (below), so it is unit-tested
  * without any network (the I/O adapter, supabaseAuditIO, is tested separately).
  */
 

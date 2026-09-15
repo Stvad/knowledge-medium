@@ -35,6 +35,7 @@ import {
   mediaHashProp,
 } from './mediaBlock.js'
 import { collectReplicationRequests, runDownLaneReconcile } from './assetDownLane.js'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 const WS = 'ws-1'
 const USER = 'user-1'
@@ -44,9 +45,9 @@ let repo: Repo
 
 const buildRepo = (userId: string = USER): Repo => {
   // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
-  const r = new Repo({
+  const r = trackTestRepo(new Repo({
     db: sharedDb.db, cache: new BlockCache(), user: { id: userId }, blockIdPolicy: 'any',
-  })
+  }))
   r.setFacetRuntime(
     resolveFacetRuntimeSync([
       kernelDataExtension,

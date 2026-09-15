@@ -33,11 +33,38 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { assertNotGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
 import {createChild as createChildMutator} from '@/data/mutators'
+
+/** The one place a property-schema name is judged. `addSchema` throws on the
+ *  reason; callers that must decide BEFORE acting — content promotion has to
+ *  decline a key before it hoists anything, since a subtractive consumer
+ *  drops the source bullet and the text would be the property's only copy —
+ *  ask `isRegistrablePropertyName`. Kept as one function so a new rule cannot
+ *  land on the throwing path while the predicate keeps saying yes.
+ *
+ *  Both rules are name hygiene (docs/properties-as-blocks-migration.html §7). A name must survive the
+ *  `[[wikilink]]` round trip — `]]` is lossy there — and must not itself BE a
+ *  reference span: the definition keeps its name in a property rather than
+ *  its content, so it mints nothing on its own, but the name is written as
+ *  `[[name]]` wherever a definition is addressed by name, and one shaped like
+ *  `((id))` reads as a different reference entirely downstream. */
+export const propertySchemaNameRejection = (name: string): string | null => {
+  if (!name) return 'name is required'
+  if (!isRoundTrippableReferenceLabel(name)) {
+    return `name ${JSON.stringify(name)} cannot round-trip as a [[wikilink]]; rename without "]]"`
+  }
+  if (isGrammarShapedLabel(name)) {
+    return `name ${JSON.stringify(name)} is itself a reference span; rename it`
+  }
+  return null
+}
+
+export const isRegistrablePropertyName = (name: string): boolean =>
+  propertySchemaNameRejection(name.trim()) === null
 
 /** Projector id for the user-defined property-schema bridge. */
 export const USER_SCHEMAS_PROJECTOR_ID = 'user-schemas'
@@ -81,11 +108,16 @@ const decodeStoredDefault = (
 }
 
 /** Builds optional local behavior for already-validated definition metadata.
- *  Missing presets and invalid configs return null with a diagnostic. The block stays in the database
+ *  Missing presets and invalid configs return null with a diagnostic.
+ *
+ *  Exported because the properties migration republishes converged definitions
+ *  and must produce the SAME schema the projector will a tick later — building
+ *  a second one beside this was how a config-carrying preset ended up skipped
+ *  and an extension-replaced one ended up published under the kernel codec. The block stays in the database
  *  untouched; a fix re-runs this on the next subscription tick (or the
  *  `onValuePresetsChange` re-resolve when a missing preset's plugin
  *  loads). */
-const tryBuildSchema = (
+export const tryBuildSchema = (
   row: BlockData,
   presets: ReadonlyMap<string, AnyValuePresetCore>,
   metadata: PropertyDefinitionMetadata,
@@ -218,26 +250,8 @@ export class UserSchemasService {
    *  registered schema. */
   async addSchema(args: AddSchemaArgs): Promise<AnyPropertySchema> {
     const name = args.name.trim()
-    if (!name) throw new Error('[addSchema] name is required')
-    // A schema name must survive the `[[wikilink]]` round trip — `]]` is
-    // lossy there. Field rows are now id-addressed (`((fieldId))`, PR #288 §7)
-    // and no longer embed the name, so this is name hygiene (a name that
-    // can't be written as a clean `[[name]]` reference) rather than a hard
-    // field-row-content requirement; it could be relaxed as a follow-up.
-    if (!isRoundTrippableReferenceLabel(name)) {
-      throw new Error(
-        `[addSchema] name ${JSON.stringify(name)} cannot round-trip as a [[wikilink]]; `
-        + 'rename without "]]"',
-      )
-    }
-    // The other half of the same hygiene (PR #288 §7): a name that IS a
-    // reference span. The property-schema block keeps its name in a property
-    // rather than its content, so unlike a type label this mints nothing on
-    // its own — but the name is written as `[[name]]` wherever a definition
-    // is addressed by name, and one shaped like `((id))` or `::((id))` reads
-    // as a different reference entirely to everything downstream.
-    assertNotGrammarShapedLabel(name, '[addSchema] name')
-
+    const rejection = propertySchemaNameRejection(name)
+    if (rejection) throw new Error(`[addSchema] ${rejection}`)
     // Capture the generation before the first await. Creation is a
     // definition-identity write: synthesis is available synchronously, but
     // existing user definitions are complete only after this workspace's

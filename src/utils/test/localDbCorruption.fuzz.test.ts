@@ -83,7 +83,6 @@
  * `Symbol.toStringTag` getter propagates the same way, and since there's
  * no own `toString`/`valueOf` it also makes `String(x)` resolve to the
  * inherited `Object.prototype.toString` and throw the SAME error first).
- * PR #447 review comment 3672555155 confirmed this against the real code;
  * `hostileConversionArb`/`revokedProxyArb` below reproduce both shapes
  * (and non-callable-`toString`/`valueOf` variants) so the fixed-string
  * final fallback is exercised, not just asserted.
@@ -96,9 +95,8 @@
  * but whose `get` trap throws for every property, including `message` and
  * `cause`. That reaches the `Error` branch of `messageOf`/`messageChainOf`
  * and used to read `(error as Error).message` directly — past a
- * successful `instanceof` check — which still threw. PR #447 review
- * comment 3676752542 found this; the fix routes that read through
- * `safeGet` (localDbCorruption.ts:117-127) exactly like every other
+ * successful `instanceof` check — which still threw. The fix routes that
+ * read through `safeGet` (localDbCorruption.ts:117-127) exactly like every other
  * property read on a not-necessarily-honest `error` in this module.
  */
 import { describe, expect, it } from 'vitest'
@@ -216,8 +214,7 @@ const cyclicChainArb: fc.Arbitrary<unknown> = fc.record({
  *  `[[Has]]` trap on a revoked proxy throws (TypeError), including for
  *  `toString`, `valueOf`, and `Symbol.toStringTag`. That makes BOTH
  *  `safeString`'s primary `String(x)` conversion AND its
- *  `Object.prototype.toString.call(x)` fallback throw — the exact shape
- *  from PR #447 review comment 3672555155.
+ *  `Object.prototype.toString.call(x)` fallback throw.
  *
  *  The array wrapper isn't about the classifiers under test — it's so
  *  fast-check's OWN internals survive generating this value. Every
@@ -253,8 +250,7 @@ const conversionBehaviorArb: fc.Arbitrary<ConversionBehavior> = fc.constantFrom(
  *    Object.prototype.toString.call(o)  // throws too
  *
  *  This generator also crosses that with throwing/non-callable own
- *  `toString`/`valueOf` — the "throwing valueOf/toString" shape PR #447
- *  review comment 3672555155 asked for — so `String(x)` can fail via a
+ *  `toString`/`valueOf` so `String(x)` can fail via a
  *  DIFFERENT path too (e.g. neither method is callable, so `ToPrimitive`
  *  itself throws "Cannot convert object to primitive value") while the tag
  *  getter independently breaks the fallback — a second, distinct way to
@@ -294,8 +290,7 @@ const hostileConversionArb: fc.Arbitrary<unknown> = fc.record({
  *  proxy's `getPrototypeOf` throws too, so `safeInstanceOf` fails closed
  *  BEFORE the `Error` branch's direct property reads are ever exercised.
  *  Here `instanceof` genuinely succeeds and then a subsequent direct
- *  `.message`/`.cause` read (not routed through `safeGet`) would throw —
- *  PR #447 review comment 3676752542.
+ *  `.message`/`.cause` read (not routed through `safeGet`) would throw.
  *
  *  Array-wrapped for the same fast-check-internals reason as
  *  {@link revokedProxyArb} (see its doc comment) — this proxy only

@@ -1,0 +1,307 @@
+// @vitest-environment node
+/**
+ * The single statement both surfaces render. The cases here are the ones where
+ * an empty regression list means opposite things.
+ */
+import { describe, expect, it } from 'vitest'
+import { analysisFixture as analysis, regressionFixture as regression } from './fixtures'
+import { summarize as summarizeWith } from '../verdict'
+
+/** Most of these are about the COMPARISON, not the environment, so the live
+ *  facts default to "recording is fine" and the two tests that care pass their
+ *  own. */
+const summarize = (
+  analysis: Parameters<typeof summarizeWith>[0],
+  live: Parameters<typeof summarizeWith>[1] = { blockedBy: null },
+) => summarizeWith(analysis, live)
+
+
+
+
+describe('summarize', () => {
+  it('calls a fully judged, unregressed comparison clean', () => {
+    const v = summarize(analysis())
+    expect(v.kind).toBe('clean')
+    expect(v.headline).toBe('No slowdowns vs baseline')
+  })
+
+  // One series judged, the other not. An empty regression list here is not a
+  // clean bill of health — nothing asked the unjudged series anything.
+  it('does not call a partial comparison clean', () => {
+    const v = summarize(analysis({ ready: { interaction: false, startup: true } }))
+    expect(v.kind).toBe('pending')
+    expect(v.notes.join(' ')).toContain('interaction history still building')
+  })
+
+  // Blended counters are settled for this page session; thin history is not.
+  // Different states, so not one message.
+  it('separates a series still filling from counters it can never compare', () => {
+    const blended = summarize(analysis({ unjudgedBecause: { interaction: 'blended-workspaces', startup: null } }))
+    expect(blended.notes.join(' ')).toContain('more than one workspace')
+    expect(blended.notes.join(' ')).not.toContain('interaction history still building')
+  })
+
+  // Two claims this note must not make, both of which it made at some point.
+  // It cannot say the database was busy: the classifier rejects a query that
+  // opens while anything else is in flight, which on a two-connection device
+  // can be one the second reader served with no wait at all. And it cannot
+  // blame other activity at all: a lone resolver batching its own ids through
+  // the coalescer is rejected with the database completely quiet, so that
+  // reader would go looking for something that was never there.
+  //
+  // What survives both is the outcome — nothing the comparison can use — which
+  // is true however the sample was rejected.
+  it('reports the never-uncontended state as an outcome, not as a cause', () => {
+    const notes = summarize(analysis({
+      unjudgedBecause: { interaction: 'never-uncontended', startup: null },
+    })).notes.join(' ')
+    expect(notes).toContain('comparison-eligible')
+    expect(notes).not.toContain('database free')
+    expect(notes).not.toContain('other database activity')
+  })
+
+  // The interaction recorder is togglable independently of the monitor, so its
+  // series can be permanently short while everything else looks healthy.
+  // "Still building" is then a remedy that never arrives.
+  it('says an interaction series is not filling rather than still building', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'not-recording', startup: null },
+    }))
+    expect(v.notes.join(' ')).toContain('interaction recording may be off')
+    expect(v.notes.join(' ')).not.toContain('interaction history still building')
+  })
+
+  // Both series unjudged for want of their CURRENT sample, with plenty of
+  // history on disk. "Building a baseline" would point at the one thing that is
+  // not the problem, next to a note reporting a healthy count.
+  it('does not call an unrecorded session a building baseline', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'not-recording', startup: 'no-current-sample' },
+      recorded: { interaction: 40, startup: 40 },
+    }))
+    expect(v.kind).toBe('pending')
+    expect(v.headline).not.toBe('Building a baseline')
+    expect(v.notes.join(' ')).toContain('40 interaction and 40 startup sessions recorded')
+  })
+
+  // A full history that happens to be all zeros: nothing to form a ratio
+  // against. "Building a baseline" would send the reader to wait for sessions
+  // the note beside it reports forty of.
+  it('does not call an all-zero baseline a building baseline', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'no-baseline', startup: 'no-baseline' },
+      recorded: { interaction: 40, startup: 40 },
+    }))
+    expect(v.headline).not.toBe('Building a baseline')
+    expect(v.notes.join(' ')).toContain('no interaction baseline to compare against')
+  })
+
+  // ...and it still says so when a series really is just short of history.
+  it('calls a genuinely short history a building baseline', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'history-short', startup: 'history-short' },
+      recorded: { interaction: 2, startup: 2 },
+    }))
+    expect(v.headline).toBe('Building a baseline')
+  })
+
+  // One judgeable metric alongside one that could not be rated is not a clean
+  // bill of health: the unjudged metric is exactly where a finding could have
+  // been hiding, and dropping it publishes "no slowdowns" over a comparison
+  // that did not happen.
+  it('does not call a partly judged series clean', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'partly-judged', startup: null },
+      regressions: [],
+    }))
+    expect(v.kind).toBe('pending')
+    expect(v.headline).not.toBe('No slowdowns vs baseline')
+    expect(v.notes.join(' ')).toContain('some interaction metrics could not be judged')
+  })
+
+  // Owning a record for this session says nothing about whether the session
+  // MEASURED anything: with no non-telemetry writes and every query below the
+  // call floor, the comparison has no current rate, and no amount of history
+  // supplies one. Deriving from record ownership called this "still building".
+  it('names a missing current measurement rather than short history', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'no-current-sample', startup: null },
+      recorded: { interaction: 40, startup: 40 },
+    }))
+    const notes = v.notes.join(' ')
+    expect(notes).toContain('no usable interaction measurement')
+    expect(notes).not.toContain('interaction history still building')
+  })
+
+  // "Still building" promises something that will never arrive when no recorder
+  // can write in this environment at all.
+  it('reports a blocked environment as disabled, not as still building', () => {
+    const v = summarize(
+      analysis({ ready: { interaction: false, startup: false } }),
+      { blockedBy: 'no-persistent-client' },
+    )
+    expect(v.headline).toBe('Performance history disabled')
+    expect(v.notes.join(' ')).toContain('durable client id')
+  })
+
+  // The count belongs to the series that was judged; reporting the other one's
+  // is how a startup-only verdict claimed "compared against 0 sessions".
+  it('reports the baseline count of the series it actually compared', () => {
+    const v = summarize(analysis({
+      ready: { interaction: false, startup: true },
+      baseline: { interaction: 0, startup: 14 },
+    }))
+    expect(v.notes.join(' ')).toContain('14 recent startup sessions')
+    expect(v.notes.join(' ')).not.toContain('0 recent')
+  })
+
+  // Both series were judged, and they fill independently against their own
+  // windows. One bare number here is the other series' count misreported as
+  // this one's.
+  it('reports both counts, labelled, when both series were judged', () => {
+    const v = summarize(analysis({
+      ready: { interaction: true, startup: true },
+      baseline: { interaction: 7, startup: 31 },
+    })).notes.join(' ')
+    expect(v).toContain('7 interaction')
+    expect(v).toContain('31 startup')
+  })
+
+  // A bare count says nothing about WHICH series is missing, or that one of
+  // them can never fill this session.
+  it('keeps the explanation when it says it is building a baseline', () => {
+    const v = summarize(analysis({
+      unjudgedBecause: { interaction: 'blended-workspaces', startup: 'history-short' },
+      baseline: { interaction: 20, startup: 0 },
+    }))
+    expect(v.headline).toBe('Building a baseline')
+    expect(v.notes.join(' ')).toContain('more than one workspace')
+  })
+
+  // Blocked recording stops the series GROWING; it does not invalidate history
+  // already on disk or this session's own counters, so a real finding against
+  // them must survive.
+  it('still reports a regression when recording is disabled', () => {
+    const v = summarize(
+      analysis({ regressions: [regression({ ratio: 6 })] }),
+      { blockedBy: 'read-only-workspace' },
+    )
+    expect(v.kind).toBe('regressed')
+    expect(v.regressions).toHaveLength(1)
+    expect(v.notes.join(' ')).toContain('not being recorded')
+  })
+
+  // Read-only stops new samples; it does not invalidate a comparison that just
+  // ran cleanly against history already on disk.
+  it('keeps a clean verdict when only recording is blocked', () => {
+    const v = summarize(analysis(), { blockedBy: 'read-only-workspace' })
+    expect(v.kind).toBe('clean')
+    expect(v.headline).toBe('No slowdowns vs baseline')
+    expect(v.notes.join(' ')).toContain('not being recorded')
+  })
+
+  // A rate that went up is not "slower", and the rate is the metric this
+  // feature exists to catch.
+  it('says a rate got higher, not slower', () => {
+    const v = summarize(analysis({
+      regressions: [regression({ label: 'handle invalidations per write', unit: 'ratio', ratio: 4 })],
+    }))
+    expect(v.headline).toContain('higher than baseline')
+    expect(v.headline).not.toContain('slower')
+  })
+
+  it('leads with the worst regression and keeps the graph-growth context', () => {
+    const v = summarize(analysis({
+      regressions: [regression({ ratio: 9 }), regression({ metric: 'query:other', ratio: 3 })],
+      graphGrowth: 1.4,
+    }))
+    expect(v.kind).toBe('regressed')
+    expect(v.headline).toContain('9×')
+    expect(v.notes.join(' ')).toContain('40% larger')
+  })
+})
+
+describe('the clustered-tail caveat', () => {
+  it('rides along with a regression rather than replacing the verdict', () => {
+    // The realistic case: one metric's tail collapses while others judge
+    // normally. Carried as a reason it would lose to `partly-judged` and never
+    // be seen, which is why it is a note.
+    const v = summarize(analysis({
+      regressions: [regression()],
+      clusteredTail: ['core.ancestors'],
+    }))
+    expect(v.kind).toBe('regressed')
+    expect(v.notes.join(' ')).toContain('core.ancestors')
+    expect(v.notes.join(' ')).toContain('within 1% of p50')
+    // The claim the sample cannot support: coalescing and a bimodal workload
+    // produce this shape alike, so the note must not assert independence.
+    expect(v.notes.join(' ')).not.toContain('independent')
+  })
+
+  it('does not send the reader after a cause the comparison already excluded', () => {
+    // Coalesced callers never reach the samples this caveat describes — they
+    // are filtered at the source. Telling the user to check whether the calls
+    // shared one resolution points them at something that cannot be there, and
+    // a caveat that costs a reader an investigation is worse than none.
+    const notes = summarize(analysis({ clusteredTail: ['core.ancestors'] })).notes.join(' ')
+    expect(notes).not.toContain('shared one resolution')
+    expect(notes).not.toContain('coalesc')
+  })
+
+  it('survives a partial comparison, which a single-slot reason could not', () => {
+    const v = summarize(analysis({
+      ready: { interaction: true, startup: false },
+      clusteredTail: ['core.ancestors'],
+    }))
+    expect(v.notes.join(' ')).toContain('core.ancestors')
+  })
+
+  it('stays silent when no tail collapsed', () => {
+    expect(summarize(analysis()).notes.join(' ')).not.toContain('within 1% of p50')
+  })
+})
+
+/**
+ * "Still building" is a promise that waiting will resolve it. When this session
+ * simply contributed no startup record — the recorder is independently
+ * togglable — no amount of history helps, and the chip would send the user to
+ * wait for something that is never coming.
+ */
+describe('an unjudged startup series', () => {
+  const startupUnjudged = (over: Parameters<typeof analysis>[0]) =>
+    summarize(analysis({ ready: { interaction: true, startup: false }, ...over }))
+
+  it('says history is building when that is what is happening', () => {
+    expect(startupUnjudged({}).notes.join(' ')).toContain('startup history still building')
+  })
+
+  // Two states reach this reason — no row for this boot, and a row written
+  // through the hidden-until-after-paint fallback, which carries no paint marks.
+  // The trend table loads and shows the second, so the note must not claim the
+  // record is missing or guess that recording is off; it would contradict what
+  // the reader can see one panel away.
+  it('names the missing measurement without asserting the row is absent', () => {
+    const notes = startupUnjudged({ unjudgedBecause: { interaction: null, startup: 'no-current-sample' } }).notes.join(' ')
+    expect(notes).toContain('no usable startup measurement')
+    expect(notes).not.toContain('still building')
+    expect(notes).not.toContain('recording may be off')
+  })
+})
+
+/**
+ * The pending note counts records ON DISK. Built from `baseline` it would be a
+ * constant zero — nothing was judged in this branch, which is what `baseline`
+ * measures — while the trend dialog beside it shows the history it was
+ * supposedly counted from.
+ */
+describe('the pending-session count', () => {
+  it('reports what is recorded, not what was judged', () => {
+    const verdict = summarize(analysis({
+      ready: { interaction: false, startup: false },
+      baseline: { interaction: 0, startup: 0 },
+      recorded: { interaction: 5, startup: 40 },
+    }))
+    expect(verdict.kind).toBe('pending')
+    expect(verdict.notes.join(' ')).toContain('5 interaction and 40 startup sessions recorded so far')
+  })
+})

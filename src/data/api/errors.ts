@@ -4,12 +4,6 @@
 
 import type {PropertySchemaIdentityUnavailableReason} from './propertySchema'
 
-// `name` is pinned for every subclass in the block at the BOTTOM of this file —
-// a source string literal that survives production minification. We deliberately
-// do NOT set it here via `new.target.name`: OXC minification strips class names,
-// so at runtime that resolves to a mangled identifier (e.g. "q") and every
-// data-layer error would report a garbage `name` in logs, error boundaries, and
-// telemetry.
 export class DataLayerError extends Error {}
 
 // ──── Block facade / cache ────
@@ -269,13 +263,11 @@ export class CodecError extends DataLayerError {
 
 // ──── Stable error names (minification-safe) ────
 //
-// Pin each error's `name` to a source string LITERAL. The base used to derive it
-// from `new.target.name`, but production OXC minification strips class names, so
-// that surfaced a mangled identifier (e.g. "q") in logs, error boundaries, and
-// telemetry. The KEYS below are string literals the minifier can't touch;
-// assigning on each prototype keeps this to one localized block instead of a
-// `this.name = '…'` in every constructor. errors.test.ts asserts this list
-// covers every exported subclass, so a new error that forgets its entry fails.
+// Pin each error's `name` to a source string LITERAL: production OXC
+// minification strips class names, so `new.target.name` resolves to a mangled
+// identifier in logs and error boundaries. One localized block rather than
+// `this.name = …` in every constructor; errors.test.ts asserts it covers every
+// exported subclass.
 const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
   ['DataLayerError', DataLayerError],
   ['BlockNotLoadedError', BlockNotLoadedError],

@@ -38,6 +38,8 @@ export default defineConfig({
       // type-only except in the modules that actually call into the app.
       // Those few get a runtime fake here, so the React half is testable at
       // all rather than being reviewed by eye.
+      {find: /^@\/components\/ui\/button\.js$/, replacement: resolve(configDir, 'test/kernel/uiButton.tsx')},
+      {find: /^@\/components\/ui\/dialog\.js$/, replacement: resolve(configDir, 'test/kernel/uiDialog.tsx')},
       {find: /^@\/utils\/dialogs\.js$/, replacement: resolve(configDir, 'test/kernel/dialogs.ts')},
       {find: /^@\/utils\/navigation\.js$/, replacement: resolve(configDir, 'test/kernel/navigation.ts')},
       {find: /^@\/hooks\/block\.js$/, replacement: resolve(configDir, 'test/kernel/blockHooks.ts')},

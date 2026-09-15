@@ -105,10 +105,9 @@ export function parseSeedAndPath(log) {
 
 // Static triage note that leads every nightly failure issue. There is
 // currently NO known standing red — the deep tier is expected to pass, so a
-// ticket existing at all means something regressed. (Through 2026-07 the
-// convergence suite WAS a standing red pending issue #381; that fix shipped
-// in PR #525 and the exemption is gone. If a suite ever becomes known-red
-// again, name it here rather than making every triager rediscover it.)
+// ticket existing at all means something regressed. (If a suite ever
+// becomes known-red, name it here rather than making every triager
+// rediscover it.)
 const TRIAGE_NOTE = `**Triage:** the deep tier runs green by default — there is no known standing red, so every file listed above is a real signal until shown otherwise. It is one of two things:
 1. **A product bug** — the property caught something real. Reproduce with the commands at the bottom, then fix the code.
 2. **An unsound oracle** — the property asserts something the code never promised, or the counterexample doesn't survive replay (see the shrink-unsoundness note below). Fix the property.

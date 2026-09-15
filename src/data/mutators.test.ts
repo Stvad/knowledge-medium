@@ -28,7 +28,10 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from './repo'
-import { aliasesProp, isCollapsedProp } from '@/data/properties'
+import {
+  addBlockTypeToProperties, aliasesProp, blockTypeLabelProp, getBlockTypes, isCollapsedProp,
+} from '@/data/properties'
+import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 
 interface Harness {
   h: TestDb
@@ -187,17 +190,10 @@ describe('core.setProperty', () => {
       tx => tx.create({id: 'p3', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    // `ro` shares the DB with `env.repo`. txId comes from `newId`; the
-    // harness gives every Repo the same `gen-<n>` counter from 0, so a
-    // second Repo on the same DB would collide on command_events.tx_id.
-    // The original `ro` used the Repo default (uuidv4); give it a distinct
-    // id space here so its tx ids don't clash with `env.repo`'s.
-    let roId = 0
     const {repo: ro} = createTestRepo({
       db: env.h.db,
       user: {id: 'user-1', name: 'Test'},
       isReadOnly: true,
-      newId: () => `ro-${++roId}`,
     })
     // BlockDefault throws ReadOnlyError; UiState and UserPrefs pass through.
     await expect(
@@ -1246,6 +1242,38 @@ describe('core.merge', () => {
       await seed('line one', 'line two')
       await env.repo.mutate.merge({intoId: 'into', fromId: 'from', contentStrategy: {separator: '\n'}})
       expect(env.read('into')!.content).toBe('line one\nline two')
+    })
+
+    // The survivor of a type merge must keep the text the strategy chose. The
+    // property union hands it the source's `block-type:label`, which is a NAME
+    // — and `blockTypeTypeify` completes a freshly tagged block by writing its
+    // label into `content`, so an unreconciled label silently retitles the
+    // survivor to the dead block's name (and, since #584, refuses the merge
+    // outright rather than doing so).
+    it("'keepTarget' names the surviving type after its own text, not the source's label", async () => {
+      await env.repo.tx(
+        tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.mutate.createChild({parentId: 'p', id: 'into', content: 'Plain page'})
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id: 'from', workspaceId: 'ws-1', parentId: 'p', orderKey: 'b9',
+          content: 'Dancer',
+          properties: addBlockTypeToProperties({}, BLOCK_TYPE_TYPE),
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from', contentStrategy: 'keepTarget'})
+      await env.repo.awaitProcessors()
+
+      const survivor = env.read('into')!
+      expect(survivor.content).toBe('Plain page')
+      expect(survivor.properties[blockTypeLabelProp.name]).toBe('Plain page')
+      expect(getBlockTypes(survivor)).toContain(BLOCK_TYPE_TYPE)
+      // The dead type's name still resolves — it rides along as an alias.
+      expect(aliasesProp.codec.decode(survivor.properties[aliasesProp.name])).toContain('Dancer')
     })
   })
 

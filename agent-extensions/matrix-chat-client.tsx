@@ -27,7 +27,11 @@ import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties, showPropertiesProp } from '@/data/properties.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
-import { computePromotedFromChildren } from '@/plugins/roam-import/plan.js'
+import {
+  computePromotedFromChildren,
+  ensurePromotedPropertySchemas,
+  isRegistrablePropertyName,
+} from '@/plugins/roam-import/plan.js'
 import { navigate } from '@/utils/navigation.js'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -516,6 +520,13 @@ const matrixEventUrl = (roomId: string, eventId: string) => `https://matrix.to/#
 const matrixPromotionOptions = {
   namespacePrefix: 'matrix',
   transformKey: (key: string) => key.toLowerCase(),
+  // Ingest promotes SUBTRACTIVELY (the bullet is dropped once hoisted), so a
+  // key that can never get a definition must be declined HERE — before
+  // bubbling — or the text is lost outright: the bullet is gone and the
+  // property would have to be dropped for lacking a definition. Declining
+  // leaves the bullet exactly as the user wrote it. `[[Page]]:: value` is the
+  // form that hits this (the name would contain `]]`).
+  acceptKey: isRegistrablePropertyName,
 }
 
 const propertyValues = (value: unknown): unknown[] => Array.isArray(value) ? value : [value]
@@ -590,6 +601,12 @@ const nestTopLevelBlocksUnderFirst = (blocks: BlockDef[]): BlockDef[] => {
     children: [...(first.children ?? []), ...rest],
   }]
 }
+
+/** Every node in a built tree, so promoted keys at any depth get a
+ *  definition. `ensurePromotedPropertySchemas` normalizes in place, so these
+ *  must be the SAME objects that are about to be written, not copies. */
+const flattenBlockDefs = (blocks: BlockDef[]): BlockDef[] =>
+  blocks.flatMap(block => [block, ...flattenBlockDefs(block.children ?? [])])
 
 const createBlocksFromEvent = (event: any, matrixClient: any): BlockDef[] => {
   const text = getMessageText(event, matrixClient)
@@ -679,9 +696,16 @@ const ensureMatrixTagBlock = async (
   return id
 }
 
-const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<void> => {
+/** `'deferred'` means nothing was written and the caller MUST NOT advance the
+ *  sync cursor — Matrix only offers an event once, so treating a deferral as
+ *  handled loses the message permanently. `'done'` covers both a successful
+ *  ingest and a deliberate skip (no event id, already ingested). */
+type IngestOutcome = 'done' | 'deferred'
+
+const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<IngestOutcome> => {
   const eventId = typeof event.event_id === 'string' ? event.event_id : null
-  if (!eventId) return
+  // Unprocessable forever, not deferrable — must not hold the cursor.
+  if (!eventId) return 'done'
 
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) throw new Error('Matrix message ingest requires an active workspace')
@@ -689,6 +713,23 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
   const iso = todayIso(new Date(eventTimestamp(event)))
   await getOrCreateDailyNote(repo, workspaceId, iso)
   const dailyId = dailyNoteBlockId(workspaceId, iso)
+
+  // Promotion INVENTS property names from message text (`key:: value`), so no
+  // code seed can declare them. Mint their definitions BEFORE the write:
+  // `addSchema` does its own writes and cannot run inside the tx below, and a
+  // key that lands definition-less is skipped by property migration forever
+  // (#501). Built out here so the same tree is registered and then written.
+  const messageTree = createBlocksFromEvent(event, matrixClient)
+  // `addSchema` targets whatever workspace is ACTIVE, while the write below
+  // targets the `workspaceId` captured above. A switch during the awaits
+  // already behind us would register these names into the new workspace and
+  // write the message into the old one — polluting one and leaving the other
+  // definition-less. Ingest is idempotent (deterministic message ids), so
+  // bailing here just defers this event to the next poll.
+  if (repo.activeWorkspaceId !== workspaceId) return 'deferred'
+  const promotionNotes = await ensurePromotedPropertySchemas(repo, flattenBlockDefs(messageTree))
+  for (const note of promotionNotes) console.warn('[matrix] promoted property:', note)
+  if (repo.activeWorkspaceId !== workspaceId) return 'deferred'
 
   await repo.tx(async (tx: any) => {
     const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso)
@@ -712,7 +753,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       tx,
       workspaceId,
       tagBlockId,
-      createBlocksFromEvent(event, matrixClient),
+      messageTree,
       eventId,
       {
         [eventIdProp.name]: eventId,
@@ -723,6 +764,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       },
     )
   }, {scope: ChangeScope.BlockDefault, description: 'matrix message ingest'})
+  return 'done'
 }
 
 // ---------------------------------------------------------------------------
@@ -852,12 +894,27 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
       const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
       const events = nextBatch ? roomEventsFromSync(syncBody, config.roomId) : []
 
+      // A deferral must STOP the batch and leave the cursor where it is.
+      // `next_batch` is saved below for the whole batch, and Matrix offers an
+      // event exactly once — so advancing past a message we chose not to
+      // write loses it permanently rather than retrying it.
+      let deferred = false
       for (const event of events) {
         if (event?.type !== 'm.room.message') continue
-        await appendMatrixMessage(repo, config, event, matrixClient)
+        if (await appendMatrixMessage(repo, config, event, matrixClient) === 'deferred') {
+          deferred = true
+          break
+        }
       }
 
       const newBatch = syncBody?.next_batch
+      if (deferred) {
+        // Back off rather than re-fetching the same batch immediately — the
+        // condition that deferred us (a workspace switch) is user-paced.
+        console.warn('[matrix-messages] deferring batch; sync cursor held')
+        await sleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
+        continue
+      }
       if (typeof newBatch === 'string') {
         nextBatch = newBatch
         saveNextBatch(config, newBatch)

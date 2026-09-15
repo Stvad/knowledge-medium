@@ -154,7 +154,7 @@ const blockData = (overrides: Partial<BlockData> = {}): BlockData => ({
 
 // Storage + local columns: this is a LOCAL `blocks` write (not staging), and
 // `blockToRowParams` produces params for the full set including the local
-// `reference_target_id` (PR #288 slice A). Building the INSERT from the
+// `reference_target_id`. Building the INSERT from the
 // storage-only set would under-count the placeholders vs. the 14 params.
 const BLOCKS_COLUMN_NAMES = BLOCKS_TABLE_COLUMN_NAMES
 const INSERT_OR_REPLACE_BLOCKS_SQL =

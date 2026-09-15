@@ -1,3 +1,17 @@
+/** Does `value` contain a UTF-16 code unit with no partner — the artefact of
+ *  cutting a string mid-character, or of text that was never well-formed?
+ *
+ *  `String.prototype.isWellFormed` is exactly this predicate, but it is ES2024
+ *  and this project's `lib` is ES2023. Worth having in one place rather than
+ *  per-caller: an ill-formed string is not merely ugly, it does not SURVIVE —
+ *  `TextEncoder` and the SQLite text columns both replace a lone surrogate
+ *  with U+FFFD, so anything that stores or hashes such text loses it. */
+export const hasLoneSurrogate = (value: string): boolean =>
+  LONE_SURROGATE_RE.test(value)
+
+const LONE_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
 /** Truncate `value` to at most `max` characters, replacing the overflow with a
  *  single ellipsis (`…`). Strings already within `max` are returned unchanged.
  *  The result is always ≤ `max` chars — the ellipsis occupies the last slot. */

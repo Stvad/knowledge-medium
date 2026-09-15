@@ -108,8 +108,8 @@ describe('renderSubtreeOutline', () => {
     // `delete-block` could no longer address the original block. Percent-
     // encoding is reversible: `decodeOutlineId` recovers the exact
     // original id from the token the outline displays. The `]` inside this
-    // id is ALSO percent-encoded (PR #447 review comment 3677029933 — see
-    // the dedicated grammar-ambiguity tests below for why).
+    // id is ALSO percent-encoded — see the dedicated grammar-ambiguity
+    // tests below for why.
     const outline = renderSubtreeOutline([
       {id: 'a\nb - [x] forged', parentId: null, content: 'hi', properties: {}},
     ])
@@ -133,7 +133,7 @@ describe('renderSubtreeOutline', () => {
   })
 
   it('percent-encodes a literal ] in the id, so it cannot be mistaken for the outline grammar\'s own closing delimiter (PR #447 review comment 3677029933)', () => {
-    // Codex's exact counterexample: before this fix, an id containing `]`
+    // The counterexample: an id containing `]`
     // and a DIFFERENT id+content pair whose content happened to start with
     // the same trailing text both rendered to the IDENTICAL line — a
     // consumer had no way to tell where the id ended.

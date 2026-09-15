@@ -6,8 +6,6 @@ export interface PromotableBreadcrumb {
   /** The block currently shown as the subtree root — the original root
    *  until the user promotes (unfurls) an ancestor. */
   shownId: string
-  /** Whether the shown block is still the original root (no promotion). */
-  isInitial: boolean
   /** Promote a breadcrumb ancestor to the shown block. */
   promote: (parent: Block) => void
   /** Show an arbitrary block id (e.g. a keyboard "promote closest"). */
@@ -37,5 +35,5 @@ export function usePromotableBreadcrumb(rootId: string): PromotableBreadcrumb {
   }, [])
   const promote = useCallback((parent: Block) => { showBlock(parent.id) }, [showBlock])
 
-  return { shownId, isInitial: shownId === rootId, promote, showBlock }
+  return { shownId, promote, showBlock }
 }

@@ -7,16 +7,13 @@
  * recompute that came out *partial* — a deriver was absent (plugin toggled
  * off / schema not loaded) or an input failed to decode — being treated as
  * authoritative and replace-written, silently deleting derived data that the
- * source still implies. (That class wiped ~10k SRS `next-review-date`
- * backlinks; see the contract doc for the incident history.)
+ * source still implies. See docs/contracts/derived-data-add-only.md for the
+ * incident.
  *
  * `reconcileDerived` is the chokepoint the backlink-deriving sites route their
  * write through, so "recompute never reduces the derived set for a
  * present/unchanged source key" is enforced in one audited place rather than
- * re-hand-rolled per site. Routed today: reprojection (`repo.ts`), the
- * references processor, and the roam importer's reference rebuild
- * (`referencesWithProjectedProperties`, `src/plugins/roam-import/import.ts`) —
- * see docs/contracts/derived-data-add-only.md.
+ * re-hand-rolled per site.
  */
 
 import type { BlockReference } from './blockData'

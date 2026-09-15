@@ -66,8 +66,7 @@
  * would fuzz a tinykeys grammar corner this app never authors.
  *
  * ──── Found while authoring — the exact-boundary gap, and why it stays
- *      admissible-either-way rather than "fixed" (PR #454 review thread,
- *      comments 3672710450 and 3676646931) ────
+ *      admissible-either-way rather than "fixed" ────
  *
  * The first deep-tier-shaped run (smoke seed, chord `"ArrowUp a"`, two
  * events each with `gapMs = DEFAULT_SEQUENCE_TIMEOUT_MS` exactly) went RED:
@@ -323,8 +322,8 @@ describe('createSequenceMatcher ↔ tinykeys per-step differential (generalizes 
           // re-running a full separate `fuzzParams` budget over the same
           // kind of generated scenarios just to re-derive what the control
           // flow already guarantees — a fuzz-tier restatement of the
-          // implementation (Codex P1, PR #454 comment 3676886057). Folding
-          // it into this loop checks it on every step of every scenario
+          // implementation. Folding it into this loop checks it on every
+          // step of every scenario
           // this property generates anyway, at zero extra cost and with
           // MORE coverage than the standalone version had (that ran over
           // its own independently-generated scenarios; this rides the

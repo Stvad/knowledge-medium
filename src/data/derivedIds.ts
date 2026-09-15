@@ -37,40 +37,19 @@
  * ## Which get-or-create do I want?
  *
  * This module answers what the id IS, and whether what is sitting at it is
- * YOURS ({@link classifyOccupant}) — never what to do about it. Three call
- * shapes sit on top, and they differ in exactly that last part: the policy
- * they apply to the verdict.
+ * YOURS ({@link classifyOccupant}) — never what to do about it.
  *
- *  - {@link getOrCreateTypedChild} (`@/data/typedRecords`) — a RECORD under a
- *    parent block, inside your tx. Refuses a tombstone (answering `taken`
- *    rather than resurrecting something deleted on purpose), lets you reject an
- *    occupant with `adoptable`, and never overwrites what it adopts.
- *  - {@link getOrCreateKernelPage} (`@/data/kernelPage`) — a per-workspace
- *    singleton PAGE at the root, `repo`-level. Restores a tombstone, because a
- *    kernel page is machinery the app needs present rather than a user record
- *    whose deletion was a decision.
- *  - {@link createOrRestoreTargetBlock} (`@/data/targets`) — the reference-seat
- *    primitive: create-or-restore at an id the CALLER computed, with a
- *    per-domain callback. Alias seats reach it through a probed SEQUENCE of ids
- *    rather than one identity, so they are the one derived-id flow here that
- *    isn't a single `derivedBlockId` call.
+ *  - {@link getOrCreateTypedChild} (`@/data/typedRecords`) — refuses a tombstone.
+ *  - {@link getOrCreateKernelPage} (`@/data/kernelPage`) — restores a tombstone.
+ *  - {@link createOrRestoreTargetBlock} (`@/data/targets`) — probes a SEQUENCE
+ *    of ids rather than one identity.
  *
- * Reach for one of those before hand-rolling a fourth. If none fits, the thing
- * you are about to write belongs here beside them.
+ * Reach for one of those before hand-rolling a fourth.
  *
- * Every derived BLOCK id in `src/` resolves through this module. Two `uuidv5`
- * calls outside it are deliberate, and they are deliberate for different
- * reasons:
- *
- *  - `workspaces.ts` derives the local-personal workspace and its member row.
- *    Those aren't blocks, so none of the policy above applies to them.
- *  - `scripts/roam-ts-backfill/build_ts_map.mjs` re-declares `ROAM_IMPORT_NS`,
- *    `DAILY_NOTE_NS` and both key shapes by hand, because it is a standalone
- *    script that must not import the app. It is byte-identical to the
- *    formulas here today, and it is aimed at a few hundred thousand live rows
- *    in a backfill that has not run yet — so re-check it against
- *    `derivedIds.test.ts` before running it, and again if either formula ever
- *    changes. Nothing enforces that copy; a human has to.
+ * `scripts/roam-ts-backfill/build_ts_map.mjs` re-declares `ROAM_IMPORT_NS`,
+ * `DAILY_NOTE_NS` and both key shapes by hand because it must not import the
+ * app; nothing enforces the copy — re-check it against `derivedIds.test.ts`
+ * before running it and whenever a formula changes.
  */
 
 import { v5 as uuidv5 } from 'uuid'
@@ -123,27 +102,19 @@ export const userStateRootBlockIds = (userPageId: string): string[] =>
  *
  * A derived id tells you WHERE to look; it never promises the row you find is
  * the one you meant. Every get-or-create above therefore reads the id and then
- * asks the same question — "is this mine to write through?" — and that question
- * used to be answered separately inside each of them, each with a different
- * subset of the clauses.
- *
- * Three of the bugs fixed while writing this module were that, and only that:
- * `getOrCreateKernelPage` repaired another workspace's page; `adoptTypedBlock`
- * tagged a tombstone; `adoptTypedBlock` tagged another workspace's row. One
- * omitted clause each, in three copies of one predicate — and fixing a copy
- * left the others wrong, which is how the second and third were found.
+ * asks the same question — "is this mine to write through?"
  *
  * So the CLASSIFICATION lives here, once, and each caller applies its own
  * POLICY to the verdict. A kernel page restores a `tombstoned`; a record
  * refuses one. They are allowed to disagree about that — what they may not do
  * is disagree about what `tombstoned` MEANS, or forget to ask about `foreign`.
  *
- * Not every derived-id flow forms this predicate: `createOrRestoreTargetBlock`
- * delegates the whole question to `tx.createOrGet`, which classifies inside the
- * engine and raises `DeletedConflictError` / `DeterministicIdCrossWorkspaceError`
- * for the caller to catch. That is the same taxonomy arrived at from the other
- * side, and it needs no read of its own — so it is deliberately not routed
- * through here.
+ * `createOrRestoreTargetBlock` is deliberately NOT routed through here: it
+ * delegates to `tx.createOrGet`, which classifies inside the engine and raises
+ * `DeletedConflictError` / `DeterministicIdCrossWorkspaceError` for the caller
+ * to catch. That is the same taxonomy reached from the other side, and it needs
+ * no read of its own — so routing it through this predicate would add a read,
+ * not consistency.
  */
 export type OccupantVerdict =
   /** No row at this id at all. Yours to create. */

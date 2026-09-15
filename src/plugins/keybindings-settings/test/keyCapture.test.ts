@@ -131,6 +131,12 @@ describe('isModifierOnly', () => {
 })
 
 describe('formatChord', () => {
+  // Glyphs are platform-dependent; state it rather than inheriting
+  // whatever the previous describe left on `navigator.platform`.
+  beforeEach(() => {
+    stubPlatform('MacIntel')
+  })
+
   it('renders modifier glyphs and uppercases the key', () => {
     expect(formatChord('$mod+Shift+k')).toBe('⌘⇧K')
     expect(formatChord('Control+Alt+ArrowLeft')).toBe('⌃⌥←')
@@ -158,9 +164,23 @@ describe('formatChord', () => {
     expect(formatChord('$mod+Enter')).toBe('⌘⏎')
     expect(formatChord('f5')).toBe('F5')
   })
+
+  it('keeps `+` as a key rather than eating it as a separator', () => {
+    // What the capture path records when you press the plus key, and what
+    // storage tokenizes with tinykeys' lookbehind. Splitting on every `+`
+    // renders the modifier alone — a chord that still fires, shown as a
+    // key that isn't the one bound.
+    expect(formatChord('Shift++')).toBe('⇧+')
+    expect(formatChord('+')).toBe('+')
+  })
 })
 
 describe('normalizeChord', () => {
+  // `Meta` folds to `$mod` only on Mac — these expectations need it.
+  beforeEach(() => {
+    stubPlatform('MacIntel')
+  })
+
   it('canonicalises modifier aliases to tinykeys names', () => {
     expect(normalizeChord('Shift+Meta+K')).toBe('$mod+Shift+K')
     expect(normalizeChord('control+option+a')).toBe('Control+Alt+a')

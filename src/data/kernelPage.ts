@@ -24,6 +24,7 @@ import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
+import { partitionClaimableAliases, restorePropertiesStrippingAliases } from '@/data/targets'
 
 const stringListProperty = (raw: unknown): readonly string[] =>
   Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
@@ -80,32 +81,24 @@ export interface KernelPageSpec {
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   derivedBlockId({namespace, key: workspaceId})
 
-/** Get-or-create a per-workspace kernel page. Repairs a live page that's
- *  missing the expected types or alias; restores a soft-deleted row;
- *  otherwise creates fresh.
+/** Get-or-create a per-workspace kernel page: repairs a live page missing its
+ *  types or alias, restores a tombstone, else creates.
  *
- *  On a READ-ONLY workspace it only GETS: the create/repair transactions are
- *  skipped and the handle is returned as-is.
+ *  On a read-only workspace it only GETS — ergonomics, not safety: the kernel
+ *  already rejects the write (`BlockDefault` is `readOnly: 'reject'` in
+ *  `CHANGE_SCOPE_POLICIES`), so this only turns an unhandled rejection out of
+ *  an action handler into an empty page.
  *
- *  This is an ERGONOMIC guard, not a safety one — a distinction I originally
- *  got backwards here. The kernel already refuses the write: `BlockDefault` is
- *  `readOnly: 'reject'` in `CHANGE_SCOPE_POLICIES`, and the commit pipeline
- *  throws `ReadOnlyError` before anything is written. So without this, a viewer
- *  merely opening a kernel-page surface got an unhandled rejection out of an
- *  action handler; nothing was ever written, and nothing was left to be
- *  RLS-rejected on sync. What this buys is that the viewer sees an empty page
- *  instead of an error.
- *
- *  The ordinary read-only case is unaffected: the id is deterministic, so a
- *  page the owner already created has synced and resolves normally.
- *
- *  It belongs here rather than in each surface because every one of them —
- *  daily notes, SRS review, locations, media capture, the Readwise backlog —
- *  reaches the same throw through this one function. */
+ *  UNDOABLE by default (issue #306), so a create inside a caller's
+ *  `repo.undoGroup` merges into the operation that needed it. Pass `skipUndo`
+ *  only when there is no user operation to merge into: an unattended create
+ *  lands alone on the stack, and `UndoManager.record` clears the redo branch
+ *  on every push, so it silently discards a redo the user still wanted. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
   spec: KernelPageSpec,
+  {skipUndo = false}: {skipUndo?: boolean} = {},
 ): Promise<Block> => {
   const id = kernelPageBlockId(workspaceId, spec.namespace)
   const aliases: readonly string[] = [spec.alias]
@@ -123,9 +116,11 @@ export const getOrCreateKernelPage = async (
   const types: readonly string[] =
     spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
 
-  const tagTypes = async (tx: Tx, snapshot: TypeRegistrySnapshot): Promise<void> => {
+  const tagTypes = async (
+    tx: Tx, snapshot: TypeRegistrySnapshot, claimAliases: readonly string[],
+  ): Promise<void> => {
     for (const type of types) {
-      await repo.addTypeInTx(tx, id, type, {[aliasesProp.name]: aliases}, snapshot)
+      await repo.addTypeInTx(tx, id, type, {[aliasesProp.name]: claimAliases}, snapshot)
     }
   }
 
@@ -188,11 +183,16 @@ export const getOrCreateKernelPage = async (
       if (!current || current.deleted) return
       refuseForeign(current)
       const txAliases = stringListProperty(current.properties[aliasesProp.name])
-      if (!includesAll(txAliases, aliases)) {
-        await tx.setProperty(id, aliasesProp, mergeStrings([...aliases, ...txAliases]))
+      const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+      const merged = mergeStrings([...claimable, ...txAliases])
+      // Compare rather than write unconditionally: while an alias stays
+      // contested `needsRepair` is true on every call, and an unguarded
+      // setProperty would then write the same value on every navigation.
+      if (!includesAll(txAliases, merged)) {
+        await tx.setProperty(id, aliasesProp, merged)
       }
-      await tagTypes(tx, typeSnapshot)
-    }, {scope: ChangeScope.BlockDefault})
+      await tagTypes(tx, typeSnapshot, claimable)
+    }, {scope: ChangeScope.BlockDefault, skipUndo})
     return repo.block(id)
   }
 
@@ -202,9 +202,16 @@ export const getOrCreateKernelPage = async (
     if (existing) refuseForeign(existing)
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
-      await tx.restore(id, {content: spec.alias})
-      await tx.setProperty(id, aliasesProp, [...aliases])
-      await tagTypes(tx, typeSnapshot)
+      // The tombstone's stored alias bag can hold an entry a different
+      // live block claimed while this page was dead (issue #378) —
+      // restoring it as-is would re-insert that stale claim and abort
+      // the whole tx. Strip it here; the setProperty below re-claims
+      // exactly the canonical alias set.
+      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
+      await tx.restore(id, {content: spec.alias, properties: restoredProperties})
+      const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+      await tx.setProperty(id, aliasesProp, claimable)
+      await tagTypes(tx, typeSnapshot, claimable)
       return
     }
     await tx.create({
@@ -214,8 +221,9 @@ export const getOrCreateKernelPage = async (
       orderKey,
       content: spec.alias,
     }, {systemMint: true})
-    await tagTypes(tx, typeSnapshot)
-  }, {scope: ChangeScope.BlockDefault})
+    const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+    await tagTypes(tx, typeSnapshot, claimable)
+  }, {scope: ChangeScope.BlockDefault, skipUndo})
 
   return repo.block(id)
 }

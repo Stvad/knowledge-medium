@@ -130,20 +130,13 @@ export interface Tx {
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void>
 
   /** Stamp the LOCAL derived columns — `reference_target_id` and
-   *  `is_field_form`, and ONLY those — without advancing `updated_at`. This
-   *  is the write mode for `core.deriveReferenceTarget`'s same-tx amendment:
-   *  both columns are per-device reflections of `content` (never in
-   *  `BLOCK_UPLOAD_COLUMNS`, never uploaded), so re-deriving them is not a
-   *  synced edit and must not mint an upload PATCH. Because the UPDATE
-   *  touches no upload column and leaves `updated_at` untouched,
-   *  `blocks_upload_update`'s diff predicate stays false and nothing is
-   *  enqueued — whereas `update(..., {skipMetadata})` still bumps
-   *  `updated_at` (an upload column) and ships a redundant PATCH (PR #288
-   *  §5, Decision A). Same-tab reactivity still fires (the write records a
-   *  `referenceTargetId`/`isFieldForm`-changed snapshot); cross-tab rides
-   *  the accompanying content edit's row_event. No-op when both columns
-   *  already match. Not for content-bundled retargets — those change a
-   *  synced column and go through `update`, which correctly uploads. */
+   *  `is_field_form` — and ONLY those, without advancing `updated_at`.
+   *  Both are per-device reflections of `content` and are never
+   *  uploaded, so re-deriving them (in `core.deriveReferenceTarget`'s
+   *  same-tx amendment) must not mint an upload PATCH; `update(...,
+   *  {skipMetadata})` would, because it still bumps `updated_at`. No-op
+   *  when both already match. NOT for content-bundled retargets — those
+   *  change a synced column and go through `update`. */
   stampReferenceTarget(id: string, targetId: string | null, isFieldForm: boolean): Promise<void>
 
   // ──── Tree moves (structural) ────
@@ -250,13 +243,71 @@ export interface Tx {
    *  the tx-start registry snapshot. */
   isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean
 
-  /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
+  /** The one properties-as-blocks predicate (docs/properties-as-blocks-migration.html §6): is `workspaceId`
    *  flipped to child-backed properties (`workspaces.properties_migration`
-   *  at or past 'children' — never an equality test)? Shared by
-   *  recognition, the dual-write, and the projection processors; cached
-   *  per tx. Reads the local synced `workspaces` row; a missing row/column
+   *  at or past 'children' — never an equality test)? It governs the
+   *  read/write DIRECTION — the dual-write gate, the projection processors,
+   *  the property-rename processor and the cell backfill — NOT whether a row
+   *  is recognized as machinery, which is data-keyed. Cached per tx. Reads the local synced `workspaces` row; a missing row/column
    *  reads as un-flipped ('cell'). */
   isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
+
+  /** The fieldIds `parentId` holds a TOMBSTONED field row for.
+   *
+   *  The one thing that separates "a cell key was never materialized" from "the
+   *  property was DELETED through its children and this device's cell has not
+   *  caught up" — the cell backfill's create-only path needs it before it may
+   *  treat a key as history. On Tx rather than read alongside the candidate scan
+   *  because the answer has to be taken under the same write lock as the
+   *  materialization it gates: a tombstone arriving while the batch waits for the
+   *  writer would otherwise be missed, and the pass would recreate the property
+   *  and upload it.
+   *
+   *  Deleted rows only, since `childrenOf` already covers the live ones. Ordered
+   *  `(order_key, id)`, and whole rows rather than a target set because the
+   *  revival path (#787) restores these rather than only counting them: a
+   *  restore that minted replacements abandoned the originals, so a property's
+   *  row identity did not survive a delete→restore and two devices restoring
+   *  the same block minted rival field rows for one definition. */
+  tombstonedPropertyFieldRows(workspaceId: string, parentId: string): Promise<BlockData[]>
+
+  /** Tombstoned children of `parentId`, ordered `(order_key, id)` — the
+   *  complement of `childrenOf`, which is live-only. Exists for the revival
+   *  path: bringing a tombstoned field row back means bringing its value
+   *  children back with it, and those are invisible to every live-only read. */
+  deletedChildrenOf(parentId: string): Promise<BlockData[]>
+
+  /** For each of `names` that has a LIVE `property-schema` block in this
+   *  workspace, the ids of those blocks — read inside the transaction.
+   *
+   *  Ids rather than a bare name set so a caller can tell the holders apart —
+   *  de-duplicate against the row its own projection selected, and name the
+   *  others when it has to report a collision.
+   *
+   *  DO NOT exclude your own deterministic id from this answer when the
+   *  question is "who holds this name". That exclusion is only meaningful where
+   *  the id is about to be WRITTEN, and as an answer about a NAME it hides the
+   *  one holder guaranteed to win: a `systemMint` row is born at `createdAt` 0
+   *  and `buildPropertyDefinitionRegistry` sorts ascending, so an unprojected
+   *  copy at that id takes the name on the next rebuild while the caller
+   *  backfills against whatever its projection picked. Keep "is this id mine to
+   *  write through?" as its own question — `classifyOccupant` answers it.
+   *
+   *  Exists because the property-definition registry is a projector-driven
+   *  PROJECTION: a definition applied by sync commits in its own transaction
+   *  and is invisible to the registry until the projector ticks. A caller about
+   *  to mint a definition cannot ask the registry whether the name is taken —
+   *  it would mint a rival, and the loser of the winner machinery strands every
+   *  field row bound to its fieldId. Inside the write lock no other writer can
+   *  commit, so this answer holds for the rest of the transaction.
+   *
+   *  Reads the LAST occurrence of the name key, matching `JSON.parse` rather
+   *  than `json_extract` — a raw write can produce a bag with a repeated key,
+   *  and SQLite and JavaScript disagree about which one wins. */
+  livePropertyDefinitionNames(
+    workspaceId: string,
+    names: readonly string[],
+  ): Promise<Map<string, string[]>>
 
   // ──── Composition ────
 
@@ -274,10 +325,10 @@ export interface Tx {
    *  This is the structural view: the actual tree, no hidden rows, so a
    *  traversal can never silently miss machinery it needs to carry (delete
    *  cascade, copy, merge). The display-visible view — which excludes
-   *  recognized property field rows in a child-backed workspace (PR #288
-   *  §9) — is opt-IN via `{hidePropertyChildren: true}`. In an un-flipped
-   *  workspace nothing is recognized, so `hidePropertyChildren` is a no-op
-   *  (dormant).
+   *  recognized property field rows (docs/properties-as-blocks-migration.html §9) — is opt-IN via
+   *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
+   *  flip-gated, so it prunes in every workspace: the cell→children backfill
+   *  mints field rows while the workspace still reads cells.
    *
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
@@ -355,6 +406,21 @@ export interface Tx {
    *  happens to be the oldest. Sees this tx's own writes. */
   aliasClaimants(alias: string, workspaceId: string): Promise<BlockData[]>
 
+  /** Every alias `blockId` claims, straight out of the trigger-maintained
+   *  index. `[]` for a tombstoned or missing row — a soft delete drops its
+   *  entries while leaving the stored property bag alone.
+   *
+   *  The authoritative answer to "what names does this row hold", and not the
+   *  same question as decoding its `alias` property. The trigger indexes
+   *  `json_each(properties_json, '$.alias')` filtered to `typeof 'text'`,
+   *  which yields values from a bare scalar and from an OBJECT as well as from
+   *  an array, and stringifies a nested array. The string-list codec accepts
+   *  none of those and throws for the whole bag if any entry is not a string.
+   *  Re-deriving those semantics in TypeScript is whack-a-mole, and each shape
+   *  missed silently RELEASES a name when the row is deleted. Sees this tx's
+   *  own writes. */
+  aliasesOf(blockId: string): Promise<string[]>
+
   // ──── Post-commit scheduling ────
 
   /** Schedule a follow-up post-commit job. Runs in its own
@@ -385,4 +451,37 @@ export interface RepoTxOptions {
    *  `tx_context` / `row_events`. Minted by `repo.undoGroup` and
    *  injected by its facade — callers don't set this by hand. */
   groupId?: string
+  /** This transaction is the app MEASURING ITSELF, not doing the user's work.
+   *
+   *  Kept out of `repo.metrics().excludingTelemetry`, so a feature that reports
+   *  performance figures does not report its own bookkeeping as load. Set it on
+   *  every transaction such a feature issues, including its cleanup passes;
+   *  anything left unflagged is counted as the user's work, which is the
+   *  direction that under-reports a problem rather than inventing one.
+   *
+   *  Orthogonal to `scope`: telemetry writes are still gated, still synced,
+   *  still non-undoable or not on their own terms. This flag only decides which
+   *  side of the metrics they land on.
+   *
+   *  Covers THIS transaction, not the cascade it may schedule: a post-commit
+   *  processor opens its own tx with opts it constructs, and nothing propagates
+   *  the flag into it. A feature whose writes trigger writing processors would
+   *  see those counted as the user's work. */
+  telemetry?: boolean
+
+  /** Skip recording an undo entry for this tx, without changing its scope.
+   *
+   *  For writes the program makes on the user's behalf while they are doing
+   *  something else — a one-shot `WorkspaceBackfill` firing seconds after
+   *  workspace open is the motivating case. Such a batch is a document edit in
+   *  every other respect (it must stay read-only-gated and seed-guarded, so it
+   *  keeps `BlockDefault`), but putting it on the undo stack means a cmd-Z
+   *  aimed at the user's own edit silently reverts the whole pass — and with
+   *  the pass's completion marker already recorded, permanently.
+   *
+   *  Prefer a non-undoable SCOPE when the write genuinely is not a document
+   *  edit (`UiState`, `UserPrefs`, `Automation`). This flag exists for the case
+   *  where the scope must stay `BlockDefault` for gating reasons but the entry
+   *  would be a trap. Default false (entries are recorded as usual). */
+  skipUndo?: boolean
 }

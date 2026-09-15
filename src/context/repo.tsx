@@ -1,4 +1,7 @@
-import { createContext, ReactNode, use, useCallback, useContext, useRef, useSyncExternalStore } from 'react'
+import { createContext, ReactNode, useCallback, useContext, useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react'
+import { createGraphBackfillClaim } from '@/data/internals/graphBackfillClaim'
+import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
+import { getClientId } from '@/utils/clientId'
 import { PowerSyncContext } from '@powersync/react'
 import type { AbstractPowerSyncDatabase } from '@powersync/common'
 import { Repo } from '../data/repo'
@@ -7,17 +10,22 @@ import { BlockCache } from '@/data/blockCache'
 import { useIsLocalOnly, useUser } from '@/components/Login'
 import { ensurePowerSyncReady, getPowerSyncDb, syncObserverDepsFor } from '@/data/repoProvider'
 import { User } from '@/types.js'
-import { memoize } from 'lodash-es'
+import { memoizeAsync } from '@/utils/memoize.js'
+import type { FulfilledThenable } from '@/utils/resolvedThenable.js'
+import { remoteSyncEnabled } from '@/services/powersync.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import { surfaceProcessorRejection } from '@/extensions/processorRejectionToast.js'
 import { markStartup } from '@/utils/startupTimeline.js'
+import { SuspenseFallback } from '@/components/util/suspense.js'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload
 // (sign-out / "Use without sync" both reload the page), but keying the cache
 // correctly keeps the contract honest.
-const initRepo = memoize(
+const repoKey = (user: User, useRemoteSync: boolean): string => `${user.id}:${useRemoteSync ? 'remote' : 'local'}`
+
+const initRepo = memoizeAsync(
   async (user: User, useRemoteSync: boolean): Promise<Repo> => {
     await ensurePowerSyncReady(user.id, useRemoteSync)
     const db = getPowerSyncDb(user.id)
@@ -25,12 +33,37 @@ const initRepo = memoize(
     // §6 mode/key resolver is built once in repoProvider and shared with the
     // upload connector; the observer deps (decrypt/copy/defer + key lookup)
     // are drawn from it here.
+    // The claim needs the Repo it is being built for (tx, db, the settle gate),
+    // so it binds lazily. Safe: nothing calls it until a workspace opens, long
+    // after construction returns.
+    let repoRef: Repo | null = null
+    const requireRepo = (): Repo => {
+      if (!repoRef) throw new Error('backfill claim used before the repo was constructed')
+      return repoRef
+    }
+    const backfillCompletionClaim = createGraphBackfillClaim({
+      get db() { return requireRepo().db },
+      // Load-bearing, not diagnostic: `decideClaim` proceeds only when a live
+      // claim names US, so this has to survive a reload or a crashed tab —
+      // otherwise the device that started a pass can never resume it.
+      claimantId: getClientId(),
+      tx: (fn, opts) => requireRepo().tx(fn, opts),
+      ensureHome: (workspaceId) => getOrCreateMigrationsPage(requireRepo(), workspaceId),
+    })
     const repo = new Repo({
       db,
       cache,
       user: {id: user.id, name: user.name},
       syncObserverDeps: syncObserverDepsFor(user.id),
+      backfillCompletionClaim,
+      // A local-only session still gets a real PowerSyncDatabase, but
+      // `ensurePowerSyncReady` returns before `db.connect()` — so the default
+      // gate (connected && !downloading) would never open and this session
+      // would never run a workspace backfill, on this or any later open. There
+      // is no server to be behind here, so nothing to wait for.
+      ...(useRemoteSync ? {} : {backfillSyncGate: (cb: () => void) => { cb(); return () => {} }}),
     })
+    repoRef = repo
     repo.setFacetRuntime(resolveFacetRuntimeSync(staticDataExtensions, {
       repo,
       workspaceId: null,
@@ -49,22 +82,61 @@ const initRepo = memoize(
     markStartup('repoReady')
     return repo
   },
-  (user, useRemoteSync) => `${user.id}:${useRemoteSync ? 'remote' : 'local'}`,
+  repoKey,
 )
+
+export type RepoBoot = (user: User, useRemoteSync: boolean) => Promise<Repo>
+type Prepare = (repo: Repo, useRemoteSync: boolean) => Promise<unknown>
+
+/** The boot promise resolves only after `prepare` (the app passes the boot-layout
+ *  resolution) has run, so App's first `use()` hits a fulfilled cache entry and
+ *  the boot path mounts no Suspense fallback (see resolvedThenable.ts). A prepare
+ *  failure fails the boot: one attempt, surfaced by the error boundary.
+ *  `prepare` is injected from main.tsx, not imported here: this module is
+ *  imported by nearly every plugin and the bootstrap graph imports it back. */
+export const createRepoBoot = (prepare: Prepare, init: RepoBoot = initRepo): RepoBoot =>
+  memoizeAsync(async (user: User, useRemoteSync: boolean): Promise<Repo> => {
+    const repo = await init(user, useRemoteSync)
+    await prepare(repo, useRemoteSync)
+    return repo
+  }, repoKey)
+
+const bareBoot = createRepoBoot(async () => {})
 
 // Exported for tests that need to provide a directly-constructed Repo
 // (e.g. via createTestRepo) without going through the full PowerSync
 // bootstrap in RepoProvider below.
 export const RepoContext = createContext<Repo | undefined>(undefined)
 
-export function RepoProvider({children}: { children: ReactNode }) {
+/** main.tsx passes the boot that also prepares the layout; a bare repo boot is
+ *  the default for other roots and tests. A boot must be memoized per (user,
+ *  sync mode): a fresh promise per call would never read as settled here. */
+export function RepoProvider({children, boot = bareBoot}: { children: ReactNode; boot?: RepoBoot }) {
   const user = useUser()
   const localOnly = useIsLocalOnly()
   if (!user) {
     throw new Error('User must be set before creating Repo')
   }
 
-  const repoInstance = use(initRepo(user, !localOnly))
+  // Waits as plain state, not through `use()`: a Suspense fallback here would
+  // be the fallback flip that throttles the layout commit (see createRepoBoot).
+  // `memoizeAsync` stamps the promise with React's fulfilled protocol on settle.
+  const [, bump] = useReducer((n: number) => n + 1, 0)
+  const [failure, setFailure] = useState<{reason: unknown} | null>(null)
+  // Not looked up again once it failed: memoizeAsync evicts a rejected entry,
+  // so the render that throws to the boundary would otherwise start a second
+  // boot (workspace bootstrap writes included) nobody observes.
+  const promise = failure ? null : boot(user, remoteSyncEnabled(localOnly)) as FulfilledThenable<Repo>
+  const ready = promise?.status === 'fulfilled'
+  useEffect(() => {
+    if (!promise || ready) return
+    let live = true
+    void promise.then(() => { if (live) bump() }, (reason: unknown) => { if (live) setFailure({reason}) })
+    return () => { live = false }
+  }, [promise, ready])
+  if (failure) throw failure.reason
+  if (!promise || !ready) return <SuspenseFallback/>
+  const repoInstance = promise.value as Repo
 
   return (
     <RepoContext value={repoInstance}>

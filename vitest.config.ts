@@ -31,10 +31,16 @@ export default defineConfig({
     // node's webstorage in the worker processes makes every node version
     // behave like node 24, where jsdom's storage wins. Node ≥22 accepts the
     // flag, so this is a no-op on versions without the new globals.
-    execArgv: ['--no-experimental-webstorage'],
+    //
+    // `--expose-gc` is for `src/test/mutationObserverGc.test.ts`, which pins a
+    // happy-dom regression that a GC makes invisible; see its header. It also
+    // pins the pool: `worker_threads` rejects V8 flags in `execArgv`
+    // (ERR_WORKER_INVALID_EXEC_ARGV), so `pool: 'threads' | 'vmThreads'` would
+    // start zero test files. Forks is vitest 4's default and what we run.
+    execArgv: ['--no-experimental-webstorage', '--expose-gc'],
     // node_modules + dist are vitest defaults; .claude/worktrees and
-    // .codex/worktrees hold full repo copies from agent runs (Claude Code and
-    // Codex respectively) whose tests we don't want to re-execute here.
+    // .codex/worktrees hold full repo copies from agent runs whose tests
+    // we don't want to re-execute here.
     // The agent-extensions SUBDIRECTORIES are standalone packages with their own
     // dependency installs and Vitest configs (they alias `@` to the generated
     // kernel-types stubs, which are .d.ts only — no runtime), so root collection

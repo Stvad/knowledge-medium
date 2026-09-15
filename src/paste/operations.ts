@@ -20,9 +20,12 @@ interface PasteOptions {
    *  `BlockContextType.scopeRootId`). Paste uses this to avoid creating
    *  siblings outside the visible scope. */
   scopeRootId?: string
-  /** `visible` follows outline navigation semantics; `sibling` keeps
-   *  range paste before/after the selected range unless that would
-   *  leave the visible subtree. */
+  /** Only consulted for `position: 'after'`. `visible` (the default) follows
+   *  outline navigation — "after" an expanded block IS its first-child slot.
+   *  `sibling` keeps a range paste beside the selected range rather than
+   *  inside it (multi-select `paste_*_selection`). `resolveRootDestination`
+   *  also selects it internally when the absorbed root's children would
+   *  otherwise collide with it. */
   placement?: PastePlacement
   /** Treat the whole clipboard text as one block's content (newlines
    *  kept) instead of parsing markdown into a tree. Used by the block-
@@ -155,6 +158,30 @@ const insertionForSiblingRun = (
   }
 }
 
+/** A scope-root / parentless target has no sibling slot, so its pasted roots
+ *  become first children — i.e. they land AFTER it — whatever `position` says.
+ *  Both the destination and the absorption rule below turn on this. */
+const hasNoSiblingSlot = (target: BlockData, scopeRootId: string | undefined): boolean =>
+  scopeRootId === target.id || target.parentId === null
+
+/** Pasted root a blank target absorbs (it BECOMES that root). The run is
+ *  contiguous with the target, so the target takes whichever end it sits at:
+ *  the head for `after`, the TAIL when the run lands strictly before it.
+ *  Absorbing the head in both cases left the target's UNMOVED order key above
+ *  the keys computed below it, so a multi-root paste-before came out reversed
+ *  (#497). */
+const absorbedRootFor = (
+  target: BlockData,
+  parsedRoots: readonly ParsedBlock[],
+  position: PastePosition,
+  scopeRootId: string | undefined,
+): ParsedBlock | undefined => {
+  if (!isBlankContent(target.content)) return undefined
+  return position === 'before' && !hasNoSiblingSlot(target, scopeRootId)
+    ? parsedRoots.at(-1)
+    : parsedRoots[0]
+}
+
 const resolveRootDestination = async (
   tx: Tx,
   target: BlockData,
@@ -162,22 +189,42 @@ const resolveRootDestination = async (
     position,
     scopeRootId,
     placement,
-  }: Required<Pick<PasteOptions, 'position' | 'placement'>> & Pick<PasteOptions, 'scopeRootId'>,
+    parsed,
+    absorbedRootId,
+  }: Required<Pick<PasteOptions, 'position' | 'placement'>> & Pick<PasteOptions, 'scopeRootId'> & {
+    parsed: readonly ParsedBlock[]
+    /** Pasted root the target absorbs (it BECOMES that root), if any. */
+    absorbedRootId: string | undefined
+  },
 ): Promise<RootDestination> => {
+  // Absorbing makes the target root #1, so root #1's own children reparent onto
+  // it (`planPastePlacement`). Roots #2..N must not ALSO take that first-child
+  // slot or the clipboard's top two levels merge, leaving a peer of root #1
+  // indistinguishable from its children. Both surfaces absorb, so the rule
+  // lives here rather than at either call site.
+  const absorbedRootHasChildren = absorbedRootId !== undefined &&
+    parsed.some(block => block.parentId === absorbedRootId)
+  const effectivePlacement = absorbedRootHasChildren ? 'sibling' : placement
+
   const targetChildren = await visibleChildrenOf(tx, target.id, target.workspaceId)
-  const targetIsScopeRoot = scopeRootId === target.id
   const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
-  const rootsAsChildren = targetIsScopeRoot ||
-    target.parentId === null ||
-    (placement === 'visible' && position === 'after' && targetHasVisibleChildren)
+  // With no sibling slot, roots #2..N land in the target's child list whatever
+  // `effectivePlacement` says — a nested clipboard still merges there.
+  // Accepted: the alternative is to stop absorbing into a zoomed title, which
+  // is a bigger behaviour change than this guard.
+  const rootsAsChildren = hasNoSiblingSlot(target, scopeRootId) ||
+    (effectivePlacement === 'visible' && position === 'after' && targetHasVisibleChildren)
+  // Type guard, not a live check: a parentless target always takes the branch
+  // above, so the sibling branch always has a parent.
   const rootParentId = rootsAsChildren ? target.id : target.parentId
   if (!rootParentId) throw new Error(`paste target ${target.id} has no visible insertion parent`)
 
-  // Placing the pasted roots as children of `target` — reveal it if
-  // collapsed so the focused paste isn't hidden inside a closed subtree
-  // (same invariant as indent / moveVertical / create-child). No-op when
-  // target is already expanded.
-  if (rootsAsChildren) await revealChildren(tx, target.id)
+  // Reveal a collapsed target whenever anything lands under it, so the focused
+  // paste isn't hidden inside a closed subtree (same invariant as indent /
+  // moveVertical / create-child). `absorbedRootHasChildren` is part of the
+  // condition because those children reparent onto the target regardless of
+  // `rootsAsChildren`. No-op when target is already expanded.
+  if (rootsAsChildren || absorbedRootHasChildren) await revealChildren(tx, target.id)
 
   const rootInsertion = rootsAsChildren
     ? insertionForFirstChild(targetChildren[0]?.orderKey)
@@ -287,15 +334,17 @@ export const planEditModeMultilinePaste = (
 /** Paste markdown text into the outline around a target block.
  *
  *  Rewrites parsed blocks into one `repo.tx`:
- *   - Empty targets absorb the first pasted root.
+ *   - Empty targets absorb a pasted root — the first, or the LAST when the
+ *     run lands strictly before the target (`absorbedRootFor`).
  *   - Root-level parsed blocks become visible siblings or first
  *     children depending on paste placement, expansion, and zoom.
  *   - Non-root parsed blocks keep their `parentId` (intra-paste tree
  *     structure), except children of an absorbed root become children
  *     of the target.
  *
- *  Returns the Block facades of the root-level pasted blocks in the
- *  resulting visible paste scope. */
+ *  Returns the Block facades of the root-level pasted blocks in CLIPBOARD
+ *  order (which is also their resulting visible order), the absorbed root
+ *  appearing at its own position in that sequence rather than first. */
 export async function pasteMultilineText(
   pastedText: string,
   pasteTarget: Block,
@@ -327,16 +376,25 @@ export async function pasteMultilineText(
     const target = await tx.get(pasteTarget.id)
     if (!target) return
 
+    // Decide absorption BEFORE resolving the destination — it is an input to
+    // the placement rule there, not an independent step.
+    const absorbedRoot = absorbedRootFor(target, parsedRoots, position, scopeRootId)
+
     const destination = await resolveRootDestination(tx, target, {
       position,
       scopeRootId,
       placement,
+      parsed,
+      absorbedRootId: absorbedRoot?.id,
     })
 
-    const absorbedRoot = isBlankContent(target.content) ? parsedRoots[0] : undefined
+    // Keyed by PARSED root so the return value is emitted in clipboard order
+    // below: the absorbed root is not always #1, but callers focus `pasted[0]`
+    // and expect the first root the user pasted.
+    const blockByRootId = new Map<string, Block>()
     if (absorbedRoot) {
       await tx.update(target.id, {content: absorbedRoot.content})
-      rootBlocks.push(repo.block(target.id))
+      blockByRootId.set(absorbedRoot.id, repo.block(target.id))
     }
 
     const {blocksToCreate, finalParentId, orderKeysByParsedId} = await planPastePlacement(
@@ -352,8 +410,10 @@ export async function pasteMultilineText(
         orderKey: orderKeysByParsedId.get(block.id) ?? block.orderKey,
         content: block.content,
       })
-      if (!block.parentId) rootBlocks.push(repo.block(id))
+      if (!block.parentId) blockByRootId.set(block.id, repo.block(id))
     }
+
+    rootBlocks.push(...parsedRoots.flatMap(root => blockByRootId.get(root.id) ?? []))
   }, {scope: ChangeScope.BlockDefault, description: 'paste multiline text'})
 
   return rootBlocks
@@ -373,10 +433,16 @@ export async function pasteEditModeMultilineText(
     const target = await tx.get(pasteTarget.id)
     if (!target) return
 
+    // `visible`: the slot right after the edited line is its first-child slot
+    // once the block has children, so a paste stays contiguous with the line it
+    // was split from. `resolveRootDestination` overrides this when the absorbed
+    // root's own children already claim that slot.
     const destination = await resolveRootDestination(tx, target, {
       position: 'after',
       scopeRootId: options.scopeRootId,
-      placement: 'sibling',
+      placement: 'visible',
+      parsed: plan.parsed,
+      absorbedRootId: plan.absorbedRoot.id,
     })
 
     await tx.update(target.id, {content: plan.targetContent})

@@ -123,8 +123,7 @@ describe('normalizeReferences', () => {
   it('output tuple set EQUALS the unique input tuple set (nothing invented, nothing dropped)', () => {
     // Set equality, not just subset: subset alone is satisfied by an
     // implementation that drops everything — a dedup regression losing a
-    // non-duplicate ref would have passed every other property here
-    // (Codex review on PR #371).
+    // non-duplicate ref would have passed every other property here.
     fc.assert(
       fc.property(refsArb, refs => {
         const out = normalizeReferences(refs)
@@ -191,9 +190,9 @@ describe('parseBlockRow / blockToRowParams (blockSchema.ts)', () => {
     isFieldForm: fc.boolean(),
   })
 
-  // PR #288 slice A: `blockToRowParams` returns storage columns followed by
-  // the local-only columns (`reference_target_id`, `is_field_form`) — mirror
-  // that order here so the round-trip covers the local columns too.
+  // `blockToRowParams` returns storage columns followed by the local-only
+  // columns (`reference_target_id`, `is_field_form`) — mirror that order
+  // here so the round-trip covers the local columns too.
   const ROW_COLUMNS = [...BLOCK_STORAGE_COLUMNS, ...BLOCK_LOCAL_COLUMNS]
 
   const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow => {

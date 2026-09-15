@@ -10,6 +10,12 @@ sync-state.json
 last-touched
 .exclusive-lock
 
+# Per-machine runtime data bd writes but its shipped ignore list misses.
+# These are beads data on a PUBLIC repo, so a `git add -A` would publish them.
+interactions.jsonl
+dolt-backup.json
+dolt-backup-state.json
+
 # Daemon runtime (lock, log, pid)
 daemon.*
 
