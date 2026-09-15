@@ -1,0 +1,1 @@
+import{ew as e,tw as t}from"../../../chunks/app-ClFCII8t.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

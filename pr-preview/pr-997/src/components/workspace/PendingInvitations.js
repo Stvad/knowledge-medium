@@ -1,0 +1,1 @@
+import{P_ as e}from"../../../chunks/app-ClFCII8t.js";export{e as PendingInvitations};

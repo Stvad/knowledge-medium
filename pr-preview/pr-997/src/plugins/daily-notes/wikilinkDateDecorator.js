@@ -1,0 +1,1 @@
+import{_b as e}from"../../../chunks/app-ClFCII8t.js";export{e as dailyDateWikilinkDecorator};

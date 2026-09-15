@@ -1,0 +1,1 @@
+import{Rw as e,zw as t}from"../../chunks/app-ClFCII8t.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

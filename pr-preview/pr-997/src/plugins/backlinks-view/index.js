@@ -1,0 +1,1 @@
+import{gu as e}from"../../../chunks/app-ClFCII8t.js";export{e as backlinksViewPlugin};

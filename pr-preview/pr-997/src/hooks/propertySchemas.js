@@ -1,0 +1,1 @@
+import{QN as e}from"../../chunks/app-ClFCII8t.js";export{e as usePropertySchemas};
