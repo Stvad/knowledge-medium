@@ -1,1 +1,1 @@
-import{gi as e,hi as t}from"../../../chunks/app-DW31eZrS.js";export{t as dbMaintenancePlugin,e as rebuildQueryStatsAction};
+import{gi as e,hi as t}from"../../../chunks/app-B6c38tgL.js";export{t as dbMaintenancePlugin,e as rebuildQueryStatsAction};
