@@ -477,7 +477,7 @@ describe('default-action dispatch sequences', () => {
     await focusBlock(uiStateBlock, ROOT)
     await invokeAction(runtime, {
       action: del,
-      deps: {uiStateBlock, scopeRootId: null, block: repo.block(ROOT)} as BaseShortcutDependencies,
+      deps: {uiStateBlock, block: repo.block(ROOT)} as BaseShortcutDependencies,
       trigger,
     })
     await env.fence()
