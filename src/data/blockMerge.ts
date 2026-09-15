@@ -53,23 +53,26 @@ export const computeMergedContent = (
   return intoContent + strategy.separator + fromContent
 }
 
-/** A type's label is its NAME, not a value to inherit. It rides the property
- *  union like any other key, so folding a type into a differently-named block
- *  left the survivor named two things at once — which the kernel refuses to
- *  tag (`blockType.nameConflict`), rolling the fold back. The survivor keeps
- *  its own label instead: `core.blockTypeTypeify` names it after the surviving
- *  content when it has none, and the folded type's name lives on as an alias
- *  through the same union. */
-const keepOwnTypeLabel = (
-  ownProps: Record<string, unknown>,
-  merged: Record<string, unknown>,
+/** A type has ONE name: the survivor's `content` is the page title `[[name]]`
+ *  resolves to, and `block-type:label` is that same name spelled again.
+ *
+ *  The fold picks content by the caller's `contentStrategy` but unions
+ *  properties name-agnostically, so a source's label rides onto a survivor that
+ *  kept its own text and the survivor ends up with two names. The strategy is
+ *  the explicit answer to which text survives, so the label follows content.
+ *
+ *  Left alone when the merged content is blank — `blockTypeTypeify` then adopts
+ *  the label as the name and writes it into `content`, reaching the same
+ *  invariant from the other side. */
+const withTypeLabelFollowingContent = (
+  properties: Record<string, unknown>,
+  content: string,
 ): Record<string, unknown> => {
-  const key = blockTypeLabelProp.name
-  if (merged[key] === ownProps[key]) return merged
-  const out = {...merged}
-  if (Object.hasOwn(ownProps, key)) out[key] = ownProps[key]
-  else delete out[key]
-  return out
+  const raw = properties[blockTypeLabelProp.name]
+  const label = typeof raw === 'string' ? raw.trim() : ''
+  const name = content.trim()
+  if (label === '' || name === '' || label === name) return properties
+  return {...properties, [blockTypeLabelProp.name]: blockTypeLabelProp.codec.encode(name)}
 }
 
 /** Fold one block into another. Thin wrapper — see `foldBlocksInTx`. */
@@ -290,7 +293,7 @@ export const foldBlocksInTx = async (
 
   await tx.update(into.id, {
     content: mergedContent,
-    properties: keepOwnTypeLabel(into.properties, mergedProperties),
+    properties: withTypeLabelFollowingContent(mergedProperties, mergedContent),
   })
 
   for (const from of folded) {
