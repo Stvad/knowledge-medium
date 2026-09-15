@@ -1,2 +1,0 @@
-import{systemToggle as e}from"../../facets/togglable.js";import{keybindingOverridesProp as t,keybindingsPrefsType as n}from"./config.js";import{keybindingsSettingsDataExtension as r}from"./dataExtension.js";var i=e({id:`system:keybindings-settings`,name:`Keyboard shortcuts`,description:`Lets you remap any action’s keyboard shortcut. Stores overrides on a per-user prefs block.`,essential:!0}).of([r]);export{t as keybindingOverridesProp,n as keybindingsPrefsType,i as keybindingsSettingsPlugin};
-//# sourceMappingURL=index.js.map

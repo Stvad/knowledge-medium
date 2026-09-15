@@ -1,2 +1,0 @@
-import{ChangeScope as e}from"../../data/api/changeScope.js";import{codecs as t}from"../../data/api/codecs.js";import{defineProperty as n}from"../../data/api/propertySchema.js";import"../../data/api/index.js";var r=.8,i=n(`video:playerView`,{codec:t.enum([`default`,`notes`]),defaultValue:`default`,changeScope:e.UiState}),a=n(`video:notesPaneRatio`,{codec:t.number,defaultValue:r,changeScope:e.UserPrefs});export{r as DEFAULT_VIDEO_NOTES_PANE_RATIO,a as videoNotesPaneRatioProp,i as videoPlayerViewProp};
-//# sourceMappingURL=view.js.map

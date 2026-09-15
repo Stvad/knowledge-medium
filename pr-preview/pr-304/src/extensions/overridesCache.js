@@ -1,2 +1,0 @@
-import{clientLocalSettings as e}from"../utils/ClientLocalSettings.js";var t=`extensions.overrides`,n=e=>`${t}.${e}`,r=e=>{let t={};for(let[n,r]of e)t[n]=r;return t},i=e=>{let t=new Map;if(!e||typeof e!=`object`||Array.isArray(e))return t;for(let[n,r]of Object.entries(e))typeof r==`boolean`&&t.set(n,r);return t},a=(t,r=e)=>i(r.get(n(t),null)),o=(t,i,a=e)=>{a.set(n(t),r(i))};export{i as decodeOverrides,r as encodeOverrides,a as readOverridesCache,o as writeOverridesCache};
-//# sourceMappingURL=overridesCache.js.map
