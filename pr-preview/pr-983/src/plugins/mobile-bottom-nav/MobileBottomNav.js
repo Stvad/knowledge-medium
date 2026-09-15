@@ -1,1 +1,0 @@
-import{bg as e}from"../../../chunks/app-BH7adpgu.js";export{e as MobileBottomNav};

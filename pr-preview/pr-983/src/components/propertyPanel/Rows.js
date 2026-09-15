@@ -1,1 +1,0 @@
-import{Gk as e,Kk as t}from"../../../chunks/app-BH7adpgu.js";export{e as MetadataRow,t as PropertySectionLabel};

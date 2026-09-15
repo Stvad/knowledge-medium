@@ -1,1 +1,0 @@
-import{aw as e,iw as t}from"../../../chunks/app-BH7adpgu.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

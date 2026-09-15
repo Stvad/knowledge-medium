@@ -1,1 +1,0 @@
-import{BR as e,RR as t,zR as n}from"../../../chunks/app-BH7adpgu.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};

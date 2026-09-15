@@ -1,1 +1,0 @@
-import{Hw as e,Uw as t}from"../../chunks/app-BH7adpgu.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};
