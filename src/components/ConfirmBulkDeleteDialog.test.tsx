@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { ConfirmBulkDeleteDialog } from '@/components/ConfirmBulkDeleteDialog'
 
 const renderDialog = (targetCount: number, totalCount: number) => {
@@ -45,6 +46,24 @@ describe('ConfirmBulkDeleteDialog', () => {
     expect(describedBy).toBeTruthy()
     expect(document.getElementById(describedBy!)?.textContent)
       .toBe('This block and the 23 blocks nested under it will be deleted.')
+  })
+
+  // Asserting BOTH directions per button: the mutation these exist to catch is
+  // the two handlers swapped, which any one-sided assertion passes.
+  it('reports a cancel as a cancel, destroying nothing', async () => {
+    const {resolve, cancel} = renderDialog(1, 24)
+    await userEvent.setup().click(screen.getByRole('button', {name: 'Cancel'}))
+    expect(cancel).toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it('confirms with the value the caller tests for', async () => {
+    const {resolve, cancel} = renderDialog(1, 24)
+    await userEvent.setup().click(screen.getByRole('button', {name: 'Delete'}))
+    // `confirmBulkDeleteThroughUi` treats anything but `true` as a decline, so
+    // the value is load-bearing, not a formality.
+    expect(resolve).toHaveBeenCalledWith(true)
+    expect(cancel).not.toHaveBeenCalled()
   })
 
   it('drops the nesting clause when there is none', () => {
