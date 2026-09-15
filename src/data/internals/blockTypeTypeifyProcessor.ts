@@ -34,10 +34,12 @@
  * registered under a name nothing resolved to (#926).
  *
  * (Sync-applied writes do NOT run this — they bypass `repo.tx` and the
- * same-tx pass entirely; the invariant still holds for a synced type
- * because the originating device already ran both jobs and the finished
- * row replicates as data. The property-panel picker also never reaches
- * completion: it filters `block-type` out of its options.)
+ * same-tx pass entirely. Where the originating device ran this code the
+ * finished row replicates as data and the invariant holds; a peer that
+ * PREDATES it can replicate a renamed content with the old label and claim
+ * still attached, and nothing on this side reconciles that — #996, which a
+ * repair pass would otherwise omit. The property-panel picker also never
+ * reaches completion: it filters `block-type` out of its options.)
  *
  * A name another block holds is refused — by `assertAliasClaimable` before the
  * write on the rename path, and by the `block_aliases_workspace_alias_unique`
