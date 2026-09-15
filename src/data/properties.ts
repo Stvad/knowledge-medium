@@ -561,6 +561,9 @@ export const getIndexedAliases = (
 ): readonly string[] | null => {
   const raw = data.properties[aliasesProp.name]
   if (raw === undefined) return []
+  // `json_each` over a scalar yields that one value, so a stored `"Book"`
+  // claims `Book` in the index exactly as `["Book"]` does (measured).
+  if (typeof raw === 'string') return [raw]
   if (!Array.isArray(raw)) return null
   return raw.filter((entry): entry is string => typeof entry === 'string')
 }

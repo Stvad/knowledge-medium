@@ -180,13 +180,7 @@ const followRenamedContent = async (
   if (name === '') return
   assertWritableTypeName(name)
 
-  if (currentLabel !== name) {
-    await ctx.tx.setProperty(row.id, blockTypeLabelProp, name)
-  }
-  if (after.content !== name) {
-    await ctx.tx.update(row.id, {content: name})
-  }
-  // Claim the new name HERE, not only through `aliasSyncProcessor`: the alias
+  // Refuse before writing, per the usual order — and claim the new name HERE, not only through `aliasSyncProcessor`: the alias
   // plugin is togglable, and a type the registry publishes under a name
   // nothing resolves to is the bug this path exists to close. Refusing a name
   // another block holds is part of that — committing the rename and skipping
@@ -203,6 +197,13 @@ const followRenamedContent = async (
     collisionOrigin: 'content-rename',
   })
   await claimName(row.id, after, name, ctx)
+
+  if (currentLabel !== name) {
+    await ctx.tx.setProperty(row.id, blockTypeLabelProp, name)
+  }
+  if (after.content !== name) {
+    await ctx.tx.update(row.id, {content: name})
+  }
 }
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({

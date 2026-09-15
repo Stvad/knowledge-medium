@@ -32,8 +32,19 @@ export const assertAliasClaimable = async (
   tx: Tx,
   {alias, blockId, workspaceId, dropSourceAliases = [], collisionOrigin}: AliasClaimIntent,
 ): Promise<void> => {
-  const claimant = await tx.aliasLookup(alias, workspaceId)
-  if (claimant === null || claimant.id === blockId) return
+  // EVERY claimant, not `aliasLookup`'s oldest one: the single-row form answers
+  // "who is named X", which is this block itself whenever it is the older of
+  // two co-claimants (reachable — the uniqueness trigger skips sync-apply).
+  //
+  // Defence in depth, deliberately: no caller can reach a case the two readers
+  // answer differently. They differ only when the claimant IS this block, and
+  // then this block already holds the name — so its own write re-inserts the
+  // whole bag through the maintenance trigger and the uniqueness check runs
+  // there instead. The contract on `aliasClaimants` is still the right reader
+  // for a veto, and costs nothing here.
+  const claimants = await tx.aliasClaimants(alias, workspaceId)
+  const claimant = claimants.find(block => block.id !== blockId)
+  if (claimant === undefined) return
   throw new ProcessorRejection(
     `Alias "${alias}" is already used by another block`,
     'alias.collision',

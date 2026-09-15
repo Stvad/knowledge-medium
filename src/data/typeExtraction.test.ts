@@ -724,6 +724,28 @@ describe('block-type typeify processor', () => {
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
   })
 
+  // A scalar `alias` cell claims its text in the index just as a one-element
+  // list does — `json_each` yields the scalar itself — so a rename that reads
+  // it as "no claims" publishes a name nothing resolves to.
+  it('claims the new name past a scalar alias cell', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: 'Book',
+    })
+    // The precondition: the trigger really did index the scalar.
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+  })
+
   it('leaves an ordinary block alone when its content changes', async () => {
     env = await setup()
     const id = await createBlock(env, 'Just a block')
