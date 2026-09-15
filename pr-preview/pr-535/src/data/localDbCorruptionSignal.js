@@ -1,2 +1,1 @@
-import{CallbackSet as e}from"../utils/callbackSet.js";import{LocalDatabaseCorruptError as t}from"../utils/localDbCorruption.js";var n=null,r=new e(`localDbCorruption`),i=(e,i)=>{n||(n=new t(e,{cause:i}),r.notify())},a=()=>n,o=e=>r.add(e),s=()=>{n=null};export{s as __resetLocalDbCorruptionSignalForTest,a as getLocalDbCorruptionSnapshot,i as reportRuntimeLocalDbCorruption,o as subscribeLocalDbCorruption};
-//# sourceMappingURL=localDbCorruptionSignal.js.map
+import{aV as e,iV as t,oV as n,sV as r}from"../../chunks/app-CM0AB7Hx.js";export{t as __resetLocalDbCorruptionSignalForTest,e as getLocalDbCorruptionSnapshot,n as reportRuntimeLocalDbCorruption,r as subscribeLocalDbCorruption};

@@ -1,2 +1,1 @@
-var e=(e,t)=>{if(e.currentStatus?.hasSynced||typeof e.registerListener!=`function`)return t(),()=>{};let n=e.registerListener({statusChanged:e=>{e.hasSynced&&(n(),t())}});return n};export{e as onFirstSync};
-//# sourceMappingURL=firstSync.js.map
+import{mJ as e,pJ as t}from"../../../chunks/app-CM0AB7Hx.js";export{t as onFirstSync,e as onSyncSettled};

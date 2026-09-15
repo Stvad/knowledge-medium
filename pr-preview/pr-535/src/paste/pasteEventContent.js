@@ -1,2 +1,1 @@
-import{decodePayloadHtml as e}from"./clipboardPayload.js";var t=t=>{let n=t.clipboardData?.files,r=n&&n.length>0?Array.from(n):[],i=t.clipboardData?.getData(`text/plain`)??``,a=t.clipboardData?.getData(`text/html`)||void 0,o=e(a,i);return{text:i,html:a,files:r,payload:o,hasAnything:!!i||r.length>0||o!==null}};export{t as readPasteEventContent};
-//# sourceMappingURL=pasteEventContent.js.map
+import{fO as e}from"../../chunks/app-CM0AB7Hx.js";export{e as readPasteEventContent};

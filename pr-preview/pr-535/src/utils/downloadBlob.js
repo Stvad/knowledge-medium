@@ -1,2 +1,1 @@
-function e(e,t,n){let r=URL.createObjectURL(e);try{let e=document.createElement(`a`);e.href=r,e.download=t,document.body.appendChild(e),e.click(),e.remove()}finally{setTimeout(()=>URL.revokeObjectURL(r),0),n&&setTimeout(()=>{Promise.resolve(n()).catch(e=>{console.warn(`[download-blob] failed to run download cleanup:`,e)})},3600*1e3)}}export{e as downloadBlob};
-//# sourceMappingURL=downloadBlob.js.map
+import{KD as e}from"../../chunks/app-CM0AB7Hx.js";export{e as downloadBlob};

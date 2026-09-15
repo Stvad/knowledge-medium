@@ -1,2 +1,1 @@
-import{createContext as e,useContext as t}from"react";var n=e(void 0),r=n;function i(){let e=t(n);if(!e)throw Error(`useAppRuntime must be used within an AppRuntimeProvider`);return e}export{r as AppRuntimeContextProvider,i as useAppRuntime};
-//# sourceMappingURL=runtimeContext.js.map
+import{TP as e,wP as t}from"../../chunks/app-CM0AB7Hx.js";export{t as AppRuntimeContextProvider,e as useAppRuntime};

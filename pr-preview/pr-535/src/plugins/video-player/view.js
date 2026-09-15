@@ -1,2 +1,1 @@
-import{ChangeScope as e}from"../../data/api/changeScope.js";import{seedProperty as t}from"../../data/propertySeeds.js";import"../../data/api/index.js";var n=`video-notes`,r=.8,i=t({seedKey:`system:video-player/property/notes-pane-ratio`,revision:1,name:`video:notesPaneRatio`,preset:`number`,defaultValue:r,changeScope:e.UserPrefs});export{r as DEFAULT_VIDEO_NOTES_PANE_RATIO,n as VIDEO_NOTES_VIEW_MODE,i as videoNotesPaneRatioProp};
-//# sourceMappingURL=view.js.map
+import{Dm as e,Em as t,Om as n}from"../../../chunks/app-CM0AB7Hx.js";export{t as DEFAULT_VIDEO_NOTES_PANE_RATIO,e as VIDEO_NOTES_VIEW_MODE,n as videoNotesPaneRatioProp};

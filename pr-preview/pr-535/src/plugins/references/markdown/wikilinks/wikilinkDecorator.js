@@ -1,2 +1,1 @@
-import{defineFacet as e}from"../../../../facets/facet.js";import{isValidElement as t}from"react";var n=e({id:`references.wikilink-display-decorator`,validate:e=>typeof e==`object`&&!!e&&typeof e.id==`string`&&typeof e.decorate==`function`}),r=e=>typeof e==`object`&&!!e&&!Array.isArray(e)&&!t(e)&&`content`in e,i=(e,t)=>{let r=e.read(n);for(let e of r){let n=e.decorate(t);if(n!=null)return n}return null};export{r as isWikilinkDisplayParts,i as resolveWikilinkDisplay,n as wikilinkDisplayDecoratorFacet};
-//# sourceMappingURL=wikilinkDecorator.js.map
+import{Cb as e,Sb as t,xb as n}from"../../../../../chunks/app-CM0AB7Hx.js";export{n as isWikilinkDisplayParts,t as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};

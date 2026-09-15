@@ -1,2 +1,1 @@
-import{defineFacet as e}from"../../facets/facet.js";var t=e({id:`daily-notes.block-date-adapter`,validate:e=>typeof e==`object`&&!!e&&typeof e.id==`string`&&typeof e.canHandle==`function`&&typeof e.getCurrentIso==`function`&&typeof e.setIso==`function`}),n=(e,n)=>{let r=e.read(t);for(let e of r)if(e.canHandle(n))return e;return null},r=(e,t)=>n(e,t)!==null;export{t as blockDateAdapterFacet,r as hasAnyBlockDateAdapter,n as pickBlockDateAdapter};
-//# sourceMappingURL=blockDateAdapter.js.map
+import{Ab as e,Ob as t,kb as n}from"../../../chunks/app-CM0AB7Hx.js";export{t as blockDateAdapterFacet,n as hasAnyBlockDateAdapter,e as pickBlockDateAdapter};

@@ -1,2 +1,1 @@
-var e=`km-meta`,t=`__km_database__`,n=e=>{let t=e.match(/\/pr-preview\/(pr-[^/]+)\//);return t?t[1]:null},r=(e,n)=>new URL(`./${t}/${encodeURIComponent(n)}`,e).toString();export{e as SERVICE_WORKER_META_CACHE,r as previewDatabaseRecordUrl,n as previewIdFromBasePath};
-//# sourceMappingURL=previewDatabases.js.map
+import{DF as e,EF as t,OF as n,TF as r,wF as i}from"../../chunks/app-CM0AB7Hx.js";export{i as PREVIEW_DATABASE_RECORD_BASENAME,r as SERVICE_WORKER_META_CACHE,t as previewDatabaseRecordInfo,e as previewDatabaseRecordUrl,n as previewIdFromBasePath};

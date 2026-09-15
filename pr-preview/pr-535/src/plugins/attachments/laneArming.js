@@ -1,2 +1,1 @@
-import{onFirstSync as e}from"../../data/internals/firstSync.js";import{getPowerSyncDb as t}from"../../data/repoProvider.js";var n=(n,r,i)=>{let a=n?e(t(n),r):()=>{};return window.addEventListener(`online`,i),()=>{a(),window.removeEventListener(`online`,i)}};export{n as armSharedLaneTriggers};
-//# sourceMappingURL=laneArming.js.map
+import{Wf as e}from"../../../chunks/app-CM0AB7Hx.js";export{e as armSharedLaneTriggers};

@@ -1,2 +1,1 @@
-import{systemToggle as e}from"../../facets/togglable.js";import{blockBulletHoverFacet as t}from"../../extensions/blockInteraction.js";import{dialogAppMountExtension as n}from"../../extensions/dialogAppMount.js";import{BlockMetaCard as r}from"./BlockMetaCard.js";var i=e({id:`system:block-info`,name:`Block info`,description:`Hover a block bullet (or open its context menu) to see when it was created / last edited and by whom.`}).of([n,t.of(()=>r,{source:`block-info`})]);export{i as blockInfoPlugin};
-//# sourceMappingURL=index.js.map
+import{su as e}from"../../../chunks/app-CM0AB7Hx.js";export{e as blockInfoPlugin};

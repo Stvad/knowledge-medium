@@ -1,2 +1,1 @@
-import{canaryAad as e}from"./aad.js";import{open as t,seal as n}from"./aead.js";var r=(t,r)=>n(t,r,e(r)),i=async(n,r,i)=>{try{return await t(n,r,e(i))===i}catch{return!1}};export{r as mintCanary,i as validateCanary};
-//# sourceMappingURL=canary.js.map
+import{M_ as e,j_ as t}from"../../../chunks/app-CM0AB7Hx.js";export{t as mintCanary,e as validateCanary};

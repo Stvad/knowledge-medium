@@ -1,2 +1,1 @@
-import{pasteFromClipboard as e}from"./operations.js";import{tryPasteAsMoveAt as t}from"./moveOnPasteVerb.js";import{recallPayloadForText as n}from"./clipboardPayload.js";var r=async(r,i,a,{placement:o=`visible`,scopeRootId:s}={})=>{let c=await navigator.clipboard.readText(),l=await t(r,i,a,s,n(c),o);return l===`not-a-move`?{moved:!1,pasted:await e(i,r,{position:a,placement:o,scopeRootId:s},c)}:{moved:l===`moved`,pasted:[]}};export{r as pasteOrMove};
-//# sourceMappingURL=pasteOrMove.js.map
+import{vC as e}from"../../chunks/app-CM0AB7Hx.js";export{e as pasteOrMove};

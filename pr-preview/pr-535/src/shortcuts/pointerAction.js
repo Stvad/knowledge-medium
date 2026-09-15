@@ -1,2 +1,1 @@
-var e=null,t=t=>{e=t},n=(t,n)=>e?e(t,n):!1;export{n as dispatchPointerAction,t as setPointerActionDispatcher};
-//# sourceMappingURL=pointerAction.js.map
+import{Lw as e,Rw as t}from"../../chunks/app-CM0AB7Hx.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

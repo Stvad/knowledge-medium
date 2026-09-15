@@ -1,2 +1,1 @@
-import{CallbackSet as e}from"../../../utils/callbackSet.js";import{useSyncExternalStore as t}from"react";import{c as n}from"react/compiler-runtime";var r=new Set,i=new e(`backlink-expansion`),a=e=>i.add(e),o=e=>{r.has(e)?r.delete(e):r.add(e),i.notify()},s=e=>{let i=n(2),o;return i[0]===e?o=i[1]:(o=()=>r.has(e),i[0]=e,i[1]=o),t(a,o)};export{o as toggleBacklinkExpansion,s as useBacklinkExpansion};
-//# sourceMappingURL=expansionStore.js.map
+import{Du as e,Ou as t}from"../../../../chunks/app-CM0AB7Hx.js";export{e as toggleBacklinkExpansion,t as useBacklinkExpansion};

@@ -1,2 +1,1 @@
-var e=(e,t)=>{let n=e.properties[t.name];return n===void 0?void 0:t.codec.decode(n)},t=(e,t)=>{let n=e.properties[t.name];return n===void 0?t.defaultValue:t.codec.decode(n)},n=(e,n)=>{try{return t(e,n)}catch{return n.defaultValue}};export{t as decodeRowProperty,e as peekRowProperty,n as safeDecodeRowProperty};
-//# sourceMappingURL=rowProperty.js.map
+import{b0 as e,v0 as t,y0 as n}from"../../chunks/app-CM0AB7Hx.js";export{t as decodeRowProperty,n as peekRowProperty,e as safeDecodeRowProperty};

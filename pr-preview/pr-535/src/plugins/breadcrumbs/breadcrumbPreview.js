@@ -1,2 +1,1 @@
-import{firstLine as e}from"../../utils/string.js";var t=t=>e(t);export{t as getBreadcrumbContentPreview};
-//# sourceMappingURL=breadcrumbPreview.js.map
+import{jg as e}from"../../../chunks/app-CM0AB7Hx.js";export{e as getBreadcrumbContentPreview};
