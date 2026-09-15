@@ -1,1 +1,1 @@
-import{GH as e,KH as t}from"../../../chunks/app-Bl0E3MB_.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};
+import{GH as e,KH as t}from"../../../chunks/app-Cai7ka97.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};
