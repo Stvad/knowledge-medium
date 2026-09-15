@@ -1,1 +1,0 @@
-import{BZ as e,IZ as t,LZ as n,RZ as r,VZ as i,zZ as a}from"../../chunks/app-Cai7ka97.js";export{t as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,n as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,r as __resetLayoutSessionIdForTesting,a as getLayoutSessionId,e as isInstalledAppDisplayMode,i as readOrCreateLayoutSessionId};

@@ -1,1 +1,0 @@
-import{MC as e,NC as t}from"../../chunks/app-Cai7ka97.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
