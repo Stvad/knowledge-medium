@@ -780,6 +780,35 @@ describe('planLossyReapplies', () => {
     expect(planLossyReapplies(claimed, issues([[1, at('2026-09-11T01:00:00Z')]]))[0].losses).toEqual(['status'])
   })
 
+  // One label saying something else is GitHub deliberately saying it, and
+  // carrying it over is what the pull is FOR. Defusing would push the stale
+  // local value over the edit, so a taxonomy edit could never reach beads —
+  // which is the opposite of a loss.
+  it('leaves a taxonomy edit a single label states to the pull', () => {
+    const relabelled = at('2026-09-11T01:00:00Z', { labels: ['priority::low', 'type::bug'] })
+    expect(planLossyReapplies([row({ id: 'km-a' })], issues([[1, relabelled]]))).toEqual([])
+  })
+
+  // …but when the bead is defused for a reason of its own, that same push
+  // overwrites the edit, so the report has to name it.
+  it('names a taxonomy edit among what the push overwrites, once something else defuses the bead', () => {
+    const relabelled = at('2026-09-11T01:00:00Z', { labels: ['priority::low', 'type::bug'] })
+    const assigned = [row({ id: 'km-a', assignee: 'Someone' })]
+    const [plan] = planLossyReapplies(assigned, issues([[1, relabelled]]))
+    expect(plan.losses).toEqual(['assignee'])
+    expect(plan.overwrites).toEqual(['issue_type', 'priority'])
+  })
+
+  // A missing label is not GitHub saying anything — it is bd about to write
+  // its own default over the bead. That is the flattening guard 2 exists for.
+  it('counts a field no label states at all as lost, not imported', () => {
+    const untyped = at('2026-09-11T01:00:00Z', { labels: [] })
+    expect(planLossyReapplies([row({ id: 'km-a', priority: 1, issue_type: 'chore' })], issues([[1, untyped]]))[0].losses).toEqual([
+      'issue_type',
+      'priority',
+    ])
+  })
+
   it('names the assignee bd never pushed, and the type the labels do not spell', () => {
     const assigned = [row({ id: 'km-a', assignee: 'Someone' })]
     expect(planLossyReapplies(assigned, issues([[1, at('2026-09-11T01:00:00Z')]]))[0].losses).toEqual(['assignee'])
@@ -1548,6 +1577,24 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain("the push overwrites GitHub's newer title — re-apply by hand if it was wanted")
+  })
+
+  // A relabelled issue is the taxonomy edit reaching beads. Defusing it would
+  // push the stale local type back over the edit — the pull's whole job,
+  // undone by its guard.
+  it('leaves a GitHub-side taxonomy edit to the pull rather than pushing over it', () => {
+    const row = syncRow({ id: 'km-r', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z'), labels: [{ name: 'priority::high' }, { name: 'type::bug' }] }],
+      lists: [[row]],
+      exportRows: [row],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).not.toContain('defused')
+    const log = shimCalls()
+    expect(log).not.toContain('bd update km-r')
+    expect(log).toContain('--pull-only')
   })
 
   // The defuse blocks the pull for that bead, so a bead the pull would carry

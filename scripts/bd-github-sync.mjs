@@ -774,43 +774,61 @@ const splitLabel = name => {
 // map to different values therefore have no answer to rely on — which is not a
 // corner case but the shape of the bug, since a bare `enhancement` is weighed
 // exactly like a scoped `type::chore`.
-const mappedValues = (labels, map, fallback) => {
+const mappedValues = (labels, map) => {
   const values = new Set()
   for (const name of labels) {
     const [prefix, value] = splitLabel(name)
     const mapped = map(prefix, value.toLowerCase())
     if (mapped !== undefined) values.add(mapped)
   }
-  return values.size ? values : new Set([fallback])
+  return values
 }
-const pullTypes = labels => mappedValues(labels, (prefix, value) => (prefix === 'type' || prefix === '' ? TYPE_LABELS[value] : undefined), 'task')
-const pullPriorities = labels => mappedValues(labels, (prefix, value) => (prefix === 'priority' ? PRIORITY_WORDS[value] : undefined), 2)
+const pullTypes = labels => mappedValues(labels, (prefix, value) => (prefix === 'type' || prefix === '' ? TYPE_LABELS[value] : undefined))
+const pullPriorities = labels => mappedValues(labels, (prefix, value) => (prefix === 'priority' ? PRIORITY_WORDS[value] : undefined))
 const LABEL_STATUSES = ['in_progress', 'blocked', 'deferred']
 const pullStatuses = (labels, state) =>
   state === 'CLOSED'
     ? new Set(['closed'])
-    : mappedValues(labels, (prefix, value) => (prefix === 'status' && LABEL_STATUSES.includes(value) ? value : undefined), 'open')
+    : mappedValues(labels, (prefix, value) => (prefix === 'status' && LABEL_STATUSES.includes(value) ? value : undefined))
 const pullLabels = labels => labels.filter(name => !SCOPED_PREFIXES.includes(splitLabel(name)[0]))
 // bd's label comparison: trimmed, empties dropped, deduplicated, sorted.
 const normalizedLabels = labels => [...new Set((labels ?? []).map(l => l.trim()).filter(Boolean))].sort().join('\n')
 
 /**
- * The label-derived fields, and what the issue's labels could make of each.
- * One owner for all three: the ambiguity rule is the same rule everywhere, and
- * the version that had it only for the type silently let an ambiguous priority
- * label read as converged (a bead is UNGUARDED exactly when the listed order
- * happens to agree) and let a claim be reverted to `open` unnoticed.
+ * The label-derived fields: what the issue's labels could make of each, bd's
+ * default when they make nothing of it, and the bead's own value. One owner
+ * for all three — the rule below is the same rule everywhere, and the version
+ * that had it only for the type let an ambiguous priority label read as
+ * converged and let a claim be reverted to `open` unnoticed.
  */
 const LABEL_FIELDS = [
-  ['issue_type', (bead, issue) => [pullTypes(issue.labels), bead.issue_type]],
-  ['priority', (bead, issue) => [pullPriorities(issue.labels), bead.priority]],
-  ['status', (bead, issue) => [pullStatuses(issue.labels, issue.state), bead.status]],
+  ['issue_type', (bead, issue) => [pullTypes(issue.labels), 'task', bead.issue_type]],
+  ['priority', (bead, issue) => [pullPriorities(issue.labels), 2, bead.priority]],
+  ['status', (bead, issue) => [pullStatuses(issue.labels, issue.state), 'open', bead.status]],
 ]
-/** The labels spell this bead's own value, and nothing else. */
-const spelled = (bead, issue, read) => {
-  const [values, mine] = read(bead, issue)
-  return values.size === 1 && values.has(mine)
+
+/**
+ * What the pull would do to one label-derived field. Three ways to disagree,
+ * and only two of them are losses:
+ *   - `ambiguous`: two labels map to different values and bd takes whichever
+ *     it reaches FIRST in GitHub's own order, which this listing's order does
+ *     not predict. Unrestorable, because nothing here knows what got written.
+ *   - `default`: no label states the value, so bd writes its own default over
+ *     the bead's — the flattening guard (2) exists for, two fields wider.
+ *   - `imports`: exactly one label, disagreeing with the bead. That is GitHub
+ *     deliberately saying something, and carrying it over is what the pull is
+ *     FOR. Defusing it would overwrite the edit with the stale local value, so
+ *     a taxonomy edit could never reach beads at all.
+ */
+const labelVerdict = (bead, issue, read) => {
+  const [values, fallback, mine] = read(bead, issue)
+  if (values.size > 1) return 'ambiguous'
+  if (values.size === 0) return mine === fallback ? 'agrees' : 'default'
+  return values.has(mine) ? 'agrees' : 'imports'
 }
+const LOSING_VERDICTS = ['ambiguous', 'default']
+const labelFieldsWhere = (bead, issue, keep) =>
+  LABEL_FIELDS.filter(([, read]) => keep(labelVerdict(bead, issue, read))).map(([field]) => field)
 
 /** Whether bd's pull would write this bead at all (its pullIssueEqual, negated). */
 export const pullWouldWrite = (bead, issue) =>
@@ -818,7 +836,7 @@ export const pullWouldWrite = (bead, issue) =>
   (bead.description ?? '') !== (issue.body ?? '') ||
   (bead.assignee ?? '').trim() !== (issue.assignee ?? '').trim() ||
   normalizedLabels(bead.labels) !== normalizedLabels(pullLabels(issue.labels)) ||
-  LABEL_FIELDS.some(([, read]) => !spelled(bead, issue, read))
+  labelFieldsWhere(bead, issue, verdict => verdict !== 'agrees').length > 0
 
 /**
  * Beads whose re-apply would LOSE something, with the losses named. bd's pull
@@ -827,7 +845,8 @@ export const pullWouldWrite = (bead, issue) =>
  * not carry back:
  *   - `closed_at`, restamped by the status write, with no bd verb to put it back
  *   - `assignee`, cleared because bd's push never sets a GitHub assignee
- *   - any label-derived field the labels do not uniquely spell (LABEL_FIELDS)
+ *   - a label-derived field bd would write ambiguously or by default, but NOT
+ *     one a single label deliberately states (labelVerdict)
  * A bead the pull would carry faithfully is deliberately absent: a GitHub-side
  * title, body or label edit is an import worth having (#955).
  *
@@ -858,12 +877,13 @@ export const planLossyReapplies = (beads, issueByNumber) =>
     const losses = [
       ...(b.status === 'closed' && b.closed_at ? ['closed_at'] : []),
       ...((b.assignee ?? '').trim() && (b.assignee ?? '').trim() !== (issue.assignee ?? '').trim() ? ['assignee'] : []),
-      ...LABEL_FIELDS.filter(([, read]) => !spelled(b, issue, read)).map(([field]) => field),
+      ...labelFieldsWhere(b, issue, verdict => LOSING_VERDICTS.includes(verdict)),
     ]
     const overwrites = [
       ...(b.title !== issue.title ? ['title'] : []),
       ...((b.description ?? '') !== (issue.body ?? '') ? ['description'] : []),
       ...(normalizedLabels(b.labels) !== normalizedLabels(pullLabels(issue.labels)) ? ['labels'] : []),
+      ...labelFieldsWhere(b, issue, verdict => verdict === 'imports'),
     ]
     return losses.length ? [{ id: b.id, number, priority: b.priority, losses, overwrites }] : []
   })
