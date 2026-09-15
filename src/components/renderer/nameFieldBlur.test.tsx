@@ -28,11 +28,12 @@ vi.mock('@/components/propertyPanel/PropertyPicker.js', () => ({
 const WS = 'ws-1'
 const PADDED_NAME = ' padded '
 const PADDED_LABEL = ' Padded '
-// A second type whose label and CONTENT diverge. An imported or raw-created
-// type keeps that state — the typeify processor adopts content into the label
-// only when there is no label yet — and the label writer's no-op needs BOTH
-// fields to match, so an untouched blur would otherwise mirror the label over
-// the content (and reconcile aliases) with nothing edited.
+// A second type whose label and CONTENT diverge. The kernel refuses to TAG a
+// block into that shape, but a later content rewrite (an import, the agent
+// bridge, a sync-applied write) still reaches it — and the label writer's
+// no-op needs BOTH fields to match, so an untouched blur would otherwise
+// mirror the label over the content (and reconcile aliases) with nothing
+// edited.
 const CLEAN_LABEL = 'Widget'
 const DIVERGENT_CONTENT = 'Type body text'
 
@@ -82,11 +83,18 @@ beforeEach(async () => {
       workspaceId: WS,
       parentId: 'root',
       orderKey: 'a3',
-      content: DIVERGENT_CONTENT,
+      content: CLEAN_LABEL,
     })
     await repo.addTypeInTx(tx, 'divergent-type', BLOCK_TYPE_TYPE, {})
     await tx.setProperty('divergent-type', blockTypeLabelProp, CLEAN_LABEL)
   }, {scope: ChangeScope.BlockDefault, description: 'padded-name fixture'})
+
+  // Diverge it AFTER the tag: typeify fires on the type-add transition only,
+  // so a content rewrite lands unreconciled — the state this fixture needs.
+  await repo.tx(
+    tx => tx.update('divergent-type', {content: DIVERGENT_CONTENT}),
+    {scope: ChangeScope.BlockDefault, description: 'diverge the type body'},
+  )
 })
 
 afterEach(() => { cleanup() })
