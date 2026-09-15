@@ -127,6 +127,15 @@ export const ActionContextTypes = {
    * give those actions a home + a dependency validator.
    */
   BLOCK_POINTER: 'block-pointer',
+  /**
+   * Active while any `openDialog` dialog is on screen. Carries no actions —
+   * it exists to be MODAL, so the surface underneath stops claiming keys the
+   * dialog's own controls need. Without it a dialog inherits whatever context
+   * was active when it opened: the editor's Enter binding still matches a
+   * keypress aimed at a dialog button, because a context's `eventFilter` is
+   * additive and the default heuristic admits any non-editable target.
+   */
+  DIALOG: 'dialog',
 } as const;
 
 export interface BaseShortcutDependencies {

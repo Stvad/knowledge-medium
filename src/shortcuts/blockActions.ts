@@ -309,13 +309,18 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // sibling → parent. This mirrors what the proactive
       // `PanelFocusRecovery` does on the DOM side, so manual deletes
       // and surprise disappearances both land on the same target.
-      const next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
-      let deleted = false
-      await withMoveTransition(async () => {
-        deleted = await deleteBlockThroughUi(block)
+      // Read in `beforeWrite`, so the target is found after the user has
+      // answered rather than before — the tree can move while a dialog is
+      // open — and while the subtree it skips is still there to skip.
+      const focus: {next: Block | null} = {next: null}
+      const deleted = await deleteBlockThroughUi(block, {
+        animate: true,
+        beforeWrite: async () => {
+          focus.next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
+        },
       })
-      // Don't move focus for a delete a guard refused.
-      if (deleted && next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
+      // Don't move focus for a delete a guard refused, or the user cancelled.
+      if (deleted && focus.next) void focusBlock(uiStateBlock, focus.next.id, {renderScopeId: deps.renderScopeId})
     },
     defaultBinding: {
       keys: 'Delete',

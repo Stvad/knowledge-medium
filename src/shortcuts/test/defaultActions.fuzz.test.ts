@@ -40,6 +40,12 @@
  *  - zoom/panel/navigation/export/import/preferences — need panel
  *    layout projection, window.location, file pickers, or dialogs.
  *
+ * The one dialog the pool DOES reach: both delete actions confirm once a
+ * gesture removes BULK_DELETE_CONFIRM_THRESHOLD blocks, and a sequence that
+ * grows the tree past it gets there. Nothing mounts a DialogHost here, so
+ * `autoConfirmDialogs` below answers for the user — without it an unanswered
+ * `openDialog` promise never settles and the run HANGS instead of failing.
+ *
  * Oracles after every dispatch:
  *  - only domain rejections (`assertLegalKernelRejection`,
  *    `@/data/test/fuzzKernelHarness` — same allowlist as the kernel
@@ -99,6 +105,8 @@ import {
   type BaseShortcutDependencies,
 } from '@/shortcuts/types'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { getDialogQueue, subscribeDialogs } from '@/utils/dialogs.js'
+import { BULK_DELETE_CONFIRM_THRESHOLD } from '@/utils/deleteBlockThroughUi.js'
 import type { Repo } from '@/data/repo'
 
 const WS = 'ws-1'
@@ -253,9 +261,25 @@ const sweepInvariants = async (db: TestDb['db']): Promise<void> => {
 // ──── case execution ────
 
 let sharedDb: TestDb
-beforeAll(async () => { sharedDb = await createTestDb() })
+let stopAutoConfirm: (() => void) | undefined
+
+/** Stand in for the user at the bulk-delete confirmation: always confirm, which
+ *  is the behaviour every invariant below was written against (a decline would
+ *  make `delete_block` a no-op and the oracles would be asserting the wrong
+ *  thing). Answering from a subscription rather than after dispatch is forced —
+ *  the handler is awaiting the dialog while we are still inside its `await`. */
+const autoConfirmDialogs = (): (() => void) =>
+  subscribeDialogs(() => {
+    for (const entry of getDialogQueue()) entry.finalize(true)
+  })
+
+beforeAll(async () => {
+  sharedDb = await createTestDb()
+  stopAutoConfirm = autoConfirmDialogs()
+})
 afterAll(async () => {
   await guard.barrier()
+  stopAutoConfirm?.()
   await sharedDb.cleanup()
 })
 
@@ -432,6 +456,35 @@ describe('default-action dispatch sequences', () => {
       fuzzParams(8),
     )
   }, fuzzTestTimeout())
+
+  // The sweeps above can only ever reach a below-threshold delete, so this
+  // pins the stand-in directly: without it the dispatch never returns, and a
+  // deep-fuzz run that grew the tree this far would burn its hour-long timeout
+  // with no failure to report.
+  it('answers the bulk-delete confirmation instead of hanging on it', async () => {
+    await guard.barrier()
+    const env = await buildEnv(
+      Array.from({length: BULK_DELETE_CONFIRM_THRESHOLD + 1}, () => ({parent: 0, content: 'x'})),
+    )
+    const {repo, ids} = env
+    const uiStateBlock = repo.block(UI)
+    const pool = resolvePool(repo)
+    const runtime = resolveFacetRuntimeSync([])
+    const trigger = {preventDefault: () => {}, stopPropagation: () => {}} as unknown as ActionTrigger
+    const del = pool[POOL.findIndex(entry => entry.id === 'delete_block')]
+
+    // ROOT holds every seeded child, so deleting it is over the threshold.
+    await focusBlock(uiStateBlock, ROOT)
+    await invokeAction(runtime, {
+      action: del,
+      deps: {uiStateBlock, block: repo.block(ROOT)} as BaseShortcutDependencies,
+      trigger,
+    })
+    await env.fence()
+    const [child] = await sharedDb.db.getAll<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [ids[1]])
+    expect(child.deleted, 'the confirmed delete went through').toBe(1)
+  })
 
   // Non-vacuity canary: the sweeps above only bite if dispatches reach
   // the mutator layer instead of no-oping through their guards. Pins
