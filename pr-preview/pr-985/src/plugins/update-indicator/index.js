@@ -1,0 +1,1 @@
+import{lu as e}from"../../../chunks/app-CpQbiXSV.js";export{e as updateIndicatorPlugin};

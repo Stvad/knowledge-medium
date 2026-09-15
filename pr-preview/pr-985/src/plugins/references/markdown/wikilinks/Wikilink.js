@@ -1,0 +1,1 @@
+import{Cd as e}from"../../../../../chunks/app-CpQbiXSV.js";export{e as Wikilink};

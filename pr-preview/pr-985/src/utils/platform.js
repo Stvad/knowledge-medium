@@ -1,0 +1,1 @@
+import{LM as e,RM as t}from"../../chunks/app-CpQbiXSV.js";export{e as isIOS,t as isMacPlatform};

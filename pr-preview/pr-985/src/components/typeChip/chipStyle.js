@@ -1,0 +1,1 @@
+import{tC as e}from"../../../chunks/app-CpQbiXSV.js";export{e as chipStyle};

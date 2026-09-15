@@ -1,0 +1,1 @@
+import{_A as e,vA as t}from"../../../chunks/app-CpQbiXSV.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

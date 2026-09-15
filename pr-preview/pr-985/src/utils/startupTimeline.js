@@ -1,0 +1,1 @@
+import{FP as e,IP as t,LP as n,MP as r,NP as i,PP as a,RP as o,jP as s,zP as c}from"../../chunks/app-CpQbiXSV.js";export{s as getLastLongTaskEndMs,r as getStartupTimeline,i as hasStartupMark,a as longTasksSupported,e as markStartup,t as markStartupAt,n as onLongTask,o as resetStartupTimeline,c as startStartupObservers};

@@ -1,0 +1,1 @@
+import{yb as e}from"../../../chunks/app-CpQbiXSV.js";export{e as dailyDateWikilinkDecorator};
