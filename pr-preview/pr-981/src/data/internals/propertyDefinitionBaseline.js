@@ -1,1 +1,1 @@
-import{UH as e,WH as t}from"../../../chunks/app-DSDdakB3.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};
+import{UH as e,WH as t}from"../../../chunks/app-CO9W7Qyy.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};
