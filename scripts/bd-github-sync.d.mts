@@ -83,6 +83,11 @@ export declare const planLossyReapplies: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
 ) => { id: string; number: number; losses: string[]; overwrites: string[] }[]
+export declare const planPullSet: (
+  beads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+  lossyIds: Set<string>,
+) => number[]
 export declare const planCloseReconciliation: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
