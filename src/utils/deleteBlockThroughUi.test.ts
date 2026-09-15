@@ -13,7 +13,7 @@ import {
   deleteBlockThroughUi,
   deleteBlocksThroughUi,
 } from '@/utils/deleteBlockThroughUi'
-import { __resetDialogsForTests, getDialogQueue } from '@/utils/dialogs'
+import { __resetDialogsForTests, getDialogQueue, subscribeDialogs } from '@/utils/dialogs'
 import * as viewTransition from '@/utils/viewTransition'
 
 const WS = 'ws-1'
@@ -164,8 +164,21 @@ describe('bulk-delete confirmation', () => {
       ),
     ]))
 
-    expect(await deleteBlocksThroughUi(ids.map(id => repo.block(id)))).toBe(false)
-    expect(getDialogQueue()).toHaveLength(0)
+    // Answer anything that does appear, so a regression fails on the assertion
+    // below rather than hanging: an unanswered dialog never settles the delete.
+    const asked: string[] = []
+    const stop = subscribeDialogs(() => {
+      for (const entry of getDialogQueue()) {
+        asked.push(String(entry.props.totalCount))
+        entry.finalize(null)
+      }
+    })
+    try {
+      expect(await deleteBlocksThroughUi(ids.map(id => repo.block(id)))).toBe(false)
+    } finally {
+      stop()
+    }
+    expect(asked).toEqual([])
   })
 
   it('re-resolves the guards after the dialog, not just before it', async () => {
