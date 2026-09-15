@@ -151,6 +151,23 @@ describe('bulk-delete confirmation', () => {
     expect(seen).toEqual(['transition:0 pending'])
   })
 
+  it('refuses a guarded delete without asking about it first', async () => {
+    // Both checks are present either way, so swapping them stays functionally
+    // correct and silent: the user is put through a "Delete 21 blocks?"
+    // question about a delete that was never going to happen.
+    const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === ids[0] ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    expect(await deleteBlocksThroughUi(ids.map(id => repo.block(id)))).toBe(false)
+    expect(getDialogQueue()).toHaveLength(0)
+  })
+
   it('re-resolves the guards after the dialog, not just before it', async () => {
     // The dialog is human-scale time: a sync landing a daily-note type on a
     // target while it is open would otherwise be waved through by a guard pass

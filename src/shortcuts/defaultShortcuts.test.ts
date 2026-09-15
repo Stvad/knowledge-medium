@@ -45,6 +45,7 @@ import { createSharedBlockActions } from '@/shortcuts/blockActions'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
 import { BULK_DELETE_CONFIRM_THRESHOLD } from '@/utils/deleteBlockThroughUi'
 import { __resetDialogsForTests, getDialogQueue } from '@/utils/dialogs'
+import * as viewTransition from '@/utils/viewTransition'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
@@ -669,6 +670,76 @@ describe('default CodeMirror shortcuts', () => {
     expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
     // Focus must not have moved for a delete that never happened.
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
+  })
+
+  it('Backspace on an emptied block with a big subtree asks before moving the cursor', async () => {
+    // An emptied block can still hold a page's worth of content. Deleting that
+    // line of the confirm call leaves every existing test here green, because
+    // they all use fixtures far below the threshold.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'emptied', content: ''})
+    for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
+      await env.repo.mutate.createChild({parentId: 'emptied', id: `kid-${i}`, content: `kid ${i}`})
+    }
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    const handling = action.handler({
+      block: env.repo.block('emptied'),
+      editorView: emptyEditorView(),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() => expect(getDialogQueue()).toHaveLength(1))
+    // The cursor must still be where the user left it while the question is up.
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
+    getDialogQueue()[0].finalize(null)
+    await handling
+
+    expect(await isBlockDeleted(env.repo, 'emptied')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'kid-0')).toBe(false)
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
+  })
+
+  it('Delete on a big subtree raises its question outside the view transition', async () => {
+    // Pins the call site, not just the choke point: wrapping this handler in
+    // `withMoveTransition` again — the shape it had before — renders the dialog
+    // under the frozen snapshot, where it can never be clicked.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'doomed', content: 'doomed'})
+    for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
+      await env.repo.mutate.createChild({parentId: 'doomed', id: `kid-${i}`, content: `kid ${i}`})
+    }
+
+    const seen: string[] = []
+    vi.spyOn(viewTransition, 'withMoveTransition').mockImplementation(async run => {
+      seen.push(`transition:${getDialogQueue().length} pending`)
+      await run()
+    })
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    const handling = deleteBlock.handler(
+      {block: env.repo.block('doomed'), uiStateBlock: env.repo.block('ui'), scopeRootId: 'root'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    await vi.waitFor(() => expect(getDialogQueue()).toHaveLength(1))
+    expect(seen).toEqual([])
+    getDialogQueue()[0].finalize(true)
+    await handling
+
+    expect(seen).toEqual(['transition:0 pending'])
+    expect(await isBlockDeleted(env.repo, 'doomed')).toBe(true)
   })
 
   it('multi-select Delete refuses the whole selection when one block is guarded', async () => {
