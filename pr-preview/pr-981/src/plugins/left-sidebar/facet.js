@@ -1,1 +1,0 @@
-import{i_ as e,r_ as t}from"../../../chunks/app-BGGuyPz0.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

@@ -1,1 +1,0 @@
-import{$2 as e,J2 as t,K2 as n,Q2 as r,X2 as i,Y2 as a,Z2 as o,e4 as s,q2 as c}from"../../../chunks/app-BGGuyPz0.js";export{n as CHANGE_SCOPE_POLICIES,c as ChangeScope,t as isChangeScope,a as policyForScope,i as scopeAllowedInReadOnly,o as scopeIsUndoable,r as scopePoliciesEquivalent,e as scopeUploadsToServer,s as sourceForScope};

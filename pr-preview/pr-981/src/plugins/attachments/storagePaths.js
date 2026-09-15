@@ -1,1 +1,0 @@
-import{nm as e,tm as t}from"../../../chunks/app-BGGuyPz0.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};

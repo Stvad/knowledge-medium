@@ -1,1 +1,0 @@
-import{Mw as e,jw as t}from"../chunks/app-BGGuyPz0.js";export{t as appUpdate,e as useAppUpdateAvailable};

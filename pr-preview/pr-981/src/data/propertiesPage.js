@@ -1,1 +1,0 @@
-import{g$ as e,h$ as t}from"../../chunks/app-BGGuyPz0.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};
