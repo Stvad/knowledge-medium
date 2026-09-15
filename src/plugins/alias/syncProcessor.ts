@@ -44,7 +44,6 @@
  */
 
 import {
-  ProcessorRejection,
   defineSameTxProcessor,
   type AnySameTxProcessor,
   type BlockData,
@@ -57,6 +56,7 @@ import {
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import { aliasesProp, getAliases } from '@/data/properties'
+import { assertAliasClaimable } from '@/data/aliasClaim'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 
@@ -171,21 +171,13 @@ const assertNoAliasCollision = async (
 ): Promise<void> => {
   if (plan.aliasesNext === null) return
   for (const alias of plan.aliasesNext) {
-    const claimant = await ctx.tx.aliasLookup(alias, plan.workspaceId)
-    if (claimant === null || claimant.id === plan.id) continue
-    throw new ProcessorRejection(
-      `Alias "${alias}" is already used by another block`,
-      'alias.collision',
-      {
-        alias,
-        conflictingBlockId: claimant.id,
-        conflictingBlockTitle: claimant.content.slice(0, 80),
-        workspaceId: plan.workspaceId,
-        attemptedOn: plan.id,
-        dropSourceAliases: [...plan.dropSourceAliasesOnCollision],
-        collisionOrigin: 'content-rename',
-      },
-    )
+    await assertAliasClaimable(ctx.tx, {
+      alias,
+      blockId: plan.id,
+      workspaceId: plan.workspaceId,
+      dropSourceAliases: plan.dropSourceAliasesOnCollision,
+      collisionOrigin: 'content-rename',
+    })
   }
 }
 

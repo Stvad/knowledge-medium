@@ -62,9 +62,11 @@ import {
   addedTypes,
   aliasesProp,
   blockTypeLabelProp,
-  getAliases,
   getBlockTypes,
+  getIndexedAliases,
+  wellFormedBlockTypes,
 } from '@/data/properties'
+import { assertAliasClaimable } from '@/data/aliasClaim'
 import {
   assertNotGrammarShapedLabel,
   assertRoundTrippableReferenceLabel,
@@ -92,6 +94,22 @@ const readLabel = (row: BlockData): string => {
 const assertWritableTypeName = (name: string): void => {
   assertNotGrammarShapedLabel(name, 'Block type label')
   assertRoundTrippableReferenceLabel(name, 'Block type label')
+}
+
+/** Ensure-present, and rebuilt from what the alias INDEX honours rather than
+ *  from the decoded bag: a malformed stored value decodes to nothing, so
+ *  writing the bag back from it would release names that still resolve. A
+ *  shape `getIndexedAliases` cannot model is left untouched — an unclaimed
+ *  name beats a released one. */
+const claimName = async (
+  id: string,
+  after: BlockData,
+  name: string,
+  ctx: SameTxCtx,
+): Promise<void> => {
+  const claimed = getIndexedAliases(after)
+  if (claimed === null || claimed.includes(name)) return
+  await ctx.tx.setProperty(id, aliasesProp, [...claimed, name])
 }
 
 const completeNewType = async (
@@ -140,12 +158,7 @@ const completeNewType = async (
   if (name !== '' && after.content !== name) {
     await ctx.tx.update(row.id, {content: name})
   }
-  if (name !== '') {
-    const aliases = getAliases(after)
-    if (!aliases.includes(name)) {
-      await ctx.tx.setProperty(row.id, aliasesProp, [...aliases, name])
-    }
-  }
+  if (name !== '') await claimName(row.id, after, name, ctx)
 }
 
 /** A content write on a block that is already a type is a RENAME — content is
@@ -175,18 +188,21 @@ const followRenamedContent = async (
   }
   // Claim the new name HERE, not only through `aliasSyncProcessor`: the alias
   // plugin is togglable, and a type the registry publishes under a name
-  // nothing resolves to is the bug this path exists to close. Ensure-present,
-  // never a replacement — moving the OLD claim stays the plugin's job, and its
-  // rule 1 dedupes this entry away in the same pass when it is installed.
-  //
-  // A name another block holds is left untouched on purpose: claiming it would
-  // trip the uniqueness trigger a step ahead of that plugin's own preflight,
-  // and the bare rejection that produces has none of the metadata its merge
-  // offer needs (measured: `dropSourceAliases` and `collisionOrigin` gone).
-  const aliases = getAliases(after)
-  if (!aliases.includes(name) && await ctx.tx.aliasLookup(name, after.workspaceId) === null) {
-    await ctx.tx.setProperty(row.id, aliasesProp, [...aliases, name])
-  }
+  // nothing resolves to is the bug this path exists to close. Refusing a name
+  // another block holds is part of that — committing the rename and skipping
+  // the claim would publish exactly such a type. Retiring the OLD claim stays
+  // the plugin's: its rule 1 replaces that entry and dedupes this one away in
+  // the same pass.
+  await assertAliasClaimable(ctx.tx, {
+    alias: name,
+    blockId: row.id,
+    workspaceId: after.workspaceId,
+    // What the merge offer must drop from this block to take the name: the
+    // entry the rename is retiring, exactly as `alias.sync` reports it.
+    dropSourceAliases: row.before.content === '' ? [] : [row.before.content],
+    collisionOrigin: 'content-rename',
+  })
+  await claimName(row.id, after, name, ctx)
 }
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
@@ -201,7 +217,11 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
     for (const row of event.changedRows) {
       const after = row.after
       if (!after || after.deleted) continue
-      if (!getBlockTypes(after).includes(BLOCK_TYPE_TYPE)) continue
+      // Tolerant, because this now runs on every CONTENT edit in the
+      // workspace: a sync-applied or pre-upgrade row can hold a `types` cell
+      // the codec refuses, and a strict read would throw there — costing an
+      // ordinary block its edit over a cell that names no type anyway.
+      if (!(wellFormedBlockTypes(after) ?? []).includes(BLOCK_TYPE_TYPE)) continue
 
       // Seed-owned type rows are code-authored, complete definitions — the
       // materializer writes the finished bag, so there is nothing to

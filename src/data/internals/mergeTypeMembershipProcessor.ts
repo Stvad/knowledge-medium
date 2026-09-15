@@ -24,13 +24,12 @@ import {
   CORE_BLOCK_MERGED_EVENT,
   defineSameTxProcessor,
   type AnySameTxProcessor,
-  type BlockData,
   type CoreBlockMergedEvent,
   type SameTxCtx,
   type SameTxTypeOwnership,
 } from '@/data/api'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
-import { setBlockTypesInProperties, typesProp } from '@/data/properties'
+import { setBlockTypesInProperties, typesProp, wellFormedBlockTypes } from '@/data/properties'
 import { typeMembershipTokenFor } from '@/data/typeDefinitionMetadata'
 
 export const RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME =
@@ -108,23 +107,6 @@ const resolveTerminalDestination = async (
     current = next
   }
   return null
-}
-
-/** A row's `types` tokens when the cell is well-formed, else `null` — "says
- *  nothing", which is not "says no tokens".
- *
- *  The obvious tolerant decode gets one half wrong. It must not THROW
- *  (`getBlockTypes` does, so a malformed synced cell would roll back the merge)
- *  and must not ACCEPT (reading the scalar `types: "block-type"` as a one-element
- *  list would let a malformed ordinary block pass the ownership gate, which the
- *  codec and registry both refuse). */
-const wellFormedTypeTokens = (row: BlockData): readonly string[] | null => {
-  const raw = row.properties[typesProp.name]
-  if (raw === undefined) return []
-  if (!Array.isArray(raw)) return null
-  return raw.every((el): el is string => typeof el === 'string')
-    ? (raw as readonly string[])
-    : null
 }
 
 /** `unchanged` — this cell doesn't name the merged-away type; `rewritten` —
@@ -251,7 +233,7 @@ const retargetTypeMembership = async (
   // defined it. Retargeting then moves members off a definition that still
   // exists. An effective merge is one whose source is tombstoned.
   if (from === null || !from.deleted) return
-  const fromTokens = wellFormedTypeTokens(from)
+  const fromTokens = wellFormedBlockTypes(from)
   if (fromTokens === null || !fromTokens.includes(BLOCK_TYPE_TYPE)) return
   // …and the tag alone is not ownership; see `tokenOwnedByOther`.
   if (tokenOwnedByOther(ownership, event.fromId, from.id)) return

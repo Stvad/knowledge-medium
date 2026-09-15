@@ -527,6 +527,44 @@ export const hasBlockType = (
   typeId: string,
 ): boolean => getBlockTypes(data).includes(typeId)
 
+/** A row's `types` tokens when the cell is well-formed, else `null` — "says
+ *  nothing", which is not "says no tokens".
+ *
+ *  Both halves are load-bearing, so neither `getBlockTypes` nor a bare cast
+ *  will do. It must not THROW — `getBlockTypes` does, so a malformed synced
+ *  cell would roll back whatever tx merely LOOKED at the row — and it must not
+ *  ACCEPT: reading the scalar `types: "block-type"` as a one-element list
+ *  would let a malformed ordinary block pass a membership gate that the codec
+ *  and the registry both refuse. */
+export const wellFormedBlockTypes = (
+  data: Pick<BlockData, 'properties'>,
+): readonly string[] | null => {
+  const raw = data.properties[typesProp.name]
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) return null
+  return raw.every((el): el is string => typeof el === 'string')
+    ? (raw as readonly string[])
+    : null
+}
+
+/** The alias entries the INDEX honours, for a writer about to put the bag
+ *  back. `null` for a stored shape this cannot model — leave that one alone.
+ *
+ *  The trigger walks `$.alias` with `json_each` and takes every TEXT value, so
+ *  a bag the codec refuses (`["Book", 7]`) still claims `Book` and still
+ *  resolves. {@link getAliases} reads that as claiming nothing, which is the
+ *  right answer for "what does this row declare" and the wrong one to rebuild
+ *  the bag from: the rewrite releases names that resolve, and hands them to
+ *  nobody. Pick by the question — see `bd recall reference_alias_index_vs_bag`. */
+export const getIndexedAliases = (
+  data: Pick<BlockData, 'properties'>,
+): readonly string[] | null => {
+  const raw = data.properties[aliasesProp.name]
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) return null
+  return raw.filter((entry): entry is string => typeof entry === 'string')
+}
+
 /** The block's `alias` list, tolerant of an absent / malformed value
  *  (treated as none). Shared by every reader that only needs "which
  *  aliases does this row claim" — the alias-sync processor, the

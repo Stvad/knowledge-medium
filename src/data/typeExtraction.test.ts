@@ -279,6 +279,25 @@ describe('createTypeBlock', () => {
 
 // ──── block-type typeify processor ──────────────────────────────────
 
+/** Plant a cell the codec refuses, in the shape only a sync-applied or
+ *  pre-upgrade row has: a raw write maintains the trigger-backed indexes
+ *  (`block_aliases` included) and fires no processor. */
+const rawProperties = async (
+  env: Harness,
+  id: string,
+  properties: Record<string, unknown>,
+): Promise<void> => {
+  await env.h.db.writeTransaction(async tx => {
+    await tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify(properties), id])
+  })
+}
+
+const rawPropertiesOf = async (env: Harness, id: string): Promise<Record<string, unknown>> => {
+  const row = await env.h.db.getOptional<{properties_json: string}>(
+    'SELECT properties_json FROM blocks WHERE id = ?', [id])
+  return JSON.parse(row!.properties_json) as Record<string, unknown>
+}
+
 /** Tag a fresh block `block-type` — the state EVERY tagging path lands
  *  in (`#type`, the picker, programmatic, import). The kernel
  *  `blockTypeTypeify` same-tx processor completes it in this same tx:
@@ -641,6 +660,67 @@ describe('block-type typeify processor', () => {
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Novel')
     // Nothing moves the old claim without the plugin; what matters is that the
     // name the registry publishes resolves to this block.
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+  })
+
+  it('refuses a rename onto a taken name with the alias plugin absent', async () => {
+    env = await setup({alias: false})
+    const id = await tagBlockType(env, 'Book')
+    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+    await env.repo.tx(async tx => {
+      await tx.update(pageId, {content: 'Novel'})
+      await tx.setProperty(pageId, aliasesProp, ['Novel'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Nothing else would: committing the label while skipping the claim is the
+    // unlinkable type this path exists to prevent.
+    await expect(env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({code: 'alias.collision'})
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+  })
+
+  // The gate reads `types` on every content edit in the workspace now, so a
+  // cell the codec refuses must not cost an ordinary block its edit.
+  it('lets a block with a malformed types cell keep editing its content', async () => {
+    env = await setup()
+    const id = await createBlock(env, 'Ordinary')
+    await rawProperties(env, id, {types: 'block-type'})
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {content: 'Ordinary, edited'}),
+      {scope: ChangeScope.BlockDefault},
+    )).resolves.toBeUndefined()
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('Ordinary, edited')
+    expect(row!.properties[blockTypeLabelProp.name]).toBeUndefined()
+  })
+
+  // The alias TRIGGER indexes every text entry, so 'Book' resolves here even
+  // though the bag as a whole is undecodable. Rebuilding that bag from the
+  // decoded value would release it.
+  it('keeps the entries the alias index honours when renaming past a malformed bag', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: ['Book', 7, 'Other'],
+    })
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    // 'Book' is retired by the rename, as always; 'Other' is a claim the
+    // rename has no business dropping, and the undecodable 7 claimed nothing.
+    expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Novel', 'Other'])
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Other'}).load())?.id).toBe(id)
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
   })
 
