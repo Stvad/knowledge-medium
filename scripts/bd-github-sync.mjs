@@ -69,9 +69,8 @@
  *
  * Beyond the guards, the wrapper carries what bd's sync does not: bead
  * COMMENTS are mirrored onto their issues, one way and append-only
- * (mirrorComments), after the pull and followed by one more pull so the
- * last_sync stamp covers the posts. GitHub-side comments are never pulled
- * into beads.
+ * (mirrorComments), after the push and after the pull. GitHub-side comments
+ * are never pulled into beads.
  *
  * Modes:
  *   node scripts/bd-github-sync.mjs               # full sync (manual / SessionEnd)
@@ -1239,7 +1238,10 @@ const exportBeads = env =>
 // and a wrong guess loses an assignee and a close date without reporting it.
 // So an unverified bd REFUSES to sync rather than syncing on stale reasoning.
 const VERIFIED_BD_VERSIONS = ['1.2.2']
-export const bdVersion = out => out?.match(/\bversion\s+(\d+\.\d+\.\d+)/i)?.[1] ?? null
+// The WHOLE token, prerelease and build metadata included: `1.2.2-rc.1` is a
+// different engine from `1.2.2` (the retracted 1.2.1 was one such), and
+// truncating it would let an unmeasured build through the allowlist.
+export const bdVersion = out => out?.match(/\bversion\s+(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?)/i)?.[1] ?? null
 
 const listAllBeads = () =>
   JSON.parse(run('bd', ['list', '--status', 'open,in_progress,blocked,deferred,closed', '--limit', '0', '--json']))
@@ -1574,7 +1576,10 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         (overwrites.length
           ? `; its ${overwrites.join(', ')} also differ(s) on GitHub and the next push sends the local value — compare them by hand`
           : '')
-      routine.add(line)
+      // Only the content-identical withhold is routine. One that also names a
+      // GitHub-side divergence is the warning that makes the trade visible —
+      // a later push sends the local value over it — so it must survive --quiet.
+      if (!overwrites.length) routine.add(line)
       report.push(line)
     }
 

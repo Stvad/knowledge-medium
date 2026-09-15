@@ -773,6 +773,9 @@ describe('bdVersion', () => {
   it('reads the version out of what bd prints, and refuses to invent one', () => {
     expect(bdVersion('bd version 1.2.2 (Homebrew)')).toBe('1.2.2')
     expect(bdVersion('bd version 1.3.0')).toBe('1.3.0')
+    // A prerelease is a different engine, and must not read as the release.
+    expect(bdVersion('bd version 1.2.2-rc.1')).toBe('1.2.2-rc.1')
+    expect(bdVersion('bd version 1.2.2-dev+abc')).toBe('1.2.2-dev+abc')
     expect(bdVersion('bd-shim 0.0.0')).toBeNull()
     expect(bdVersion('')).toBeNull()
     expect(bdVersion(null)).toBeNull()
@@ -1337,6 +1340,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).not.toContain('--pull-only')
     expect(shimCalls()).not.toContain('--push-only')
 
+    // A prerelease of a verified release is a different engine.
+    const rc = makeSyncRepo({ ...repo, bdVersionOutput: 'bd version 1.2.2-rc.1' })
+    expect(rc.run().status).toBe(1)
+    expect(rc.shimCalls()).not.toContain('--pull-only')
+
     const overridden = makeSyncRepo({ ...repo, env: { KM_BD_VERSION_OK: '1' } })
     expect(overridden.run().status).toBe(0)
     expect(overridden.shimCalls()).toContain('--pull-only')
@@ -1790,6 +1798,21 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run('--quiet')
     expect(r.status).toBe(0)
     expect(r.stdout).toBe('')
+  })
+
+  // …but a withhold that also names a GitHub-side divergence is the warning
+  // that makes the trade visible, and must survive --quiet.
+  it('speaks up under --quiet when a withheld bead also differs on GitHub', () => {
+    const row = syncRow({ id: 'km-o', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run } = makeSyncRepo({
+      issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED'), title: 'edited on GitHub' }],
+      lists: [[row]],
+      shows: [[row]],
+      exportRows: [{ ...row, closed_at: '2026-08-01T00:00:00Z' }],
+    })
+    const r = run('--quiet')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('also differ(s) on GitHub')
   })
 
   it('stays silent under --quiet when a converged run changed nothing', () => {
