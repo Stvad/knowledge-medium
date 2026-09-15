@@ -3,15 +3,45 @@
  * Generic reads/writes live in @knowledge-medium/agent-cli/graph; this
  * module owns only the durable dispatch task protocol.
  */
-import type { BridgeClient } from '@knowledge-medium/agent-cli/client'
+import { errorMessage, isCommandRejection, type BridgeClient } from '@knowledge-medium/agent-cli/client'
 import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type BridgeGraph, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
 import { PROPS, type Executor, type TaskStatus } from './config.js'
 import type { AgentResumeOptions } from './resumeCommand.js'
+import { bridgeFailure, withRunFailure } from './runFailure.js'
 
 export type { BacklinkSource, BlockData, BlockView, HydratedRef }
 
+/** Every bridge call, with its failures classified AT the boundary.
+ *
+ *  A bridge command fails because the app tab is slow, gone or
+ *  reconnecting — a transient the daemon should defer, never a task that
+ *  went wrong. Attaching that here means the retry path reads a value
+ *  instead of matching a rendered sentence, where a misphrased message
+ *  (a disconnected client, a command timeout) could park a claimed block
+ *  as a dead task. */
+const withBridgeFailures = <T extends object>(graph: T): T =>
+  new Proxy(graph, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver) as unknown
+      if (typeof value !== 'function') return value
+      return (...args: unknown[]) => {
+        const called = (value as (...a: unknown[]) => unknown).apply(target, args)
+        return called instanceof Promise
+          ? called.catch((error: unknown) => {
+            // Only failures to REACH the app are the transport's. A command
+            // the app received and refused is an answer, and dressing it as
+            // an outage cooled the whole executor lane — so deleting one
+            // block could pause every unrelated watcher on it.
+            if (isCommandRejection(error)) throw error
+            throw withRunFailure(errorMessage(error), bridgeFailure())
+          })
+          : called
+      }
+    },
+  })
+
 export const createGraph = (client: BridgeClient) => {
-  const bridgeGraph = createBridgeGraph(client)
+  const bridgeGraph = withBridgeFailures(createBridgeGraph(client))
 
   // KNOWN LIMITATION: this write goes through the bridge `update-block`
   // command, which stamps user_updated_at/updatedBy like a user edit —
@@ -24,7 +54,8 @@ export const createGraph = (client: BridgeClient) => {
     args: {
       status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
       resumeOptions?: AgentResumeOptions | null,
-      attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
+      attempts?: number, activity?: string | null, cancel?: string | null,
+      retryAfter?: number | null, nowMs: number,
     },
   ): Promise<void> => {
     const properties: Record<string, unknown> = {
@@ -41,6 +72,9 @@ export const createGraph = (client: BridgeClient) => {
     // Clear the cancel REQUEST on terminal writes (merged, like activity)
     // so a satisfied/stale cancel never re-cancels a later rerun.
     if (args.cancel !== undefined) properties[PROPS.cancel] = args.cancel ?? ''
+    // 0 (not '') is the cleared form: the app seeds agent:retry-after with
+    // the `number` codec, and a string would not round-trip through it.
+    if (args.retryAfter !== undefined) properties[PROPS.retryAfter] = args.retryAfter ?? 0
     await bridgeGraph.updateBlock(id, {properties})
   }
 
@@ -121,7 +155,8 @@ export type Graph = DispatchBridgeGraph & {
     args: {
       status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
       resumeOptions?: AgentResumeOptions | null,
-      attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
+      attempts?: number, activity?: string | null, cancel?: string | null,
+      retryAfter?: number | null, nowMs: number,
     },
   ) => Promise<void>
   createReply: (parentId: string, content: string) => Promise<BlockData>

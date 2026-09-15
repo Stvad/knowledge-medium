@@ -341,6 +341,10 @@ export const runCodex = async (
     exitCode,
     timedOut,
     stderr: effectiveStderr,
+    // Only the STRUCTURED error (error / turn.failed) — never resultText,
+    // which for codex accumulates agent messages, i.e. the assistant's own
+    // words. See runFailure.ts on why that separation matters.
+    failureText: ok ? '' : (parsed.errorMessage ?? ''),
     raw: parsed.raw,
   }
 }
