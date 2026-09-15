@@ -53,7 +53,11 @@
  *    as candidates nor lets the pull fetch their issues (planLossyReapplies).
  *    The touch is the whole defuse — pushing as well would re-stamp the issue
  *    newer than the bead, which is the candidate condition, and the guard
- *    would never quiesce. That is also why (4)'s push now declines a PATCH
+ *    would never quiesce. It settles after ONE run for a bead whose content
+ *    GitHub already has, and after TWO for one it does not: that bead's push
+ *    is the mirror doing its job, and it re-stamps the issue, so the next run
+ *    defuses it once more — by then the content agrees, no push follows, and
+ *    it settles. That is also why (4)'s push now declines a PATCH
  *    that would change nothing. Beads the pull would carry faithfully are left
  *    to it: a GitHub-side title, body, label or taxonomy edit still imports. A
  *    touch that fails ABORTS, like (1) and (4): the pull would then make the
@@ -918,7 +922,7 @@ export const planLossyReapplies = (beads, issueByNumber) =>
       ...(normalizedLabels(b.labels) !== normalizedLabels(pullLabels(issue.labels)) ? ['labels'] : []),
       ...labelFieldsWhere(b, issue, verdict => verdict === 'imports'),
     ]
-    return losses.length ? [{ id: b.id, number, priority: b.priority, losses, overwrites, pushChanges: pushWouldChange(b, issue) }] : []
+    return losses.length ? [{ id: b.id, number, losses, overwrites, pushChanges: pushWouldChange(b, issue) }] : []
   })
 
 // Beads to hand the pre-pull push, skipping the two kinds bd would waste a
@@ -1234,9 +1238,21 @@ const exportBeads = env =>
 
 // Marks a bead "locally modified since last sync", which is what makes bd's
 // pull skip it — the mark both the defuse (step 1.2) and the comment mirror
-// rely on. A priority write of the CURRENT value is the cheapest thing that
-// bumps updated_at; `bd comment` does not (measured).
-const touchBead = (bead, env) => tryRun('bd', ['update', bead.id, '-p', String(bead.priority)], { env }) !== null
+// rely on. `bd comment` does not bump updated_at (measured); a metadata write
+// does, and merges rather than replacing the map (measured against bd 1.2.2,
+// which also rejects a key outside [a-zA-Z_][a-zA-Z0-9_.]*).
+//
+// Deliberately NOT the obvious `-p <current priority>`: that echoes a field
+// back, so it is "same-value" only relative to whatever the caller read, and
+// every beads worktree shares one database (AGENTS.md). A priority changed
+// between that read and this write would be silently reverted by the echo —
+// and the mirror's read can be a minute old, since its loop paces posts.
+// Writing a key in this tool's own namespace cannot revert anyone: nothing
+// else writes it, the value is always new so the bump always happens, and
+// metadata reaches neither GitHub (the push sends title/body/labels/state) nor
+// any comparison here.
+const TOUCH_KEY = 'bd_github_sync.touched'
+const touchBead = (id, env) => tryRun('bd', ['update', id, '--set-metadata', `${TOUCH_KEY}=${new Date().toISOString()}`], { env }) !== null
 
 const listAllBeads = () =>
   JSON.parse(run('bd', ['list', '--status', 'open,in_progress,blocked,deferred,closed', '--limit', '0', '--json']))
@@ -1445,7 +1461,7 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
       report.push(`[dry-run] would mirror ${publishable.length} comment(s) of ${bead.id} to #${number}`)
       continue
     }
-    if (!touchBead(bead, env)) {
+    if (!touchBead(bead.id, env)) {
       report.push(`FAILED to touch ${bead.id} before mirroring — its ${publishable.length} comment(s) wait for the next run`)
       continue
     }
@@ -1525,7 +1541,9 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // bead locally modified, which is what makes bd's pull skip it, and it
     // leaves the bead newer than its issue — so the next run neither treats it
     // as a candidate nor, since nothing re-stamped the issue, lets the pull
-    // fetch it at all. Quiescent after one run.
+    // fetch it at all. One run settles a bead whose content GitHub already
+    // has; a bead it does not is pushed by 1.5 below, which re-stamps the
+    // issue, so that one settles on the run after.
     // Pushing it as well would undo exactly that: the PATCH re-stamps the
     // issue newer than the bead, which IS the candidate condition, so every
     // bead whose divergence cannot converge — every assigned one, since bd
@@ -1541,12 +1559,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     const defusedNeedingPush = []
     // `bd export` rather than the listing: only it carries assignee, labels
     // and closed_at, and it is one read for the whole tracker either way.
-    for (const { id, number, priority, losses, overwrites, pushChanges } of planLossyReapplies(exportBeads(env), issueByNumber)) {
+    for (const { id, number, losses, overwrites, pushChanges } of planLossyReapplies(exportBeads(env), issueByNumber)) {
       // Same reasoning as the close-adoption and snapshot aborts: a touch that
       // did not land leaves the pull free to make the very write named here,
       // and closed_at cannot be put back afterwards. Reporting and pulling on
       // would be reporting the loss while causing it.
-      if (!dryRun && !touchBead({ id, priority }, env))
+      if (!dryRun && !touchBead(id, env))
         throw new Error(
           `aborting before the pull: could not defuse ${id} (#${number}) — the pull would lose ${losses.join(', ')} (#955)` +
             (report.length ? ` (already applied: ${report.join('; ')})` : ''),
@@ -1750,9 +1768,9 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // runs once more, so its last_sync stamp covers the posts: without that,
     // the next run's pull would re-apply every posted issue onto its bead
     // (#955). Both are report lines on failure, like the mirror itself.
-    // Read fresh here, not from postBeads: the touch writes the bead's CURRENT
-    // priority back, and step 3 just rewrote priorities the pull flattened —
-    // read from before it, the touch would undo the repair.
+    // Read fresh here, not from postBeads: this run's push may have minted the
+    // external_refs the mirror resolves bead ids through, and postBeads is a
+    // listing, which carries no comments.
     const mirror = mirrorComments({
       beads: exportBeads(env),
       issueByNumber,

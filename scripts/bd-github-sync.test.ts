@@ -758,7 +758,7 @@ describe('planLossyReapplies', () => {
   it('names the close date for a closed bead the pull would rewrite, and the edit its push overwrites', () => {
     const beads = [row({ id: 'km-a', status: 'closed', closed_at: '2026-09-01T00:00:00Z', title: 'the local title' })]
     expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { state: 'CLOSED', title: 'edited on GitHub' })]]))).toEqual([
-      { id: 'km-a', number: 1, priority: 1, losses: ['closed_at'], overwrites: ['title'], pushChanges: true },
+      { id: 'km-a', number: 1, losses: ['closed_at'], overwrites: ['title'], pushChanges: true },
     ])
   })
 
@@ -1558,8 +1558,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     // content already matches GitHub, and a PATCH that changes nothing would
     // re-stamp the issue newer than the bead — the candidate condition — so
     // the guard would touch and PATCH it again on every run for ever.
-    expect(log.indexOf('bd update km-l -p 1')).toBeGreaterThan(-1)
-    expect(log.indexOf('bd update km-l -p 1')).toBeLessThan(log.indexOf('--pull-only'))
+    expect(log).toMatch(/bd update km-l --set-metadata bd_github_sync\.touched=/)
+    expect(log.indexOf('bd update km-l --set-metadata')).toBeLessThan(log.indexOf('--pull-only'))
     expect(log).not.toContain('--push-only')
   })
 
@@ -1797,7 +1797,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     // stamp covers the posts.
     const calls = shimCalls()
     const pulls = [...calls.matchAll(/bd github sync --pull-only/g)].map(m => m.index)
-    const touch = calls.indexOf('bd update km-m -p 1\n')
+    const touch = calls.indexOf('bd update km-m --set-metadata')
     const firstPost = calls.indexOf('gh api -X POST')
     const pushTouched = calls.indexOf('bd github sync --push-only --issues km-m')
     expect(pulls).toHaveLength(2)
@@ -1836,7 +1836,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const calls = shimCalls()
     const push = calls.indexOf('bd github sync --push-only --issues km-m')
     const firstPull = calls.indexOf('bd github sync --pull-only')
-    const touch = calls.indexOf('bd update km-m -p 1\n')
+    const touch = calls.indexOf('bd update km-m --set-metadata')
     expect(push).toBeGreaterThan(-1)
     expect(push).toBeLessThan(firstPull)
     expect(firstPull).toBeLessThan(touch)
@@ -1995,10 +1995,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(posted()).toBe('')
   })
 
-  // The touch writes the bead's current priority back, so it must read AFTER
-  // step 3 has repaired a pull-flattened priority — the post-pull listing
-  // still carries the flattened value; the export read at mirror time does not.
-  it('touches with the repaired priority, not the flattened one the pull left', () => {
+  // Every beads worktree shares one database, so a touch that echoed a field
+  // back would revert whatever another worktree changed since it was read —
+  // including a priority step 3 had just repaired. The touch writes only this
+  // tool's own metadata key, so there is nothing of anyone else's to revert.
+  it('touches without writing back any field a concurrent worktree could own', () => {
     const flattened = commentedRows().map(r => (r.id === 'km-m' ? { ...r, priority: 2 } : r))
     const { run, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
@@ -2009,11 +2010,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('priority km-m → 1')
     expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
-    const calls = shimCalls()
-    expect(calls).not.toContain('bd update km-m -p 2')
-    expect(calls.match(/bd update km-m -p 1\n/g)).toHaveLength(2)
+    const writes = shimCalls().match(/bd update km-m [^\n]*/g) ?? []
+    // Counted, not filtered: a filter alone passes vacuously if the touch
+    // starts writing the field again, which is the whole thing under test.
+    const touches = writes.filter(w => /^bd update km-m --set-metadata bd_github_sync\.touched=\S+$/.test(w))
+    expect(touches).toHaveLength(1)
+    // The only OTHER write is step 3's deliberate priority repair.
+    expect(writes.filter(w => !touches.includes(w))).toEqual(['bd update km-m -p 1'])
   })
 
   // A ref below the listing's last number that the listing does not show is

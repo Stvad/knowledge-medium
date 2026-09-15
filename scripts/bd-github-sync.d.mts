@@ -82,7 +82,7 @@ export declare const pushWouldChange: (bead: BeadRow, issue: IssueInfo) => boole
 export declare const planLossyReapplies: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
-) => { id: string; number: number; priority: number; losses: string[]; overwrites: string[]; pushChanges: boolean }[]
+) => { id: string; number: number; losses: string[]; overwrites: string[]; pushChanges: boolean }[]
 export declare const planCloseReconciliation: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
