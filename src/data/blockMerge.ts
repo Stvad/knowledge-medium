@@ -13,6 +13,7 @@ import {
   materializePropertyChildrenForExistingRow,
 } from './internals/propertyChildrenProcessor'
 import { mergeProperties } from './mergeProperties'
+import { blockTypeLabelProp } from './properties'
 
 export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }
 
@@ -50,6 +51,28 @@ export const computeMergedContent = (
     return intoContent.length > 0 ? intoContent : fromContent
   }
   return intoContent + strategy.separator + fromContent
+}
+
+/** A type has ONE name: the survivor's `content` is the page title `[[name]]`
+ *  resolves to, and `block-type:label` is that same name spelled again.
+ *
+ *  The fold picks content by the caller's `contentStrategy` but unions
+ *  properties name-agnostically, so a source's label rides onto a survivor that
+ *  kept its own text and the survivor ends up with two names. The strategy is
+ *  the explicit answer to which text survives, so the label follows content.
+ *
+ *  Left alone when the merged content is blank — `blockTypeTypeify` then adopts
+ *  the label as the name and writes it into `content`, reaching the same
+ *  invariant from the other side. */
+const withTypeLabelFollowingContent = (
+  properties: Record<string, unknown>,
+  content: string,
+): Record<string, unknown> => {
+  const raw = properties[blockTypeLabelProp.name]
+  const label = typeof raw === 'string' ? raw.trim() : ''
+  const name = content.trim()
+  if (label === '' || name === '' || label === name) return properties
+  return {...properties, [blockTypeLabelProp.name]: blockTypeLabelProp.codec.encode(name)}
 }
 
 /** Fold one block into another. Thin wrapper — see `foldBlocksInTx`. */
@@ -268,7 +291,10 @@ export const foldBlocksInTx = async (
   // write-elision.
   if (folded.length === 0) return
 
-  await tx.update(into.id, {content: mergedContent, properties: mergedProperties})
+  await tx.update(into.id, {
+    content: mergedContent,
+    properties: withTypeLabelFollowingContent(mergedProperties, mergedContent),
+  })
 
   for (const from of folded) {
     tx.emitEvent(CORE_BLOCK_MERGED_EVENT, {
