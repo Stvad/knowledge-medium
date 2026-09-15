@@ -758,7 +758,7 @@ describe('planLossyReapplies', () => {
   it('names the close date for a closed bead the pull would rewrite, and the edit its push overwrites', () => {
     const beads = [row({ id: 'km-a', status: 'closed', closed_at: '2026-09-01T00:00:00Z', title: 'the local title' })]
     expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { state: 'CLOSED', title: 'edited on GitHub' })]]))).toEqual([
-      { id: 'km-a', number: 1, losses: ['closed_at'], overwrites: ['title'], pushChanges: true },
+      { id: 'km-a', number: 1, losses: ['closed_at'], overwrites: ['title'] },
     ])
   })
 
@@ -877,17 +877,28 @@ describe('planPrePullPush', () => {
     expect(planPrePullPush([bead({ external_ref: ref(1), updated_at: '2026-08-20T00:00:00Z' })], map)).toEqual([])
   })
 
-  // A PATCH that changes nothing is not merely wasteful: it re-stamps the
-  // issue newer than the bead, which is the condition that makes it a defuse
-  // candidate — so guard 5 would never quiesce for a bead whose divergence
-  // cannot converge (every assigned one, since bd never pushes an assignee).
-  it('declines a push that would change nothing, however much newer the local row is', () => {
+  // A PATCH bd would make for no reason still re-stamps the issue, so it is
+  // skipped — but ONLY when the pull would also write nothing.
+  it('declines a push that would change nothing, when the pull would write nothing either', () => {
     const converged = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', updatedAt: '2026-08-20T01:00:00Z' }
     const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task' })
     expect(planPrePullPush([row], issues([[1, converged]]))).toEqual([])
     expect(planPrePullPush([{ ...row, title: 'edited locally' }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, labels: ['ui'] }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, status: 'closed' }], issues([[1, converged]]))).toEqual(['km-q'])
+  })
+
+  // The push carries no content here — its job is to move the ISSUE. bd's pull
+  // explicitly fetches a bead modified since last_sync whose issue the
+  // incremental query did not return, and those bypass its skip-locally-
+  // modified guard; the push is what puts the issue in that query. Without it
+  // the pull re-applies the row, clearing the assignee and restamping a close
+  // date nothing can restore.
+  it('pushes a content-identical local-newer row the pull would still write', () => {
+    const converged = { state: 'CLOSED' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', assignee: '', updatedAt: '2026-08-20T01:00:00Z' }
+    const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task', status: 'closed' })
+    expect(planPrePullPush([row], issues([[1, converged]]))).toEqual([])
+    expect(planPrePullPush([{ ...row, assignee: 'Someone' }], issues([[1, converged]]))).toEqual(['km-q'])
   })
 })
 
@@ -1123,8 +1134,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failTouchId?: string
     /** Extra environment for the script (the mirror's post cap override). */
     env?: Record<string, string>
-    /** Rows `bd export` serves the mirror (default: the last listing), each joined with its `comments` fixture. */
-    exportRows?: object[]
+    /** Rows `bd export` serves, one set per call with the last repeating (default: the last listing), each joined with its `comments` fixture. */
+    exportRows?: object[] | object[][]
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -1142,8 +1153,15 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     )
     const lastShow = shows[shows.length - 1] ?? []
     writeFileSync(join(repo, 'show-last.json'), typeof lastShow === 'string' ? lastShow : JSON.stringify(lastShow, null, 2))
-    const exportRows = (opts.exportRows ?? opts.lists[opts.lists.length - 1]) as { id: string }[]
-    writeFileSync(join(repo, 'export.jsonl'), exportRows.map(r => JSON.stringify({ _type: 'issue', ...r, comments: opts.comments?.[r.id] ?? [] })).join('\n') + '\n')
+    // One set of rows per `bd export` call, the last repeating — the wrapper
+    // reads the export more than once per run and expects different states
+    // (before the touches, after them).
+    const given = opts.exportRows ?? opts.lists[opts.lists.length - 1]
+    const exportCalls = (Array.isArray(given[0]) ? given : [given]) as { id: string }[][]
+    const serialize = (rows: { id: string }[]) =>
+      rows.map(r => JSON.stringify({ _type: 'issue', ...r, comments: opts.comments?.[r.id] ?? [] })).join('\n') + '\n'
+    exportCalls.forEach((rows, i) => writeFileSync(join(repo, `export-${i + 1}.jsonl`), serialize(rows)))
+    writeFileSync(join(repo, 'export-last.jsonl'), serialize(exportCalls[exportCalls.length - 1]))
     const graphqlFixtures = Array.isArray(opts.graphql) ? opts.graphql : [opts.graphql ?? { data: { repository: {} } }]
     graphqlFixtures.forEach((g, i) => writeFileSync(join(repo, `gh-graphql-${i + 1}.json`), JSON.stringify(g)))
     writeFileSync(join(repo, 'gh-graphql-last.json'), JSON.stringify(graphqlFixtures[graphqlFixtures.length - 1]))
@@ -1171,7 +1189,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `      if [ "$k" = "${opts.failPushCall ?? 0}" ]; then echo "Error: push exploded"; else echo "Pushed 0 issues"; fi;;`,
         `    *) echo "${opts.failFullSync ? 'Error: pull exploded' : 'Pushed 0 issues'}";;`,
         '    esac;;',
-        `  export) cat "${repo}/export.jsonl";;`,
+        '  export)',
+        `    e=$(cat "${repo}/export-count" 2>/dev/null || echo 0)`,
+        `    e=$((e+1)); echo $e > "${repo}/export-count"`,
+        `    if [ -f "${repo}/export-$e.jsonl" ]; then cat "${repo}/export-$e.jsonl"; else cat "${repo}/export-last.jsonl"; fi;;`,
         ...(opts.failCloseId
           ? [`  close) if [ "$2" = "${opts.failCloseId}" ]; then echo "Error: cannot close"; else echo ok; fi;;`]
           : []),
@@ -1539,28 +1560,31 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     // than its issue. Without it the push set would skip km-l on the timestamp
     // test alone, and "not pushed" would prove nothing about the content test.
     const touched = { ...row, updated_at: '2026-08-21T00:00:00Z' }
+    const lossy = { ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }
     return makeSyncRepo({
       issues: [ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED')],
       lists: [[row], [touched]],
       shows: [[touched]],
-      exportRows: [{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }],
+      // Second export = after the touch, so the row is now local-newer.
+      exportRows: [[lossy], [{ ...lossy, updated_at: '2026-08-21T00:00:00Z' }]],
       ...over,
     })
   }
 
-  it('defuses a lossy re-apply by touching it before the pull, and does not push it out', () => {
+  it('defuses a lossy re-apply by touching it before the pull, and pushes it so the pull cannot hydrate it', () => {
     const { run, shimCalls } = lossyRepo()
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('defused km-l (#4): the pull would lose closed_at, assignee')
     const log = shimCalls()
-    // Touched before the pull, so bd skips the bead. NOT pushed: this bead's
-    // content already matches GitHub, and a PATCH that changes nothing would
-    // re-stamp the issue newer than the bead — the candidate condition — so
-    // the guard would touch and PATCH it again on every run for ever.
+    // Touched before the pull, so bd skips the bead — AND pushed, though the
+    // push ships no content: the pull hydrates a bead modified since last_sync
+    // whose issue the incremental query did not return, bypassing that skip.
+    // The push is what puts the issue in the query, so both sides moved.
     expect(log).toMatch(/bd update km-l --set-metadata bd_github_sync\.touched=/)
-    expect(log.indexOf('bd update km-l --set-metadata')).toBeLessThan(log.indexOf('--pull-only'))
-    expect(log).not.toContain('--push-only')
+    expect(log.indexOf('bd update km-l --set-metadata')).toBeLessThan(log.indexOf('--push-only'))
+    expect(log).toContain('--push-only --issues km-l')
+    expect(log.indexOf('--push-only')).toBeLessThan(log.indexOf('--pull-only'))
   })
 
   // …but the ordinary mirror must keep working: a defused bead whose content
@@ -1569,10 +1593,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const row = pushable({ id: 'km-p', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED')],
-      // The second listing is what the touch leaves behind: a bumped row.
+      // The second listing/export is what the touch leaves behind: a bumped row.
       lists: [[row], [{ ...row, updated_at: '2026-08-21T00:00:00Z' }]],
       shows: [[{ ...row, updated_at: '2026-08-21T00:00:00Z' }]],
-      exportRows: [{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }],
+      exportRows: [
+        [{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }],
+        [{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-21T00:00:00Z' }],
+      ],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -1599,8 +1626,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run('--dry-run')
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('[dry-run] would defuse km-l (#4)')
-    // Converged content, so the real run pushes nothing either.
-    expect(r.stdout).toContain('[dry-run] would push 0 bead(s) out before the pull')
+    // The push is previewed too: a defused bead always needs it (see 1.5).
+    expect(r.stdout).toContain('[dry-run] would push 1 bead(s) out before the pull: km-l')
     expect(shimCalls()).not.toContain('bd update')
   })
 
