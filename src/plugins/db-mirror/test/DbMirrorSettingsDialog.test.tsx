@@ -343,10 +343,9 @@ describe('DbMirrorSettingsDialog', () => {
 
     // Everything below is fenced on the handler's OWN write, because nothing on
     // screen can stand in for it: the re-grant button is gone once the folder
-    // moves on, and the failure this asserts was recorded BEFORE the release —
-    // so asserting it directly passes whether or not the granted branch ever
-    // ran, which is how this test came to leave that branch in flight and
-    // resume the schedule inside whichever test ran next.
+    // moves on, and the failure asserted below was recorded BEFORE the release,
+    // so asserting it unfenced would pass whether or not the granted branch ever
+    // ran — and leave it running into the next test.
     const granted = vi.spyOn(store, 'recordStatus')
     release('granted')
     await waitFor(() => expect(granted).toHaveBeenCalled())

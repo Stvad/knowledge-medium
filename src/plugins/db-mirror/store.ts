@@ -325,12 +325,15 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         }
         const mutated = mutate(read)
         const applied = mutated !== undefined
-        // A declined write still writes: `updated` is what was READ, so the
-        // record comes back byte-identical, and skipping the put would only
-        // save a no-op at the cost of a second rule about when the install id
-        // is minted.
-        const updated = mutated ?? read
-        if (persist) {
+        // A declined write writes NOTHING, and `read` is why that is not the
+        // no-op it looks like: it is the stored record REBUILT — normalized,
+        // and carrying an id this call would mint if the stored one is missing
+        // or unusable. Persisting that would change the record on a write the
+        // store just refused, while the suppressed broadcast below told every
+        // other tab nothing had happened. The repair is not lost; it rides the
+        // next write that does apply.
+        const updated = mutated ?? {...read, installId: known}
+        if (persist && applied) {
           store.put(
             {
               settings: updated.settings,
@@ -346,9 +349,8 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         return {state: updated, applied}
       })
       .then(({state, applied}) => {
-        // A refusal wrote the same values back, so telling other tabs that
-        // something changed would be false — and each would re-read to find
-        // nothing.
+        // A refusal wrote nothing, so there is nothing for another tab to
+        // re-read.
         if (persist && applied) channel?.postMessage(userId)
         return {state: publish(userId, state), applied}
       })

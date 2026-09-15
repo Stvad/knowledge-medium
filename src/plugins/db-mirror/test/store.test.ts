@@ -271,10 +271,37 @@ describe('db-mirror store', () => {
     expect(store.getSnapshot()?.status.lastMarker).toBeUndefined()
   })
 
+  it('a refused write leaves the record alone, down to an id it would have minted', async () => {
+    // A refused write must not reach storage at all. The state it would
+    // otherwise put back is the stored record REBUILT — normalized, and
+    // carrying an install id minted here when the stored one is unusable — so
+    // "it writes the same values back" is not true, and persisting it would
+    // change the record while the suppressed broadcast said nothing had.
+    const tabA = createDbMirrorStore()
+    await tabA.setDirectory(USER, fakeDirectory('Backups'))
+    await tabA.setDirectory(USER, fakeDirectory('Elsewhere'))
+    // Hand-written AFTER the folder writes, which mint a good one themselves.
+    const [key] = (await storedKeys()).filter(k => String(k).includes('settings'))
+    const idb = new IdbKeyedStore('km-db-mirror', 'mirror')
+    const record = await idb.tx('readonly', s => s.get(key)) as {directoryEpoch: number}
+    await idb.tx('readwrite', s => s.put({...record, installId: 'NOT-HEX!'}, key))
+
+    const tabC = createDbMirrorStore()
+    // Loaded first, or `publish` rightly refuses to snapshot for a user this
+    // store was never showing — and the assertion below would pass vacuously.
+    await tabC.load(USER)
+    const refusedById = await tabC.recordStatus(
+      USER, {lastMarker: 'never'}, {ifDirectoryEpoch: record.directoryEpoch - 1},
+    )
+
+    expect(refusedById).toBeUndefined()
+    expect(await idb.tx('readonly', s => s.get(key))).toMatchObject({installId: 'NOT-HEX!'})
+    // Nor may the id reach the SNAPSHOT: an install id on screen that storage
+    // does not hold is one the next run would name copies for and then forget.
+    expect(tabC.getSnapshot()?.installId).toBeUndefined()
+  })
+
   it('a refused write changes nothing, and wakes nobody to read it', async () => {
-    // A refusal writes the record's own values back, so it is invisible in
-    // storage — which is exactly why it has to be visible in the RESULT, and
-    // why it must not be announced to the other tabs as a change.
     const tabA = createDbMirrorStore()
     await tabA.setDirectory(USER, fakeDirectory('Backups'))
     const stale = (await tabA.load(USER)).directoryEpoch
