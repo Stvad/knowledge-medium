@@ -246,6 +246,10 @@ export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
  *  misses any of it silently gets the old plan — which its results cannot be
  *  told apart from, so `recentsPlan.test.ts` reads the plan instead.
  *
+ *  `content != ''` is in the predicate to keep the index off rows no consumer
+ *  can return, and obliging every consumer to carry it is the price of that;
+ *  widening the index to all live rows would serve the same plans.
+ *
  *  MUST be created after `ensureBlockUserUpdatedAtColumn`: on an upgrading
  *  device `user_updated_at` does not exist until that migration adds it, and
  *  CREATE INDEX over a missing column fails outright.
