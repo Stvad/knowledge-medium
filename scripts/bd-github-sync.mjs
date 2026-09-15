@@ -45,38 +45,37 @@
  *    step-4 close — and that copy drops what GitHub does not carry back: the
  *    assignee (bd's push never sets one), the close date (the status write
  *    restamps it, and no bd verb can put it back), and a type the labels do
- *    not spell uniquely (#955). Note the difference from (4): those rows are
- *    local-OLDER by construction, so (4)'s snapshot never sees them, and
- *    closed_at could not be restored afterwards in any case. So the lossy ones
- *    are DEFUSED before the pull: TOUCHED, which both makes bd skip them and
- *    leaves the bead newer than its issue, so the next run neither treats them
- *    as candidates nor lets the pull fetch their issues (planLossyReapplies).
- *    The touch alone is NOT enough, and the push is not about content: bd's
- *    pull explicitly fetches every bead modified since last_sync whose issue
- *    the incremental query did not return, and those BYPASS its
- *    skip-locally-modified guard (fetchPrelinkedIssues). So the pull writes a
- *    bead exactly when ONE of the two sides moved since last_sync — and the
- *    defuse moves BOTH, the touch the bead and the push the issue. That is the
- *    whole safety argument, and it holds without knowing last_sync, without
- *    knowing which side moved last, and without comparing the two timestamps
- *    at all. Every attempt to narrow the set by comparing them was wrong in a
- *    new way and bought nothing: the lossy rows are the same either way,
- *    because a bead diverging in a field GitHub cannot carry diverges for good.
- *    KNOWN COST: such a bead — every assigned one, since bd never pushes an
- *    assignee — is defused on EVERY run rather than settling, since it keeps
- *    diverging. Settling needs a last_sync of our own, to tell this run's own
- *    push apart from a foreign touch; that is a design step, not a patch, and
- *    #955's own alternative (pull only the issues that have no bead) takes the
- *    other branch of doPull, never hydrates, and removes the class instead. That is also why (4)'s push now declines a PATCH
- *    that would change nothing. Beads the pull would carry faithfully are left
- *    to it: a GitHub-side title, body, label or taxonomy edit still imports. A
- *    touch that fails ABORTS, like (1) and (4): the pull would then make the
- *    very write the defuse named, and closed_at cannot be put back.
+ *    not spell uniquely (#955). The lossy ones are therefore DEFUSED before
+ *    the pull (planLossyReapplies): TOUCHED, which marks the bead locally
+ *    modified, and PUSHED. A touch that fails ABORTS, like (1) and (4).
+ *
+ *    What actually protects them is the PUSH, and not for its content: bd
+ *    stamps last_sync at the end of EVERY non-dry-run sync, a --push-only one
+ *    included, and stamps it a second into the FUTURE — so the pull that
+ *    follows reads an empty window and can reach nothing at all. When no push
+ *    runs, the window stays open and the rule is the one the touch serves:
+ *    the pull writes a bead exactly when ONE of the two sides moved since
+ *    last_sync (its skip for a locally-modified bead is bypassed for one it
+ *    hydrates by identifier — fetchPrelinkedIssues), and the defuse moves both.
+ *
+ *    Three consequences, none of them small, and the first is a REGRESSION
+ *    this guard introduced:
+ *      - a run that pushes imports NOTHING, new GitHub-filed issues included.
+ *        A lossy bead never converges (bd never pushes an assignee), so the
+ *        push now runs every run and the GitHub→beads direction is shut.
+ *        #955's own alternative — pull issues BY IDENTIFIER, which takes
+ *        doPull's other branch, ignores last_sync and never hydrates — is the
+ *        only shape that can protect and import in the same run.
+ *      - guard (4) snapshots every defused bead, because the touch makes it
+ *        local-newer than the listing. That is a second line of defence for
+ *        everything except closed_at, and it costs two `bd show` passes over
+ *        the whole set on every run.
+ *      - the defuse never settles, so a converged run is no longer silent;
+ *        its lines are kept out of the `--quiet` "did anything change" test
+ *        for that reason.
  *    Accepted race: an issue touched on GitHub AFTER this run's issue listing
- *    escapes the guard, and the pull can re-apply it. Re-reading the listing
- *    would only move the window, not close it (no atomicity boundary is shared
- *    with bd's own fetch), and dropping the timestamp test instead would make
- *    the guard touch every assigned bead on every run for ever.
+ *    escapes the guard. Re-reading the listing would only move the window, not
+ *    close it — no atomicity boundary is shared with bd's own fetch.
  *
  * Accepted race: an issue closed on GitHub DURING the sync window can be
  * re-opened by the in-flight push, and because the reopen is then the state
@@ -668,17 +667,12 @@ export const resolveBodyPath = (p, cwd, home) =>
 // plain object answers `constructor`, `__proto__` or `toString` with an
 // inherited member rather than undefined — so `priority::constructor` would
 // read as a real priority, and a bare `constructor` as a real type.
-const PRIORITY_WORDS = new Map([
-  ['critical', 0],
-  ['high', 1],
-  ['medium', 2],
-  ['low', 3],
-  ['none', 4],
-])
+const PRIORITY_WORDS = ['critical', 'high', 'medium', 'low', 'none'] // index === bd priority
+const PRIORITY_BY_WORD = new Map(PRIORITY_WORDS.map((word, priority) => [word, priority]))
 export const deriveLabelPriority = labels => {
   for (const name of labels) {
     const m = name.match(/^priority::(\w+)$/i)
-    if (m && PRIORITY_WORDS.has(m[1].toLowerCase())) return PRIORITY_WORDS.get(m[1].toLowerCase())
+    if (m && PRIORITY_BY_WORD.has(m[1].toLowerCase())) return PRIORITY_BY_WORD.get(m[1].toLowerCase())
   }
   for (const name of labels) {
     const m = name.match(/^[pP]([0-4])$/)
@@ -818,7 +812,7 @@ const mappedValues = (labels, map) => {
   return values
 }
 const pullTypes = labels => mappedValues(labels, (prefix, value) => (prefix === 'type' || prefix === '' ? TYPE_LABELS.get(value) : undefined))
-const pullPriorities = labels => mappedValues(labels, (prefix, value) => (prefix === 'priority' ? PRIORITY_WORDS.get(value) : undefined))
+const pullPriorities = labels => mappedValues(labels, (prefix, value) => (prefix === 'priority' ? PRIORITY_BY_WORD.get(value) : undefined))
 const LABEL_STATUSES = ['in_progress', 'blocked', 'deferred']
 const pullStatuses = (labels, state) =>
   state === 'CLOSED'
@@ -873,14 +867,13 @@ const labelFieldsWhere = (bead, issue, keep) =>
  * Mirrors bd's BeadsIssueToGitHubFields — title, body, open/closed, and the
  * whole label set, scoped labels derived from the bead plus its own.
  */
-const PRIORITY_LABELS = ['critical', 'high', 'medium', 'low', 'none']
 const pushedLabels = bead => [
   ...(bead.issue_type ? [`type::${bead.issue_type}`] : []),
-  `priority::${PRIORITY_LABELS[bead.priority] ?? 'medium'}`,
+  `priority::${PRIORITY_WORDS[bead.priority] ?? 'medium'}`,
   ...(LABEL_STATUSES.includes(bead.status) ? [`status::${bead.status}`] : []),
   ...(bead.labels ?? []),
 ]
-export const pushWouldChange = (bead, issue) =>
+const pushWouldChange = (bead, issue) =>
   bead.title !== issue.title ||
   (bead.description ?? '') !== (issue.body ?? '') ||
   (bead.status === 'closed') !== (issue.state === 'CLOSED') ||
@@ -1136,7 +1129,10 @@ export const bdShowRows = (ids, opts = {}) => {
   const r = spawnSync('bd', ['show', ...ids, '--json'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 15_000,
+    // Scales with the request: `bd show` costs ~0.3s per id, and a failed
+    // pre-pull snapshot ABORTS the whole sync — a fixed ceiling turns a
+    // growing suspect set into a sync that stops working and stays stopped.
+    timeout: Math.max(15_000, ids.length * 2_000),
     maxBuffer: MAX_OUTPUT_BYTES,
     ...opts,
   })
@@ -1292,7 +1288,7 @@ const touchBead = (id, env) => tryRun('bd', ['update', id, '--set-metadata', `${
 // the pair lands has to be measured rather than reasoned. A wrong guess there
 // loses an assignee and a close date, neither of which reports itself. So an
 // unverified bd REFUSES to sync rather than syncing on stale reasoning.
-export const VERIFIED_BD_VERSIONS = ['1.2.2']
+const VERIFIED_BD_VERSIONS = ['1.2.2']
 export const bdVersion = out => out?.match(/\bversion\s+(\d+\.\d+\.\d+)/i)?.[1] ?? null
 
 const listAllBeads = () =>
@@ -1545,7 +1541,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
   }
   const { env } = pre
 
-  const version = bdVersion(tryRun('bd', ['--version'], { env }))
+  const version = bdVersion(tryRun('bd', ['--version'], { env, timeout: PROBE_TIMEOUT }))
   if (!process.env.KM_BD_VERSION_OK && !VERIFIED_BD_VERSIONS.includes(version))
     throw new Error(
       `refusing to sync: these guards were verified against bd ${VERIFIED_BD_VERSIONS.join(', ')}, and bd reports ` +
@@ -1602,6 +1598,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // and takes the bead out of the pull's reach on its own. Before the PULL
     // is the position that matters.
     const defused = []
+    // Printed, but never counted as news: the defuse recurs every run for a
+    // bead whose divergence cannot converge, so letting it answer "did
+    // anything change" would un-quiet every SessionEnd run for ever — the
+    // same reason zero-count push lines stay out of the report. A defuse that
+    // also OVERWRITES something IS news and stays out of this set.
+    const routine = new Set()
     // `bd export` rather than the listing: only it carries assignee, labels
     // and closed_at, and it is one read for the whole tracker either way. Read
     // after close-adoption, so it already reflects the closes.
@@ -1617,10 +1619,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
             (report.length ? ` (already applied: ${report.join('; ')})` : ''),
         )
       defused.push(id)
-      report.push(
+      const line =
         `${dryRun ? '[dry-run] would defuse' : 'defused'} ${id} (#${number}): the pull would lose ${losses.join(', ')} (#955)` +
-          (overwrites.length ? `; the push sends the local ${overwrites.join(', ')} over a different value on GitHub — compare them by hand` : ''),
-      )
+        (overwrites.length ? `; the push sends the local ${overwrites.join(', ')} over a different value on GitHub — compare them by hand` : '')
+      if (!overwrites.length) routine.add(line)
+      report.push(line)
     }
 
     // 1.5 Push local state out BEFORE anything pulls. bd's pull applies a
@@ -1630,17 +1633,19 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // re-open its GitHub-closed issue). Handed only the beads bd could update
     // (planPrePullPush) — listed AFTER close-adoption, since a close bumps
     // updated_at and the pre-adoption row would look converged.
-    // EXPORT rows, not a listing: planPrePullPush now asks whether the pull
-    // would write the bead, and `bd list` carries neither assignee nor labels —
-    // computed from a listing, the assignee divergence that makes the pull
-    // write is invisible and exactly the rows needing the push are dropped.
-    // Re-read only when the touches moved something, since `exported` was
-    // already taken after close-adoption.
+    // Every defused bead is named outright rather than left to emerge from a
+    // re-read: the push is what protects it (see the header), so an abort
+    // between the touches and here would otherwise leave beads touched but
+    // unpushed — a state strictly MORE exposed than untouched, since the bead
+    // has moved and its issue has not.
+    // EXPORT rows, not a listing: planPrePullPush asks whether the pull would
+    // write the bead, and `bd list` carries neither assignee nor labels, so a
+    // listing hides the very divergence that decides it. `exported` was read
+    // after close-adoption, so the closes are already in it.
     // A dry run makes neither the closes nor the touches, so the rows it would
     // have bumped are added by hand.
-    const pushRows = defused.length && !dryRun ? exportBeads(env) : exported
-    const dryRunBumped = dryRun ? [...closes.map(c => c.id), ...defused] : []
-    const pushSet = [...new Set([...planPrePullPush(pushRows, issueByNumber), ...dryRunBumped])]
+    const dryRunBumped = dryRun ? closes.map(c => c.id) : []
+    const pushSet = [...new Set([...planPrePullPush(exported, issueByNumber), ...defused, ...dryRunBumped])]
     if (dryRun) {
       report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
     } else if (pushSet.length) {
@@ -1662,8 +1667,15 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         throw e
       }
       // Zero-count lines stay out of the report: they would flip `changed`
-      // below and un-quiet every converged SessionEnd run.
-      report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
+      // below and un-quiet every converged SessionEnd run. A push carrying
+      // nothing BUT defused beads is the same case one step on — it is the
+      // steady state, not news — so its lines are routine too.
+      const defusedOnly = pushSet.every(id => routine.has(id) || defused.includes(id)) && defused.length > 0
+      for (const l of pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l))) {
+        const line = `pre-pull: ${l.trim()}`
+        if (defusedOnly) routine.add(line)
+        report.push(line)
+      }
     }
 
     // 1.6 A push can leave a local-newer row unpushed (it failed, or bd's
@@ -1674,7 +1686,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // list: the push just minted refs. Snapshot via a direct spawn, not
     // run(): `bd show` output is pretty-printed JSON, and a description line
     // starting with "Error" would trip run()'s bd check.
-    const freshBeads = dryRun ? pushRows : listAllBeads()
+    const freshBeads = dryRun ? exported : listAllBeads()
     printMinted(freshBeads)
     const suspects = [
       ...new Map(
@@ -1842,7 +1854,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 
     // "Changed" means an action was reported — a close-push candidate that
     // turned out converged (silent continue above) must not un-quiet a run.
-    const actionReported = report.some(l => !syncSummary.includes(l))
+    const actionReported = report.some(l => !syncSummary.includes(l) && !routine.has(l))
     const changed = actionReported || syncSummary.some(l => /[1-9]/.test(l))
     if (!quiet || changed) console.log(['bd-github-sync:', ...report].join('\n  '))
     return { closes, fixes, closePushes }

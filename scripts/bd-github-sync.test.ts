@@ -1178,7 +1178,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     /** `gh api graphql` responses, one per call (the last one repeats). */
     graphql?: object | object[]
     failPostCall?: number
-    /** Bead whose pre-mirror touch (`bd update <id> -p …`) fails. */
+    /** Bead whose next `bd update <id>` — the defuse touch or the mirror's — fails. */
     failTouchId?: string
     /** Extra environment for the script (the mirror's post cap override). */
     env?: Record<string, string>
@@ -1635,8 +1635,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
       issues: [ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED')],
       lists: [[row], [touched]],
       shows: [[touched]],
-      // Second export = after the touch, so the row is now local-newer.
-      exportRows: [[lossy], [{ ...lossy, updated_at: '2026-08-21T00:00:00Z' }]],
+        // Deliberately NOT bumped: the push set names the defused beads
+      // outright, so it must not depend on a re-read showing the touch.
+      exportRows: [lossy],
       ...over,
     })
   }
@@ -1842,6 +1843,30 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('could not re-list beads')
     expect(r.stdout).not.toContain('minted:')
+  })
+
+  // The defuse recurs every run for a bead whose divergence can never
+  // converge, so counting it as news would un-quiet every SessionEnd run for
+  // ever — and the push it forces would do the same one step on.
+  it('stays silent under --quiet when the only work was the steady-state defuse', () => {
+    const { run } = lossyRepo()
+    const r = run('--quiet')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+  })
+
+  // …but a defuse that overwrites a GitHub-side value is news, not routine.
+  it('speaks up under --quiet when a defuse overwrites something on GitHub', () => {
+    const row = syncRow({ id: 'km-o', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run } = makeSyncRepo({
+      issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED'), title: 'edited on GitHub' }],
+      lists: [[row]],
+      shows: [[row]],
+      exportRows: [{ ...row, closed_at: '2026-08-01T00:00:00Z' }],
+    })
+    const r = run('--quiet')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('over a different value on GitHub')
   })
 
   it('stays silent under --quiet when a converged run changed nothing', () => {
