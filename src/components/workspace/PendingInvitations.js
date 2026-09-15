@@ -1,1 +1,1 @@
-import{P_ as e}from"../../../chunks/app-CjjJD7n2.js";export{e as PendingInvitations};
+import{P_ as e}from"../../../chunks/app-BYieiSxZ.js";export{e as PendingInvitations};
