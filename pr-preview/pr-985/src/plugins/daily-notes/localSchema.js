@@ -1,1 +1,1 @@
-import{_R as e}from"../../../chunks/app-CpQbiXSV.js";export{e as dailyNotesLocalSchema};
+import{_R as e}from"../../../chunks/app-DUixsTbL.js";export{e as dailyNotesLocalSchema};

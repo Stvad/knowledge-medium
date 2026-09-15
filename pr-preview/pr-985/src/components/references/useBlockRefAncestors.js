@@ -1,1 +1,1 @@
-import{KS as e}from"../../../chunks/app-CpQbiXSV.js";export{e as useBlockRefAncestors};
+import{KS as e}from"../../../chunks/app-DUixsTbL.js";export{e as useBlockRefAncestors};

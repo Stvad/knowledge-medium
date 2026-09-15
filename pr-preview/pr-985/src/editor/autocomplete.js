@@ -1,1 +1,1 @@
-import{tw as e}from"../../chunks/app-CpQbiXSV.js";export{e as editorAutocompleteExtension};
+import{tw as e}from"../../chunks/app-DUixsTbL.js";export{e as editorAutocompleteExtension};
