@@ -254,6 +254,13 @@ describe('bulk-delete confirmation', () => {
     // Reached from Backspace on an emptied block, the dialog takes DOM focus off
     // a live CodeMirror editor, which the blur handler reads as "editing ended".
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
+    // The latch is process-global and each hold lingers 400ms past its dialog
+    // closing, so every earlier test here leaves one behind. Drain first or
+    // this reads someone else's hold and stays green with the keepalive gone.
+    await vi.waitFor(
+      () => expect(resolveEditModeKeepalive()).toBe('exit'),
+      {timeout: 2000},
+    )
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
     await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
@@ -334,6 +341,21 @@ describe('bulk-delete confirmation', () => {
       expect(await deleteBlockThroughUi(repo.block('guarded'), {beforeWrite})).toBe(false)
       expect(beforeWrite).not.toHaveBeenCalled()
     })
+  })
+
+  it('counts a repeated target once, in the dialog as well as the delete', async () => {
+    // `run-action multi_select.delete_block` maps raw selectedBlockIds through,
+    // so the same id can arrive more than once.
+    await repo.mutate.createChild({parentId: 'root', id: 'page', content: 'page'})
+    await seedChildren('page', BULK_DELETE_CONFIRM_THRESHOLD, 'kid')
+    const repeated = Array.from({length: 25}, () => repo.block('page'))
+
+    const deleting = deleteBlocksThroughUi(repeated)
+    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    expect(pendingDialog()?.props.targetCount).toBe(1)
+    answerDialog(true)
+
+    expect(await deleting).toBe(true)
   })
 
   it('deletes leaf-first whatever order the caller selected in', async () => {

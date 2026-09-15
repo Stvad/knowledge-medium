@@ -100,22 +100,28 @@ export const deleteBlocksThroughUi = async (
   blocks: readonly Block[],
   {animate = false, beforeWrite}: DeleteThroughUiOptions = {},
 ): Promise<boolean> => {
-  if (!await ensureDeletableThroughUi(blocks)) return false
-  if (!await confirmBulkDeleteThroughUi(blocks)) return false
+  // One entry per block for the whole gesture. A caller can hand over the same
+  // id twice — `run-action multi_select.delete_block` maps raw
+  // `selectedBlockIds` straight through — and the count already dedupes, so
+  // without this the dialog says "25 selected blocks" over a 20-block total
+  // and the write repeats itself.
+  const targets = [...new Map(blocks.map(block => [block.id, block])).values()]
+  if (!await ensureDeletableThroughUi(targets)) return false
+  if (!await confirmBulkDeleteThroughUi(targets)) return false
   if (beforeWrite) {
     await beforeWrite()
     // Caller work of unbounded duration — the cut path serializes every
     // selected subtree and awaits the clipboard API — so the guards are
     // resolved again rather than writing on a decision taken before it. Gated
     // on there being such work: without it this is the pass above.
-    if (!await ensureDeletableThroughUi(blocks)) return false
+    if (!await ensureDeletableThroughUi(targets)) return false
   }
   const write = async (): Promise<void> => {
     // Leaf-first so each removal can't disturb the next. Owned here, with the
     // ancestor-first order `countBlocksRemovedBy` wants, so callers pass one
     // list in outline order and neither ordering can be got wrong at a site.
     // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point
-    for (const block of blocks.toReversed()) await block.delete()
+    for (const block of targets.toReversed()) await block.delete()
   }
   await (animate ? withMoveTransition(write) : write())
   return true
