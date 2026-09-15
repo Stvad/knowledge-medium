@@ -11,6 +11,7 @@ import {
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
@@ -91,6 +92,7 @@ describe('initializeClientSchema', () => {
       CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
       CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL,
       CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL,
       CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
       CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
       CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
@@ -115,6 +117,15 @@ describe('initializeClientSchema', () => {
     const localIndexes = batchIndexOf(calls, CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
     expect(blocksTable).toBeLessThan(blocksColumns)
     expect(blocksColumns).toBeLessThan(localIndexes)
+    // The recency index is keyed on `user_updated_at`, so it must come after
+    // the migration that adds that column — on an upgrading device it does not
+    // exist before, and CREATE INDEX over a missing column fails outright.
+    // Anchored on the `blocks_synced` read because the `blocks` one is also
+    // taken by the earlier local-column migration.
+    const userUpdatedAtColumns = readIndexOf(calls, 'PRAGMA table_info(blocks_synced)')
+    expect(userUpdatedAtColumns).toBeGreaterThan(-1)
+    expect(userUpdatedAtColumns)
+      .toBeLessThan(batchIndexOf(calls, CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL))
     // The stale-index probe precedes the any-field-form index it replaces.
     const staleProbe = calls.findIndex(c => c.kind === 'getOptional' && c.sql.includes('idx_blocks_any_field_form'))
     expect(staleProbe).toBeLessThan(batchIndexOf(calls, CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL))

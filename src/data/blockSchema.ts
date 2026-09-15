@@ -229,6 +229,37 @@ export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
   WHERE deleted = 0 AND properties_json <> '{}'
 `
 
+/** Serves the recency window every "what did I touch lately" surface pages
+ *  through: the empty-query pickers (`core.recentBlocks`,
+ *  `core.recentUserBlocks`), the activity feed (`core.recentActivity`) and
+ *  find-replace's candidate scan. Without it each of those scans every live
+ *  row of the workspace and sorts the lot in a temp B-tree before the LIMIT,
+ *  so the per-row tests they layer on top (a `json_extract`, a correlated
+ *  `block_types` probe) are paid once per row in the graph rather than once
+ *  per row returned.
+ *
+ *  A query reaches it only by carrying all of `workspace_id = ?`,
+ *  `deleted = 0` and `content != ''` (the partial-index proof) plus
+ *  `ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC`. The mixed
+ *  direction is part of the match, not decoration: drop the per-column
+ *  `DESC`/`ASC` and the tiebreak goes back to a temp B-tree. A query that
+ *  misses any of it silently gets the old plan — which its results cannot be
+ *  told apart from, so `recentsPlan.test.ts` reads the plan instead.
+ *
+ *  MUST be created after `ensureBlockUserUpdatedAtColumn`: on an upgrading
+ *  device `user_updated_at` does not exist until that migration adds it, and
+ *  CREATE INDEX over a missing column fails outright.
+ *
+ *  Alone among the indexes here, its key is one an ordinary edit MOVES — every
+ *  write bumps `updated_at` — so it is maintained on the write path rather
+ *  than only when a row is created or reparented. Accepted: the reads it
+ *  serves are interactive and the writes it taxes are one row at a time. */
+export const CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_workspace_recent
+  ON blocks (workspace_id, coalesce(user_updated_at, updated_at) DESC, id ASC)
+  WHERE deleted = 0 AND content != ''
+`
+
 /** Partial index over the local derived column: field-row recognition and
  *  "rows referencing target X" scans (rename retitle, projection walks) hit
  *  `(workspace_id, reference_target_id, parent_id)`; the `IS NOT NULL`
