@@ -1,1 +1,1 @@
-import{bg as e}from"../../../chunks/app-Cbt5fE5f.js";export{e as MobileBottomNav};
+import{bg as e}from"../../../chunks/app-CdwtlHTq.js";export{e as MobileBottomNav};

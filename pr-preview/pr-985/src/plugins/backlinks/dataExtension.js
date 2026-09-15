@@ -1,1 +1,1 @@
-import{VR as e}from"../../../chunks/app-Cbt5fE5f.js";export{e as backlinksDataExtension};
+import{VR as e}from"../../../chunks/app-CdwtlHTq.js";export{e as backlinksDataExtension};
