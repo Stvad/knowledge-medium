@@ -1267,6 +1267,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Copy exactly the set we're about to delete rather than re-reading the
         // ui-state selection: with supplied deps the two can differ, and the copy
         // would quietly no-op while the delete went ahead.
+        //
+        // Stays BEFORE the write, unlike the focus move in the Backspace path,
+        // even though a late guard refusal can then leave the clipboard holding
+        // blocks that survived. Deferring it until after would mean a failed
+        // clipboard write costs the blocks as well: a cut degrading to a copy
+        // is benign, a cut degrading to a delete is not.
         if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
 
         const selectedIds = new Set(selectedBlocks.map(block => block.id))
