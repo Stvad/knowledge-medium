@@ -1,1 +1,1 @@
-import{_t as e}from"../../../chunks/app-Cvjwgk_i.js";export{e as extensionsDataExtension};
+import{_t as e}from"../../../chunks/app-BdYXuLW_.js";export{e as extensionsDataExtension};
