@@ -286,9 +286,17 @@ const rawProperties = async (
   env: Harness,
   id: string,
   properties: Record<string, unknown>,
+  content?: string,
 ): Promise<void> => {
   await env.h.db.writeTransaction(async tx => {
-    await tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify(properties), id])
+    await tx.execute(
+      content === undefined
+        ? 'UPDATE blocks SET properties_json = ? WHERE id = ?'
+        : 'UPDATE blocks SET properties_json = ?, content = ? WHERE id = ?',
+      content === undefined
+        ? [JSON.stringify(properties), id]
+        : [JSON.stringify(properties), content, id],
+    )
   })
 }
 
@@ -720,8 +728,7 @@ describe('block-type typeify processor', () => {
 
     // 'Book' is retired by the rename, as always; 'Other' is a claim the
     // rename has no business dropping, and the undecodable 7 claimed nothing.
-    // Order comes from the index for a bag that could not be decoded.
-    expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Other', 'Novel'])
+    expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Novel', 'Other'])
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Other'}).load())?.id).toBe(id)
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
   })
@@ -818,15 +825,16 @@ describe('block-type typeify processor', () => {
   // A legacy or sync-applied type can be titled `See [[Foo]]`, which the tag
   // path would refuse today. Renaming Foo rewrites that title in the RENAME's
   // own tx (`references.renameBacklinks`), and this processor sees it on the
-  // rerun — refusing there would roll back an unrelated rename for good.
-  it('steps aside for a rewrite of an already-unwritable type name', async () => {
+  // rerun: refusing there would roll back an unrelated rename for good, and
+  // declining to reconcile would strand the label while the claim moved.
+  it('reconciles a rewrite of an already-unwritable type name', async () => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
     await rawProperties(env, id, {
       types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
       [blockTypeLabelProp.name]: 'See [[Foo]]',
-      [aliasesProp.name]: ['Book'],
-    })
+      [aliasesProp.name]: ['See [[Foo]]'],
+    }, 'See [[Foo]]')
 
     await expect(env.repo.tx(
       tx => tx.update(id, {content: 'See [[Bar]]'}),
@@ -835,9 +843,34 @@ describe('block-type typeify processor', () => {
 
     const row = await env.repo.load(id)
     expect(row!.content).toBe('See [[Bar]]')
-    // Left as it was: the name was already unlinkable, and this path does not
-    // get to make an unrelated rename pay for repairing it.
-    expect(row!.properties[blockTypeLabelProp.name]).toBe('See [[Foo]]')
+    // Still unlinkable — that is the row's pre-existing condition, and not
+    // something an unrelated rename gets to pay for. What this path can do is
+    // keep the three spellings saying the same thing.
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('See [[Bar]]')
+    expect(row!.properties[aliasesProp.name]).toEqual(['See [[Bar]]'])
+  })
+
+  // What the rename RETIRES has to be visible in the stored bag, because that
+  // is what every other reactor diffs — `references.renameBacklinks` reads the
+  // bag, so a claim released from the index alone takes its inbound links with
+  // it and nothing rewrites them. Keeping it costs a type that answers to two
+  // names; releasing it costs the links.
+  it('keeps a claim the stored bag cannot show when renaming', async () => {
+    env = await setup({alias: false})
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: ['Book', 7],
+    })
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
   })
 
   it('leaves an ordinary block alone when its content changes', async () => {

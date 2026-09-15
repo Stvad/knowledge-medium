@@ -128,9 +128,15 @@ const claimTypeName = async (
     ...stored.filter(alias => claimed.includes(alias)),
     ...claimed.filter(alias => !stored.includes(alias)),
   ]
-  const next = [...ordered.filter(alias => alias !== retiring && alias !== name), name]
+  // In PLACE when a name is being retired: the first entry is what a block is
+  // displayed as (the sidebar reads `aliases[0]`), so a rename must not promote
+  // some other alias by appending. Same replacement `alias.sync`'s rule 1 would
+  // have made — this write just gets there first.
+  const renamed = retiring !== undefined && ordered.includes(retiring)
+    ? ordered.map(alias => (alias === retiring ? name : alias))
+    : [...ordered, name]
   // `setProperty` elides a write that changes nothing, so no guard here.
-  await ctx.tx.setProperty(id, aliasesProp, next, derived ? {skipMetadata: true} : {})
+  await ctx.tx.setProperty(id, aliasesProp, [...new Set(renamed)], derived ? {skipMetadata: true} : {})
 }
 
 const completeNewType = async (
@@ -200,24 +206,25 @@ const followRenamedContent = async (
   // guard is `=== ''`, so `"   "` would otherwise be claimed as the name.
   const name = after.content.trim() || currentLabel
   if (name === '') return
-  if (!isWritableTypeName(name)) {
-    // Refuse only a REGRESSION — a name that resolves today becoming one
-    // nothing can link to. A type whose name was ALREADY unwritable is legacy
-    // or sync-applied, and the rewrite that reaches us is usually not even
-    // about it: `references.renameBacklinks` retitles a type whose name embeds
-    // the wikilink being renamed, inside that rename's own tx. Throwing there
-    // rolls an unrelated rename back for good, on behalf of a row that was
-    // broken before anyone touched it.
-    if (!isWritableTypeName(readLabel(before) || before.content.trim())) return
+  // Refuse only a REGRESSION — a name that resolves today becoming one nothing
+  // can link to. A type whose name was ALREADY unwritable is legacy or
+  // sync-applied, and the rewrite that reaches us is usually not even about it:
+  // `references.renameBacklinks` retitles a type whose name embeds the wikilink
+  // being renamed, inside that rename's own tx. Throwing there rolls an
+  // unrelated rename back for good, on behalf of a row that was broken before
+  // anyone touched it. The reconciliation below still runs: keeping the three
+  // spellings in agreement cannot make an unlinkable name worse.
+  if (!isWritableTypeName(name) && isWritableTypeName(readLabel(before) || before.content.trim())) {
     assertWritableTypeName(name)
   }
 
-  // Only a name this row actually claims is being retired, so only that one may
-  // be offered up for the merge — `alias.sync` reports the same empty list when
-  // the old content was never an alias anchor (its A3 drift case).
-  const retiring = (await ctx.tx.aliasesOf(row.id)).includes(before.content)
-    ? before.content
-    : undefined
+  // Retire what the stored BAG shows, not what the index knows. Every other
+  // reactor to a rename diffs the bag — `references.renameBacklinks` reads
+  // `getAliases(row.before)` — so releasing a claim only the index can see
+  // strands the inbound `[[old name]]` links nothing will rewrite. It doubles
+  // as what the merge offer may drop, and matches the empty list `alias.sync`
+  // reports when the old content was never an alias anchor (its A3 case).
+  const retiring = getAliases(before).includes(before.content) ? before.content : undefined
 
   // The whole claim moves HERE — old name retired, new one taken — rather than
   // being left to `aliasSyncProcessor`: that plugin is togglable, and a type

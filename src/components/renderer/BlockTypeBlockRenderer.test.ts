@@ -95,9 +95,11 @@ describe('writeBlockTypeLabel', () => {
 
   it('does not overwrite an existing alias when the label is renamed', async () => {
     // A `createTypeBlock`-minted type already claims its label, and the rename
-    // retires exactly that one name: `Pen name` is a claim the user added and
-    // nothing here may drop it. `writeBlockTypeLabel`'s own seeding branch
-    // would re-seed the bag to `['Writer']`, which is what this catches.
+    // replaces exactly that one name IN PLACE: `Pen name` is a claim the user
+    // added, nothing here may drop it, and it must not be promoted to first
+    // either — `aliases[0]` is what the sidebar displays this block as.
+    // `writeBlockTypeLabel`'s own seeding branch would re-seed the bag to
+    // `['Writer']`, which is what this catches.
     const repo = await setupTypeBlock({
       label: 'Author', content: 'Author', aliases: ['Author', 'Pen name'],
     })
@@ -105,7 +107,7 @@ describe('writeBlockTypeLabel', () => {
     await writeBlockTypeLabel(block, 'Author', 'Author', 'Writer')
 
     expect(block.peekProperty(blockTypeLabelProp)).toBe('Writer')
-    expect(block.peekProperty(aliasesProp)).toEqual(['Pen name', 'Writer'])
+    expect(block.peekProperty(aliasesProp)).toEqual(['Writer', 'Pen name'])
   })
 
   // The editor captured `Author` when it rendered; a rename — remote, or from
