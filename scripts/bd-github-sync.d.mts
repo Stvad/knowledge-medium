@@ -79,6 +79,8 @@ export interface IssueInfo {
 }
 export declare const pullWouldWrite: (bead: BeadRow, issue: IssueInfo) => boolean
 export declare const pushWouldChange: (bead: BeadRow, issue: IssueInfo) => boolean
+export declare const VERIFIED_BD_VERSIONS: string[]
+export declare const bdVersion: (out: string | null | undefined) => string | null
 export declare const planLossyReapplies: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,

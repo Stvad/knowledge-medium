@@ -30,6 +30,7 @@ import {
   planCommentMirror,
   planClosePushes,
   planCloseReconciliation,
+  bdVersion,
   planLocalWins,
   planLossyReapplies,
   pullWouldWrite,
@@ -366,6 +367,14 @@ describe('deriveLabelPriority', () => {
   it('returns null when no priority label exists or it is out of range', () => {
     expect(deriveLabelPriority(['bug', 'ui'])).toBeNull()
     expect(deriveLabelPriority(['P5', 'priority::9', 'priority::urgent'])).toBeNull()
+  })
+})
+
+describe('deriveLabelPriority prototype safety', () => {
+  it('does not take an Object.prototype member for a priority word', () => {
+    for (const poison of ['constructor', 'toString', 'valueOf', 'hasOwnProperty'])
+      expect(deriveLabelPriority([`priority::${poison}`])).toBeNull()
+    expect(deriveLabelPriority(['priority::high'])).toBe(1)
   })
 })
 
@@ -736,9 +745,37 @@ describe('pullWouldWrite', () => {
     expect(pullWouldWrite({ ...local, issue_type: 'chore' }, { ...remote, labels: ['priority::high', 'type::chore', 'enhancement'] })).toBe(true)
   })
 
+  // A label is whatever a human typed. Read through a plain object, one named
+  // `constructor` or `__proto__` answers with an inherited member instead of
+  // undefined — so it would read as a real type or priority, turn the field
+  // ambiguous, and defuse a bead whose GitHub-side edit the pull should have
+  // imported.
+  it('does not read an Object.prototype member as a label mapping', () => {
+    for (const poison of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty']) {
+      // Carried on BOTH sides, so the label sets agree and the only question
+      // left is whether the name reads as a type.
+      const carried = { ...local, labels: [...(local.labels ?? []), poison] }
+      expect(pullWouldWrite(carried, { ...remote, labels: [...remote.labels, poison] })).toBe(false)
+      // Scoped spellings are dropped from the label comparison outright, so
+      // these ask the mapping question on their own.
+      expect(pullWouldWrite(local, { ...remote, labels: [...remote.labels, `type::${poison}`] })).toBe(false)
+      expect(pullWouldWrite(local, { ...remote, labels: [...remote.labels, `priority::${poison}`] })).toBe(false)
+    }
+  })
+
   it('compares labels as bd does: scoped ones dropped, trimmed, deduplicated, order-free', () => {
     expect(pullWouldWrite({ ...local, labels: [' ui ', 'ui', ''] }, remote)).toBe(false)
     expect(pullWouldWrite({ ...local, labels: ['b', 'a'] }, { ...remote, labels: ['type::task', 'priority::high', 'a', 'b'] })).toBe(false)
+  })
+})
+
+describe('bdVersion', () => {
+  it('reads the version out of what bd prints, and refuses to invent one', () => {
+    expect(bdVersion('bd version 1.2.2 (Homebrew)')).toBe('1.2.2')
+    expect(bdVersion('bd version 1.3.0')).toBe('1.3.0')
+    expect(bdVersion('bd-shim 0.0.0')).toBeNull()
+    expect(bdVersion('')).toBeNull()
+    expect(bdVersion(null)).toBeNull()
   })
 })
 
@@ -1145,6 +1182,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failTouchId?: string
     /** Extra environment for the script (the mirror's post cap override). */
     env?: Record<string, string>
+    /** What `bd --version` prints (default: a verified version). */
+    bdVersionOutput?: string
     /** Rows `bd export` serves, one set per call with the last repeating (default: the last listing), each joined with its `comments` fixture. */
     exportRows?: object[] | object[][]
   }) => {
@@ -1184,7 +1223,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         '#!/bin/sh',
         `echo "bd $@" >> "${shimLog}"`,
         'case "$1" in',
-        '  --version) echo "bd-shim 0.0.0";;',
+        `  --version) echo "${opts.bdVersionOutput ?? 'bd version 1.2.2 (shim)'}";;`,
         '  list)',
         `    n=$(cat "${repo}/list-count" 2>/dev/null || echo 0)`,
         `    n=$((n+1)); echo $n > "${repo}/list-count"`,
@@ -1287,6 +1326,26 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(i).toBeGreaterThan(-1)
     return log.slice(i)
   }
+
+  // Every guard here was measured against one bd; an upgrade moves several of
+  // them at once and reports nothing. Refusing is the loud failure that a
+  // silent assignee/close-date loss is not.
+  it('refuses to sync on a bd version the guards were not verified against', () => {
+    const row = syncRow({ id: 'km-v', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], lists: [[row]], bdVersionOutput: 'bd version 1.3.0' }
+    const { run, shimCalls } = makeSyncRepo(repo)
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('verified against bd 1.2.2')
+    expect(r.stderr).toContain('1.3.0')
+    // Nothing was read or written past the probe.
+    expect(shimCalls()).not.toContain('--pull-only')
+    expect(shimCalls()).not.toContain('--push-only')
+
+    const overridden = makeSyncRepo({ ...repo, env: { KM_BD_VERSION_OK: '1' } })
+    expect(overridden.run().status).toBe(0)
+    expect(overridden.shimCalls()).toContain('--pull-only')
+  })
 
   it('pushes local state out BEFORE the pull, and stays quiet with no suspects', () => {
     const row = syncRow({ id: 'km-t1', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
@@ -1658,7 +1717,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   // The push writes the bead's own title over the newer GitHub one. That is
   // the deliberate trade (see planLossyReapplies) — but it must be legible.
-  it('says which GitHub-side edit a later push overwrites', () => {
+  it('says which fields the push sends over a different GitHub value', () => {
     const row = syncRow({ id: 'km-o', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
     const { run } = makeSyncRepo({
       issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED'), title: 'edited on GitHub' }],
@@ -1668,7 +1727,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain("a later push overwrites GitHub's newer title — re-apply by hand if it was wanted")
+    expect(r.stdout).toContain("the push sends the local title over a different value on GitHub — compare them by hand")
   })
 
   // A relabelled issue is the taxonomy edit reaching beads. Defusing it would

@@ -664,11 +664,21 @@ export const resolveBodyPath = (p, cwd, home) =>
  * upstream's PriorityMapping vocabulary) wins over the hand label (`P1`).
  * Only consulted for beads that did not exist before this run — see header.
  */
-const PRIORITY_WORDS = { critical: 0, high: 1, medium: 2, low: 3, none: 4 }
+// A Map, not an object: a label may be named anything a human can type, and a
+// plain object answers `constructor`, `__proto__` or `toString` with an
+// inherited member rather than undefined — so `priority::constructor` would
+// read as a real priority, and a bare `constructor` as a real type.
+const PRIORITY_WORDS = new Map([
+  ['critical', 0],
+  ['high', 1],
+  ['medium', 2],
+  ['low', 3],
+  ['none', 4],
+])
 export const deriveLabelPriority = labels => {
   for (const name of labels) {
     const m = name.match(/^priority::(\w+)$/i)
-    if (m && m[1].toLowerCase() in PRIORITY_WORDS) return PRIORITY_WORDS[m[1].toLowerCase()]
+    if (m && PRIORITY_WORDS.has(m[1].toLowerCase())) return PRIORITY_WORDS.get(m[1].toLowerCase())
   }
   for (const name of labels) {
     const m = name.match(/^[pP]([0-4])$/)
@@ -774,18 +784,19 @@ export const planLocalWins = (beads, issueByNumber) =>
 // costs one needless touch and push, and missing one leaves today's behaviour.
 // bd splits a label on the FIRST `::`, compares the prefix case-sensitively
 // and the value case-insensitively.
-const TYPE_LABELS = {
-  bug: 'bug',
-  feature: 'feature',
-  enhancement: 'feature',
-  task: 'task',
-  epic: 'epic',
-  chore: 'chore',
-  decision: 'decision',
-  spike: 'spike',
-  story: 'story',
-  milestone: 'milestone',
-}
+// A Map for the same reason as PRIORITY_WORDS above.
+const TYPE_LABELS = new Map([
+  ['bug', 'bug'],
+  ['feature', 'feature'],
+  ['enhancement', 'feature'],
+  ['task', 'task'],
+  ['epic', 'epic'],
+  ['chore', 'chore'],
+  ['decision', 'decision'],
+  ['spike', 'spike'],
+  ['story', 'story'],
+  ['milestone', 'milestone'],
+])
 const SCOPED_PREFIXES = ['priority', 'status', 'type']
 const splitLabel = name => {
   const i = name.indexOf('::')
@@ -806,8 +817,8 @@ const mappedValues = (labels, map) => {
   }
   return values
 }
-const pullTypes = labels => mappedValues(labels, (prefix, value) => (prefix === 'type' || prefix === '' ? TYPE_LABELS[value] : undefined))
-const pullPriorities = labels => mappedValues(labels, (prefix, value) => (prefix === 'priority' ? PRIORITY_WORDS[value] : undefined))
+const pullTypes = labels => mappedValues(labels, (prefix, value) => (prefix === 'type' || prefix === '' ? TYPE_LABELS.get(value) : undefined))
+const pullPriorities = labels => mappedValues(labels, (prefix, value) => (prefix === 'priority' ? PRIORITY_WORDS.get(value) : undefined))
 const LABEL_STATUSES = ['in_progress', 'blocked', 'deferred']
 const pullStatuses = (labels, state) =>
   state === 'CLOSED'
@@ -898,12 +909,13 @@ export const pullWouldWrite = (bead, issue) =>
  * `overwrites` names the fields GitHub carries faithfully that ALSO diverge
  * here — the defuse's push writes the local value over them. Declined
  * alternative: carry those fields onto the bead instead, so nothing is lost
- * either way. It cannot be done soundly. Nothing here says which SIDE is
- * newer per field: the issue timestamp moves for a comment as readily as for
- * an edit, so a bead edited locally and then commented on would have its own
- * newer title overwritten by GitHub's older one — #647's loss, pointed the
- * other way. Beads is the source of truth, so the local value wins and the
- * report names what was overwritten.
+ * either way. It cannot be done soundly, and neither can saying which side is
+ * RIGHT: nothing here knows which was edited last per field — the issue
+ * timestamp moves for a comment as readily as for an edit, and there is no
+ * per-field history on either side. So the report says the two differ and
+ * leaves the judgement to a human; calling GitHub's value the newer one would
+ * invite overwriting a local edit that was in fact the later one. Beads is the
+ * source of truth, so the local value is what ships.
  *
  * There is deliberately NO timestamp test. The pull writes a bead exactly when
  * ONE of the two sides moved since last_sync (see the header on hydration),
@@ -1272,6 +1284,17 @@ const exportBeads = env =>
 const TOUCH_KEY = 'bd_github_sync.touched'
 const touchBead = (id, env) => tryRun('bd', ['update', id, '--set-metadata', `${TOUCH_KEY}=${new Date().toISOString()}`], { env }) !== null
 
+// Every guard in this file is calibrated to ONE bd version's MEASURED
+// behaviour: the pull's re-apply and hydration rules, the push's timestamp
+// rule, the close that only gh can carry. An upgrade moves them together and
+// silently — 1.3.0 skips the content-identical PATCH guard 5 leans on, while
+// also narrowing the hydration that made that PATCH necessary, and which way
+// the pair lands has to be measured rather than reasoned. A wrong guess there
+// loses an assignee and a close date, neither of which reports itself. So an
+// unverified bd REFUSES to sync rather than syncing on stale reasoning.
+export const VERIFIED_BD_VERSIONS = ['1.2.2']
+export const bdVersion = out => out?.match(/\bversion\s+(\d+\.\d+\.\d+)/i)?.[1] ?? null
+
 const listAllBeads = () =>
   JSON.parse(run('bd', ['list', '--status', 'open,in_progress,blocked,deferred,closed', '--limit', '0', '--json']))
 
@@ -1522,6 +1545,14 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
   }
   const { env } = pre
 
+  const version = bdVersion(tryRun('bd', ['--version'], { env }))
+  if (!process.env.KM_BD_VERSION_OK && !VERIFIED_BD_VERSIONS.includes(version))
+    throw new Error(
+      `refusing to sync: these guards were verified against bd ${VERIFIED_BD_VERSIONS.join(', ')}, and bd reports ` +
+        `${version ?? 'a version this could not read'}. Re-verify them against the new engine before syncing (the bd ` +
+        `upgrade issue carries the checklist), then add the version here. KM_BD_VERSION_OK=1 proceeds anyway.`,
+    )
+
   const result = withLock(pre.root, () => {
     const { issueByNumber, maxKnownIssueNumber } = fetchIssues()
     const preBeads = listAllBeads()
@@ -1588,7 +1619,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       defused.push(id)
       report.push(
         `${dryRun ? '[dry-run] would defuse' : 'defused'} ${id} (#${number}): the pull would lose ${losses.join(', ')} (#955)` +
-          (overwrites.length ? `; a later push overwrites GitHub's newer ${overwrites.join(', ')} — re-apply by hand if it was wanted` : ''),
+          (overwrites.length ? `; the push sends the local ${overwrites.join(', ')} over a different value on GitHub — compare them by hand` : ''),
       )
     }
 
