@@ -1,2 +1,0 @@
-import{listMyPendingInvitations as e}from"../data/workspaces.js";import{useCallback as t,useEffect as n,useState as r}from"react";var i=()=>{let[i,a]=r([]),[o,s]=r(!0),[c,l]=r(null),u=t(async()=>{l(null);try{a(await e())}catch(e){l(e instanceof Error?e.message:`Failed to load invitations`)}finally{s(!1)}},[]);return n(()=>{u()},[u]),{invitations:i,isLoading:o,error:c,refresh:u}};export{i as usePendingInvitations};
-//# sourceMappingURL=usePendingInvitations.js.map

@@ -1,2 +1,0 @@
-import{TYPES_PAGE_TYPE as e}from"./blockTypes.js";import{getOrCreateKernelPage as t,kernelPageBlockId as n}from"./kernelPage.js";var r=`fd2c1ba0-7c4e-49f7-8a6b-4d56b3e3a5c7`,i=`Types`,a=e=>n(e,r),o=(n,a)=>t(n,a,{namespace:r,alias:i,markerType:e});export{o as getOrCreateTypesPage,a as typesPageBlockId};
-//# sourceMappingURL=typesPage.js.map

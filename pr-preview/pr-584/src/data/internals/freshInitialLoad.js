@@ -1,2 +1,0 @@
-var e=3,t=e=>100*2**e,n=(e,t)=>{let n=setTimeout(e,t);return()=>clearTimeout(n)},r=(r,i,a,o={})=>{let s=o.retries??e,c=o.schedule??n,l=!1,u,d=e=>{r().then(e=>{l||i(e)},n=>{if(!l){if(e<s){u=c(()=>d(e+1),t(e));return}a(n)}})};return d(0),()=>{l=!0,u?.()}};export{r as runFreshInitialLoad};
-//# sourceMappingURL=freshInitialLoad.js.map

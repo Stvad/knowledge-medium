@@ -1,2 +1,0 @@
-import{definePropertyEditorOverride as e}from"../../data/api/propertySchema.js";import"../../data/api/index.js";import{locationProp as t}from"./properties.js";import{LocationPropertyEditor as n}from"./LocationPropertyEditor.js";var r=e(t,{label:`Location`,Editor:n});export{r as locationPropertyEditorOverride};
-//# sourceMappingURL=propertyEditorOverrides.js.map

@@ -1,2 +1,0 @@
-import e from"./VideoTimeStamp.js";import{remarkTimestamps as t}from"./remark-timestamps.js";import{jsx as n}from"react/jsx-runtime";var r=({blockContext:r})=>{let i=r.videoPlayerBlockId;if(typeof i!=`string`)return null;let a=typeof r.renderScopeId==`string`?r.renderScopeId:void 0;return{remarkPlugins:[t],components:{"time-stamp":({node:t})=>{let r=t?.properties?.hms;return typeof r==`string`?n(e,{hms:r,videoBlockId:i,renderScopeId:a}):null}}}};export{r as videoPlayerMarkdownExtension};
-//# sourceMappingURL=markdown.js.map
