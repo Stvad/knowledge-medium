@@ -497,20 +497,106 @@ describe('block-type typeify processor', () => {
     expect(row!.properties[aliasesProp.name]).toEqual(['Custom'])
   })
 
-  it('does not grow the alias set on a later label-only edit (fires only on the type-add)', async () => {
+  it('does not grow the alias set on a later label-only edit', async () => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
-    // Edit the label WITHOUT touching content — this is not a type-add,
-    // so the `addedTypes` transition-guard must keep the processor from
-    // firing again. If it fired (guard regressed to fire-on-present),
-    // ensure-present would append 'Novel' → alias grows. aliasSync stays
-    // out of it (content unchanged), so this isolates the guard.
+    // The completion's ensure-present claim belongs to the type-add alone.
+    // Were it to run again here it would append 'Novel' → alias grows, and
+    // the block would answer to two names. aliasSync stays out of it
+    // (content unchanged), so this isolates the completion.
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypeLabelProp, 'Novel')
     }, {scope: ChangeScope.BlockDefault})
 
     const row = await env.repo.load(id)
     expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+  })
+
+  // A content rewrite on a block that is ALREADY a type — the agent bridge,
+  // an import — is a RENAME: aliasSync already moves the alias to the new
+  // content, so the label has to move with it or the type stays registered
+  // under a name nothing resolves to.
+  it('follows a content rewrite on an existing type with its label and alias', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Novel')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Novel'])
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+    expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
+  })
+
+  // Emptying the body is not a rename: a blank label DROPS the type from the
+  // registry while aliasSync's blank-content guard keeps the claim, so the
+  // name would survive with nothing left to publish it.
+  it('keeps a type named when its content is cleared', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: '   '}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
+  // Same rule as the tag path, one tx later — a name that can't be written
+  // as `[[name]]` leaves the type unlinkable, so the rename is refused whole
+  // instead of propagated into a label nothing can address.
+  it.each([
+    ['`]]`-lossy', 'Book]]Club', LossyLabelError],
+    ['grammar-shaped', `((${'1'.repeat(8)}-1111-4111-8111-111111111111))`, GrammarShapedLabelError],
+  ])('refuses a content rewrite renaming a type to a name that is %s', async (_l, content, errorType) => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {content}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(errorType)
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('Book')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+  })
+
+  // A type tagged blank claims no alias, and aliasSync only reconciles
+  // blocks that already carry one — so nothing else would claim the name
+  // the registry is about to publish.
+  it('claims the name when content arrives on a type tagged blank', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, '   ')
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Widget'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Widget')
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Widget'}).load())?.id).toBe(id)
+  })
+
+  it('leaves an ordinary block alone when its content changes', async () => {
+    env = await setup()
+    const id = await createBlock(env, 'Just a block')
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Still just a block'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBeUndefined()
   })
 
   it('leaves a blank block unnamed (no label/alias) but still a page', async () => {
