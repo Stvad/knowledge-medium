@@ -29,9 +29,9 @@
  * (`writeBlockTypeLabel`).
  *
  * **Rename**, when a block that is ALREADY a type has its `content`
- * rewritten (the agent bridge, an import): the label follows the new
- * name. Completion is a one-shot and `aliasSyncProcessor` moves the alias
- * by matching the old content, so nothing else would (#926).
+ * rewritten (the agent bridge, an import): the label and the claim on the
+ * name follow it. Completion is a one-shot, so without this the type stayed
+ * registered under a name nothing resolved to (#926).
  *
  * (Sync-applied writes do NOT run this — they bypass `repo.tx` and the
  * same-tx pass entirely; the invariant still holds for a synced type
@@ -70,6 +70,8 @@ import { assertAliasClaimable } from '@/data/aliasClaim'
 import {
   assertNotGrammarShapedLabel,
   assertRoundTrippableReferenceLabel,
+  isGrammarShapedLabel,
+  isRoundTrippableReferenceLabel,
 } from '@/data/referenceBlock'
 import { seededDefinitionKey } from '@/data/definitionSeeds'
 import { isTypeSeedKey } from '@/data/typeSeeds'
@@ -95,6 +97,10 @@ const assertWritableTypeName = (name: string): void => {
   assertNotGrammarShapedLabel(name, 'Block type label')
   assertRoundTrippableReferenceLabel(name, 'Block type label')
 }
+
+/** Non-throwing form, for the caller that has to ask before it decides. */
+const isWritableTypeName = (name: string): boolean =>
+  !isGrammarShapedLabel(name) && isRoundTrippableReferenceLabel(name)
 
 /** Claim `name` for this type, retiring `retiring` in the SAME write.
  *
@@ -184,7 +190,8 @@ const followRenamedContent = async (
   after: BlockData,
   ctx: SameTxCtx,
 ): Promise<void> => {
-  if (row.before === null || row.before.content === after.content) return
+  const before = row.before
+  if (before === null || before.content === after.content) return
 
   const currentLabel = readLabel(after)
   // An emptied body names nothing, so the type keeps its name and the body is
@@ -193,21 +200,31 @@ const followRenamedContent = async (
   // guard is `=== ''`, so `"   "` would otherwise be claimed as the name.
   const name = after.content.trim() || currentLabel
   if (name === '') return
-  assertWritableTypeName(name)
+  if (!isWritableTypeName(name)) {
+    // Refuse only a REGRESSION — a name that resolves today becoming one
+    // nothing can link to. A type whose name was ALREADY unwritable is legacy
+    // or sync-applied, and the rewrite that reaches us is usually not even
+    // about it: `references.renameBacklinks` retitles a type whose name embeds
+    // the wikilink being renamed, inside that rename's own tx. Throwing there
+    // rolls an unrelated rename back for good, on behalf of a row that was
+    // broken before anyone touched it.
+    if (!isWritableTypeName(readLabel(before) || before.content.trim())) return
+    assertWritableTypeName(name)
+  }
 
-  // Refuse before writing, per the usual order — and claim the new name HERE, not only through `aliasSyncProcessor`: the alias
-  // plugin is togglable, and a type the registry publishes under a name
-  // nothing resolves to is the bug this path exists to close. Refusing a name
-  // another block holds is part of that — committing the rename and skipping
-  // the claim would publish exactly such a type. Retiring the OLD claim stays
-  // the plugin's: its rule 1 replaces that entry and dedupes this one away in
-  // the same pass.
-  // Only a name this row actually claims is being retired, so only that one
-  // may be offered up for the merge — `alias.sync` reports the same empty list
-  // when the old content was never an alias anchor (its A3 drift case).
-  const retiring = (await ctx.tx.aliasesOf(row.id)).includes(row.before.content)
-    ? row.before.content
+  // Only a name this row actually claims is being retired, so only that one may
+  // be offered up for the merge — `alias.sync` reports the same empty list when
+  // the old content was never an alias anchor (its A3 drift case).
+  const retiring = (await ctx.tx.aliasesOf(row.id)).includes(before.content)
+    ? before.content
     : undefined
+
+  // The whole claim moves HERE — old name retired, new one taken — rather than
+  // being left to `aliasSyncProcessor`: that plugin is togglable, and a type
+  // the registry publishes under a name nothing resolves to is the bug this
+  // path exists to close. A name another block holds is refused for the same
+  // reason, and refused BEFORE the writes below. The plugin then finds the bag
+  // already reconciled and no-ops; it is not a step this depends on.
   await assertAliasClaimable(ctx.tx, {
     alias: name,
     blockId: row.id,
@@ -217,10 +234,9 @@ const followRenamedContent = async (
   })
   await claimTypeName(row.id, after, name, ctx, {retiring, derived: true})
 
-  // `skipMetadata`, like every write here: this reconciles a content change
-  // somebody else made, and a derived rewrite (`references.renameBacklinks`
-  // retitling a type whose name embeds a renamed wikilink) would otherwise
-  // float the type into recents with nobody having touched it.
+  // `skipMetadata` on every write here: this reconciles a content change
+  // somebody else made, and one that was itself derived would otherwise float
+  // the type into recents with nobody having touched it.
   if (currentLabel !== name) {
     await ctx.tx.setProperty(row.id, blockTypeLabelProp, name, {skipMetadata: true})
   }

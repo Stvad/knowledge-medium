@@ -815,6 +815,31 @@ describe('block-type typeify processor', () => {
     expect(await stampOf()).toBe(before)
   })
 
+  // A legacy or sync-applied type can be titled `See [[Foo]]`, which the tag
+  // path would refuse today. Renaming Foo rewrites that title in the RENAME's
+  // own tx (`references.renameBacklinks`), and this processor sees it on the
+  // rerun — refusing there would roll back an unrelated rename for good.
+  it('steps aside for a rewrite of an already-unwritable type name', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'See [[Foo]]',
+      [aliasesProp.name]: ['Book'],
+    })
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {content: 'See [[Bar]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )).resolves.toBeUndefined()
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('See [[Bar]]')
+    // Left as it was: the name was already unlinkable, and this path does not
+    // get to make an unrelated rename pay for repairing it.
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('See [[Foo]]')
+  })
+
   it('leaves an ordinary block alone when its content changes', async () => {
     env = await setup()
     const id = await createBlock(env, 'Just a block')
