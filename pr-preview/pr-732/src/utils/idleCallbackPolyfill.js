@@ -1,0 +1,1 @@
+import{t as e}from"../../chunks/app-oAnPuqix.js";export{e as installIdleCallbackPolyfill};

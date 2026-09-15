@@ -1,2 +1,1 @@
-var e=async(e,t)=>{let n=typeof navigator<`u`?navigator.locks:void 0;return n?.request?n.request(e,t):t()},t=async(e,t)=>{let n=typeof navigator<`u`?navigator.locks:void 0;return n?.request?n.request(e,{ifAvailable:!0},async e=>e?(await t(),!0):!1):(await t(),!0)};export{t as runSingleOwner,e as withLock};
-//# sourceMappingURL=laneLock.js.map
+import{Jf as e,qf as t}from"../../../chunks/app-oAnPuqix.js";export{t as runSingleOwner,e as withLock};

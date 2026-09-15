@@ -1,2 +1,1 @@
-var e=e=>e===`children`||e===`cell-off`;export{e as isChildBackedPropertiesWorkspace};
-//# sourceMappingURL=types.js.map
+import{s$ as e}from"../chunks/app-oAnPuqix.js";export{e as isChildBackedPropertiesWorkspace};

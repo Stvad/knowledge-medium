@@ -1,2 +1,1 @@
-var e=(e,t)=>`${e}/${t}`,t=(e,t,n)=>`${e.replace(/\/$/,``)}/storage/v1/object/${t}/${n.split(`/`).map(encodeURIComponent).join(`/`)}`;export{e as attachmentObjectPath,t as authenticatedObjectUrl};
-//# sourceMappingURL=storagePaths.js.map
+import{nm as e,tm as t}from"../../../chunks/app-oAnPuqix.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};

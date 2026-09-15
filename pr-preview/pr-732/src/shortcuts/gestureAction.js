@@ -1,2 +1,1 @@
-var e=null,t=t=>{e=t},n=(t,n,r)=>e?e(t,n,r):!1,r=`gesture-progress-cancel`,i=e=>new CustomEvent(r,{detail:{gesture:e}}),a=null,o=e=>{a=e},s=(e,t)=>a?a(e,t):null;export{r as GESTURE_PROGRESS_CANCEL_EVENT,s as beginGestureProgress,n as dispatchGesture,i as gestureProgressCancelEvent,t as setGestureActionDispatcher,o as setGestureProgressDispatcher};
-//# sourceMappingURL=gestureAction.js.map
+import{$E as e,JE as t,QE as n,XE as r,YE as i,ZE as a}from"../../chunks/app-oAnPuqix.js";export{t as GESTURE_PROGRESS_CANCEL_EVENT,i as beginGestureProgress,r as dispatchGesture,a as gestureProgressCancelEvent,n as setGestureActionDispatcher,e as setGestureProgressDispatcher};

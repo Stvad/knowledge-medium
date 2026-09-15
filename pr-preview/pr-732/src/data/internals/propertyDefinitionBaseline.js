@@ -1,0 +1,1 @@
+import{KH as e,qH as t}from"../../../chunks/app-oAnPuqix.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};

@@ -1,2 +1,1 @@
-var e=`ftm.lastWorkspaceId`,t=t=>{try{window.localStorage.setItem(e,t)}catch{}},n=()=>{try{return window.localStorage.getItem(e)??void 0}catch{return}},r=()=>{try{window.localStorage.removeItem(e)}catch{}};export{r as forgetRememberedWorkspace,n as recallRememberedWorkspace,t as rememberWorkspace};
-//# sourceMappingURL=lastWorkspace.js.map
+import{M_ as e,N_ as t,j_ as n}from"../../chunks/app-oAnPuqix.js";export{n as forgetRememberedWorkspace,e as recallRememberedWorkspace,t as rememberWorkspace};

@@ -1,2 +1,1 @@
-import e from"../../node_modules/.pnpm/uuid@14.0.0/node_modules/uuid/dist/v4.js";var t=`km:client-id`,n,r=()=>{if(n!==void 0)return n;try{let r=globalThis.localStorage?.getItem(t);if(r)return n=r;let i=e();return globalThis.localStorage?.setItem(t,i),n=i}catch{return n??=e()}},i=()=>{n=void 0};export{r as getClientId,i as resetClientIdCache};
-//# sourceMappingURL=clientId.js.map
+import{FZ as e,IZ as t,MZ as n,NZ as r,PZ as i}from"../../chunks/app-oAnPuqix.js";export{n as deviceSurface,r as getClientId,i as getDeviceLabel,e as isClientIdPersistent,t as resetClientIdCache};

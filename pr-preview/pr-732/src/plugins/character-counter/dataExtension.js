@@ -1,2 +1,1 @@
-import{definitionSeedsFacet as e,typeSeedsFacet as t}from"../../data/facets.js";import{charLimitProp as n,charProfileProp as r,charScopeProp as i}from"./properties.js";import{CHAR_COUNTER_TYPE_CONTRIBUTIONS as a}from"./blockType.js";var o=[a.map(e=>t.of(e,{source:`character-counter`})),[n,i,r].map(t=>e.of(t,{source:`character-counter`}))];export{o as characterCounterDataExtension};
-//# sourceMappingURL=dataExtension.js.map
+import{RR as e}from"../../../chunks/app-oAnPuqix.js";export{e as characterCounterDataExtension};

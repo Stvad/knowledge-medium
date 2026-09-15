@@ -1,2 +1,1 @@
-var e=e=>encodeURIComponent(e),t=(t,n)=>[t,...n.map(e)].join(`:`),n=e=>t(`outline`,[e]),r=(e,n)=>t(`panel`,[e,n]),i=(e,n,r,i)=>t(`embed`,[n,r,i,e]),a=(e,n)=>t(`backlink`,[n,e]),o=(e,n,r)=>t(`breadcrumb`,[n,r,e]);export{a as backlinkRenderScopeId,o as breadcrumbRenderScopeId,i as embedRenderScopeId,n as outlineRenderScopeId,r as panelRenderScopeId};
-//# sourceMappingURL=renderScope.js.map
+import{J1 as e,X1 as t,Y1 as n,Z1 as r,q1 as i}from"../../chunks/app-oAnPuqix.js";export{i as backlinkRenderScopeId,e as breadcrumbRenderScopeId,n as embedRenderScopeId,t as outlineRenderScopeId,r as panelRenderScopeId};

@@ -1,2 +1,1 @@
-import{CallbackSet as e}from"../../utils/callbackSet.js";var t=null,n=new e(`srsClipboard`),r=()=>t,i=e=>{t=e,n.notify()},a=()=>i(null),o=e=>n.add(e);export{a as clearSrsClipboard,r as getSrsClipboard,i as setSrsClipboard,o as subscribeSrsClipboard};
-//# sourceMappingURL=srsClipboard.js.map
+import{Io as e,Lo as t,Ro as n,zo as r}from"../../../chunks/app-oAnPuqix.js";export{e as clearSrsClipboard,t as getSrsClipboard,n as setSrsClipboard,r as subscribeSrsClipboard};

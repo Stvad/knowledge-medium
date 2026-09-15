@@ -1,2 +1,1 @@
-var e=e=>e;export{e as defineQuery};
-//# sourceMappingURL=query.js.map
+import{i2 as e}from"../../../chunks/app-oAnPuqix.js";export{e as defineQuery};

@@ -1,2 +1,1 @@
-var e=()=>typeof document>`u`?null:document.querySelector(`[data-layout-session-active]`)??document.querySelector(`[data-layout-session-id]`);export{e as activeLayoutSessionElement};
-//# sourceMappingURL=layoutSessionDom.js.map
+import{wC as e}from"../../chunks/app-oAnPuqix.js";export{e as activeLayoutSessionElement};

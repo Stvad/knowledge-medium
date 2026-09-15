@@ -1,0 +1,1 @@
+import{Mv as e}from"../../../chunks/app-oAnPuqix.js";export{e as openRecentsPage};

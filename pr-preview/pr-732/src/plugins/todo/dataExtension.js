@@ -1,2 +1,1 @@
-import{definitionSeedsFacet as e,typeSeedsFacet as t}from"../../data/facets.js";import{roamTodoStateProp as n,statusProp as r,todoType as i}from"./schema.js";var a=[e.of(r,{source:`todo`}),e.of(n,{source:`todo`}),t.of(i,{source:`todo`})];export{a as todoDataExtension};
-//# sourceMappingURL=dataExtension.js.map
+import{uF as e}from"../../../chunks/app-oAnPuqix.js";export{e as todoDataExtension};

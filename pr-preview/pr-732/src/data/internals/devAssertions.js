@@ -1,2 +1,1 @@
-var e=!1,t=()=>e,n=t=>{e=t};export{t as devAssertionsEnabled,n as setDevAssertionsEnabled};
-//# sourceMappingURL=devAssertions.js.map
+import{Gq as e,Kq as t}from"../../../chunks/app-oAnPuqix.js";export{e as devAssertionsEnabled,t as setDevAssertionsEnabled};

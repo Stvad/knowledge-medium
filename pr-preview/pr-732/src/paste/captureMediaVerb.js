@@ -1,2 +1,1 @@
-import{defineVerbFacet as e}from"../facets/verbFacet.js";var t={references:[]},n=e({id:`paste.capture-media`,defaultImpl:()=>t,onError:`rethrow`});export{n as captureMediaVerb};
-//# sourceMappingURL=captureMediaVerb.js.map
+import{hO as e}from"../../chunks/app-oAnPuqix.js";export{e as captureMediaVerb};

@@ -1,2 +1,1 @@
-var e=async(e,t)=>(await e.db.getOptional(`SELECT deleted FROM blocks WHERE id = ?`,[t]))?.deleted===1,t=async(e,t)=>{if(t.length===0)return!1;let n=t.map(()=>`?`).join(`, `);return(await e.db.getAll(`SELECT deleted FROM blocks WHERE id IN (${n})`,[...t])).some(e=>e.deleted===1)};export{t as anyBlockTombstoned,e as isBlockTombstoned};
-//# sourceMappingURL=blockLiveness.js.map
+import{Oj as e,kj as t}from"../../chunks/app-oAnPuqix.js";export{e as anyBlockTombstoned,t as isBlockTombstoned};

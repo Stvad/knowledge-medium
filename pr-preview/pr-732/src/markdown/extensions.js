@@ -1,2 +1,1 @@
-import{defineFacet as e,isFunction as t}from"../facets/facet.js";var n=(e,t)=>{let n=[],r={};for(let i of e){let e=i(t);e&&(e.remarkPlugins&&n.push(...e.remarkPlugins),e.components&&Object.assign(r,e.components))}return{remarkPlugins:n,components:r}},r=e({id:`core.markdown-extensions`,combine:e=>t=>n(e,t),empty:()=>()=>({remarkPlugins:[],components:{}}),validate:t});export{r as markdownExtensionsFacet,n as resolveMarkdownRenderConfig};
-//# sourceMappingURL=extensions.js.map
+import{Bk as e,Vk as t}from"../../chunks/app-oAnPuqix.js";export{e as markdownExtensionsFacet,t as resolveMarkdownRenderConfig};

@@ -1,2 +1,1 @@
-import{blockBulletClassFacet as e,blockTextClassFacet as t}from"../../extensions/blockInteraction.js";var n=e=>e.isFocal||e.aliases.length===0?null:`page-name-text`,r=e=>e.aliases.length===0?null:`page-bullet`,i=t.of(n,{source:`alias`}),a=e.of(r,{source:`alias`});export{r as aliasPageBullet,a as aliasPageBulletContribution,n as aliasPageStyling,i as aliasPageStylingContribution};
-//# sourceMappingURL=pageStyling.js.map
+import{$d as e,ef as t,nf as n,tf as r}from"../../../chunks/app-oAnPuqix.js";export{e as aliasPageBullet,t as aliasPageBulletContribution,r as aliasPageStyling,n as aliasPageStylingContribution};
