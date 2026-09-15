@@ -1,0 +1,1 @@
+import{aw as e,iw as t}from"../../../chunks/app-PCcPx3jt.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

@@ -1,0 +1,1 @@
+import{is as e,rs as t}from"../../../chunks/app-PCcPx3jt.js";export{t as appendTagToBlocks,e as appendTagToContent};

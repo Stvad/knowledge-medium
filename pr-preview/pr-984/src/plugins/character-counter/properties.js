@@ -1,0 +1,1 @@
+import{BR as e,RR as t,zR as n}from"../../../chunks/app-PCcPx3jt.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
