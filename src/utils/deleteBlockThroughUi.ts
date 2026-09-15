@@ -29,6 +29,7 @@
 import type { SubtreeRow } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { ConfirmBulkDeleteDialog } from '@/components/ConfirmBulkDeleteDialog.js'
+import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { resolveDeletionRefusal } from '@/extensions/core.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { showInfo } from '@/utils/toast.js'
@@ -173,10 +174,17 @@ export const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Prom
   if (blocks.length === 0) return true
   const totalCount = await countBlocksRemovedBy(blocks)
   if (totalCount < BULK_DELETE_CONFIRM_THRESHOLD) return true
-  const confirmed = await openDialog(ConfirmBulkDeleteDialog, {
-    targetCount: blocks.length,
-    totalCount,
-  })
+  // 'yield-focus', as the command palette does: Radix moves DOM focus into the
+  // dialog, which the editor's blur handler would otherwise read as "editing
+  // ended" and drop the very block being asked about out of edit mode, under
+  // the open modal. Refocusing instead would steal focus back and break the
+  // dialog. Held here rather than at the Backspace caller that reaches this
+  // from an active editor, so a later caller cannot forget it.
+  const confirmed = await withEditModeKeepalive('yield-focus', () =>
+    openDialog(ConfirmBulkDeleteDialog, {
+      targetCount: blocks.length,
+      totalCount,
+    }))
   if (confirmed !== true) return false
   return ensureDeletableThroughUi(blocks)
 }

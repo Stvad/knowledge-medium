@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { resolveEditModeKeepalive } from '@/components/editModeKeepalive'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
@@ -224,6 +225,20 @@ describe('bulk-delete confirmation', () => {
     const deleting = deleteBlockThroughUi(repo.block('root'))
     await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
     answerDialog(null)
+    await deleting
+  })
+
+  it('keeps the editor in edit mode while the dialog holds focus', async () => {
+    // Reached from Backspace on an emptied block, the dialog takes DOM focus off
+    // a live CodeMirror editor, which the blur handler reads as "editing ended".
+    const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
+
+    const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
+    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    // 'yield', not 'refocus': snapping focus back to the editor would take it
+    // off the dialog the user still has to answer.
+    expect(resolveEditModeKeepalive()).toBe('yield')
+    answerDialog(true)
     await deleting
   })
 
