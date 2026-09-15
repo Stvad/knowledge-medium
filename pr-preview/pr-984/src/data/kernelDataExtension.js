@@ -1,1 +1,1 @@
-import{NG as e}from"../../chunks/app-PCcPx3jt.js";export{e as kernelDataExtension};
+import{NG as e}from"../../chunks/app-hUZy_mRj.js";export{e as kernelDataExtension};
