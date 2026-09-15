@@ -98,9 +98,7 @@ describe('bulk-delete confirmation', () => {
   })
 
   it('counts the subtree, not the selection — one collapsed page still asks', async () => {
-    // The case the gesture can least see coming, and the reason the count is
-    // not `blocks.length`: a single target whose delete cascades over a large
-    // subtree.
+    // Why the count is not `blocks.length`.
     await repo.mutate.createChild({parentId: 'root', id: 'page', content: 'page'})
     await seedChildren('page', BULK_DELETE_CONFIRM_THRESHOLD - 1, 'child')
 
@@ -131,10 +129,8 @@ describe('bulk-delete confirmation', () => {
   })
 
   it('asks BEFORE starting the view transition', async () => {
-    // A dialog opened inside `startViewTransition`'s callback renders under the
-    // frozen page snapshot, where it can never be clicked — the gesture would
-    // hang on a promise the user cannot resolve. Ordering is owned by the choke
-    // point precisely so no caller can reintroduce that.
+    // Owned by the choke point so no caller can reintroduce a dialog rendered
+    // under the frozen snapshot, where it can never be clicked.
     const seen: string[] = []
     vi.spyOn(viewTransition, 'withMoveTransition').mockImplementation(async run => {
       seen.push(`transition:${getDialogQueue().length} pending`)
@@ -182,9 +178,8 @@ describe('bulk-delete confirmation', () => {
   })
 
   it('re-resolves the guards after the dialog, not just before it', async () => {
-    // The dialog is human-scale time: a sync landing a daily-note type on a
-    // target while it is open would otherwise be waved through by a guard pass
-    // that finished before the question was even asked.
+    // A sync landing a daily-note type while the dialog is open would otherwise
+    // be waved through by a guard pass that ran before the question.
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
@@ -223,11 +218,8 @@ describe('bulk-delete confirmation', () => {
   })
 
   it('counts authored descendants hanging under a property field row', async () => {
-    // The visible-subtree view prunes AT a recognized field row and takes the
-    // whole branch — including a comment thread someone wrote under a property
-    // value. The delete takes them too, so counting them out could drop the
-    // total under the threshold and skip the question for a delete that
-    // removes a dozen authored blocks.
+    // The visible view prunes the whole branch under a field row, comment
+    // thread included; the delete takes them anyway. See `countBlocksRemovedBy`.
     await repo.tx(async tx => {
       await tx.create({
         id: 'def', workspaceId: WS, parentId: 'root', orderKey: 'b0', content: 'a property',

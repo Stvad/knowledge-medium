@@ -983,9 +983,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           // veto as `delete_block`; emptying a daily note's title and pressing
           // Backspace used to destroy it straight past the guard.
           if (!await ensureDeletableThroughUi([block])) return
-          // Same reason as the guards: an emptied block can still have a large
-          // subtree under it, and a cancelled confirmation that had already
-          // moved the cursor would look like the block vanished.
+          // Before the focus move for the same reason as the guards above: an
+          // emptied block can still hold a large subtree.
           if (!await confirmBulkDeleteThroughUi([block])) return
           const prevVisible = await previousVisibleBlock(block, scopeRootId)
           if (prevVisible) {
@@ -1258,9 +1257,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
     const blocks = selectedBlocks.toReversed()
     if (!await ensureDeletableThroughUi(blocks)) return
-    // Selection order, not the leaf-first `blocks`: the count skips a target
-    // already covered by an earlier target's subtree, which only saves queries
-    // when ancestors come first. Same set either way.
+    // Selection order, not the leaf-first `blocks` — same set, but the count's
+    // dedup only pays when ancestors come first (`countBlocksRemovedBy`).
     if (!await confirmBulkDeleteThroughUi(selectedBlocks)) return
 
     // Copy exactly the set we're about to delete rather than re-reading the

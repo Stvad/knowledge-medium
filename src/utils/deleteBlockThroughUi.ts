@@ -44,12 +44,10 @@ const REFUSAL_TOAST_ID = 'block-deletion-refused'
  *  the whole affected set, so the number means the same thing whether the user
  *  selected 30 blocks or pressed Delete on one collapsed page holding 30.
  *
- *  Sized for a confirmation that stays worth reading: one the user meets often
- *  enough to click through without looking is worse than none, since it trains
- *  the reflex it exists to interrupt. The count includes property field/value
- *  rows, so a property-heavy block reads higher than what is on screen — if
- *  this starts asking about deletes that look small, that inflation is the
- *  first thing to check, not the number here (issue #738). */
+ *  Sized for a confirmation that stays worth reading: one met often enough to
+ *  click through without looking is worse than none. If it starts asking about
+ *  deletes that look small, read `countBlocksRemovedBy` before changing this
+ *  number — what it counts is the likelier cause. */
 export const BULK_DELETE_CONFIRM_THRESHOLD = 20
 
 export interface DeleteThroughUiOptions {
@@ -130,56 +128,34 @@ export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promis
 }
 
 /**
- * User consent for a delete big enough to be worth a second look. Answers true
- * — without asking anything — for the small deletes that make up nearly every
- * gesture.
+ * User consent for a delete big enough to be worth a second look — true,
+ * without asking, for the small deletes that are nearly every gesture. Measured
+ * over what the delete REMOVES (`countBlocksRemovedBy`), not over the blocks
+ * the gesture names.
  *
- * Measured over everything the delete removes, not over the blocks the gesture
- * names: `block.delete()` takes the whole subtree, so one Delete on a collapsed
- * page destroys as much as a large selection does, and it's the case the user
- * can least see coming. That's also why this is not folded into
- * `ensureDeletableThroughUi` — merge runs those guards to veto destroying its
- * source block, but a merge REPARENTS the children rather than deleting them,
- * so counting the subtree there would warn about blocks that survive.
- *
- * Counts what the delete REMOVES — the full subtree, the same walk
- * `deleteSubtreeInTx` makes. The visible view is the tempting one (its number
- * is the one the user can count on screen) and it is wrong here: it prunes at
- * a recognized field row, taking that row's whole branch with it, and an
- * authored comment thread under a property value lives in that branch. Those
- * blocks are deleted either way, so counting them out is the one direction of
- * error that matters — it does not merely understate the number, it can drop
- * the total under the threshold and skip the question entirely.
- *
- * The cost is that machinery rows count too, so a property-heavy block reads
- * higher than what is on screen. In a workspace that has not flipped to
- * properties-as-blocks there are no such rows and the two views agree. If the
- * inflation ever makes this ask too often, the fix is a counting view in the
- * data layer that drops machinery WITHOUT pruning its authored descendants —
- * not a hand-rolled field-row classifier here, which is the restatement §9's
- * named-predicate discipline exists to prevent.
+ * Deliberately not folded into `ensureDeletableThroughUi`: merge runs those
+ * guards to veto destroying its source block, but REPARENTS the children, so
+ * counting the subtree there would warn about blocks that survive.
  *
  * Separate export because a gesture that works between deciding and writing has
  * to ask before that work, not after — see `alreadyConfirmed`.
  *
- * Re-resolves the guards after the dialog closes, so `false` here can mean
- * either "the user declined" or "a guard started refusing while we asked" —
- * both are "don't proceed", which is all any caller does with it. The gap is
- * human-scale (a sync can land a daily-note type mid-dialog) and this function
- * is the one that opens it, so it is the one that closes it. Doing it here
- * rather than in the choke point also keeps the no-dialog path — nearly every
- * delete — at exactly one guard pass.
+ * Re-resolves the guards after the dialog closes, so `false` means either "the
+ * user declined" or "a guard started refusing while we asked" — both being
+ * "don't proceed", which is all any caller does with it. The wait is
+ * human-scale (a sync can land a daily-note type mid-dialog); closing that gap
+ * here rather than in the choke point keeps the no-dialog path at one guard
+ * pass.
  */
 export const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   if (blocks.length === 0) return true
   const totalCount = await countBlocksRemovedBy(blocks)
   if (totalCount < BULK_DELETE_CONFIRM_THRESHOLD) return true
-  // 'yield-focus', as the command palette does: Radix moves DOM focus into the
-  // dialog, which the editor's blur handler would otherwise read as "editing
-  // ended" and drop the very block being asked about out of edit mode, under
-  // the open modal. Refocusing instead would steal focus back and break the
-  // dialog. Held here rather than at the Backspace caller that reaches this
-  // from an active editor, so a later caller cannot forget it.
+  // Radix takes DOM focus, which the editor's blur handler reads as "editing
+  // ended" — dropping the block being asked about out of edit mode under the
+  // open modal. 'yield-focus', not 'refocus': the dialog must keep the focus it
+  // took. Held here, not at the one caller that reaches this from a live
+  // editor, so a later caller cannot forget it.
   const confirmed = await withEditModeKeepalive('yield-focus', () =>
     openDialog(ConfirmBulkDeleteDialog, {
       targetCount: blocks.length,
@@ -189,17 +165,25 @@ export const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Prom
   return ensureDeletableThroughUi(blocks)
 }
 
-/** Live blocks the delete would tombstone. Deduped across the input: a
- *  selection may hold both a block and its descendant — an outline range
- *  spanning an expanded parent and its children is the ordinary way to get
- *  one — and the delete visits each row once.
+/** Live blocks the delete would tombstone — the single owner of what "how many
+ *  blocks" means here; `BULK_DELETE_CONFIRM_THRESHOLD` and
+ *  `confirmBulkDeleteThroughUi` both defer to it.
  *
- *  Skipping a target already covered by an earlier target's subtree is a
- *  saving, not a correctness condition: the count is the same either way, but
- *  selecting a page and its 200 children costs 1 query instead of 201. It pays
- *  off when targets arrive ancestor-first, which is outline order, so callers
- *  pass selection order here and leave the leaf-first ordering to the delete
- *  itself. A leaf-first list just pays the redundant queries. */
+ *  The FULL subtree, matching `deleteSubtreeInTx`'s walk, NOT the visible view.
+ *  The visible view prunes at a recognized field row and takes that row's whole
+ *  branch, including any authored comment thread under a property value — which
+ *  the delete removes regardless. Undercounting is the one direction of error
+ *  that matters: it can drop the total under the threshold and skip the
+ *  question entirely. The price is that machinery rows count too, so a
+ *  property-heavy block reads higher than what is on screen; if that starts
+ *  asking about deletes that look small, the fix is a data-layer count that
+ *  drops machinery without pruning its authored descendants, never a field-row
+ *  classifier restated here (issue #738).
+ *
+ *  Deduping is a saving, not a correctness condition — the count is the same
+ *  either way, but a page selected with its 200 children costs 1 query instead
+ *  of 201. It only pays when targets arrive ancestor-first, so callers pass
+ *  selection order and leave the leaf-first ordering to the delete. */
 const countBlocksRemovedBy = async (blocks: readonly Block[]): Promise<number> => {
   const ids = new Set<string>()
   for (const block of blocks) {
