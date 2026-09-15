@@ -1,1 +1,1 @@
-import{Xk as e}from"../../../chunks/app-B6c38tgL.js";export{e as PropertyRow};
+import{Xk as e}from"../../../chunks/app-ywBbXX5d.js";export{e as PropertyRow};
