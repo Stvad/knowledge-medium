@@ -55,16 +55,19 @@
  *    pull explicitly fetches every bead modified since last_sync whose issue
  *    the incremental query did not return, and those BYPASS its
  *    skip-locally-modified guard (fetchPrelinkedIssues). So the pull writes a
- *    bead exactly when ONE of the two sides moved since last_sync; the touch
- *    moves the bead and the push moves the issue, and moving both is what
- *    makes the defuse safe without knowing last_sync at all.
- *    KNOWN COST: a bead whose divergence can never converge — every assigned
- *    one, since bd never pushes an assignee — is therefore defused on every
- *    run rather than settling, because "the issue is newer than the bead" is
- *    true again the moment this run's own push lands. Quiescence needs a
- *    last_sync of our own to tell our push apart from a foreign touch; that is
- *    a design step, not a patch, and #955's own alternative (pull only the
- *    issues that have no bead) removes the class instead. That is also why (4)'s push now declines a PATCH
+ *    bead exactly when ONE of the two sides moved since last_sync — and the
+ *    defuse moves BOTH, the touch the bead and the push the issue. That is the
+ *    whole safety argument, and it holds without knowing last_sync, without
+ *    knowing which side moved last, and without comparing the two timestamps
+ *    at all. Every attempt to narrow the set by comparing them was wrong in a
+ *    new way and bought nothing: the lossy rows are the same either way,
+ *    because a bead diverging in a field GitHub cannot carry diverges for good.
+ *    KNOWN COST: such a bead — every assigned one, since bd never pushes an
+ *    assignee — is defused on EVERY run rather than settling, since it keeps
+ *    diverging. Settling needs a last_sync of our own, to tell this run's own
+ *    push apart from a foreign touch; that is a design step, not a patch, and
+ *    #955's own alternative (pull only the issues that have no bead) takes the
+ *    other branch of doPull, never hydrates, and removes the class instead. That is also why (4)'s push now declines a PATCH
  *    that would change nothing. Beads the pull would carry faithfully are left
  *    to it: a GitHub-side title, body, label or taxonomy edit still imports. A
  *    touch that fails ABORTS, like (1) and (4): the pull would then make the
@@ -852,12 +855,10 @@ const labelFieldsWhere = (bead, issue, keep) =>
 
 /**
  * Whether a push would CHANGE the issue — bd 1.2.2 does not ask (it PATCHes on
- * the timestamp alone), so the wrapper asks on its behalf. This is the other
- * half of the defuse: a push that changes nothing still re-stamps the issue
- * newer than the bead, which is precisely the condition that makes it a
- * candidate again, so a guard that pushed unconditionally would touch and
- * PATCH every assigned bead on every run for ever (measured: it never
- * quiesces, because the assignee divergence can never converge).
+ * the timestamp alone), so the wrapper asks on its behalf and spares the
+ * tracker a PATCH that ships nothing. Only ever a THRIFT: a push that ships
+ * nothing still moves the issue, which planPrePullPush needs whenever the pull
+ * would write the bead, so this never decides that case on its own.
  * Mirrors bd's BeadsIssueToGitHubFields — title, body, open/closed, and the
  * whole label set, scoped labels derived from the bead plus its own.
  */
@@ -904,20 +905,23 @@ export const pullWouldWrite = (bead, issue) =>
  * other way. Beads is the source of truth, so the local value wins and the
  * report names what was overwritten.
  *
- * The candidate test is the issue being newer than the local row, which is a
- * complete superset of what the pull can re-apply: the pull fetches only
- * issues touched since last_sync and skips any bead touched since then too, so
- * a bead at least as new as its issue is skipped either way. Missing
- * timestamps mean "cannot prove the issue is newer" — not a candidate, leaving
- * today's behaviour rather than touching on a guess.
+ * There is deliberately NO timestamp test. The pull writes a bead exactly when
+ * ONE of the two sides moved since last_sync (see the header on hydration),
+ * and the defuse moves BOTH — the touch here, the push at 1.5 — so it is safe
+ * whatever last_sync turns out to be, and needs to know neither it nor which
+ * side moved last. Every version that tried to narrow this set by comparing
+ * the two timestamps got the comparison wrong in a different way: a tie reads
+ * as safe when it is unknowable, a touch that moves only the bead ARMS the
+ * hydration it meant to prevent, and an issue touched after the listing is
+ * mis-read from stale data. Narrowing also buys nothing measurable: the rows
+ * with a lossy divergence are the same 24 either way, because a bead that
+ * diverges in a field GitHub cannot carry diverges permanently.
  */
 export const planLossyReapplies = (beads, issueByNumber) =>
   beads.flatMap(b => {
     const number = issueNumberFromRef(b.external_ref)
     const issue = number === null ? undefined : issueByNumber.get(number)
-    if (!issue?.updatedAt || !b.updated_at) return []
-    if (Date.parse(issue.updatedAt) <= Date.parse(b.updated_at)) return []
-    if (!pullWouldWrite(b, issue)) return []
+    if (!issue || !pullWouldWrite(b, issue)) return []
     const losses = [
       ...(b.status === 'closed' && b.closed_at ? ['closed_at'] : []),
       ...((b.assignee ?? '').trim() && (b.assignee ?? '').trim() !== (issue.assignee ?? '').trim() ? ['assignee'] : []),
@@ -1555,8 +1559,8 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // of what makes bd's pull leave it alone; 1.5's push is the other half
     // (see the header on hydration). Together they leave the bead newer than
     // its issue — so this run's pull neither treats it
-    // as a candidate. It does NOT settle: 1.5's push re-stamps the issue, so
-    // the bead reads as a candidate again next run (see the header).
+    // as a candidate this run. It does NOT settle: the divergence is permanent,
+    // so the bead is defused again next run (see the header).
     // Pushing it as well would undo exactly that: the PATCH re-stamps the
     // issue newer than the bead, which IS the candidate condition, so every
     // bead whose divergence cannot converge — every assigned one, since bd

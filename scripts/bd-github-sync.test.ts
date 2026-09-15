@@ -835,13 +835,24 @@ describe('planLossyReapplies', () => {
     expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { assignee: 'octocat' })]]))).toEqual([])
   })
 
-  it('ignores beads the pull cannot reach: local at least as new, unlinked, or either timestamp missing', () => {
+  // No timestamp test: whichever side moved last, the defuse moves BOTH, so
+  // it is safe without knowing last_sync. A tie is the case every comparison
+  // got wrong — it reads as safe while being unknowable — and it is a
+  // candidate here like any other divergent row.
+  it('does not care which side is newer, or whether either timestamp is there at all', () => {
     const assigned = (over: Partial<BeadRow>) => [row({ id: 'km-a', assignee: 'Someone', ...over })]
-    expect(planLossyReapplies(assigned({}), issues([[1, at('2026-09-11T00:00:00Z')]]))).toEqual([])
-    expect(planLossyReapplies(assigned({}), issues([[1, at('2026-09-10T00:00:00Z')]]))).toEqual([])
+    const named = [{ id: 'km-a', number: 1, losses: ['assignee'], overwrites: [] }]
+    expect(planLossyReapplies(assigned({}), issues([[1, at('2026-09-11T01:00:00Z')]]))).toEqual(named) // issue newer
+    expect(planLossyReapplies(assigned({}), issues([[1, at('2026-09-11T00:00:00Z')]]))).toEqual(named) // a tie
+    expect(planLossyReapplies(assigned({}), issues([[1, at('2026-09-10T00:00:00Z')]]))).toEqual(named) // bead newer
+    expect(planLossyReapplies(assigned({ updated_at: undefined }), issues([[1, at('2026-09-11T01:00:00Z')]]))).toEqual(named)
+    expect(planLossyReapplies(assigned({}), issues([[1, { ...at('2026-09-11T01:00:00Z'), updatedAt: undefined }]]))).toEqual(named)
+  })
+
+  it('still ignores a bead this repo has no issue for', () => {
+    const assigned = (over: Partial<BeadRow>) => [row({ id: 'km-a', assignee: 'Someone', ...over })]
     expect(planLossyReapplies(assigned({ external_ref: null }), issues([[1, at('2026-09-11T01:00:00Z')]]))).toEqual([])
-    expect(planLossyReapplies(assigned({ updated_at: undefined }), issues([[1, at('2026-09-11T01:00:00Z')]]))).toEqual([])
-    expect(planLossyReapplies(assigned({}), issues([[1, { ...at('2026-09-11T01:00:00Z'), updatedAt: undefined }]]))).toEqual([])
+    expect(planLossyReapplies(assigned({}), issues([[2, at('2026-09-11T01:00:00Z')]]))).toEqual([])
   })
 })
 
