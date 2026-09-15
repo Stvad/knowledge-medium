@@ -586,6 +586,23 @@ describe('block-type typeify processor', () => {
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Widget'}).load())?.id).toBe(id)
   })
 
+  // A type that was never named has no name to keep, so an emptied body stays
+  // empty — and claims nothing.
+  it('accepts a blank body on a type that was never named', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, '   ')
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: ''}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('')
+    expect(row!.properties[blockTypeLabelProp.name]).toBeUndefined()
+    expect(row!.properties[aliasesProp.name]).toBeUndefined()
+  })
+
   it('leaves an ordinary block alone when its content changes', async () => {
     env = await setup()
     const id = await createBlock(env, 'Just a block')
