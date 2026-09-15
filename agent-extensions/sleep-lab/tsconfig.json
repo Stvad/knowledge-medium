@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "baseUrl": "../..",
+    "ignoreDeprecations": "6.0",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "paths": {
+      "@/*": ["agent-extensions/kernel-types/src/*"]
+    },
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022",
+    "types": ["react", "react-dom"]
+  },
+  "include": ["src/**/*", "test/**/*", "vite.config.ts", "vitest.config.ts", "vitest.integration.config.ts"],
+  // `test/integration/**` runs against the REAL `@/` sources (see
+  // vitest.integration.config.ts), not the kernel-type stubs this tsconfig's
+  // `paths` points at. It imports the app's internal test harness
+  // (`@/data/test/createTestDb` etc.), which the stubs deliberately don't
+  // declare — that harness isn't part of the extension-facing API. Verified
+  // by actually running it (`pnpm run test:integration`), not by this tsc.
+  "exclude": ["test/integration/**/*"]
+}
