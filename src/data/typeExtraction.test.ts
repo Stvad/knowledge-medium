@@ -885,6 +885,25 @@ describe('block-type typeify processor', () => {
     expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
   })
 
+  // A padded entry is a user's own alias, not the claim this type made — every
+  // writer of a type name writes the trimmed spelling — so a rename adds its
+  // new name beside it instead of consuming it.
+  it('leaves a padded user alias alone when renaming', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await env.repo.tx(
+      tx => tx.setProperty(id, aliasesProp, [' Book ']),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual([' Book ', 'Novel'])
+  })
+
   it('leaves an ordinary block alone when its content changes', async () => {
     env = await setup()
     const id = await createBlock(env, 'Just a block')

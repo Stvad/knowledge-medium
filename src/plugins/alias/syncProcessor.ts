@@ -114,16 +114,18 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
     // `""` alias entry.
     if (after.content === '') return null
 
-    if (beforeAliases.includes(before.content)) {
+    if (beforeAliases.includes(before.content) && afterAliases.includes(before.content)) {
       // Rule 1 (A1, A2): replace old content's alias entry with new
       // content; dedupe.
       //
-      // Keyed off the TX-START bag, not the current one: an entry that
-      // appeared DURING this tx was not a name this rename is retiring, and
+      // Present in BOTH bags. Tx-start, because an entry that only appeared
+      // DURING this tx was not a name this rename is retiring, and
       // `references.renameBacklinks` — which diffs the tx-start bag — cannot
-      // see it go. Retiring one anyway releases a name whose inbound spans
+      // see it go; retiring one anyway releases a name whose inbound spans
       // nothing will rewrite (the kernel repairing a malformed cell is how
-      // that happens in practice).
+      // that happens in practice). And current, because there has to be an
+      // entry left to replace: one the tx itself removed falls through to the
+      // additive heal below, which is the answer A3 already gives.
       const replaced = dedupe(
         afterAliases.map(a => (a === before.content ? after.content : a)),
       )

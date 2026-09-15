@@ -211,12 +211,12 @@ const followRenamedContent = async (
     // strands the inbound `[[old name]]` links nothing will rewrite. It
     // doubles as what the merge offer may drop, and matches the empty list
     // `alias.sync` reports for its A3 drift case.
-    // Matched on the trimmed spelling: a legacy row can store `" Book "` as its
-    // content while the claim it made is `Book`, and those are one name.
+    // The old name TRIMMED, matched exactly: a legacy row can store `" Book "`
+    // as its content while the claim it made is `Book` — every writer of a type
+    // name writes the trimmed spelling. A padded entry is not that claim, it is
+    // a user's own alias, and this rename does not get to retire it.
     const previousName = before.content.trim()
-    const retiring = previousName === ''
-      ? undefined
-      : getAliases(before).find(alias => alias.trim() === previousName)
+    const retiring = getAliases(before).includes(previousName) ? previousName : undefined
 
     // The whole claim moves HERE — old name retired, new one taken — rather
     // than being left to `aliasSyncProcessor`: that plugin is togglable, and a
