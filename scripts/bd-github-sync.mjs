@@ -1542,7 +1542,9 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
   const { env } = pre
 
   const version = bdVersion(tryRun('bd', ['--version'], { env, timeout: PROBE_TIMEOUT }))
-  if (!process.env.KM_BD_VERSION_OK && !VERIFIED_BD_VERSIONS.includes(version))
+  // Exactly '1', like the two hook escapes, which match a literal `=1`:
+  // read for truthiness, `KM_BD_VERSION_OK=0` would turn the refusal OFF.
+  if (process.env.KM_BD_VERSION_OK !== '1' && !VERIFIED_BD_VERSIONS.includes(version))
     throw new Error(
       `refusing to sync: these guards were verified against bd ${VERIFIED_BD_VERSIONS.join(', ')}, and bd reports ` +
         `${version ?? 'a version this could not read'}. Re-verify them against the new engine before syncing (the bd ` +

@@ -1345,6 +1345,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const overridden = makeSyncRepo({ ...repo, env: { KM_BD_VERSION_OK: '1' } })
     expect(overridden.run().status).toBe(0)
     expect(overridden.shimCalls()).toContain('--pull-only')
+
+    // A value that MEANS off must not read as on — the refusal exists to stop
+    // silent assignee and close-date loss.
+    for (const off of ['0', 'false', '']) {
+      const still = makeSyncRepo({ ...repo, env: { KM_BD_VERSION_OK: off } })
+      expect(still.run().status).toBe(1)
+      expect(still.shimCalls()).not.toContain('--pull-only')
+    }
   })
 
   it('pushes local state out BEFORE the pull, and stays quiet with no suspects', () => {
