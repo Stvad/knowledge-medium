@@ -1,1 +1,1 @@
-import{iI as e,rI as t}from"../../../chunks/app-D3DMNErx.js";export{t as mergeReferrers,e as wikilinkSourcesByContent};
+import{iI as e,rI as t}from"../../../chunks/app-CrUyv2DX.js";export{t as mergeReferrers,e as wikilinkSourcesByContent};

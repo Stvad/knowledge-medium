@@ -1,1 +1,1 @@
-import{FC as e,PC as t}from"../../chunks/app-D3DMNErx.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{FC as e,PC as t}from"../../chunks/app-CrUyv2DX.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

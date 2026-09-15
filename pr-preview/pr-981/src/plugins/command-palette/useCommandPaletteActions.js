@@ -1,1 +1,1 @@
-import{Mx as e}from"../../../chunks/app-D3DMNErx.js";export{e as useCommandPaletteActions};
+import{Mx as e}from"../../../chunks/app-CrUyv2DX.js";export{e as useCommandPaletteActions};

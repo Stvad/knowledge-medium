@@ -1,1 +1,1 @@
-import{rm as e}from"../../../chunks/app-D3DMNErx.js";export{e as videoPlayerPlugin};
+import{rm as e}from"../../../chunks/app-CrUyv2DX.js";export{e as videoPlayerPlugin};

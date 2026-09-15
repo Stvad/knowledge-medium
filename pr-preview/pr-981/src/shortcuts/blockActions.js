@@ -1,1 +1,1 @@
-import{CC as e,EC as t,SC as n,TC as r,wC as i,xC as a}from"../../chunks/app-D3DMNErx.js";export{a as bindBlockActionContext,n as createSharedBlockActions,e as enterEditMode,i as extendSelectionDown,r as extendSelectionUp,t as requestEditorFocusIfEditing};
+import{CC as e,EC as t,SC as n,TC as r,wC as i,xC as a}from"../../chunks/app-CrUyv2DX.js";export{a as bindBlockActionContext,n as createSharedBlockActions,e as enterEditMode,i as extendSelectionDown,r as extendSelectionUp,t as requestEditorFocusIfEditing};

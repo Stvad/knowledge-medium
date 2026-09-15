@@ -1,1 +1,1 @@
-import{lz as e,uz as t}from"../../chunks/app-D3DMNErx.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{lz as e,uz as t}from"../../chunks/app-CrUyv2DX.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

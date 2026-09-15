@@ -1,1 +1,1 @@
-import{X0 as e,Y0 as t,Z0 as n}from"../../../chunks/app-D3DMNErx.js";export{t as SYSTEM_AUTHOR_PREFIX,e as isSystemAuthor,n as systemAuthor};
+import{X0 as e,Y0 as t,Z0 as n}from"../../../chunks/app-CrUyv2DX.js";export{t as SYSTEM_AUTHOR_PREFIX,e as isSystemAuthor,n as systemAuthor};

@@ -1,1 +1,1 @@
-import{Dg as e}from"../../../chunks/app-D3DMNErx.js";export{e as usePromotableBreadcrumb};
+import{Dg as e}from"../../../chunks/app-CrUyv2DX.js";export{e as usePromotableBreadcrumb};
