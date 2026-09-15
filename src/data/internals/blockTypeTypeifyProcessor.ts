@@ -149,10 +149,8 @@ const completeNewType = async (
 }
 
 /** A content write on a block that is already a type is a RENAME — content is
- *  the name — so the label follows it. `aliasSyncProcessor` owns the alias
- *  move (and the collision preflight that lets a rejected rename offer a
- *  merge); the only alias work left here is the case it declines, a type with
- *  none to move. */
+ *  the name — so the label, and the claim on that name, follow it. Retiring
+ *  the OLD claim stays `aliasSyncProcessor`'s; see the claim below. */
 const followRenamedContent = async (
   row: ChangedRow,
   after: BlockData,
@@ -175,8 +173,19 @@ const followRenamedContent = async (
   if (after.content !== name) {
     await ctx.tx.update(row.id, {content: name})
   }
-  if (getAliases(after).length === 0) {
-    await ctx.tx.setProperty(row.id, aliasesProp, [name])
+  // Claim the new name HERE, not only through `aliasSyncProcessor`: the alias
+  // plugin is togglable, and a type the registry publishes under a name
+  // nothing resolves to is the bug this path exists to close. Ensure-present,
+  // never a replacement — moving the OLD claim stays the plugin's job, and its
+  // rule 1 dedupes this entry away in the same pass when it is installed.
+  //
+  // A name another block holds is left untouched on purpose: claiming it would
+  // trip the uniqueness trigger a step ahead of that plugin's own preflight,
+  // and the bare rejection that produces has none of the metadata its merge
+  // offer needs (measured: `dropSourceAliases` and `collisionOrigin` gone).
+  const aliases = getAliases(after)
+  if (!aliases.includes(name) && await ctx.tx.aliasLookup(name, after.workspaceId) === null) {
+    await ctx.tx.setProperty(row.id, aliasesProp, [...aliases, name])
   }
 }
 

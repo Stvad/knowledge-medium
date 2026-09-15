@@ -94,15 +94,17 @@ describe('writeBlockTypeLabel', () => {
   })
 
   it('does not overwrite an existing alias when the label is renamed', async () => {
-    // A `createTypeBlock`-minted type already claims its label; the rename
-    // reconciliation belongs to `aliasSyncProcessor` (content → alias),
-    // so `writeBlockTypeLabel` must not re-seed / clobber the alias.
+    // A `createTypeBlock`-minted type already claims its label; RETIRING that
+    // claim on a rename belongs to `aliasSyncProcessor` (content → alias), so
+    // `writeBlockTypeLabel` must not re-seed / clobber the alias. `Writer` is
+    // the kernel typeify processor claiming the new name — additively, and
+    // with no alias plugin in this harness to fold the old one away.
     const repo = await setupTypeBlock({ label: 'Author', content: 'Author', alias: 'Author' })
     const block = repo.block('type-1')
     await writeBlockTypeLabel(block, 'Author', 'Author', 'Writer')
 
     expect(block.peekProperty(blockTypeLabelProp)).toBe('Writer')
-    expect(block.peekProperty(aliasesProp)).toEqual(['Author'])
+    expect(block.peekProperty(aliasesProp)).toEqual(['Author', 'Writer'])
   })
 
   // The editor captured `Author` when it rendered; a rename — remote, or from

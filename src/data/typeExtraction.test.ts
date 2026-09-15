@@ -39,7 +39,10 @@ interface Harness {
   dispose: () => void
 }
 
-const setup = async (): Promise<Harness> => {
+/** `alias: false` drops the alias plugin — the shape a user gets by toggling
+ *  Aliases off or opening `?safeMode`, where nothing but the kernel keeps a
+ *  type's name claimed. */
+const setup = async ({alias = true}: {alias?: boolean} = {}): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
@@ -52,7 +55,7 @@ const setup = async (): Promise<Harness> => {
       // Load the alias plugin so the typeify processor's alias writes are
       // exercised against the REAL content<->alias sync (kernel processor
       // first, then aliasSync) — not in isolation.
-      aliasDataExtension,
+      ...(alias ? [aliasDataExtension] : []),
     ],
   })
   repo.setActiveWorkspaceId(WS)
@@ -601,6 +604,44 @@ describe('block-type typeify processor', () => {
     expect(row!.content).toBe('')
     expect(row!.properties[blockTypeLabelProp.name]).toBeUndefined()
     expect(row!.properties[aliasesProp.name]).toBeUndefined()
+  })
+
+  // The kernel claims the new name itself, so the invariant survives the alias
+  // plugin being toggled off — but a name another block holds is left alone,
+  // or the uniqueness trigger fires a step ahead of that plugin's preflight
+  // and its rejection loses the metadata the merge offer is built from.
+  it('leaves a colliding rename to the alias plugin, merge offer intact', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+    await env.repo.tx(async tx => {
+      await tx.update(pageId, {content: 'Novel'})
+      await tx.setProperty(pageId, aliasesProp, ['Novel'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      code: 'alias.collision',
+      meta: {collisionOrigin: 'content-rename', dropSourceAliases: ['Book']},
+    })
+  })
+
+  it('claims the renamed name with the alias plugin absent', async () => {
+    env = await setup({alias: false})
+    const id = await tagBlockType(env, 'Book')
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Novel')
+    // Nothing moves the old claim without the plugin; what matters is that the
+    // name the registry publishes resolves to this block.
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
   })
 
   it('leaves an ordinary block alone when its content changes', async () => {
