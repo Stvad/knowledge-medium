@@ -114,7 +114,14 @@ const isWritableTypeName = (name: string): boolean =>
  *  One write rather than append-then-retire, because the intermediate bag goes
  *  through the maintenance trigger too: it would re-insert the name being
  *  given up, and renaming AWAY from a name some sync-applied row co-claims
- *  would abort on the retiring name. */
+ *  would abort on the retiring name.
+ *
+ *  Accepted, not overlooked: a claim moved on a RERUN (another processor
+ *  rewrote the content in this pass) lands after `references.renameBacklinks`,
+ *  which is pass-one by design, so inbound `[[old name]]` spans are not
+ *  rewritten. `alias.sync` documents the same gap for its own non-rerun, and
+ *  closing it means carrying an explicit retirement through the pass (#991),
+ *  not moving this write. */
 const claimTypeName = async (
   id: string,
   after: BlockData,
@@ -214,9 +221,11 @@ const followRenamedContent = async (
   // unrelated rename back for good, on behalf of a row that was broken before
   // anyone touched it. The reconciliation below still runs: keeping the three
   // spellings in agreement cannot make an unlinkable name worse.
-  if (!isWritableTypeName(name) && isWritableTypeName(readLabel(before) || before.content.trim())) {
-    assertWritableTypeName(name)
-  }
+  //
+  // An UNNAMED type is not a broken one — the first name it is given is a new
+  // name, and gets the check the tag path would have given it.
+  const previousName = readLabel(before) || before.content.trim()
+  if (previousName === '' || isWritableTypeName(previousName)) assertWritableTypeName(name)
 
   // Retire what the stored BAG shows, not what the index knows. Every other
   // reactor to a rename diffs the bag — `references.renameBacklinks` reads

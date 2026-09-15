@@ -20,6 +20,7 @@ import {
   GrammarShapedLabelError,
   LossyLabelError,
   MAX_ALIAS_LENGTH,
+  UnwritableLabelError,
 } from '@/data/referenceBlock'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage, typesPageBlockId } from '@/data/typesPage'
@@ -871,6 +872,25 @@ describe('block-type typeify processor', () => {
 
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
+  // A type tagged blank is UNNAMED, not broken: the first name it is given is
+  // a new name and gets the check the tag path would have given it.
+  it.each([
+    ['`]]`-lossy', 'Book]]Club'],
+    ['grammar-shaped', `((${'1'.repeat(8)}-1111-4111-8111-111111111111))`],
+  ])('refuses a first name that is %s on a type tagged blank', async (_l, content) => {
+    env = await setup()
+    const id = await tagBlockType(env, '   ')
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {content}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(UnwritableLabelError)
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBeUndefined()
+    expect(row!.properties[aliasesProp.name]).toBeUndefined()
   })
 
   it('leaves an ordinary block alone when its content changes', async () => {
