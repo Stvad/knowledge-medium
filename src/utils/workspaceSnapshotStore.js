@@ -1,1 +1,1 @@
-import{Vi as e}from"../../chunks/app-BKslgBgA.js";export{e as createWorkspaceSnapshotStore};
+import{Vi as e}from"../../chunks/app-BpgJAuA6.js";export{e as createWorkspaceSnapshotStore};
