@@ -262,11 +262,10 @@ export const copyBlockIdsToClipboard = async (
  *  content the clipboard never represented.
  *
  *  A refused OS write (`NotAllowedError` — non-secure context, no user
- *  gesture) fails the cut outright rather than half-arming it. Nothing to
- *  unwind: the payload is remembered against text that never reached the
- *  clipboard, so no paste can match it. (The old register needed an
- *  elaborate read-back-the-clipboard-as-a-sentinel dance here precisely
- *  because it COULD be armed independently of the write.) */
+ *  gesture) fails the cut outright, and there is nothing to unwind:
+ *  `writeToClipboard` calls `rememberPayload` only after the write
+ *  RESOLVES, so a refusal leaves no entry behind. Keep that ordering — it
+ *  is what makes the failure path need no bookkeeping. */
 export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,

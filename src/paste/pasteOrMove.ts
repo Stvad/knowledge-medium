@@ -29,11 +29,18 @@ import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
 import { recallPayloadForText } from '@/paste/clipboardPayload.js'
 
 export interface PasteOrMoveResult {
-  /** A pending cut→move was consumed — completed, or refused as a
-   *  would-be cycle (see `pasteAsMoveImpl`). Either way nothing was
-   *  pasted and `pasted` is empty. */
+  /** Blocks were actually RELOCATED. False for a refusal — a would-be
+   *  cycle, a failed move (see `pasteAsMoveImpl`) — even though the paste
+   *  was consumed and nothing was pasted either.
+   *
+   *  Callers clear the user's selection on `moved`, so a refusal must not
+   *  report it: the selection is the range they need in order to retry
+   *  somewhere valid. `{moved: false, pasted: []}` therefore covers both
+   *  "refused" and "nothing to do", and callers correctly do nothing for
+   *  both. */
   moved: boolean
-  /** Blocks created by the text paste. Empty when `moved`. */
+  /** Blocks created by the text paste. Empty when `moved`, and empty for a
+   *  refusal. */
   pasted: Block[]
 }
 

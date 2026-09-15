@@ -113,10 +113,6 @@ function SampleRow({ id, onOpen }: { id: string; onOpen: (id: string) => void })
     try {
       // Throws synchronously in an insecure context / older webview where
       // `navigator.clipboard` is undefined — caught below.
-      // `writeTextToClipboard` (not a raw `navigator.clipboard.writeText`)
-      // also clears any pending cut→move first — this copy puts DIFFERENT
-      // content on the clipboard than whatever was cut, which must
-      // invalidate the move the same way every other clipboard write does.
       await writeTextToClipboard(id)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1200)

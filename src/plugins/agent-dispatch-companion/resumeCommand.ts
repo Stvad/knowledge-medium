@@ -95,10 +95,6 @@ export const copyAgentResumeCommand = async (block: Block): Promise<void> => {
     if (typeof navigator === 'undefined' || !navigator.clipboard) {
       throw new Error('Clipboard API is unavailable')
     }
-    // `writeTextToClipboard` (not a raw `navigator.clipboard.writeText`)
-    // clears any pending cut→move first — this copy puts DIFFERENT content
-    // on the clipboard than whatever was cut, which must invalidate the
-    // move the same way every other clipboard write does.
     await writeTextToClipboard(command)
     showSuccess('Agent resume command copied.')
   } catch {

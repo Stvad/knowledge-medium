@@ -103,10 +103,6 @@ function AgentTokensDialogBody({
 
   const copy = async (text: string) => {
     try {
-      // `writeTextToClipboard` (not a raw `navigator.clipboard.writeText`)
-      // clears any pending cut→move first — this copy puts DIFFERENT
-      // content on the clipboard than whatever was cut, which must
-      // invalidate the move the same way every other clipboard write does.
       await writeTextToClipboard(text)
       setCopyState('copied')
       window.setTimeout(() => setCopyState('idle'), 1500)

@@ -78,10 +78,6 @@ export function RejectionDialog({open, onOpenChange}: Props) {
       error: safeParseJson(row.error_message ?? '') ?? row.error_message,
       rejected_at: new Date(row.rejected_at).toISOString(),
     }
-    // `writeTextToClipboard` (not a raw `navigator.clipboard.writeText`)
-    // clears any pending cut→move first — this copy puts DIFFERENT content
-    // on the clipboard than whatever was cut, which must invalidate the
-    // move the same way every other clipboard write does.
     await writeTextToClipboard(JSON.stringify(payload, null, 2))
     setCopiedId(row.id)
     setTimeout(() => setCopiedId(current => (current === row.id ? null : current)), 1500)
