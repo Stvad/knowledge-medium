@@ -57,12 +57,13 @@ export interface DeleteThroughUiOptions {
    *  callback renders under the frozen page snapshot, where it cannot be
    *  clicked, and the gesture waits on a promise nobody can resolve. */
   animate?: boolean
-  /** Set by a gesture that has already run {@link confirmBulkDeleteThroughUi}
-   *  over these same blocks because it has work to do between asking and
-   *  writing (the cut path's clipboard write). It suppresses the second ask,
-   *  and nothing else — the guards are still re-checked immediately before the
-   *  write. */
-  alreadyConfirmed?: boolean
+  /** Work that must happen while the blocks still exist — a cut's clipboard
+   *  write, a focus target read out of the subtree about to vanish. Runs after
+   *  the guards and the confirmation, so a refused or cancelled gesture never
+   *  reaches it, and before the write, which is the only window in which it is
+   *  correct. Callers used to sequence this themselves and each had to
+   *  remember the same order. */
+  beforeWrite?: () => Promise<void> | void
 }
 
 /**
@@ -97,13 +98,17 @@ export const deleteBlockThroughUi = async (
  *  `Delete` and `d` on the same selection must not disagree. */
 export const deleteBlocksThroughUi = async (
   blocks: readonly Block[],
-  {animate = false, alreadyConfirmed = false}: DeleteThroughUiOptions = {},
+  {animate = false, beforeWrite}: DeleteThroughUiOptions = {},
 ): Promise<boolean> => {
   if (!await ensureDeletableThroughUi(blocks)) return false
-  if (!alreadyConfirmed && !await confirmBulkDeleteThroughUi(blocks)) return false
+  if (!await confirmBulkDeleteThroughUi(blocks)) return false
+  await beforeWrite?.()
   const write = async (): Promise<void> => {
+    // Leaf-first so each removal can't disturb the next. Owned here, with the
+    // ancestor-first order `countBlocksRemovedBy` wants, so callers pass one
+    // list in outline order and neither ordering can be got wrong at a site.
     // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point
-    for (const block of blocks) await block.delete()
+    for (const block of blocks.toReversed()) await block.delete()
   }
   await (animate ? withMoveTransition(write) : write())
   return true
@@ -137,8 +142,6 @@ export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promis
  * guards to veto destroying its source block, but REPARENTS the children, so
  * counting the subtree there would warn about blocks that survive.
  *
- * Separate export because a gesture that works between deciding and writing has
- * to ask before that work, not after — see `alreadyConfirmed`.
  *
  * Re-resolves the guards after the dialog closes, so `false` means either "the
  * user declined" or "a guard started refusing while we asked" — both being
@@ -147,7 +150,7 @@ export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promis
  * here rather than in the choke point keeps the no-dialog path at one guard
  * pass.
  */
-export const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
+const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   if (blocks.length === 0) return true
   const totalCount = await countBlocksRemovedBy(blocks)
   if (totalCount < BULK_DELETE_CONFIRM_THRESHOLD) return true

@@ -264,13 +264,74 @@ describe('bulk-delete confirmation', () => {
     await deleting
   })
 
-  it('skips the ask for a caller that already confirmed', async () => {
-    const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
+  // `beforeWrite` exists so a gesture's interstitial work (a cut's clipboard
+  // write, a focus target read out of the doomed subtree) sits in the one
+  // window where it is correct. Both edges are load-bearing.
+  describe('beforeWrite', () => {
+    it('runs after the question and before the write', async () => {
+      const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
+      const seen: string[] = []
 
-    expect(await deleteBlocksThroughUi(ids.map(id => repo.block(id)), {alreadyConfirmed: true}))
-      .toBe(true)
+      const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)), {
+        beforeWrite: async () => {
+          seen.push(`asked:${getDialogQueue().length} pending`)
+          seen.push(`deleted:${await isBlockDeleted(repo, ids[0])}`)
+        },
+      })
+      await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+      expect(seen, 'not before the user has answered').toEqual([])
+      answerDialog(true)
+      await deleting
 
-    expect(getDialogQueue()).toHaveLength(0)
-    expect(await isBlockDeleted(repo, ids[0])).toBe(true)
+      // The dialog is gone by the time it runs, and nothing is tombstoned yet.
+      expect(seen).toEqual(['asked:0 pending', 'deleted:false'])
+    })
+
+    it('does not run for a delete the user calls off', async () => {
+      const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
+      const beforeWrite = vi.fn()
+
+      const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)), {beforeWrite})
+      await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+      answerDialog(null)
+
+      expect(await deleting).toBe(false)
+      expect(beforeWrite).not.toHaveBeenCalled()
+    })
+
+    it('does not run for a delete a guard refuses', async () => {
+      await repo.mutate.createChild({parentId: 'root', id: 'guarded', content: 'g'})
+      repo.setFacetRuntime(resolveFacetRuntimeSync([
+        kernelDataExtension,
+        blockDeletionGuardsFacet.of(
+          block => (block.id === 'guarded' ? 'Nope.' : null),
+          {source: 'test'},
+        ),
+      ]))
+      const beforeWrite = vi.fn()
+
+      expect(await deleteBlockThroughUi(repo.block('guarded'), {beforeWrite})).toBe(false)
+      expect(beforeWrite).not.toHaveBeenCalled()
+    })
+  })
+
+  it('deletes leaf-first whatever order the caller selected in', async () => {
+    // Callers pass outline order; both the count's ancestor-first dedup and the
+    // write's leaf-first order are derived here, so neither can be got wrong at
+    // a call site.
+    await repo.mutate.createChild({parentId: 'root', id: 'parent', content: 'parent'})
+    await repo.mutate.createChild({parentId: 'parent', id: 'child', content: 'child'})
+    const order: string[] = []
+    // `repo.block(id)` is identity-stable, so spying the instance catches the
+    // call the choke point actually makes.
+    for (const id of ['parent', 'child']) {
+      const block = repo.block(id)
+      const real = block.delete.bind(block)
+      vi.spyOn(block, 'delete').mockImplementation(async () => { order.push(id); await real() })
+    }
+
+    await deleteBlocksThroughUi([repo.block('parent'), repo.block('child')])
+
+    expect(order).toEqual(['child', 'parent'])
   })
 })

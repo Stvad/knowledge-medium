@@ -55,7 +55,6 @@ import {
 } from '@/utils/codemirror.js'
 import { copyBlockIdsToClipboard, copySelectedBlocksToClipboard } from '@/utils/copy.js'
 import {
-  confirmBulkDeleteThroughUi,
   deleteBlockThroughUi,
   deleteBlocksThroughUi,
   ensureDeletableThroughUi,
@@ -977,25 +976,24 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         if (liveContent === '') {
           if (!canMergeUp) return
           trigger.preventDefault()
-          // Ask the deletion guards BEFORE moving focus — a refused delete that
-          // had already moved the cursor would look like the block vanished.
           // This path deletes the block's whole subtree, so it needs the same
           // veto as `delete_block`; emptying a daily note's title and pressing
-          // Backspace used to destroy it straight past the guard.
-          if (!await ensureDeletableThroughUi([block])) return
-          // Before the focus move for the same reason as the guards above: an
-          // emptied block can still hold a large subtree.
-          if (!await confirmBulkDeleteThroughUi([block])) return
-          const prevVisible = await previousVisibleBlock(block, scopeRootId)
-          if (prevVisible) {
-            const prevData = await prevVisible.load()
-            await uiStateBlock.set(editorSelection, {
-              blockId: prevVisible.id,
-              start: prevData?.content.length ?? 0,
-            })
-            await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
-          }
-          await deleteBlockThroughUi(block, {alreadyConfirmed: true})
+          // Backspace used to destroy it straight past the guard. The cursor
+          // move rides `beforeWrite` so it happens after every refusal — a
+          // delete that was called off must not look like the block vanished —
+          // and while `previousVisibleBlock` can still walk the live tree.
+          await deleteBlockThroughUi(block, {
+            beforeWrite: async () => {
+              const prevVisible = await previousVisibleBlock(block, scopeRootId)
+              if (!prevVisible) return
+              const prevData = await prevVisible.load()
+              await uiStateBlock.set(editorSelection, {
+                blockId: prevVisible.id,
+                start: prevData?.content.length ?? 0,
+              })
+              await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
+            },
+          })
           return
         }
 
@@ -1255,28 +1253,26 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     const {uiStateBlock, selectedBlocks, scopeRootId} = deps
     if (!selectedBlocks.length) return
 
-    const blocks = selectedBlocks.toReversed()
-    if (!await ensureDeletableThroughUi(blocks)) return
-    // Selection order, not the leaf-first `blocks` — same set, but the count's
-    // dedup only pays when ancestors come first (`countBlocksRemovedBy`).
-    if (!await confirmBulkDeleteThroughUi(selectedBlocks)) return
+    const focus: {target: Block | null} = {target: null}
+    const deleted = await deleteBlocksThroughUi(selectedBlocks, {
+      animate: true,
+      beforeWrite: async () => {
+        // Copy exactly the set we're about to delete rather than re-reading the
+        // ui-state selection: with supplied deps the two can differ, and the copy
+        // would quietly no-op while the delete went ahead.
+        if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
 
-    // Copy exactly the set we're about to delete rather than re-reading the
-    // ui-state selection: with supplied deps the two can differ, and the copy
-    // would quietly no-op while the delete went ahead.
-    if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
-
-    const selectedIds = new Set(selectedBlocks.map(block => block.id))
-    const after = scopeRootId
-      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
-      : null
-    const focusTarget = after && !selectedIds.has(after.id) ? after : null
-
-    const deleted = await deleteBlocksThroughUi(blocks, {animate: true, alreadyConfirmed: true})
+        const selectedIds = new Set(selectedBlocks.map(block => block.id))
+        const after = scopeRootId
+          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+          : null
+        focus.target = after && !selectedIds.has(after.id) ? after : null
+      },
+    })
     if (!deleted) return
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-    if (focusTarget) {
-      void focusBlock(uiStateBlock, focusTarget.id)
+    if (focus.target) {
+      void focusBlock(uiStateBlock, focus.target.id)
     }
   }
 
