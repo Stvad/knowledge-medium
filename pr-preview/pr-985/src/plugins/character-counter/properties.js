@@ -1,1 +1,1 @@
-import{BR as e,RR as t,zR as n}from"../../../chunks/app-DUixsTbL.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
+import{BR as e,RR as t,zR as n}from"../../../chunks/app-DBL2m16q.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
