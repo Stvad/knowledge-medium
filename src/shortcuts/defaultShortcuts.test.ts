@@ -708,6 +708,50 @@ describe('default CodeMirror shortcuts', () => {
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
   })
 
+  it('leaves the cursor put when the delete is refused after the landing spot is read', async () => {
+    // The landing spot must be read while the tree is live, but moving the
+    // cursor there before the delete is confirmed is how a block that survives
+    // looks like it vanished.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'emptied', content: ''})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'emptied')
+
+    // Start refusing from inside the landing read — the window this ordering
+    // exists for. `repo.block(id)` is identity-stable, so the instance spy
+    // catches the load `beforeWrite` actually makes.
+    const prev = env.repo.block('first')
+    const realLoad = prev.load.bind(prev)
+    vi.spyOn(prev, 'load').mockImplementation(async () => {
+      const data = await realLoad()
+      env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+        kernelDataExtension,
+        blockDeletionGuardsFacet.of(
+          block => (block.id === 'emptied' ? 'Nope.' : null),
+          {source: 'test'},
+        ),
+      ]))
+      return data
+    })
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    await action.handler({
+      block: env.repo.block('emptied'),
+      editorView: emptyEditorView(),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'emptied')).toBe(false)
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('emptied')
+  })
+
   it('Delete on a big subtree raises its question outside the view transition', async () => {
     // Pins the call site, not just the choke point: wrapping this handler in
     // `withMoveTransition` again — the shape it had before — renders the dialog

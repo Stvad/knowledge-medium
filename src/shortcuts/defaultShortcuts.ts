@@ -978,22 +978,29 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           trigger.preventDefault()
           // This path deletes the block's whole subtree, so it needs the same
           // veto as `delete_block`; emptying a daily note's title and pressing
-          // Backspace used to destroy it straight past the guard. The cursor
-          // move rides `beforeWrite` so it happens after every refusal — a
-          // delete that was called off must not look like the block vanished —
-          // and while `previousVisibleBlock` can still walk the live tree.
-          await deleteBlockThroughUi(block, {
+          // Backspace used to destroy it straight past the guard.
+          //
+          // `beforeWrite` READS the landing spot — it has to, while the tree is
+          // still there to walk — and the cursor only moves once the delete has
+          // actually happened. A refusal must not leave the cursor somewhere
+          // else on a block that survived, which is what "it looks like the
+          // block vanished" means here.
+          const landing: {at: {id: string; start: number} | null} = {at: null}
+          const deleted = await deleteBlockThroughUi(block, {
             beforeWrite: async () => {
               const prevVisible = await previousVisibleBlock(block, scopeRootId)
               if (!prevVisible) return
               const prevData = await prevVisible.load()
-              await uiStateBlock.set(editorSelection, {
-                blockId: prevVisible.id,
-                start: prevData?.content.length ?? 0,
-              })
-              await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
+              landing.at = {id: prevVisible.id, start: prevData?.content.length ?? 0}
             },
           })
+          if (deleted && landing.at) {
+            await uiStateBlock.set(editorSelection, {
+              blockId: landing.at.id,
+              start: landing.at.start,
+            })
+            await focusBlock(uiStateBlock, landing.at.id, {edit: true, renderScopeId: deps.renderScopeId})
+          }
           return
         }
 
