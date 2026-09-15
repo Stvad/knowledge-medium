@@ -114,9 +114,16 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
     // `""` alias entry.
     if (after.content === '') return null
 
-    if (afterAliases.includes(before.content)) {
+    if (beforeAliases.includes(before.content)) {
       // Rule 1 (A1, A2): replace old content's alias entry with new
       // content; dedupe.
+      //
+      // Keyed off the TX-START bag, not the current one: an entry that
+      // appeared DURING this tx was not a name this rename is retiring, and
+      // `references.renameBacklinks` — which diffs the tx-start bag — cannot
+      // see it go. Retiring one anyway releases a name whose inbound spans
+      // nothing will rewrite (the kernel repairing a malformed cell is how
+      // that happens in practice).
       const replaced = dedupe(
         afterAliases.map(a => (a === before.content ? after.content : a)),
       )

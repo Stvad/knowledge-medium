@@ -29,7 +29,8 @@ import {
   type SameTxTypeOwnership,
 } from '@/data/api'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
-import { setBlockTypesInProperties, typesProp, wellFormedBlockTypes } from '@/data/properties'
+import { setBlockTypesInProperties, typesProp } from '@/data/properties'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { typeMembershipTokenFor } from '@/data/typeDefinitionMetadata'
 
 export const RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME =
@@ -233,8 +234,10 @@ const retargetTypeMembership = async (
   // defined it. Retargeting then moves members off a definition that still
   // exists. An effective merge is one whose source is tombstoned.
   if (from === null || !from.deleted) return
-  const fromTokens = wellFormedBlockTypes(from)
-  if (fromTokens === null || !fromTokens.includes(BLOCK_TYPE_TYPE)) return
+  // Tolerant on purpose, and fail-closed: a cell the codec refuses (the scalar
+  // `types: "block-type"` a sync-applied row can carry) must neither throw out
+  // of the merge nor read as a type the registry would refuse.
+  if (!safeDecodeRowProperty(from, typesProp).includes(BLOCK_TYPE_TYPE)) return
   // …and the tag alone is not ownership; see `tokenOwnedByOther`.
   if (tokenOwnedByOther(ownership, event.fromId, from.id)) return
 

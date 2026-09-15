@@ -39,9 +39,13 @@
  * row replicates as data. The property-panel picker also never reaches
  * completion: it filters `block-type` out of its options.)
  *
- * A label colliding with a live alias in the workspace is rejected by the
- * `block_aliases_workspace_alias_unique` storage trigger
- * (`alias.collision`), rolling back the whole tx.
+ * A name another block holds is refused — by `assertAliasClaimable` before the
+ * write on the rename path, and by the `block_aliases_workspace_alias_unique`
+ * storage trigger everywhere else. Both roll the whole tx back.
+ *
+ * Both jobs write BlockDefault properties, so a tx declaring a scope that is
+ * not policy-equivalent cannot carry them (#989 — it already cannot rename
+ * anything that carries a name).
  *
  * Registered as a kernel processor so the invariant holds for every
  * block-type tag, and — being kernel — ahead of the alias plugin's
@@ -55,24 +59,20 @@ import {
   type BlockData,
   type ChangedRow,
   type SameTxCtx,
+  type TxWriteOpts,
 } from '@/data/api'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import {
   addBlockTypeToProperties,
-  addedTypes,
   aliasesProp,
   blockTypeLabelProp,
-  getBlockTypes,
   getAliases,
-  wellFormedBlockTypes,
+  getBlockTypes,
+  typesProp,
 } from '@/data/properties'
-import { assertAliasClaimable } from '@/data/aliasClaim'
-import {
-  assertNotGrammarShapedLabel,
-  assertRoundTrippableReferenceLabel,
-  isGrammarShapedLabel,
-  isRoundTrippableReferenceLabel,
-} from '@/data/referenceBlock'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
+import { assertAliasClaimable, claimedAliases } from '@/data/aliasClaim'
+import { assertWritableLabel, isWritableLabel } from '@/data/referenceBlock'
 import { seededDefinitionKey } from '@/data/definitionSeeds'
 import { isTypeSeedKey } from '@/data/typeSeeds'
 
@@ -82,68 +82,42 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME = 'core.blockTypeTypeify'
  *  back to the raw message, which says what to fix. */
 export const BLOCK_TYPE_NAME_CONFLICT = 'blockType.nameConflict'
 
-const readLabel = (row: BlockData): string => {
-  const raw = row.properties[blockTypeLabelProp.name]
-  return (typeof raw === 'string' ? raw : '').trim()
-}
+const readLabel = (row: BlockData): string =>
+  safeDecodeRowProperty(row, blockTypeLabelProp).trim()
 
-/** THROWS rather than skipping the name: a type whose name can't be written
- *  as `[[name]]` is unlinkable, and minting one silently is the failure mode
- *  this whole family of bugs is made of. Same-tx, so it rolls the tx back
- *  atomically; both refusals derive from `UnwritableLabelError`, which the
- *  type-label UI catches to revert. Needed on every path that names a type —
- *  the agent bridge's raw properties bag arrives here unvalidated. */
-const assertWritableTypeName = (name: string): void => {
-  assertNotGrammarShapedLabel(name, 'Block type label')
-  assertRoundTrippableReferenceLabel(name, 'Block type label')
-}
-
-/** Non-throwing form, for the caller that has to ask before it decides. */
-const isWritableTypeName = (name: string): boolean =>
-  !isGrammarShapedLabel(name) && isRoundTrippableReferenceLabel(name)
+/** THROWS rather than skipping the name: a type whose name can't be written as
+ *  `[[name]]` is unlinkable. Same-tx, so it rolls the tx back atomically; the
+ *  refusal derives from `UnwritableLabelError`, which the type-label UI catches
+ *  to revert. Needed on every path that names a type — the agent bridge's raw
+ *  properties bag arrives here unvalidated. */
+const assertWritableTypeName = (name: string): void =>
+  assertWritableLabel(name, 'Block type label')
 
 /** Claim `name` for this type, retiring `retiring` in the SAME write.
  *
- *  Membership comes from the INDEX (`tx.aliasesOf`), which is the authority on
- *  what a row claims: the trigger indexes every text value `json_each` yields,
- *  from a bare scalar and an object as well as an array, and re-deriving that
- *  in TypeScript is the whack-a-mole its own contract warns about — each shape
- *  missed releases a name. The stored bag supplies only ORDER, for the entries
- *  it can decode.
+ *  One write rather than append-then-retire: the intermediate bag goes through
+ *  the maintenance trigger too, so it would re-insert the name being given up,
+ *  and renaming AWAY from a name some sync-applied row co-claims would abort on
+ *  the name being retired.
  *
- *  One write rather than append-then-retire, because the intermediate bag goes
- *  through the maintenance trigger too: it would re-insert the name being
- *  given up, and renaming AWAY from a name some sync-applied row co-claims
- *  would abort on the retiring name.
- *
- *  Accepted, not overlooked: a claim moved on a RERUN (another processor
- *  rewrote the content in this pass) lands after `references.renameBacklinks`,
- *  which is pass-one by design, so inbound `[[old name]]` spans are not
- *  rewritten. `alias.sync` documents the same gap for its own non-rerun, and
- *  closing it means carrying an explicit retirement through the pass (#991),
- *  not moving this write. */
+ *  Accepted: a claim moved on a RERUN lands after `references.renameBacklinks`,
+ *  so the old name's inbound spans are left alone — #991, not this write. */
 const claimTypeName = async (
-  id: string,
   after: BlockData,
   name: string,
   ctx: SameTxCtx,
-  {retiring, derived = false}: {retiring?: string; derived?: boolean} = {},
+  {retiring, ...writeOptions}: {retiring?: string} & TxWriteOpts = {},
 ): Promise<void> => {
-  const claimed = await ctx.tx.aliasesOf(id)
-  const stored = getAliases(after)
-  const ordered = [
-    ...stored.filter(alias => claimed.includes(alias)),
-    ...claimed.filter(alias => !stored.includes(alias)),
-  ]
+  const claimed = await claimedAliases(ctx.tx, after)
   // In PLACE when a name is being retired: the first entry is what a block is
   // displayed as (the sidebar reads `aliases[0]`), so a rename must not promote
   // some other alias by appending. Same replacement `alias.sync`'s rule 1 would
   // have made — this write just gets there first.
-  const renamed = retiring !== undefined && ordered.includes(retiring)
-    ? ordered.map(alias => (alias === retiring ? name : alias))
-    : [...ordered, name]
+  const renamed = retiring !== undefined && claimed.includes(retiring)
+    ? claimed.map(alias => (alias === retiring ? name : alias))
+    : [...claimed, name]
   // `setProperty` elides a write that changes nothing, so no guard here.
-  await ctx.tx.setProperty(id, aliasesProp, [...new Set(renamed)], derived ? {skipMetadata: true} : {})
+  await ctx.tx.setProperty(after.id, aliasesProp, [...new Set(renamed)], writeOptions)
 }
 
 const completeNewType = async (
@@ -192,12 +166,11 @@ const completeNewType = async (
   if (name !== '' && after.content !== name) {
     await ctx.tx.update(row.id, {content: name})
   }
-  if (name !== '') await claimTypeName(row.id, after, name, ctx)
+  if (name !== '') await claimTypeName(after, name, ctx)
 }
 
 /** A content write on a block that is already a type is a RENAME — content is
- *  the name — so the label, and the claim on that name, follow it. Retiring
- *  the OLD claim stays `aliasSyncProcessor`'s; see the claim below. */
+ *  the name — so the label, and the claim on that name, follow it. */
 const followRenamedContent = async (
   row: ChangedRow,
   after: BlockData,
@@ -213,42 +186,42 @@ const followRenamedContent = async (
   // guard is `=== ''`, so `"   "` would otherwise be claimed as the name.
   const name = after.content.trim() || currentLabel
   if (name === '') return
-  // Refuse only a REGRESSION — a name that resolves today becoming one nothing
-  // can link to. A type whose name was ALREADY unwritable is legacy or
-  // sync-applied, and the rewrite that reaches us is usually not even about it:
-  // `references.renameBacklinks` retitles a type whose name embeds the wikilink
-  // being renamed, inside that rename's own tx. Throwing there rolls an
-  // unrelated rename back for good, on behalf of a row that was broken before
-  // anyone touched it. The reconciliation below still runs: keeping the three
-  // spellings in agreement cannot make an unlinkable name worse.
-  //
-  // An UNNAMED type is not a broken one — the first name it is given is a new
-  // name, and gets the check the tag path would have given it.
+  // Refuse a REGRESSION, not a row that arrived broken: `references.renameBacklinks`
+  // retitles a type whose name embeds the wikilink being renamed, inside that
+  // rename's own tx, and throwing there would roll an unrelated rename back for
+  // good. An UNNAMED type is not a broken one — its first name is a new name.
   const previousName = readLabel(before) || before.content.trim()
-  if (previousName === '' || isWritableTypeName(previousName)) assertWritableTypeName(name)
+  const arrivedBroken = previousName !== '' && !isWritableLabel(previousName)
+  if (!arrivedBroken) assertWritableTypeName(name)
 
-  // Retire what the stored BAG shows, not what the index knows. Every other
-  // reactor to a rename diffs the bag — `references.renameBacklinks` reads
-  // `getAliases(row.before)` — so releasing a claim only the index can see
-  // strands the inbound `[[old name]]` links nothing will rewrite. It doubles
-  // as what the merge offer may drop, and matches the empty list `alias.sync`
-  // reports when the old content was never an alias anchor (its A3 case).
-  const retiring = getAliases(before).includes(before.content) ? before.content : undefined
+  // Only a name that CAN be linked to is claimed. An unwritable one buys
+  // nothing by being claimed, and refusing its collision would abort whatever
+  // tx is doing the rewriting — the same unrelated rename the check above
+  // steps aside for.
+  if (isWritableLabel(name)) {
+    // Retire what the stored BAG shows, not what the index knows. Every other
+    // reactor to a rename diffs the bag — `references.renameBacklinks` reads
+    // `getAliases(row.before)` — so releasing a claim only the index can see
+    // strands the inbound `[[old name]]` links nothing will rewrite. It
+    // doubles as what the merge offer may drop, and matches the empty list
+    // `alias.sync` reports for its A3 drift case.
+    const retiring = getAliases(before).includes(before.content) ? before.content : undefined
 
-  // The whole claim moves HERE — old name retired, new one taken — rather than
-  // being left to `aliasSyncProcessor`: that plugin is togglable, and a type
-  // the registry publishes under a name nothing resolves to is the bug this
-  // path exists to close. A name another block holds is refused for the same
-  // reason, and refused BEFORE the writes below. The plugin then finds the bag
-  // already reconciled and no-ops; it is not a step this depends on.
-  await assertAliasClaimable(ctx.tx, {
-    alias: name,
-    blockId: row.id,
-    workspaceId: after.workspaceId,
-    dropSourceAliases: retiring === undefined ? [] : [retiring],
-    collisionOrigin: 'content-rename',
-  })
-  await claimTypeName(row.id, after, name, ctx, {retiring, derived: true})
+    // The whole claim moves HERE — old name retired, new one taken — rather
+    // than being left to `aliasSyncProcessor`: that plugin is togglable, and a
+    // type the registry publishes under a name nothing resolves to is the bug
+    // this path exists to close. A name another block holds is refused for the
+    // same reason, and refused BEFORE the writes below. The plugin then finds
+    // the bag already reconciled and no-ops; it is not a step this depends on.
+    await assertAliasClaimable(ctx.tx, {
+      alias: name,
+      blockId: row.id,
+      workspaceId: after.workspaceId,
+      dropSourceAliases: retiring === undefined ? [] : [retiring],
+      collisionOrigin: 'content-rename',
+    })
+    await claimTypeName(after, name, ctx, {retiring, skipMetadata: true})
+  }
 
   // `skipMetadata` on every write here: this reconciles a content change
   // somebody else made, and one that was itself derived would otherwise float
@@ -277,7 +250,7 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       // workspace: a sync-applied or pre-upgrade row can hold a `types` cell
       // the codec refuses, and a strict read would throw there — costing an
       // ordinary block its edit over a cell that names no type anyway.
-      if (!(wellFormedBlockTypes(after) ?? []).includes(BLOCK_TYPE_TYPE)) continue
+      if (!safeDecodeRowProperty(after, typesProp).includes(BLOCK_TYPE_TYPE)) continue
 
       // Seed-owned type rows are code-authored, complete definitions — the
       // materializer writes the finished bag, so there is nothing to
@@ -286,7 +259,12 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       const seedKey = seededDefinitionKey(after)
       if (seedKey !== undefined && isTypeSeedKey(seedKey)) continue
 
-      if (addedTypes(row).includes(BLOCK_TYPE_TYPE)) {
+      // Tolerant on BOTH sides, for the reason the gate above is: `addedTypes`
+      // decodes `before` strictly, and a tx writing a well-formed cell over a
+      // malformed one would throw there instead of completing the type.
+      const hadBlockType = row.before !== null
+        && safeDecodeRowProperty(row.before, typesProp).includes(BLOCK_TYPE_TYPE)
+      if (!hadBlockType) {
         await completeNewType(row, after, ctx)
         continue
       }

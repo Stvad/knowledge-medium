@@ -14,7 +14,31 @@
  * kernel's.
  */
 
-import { ProcessorRejection, type Tx } from '@/data/api'
+import { ProcessorRejection, type BlockData, type Tx } from '@/data/api'
+import { aliasesProp } from '@/data/properties'
+
+/** Every name this row actually claims, bag order first.
+ *
+ *  Read from the index rather than decoded from the property, because only the
+ *  index knows what the trigger accepted — it takes text values from a bare
+ *  scalar and from an OBJECT as well as from an array — and a name missed here
+ *  is RELEASED by whatever writes the bag back, taking its links with it. Bag
+ *  order is preserved for the plain string array everything writes, since the
+ *  first entry reads as the page's primary name; anything the index knows
+ *  beyond that is appended, which is also what repairs a malformed bag. */
+export const claimedAliases = async (tx: Tx, block: BlockData): Promise<string[]> => {
+  const indexed = await tx.aliasesOf(block.id)
+  const known = new Set(indexed)
+  const raw = block.properties[aliasesProp.name]
+  const inBagOrder = Array.isArray(raw)
+    ? raw.filter((value): value is string => typeof value === 'string' && known.has(value))
+    : []
+  return [...new Set([...inBagOrder, ...indexed])]
+}
+
+/** Closed set: the toast branches on these, and a typo in a free-form string
+ *  would read as "no origin" and silently drop the merge offer. */
+export type AliasCollisionOrigin = 'create' | 'content-rename'
 
 export interface AliasClaimIntent {
   alias: string
@@ -25,7 +49,7 @@ export interface AliasClaimIntent {
    *  user accepts the merge — the names it is giving up by claiming. */
   dropSourceAliases?: readonly string[]
   /** What the user did, for the toast's wording and affordances. */
-  collisionOrigin?: string
+  collisionOrigin?: AliasCollisionOrigin
 }
 
 export const assertAliasClaimable = async (

@@ -34,6 +34,13 @@ import {
 
 const WS = 'ws-type-extraction'
 
+// `]]` makes the name unwritable as a `[[name]]` link (LossyLabelError).
+const LOSSY_NAME = 'Book]]Club'
+// A ref-shaped name reads as a block reference rather than a title
+// (GrammarShapedLabelError). Built rather than written as one literal
+// string — a pre-commit hook rejects a staged uuid-shaped literal.
+const GRAMMAR_SHAPED_NAME = '((' + '1'.repeat(8) + '-1111-4111-8111-111111111111))'
+
 interface Harness {
   h: TestDb
   repo: Repo
@@ -168,11 +175,7 @@ describe('createTypeBlock', () => {
     env = await setup()
     // A prior `[[Task]]` reference (or create-page UI) already left a
     // live block claiming the alias in this workspace.
-    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
-    await env.repo.tx(async tx => {
-      await tx.update(pageId, {content: 'Task'})
-      await tx.setProperty(pageId, aliasesProp, ['Task'])
-    }, {scope: ChangeScope.BlockDefault})
+    await claimAlias(env, 'Task')
 
     await expect(createTypeBlock(env.repo, {
       workspaceId: WS,
@@ -307,6 +310,22 @@ const rawPropertiesOf = async (env: Harness, id: string): Promise<Record<string,
   return JSON.parse(row!.properties_json) as Record<string, unknown>
 }
 
+/** Plant an alias cell the codec refuses, leaving the rest of the bag as the
+ *  tagging path wrote it. */
+const rawAliasCell = async (env: Harness, id: string, cell: unknown): Promise<void> =>
+  rawProperties(env, id, {...await rawPropertiesOf(env, id), [aliasesProp.name]: cell})
+
+/** Another block already holding `name` — the collision every refusal test
+ *  needs on the other side. */
+const claimAlias = async (env: Harness, name: string): Promise<string> => {
+  const id = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+  await env.repo.tx(async tx => {
+    await tx.update(id, {content: name})
+    await tx.setProperty(id, aliasesProp, [name])
+  }, {scope: ChangeScope.BlockDefault})
+  return id
+}
+
 /** Tag a fresh block `block-type` — the state EVERY tagging path lands
  *  in (`#type`, the picker, programmatic, import). The kernel
  *  `blockTypeTypeify` same-tx processor completes it in this same tx:
@@ -345,9 +364,9 @@ describe('block-type typeify processor', () => {
   // `[[name]]` is broken in the way that matters (nothing can link to
   // it), so the tagging is REFUSED rather than quietly producing one.
   it.each([
-    ['`]]`-lossy', 'Book]]Club', LossyLabelError],
+    ['`]]`-lossy', LOSSY_NAME, LossyLabelError],
     ['past the alias cap', 'a'.repeat(MAX_ALIAS_LENGTH + 1), LossyLabelError],
-    ['grammar-shaped', `((${'1'.repeat(8)}-1111-4111-8111-111111111111))`, GrammarShapedLabelError],
+    ['grammar-shaped', GRAMMAR_SHAPED_NAME, GrammarShapedLabelError],
   ])('refuses to type-tag a block whose name is %s', async (_label, content, errorType) => {
     env = await setup()
     await expect(tagBlockType(env, content)).rejects.toThrow(errorType)
@@ -584,8 +603,8 @@ describe('block-type typeify processor', () => {
   // as `[[name]]` leaves the type unlinkable, so the rename is refused whole
   // instead of propagated into a label nothing can address.
   it.each([
-    ['`]]`-lossy', 'Book]]Club', LossyLabelError],
-    ['grammar-shaped', `((${'1'.repeat(8)}-1111-4111-8111-111111111111))`, GrammarShapedLabelError],
+    ['`]]`-lossy', LOSSY_NAME, LossyLabelError],
+    ['grammar-shaped', GRAMMAR_SHAPED_NAME, GrammarShapedLabelError],
   ])('refuses a content rewrite renaming a type to a name that is %s', async (_l, content, errorType) => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
@@ -635,17 +654,15 @@ describe('block-type typeify processor', () => {
   })
 
   // The kernel claims the new name itself, so the invariant survives the alias
-  // plugin being toggled off — but a name another block holds is left alone,
-  // or the uniqueness trigger fires a step ahead of that plugin's preflight
-  // and its rejection loses the metadata the merge offer is built from.
-  it('leaves a colliding rename to the alias plugin, merge offer intact', async () => {
+  // plugin being toggled off — but a name another block holds is left alone.
+  // This pins that the refusal happens in the alias plugin's PREFLIGHT, not at
+  // the uniqueness trigger a step later: only the preflight's rejection carries
+  // `dropSourceAliases` / `collisionOrigin`, so firing a step later would lose
+  // the metadata the merge offer is built from.
+  it('refuses a colliding rename in the preflight, so the merge offer survives', async () => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
-    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
-    await env.repo.tx(async tx => {
-      await tx.update(pageId, {content: 'Novel'})
-      await tx.setProperty(pageId, aliasesProp, ['Novel'])
-    }, {scope: ChangeScope.BlockDefault})
+    await claimAlias(env, 'Novel')
 
     await expect(env.repo.tx(
       tx => tx.update(id, {content: 'Novel'}),
@@ -654,43 +671,6 @@ describe('block-type typeify processor', () => {
       code: 'alias.collision',
       meta: {collisionOrigin: 'content-rename', dropSourceAliases: ['Book']},
     })
-  })
-
-  it('claims the renamed name with the alias plugin absent', async () => {
-    env = await setup({alias: false})
-    const id = await tagBlockType(env, 'Book')
-
-    await env.repo.tx(
-      tx => tx.update(id, {content: 'Novel'}),
-      {scope: ChangeScope.BlockDefault},
-    )
-
-    const row = await env.repo.load(id)
-    expect(row!.properties[blockTypeLabelProp.name]).toBe('Novel')
-    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
-    // The rename RETIRES the old name here too: with no plugin to do it, an
-    // append-only claim would leave the type answering to both names forever.
-    expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
-  })
-
-  it('refuses a rename onto a taken name with the alias plugin absent', async () => {
-    env = await setup({alias: false})
-    const id = await tagBlockType(env, 'Book')
-    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
-    await env.repo.tx(async tx => {
-      await tx.update(pageId, {content: 'Novel'})
-      await tx.setProperty(pageId, aliasesProp, ['Novel'])
-    }, {scope: ChangeScope.BlockDefault})
-
-    // Nothing else would: committing the label while skipping the claim is the
-    // unlinkable type this path exists to prevent.
-    await expect(env.repo.tx(
-      tx => tx.update(id, {content: 'Novel'}),
-      {scope: ChangeScope.BlockDefault},
-    )).rejects.toMatchObject({code: 'alias.collision'})
-
-    const row = await env.repo.load(id)
-    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
   })
 
   // The gate reads `types` on every content edit in the workspace now, so a
@@ -716,36 +696,36 @@ describe('block-type typeify processor', () => {
   it('keeps the entries the alias index honours when renaming past a malformed bag', async () => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
-    await rawProperties(env, id, {
-      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
-      [blockTypeLabelProp.name]: 'Book',
-      [aliasesProp.name]: ['Book', 7, 'Other'],
-    })
+    await rawAliasCell(env, id, ['Book', 7, 'Other'])
 
     await env.repo.tx(
       tx => tx.update(id, {content: 'Novel'}),
       {scope: ChangeScope.BlockDefault},
     )
 
-    // 'Book' is retired by the rename, as always; 'Other' is a claim the
-    // rename has no business dropping, and the undecodable 7 claimed nothing.
-    expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Novel', 'Other'])
-    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Other'}).load())?.id).toBe(id)
-    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+    // Nothing the stored bag could not show is retired — not by the kernel and
+    // not by the plugin — because no reader of a rename could see it go. So
+    // the repaired bag keeps both old names and gains the new one, and this is
+    // the SAME answer the plugin-off case gives below.
+    expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Book', 'Other', 'Novel'])
+    for (const alias of ['Book', 'Other', 'Novel']) {
+      expect((await env.repo.query.aliasLookup({workspaceId: WS, alias}).load())?.id).toBe(id)
+    }
   })
 
-  // A scalar `alias` cell claims its text in the index just as a one-element
-  // list does — `json_each` yields the scalar itself — so a rename that reads
-  // it as "no claims" publishes a name nothing resolves to.
-  it('claims the new name past a scalar alias cell', async () => {
+  // The alias index doesn't care about SHAPE — a scalar cell indexes its text
+  // just as a one-element list does (`json_each` yields the scalar itself),
+  // and an object cell indexes the text values nested inside it — so a rename
+  // that reads either as "no claims" (because the bag doesn't decode)
+  // publishes a name nothing resolves to.
+  it.each([
+    ['scalar', 'Book'],
+    ['object-shaped', {primary: 'Book'}],
+  ])('claims the new name past a %s alias cell', async (_shape, cell) => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
-    await rawProperties(env, id, {
-      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
-      [blockTypeLabelProp.name]: 'Book',
-      [aliasesProp.name]: 'Book',
-    })
-    // The precondition: the trigger really did index the scalar.
+    await rawAliasCell(env, id, cell)
+    // The precondition: the trigger really did index the cell.
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
 
     await env.repo.tx(
@@ -754,26 +734,9 @@ describe('block-type typeify processor', () => {
     )
 
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
-  })
-
-  // The trigger indexes text values out of an OBJECT too, so the bag decoding
-  // to nothing says nothing about what this row claims.
-  it('claims the new name past an object-shaped alias cell', async () => {
-    env = await setup()
-    const id = await tagBlockType(env, 'Book')
-    await rawProperties(env, id, {
-      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
-      [blockTypeLabelProp.name]: 'Book',
-      [aliasesProp.name]: {primary: 'Book'},
-    })
+    // And the old name still resolves: the bag never showed it, so nothing may
+    // retire it — the plugin included.
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
-
-    await env.repo.tx(
-      tx => tx.update(id, {content: 'Novel'}),
-      {scope: ChangeScope.BlockDefault},
-    )
-
-    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
   })
 
   // A3: the old content was never an alias anchor, so the rename retires
@@ -782,16 +745,8 @@ describe('block-type typeify processor', () => {
   it('offers no dropped alias when the old content was never claimed', async () => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
-    await rawProperties(env, id, {
-      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
-      [blockTypeLabelProp.name]: 'Book',
-      [aliasesProp.name]: ['Other'],
-    })
-    const holder = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
-    await env.repo.tx(async tx => {
-      await tx.update(holder, {content: 'Novel'})
-      await tx.setProperty(holder, aliasesProp, ['Novel'])
-    }, {scope: ChangeScope.BlockDefault})
+    await rawAliasCell(env, id, ['Other'])
+    await claimAlias(env, 'Novel')
 
     await expect(env.repo.tx(
       tx => tx.update(id, {content: 'Novel'}),
@@ -851,34 +806,11 @@ describe('block-type typeify processor', () => {
     expect(row!.properties[aliasesProp.name]).toEqual(['See [[Bar]]'])
   })
 
-  // What the rename RETIRES has to be visible in the stored bag, because that
-  // is what every other reactor diffs — `references.renameBacklinks` reads the
-  // bag, so a claim released from the index alone takes its inbound links with
-  // it and nothing rewrites them. Keeping it costs a type that answers to two
-  // names; releasing it costs the links.
-  it('keeps a claim the stored bag cannot show when renaming', async () => {
-    env = await setup({alias: false})
-    const id = await tagBlockType(env, 'Book')
-    await rawProperties(env, id, {
-      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
-      [blockTypeLabelProp.name]: 'Book',
-      [aliasesProp.name]: ['Book', 7],
-    })
-
-    await env.repo.tx(
-      tx => tx.update(id, {content: 'Novel'}),
-      {scope: ChangeScope.BlockDefault},
-    )
-
-    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
-    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
-  })
-
   // A type tagged blank is UNNAMED, not broken: the first name it is given is
   // a new name and gets the check the tag path would have given it.
   it.each([
-    ['`]]`-lossy', 'Book]]Club'],
-    ['grammar-shaped', `((${'1'.repeat(8)}-1111-4111-8111-111111111111))`],
+    ['`]]`-lossy', LOSSY_NAME],
+    ['grammar-shaped', GRAMMAR_SHAPED_NAME],
   ])('refuses a first name that is %s on a type tagged blank', async (_l, content) => {
     env = await setup()
     const id = await tagBlockType(env, '   ')
@@ -891,6 +823,24 @@ describe('block-type typeify processor', () => {
     const row = await env.repo.load(id)
     expect(row!.properties[blockTypeLabelProp.name]).toBeUndefined()
     expect(row!.properties[aliasesProp.name]).toBeUndefined()
+  })
+
+  // The transition is read on BOTH sides, so a tx that writes a well-formed
+  // `types` cell over a malformed one completes the type instead of throwing
+  // the codec error out of the pass.
+  it('types a block whose previous types cell was malformed', async () => {
+    env = await setup()
+    const id = await createBlock(env, 'Widget')
+    await rawProperties(env, id, {types: 'block-type'})
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {properties: {types: [BLOCK_TYPE_TYPE]}}),
+      {scope: ChangeScope.BlockDefault},
+    )).resolves.toBeUndefined()
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Widget')
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Widget'}).load())?.id).toBe(id)
   })
 
   it('leaves an ordinary block alone when its content changes', async () => {
@@ -918,13 +868,91 @@ describe('block-type typeify processor', () => {
 
   it('rejects when the adopted name collides with an existing page alias', async () => {
     env = await setup()
-    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
-    await env.repo.tx(async tx => {
-      await tx.update(pageId, {content: 'Book'})
-      await tx.setProperty(pageId, aliasesProp, ['Book'])
-    }, {scope: ChangeScope.BlockDefault})
+    await claimAlias(env, 'Book')
 
     await expect(tagBlockType(env, 'Book')).rejects.toMatchObject({code: 'alias.collision'})
+  })
+
+  describe('with the alias plugin off', () => {
+    it('claims the renamed name with the alias plugin absent', async () => {
+      env = await setup({alias: false})
+      const id = await tagBlockType(env, 'Book')
+
+      await env.repo.tx(
+        tx => tx.update(id, {content: 'Novel'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+
+      const row = await env.repo.load(id)
+      expect(row!.properties[blockTypeLabelProp.name]).toBe('Novel')
+      expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+      // The rename RETIRES the old name here too: with no plugin to do it, an
+      // append-only claim would leave the type answering to both names forever.
+      expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
+    })
+
+    it('refuses a rename onto a taken name with the alias plugin absent', async () => {
+      env = await setup({alias: false})
+      const id = await tagBlockType(env, 'Book')
+      await claimAlias(env, 'Novel')
+
+      // Nothing else would: committing the label while skipping the claim is the
+      // unlinkable type this path exists to prevent.
+      await expect(env.repo.tx(
+        tx => tx.update(id, {content: 'Novel'}),
+        {scope: ChangeScope.BlockDefault},
+      )).rejects.toMatchObject({code: 'alias.collision'})
+
+      const row = await env.repo.load(id)
+      expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    })
+
+    // What the rename RETIRES has to be visible in the stored bag, because that
+    // is what every other reactor diffs — `references.renameBacklinks` reads the
+    // bag, so a claim released from the index alone takes its inbound links with
+    // it and nothing rewrites them. Keeping it costs a type that answers to two
+    // names; releasing it costs the links.
+    it('keeps a claim the stored bag cannot show when renaming', async () => {
+      env = await setup({alias: false})
+      const id = await tagBlockType(env, 'Book')
+      await rawAliasCell(env, id, ['Book', 7])
+
+      await env.repo.tx(
+        tx => tx.update(id, {content: 'Novel'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+
+      expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+      expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+    })
+
+    // A rewrite of an already-unwritable name must not take an unrelated tx down
+    // with it, and refusing a COLLISION is a refusal like any other: the name
+    // nothing can link to is not claimed, so there is nothing to collide. Plugin
+    // off, because the reachable shape is a LATE rewrite — `renameBacklinks`
+    // retitling this type inside someone else's rename, after `alias.sync` has
+    // already run — and only the kernel's rerun acts there.
+    it('commits a legacy rewrite even when the new spelling is claimed elsewhere', async () => {
+      env = await setup({alias: false})
+      const id = await tagBlockType(env, 'Book')
+      await rawProperties(env, id, {
+        types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+        [blockTypeLabelProp.name]: 'See [[Foo]]',
+        [aliasesProp.name]: ['See [[Foo]]'],
+      }, 'See [[Foo]]')
+      const squatter = await claimAlias(env, 'See [[Bar]]')
+
+      await expect(env.repo.tx(
+        tx => tx.update(id, {content: 'See [[Bar]]'}),
+        {scope: ChangeScope.BlockDefault},
+      )).resolves.toBeUndefined()
+
+      const row = await env.repo.load(id)
+      expect(row!.content).toBe('See [[Bar]]')
+      expect(row!.properties[blockTypeLabelProp.name]).toBe('See [[Bar]]')
+      expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'See [[Bar]]'}).load())?.id)
+        .toBe(squatter)
+    })
   })
 })
 

@@ -22,7 +22,7 @@ describe('writeBlockTypeLabel', () => {
 
   /** Fresh repo + one alias-less `block-type` block (`type-1`), mirroring
    *  the Types-page "New type" button: created with an empty label and no
-   *  alias. Optional `initialAlias` simulates a `createTypeBlock`-minted
+   *  alias. Optional `aliases` simulates a `createTypeBlock`-minted
    *  type that already claims its label. */
   const setupTypeBlock = async (
     initial: { label?: string; content?: string; aliases?: readonly string[] } = {},
