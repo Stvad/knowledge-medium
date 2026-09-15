@@ -48,6 +48,7 @@ import {
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
   ensureBlockLocalColumns,
 } from '@/data/blockSchema'
@@ -505,6 +506,9 @@ export const initializeClientSchema = async (db: SchemaDb): Promise<void> => {
   // EXISTS above is a no-op when the table already exists) + one-shot
   // backfill. See hydration-staleness-fix-handoff.md step 3.
   await ensureBlockUserUpdatedAtColumn(db)
+  // After the migration above, not with the other blocks indexes: it is keyed
+  // on `user_updated_at`, which an upgrading device does not have until then.
+  await runDdl(db, [CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL])
 
   // Idempotent local migration: add the E2EE columns to an existing
   // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
