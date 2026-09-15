@@ -658,9 +658,10 @@ describe('block-type typeify processor', () => {
 
     const row = await env.repo.load(id)
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Novel')
-    // Nothing moves the old claim without the plugin; what matters is that the
-    // name the registry publishes resolves to this block.
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+    // The rename RETIRES the old name here too: with no plugin to do it, an
+    // append-only claim would leave the type answering to both names forever.
+    expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
   })
 
   it('refuses a rename onto a taken name with the alias plugin absent', async () => {
@@ -719,7 +720,8 @@ describe('block-type typeify processor', () => {
 
     // 'Book' is retired by the rename, as always; 'Other' is a claim the
     // rename has no business dropping, and the undecodable 7 claimed nothing.
-    expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Novel', 'Other'])
+    // Order comes from the index for a bag that could not be decoded.
+    expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Other', 'Novel'])
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Other'}).load())?.id).toBe(id)
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
   })
@@ -744,6 +746,73 @@ describe('block-type typeify processor', () => {
     )
 
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+  })
+
+  // The trigger indexes text values out of an OBJECT too, so the bag decoding
+  // to nothing says nothing about what this row claims.
+  it('claims the new name past an object-shaped alias cell', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: {primary: 'Book'},
+    })
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+  })
+
+  // A3: the old content was never an alias anchor, so the rename retires
+  // nothing — and the merge offer must not be told to drop a title this block
+  // does not hold, or accepting it would strand that name.
+  it('offers no dropped alias when the old content was never claimed', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: ['Other'],
+    })
+    const holder = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+    await env.repo.tx(async tx => {
+      await tx.update(holder, {content: 'Novel'})
+      await tx.setProperty(holder, aliasesProp, ['Novel'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      code: 'alias.collision',
+      meta: {dropSourceAliases: [], collisionOrigin: 'content-rename'},
+    })
+  })
+
+  // Every write on this path reconciles somebody else's change, so a DERIVED
+  // content rewrite must not float the type into recents.
+  it('does not stamp the type as user-touched when the rename is derived', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    const stampOf = async (): Promise<number> => {
+      const row = await env.h.db.getOptional<{user_updated_at: number}>(
+        'SELECT user_updated_at FROM blocks WHERE id = ?', [id])
+      return row!.user_updated_at
+    }
+    const before = await stampOf()
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}, {skipMetadata: true}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect(await env.repo.load(id).then(r => r!.properties[blockTypeLabelProp.name])).toBe('Novel')
+    expect(await stampOf()).toBe(before)
   })
 
   it('leaves an ordinary block alone when its content changes', async () => {

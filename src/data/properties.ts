@@ -547,27 +547,6 @@ export const wellFormedBlockTypes = (
     : null
 }
 
-/** The alias entries the INDEX honours, for a writer about to put the bag
- *  back. `null` for a stored shape this cannot model — leave that one alone.
- *
- *  The trigger walks `$.alias` with `json_each` and takes every TEXT value, so
- *  a bag the codec refuses (`["Book", 7]`) still claims `Book` and still
- *  resolves. {@link getAliases} reads that as claiming nothing, which is the
- *  right answer for "what does this row declare" and the wrong one to rebuild
- *  the bag from: the rewrite releases names that resolve, and hands them to
- *  nobody. Pick by the question — see `bd recall reference_alias_index_vs_bag`. */
-export const getIndexedAliases = (
-  data: Pick<BlockData, 'properties'>,
-): readonly string[] | null => {
-  const raw = data.properties[aliasesProp.name]
-  if (raw === undefined) return []
-  // `json_each` over a scalar yields that one value, so a stored `"Book"`
-  // claims `Book` in the index exactly as `["Book"]` does (measured).
-  if (typeof raw === 'string') return [raw]
-  if (!Array.isArray(raw)) return null
-  return raw.filter((entry): entry is string => typeof entry === 'string')
-}
-
 /** The block's `alias` list, tolerant of an absent / malformed value
  *  (treated as none). Shared by every reader that only needs "which
  *  aliases does this row claim" — the alias-sync processor, the

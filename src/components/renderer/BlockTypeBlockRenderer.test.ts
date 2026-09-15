@@ -25,7 +25,7 @@ describe('writeBlockTypeLabel', () => {
    *  alias. Optional `initialAlias` simulates a `createTypeBlock`-minted
    *  type that already claims its label. */
   const setupTypeBlock = async (
-    initial: { label?: string; content?: string; alias?: string } = {},
+    initial: { label?: string; content?: string; aliases?: readonly string[] } = {},
   ): Promise<Repo> => {
     let idSeq = 0
     const { repo } = createTestRepo({
@@ -46,8 +46,8 @@ describe('writeBlockTypeLabel', () => {
       })
       await repo.addTypeInTx(tx, 'type-1', BLOCK_TYPE_TYPE, {})
       await tx.setProperty('type-1', blockTypeLabelProp, initial.label ?? '')
-      if (initial.alias !== undefined) {
-        await tx.setProperty('type-1', aliasesProp, [initial.alias])
+      if (initial.aliases !== undefined) {
+        await tx.setProperty('type-1', aliasesProp, [...initial.aliases])
       }
     }, {scope: ChangeScope.BlockDefault, description: 'create type'})
 
@@ -94,17 +94,18 @@ describe('writeBlockTypeLabel', () => {
   })
 
   it('does not overwrite an existing alias when the label is renamed', async () => {
-    // A `createTypeBlock`-minted type already claims its label; RETIRING that
-    // claim on a rename belongs to `aliasSyncProcessor` (content → alias), so
-    // `writeBlockTypeLabel` must not re-seed / clobber the alias. `Writer` is
-    // the kernel typeify processor claiming the new name — additively, and
-    // with no alias plugin in this harness to fold the old one away.
-    const repo = await setupTypeBlock({ label: 'Author', content: 'Author', alias: 'Author' })
+    // A `createTypeBlock`-minted type already claims its label, and the rename
+    // retires exactly that one name: `Pen name` is a claim the user added and
+    // nothing here may drop it. `writeBlockTypeLabel`'s own seeding branch
+    // would re-seed the bag to `['Writer']`, which is what this catches.
+    const repo = await setupTypeBlock({
+      label: 'Author', content: 'Author', aliases: ['Author', 'Pen name'],
+    })
     const block = repo.block('type-1')
     await writeBlockTypeLabel(block, 'Author', 'Author', 'Writer')
 
     expect(block.peekProperty(blockTypeLabelProp)).toBe('Writer')
-    expect(block.peekProperty(aliasesProp)).toEqual(['Author', 'Writer'])
+    expect(block.peekProperty(aliasesProp)).toEqual(['Pen name', 'Writer'])
   })
 
   // The editor captured `Author` when it rendered; a rename — remote, or from
@@ -114,7 +115,7 @@ describe('writeBlockTypeLabel', () => {
   // `content` too, so `aliasSyncProcessor`'s blank-content guard will not
   // come back for it either.
   it('releases the label as stored, not as captured, when a rename landed first', async () => {
-    const repo = await setupTypeBlock({ label: 'Author', content: 'Author', alias: 'Author' })
+    const repo = await setupTypeBlock({ label: 'Author', content: 'Author', aliases: ['Author'] })
     const block = repo.block('type-1')
     await repo.tx(async tx => {
       await tx.setProperty('type-1', blockTypeLabelProp, 'Editor')
@@ -136,7 +137,7 @@ describe('writeBlockTypeLabel', () => {
     // won't release the alias, so writeBlockTypeLabel must — else [[Author]]
     // keeps resolving to a now-typeless block and re-creating "Author"
     // collides. User-added aliases (`Scribe`) survive.
-    const repo = await setupTypeBlock({ label: 'Author', content: 'Author', alias: 'Author' })
+    const repo = await setupTypeBlock({ label: 'Author', content: 'Author', aliases: ['Author'] })
     const block = repo.block('type-1')
     await repo.tx(async tx => {
       await tx.setProperty('type-1', aliasesProp, ['Author', 'Scribe'])

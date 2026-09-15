@@ -63,7 +63,7 @@ import {
   aliasesProp,
   blockTypeLabelProp,
   getBlockTypes,
-  getIndexedAliases,
+  getAliases,
   wellFormedBlockTypes,
 } from '@/data/properties'
 import { assertAliasClaimable } from '@/data/aliasClaim'
@@ -96,20 +96,35 @@ const assertWritableTypeName = (name: string): void => {
   assertRoundTrippableReferenceLabel(name, 'Block type label')
 }
 
-/** Ensure-present, and rebuilt from what the alias INDEX honours rather than
- *  from the decoded bag: a malformed stored value decodes to nothing, so
- *  writing the bag back from it would release names that still resolve. A
- *  shape `getIndexedAliases` cannot model is left untouched — an unclaimed
- *  name beats a released one. */
-const claimName = async (
+/** Claim `name` for this type, retiring `retiring` in the SAME write.
+ *
+ *  Membership comes from the INDEX (`tx.aliasesOf`), which is the authority on
+ *  what a row claims: the trigger indexes every text value `json_each` yields,
+ *  from a bare scalar and an object as well as an array, and re-deriving that
+ *  in TypeScript is the whack-a-mole its own contract warns about — each shape
+ *  missed releases a name. The stored bag supplies only ORDER, for the entries
+ *  it can decode.
+ *
+ *  One write rather than append-then-retire, because the intermediate bag goes
+ *  through the maintenance trigger too: it would re-insert the name being
+ *  given up, and renaming AWAY from a name some sync-applied row co-claims
+ *  would abort on the retiring name. */
+const claimTypeName = async (
   id: string,
   after: BlockData,
   name: string,
   ctx: SameTxCtx,
+  {retiring, derived = false}: {retiring?: string; derived?: boolean} = {},
 ): Promise<void> => {
-  const claimed = getIndexedAliases(after)
-  if (claimed === null || claimed.includes(name)) return
-  await ctx.tx.setProperty(id, aliasesProp, [...claimed, name])
+  const claimed = await ctx.tx.aliasesOf(id)
+  const stored = getAliases(after)
+  const ordered = [
+    ...stored.filter(alias => claimed.includes(alias)),
+    ...claimed.filter(alias => !stored.includes(alias)),
+  ]
+  const next = [...ordered.filter(alias => alias !== retiring && alias !== name), name]
+  // `setProperty` elides a write that changes nothing, so no guard here.
+  await ctx.tx.setProperty(id, aliasesProp, next, derived ? {skipMetadata: true} : {})
 }
 
 const completeNewType = async (
@@ -158,7 +173,7 @@ const completeNewType = async (
   if (name !== '' && after.content !== name) {
     await ctx.tx.update(row.id, {content: name})
   }
-  if (name !== '') await claimName(row.id, after, name, ctx)
+  if (name !== '') await claimTypeName(row.id, after, name, ctx)
 }
 
 /** A content write on a block that is already a type is a RENAME — content is
@@ -187,22 +202,30 @@ const followRenamedContent = async (
   // the claim would publish exactly such a type. Retiring the OLD claim stays
   // the plugin's: its rule 1 replaces that entry and dedupes this one away in
   // the same pass.
+  // Only a name this row actually claims is being retired, so only that one
+  // may be offered up for the merge — `alias.sync` reports the same empty list
+  // when the old content was never an alias anchor (its A3 drift case).
+  const retiring = (await ctx.tx.aliasesOf(row.id)).includes(row.before.content)
+    ? row.before.content
+    : undefined
   await assertAliasClaimable(ctx.tx, {
     alias: name,
     blockId: row.id,
     workspaceId: after.workspaceId,
-    // What the merge offer must drop from this block to take the name: the
-    // entry the rename is retiring, exactly as `alias.sync` reports it.
-    dropSourceAliases: row.before.content === '' ? [] : [row.before.content],
+    dropSourceAliases: retiring === undefined ? [] : [retiring],
     collisionOrigin: 'content-rename',
   })
-  await claimName(row.id, after, name, ctx)
+  await claimTypeName(row.id, after, name, ctx, {retiring, derived: true})
 
+  // `skipMetadata`, like every write here: this reconciles a content change
+  // somebody else made, and a derived rewrite (`references.renameBacklinks`
+  // retitling a type whose name embeds a renamed wikilink) would otherwise
+  // float the type into recents with nobody having touched it.
   if (currentLabel !== name) {
-    await ctx.tx.setProperty(row.id, blockTypeLabelProp, name)
+    await ctx.tx.setProperty(row.id, blockTypeLabelProp, name, {skipMetadata: true})
   }
   if (after.content !== name) {
-    await ctx.tx.update(row.id, {content: name})
+    await ctx.tx.update(row.id, {content: name}, {skipMetadata: true})
   }
 }
 
