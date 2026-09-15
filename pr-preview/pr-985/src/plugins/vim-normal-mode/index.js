@@ -1,1 +1,1 @@
-import{Qm as e,Zm as t}from"../../../chunks/app-CdwtlHTq.js";export{t as vimNormalModeInteractionExtension,e as vimNormalModePlugin};
+import{Qm as e,Zm as t}from"../../../chunks/app-1ottDgZb.js";export{t as vimNormalModeInteractionExtension,e as vimNormalModePlugin};
