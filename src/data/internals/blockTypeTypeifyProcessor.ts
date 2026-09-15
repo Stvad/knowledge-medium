@@ -186,13 +186,19 @@ const followRenamedContent = async (
   // guard is `=== ''`, so `"   "` would otherwise be claimed as the name.
   const name = after.content.trim() || currentLabel
   if (name === '') return
-  // Refuse a REGRESSION, not a row that arrived broken: `references.renameBacklinks`
-  // retitles a type whose name embeds the wikilink being renamed, inside that
-  // rename's own tx, and throwing there would roll an unrelated rename back for
-  // good. An UNNAMED type is not a broken one — its first name is a new name.
-  const previousName = readLabel(before) || before.content.trim()
-  const arrivedBroken = previousName !== '' && !isWritableLabel(previousName)
-  if (!arrivedBroken) assertWritableTypeName(name)
+  if (!isWritableLabel(name)) {
+    // Refuse a REGRESSION, not a row that arrived broken: `references.renameBacklinks` retitles a type whose name embeds the wikilink being renamed,
+    // inside that rename's own tx, and throwing there would roll an unrelated
+    // rename back for good. The name being replaced is the CONTENT — that is
+    // what this rewrite is replacing — and an UNNAMED type is not a broken one:
+    // its first name is a new name.
+    const previousName = before.content.trim() || currentLabel
+    if (previousName === '' || isWritableLabel(previousName)) assertWritableTypeName(name)
+    // Past that, a broken row may have its spellings brought into agreement,
+    // but never at the cost of a name that still works: the label is what the
+    // registry publishes, so an unwritable rewrite leaves a writable one alone.
+    if (isWritableLabel(currentLabel)) return
+  }
 
   // Only a name that CAN be linked to is claimed. An unwritable one buys
   // nothing by being claimed, and refusing its collision would abort whatever
@@ -205,7 +211,12 @@ const followRenamedContent = async (
     // strands the inbound `[[old name]]` links nothing will rewrite. It
     // doubles as what the merge offer may drop, and matches the empty list
     // `alias.sync` reports for its A3 drift case.
-    const retiring = getAliases(before).includes(before.content) ? before.content : undefined
+    // Matched on the trimmed spelling: a legacy row can store `" Book "` as its
+    // content while the claim it made is `Book`, and those are one name.
+    const previousName = before.content.trim()
+    const retiring = previousName === ''
+      ? undefined
+      : getAliases(before).find(alias => alias.trim() === previousName)
 
     // The whole claim moves HERE — old name retired, new one taken — rather
     // than being left to `aliasSyncProcessor`: that plugin is togglable, and a

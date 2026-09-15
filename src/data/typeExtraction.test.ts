@@ -843,6 +843,48 @@ describe('block-type typeify processor', () => {
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Widget'}).load())?.id).toBe(id)
   })
 
+  // A legacy row can have a WORKING label over an unwritable body. Retitling
+  // that body — again, inside somebody else's rename — must neither roll that
+  // rename back nor take the name the registry publishes away from this type.
+  it('keeps a working label when an unwritable body is rewritten', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: ['Book'],
+    }, 'See [[Foo]]')
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {content: 'See [[Bar]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )).resolves.toBeUndefined()
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
+  // Padding is not a different name: a legacy row storing `" Book "` as its
+  // content claimed `Book`, and a rename retires the claim it actually made.
+  it('retires a padded old name on rename', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: ['Book'],
+    }, ' Book ')
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Novel'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Novel'])
+    expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
+  })
+
   it('leaves an ordinary block alone when its content changes', async () => {
     env = await setup()
     const id = await createBlock(env, 'Just a block')

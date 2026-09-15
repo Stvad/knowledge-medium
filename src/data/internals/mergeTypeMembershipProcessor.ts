@@ -122,11 +122,12 @@ type TypeCellRewrite =
  *  `rewriteRefValue` does for ref cells), so a malformed cell is recognized
  *  rather than throwing a `CodecError` that would roll back the merge.
  *
- *  A malformed cell is left untouched because it CANNOT be retargeted in this
- *  tx: any write dirties the row for typeify's `rerunOnDirtyRows` pass, which
- *  decodes the BEFORE snapshot — still malformed — and throws. Such cells reach
- *  here from sync-applied rows, which bypass the same-tx pass while the
- *  `block_types` triggers still index them.
+ *  A malformed cell is left untouched by CHOICE, not because a write would
+ *  abort (typeify reads both snapshots tolerantly now): the shape is not a
+ *  membership the codec or the registry accepts, so rewriting it in-tx would
+ *  mint one the rest of the system still refuses. Repair belongs to the audit
+ *  query, out of tx. Such cells reach here from sync-applied rows, which bypass
+ *  the same-tx pass while the `block_types` triggers still index them.
  *
  *  No `projectedIdOf` trim: membership tokens are compared verbatim everywhere,
  *  so `' x'` and `'x'` are different tokens and trimming would retarget one that
