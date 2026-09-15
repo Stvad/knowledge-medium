@@ -1,0 +1,1 @@
+import{IC as e,LC as t}from"../../chunks/app-BH7adpgu.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

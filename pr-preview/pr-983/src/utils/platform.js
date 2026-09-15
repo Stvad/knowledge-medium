@@ -1,0 +1,1 @@
+import{LM as e,RM as t}from"../../chunks/app-BH7adpgu.js";export{e as isIOS,t as isMacPlatform};

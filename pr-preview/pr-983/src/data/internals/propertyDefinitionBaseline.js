@@ -1,0 +1,1 @@
+import{UH as e,WH as t}from"../../../chunks/app-BH7adpgu.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};

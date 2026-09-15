@@ -1,0 +1,1 @@
+import{f$ as e,p$ as t}from"../../chunks/app-BH7adpgu.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
