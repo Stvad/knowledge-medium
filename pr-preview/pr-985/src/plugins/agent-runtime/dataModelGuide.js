@@ -1,1 +1,1 @@
-import{Ql as e}from"../../../chunks/app-1ottDgZb.js";export{e as DATA_MODEL_GUIDE};
+import{Ql as e}from"../../../chunks/app-DW31eZrS.js";export{e as DATA_MODEL_GUIDE};

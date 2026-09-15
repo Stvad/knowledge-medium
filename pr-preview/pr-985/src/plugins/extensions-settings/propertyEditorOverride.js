@@ -1,1 +1,1 @@
-import{vt as e}from"../../../chunks/app-1ottDgZb.js";export{e as extensionsOverridesUi};
+import{vt as e}from"../../../chunks/app-DW31eZrS.js";export{e as extensionsOverridesUi};
