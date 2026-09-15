@@ -28,7 +28,13 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from './repo'
-import { aliasesProp, isCollapsedProp } from '@/data/properties'
+import {
+  addBlockTypeToProperties,
+  aliasesProp,
+  blockTypeLabelProp,
+  isCollapsedProp,
+} from '@/data/properties'
+import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 
 interface Harness {
   h: TestDb
@@ -1274,6 +1280,30 @@ describe('core.merge', () => {
       await seedWithProps({title: 'Target'}, {title: 'Source'})
       await env.repo.mutate.merge({intoId: 'into', fromId: 'from'})
       expect(env.read('into')!.properties.title).toBe('Target')
+    })
+
+    // A type's label is its NAME: inherited, it would name the survivor twice
+    // over and the kernel would refuse the fold outright. The folded name is
+    // not lost — the alias union carries it.
+    it('names the survivor after its own text when a type is folded in', async () => {
+      await env.repo.tx(
+        tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.mutate.createChild({parentId: 'p', id: 'into', content: 'Plain page'})
+      await env.repo.mutate.createChild({
+        parentId: 'p',
+        id: 'from',
+        content: 'Dancer',
+        properties: addBlockTypeToProperties({}, BLOCK_TYPE_TYPE),
+      })
+
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from', contentStrategy: 'keepTarget'})
+
+      const row = env.read('into')!
+      expect(row.content).toBe('Plain page')
+      expect(row.properties[blockTypeLabelProp.name]).toBe('Plain page')
+      expect(row.properties[aliasesProp.name]).toEqual(['Dancer', 'Plain page'])
     })
 
     it('merges alias arrays without tripping the uniqueness trigger', async () => {

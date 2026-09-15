@@ -13,6 +13,7 @@ import {
   materializePropertyChildrenForExistingRow,
 } from './internals/propertyChildrenProcessor'
 import { mergeProperties } from './mergeProperties'
+import { blockTypeLabelProp } from './properties'
 
 export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }
 
@@ -50,6 +51,25 @@ export const computeMergedContent = (
     return intoContent.length > 0 ? intoContent : fromContent
   }
   return intoContent + strategy.separator + fromContent
+}
+
+/** A type's label is its NAME, not a value to inherit. It rides the property
+ *  union like any other key, so folding a type into a differently-named block
+ *  left the survivor named two things at once — which the kernel refuses to
+ *  tag (`blockType.nameConflict`), rolling the fold back. The survivor keeps
+ *  its own label instead: `core.blockTypeTypeify` names it after the surviving
+ *  content when it has none, and the folded type's name lives on as an alias
+ *  through the same union. */
+const keepOwnTypeLabel = (
+  ownProps: Record<string, unknown>,
+  merged: Record<string, unknown>,
+): Record<string, unknown> => {
+  const key = blockTypeLabelProp.name
+  if (merged[key] === ownProps[key]) return merged
+  const out = {...merged}
+  if (Object.hasOwn(ownProps, key)) out[key] = ownProps[key]
+  else delete out[key]
+  return out
 }
 
 /** Fold one block into another. Thin wrapper — see `foldBlocksInTx`. */
@@ -268,7 +288,10 @@ export const foldBlocksInTx = async (
   // write-elision.
   if (folded.length === 0) return
 
-  await tx.update(into.id, {content: mergedContent, properties: mergedProperties})
+  await tx.update(into.id, {
+    content: mergedContent,
+    properties: keepOwnTypeLabel(into.properties, mergedProperties),
+  })
 
   for (const from of folded) {
     tx.emitEvent(CORE_BLOCK_MERGED_EVENT, {
