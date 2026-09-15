@@ -14,7 +14,7 @@
  */
 import 'fake-indexeddb/auto'
 import { IDBFactory } from 'fake-indexeddb'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DbMirrorSettingsDialog } from '../DbMirrorSettingsDialog.tsx'
@@ -331,6 +331,7 @@ describe('DbMirrorSettingsDialog', () => {
     )
     fireEvent.click(screen.getByRole('button', {name: /grant access again/i}))
     await waitFor(() => expect(mocks.requestDirectoryPermission).toHaveBeenCalled())
+    await screen.findByRole('button', {name: /requesting/i})
 
     // The folder moves on, and a run against it records a real failure.
     await store.setDirectory(USER, fakeDirectory('Elsewhere'))
@@ -339,10 +340,23 @@ describe('DbMirrorSettingsDialog', () => {
       {lastError: 'the new drive is full'},
       {ifDirectoryEpoch: (await store.load(USER)).directoryEpoch},
     )
-    release('granted')
 
-    await waitFor(() => expect(mocks.requestDirectoryPermission).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(store.getSnapshot()?.status.lastError).toBe('the new drive is full'))
+    // Everything below is fenced on the handler's OWN write, because nothing on
+    // screen can stand in for it: the re-grant button is gone once the folder
+    // moves on, and the failure asserted below was recorded BEFORE the release,
+    // so asserting it unfenced would pass whether or not the granted branch ever
+    // ran — and leave it running into the next test.
+    const granted = vi.spyOn(store, 'recordStatus')
+    release('granted')
+    await waitFor(() => expect(granted).toHaveBeenCalled())
+    // The write, and then the turn on which the handler decides what to do
+    // with its answer.
+    await act(async () => { await granted.mock.results.at(-1)?.value })
+
+    expect(store.getSnapshot()?.status.lastError).toBe('the new drive is full')
+    // The refusal has to reach the schedule too: re-arming here promises a
+    // mirror against a failure that is still on record.
+    expect(mocks.resume).not.toHaveBeenCalled()
   })
 
   it('a re-grant the browser refuses leaves the flag set', async () => {

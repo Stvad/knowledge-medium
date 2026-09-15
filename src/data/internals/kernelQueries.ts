@@ -332,13 +332,27 @@ export const SELECT_USER_PAGE_IDS_SQL = `
  *  The walk deliberately does NOT filter `deleted = 0` — sync-apply
  *  permits a live child under a tombstoned parent, so stopping at a
  *  tombstone would leak a state row into the feed. The outer query
- *  still filters deleted rows out of the result. */
+ *  still filters deleted rows out of the result.
+ *
+ *  Which is why the descent is TWO recursive terms rather than one
+ *  `deleted`-blind join: the only `parent_id`-leading indexes are the
+ *  complementary partials `idx_blocks_parent_order` (`deleted = 0`) and
+ *  `idx_blocks_parent_deleted` (`deleted = 1`), so each arm must carry its
+ *  `deleted` predicate literally as the partial-index proof. A step that
+ *  proves neither gets no index and scans every row of `blocks`, once per
+ *  iteration. The two arms are the whole table: `deleted` is `NOT NULL
+ *  DEFAULT 0` and only ever written as 0 or 1. */
 export const SELECT_RECENT_USER_BLOCKS_SQL = `
   WITH RECURSIVE user_state(id) AS (
     SELECT value FROM json_each(?)
     UNION
     SELECT b.id FROM blocks b
       JOIN user_state ON b.parent_id = user_state.id
+     WHERE b.deleted = 0
+    UNION
+    SELECT b.id FROM blocks b
+      JOIN user_state ON b.parent_id = user_state.id
+     WHERE b.deleted = 1
   )
   SELECT ${buildQualifiedBlockColumnsSql('blocks')}
   FROM blocks

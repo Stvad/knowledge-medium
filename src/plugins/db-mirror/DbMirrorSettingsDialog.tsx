@@ -176,6 +176,11 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
     requestDirectoryPermission(directory)
       .then(async result => {
         if (result === 'granted') {
+          // Undefined covers both ways this can fail to clear anything: the
+          // save threw, or the folder moved on and the store refused. Re-arming
+          // on either would promise a mirror against a failure still on record.
+          // A refusal is silent on purpose — the new folder's own error is
+          // already on screen, and it is the one that matters.
           const cleared = await saving(dbMirrorStore.recordStatus(userId, {
             permissionLost: false,
             lastError: undefined,

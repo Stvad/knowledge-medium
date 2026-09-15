@@ -225,12 +225,19 @@ export interface DbMirrorStore {
    *  omitted it and could land a stale run's verdict on the folder the user had
    *  just chosen. Omitting it is now a compile error, so every call site — and
    *  every future one — has to say which it is. `undefined` means "not
-   *  folder-scoped", as a statement rather than as a default. */
+   *  folder-scoped", as a statement rather than as a default.
+   *
+   *  Resolves to `undefined` when that condition refused the write — the
+   *  folder moved on, and nothing was recorded. The refusal is in the RESULT
+   *  rather than in a state the caller has to re-inspect, because a caller
+   *  cannot re-derive it without a second copy of the condition, and a caller
+   *  that only checks "did this resolve" reads a refusal as a completed
+   *  write. A non-folder-scoped write never refuses. */
   recordStatus: (
     userId: string,
     patch: DbMirrorStatus,
     opts: {ifDirectoryEpoch: number | undefined},
-  ) => Promise<DbMirrorState>
+  ) => Promise<DbMirrorState | undefined>
   /** The last loaded state, or null before the first load. Stable BETWEEN
    *  writes, which is what `useSyncExternalStore` needs; a re-read publishes a
    *  freshly built object even when storage has not changed, and at one read
@@ -273,12 +280,21 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
    * `mutate` is therefore SYNCHRONOUS: an await inside it would yield to a
    * later task and the transaction would auto-commit out from under it (see the
    * activeness contract in `idbKeyedStore`).
+   *
+   * `mutate` returning `undefined` means this write declined to apply: the
+   * record keeps the values it was read with, and the caller is told, rather
+   * than handed back a state object it cannot tell apart from a completed
+   * write.
+   *
+   * A declined write still publishes what it read. The refusal means the
+   * folder moved on, so the state in hand is NEWER than the caller's — the
+   * surface that asked is the one that should show it.
    */
-  const update = (
+  const applyUpdate = (
     userId: string,
-    mutate: (state: DbMirrorState) => DbMirrorState,
+    mutate: (state: DbMirrorState) => DbMirrorState | undefined,
     persist = true,
-  ): Promise<DbMirrorState> => {
+  ): Promise<{state: DbMirrorState; applied: boolean}> => {
     const keys = keysFor(userId)
     return idb
       .runTransaction(persist ? 'readwrite' : 'readonly', async store => {
@@ -297,7 +313,7 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
           typeof stored?.installId === 'string' && INSTALL_ID_PATTERN.test(stored.installId)
             ? stored.installId
             : undefined
-        const updated = mutate({
+        const read = {
           settings: normalizeSettings(stored?.settings),
           status: normalizeStatus(stored?.status),
           directory: directory ?? undefined,
@@ -306,8 +322,18 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
           // one the copies already in the folder were named for.
           installId: known ?? (persist ? mintInstallId() : undefined),
           directoryEpoch: isFiniteNumber(stored?.directoryEpoch) ? stored.directoryEpoch : undefined,
-        })
-        if (persist) {
+        }
+        const mutated = mutate(read)
+        const applied = mutated !== undefined
+        // A declined write writes NOTHING, and `read` is why that is not the
+        // no-op it looks like: it is the stored record REBUILT — normalized,
+        // and carrying an id this call would mint if the stored one is missing
+        // or unusable. Persisting that would change the record on a write the
+        // store just refused, while the suppressed broadcast below told every
+        // other tab nothing had happened. The repair is not lost; it rides the
+        // next write that does apply.
+        const updated = mutated ?? {...read, installId: known}
+        if (persist && applied) {
           store.put(
             {
               settings: updated.settings,
@@ -320,11 +346,13 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
           if (updated.directory) store.put(updated.directory, keys.directory)
           else store.delete(keys.directory)
         }
-        return updated
+        return {state: updated, applied}
       })
-      .then(updated => {
-        if (persist) channel?.postMessage(userId)
-        return publish(userId, updated)
+      .then(({state, applied}) => {
+        // A refusal wrote nothing, so there is nothing for another tab to
+        // re-read.
+        if (persist && applied) channel?.postMessage(userId)
+        return {state: publish(userId, state), applied}
       })
       .catch((err: unknown) => {
         // NOT swallowed into the defaults. Answering "off, no folder" for a
@@ -338,6 +366,15 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         throw err
       })
   }
+
+  /** `applyUpdate` for the writes that have no condition to fail: `mutate`
+   *  returns a state, so `applied` is always true and the caller is spared a
+   *  verdict that cannot vary. */
+  const update = (
+    userId: string,
+    mutate: (state: DbMirrorState) => DbMirrorState,
+    persist = true,
+  ): Promise<DbMirrorState> => applyUpdate(userId, mutate, persist).then(({state}) => state)
 
   const reload = (): void => {
     if (snapshotUserId === null) return
@@ -370,11 +407,11 @@ export const createDbMirrorStore = (dbName = 'km-db-mirror'): DbMirrorStore => {
         settings: normalizeSettings({...state.settings, ...patch}),
       })),
     recordStatus: (userId, patch, opts) =>
-      update(userId, state =>
+      applyUpdate(userId, state =>
         opts.ifDirectoryEpoch !== undefined && state.directoryEpoch !== opts.ifDirectoryEpoch
-          ? state
+          ? undefined
           : {...state, status: normalizeStatus({...state.status, ...patch})},
-      ),
+      ).then(({state, applied}) => applied ? state : undefined),
     setDirectory: (userId, directory) =>
       update(userId, state => ({
         ...state,

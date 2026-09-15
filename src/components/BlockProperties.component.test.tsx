@@ -856,6 +856,49 @@ describe('BlockProperties component', () => {
       expect(within(nextRow).getByText('Related target block')).toBeTruthy()
     })
   })
+
+  // The suggestion the picker offers with an EMPTY query comes from the
+  // alias/recents branch, and Enter commits it through `useAutocompleteListbox`
+  // rather than through the option's own click handler — two paths the
+  // click-driven cases above leave untouched.
+  it('adds a ref-list target the keyboard picked from the no-query suggestions', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'target-related',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'b0',
+        content: 'Related target block',
+        properties: {
+          [typesProp.name]: typesProp.codec.encode(['related']),
+          [aliasesProp.name]: aliasesProp.codec.encode(['Related alias']),
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create related target'})
+
+    const block = repo.block('block-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={block}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    const row = propertyRow(relatedRefsProp.name)
+    const input = within(row).getByRole('combobox', {name: /search block reference/i})
+
+    await act(async () => { fireEvent.focus(input) })
+
+    await screen.findByRole('option', {name: /Related alias/})
+
+    await act(async () => { fireEvent.keyDown(input, {key: 'Enter'}) })
+
+    await waitFor(() => {
+      expect(block.peekProperty(relatedRefsProp)).toEqual(['target-related'])
+    })
+  })
 })
 
 const propertyRow = (propertyName: string): HTMLElement => {
