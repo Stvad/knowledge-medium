@@ -195,8 +195,14 @@ const followRenamedContent = async (
   // `references` inlining a deleted target or retitling a renamed one, inside
   // that gesture's own tx, and this path may neither take the working label nor
   // refuse that tx on its behalf.
+  //
+  // Unless the LABEL moved in this tx, which is the naming gesture itself: the
+  // type editor writes both halves, and that is a rename however drifted the
+  // row was. Stepping aside there would leave the new name unclaimed.
   const previousName = before.content.trim()
-  if (previousName !== '' && !isWritableLabel(previousName) && isWritableLabel(currentLabel)) return
+  const renamedByLabel = readLabel(before) !== currentLabel
+  if (!renamedByLabel && previousName !== '' && !isWritableLabel(previousName)
+    && isWritableLabel(currentLabel)) return
 
   // Otherwise the new name has to be a name: refuse a REGRESSION, where the one
   // being replaced worked or where the type is being named for the first time

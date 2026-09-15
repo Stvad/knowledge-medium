@@ -960,6 +960,29 @@ describe('block-type typeify processor', () => {
   })
 
   describe('with the alias plugin off', () => {
+    // The type editor writing BOTH halves is the naming gesture, however
+    // drifted the row was — so the new name is claimed here rather than being
+    // left to a plugin that may not be installed. The old name is not retired:
+    // it was never what the content said, and releasing a claim on the strength
+    // of a LABEL cannot tell the type's own name from a user alias equal to it.
+    it('claims the new name when a legacy drifted type is renamed explicitly', async () => {
+      env = await setup({alias: false})
+      const id = await tagBlockType(env, 'Book')
+      await rawProperties(env, id, {
+        types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+        [blockTypeLabelProp.name]: 'Book',
+        [aliasesProp.name]: ['Book'],
+      }, 'See [[Foo]]')
+
+      await env.repo.tx(async tx => {
+        await tx.setProperty(id, blockTypeLabelProp, 'Novel')
+        await tx.update(id, {content: 'Novel'})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
+      expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+    })
+
     // The other legacy spelling: content and claim BOTH padded, which is a
     // matching pair and so the type's own name, not a user alias. Pinned here
     // because with the plugin on its rule 1 retires that entry regardless of
