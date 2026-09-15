@@ -49,6 +49,7 @@ export interface BeadRow {
   close_reason?: string
   issue_type?: string
   labels?: string[]
+  closed_at?: string | null
   comment_count?: number
 }
 export interface BeadComment {
@@ -72,7 +73,21 @@ export interface IssueInfo {
   state: 'OPEN' | 'CLOSED'
   labels: string[]
   updatedAt?: string
+  title?: string
+  body?: string
+  assignee?: string
 }
+export declare const pullWouldWrite: (bead: BeadRow, issue: IssueInfo) => boolean
+export declare const bdVersion: (out: string | null | undefined) => string | null
+export declare const planLossyReapplies: (
+  beads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+) => { id: string; number: number; losses: string[]; overwrites: string[] }[]
+export declare const planPullSet: (
+  beads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+  lossyIds: Set<string>,
+) => number[]
 export declare const planCloseReconciliation: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
