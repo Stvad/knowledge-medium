@@ -29,11 +29,9 @@
  * (`writeBlockTypeLabel`).
  *
  * **Rename**, when a block that is ALREADY a type has its `content`
- * rewritten (the agent bridge, an import updating an existing row): the
- * label follows the new name. Completion is a one-shot, so without this
- * the label kept the old name while `aliasSyncProcessor` moved the alias
- * to the new content — leaving the type registered under a name nothing
- * resolved to (#926).
+ * rewritten (the agent bridge, an import): the label follows the new
+ * name. Completion is a one-shot and `aliasSyncProcessor` moves the alias
+ * by matching the old content, so nothing else would (#926).
  *
  * (Sync-applied writes do NOT run this — they bypass `repo.tx` and the
  * same-tx pass entirely; the invariant still holds for a synced type
@@ -85,15 +83,12 @@ const readLabel = (row: BlockData): string => {
   return (typeof raw === 'string' ? raw : '').trim()
 }
 
-/** THROWS rather than skipping the name: a type whose name can't be
- *  written as `[[name]]` is unlinkable, and minting one silently is the
- *  failure mode this whole family of bugs is made of. Same-tx, so it rolls
- *  the tagging (or the rename) back atomically; both refusals derive from
- *  `UnwritableLabelError`, which the type-label UI catches to revert.
- *
- *  Needed on every path that names a type, not only in `createTypeBlock`
- *  (which pre-checks, making this a no-op for it) — the agent bridge's raw
- *  properties bag arrives here unvalidated. */
+/** THROWS rather than skipping the name: a type whose name can't be written
+ *  as `[[name]]` is unlinkable, and minting one silently is the failure mode
+ *  this whole family of bugs is made of. Same-tx, so it rolls the tx back
+ *  atomically; both refusals derive from `UnwritableLabelError`, which the
+ *  type-label UI catches to revert. Needed on every path that names a type —
+ *  the agent bridge's raw properties bag arrives here unvalidated. */
 const assertWritableTypeName = (name: string): void => {
   assertNotGrammarShapedLabel(name, 'Block type label')
   assertRoundTrippableReferenceLabel(name, 'Block type label')
@@ -153,12 +148,11 @@ const completeNewType = async (
   }
 }
 
-/** A content write on a block that is already a type is a RENAME — content
- *  is the name — so the label follows it.
- *
- *  `aliasSyncProcessor` owns the alias move (and the collision preflight
- *  that lets a rejected rename offer a merge), so the only alias work left
- *  here is the case it declines: a type with none to move. */
+/** A content write on a block that is already a type is a RENAME — content is
+ *  the name — so the label follows it. `aliasSyncProcessor` owns the alias
+ *  move (and the collision preflight that lets a rejected rename offer a
+ *  merge); the only alias work left here is the case it declines, a type with
+ *  none to move. */
 const followRenamedContent = async (
   row: ChangedRow,
   after: BlockData,
@@ -167,11 +161,10 @@ const followRenamedContent = async (
   if (row.before === null || row.before.content === after.content) return
 
   const currentLabel = readLabel(after)
-  // An emptied body names nothing, so the type keeps the name it has and the
-  // body is restored to it: un-naming a type is the type editor's own
-  // gesture, which also releases the alias. Whitespace is emptiness here —
-  // aliasSync's blank guard is `=== ''`, so it would otherwise claim `"   "`
-  // as this type's name and `[[Name]]` would resolve to nothing.
+  // An emptied body names nothing, so the type keeps its name and the body is
+  // restored to it — un-naming a type is the type editor's gesture, which
+  // releases the alias too. Whitespace counts as empty: aliasSync's blank
+  // guard is `=== ''`, so `"   "` would otherwise be claimed as the name.
   const name = after.content.trim() || currentLabel
   if (name === '') return
   assertWritableTypeName(name)
