@@ -1704,8 +1704,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   // A dry run cannot re-list, so a defused row that DOES need a push has to be
   // named by hand — otherwise the preview understates what the real run does.
+  // Content-converged on purpose: the preview must name the defused bead
+  // because the push set names it outright, not because its content diverges.
   it('previews the push a defused bead still needs under --dry-run', () => {
-    const row = pushable({ id: 'km-p', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const row = syncRow({ id: 'km-p', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
     const { run } = makeSyncRepo({
       issues: [ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED')],
       lists: [[row]],
@@ -1731,10 +1733,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain("the push sends the local title over a different value on GitHub — compare them by hand")
   })
 
-  // A relabelled issue is the taxonomy edit reaching beads. Defusing it would
-  // push the stale local type back over the edit — the pull's whole job,
-  // undone by its guard.
-  it('leaves a GitHub-side taxonomy edit to the pull rather than pushing over it', () => {
+  // Pins the WIRING only: a bead with no loss never enters the defuse, so it
+  // is neither touched nor force-pushed and is left to the pull. Which FIELD
+  // diverges is `planLossyReapplies`' business and is covered by its own
+  // cases — runSync does not discriminate by field.
+  // Note it does NOT pin that the pull imports the edit: a run that pushes
+  // stamps last_sync past its own window (see the header), so on such a run
+  // nothing is imported at all.
+  it('leaves a bead with no loss out of the defuse entirely', () => {
     const row = syncRow({ id: 'km-r', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z'), labels: [{ name: 'priority::high' }, { name: 'type::bug' }] }],
@@ -1746,24 +1752,6 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).not.toContain('defused')
     const log = shimCalls()
     expect(log).not.toContain('bd update km-r')
-    expect(log).toContain('--pull-only')
-  })
-
-  // The defuse blocks the pull for that bead, so a bead the pull would carry
-  // faithfully must not enter it — a GitHub-side title or label edit is an
-  // import worth having.
-  it('leaves a GitHub-side edit the pull carries faithfully to the pull', () => {
-    const row = syncRow({ id: 'km-f', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z'), title: 'edited on GitHub' }],
-      lists: [[row]],
-      exportRows: [row],
-    })
-    const r = run()
-    expect(r.status).toBe(0)
-    expect(r.stdout).not.toContain('defused')
-    const log = shimCalls()
-    expect(log).not.toContain('bd update km-f')
     expect(log).toContain('--pull-only')
   })
 
