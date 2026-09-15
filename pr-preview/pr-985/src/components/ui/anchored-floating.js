@@ -1,1 +1,1 @@
-import{JN as e,YN as t}from"../../../chunks/app-DBL2m16q.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
+import{JN as e,YN as t}from"../../../chunks/app-Du1kg67b.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
