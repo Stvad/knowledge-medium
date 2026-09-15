@@ -111,8 +111,8 @@ const resolveTerminalDestination = async (
 }
 
 /** `unchanged` — this cell doesn't name the merged-away type; `rewritten` —
- *  `value` is the new raw cell; `undecodable` — the cell names it but its shape
- *  makes an in-tx retarget impossible (see `rewriteTypeToken`). */
+ *  `value` is the new raw cell; `undecodable` — the cell names it in a shape
+ *  this deliberately does not rewrite (see `rewriteTypeToken`). */
 type TypeCellRewrite =
   | {outcome: 'unchanged'}
   | {outcome: 'rewritten'; value: readonly string[]}
@@ -263,7 +263,8 @@ const retargetTypeMembership = async (
       console.warn(
         `[${RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME}] block ${id} still tags the ` +
         `merged-away type ${event.fromId}, but its "types" cell is not a string list; ` +
-        'left as-is — retargeting it would abort the merge (see rewriteTypeToken)',
+        'left as-is — the shape is not a membership the codec or registry accepts ' +
+        '(see rewriteTypeToken)',
       )
       continue
     }

@@ -905,6 +905,30 @@ describe('block-type typeify processor', () => {
     expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual([' Book ', 'Novel'])
   })
 
+  // A legacy title that is a bare block reference was never this type's name —
+  // the label is. Deleting the referenced block makes `references` inline that
+  // title into the deleted body's text, inside the DELETE's tx, and treating
+  // that as a rename would hand this type a name nobody chose for it.
+  it('leaves a type alone when a reference title is inlined', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: ['Book'],
+    }, `((${'1'.repeat(8)}-1111-4111-8111-111111111111))`)
+
+    // What the inline rewrite lands: the deleted block's body, as content.
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Foo'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
   it('leaves an ordinary block alone when its content changes', async () => {
     env = await setup()
     const id = await createBlock(env, 'Just a block')

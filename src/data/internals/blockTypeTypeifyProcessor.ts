@@ -188,19 +188,22 @@ const followRenamedContent = async (
   // guard is `=== ''`, so `"   "` would otherwise be claimed as the name.
   const name = after.content.trim() || currentLabel
   if (name === '') return
-  if (!isWritableLabel(name)) {
-    // Refuse a REGRESSION, not a row that arrived broken: `references.renameBacklinks` retitles a type whose name embeds the wikilink being renamed,
-    // inside that rename's own tx, and throwing there would roll an unrelated
-    // rename back for good. The name being replaced is the CONTENT — that is
-    // what this rewrite is replacing — and an UNNAMED type is not a broken one:
-    // its first name is a new name.
-    const previousName = before.content.trim() || currentLabel
-    if (previousName === '' || isWritableLabel(previousName)) assertWritableTypeName(name)
-    // Past that, a broken row may have its spellings brought into agreement,
-    // but never at the cost of a name that still works: the label is what the
-    // registry publishes, so an unwritable rewrite leaves a writable one alone.
-    if (isWritableLabel(currentLabel)) return
-  }
+  // A content rewrite is a rename only where the content WAS this type's name.
+  // On a legacy or sync-applied row it may never have been one — a title that
+  // is a bare `((id))`, or one embedding a wikilink — and then the name is the
+  // LABEL. Something rewriting such a title is not renaming anything: it is
+  // `references` inlining a deleted target or retitling a renamed one, inside
+  // that gesture's own tx, and this path may neither take the working label nor
+  // refuse that tx on its behalf.
+  const previousName = before.content.trim()
+  if (previousName !== '' && !isWritableLabel(previousName) && isWritableLabel(currentLabel)) return
+
+  // Otherwise the new name has to be a name: refuse a REGRESSION, where the one
+  // being replaced worked or where the type is being named for the first time
+  // (an UNNAMED type is not a broken one). A row whose name was already
+  // unwritable still gets its spellings reconciled — that cannot make an
+  // unlinkable name worse.
+  if (previousName === '' || isWritableLabel(previousName)) assertWritableTypeName(name)
 
   // Only a name that CAN be linked to is claimed. An unwritable one buys
   // nothing by being claimed, and refusing its collision would abort whatever
