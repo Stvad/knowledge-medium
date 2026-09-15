@@ -60,6 +60,14 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     validateDependencies: isCodeMirrorEditModeDependencies,
   },
   {
+    type: ActionContextTypes.DIALOG,
+    displayName: 'Dialog',
+    modal: true,
+    // Nothing binds to it; `modal` is the whole point. Any deps are fine
+    // because no action will ever resolve against them.
+    validateDependencies: (deps: unknown): deps is BaseShortcutDependencies => deps !== null,
+  },
+  {
     type: ActionContextTypes.PROPERTY_EDITING,
     displayName: 'Property Editing',
     modal: true,

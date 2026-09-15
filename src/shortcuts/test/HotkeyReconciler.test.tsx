@@ -3,6 +3,8 @@ import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
+import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
 import {
   dispatchGesture,
@@ -415,6 +417,31 @@ describe('HotkeyReconciler', () => {
 
       act(() => dispatchKeydown('k'))
       expect(globalHandler).toHaveBeenCalledTimes(1)
+    })
+
+    it('shadows the surface underneath an open dialog', () => {
+      // The real DIALOG config, not a stand-in: a dialog inherits whatever
+      // context was active when it opened, and the editor's Enter binding
+      // matches a keypress aimed at a dialog button — a context's eventFilter
+      // is additive, and the default heuristic admits any non-editable target.
+      const surfaceHandler = vi.fn()
+      const dialogContextConfig = defaultActionContextConfigs
+        .find(config => config.type === ActionContextTypes.DIALOG)!
+      const surfaceAction = buildAction({
+        id: 'test.surface',
+        context: TEST_CONTEXT,
+        handler: surfaceHandler,
+        defaultBinding: {keys: 'Enter'},
+      })
+
+      render(
+        <Harness actions={[surfaceAction]} contexts={[testContextConfig, dialogContextConfig]}>
+          <SequentialActivator contexts={[TEST_CONTEXT, ActionContextTypes.DIALOG]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('Enter'))
+      expect(surfaceHandler).not.toHaveBeenCalled()
     })
 
     it('shadows every non-global context while a modal is active', () => {
