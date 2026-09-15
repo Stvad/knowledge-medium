@@ -1,0 +1,1 @@
+import{ow as e,sw as t}from"../../../chunks/app-Dcc58maa.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

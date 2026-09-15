@@ -1,0 +1,1 @@
+import{Cb as e,Sb as t,xb as n}from"../../../../../chunks/app-Dcc58maa.js";export{n as isWikilinkDisplayParts,t as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};

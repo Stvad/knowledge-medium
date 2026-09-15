@@ -1,0 +1,1 @@
+import{FC as e,PC as t}from"../../chunks/app-Dcc58maa.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

@@ -1,0 +1,1 @@
+import{Fk as e,Ik as t}from"../../chunks/app-Dcc58maa.js";export{e as isFocalRender,t as useIsFocalRender};

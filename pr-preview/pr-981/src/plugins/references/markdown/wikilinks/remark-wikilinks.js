@@ -1,0 +1,1 @@
+import{wd as e}from"../../../../../chunks/app-Dcc58maa.js";export{e as remarkWikilinks};

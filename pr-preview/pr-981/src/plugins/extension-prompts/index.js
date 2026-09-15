@@ -1,0 +1,1 @@
+import{aw as e,iw as t}from"../../../chunks/app-Dcc58maa.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

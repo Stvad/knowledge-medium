@@ -1,0 +1,1 @@
+import{is as e,rs as t}from"../../../chunks/app-Dcc58maa.js";export{t as appendTagToBlocks,e as appendTagToContent};

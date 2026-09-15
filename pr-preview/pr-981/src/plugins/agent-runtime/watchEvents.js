@@ -1,0 +1,1 @@
+import{Gl as e,Wl as t}from"../../../chunks/app-Dcc58maa.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};

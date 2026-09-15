@@ -1,0 +1,1 @@
+import{Gk as e,Kk as t}from"../../../chunks/app-Dcc58maa.js";export{e as MetadataRow,t as PropertySectionLabel};

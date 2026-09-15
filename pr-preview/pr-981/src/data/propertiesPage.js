@@ -1,0 +1,1 @@
+import{f$ as e,p$ as t}from"../../chunks/app-Dcc58maa.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
