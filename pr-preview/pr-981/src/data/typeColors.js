@@ -1,1 +1,1 @@
-import{iC as e,nC as t,rC as n}from"../../chunks/app-CWk990mQ.js";export{t as DEFAULT_TYPE_COLORS,n as defaultTypeColor,e as pickLeastUsedTypeColor};
+import{iC as e,nC as t,rC as n}from"../../chunks/app-CbKlrcIy.js";export{t as DEFAULT_TYPE_COLORS,n as defaultTypeColor,e as pickLeastUsedTypeColor};
