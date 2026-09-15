@@ -1,1 +1,1 @@
-import{ew as e,tw as t}from"../../../chunks/app-DE79Z2FY.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{ew as e,tw as t}from"../../../chunks/app-BGGuyPz0.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
