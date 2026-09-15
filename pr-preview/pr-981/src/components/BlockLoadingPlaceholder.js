@@ -1,1 +1,1 @@
-import{JT as e}from"../../chunks/app-BXBAf4qj.js";export{e as BlockLoadingPlaceholder};
+import{JT as e}from"../../chunks/app-D3DMNErx.js";export{e as BlockLoadingPlaceholder};
