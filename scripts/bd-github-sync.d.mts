@@ -78,10 +78,11 @@ export interface IssueInfo {
   assignee?: string
 }
 export declare const pullWouldWrite: (bead: BeadRow, issue: IssueInfo) => boolean
+export declare const pushWouldChange: (bead: BeadRow, issue: IssueInfo) => boolean
 export declare const planLossyReapplies: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
-) => { id: string; number: number; priority: number; losses: string[]; overwrites: string[] }[]
+) => { id: string; number: number; priority: number; losses: string[]; overwrites: string[]; pushChanges: boolean }[]
 export declare const planCloseReconciliation: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,

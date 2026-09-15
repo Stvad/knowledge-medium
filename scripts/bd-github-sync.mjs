@@ -48,12 +48,21 @@
  *    not spell uniquely (#955). Note the difference from (4): those rows are
  *    local-OLDER by construction, so (4)'s snapshot never sees them, and
  *    closed_at could not be restored afterwards in any case. So the lossy ones
- *    are DEFUSED before the pull — touched, which makes bd skip them, and
- *    pushed, which keeps them skipped (planLossyReapplies). Beads the pull
- *    would carry faithfully are left to it: a GitHub-side title, body or label
- *    edit still imports. A touch that fails ABORTS, like (1) and (4): the pull
- *    would then make the very write the defuse named, and closed_at cannot be
- *    put back.
+ *    are DEFUSED before the pull: TOUCHED, which both makes bd skip them and
+ *    leaves the bead newer than its issue, so the next run neither treats them
+ *    as candidates nor lets the pull fetch their issues (planLossyReapplies).
+ *    The touch is the whole defuse — pushing as well would re-stamp the issue
+ *    newer than the bead, which is the candidate condition, and the guard
+ *    would never quiesce. That is also why (4)'s push now declines a PATCH
+ *    that would change nothing. Beads the pull would carry faithfully are left
+ *    to it: a GitHub-side title, body, label or taxonomy edit still imports. A
+ *    touch that fails ABORTS, like (1) and (4): the pull would then make the
+ *    very write the defuse named, and closed_at cannot be put back.
+ *    Accepted race: an issue touched on GitHub AFTER this run's issue listing
+ *    escapes the guard, and the pull can re-apply it. Re-reading the listing
+ *    would only move the window, not close it (no atomicity boundary is shared
+ *    with bd's own fetch), and dropping the timestamp test instead would make
+ *    the guard touch every assigned bead on every run for ever.
  *
  * Accepted race: an issue closed on GitHub DURING the sync window can be
  * re-opened by the in-flight push, and because the reopen is then the state
@@ -830,6 +839,30 @@ const LOSING_VERDICTS = ['ambiguous', 'default']
 const labelFieldsWhere = (bead, issue, keep) =>
   LABEL_FIELDS.filter(([, read]) => keep(labelVerdict(bead, issue, read))).map(([field]) => field)
 
+/**
+ * Whether a push would CHANGE the issue — bd 1.2.2 does not ask (it PATCHes on
+ * the timestamp alone), so the wrapper asks on its behalf. This is the other
+ * half of the defuse: a push that changes nothing still re-stamps the issue
+ * newer than the bead, which is precisely the condition that makes it a
+ * candidate again, so a guard that pushed unconditionally would touch and
+ * PATCH every assigned bead on every run for ever (measured: it never
+ * quiesces, because the assignee divergence can never converge).
+ * Mirrors bd's BeadsIssueToGitHubFields — title, body, open/closed, and the
+ * whole label set, scoped labels derived from the bead plus its own.
+ */
+const PRIORITY_LABELS = ['critical', 'high', 'medium', 'low', 'none']
+const pushedLabels = bead => [
+  ...(bead.issue_type ? [`type::${bead.issue_type}`] : []),
+  `priority::${PRIORITY_LABELS[bead.priority] ?? 'medium'}`,
+  ...(LABEL_STATUSES.includes(bead.status) ? [`status::${bead.status}`] : []),
+  ...(bead.labels ?? []),
+]
+export const pushWouldChange = (bead, issue) =>
+  bead.title !== issue.title ||
+  (bead.description ?? '') !== (issue.body ?? '') ||
+  (bead.status === 'closed') !== (issue.state === 'CLOSED') ||
+  normalizedLabels(pushedLabels(bead)) !== normalizedLabels(issue.labels)
+
 /** Whether bd's pull would write this bead at all (its pullIssueEqual, negated). */
 export const pullWouldWrite = (bead, issue) =>
   bead.title !== issue.title ||
@@ -885,28 +918,30 @@ export const planLossyReapplies = (beads, issueByNumber) =>
       ...(normalizedLabels(b.labels) !== normalizedLabels(pullLabels(issue.labels)) ? ['labels'] : []),
       ...labelFieldsWhere(b, issue, verdict => verdict === 'imports'),
     ]
-    return losses.length ? [{ id: b.id, number, priority: b.priority, losses, overwrites }] : []
+    return losses.length ? [{ id: b.id, number, priority: b.priority, losses, overwrites, pushChanges: pushWouldChange(b, issue) }] : []
   })
 
-// Beads to hand the pre-pull push. bd 1.2.2 wires no content hook — its
-// GitHub command sets PullHooks and never PushHooks, so doPush's ContentEqual
-// is nil and it falls back to the timestamp rule: for every linked bead it
-// GETs the issue and PATCHes whenever the local row is STRICTLY newer, content
-// identical or not. A defuse therefore leaves GitHub newer and drops out of
-// this set next run, rather than being re-offered forever. (Under 1.3.0 the
-// push skips an identical pair instead — at which point the defused row stays
-// local-newer, and stays SAFE for the same reason: its issue is never
-// re-stamped, so no later pull fetches it. See the bd upgrade issue.)
-// A bead whose listed GitHub copy is same-or-newer costs a GET and changes
-// nothing — skip exactly those. Everything the listing cannot
-// prove bd would skip (no ref, a foreign ref, an issue missing from the
-// listing, a missing timestamp) still goes to bd, which decides with a fresh
-// GET as the full push did.
+// Beads to hand the pre-pull push, skipping the two kinds bd would waste a
+// GET on. bd 1.2.2 wires no content hook — its GitHub command sets PullHooks
+// and never PushHooks, so doPush's ContentEqual is nil and it falls back to
+// the timestamp rule: it GETs every linked bead and PATCHes whenever the local
+// row is STRICTLY newer, content identical or not.
+//   - GitHub is same-or-newer: bd would skip it anyway.
+//   - the push would change nothing (pushWouldChange): bd would PATCH, and
+//     that PATCH is pure harm. It re-stamps the issue newer than the bead,
+//     which re-arms the very re-apply guard 5 just defused — permanently, for
+//     any bead whose divergence cannot converge, which is every assigned one.
+//     This is what bd 1.3.0 does natively (PushFieldsEqual), one version early.
+// Everything the listing cannot prove bd would skip (no ref, a foreign ref, an
+// issue missing from the listing, a missing timestamp) still goes to bd, which
+// decides with a fresh GET as the full push did.
 export const planPrePullPush = (beads, issueByNumber) =>
   beads
     .filter(b => {
       const issue = issueByNumber.get(issueNumberFromRef(b.external_ref))
-      return !(issue?.updatedAt && b.updated_at && Date.parse(issue.updatedAt) >= Date.parse(b.updated_at))
+      if (!issue) return true
+      if (issue.updatedAt && b.updated_at && Date.parse(issue.updatedAt) >= Date.parse(b.updated_at)) return false
+      return pushWouldChange(b, issue)
     })
     .map(b => b.id)
 
@@ -1486,19 +1521,27 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       )
 
     // 1.2 Defuse the re-applies that would lose something (planLossyReapplies
-    // names which). The touch is what makes bd's pull skip the bead, and the
-    // push below is what keeps it skipped: it leaves GitHub newer than the
-    // local row, so the next run neither pushes the bead nor fetches its
-    // issue. Touched but NOT pushed, the row would be pushed next run instead,
-    // and that PATCH is the foreign-looking touch the pull re-applies — the
-    // defuse would walk forward one run at a time forever.
+    // names which). The defuse is the TOUCH, and only the touch: it marks the
+    // bead locally modified, which is what makes bd's pull skip it, and it
+    // leaves the bead newer than its issue — so the next run neither treats it
+    // as a candidate nor, since nothing re-stamped the issue, lets the pull
+    // fetch it at all. Quiescent after one run.
+    // Pushing it as well would undo exactly that: the PATCH re-stamps the
+    // issue newer than the bead, which IS the candidate condition, so every
+    // bead whose divergence cannot converge — every assigned one, since bd
+    // never pushes an assignee — would be touched and PATCHed on every run for
+    // ever. Keeping the ordinary push honest is planPrePullPush's job, and it
+    // now declines a push that would change nothing for this reason.
     // Sitting after close-adoption only saves work — a close bumps updated_at
-    // and takes the bead out of the pull's reach on its own. Before the PUSH
+    // and takes the bead out of the pull's reach on its own. Before the PULL
     // is the position that matters.
     const defused = []
+    // Only these need the push a dry run cannot infer from a listing it never
+    // re-takes; a real run reaches the same answer through planPrePullPush.
+    const defusedNeedingPush = []
     // `bd export` rather than the listing: only it carries assignee, labels
     // and closed_at, and it is one read for the whole tracker either way.
-    for (const { id, number, priority, losses, overwrites } of planLossyReapplies(exportBeads(env), issueByNumber)) {
+    for (const { id, number, priority, losses, overwrites, pushChanges } of planLossyReapplies(exportBeads(env), issueByNumber)) {
       // Same reasoning as the close-adoption and snapshot aborts: a touch that
       // did not land leaves the pull free to make the very write named here,
       // and closed_at cannot be put back afterwards. Reporting and pulling on
@@ -1508,12 +1551,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
           `aborting before the pull: could not defuse ${id} (#${number}) — the pull would lose ${losses.join(', ')} (#955)` +
             (report.length ? ` (already applied: ${report.join('; ')})` : ''),
         )
-      // Collected in BOTH modes: the push below is half of the defuse, and a
-      // dry run that left these out would preview a push of zero beads.
       defused.push(id)
+      if (pushChanges) defusedNeedingPush.push(id)
       report.push(
         `${dryRun ? '[dry-run] would defuse' : 'defused'} ${id} (#${number}): the pull would lose ${losses.join(', ')} (#955)` +
-          (overwrites.length ? `; the push overwrites GitHub's newer ${overwrites.join(', ')} — re-apply by hand if it was wanted` : ''),
+          (overwrites.length ? `; a later push overwrites GitHub's newer ${overwrites.join(', ')} — re-apply by hand if it was wanted` : ''),
       )
     }
 
@@ -1524,13 +1566,16 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // re-open its GitHub-closed issue). Handed only the beads bd could update
     // (planPrePullPush) — listed AFTER close-adoption, since a close bumps
     // updated_at and the pre-adoption row would look converged.
-    // A dry run cannot re-list, so the closes it would adopt are added by
-    // hand: the real close bumps updated_at and puts them in the set.
-    const adoptedBeads = closes.length && !dryRun ? listAllBeads() : preBeads
-    // The defused ids are named outright rather than left to the listing: the
-    // push is half of what the defuse means (see 1.2), so it must not depend
-    // on a re-listing this branch may skip.
-    const pushSet = [...new Set([...planPrePullPush(adoptedBeads, issueByNumber), ...defused, ...(dryRun ? closes.map(c => c.id) : [])])]
+    // Re-listed after the closes AND the touches, so both reach the set
+    // through the one rule rather than being bolted on: a defused bead is
+    // pushed only if planPrePullPush judges the push would change GitHub,
+    // which is what keeps the defuse quiescent (see 1.2).
+    // A dry run cannot re-list, so the rows it would have bumped are added by
+    // hand — and the defused ones only when a push would actually change
+    // something, which is the same test the real run applies.
+    const adoptedBeads = (closes.length || defused.length) && !dryRun ? listAllBeads() : preBeads
+    const dryRunBumped = dryRun ? [...closes.map(c => c.id), ...defusedNeedingPush] : []
+    const pushSet = [...new Set([...planPrePullPush(adoptedBeads, issueByNumber), ...dryRunBumped])]
     if (dryRun) {
       report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
     } else if (pushSet.length) {

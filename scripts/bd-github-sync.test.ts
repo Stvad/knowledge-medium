@@ -758,7 +758,7 @@ describe('planLossyReapplies', () => {
   it('names the close date for a closed bead the pull would rewrite, and the edit its push overwrites', () => {
     const beads = [row({ id: 'km-a', status: 'closed', closed_at: '2026-09-01T00:00:00Z', title: 'the local title' })]
     expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { state: 'CLOSED', title: 'edited on GitHub' })]]))).toEqual([
-      { id: 'km-a', number: 1, priority: 1, losses: ['closed_at'], overwrites: ['title'] },
+      { id: 'km-a', number: 1, priority: 1, losses: ['closed_at'], overwrites: ['title'], pushChanges: true },
     ])
   })
 
@@ -875,6 +875,19 @@ describe('planPrePullPush', () => {
   it('returns nothing for a converged tracker', () => {
     const map = issues([[1, gh('2026-08-20T01:00:00Z')]])
     expect(planPrePullPush([bead({ external_ref: ref(1), updated_at: '2026-08-20T00:00:00Z' })], map)).toEqual([])
+  })
+
+  // A PATCH that changes nothing is not merely wasteful: it re-stamps the
+  // issue newer than the bead, which is the condition that makes it a defuse
+  // candidate — so guard 5 would never quiesce for a bead whose divergence
+  // cannot converge (every assigned one, since bd never pushes an assignee).
+  it('declines a push that would change nothing, however much newer the local row is', () => {
+    const converged = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', updatedAt: '2026-08-20T01:00:00Z' }
+    const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task' })
+    expect(planPrePullPush([row], issues([[1, converged]]))).toEqual([])
+    expect(planPrePullPush([{ ...row, title: 'edited locally' }], issues([[1, converged]]))).toEqual(['km-q'])
+    expect(planPrePullPush([{ ...row, labels: ['ui'] }], issues([[1, converged]]))).toEqual(['km-q'])
+    expect(planPrePullPush([{ ...row, status: 'closed' }], issues([[1, converged]]))).toEqual(['km-q'])
   })
 })
 
@@ -1230,6 +1243,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     ...over,
   })
 
+  // syncRow is CONVERGED with ghIssue, so a push of it would change nothing
+  // and the pre-pull push declines it. A test whose subject is the push wants
+  // this instead: the same row with one field GitHub does not yet have.
+  const pushable = <T extends object>(over: T) => syncRow({ title: 'T (edited locally)', ...over })
+
   // The pre-pull push and the push-back both spell `--push-only --issues`, so
   // a push-back pin reads only the log AFTER the pull.
   const afterPull = (log: string) => {
@@ -1261,7 +1279,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // Position pin: the pre-pull push must run AFTER close-adoption — swapped,
   // a still-open bead's push would re-open its GitHub-closed issue (trap 1).
   it('adopts GitHub-side closes BEFORE the pre-pull push', () => {
-    const row = syncRow({ id: 'km-t3', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
+    const row = pushable({ id: 'km-t3', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED')],
       lists: [[row], [{ ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }]],
@@ -1486,9 +1504,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // GitHub copy is same-or-newer are skipped up front — the run's cost is
   // proportional to what changed, not to the tracker.
   it('hands the pre-pull push only the beads bd could update', () => {
-    const converged = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
-    const newer = syncRow({ id: 'km-n', external_ref: ref(2), updated_at: '2026-08-21T00:00:00Z' })
-    const unlinked = syncRow({ id: 'km-u', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const converged = pushable({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const newer = pushable({ id: 'km-n', external_ref: ref(2), updated_at: '2026-08-21T00:00:00Z' })
+    const unlinked = pushable({ id: 'km-u', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(1, '2026-08-20T00:00:00Z'), ghIssue(2, '2026-08-20T00:00:00Z')],
       lists: [[converged, newer, unlinked]],
@@ -1517,26 +1535,50 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // clear the assignee and restamp the close date, and neither comes back.
   const lossyRepo = (over: { failTouchId?: string } = {}) => {
     const row = syncRow({ id: 'km-l', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    // The second listing is what the touch leaves behind — a row now NEWER
+    // than its issue. Without it the push set would skip km-l on the timestamp
+    // test alone, and "not pushed" would prove nothing about the content test.
+    const touched = { ...row, updated_at: '2026-08-21T00:00:00Z' }
     return makeSyncRepo({
       issues: [ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED')],
-      lists: [[row]],
-      shows: [[row]],
+      lists: [[row], [touched]],
+      shows: [[touched]],
       exportRows: [{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }],
       ...over,
     })
   }
 
-  it('defuses a lossy re-apply before the pull, and pushes it out so it stays defused', () => {
+  it('defuses a lossy re-apply by touching it before the pull, and does not push it out', () => {
     const { run, shimCalls } = lossyRepo()
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('defused km-l (#4): the pull would lose closed_at, assignee')
     const log = shimCalls()
-    // The order IS the guard: touched before the pull so bd skips the bead,
-    // pushed before the pull so GitHub ends the run newer and the next run
-    // neither pushes it nor fetches its issue.
-    expect(log.indexOf('bd update km-l -p 1')).toBeLessThan(log.indexOf('--push-only'))
-    expect(log).toContain('--push-only --issues km-l')
+    // Touched before the pull, so bd skips the bead. NOT pushed: this bead's
+    // content already matches GitHub, and a PATCH that changes nothing would
+    // re-stamp the issue newer than the bead — the candidate condition — so
+    // the guard would touch and PATCH it again on every run for ever.
+    expect(log.indexOf('bd update km-l -p 1')).toBeGreaterThan(-1)
+    expect(log.indexOf('bd update km-l -p 1')).toBeLessThan(log.indexOf('--pull-only'))
+    expect(log).not.toContain('--push-only')
+  })
+
+  // …but the ordinary mirror must keep working: a defused bead whose content
+  // GitHub does not have yet is still pushed, in the same run, before the pull.
+  it('still pushes a defused bead whose content GitHub lacks', () => {
+    const row = pushable({ id: 'km-p', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED')],
+      // The second listing is what the touch leaves behind: a bumped row.
+      lists: [[row], [{ ...row, updated_at: '2026-08-21T00:00:00Z' }]],
+      shows: [[{ ...row, updated_at: '2026-08-21T00:00:00Z' }]],
+      exportRows: [{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('defused km-p (#4)')
+    const log = shimCalls()
+    expect(log).toContain('--push-only --issues km-p')
     expect(log.indexOf('--push-only')).toBeLessThan(log.indexOf('--pull-only'))
   })
 
@@ -1552,21 +1594,33 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(log).not.toContain('--push-only')
   })
 
-  it('names what a defuse would cost under --dry-run, push included, without touching anything', () => {
+  it('names what a defuse would cost under --dry-run without touching anything', () => {
     const { run, shimCalls } = lossyRepo()
     const r = run('--dry-run')
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('[dry-run] would defuse km-l (#4)')
-    // The push is half of the defuse, so a preview that omitted it would
-    // understate the run — and planPrePullPush cannot see a touch that a dry
-    // run never made.
-    expect(r.stdout).toContain('[dry-run] would push 1 bead(s) out before the pull: km-l')
+    // Converged content, so the real run pushes nothing either.
+    expect(r.stdout).toContain('[dry-run] would push 0 bead(s) out before the pull')
     expect(shimCalls()).not.toContain('bd update')
+  })
+
+  // A dry run cannot re-list, so a defused row that DOES need a push has to be
+  // named by hand — otherwise the preview understates what the real run does.
+  it('previews the push a defused bead still needs under --dry-run', () => {
+    const row = pushable({ id: 'km-p', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run } = makeSyncRepo({
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED')],
+      lists: [[row]],
+      exportRows: [{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }],
+    })
+    const r = run('--dry-run')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('[dry-run] would push 1 bead(s) out before the pull: km-p')
   })
 
   // The push writes the bead's own title over the newer GitHub one. That is
   // the deliberate trade (see planLossyReapplies) — but it must be legible.
-  it('says which GitHub-side edit the defuse push overwrites', () => {
+  it('says which GitHub-side edit a later push overwrites', () => {
     const row = syncRow({ id: 'km-o', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
     const { run } = makeSyncRepo({
       issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED'), title: 'edited on GitHub' }],
@@ -1576,7 +1630,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain("the push overwrites GitHub's newer title — re-apply by hand if it was wanted")
+    expect(r.stdout).toContain("a later push overwrites GitHub's newer title — re-apply by hand if it was wanted")
   })
 
   // A relabelled issue is the taxonomy edit reaching beads. Defusing it would
@@ -1619,7 +1673,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // bumps updated_at, and computed from the pre-adoption rows the just-closed
   // bead would look converged and never be pushed.
   it('computes the pre-pull set after close-adoption', () => {
-    const row = syncRow({ id: 'km-a', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
+    const row = pushable({ id: 'km-a', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
     const closed = { ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED')],
@@ -1768,7 +1822,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // bumps the issue past the local row, and bd PATCHes only local-newer
   // rows), and after the pull.
   it('mirrors after the pre-pull push has carried the bead out and the pull has run', () => {
-    const newer = syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
+    const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
     const { run, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
       lists: [[newer]],
