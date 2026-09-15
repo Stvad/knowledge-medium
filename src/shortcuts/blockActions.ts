@@ -25,6 +25,7 @@ import {
   ActionContextType,
   ActionIcon,
   ActionTrigger,
+  BaseShortcutDependencies,
   BlockShortcutDependencies,
   ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
@@ -179,7 +180,22 @@ export const extendSelectionUp = async (
   return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
 }
 
-export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
+/** The Repo a block-action handler must route its WRITES through.
+ *
+ *  A batch wrapper (`applyToAllBlocksInSelection`) hands over an
+ *  `undoGroup` facade so a gesture fanned out across a selection collapses
+ *  to one undo entry; everything else gets the ambient repo. The closure
+ *  binding below is deliberately named `ambientRepo` rather than `repo`, so
+ *  a handler that writes has to say which repo it means — a plain
+ *  `repo.mutate.…` doesn't compile unless it first asked for one here.
+ *
+ *  Reads may use either; only `tx` / `mutate` / `run` carry the token. */
+const writeRepo = (deps: BaseShortcutDependencies, ambientRepo: Repo): Repo =>
+  deps.writeRepo ?? ambientRepo
+
+export const createSharedBlockActions = (
+  {repo: ambientRepo}: { repo: Repo },
+): SharedBlockActions => {
   // In-place structural shifts deliberately run WITHOUT
   // `withMoveTransition`: the root-level crossfade ghosts the shifting
   // content at both old and new positions (text overlaps itself
@@ -201,6 +217,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // mutator separately no-ops when there's no previous sibling.
       const {canIndent} = await structuralEditPolicyForBlock(deps.block, deps.scopeRootId)
       if (!canIndent) return
+      const repo = writeRepo(deps, ambientRepo)
       await repo.mutate.indent({id: deps.block.id})
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
@@ -216,7 +233,8 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'outdent_block',
     description: 'Outdent block',
     icon: IndentDecrease,
-    handler: async ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) => {
+    handler: async (deps: BlockShortcutDependencies) => {
+      const {block, uiStateBlock, scopeRootId} = deps
       if (!scopeRootId) return
 
       // Don't outdent the scope root itself; the mutator additionally
@@ -225,6 +243,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {canOutdent} = await structuralEditPolicyForBlock(block, scopeRootId)
       if (!canOutdent) return
 
+      const repo = writeRepo(deps, ambientRepo)
       await repo.mutate.outdent({id: block.id, scopeRootId})
       requestEditorFocusIfEditing(uiStateBlock)
     },
@@ -242,6 +261,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
+      const repo = writeRepo(deps, ambientRepo)
       await withRowSlide(() => reorderBlock(repo, block, -1, scopeRootId))
       requestEditorFocusIfEditing(uiStateBlock)
     },
@@ -260,6 +280,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
+      const repo = writeRepo(deps, ambientRepo)
       await withRowSlide(() => reorderBlock(repo, block, 1, scopeRootId))
       requestEditorFocusIfEditing(uiStateBlock)
     },
@@ -312,7 +333,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
       let deleted = false
       await withMoveTransition(async () => {
-        deleted = await deleteBlockThroughUi(block)
+        deleted = await deleteBlockThroughUi(block, writeRepo(deps, ambientRepo))
       })
       // Don't move focus for a delete a guard refused.
       if (deleted && next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
@@ -330,8 +351,13 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block} = deps
       if (!block) return
 
+      // `repo.mutate.setProperty` rather than `block.set` so a multi-select
+      // fan-out folds into one undo entry — `block.set` routes through
+      // `block.repo`, which is never the group facade.
       const showProperties = block.peekProperty(showPropertiesProp) ?? false
-      await block.set(showPropertiesProp, !showProperties)
+      await writeRepo(deps, ambientRepo).mutate.setProperty({
+        id: block.id, schema: showPropertiesProp, value: !showProperties,
+      })
     },
     defaultBinding: {
       keys: 't',
@@ -346,9 +372,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block} = deps
       if (!block) return
 
+      // See togglePropertiesDisplay for why this isn't `block.set`.
       const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
+      const repo = writeRepo(deps, ambientRepo)
       await withMoveTransition(async () => {
-        await block.set(isCollapsedProp, !isCollapsed)
+        await repo.mutate.setProperty({id: block.id, schema: isCollapsedProp, value: !isCollapsed})
       })
     },
     defaultBinding: {
@@ -438,7 +466,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     // buildAppHash ON PURPOSE — see buildAppHashInContext's docstring for
     // why shared URLs must stay lane-free.
     handler: ({block}: BlockShortcutDependencies) => {
-      const workspaceId = repo.activeWorkspaceId
+      const workspaceId = ambientRepo.activeWorkspaceId
       if (!workspaceId) return
       writeToClipboard(absoluteAppUrl(buildAppHash(workspaceId, block.id)))
     },
@@ -451,7 +479,8 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_up',
     description: 'Extend selection up',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+      // UiState scope — never recorded on the undo stack, so no group needed.
+      await extendSelectionUp(deps.uiStateBlock, ambientRepo, deps.scopeRootId, deps.scopeRootForcesOpen)
     },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
@@ -465,7 +494,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_down',
     description: 'Extend selection down',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+      await extendSelectionDown(deps.uiStateBlock, ambientRepo, deps.scopeRootId, deps.scopeRootForcesOpen)
     },
     defaultBinding: {
       keys: 'Shift+ArrowDown',

@@ -193,55 +193,108 @@ export const getRootBlock = (block: Block): Block => {
   }
 }
 
-/** Cache-only ancestor membership check. Walks parent chain via
- *  cache snapshots; returns true iff `descendant` is reached from
- *  `ancestor` going down (or, equivalently, if `ancestor` is in
- *  `descendant`'s parent chain). */
-const isDescendantOf = (descendant: Block, ancestor: Block): boolean => {
-  const repo = descendant.repo
-  let currentId: string | null | undefined = descendant.peek()?.parentId
-  const seen = new Set<string>([descendant.id])
+interface AncestorChain {
+  /** Ancestor ids, closest first. */
+  ids: string[]
+  /** False when the walk ran out of CACHED rows before reaching a root —
+   *  i.e. `ids` is a prefix of the real chain and the caller must hydrate
+   *  before trusting it. True when the walk ended for a reason hydrating
+   *  can't change: a parentless root, a confirmed-missing/tombstoned row,
+   *  or a cycle. */
+  complete: boolean
+}
+
+/** Cache-only ancestor chain of `id`, closest first.
+ *
+ *  The walk is deliberately identical to the one the hierarchy rules need:
+ *  the first hop reads `Block.peek()` (so a tombstone or confirmed-missing
+ *  row yields an empty chain) and the rest read `repo.cache.getSnapshot`
+ *  directly, with the same cycle guard — that guard is defence against
+ *  corrupted data, not something well-formed input can hit. An id is
+ *  recorded BEFORE its own snapshot is looked up, so a parent whose row
+ *  isn't cached still counts as an ancestor. */
+const ancestorChainFromCache = (repo: Repo, id: string): AncestorChain => {
+  const ids: string[] = []
+  const self = repo.block(id).peek()
+  // undefined = row not loaded, so any chain we compute here is a guess.
+  // null = the cache knows the row is missing or tombstoned; hydrating
+  // can't produce a chain either (`repo.load` filters deleted rows), so
+  // the empty chain is the final answer.
+  if (self === undefined) return {ids, complete: false}
+
+  const seen = new Set<string>([id])
+  let currentId: string | null | undefined = self?.parentId
   while (currentId) {
-    if (seen.has(currentId)) return false  // cycle guard
+    if (seen.has(currentId)) return {ids, complete: true}  // cycle guard
     seen.add(currentId)
-    if (currentId === ancestor.id) return true
-    currentId = repo.cache.getSnapshot(currentId)?.parentId
+    ids.push(currentId)
+    const snapshot = repo.cache.getSnapshot(currentId)
+    if (snapshot === undefined) return {ids, complete: false}
+    currentId = snapshot.parentId
   }
-  return false
+  return {ids, complete: true}
 }
 
 /** Validates a set of block ids against hierarchical selection
  *  rules:
  *   - When a block is selected, none of its descendants may be selected
  *   - When a block is selected, none of its ancestors may be selected
- *  Processes ids in input order; the first id wins ties. */
+ *  Processes ids in input order; the first id wins ties.
+ *
+ *  Hot path: `extendSelection` runs this over the WHOLE accumulated range
+ *  on every Shift+Arrow — twice, since `getBlocksInRange` validates its
+ *  result and `commitSelectionRange` validates what it's handed. Both the
+ *  hydration and the comparison below are therefore written to cost
+ *  nothing when the selection is already on screen:
+ *
+ *   - hydration is skipped for ids whose ancestor chain is already cached.
+ *     Loading unconditionally cost 2 SQL round-trips per selected block per
+ *     keystroke (~400 for a 100-block selection) and was the entire
+ *     measured SQL cost of extending a selection. Trusting the cache here
+ *     is not a new assumption — the rules themselves are decided purely
+ *     from cache snapshots, and `Block.load()` short-circuits the same way
+ *     for the same reason.
+ *   - the ancestor rule is checked against a set of kept ids rather than by
+ *     re-testing every kept id pairwise, turning O(selection²) chain walks
+ *     into O(selection × depth). */
 export async function validateSelectionHierarchy(
   selectedIds: string[],
   repo: Repo,
 ): Promise<string[]> {
-  // Hydrate ancestor chains for all selected ids — cheap if cached.
-  await Promise.all(selectedIds.map(id => repo.load(id, {ancestors: true})))
-
-  const validatedIds = new Set<string>()
-  for (const id of selectedIds) {
-    const block = repo.block(id)
-    let isValid = true
-
-    for (const validId of validatedIds) {
-      const validBlock = repo.block(validId)
-      if (isDescendantOf(block, validBlock)) {
-        isValid = false
-        break
-      }
-      if (isDescendantOf(validBlock, block)) {
-        validatedIds.delete(validId)
-      }
-    }
-
-    if (isValid) validatedIds.add(id)
+  const uncached = uniqueBlockIds(selectedIds)
+    .filter(id => !ancestorChainFromCache(repo, id).complete)
+  if (uncached.length > 0) {
+    await Promise.all(uncached.map(id => repo.load(id, {ancestors: true})))
   }
 
-  return Array.from(validatedIds)
+  const validated = new Set<string>()
+  /** ancestor id → the kept ids sitting under it. The reverse rule ("drop
+   *  kept blocks that are descendants of the incoming one") reads this
+   *  instead of re-walking every kept id's chain. Entries are not pruned
+   *  when an id is dropped: a stale entry only ever produces a no-op
+   *  `validated.delete`. */
+  const keptUnder = new Map<string, Set<string>>()
+
+  for (const id of selectedIds) {
+    if (validated.has(id)) continue  // duplicate id — re-adding is a no-op
+    const {ids: ancestors} = ancestorChainFromCache(repo, id)
+
+    // An ancestor is already selected — this block is covered by it.
+    // (At most one kept ancestor can exist, and it excludes any kept
+    // descendant, since the kept set never holds an ancestor/descendant
+    // pair itself. So the two rules below are never both live for one id.)
+    if (ancestors.some(ancestorId => validated.has(ancestorId))) continue
+
+    for (const descendantId of keptUnder.get(id) ?? []) validated.delete(descendantId)
+    validated.add(id)
+    for (const ancestorId of ancestors) {
+      const bucket = keptUnder.get(ancestorId)
+      if (bucket) bucket.add(id)
+      else keptUnder.set(ancestorId, new Set([id]))
+    }
+  }
+
+  return Array.from(validated)
 }
 
 const uniqueBlockIds = (ids: readonly string[]): string[] =>
@@ -347,9 +400,17 @@ export async function commitSelectionRange(
 
 /** Walk visible blocks from `startBlockId` toward `endBlockId` using
  *  the relative-navigation primitives. Direction is auto-detected by
- *  trying forward first, then backward — endpoints are interchangeable
+ *  walking both ways in lockstep — endpoints are interchangeable
  *  per the original `getBlocksInRange` contract. Returns the inclusive
  *  range of ids in document order, validated for hierarchy rules.
+ *
+ *  Interleaved rather than forward-walk-first: a forward probe that runs to
+ *  completion before trying backward costs O(document) whenever the target
+ *  is ABOVE the start — which is every upward Shift+Arrow, on every
+ *  keystroke, re-walking the entire page below the anchor to find a block
+ *  one row above it. Interleaving bounds the walk at 2× the real distance.
+ *  Document order is total, so `endBlockId` is reachable from `startBlockId`
+ *  on exactly one side and interleaving can't make the answer ambiguous.
  *
  *  Falls back to whichever endpoint is reachable when the other one
  *  isn't visible from the start (matches the legacy behavior of
@@ -369,33 +430,33 @@ export async function getBlocksInRange(
   const start = repo.block(startBlockId)
   const end = repo.block(endBlockId)
 
-  const collectForward = async (): Promise<string[] | null> => {
-    const ids: string[] = [startBlockId]
-    let walker: Block | null = start
-    while (walker) {
-      walker = await nextVisibleBlock(walker, scopeRootId, scopeRootForcesOpen)
-      if (!walker) return null
-      ids.push(walker.id)
-      if (walker.id === endBlockId) return ids
-    }
-    return null
-  }
+  // Forward ids in document order; backward ids in reverse document order
+  // (reversed on the way out) — appending to both beats unshifting into one.
+  const forwardIds: string[] = []
+  const backwardIds: string[] = []
+  let forwardWalker: Block | null = start
+  let backwardWalker: Block | null = start
 
-  const collectBackward = async (): Promise<string[] | null> => {
-    const ids: string[] = [startBlockId]
-    let walker: Block | null = start
-    while (walker) {
-      walker = await previousVisibleBlock(walker, scopeRootId)
-      if (!walker) return null
-      ids.unshift(walker.id)
-      if (walker.id === endBlockId) return ids
+  while (forwardWalker || backwardWalker) {
+    if (forwardWalker) {
+      forwardWalker = await nextVisibleBlock(forwardWalker, scopeRootId, scopeRootForcesOpen)
+      if (forwardWalker) {
+        forwardIds.push(forwardWalker.id)
+        if (forwardWalker.id === endBlockId) {
+          return validateSelectionHierarchy([startBlockId, ...forwardIds], repo)
+        }
+      }
     }
-    return null
+    if (backwardWalker) {
+      backwardWalker = await previousVisibleBlock(backwardWalker, scopeRootId)
+      if (backwardWalker) {
+        backwardIds.push(backwardWalker.id)
+        if (backwardWalker.id === endBlockId) {
+          return validateSelectionHierarchy([...backwardIds.reverse(), startBlockId], repo)
+        }
+      }
+    }
   }
-
-  const forward = await collectForward()
-  const range = forward ?? await collectBackward()
-  if (range) return validateSelectionHierarchy(range, repo)
 
   // Either endpoint isn't reachable from the other within the current
   // scope; preserve the legacy fallback of returning whichever

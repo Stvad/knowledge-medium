@@ -8,7 +8,9 @@ import {
   blockAfterSubtreeRemoval,
   blockIdsInOrderedSelectionRange,
   findBestSelectionAnchorIndex,
+  getBlocksInRange,
   getLastVisibleDescendant,
+  validateSelectionHierarchy,
 } from '@/utils/selection.js'
 
 const WS = 'ws-1'
@@ -223,5 +225,104 @@ describe('getLastVisibleDescendant', () => {
     await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
     const result = await getLastVisibleDescendant(env.repo.block('b'), 'top')
     expect(result.id).toBe('b')
+  })
+})
+
+/** Total SQL round-trips the repo has issued. These are the cost unit for
+ *  selection extension: every one is a round-trip to the (in production,
+ *  OPFS/WASM) database on the keystroke path. */
+const sqlCalls = (repo: Repo): number => {
+  const m = repo.dbMetrics.snapshot()
+  return m.getAll.calls + m.getOptional.calls + m.get.calls + m.execute.calls
+}
+
+/** A flat outline `root > b0..b{count-1}`, seeded in one tx. */
+const seedFlatOutline = async (repo: Repo, count: number): Promise<void> => {
+  await repo.tx(async tx => {
+    await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'root'})
+    for (let i = 0; i < count; i++) {
+      await tx.create({
+        id: `b${i}`, workspaceId: WS, parentId: 'root',
+        orderKey: `m${String(i).padStart(4, '0')}`, content: `b${i}`,
+      })
+    }
+  }, {scope: ChangeScope.UiState})
+}
+
+/** A second Repo over the same db — same rows, empty BlockCache. Models the
+ *  cold-cache case (first interaction after load) that the hydration in
+ *  `validateSelectionHierarchy` exists for. Read-only here, so the colliding
+ *  id generators the `createTestRepo` docblock warns about don't apply. */
+const coldRepo = (): Repo => {
+  const {repo} = createTestRepo({db: sharedDb.db, user: USER})
+  repo.setActiveWorkspaceId(WS)
+  return repo
+}
+
+describe('validateSelectionHierarchy — hydration cost', () => {
+  it('issues no SQL when the ancestor chains are already in cache', async () => {
+    // The keystroke path (`extendSelection`) runs this over the WHOLE
+    // accumulated range on every Shift+Arrow, twice (once inside
+    // `getBlocksInRange`, once in `commitSelectionRange`). Hydrating
+    // unconditionally cost 2 round-trips per selected block per press —
+    // ~400 queries for a 100-block selection, which measured as the entire
+    // SQL cost of extending a selection. The chains are already cached
+    // (the blocks are rendered), so the loads were pure waste.
+    await seedFlatOutline(env.repo, 30)
+    const ids = Array.from({length: 30}, (_, i) => `b${i}`)
+    // Warm the chains the way rendering the outline does.
+    await validateSelectionHierarchy([...ids], env.repo)
+
+    const before = sqlCalls(env.repo)
+    const result = await validateSelectionHierarchy([...ids], env.repo)
+    expect(sqlCalls(env.repo) - before).toBe(0)
+    expect(result).toEqual(ids)
+  })
+
+  it('still hydrates — and still collapses a descendant into its ancestor — on a cold cache', async () => {
+    // The skip must be driven by "chain already in cache", not by dropping
+    // hydration: with a cold cache `isDescendantOf` walks
+    // `cache.getSnapshot(parentId)`, finds nothing, and would keep BOTH the
+    // parent and the child.
+    await seedOutline(env.repo, [
+      {id: 'root', parentId: null, orderKey: 'a'},
+      {id: 'parent', parentId: 'root', orderKey: 'b'},
+      {id: 'child', parentId: 'parent', orderKey: 'c'},
+    ])
+
+    const cold = coldRepo()
+    const result = await validateSelectionHierarchy(['parent', 'child'], cold)
+    expect(result).toEqual(['parent'])
+  })
+})
+
+describe('getBlocksInRange — walk cost', () => {
+  it('walking BACKWARD does not first walk forward to the end of the document', async () => {
+    // Direction was auto-detected by running the forward walk to completion
+    // and only then trying backward — so extending a selection UPWARD from
+    // the middle of a page re-walked every block BELOW the anchor, every
+    // keystroke. Cold cache makes that walk visible: each block it touches
+    // costs SQL, so a 6-block range in a 60-block outline must not pay for
+    // the ~50 blocks that sit past the anchor.
+    await seedFlatOutline(env.repo, 60)
+
+    const cold = coldRepo()
+    // Warm only the range we actually traverse, so the assertion measures
+    // the WALK's reach rather than one-off hydration of the endpoints.
+    const before = sqlCalls(cold)
+    const result = await getBlocksInRange('b30', 'b25', 'root', cold)
+    const spent = sqlCalls(cold) - before
+
+    expect(result).toEqual(['b25', 'b26', 'b27', 'b28', 'b29', 'b30'])
+    // Blocks below b30 are never in the answer; touching them at all means
+    // the forward walk ran to the end of the document first. Generous bound
+    // — the point is O(range), not O(document).
+    expect(spent).toBeLessThan(40)
+  })
+
+  it('still finds the endpoint when walking forward', async () => {
+    await seedFlatOutline(env.repo, 20)
+    expect(await getBlocksInRange('b3', 'b6', 'root', env.repo))
+      .toEqual(['b3', 'b4', 'b5', 'b6'])
   })
 })
