@@ -866,7 +866,8 @@ describe('block-type typeify processor', () => {
   })
 
   // Padding is not a different name: a legacy row storing `" Book "` as its
-  // content claimed `Book`, and a rename retires the claim it actually made.
+  // content claimed the old name in ONE of two spellings, and a rename retires
+  // whichever it actually made — here the trimmed one, below the padded one.
   it('retires a padded old name on rename', async () => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
@@ -935,6 +936,28 @@ describe('block-type typeify processor', () => {
   })
 
   describe('with the alias plugin off', () => {
+    // The other legacy spelling: content and claim BOTH padded, which is a
+    // matching pair and so the type's own name, not a user alias. Pinned here
+    // because with the plugin on its rule 1 retires that entry regardless of
+    // what the kernel decides — the two must simply agree.
+    it('retires an old name whose claim is padded to match its content', async () => {
+      env = await setup({alias: false})
+      const id = await tagBlockType(env, 'Book')
+      await rawProperties(env, id, {
+        types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+        [blockTypeLabelProp.name]: 'Book',
+        [aliasesProp.name]: [' Book '],
+      }, ' Book ')
+
+      await env.repo.tx(
+        tx => tx.update(id, {content: 'Novel'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+
+      expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Novel'])
+      expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: ' Book '}).load()).toBeNull()
+    })
+
     it('claims the renamed name with the alias plugin absent', async () => {
       env = await setup({alias: false})
       const id = await tagBlockType(env, 'Book')
