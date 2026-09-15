@@ -714,6 +714,11 @@ describe('pullWouldWrite', () => {
     expect(pullWouldWrite(local, { ...remote, state: 'CLOSED' })).toBe(true)
   })
 
+  it('treats two labels mapping a field differently as a write, whichever one bd would reach first', () => {
+    expect(pullWouldWrite(local, { ...remote, labels: ['priority::high', 'priority::low', 'type::task', 'ui'] })).toBe(true)
+    expect(pullWouldWrite({ ...local, status: 'blocked' }, { ...remote, labels: [...remote.labels, 'status::blocked', 'status::deferred'] })).toBe(true)
+  })
+
   it('reads priority from the machine label only — a bare P1 is not one, unlike deriveLabelPriority', () => {
     expect(pullWouldWrite(local, { ...remote, labels: ['type::task', 'ui', 'P1'] })).toBe(true)
     expect(pullWouldWrite({ ...local, priority: 2, labels: ['ui', 'P1'] }, { ...remote, labels: ['type::task', 'ui', 'P1'] })).toBe(false)
@@ -750,11 +755,29 @@ describe('planLossyReapplies', () => {
   const row = (over: Partial<BeadRow>) =>
     bead({ title: 'T', description: 'D', priority: 1, issue_type: 'task', updated_at: '2026-09-11T00:00:00Z', ...over })
 
-  it('names the close date for a closed bead the pull would rewrite', () => {
-    const beads = [row({ id: 'km-a', status: 'closed', closed_at: '2026-09-01T00:00:00Z', title: 'stale on GitHub' })]
-    expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { state: 'CLOSED' })]]))).toEqual([
-      { id: 'km-a', number: 1, priority: 1, losses: ['closed_at'] },
+  it('names the close date for a closed bead the pull would rewrite, and the edit its push overwrites', () => {
+    const beads = [row({ id: 'km-a', status: 'closed', closed_at: '2026-09-01T00:00:00Z', title: 'the local title' })]
+    expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { state: 'CLOSED', title: 'edited on GitHub' })]]))).toEqual([
+      { id: 'km-a', number: 1, priority: 1, losses: ['closed_at'], overwrites: ['title'] },
     ])
+  })
+
+  // The ambiguity rule is the same rule for every label-derived field. Held
+  // only for the type, an issue carrying two priority labels reads as
+  // converged whenever the listed order happens to agree with the bead — so
+  // the row is not defused and the pull restamps its close date anyway.
+  it('counts a label-derived field as lost whenever the labels do not spell it uniquely', () => {
+    const twoPriorities = at('2026-09-11T01:00:00Z', { state: 'CLOSED', labels: ['priority::high', 'priority::low', 'type::task'] })
+    const closed = [row({ id: 'km-a', status: 'closed', closed_at: '2026-09-01T00:00:00Z' })]
+    expect(planLossyReapplies(closed, issues([[1, twoPriorities]]))[0].losses).toEqual(['closed_at', 'priority'])
+  })
+
+  // bd pushes `status::in_progress` for a claimed bead, so an issue without it
+  // maps to `open` — the pull would drop the claim, and nothing restores it
+  // (the row is local-OLDER, so guard 4 never sees it).
+  it('counts a claim the labels no longer spell as lost', () => {
+    const claimed = [row({ id: 'km-a', status: 'in_progress' })]
+    expect(planLossyReapplies(claimed, issues([[1, at('2026-09-11T01:00:00Z')]]))[0].losses).toEqual(['status'])
   })
 
   it('names the assignee bd never pushed, and the type the labels do not spell', () => {
@@ -1478,7 +1501,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, shimCalls } = lossyRepo()
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('defused km-l (#4): the pull would have lost closed_at, assignee')
+    expect(r.stdout).toContain('defused km-l (#4): the pull would lose closed_at, assignee')
     const log = shimCalls()
     // The order IS the guard: touched before the pull so bd skips the bead,
     // pushed before the pull so GitHub ends the run newer and the next run
@@ -1488,20 +1511,43 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(log.indexOf('--push-only')).toBeLessThan(log.indexOf('--pull-only'))
   })
 
-  it('reports a failed defuse and keeps the untouched bead out of the push', () => {
+  // Same reasoning as the close-adoption and snapshot aborts: pulling after a
+  // touch that did not land is causing the loss the step just named.
+  it('aborts before the pull when a defuse touch fails', () => {
     const { run, shimCalls } = lossyRepo({ failTouchId: 'km-l' })
     const r = run()
-    expect(r.status).toBe(0)
-    expect(r.stdout).toContain('FAILED to defuse km-l (#4)')
-    expect(shimCalls()).not.toContain('--push-only')
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('could not defuse km-l (#4)')
+    const log = shimCalls()
+    expect(log).not.toContain('--pull-only')
+    expect(log).not.toContain('--push-only')
   })
 
-  it('names what a defuse would cost under --dry-run without touching anything', () => {
+  it('names what a defuse would cost under --dry-run, push included, without touching anything', () => {
     const { run, shimCalls } = lossyRepo()
     const r = run('--dry-run')
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('[dry-run] would defuse km-l (#4)')
+    // The push is half of the defuse, so a preview that omitted it would
+    // understate the run — and planPrePullPush cannot see a touch that a dry
+    // run never made.
+    expect(r.stdout).toContain('[dry-run] would push 1 bead(s) out before the pull: km-l')
     expect(shimCalls()).not.toContain('bd update')
+  })
+
+  // The push writes the bead's own title over the newer GitHub one. That is
+  // the deliberate trade (see planLossyReapplies) — but it must be legible.
+  it('says which GitHub-side edit the defuse push overwrites', () => {
+    const row = syncRow({ id: 'km-o', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run } = makeSyncRepo({
+      issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED'), title: 'edited on GitHub' }],
+      lists: [[row]],
+      shows: [[row]],
+      exportRows: [{ ...row, closed_at: '2026-08-01T00:00:00Z' }],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain("the push overwrites GitHub's newer title — re-apply by hand if it was wanted")
   })
 
   // The defuse blocks the pull for that bead, so a bead the pull would carry

@@ -51,7 +51,9 @@
  *    are DEFUSED before the pull — touched, which makes bd skip them, and
  *    pushed, which keeps them skipped (planLossyReapplies). Beads the pull
  *    would carry faithfully are left to it: a GitHub-side title, body or label
- *    edit still imports.
+ *    edit still imports. A touch that fails ABORTS, like (1) and (4): the pull
+ *    would then make the very write the defuse named, and closed_at cannot be
+ *    put back.
  *
  * Accepted race: an issue closed on GitHub DURING the sync window can be
  * re-opened by the in-flight push, and because the reopen is then the state
@@ -766,50 +768,57 @@ const splitLabel = name => {
   const i = name.indexOf('::')
   return i < 0 ? ['', name] : [name.slice(0, i), name.slice(i + 2)]
 }
-const pullPriority = labels => {
+// Every label-derived field yields the SET of values the labels could produce,
+// never one value: bd takes the FIRST match in GitHub's own label order, and
+// the order this listing reports is not the order bd fetches. Two labels that
+// map to different values therefore have no answer to rely on — which is not a
+// corner case but the shape of the bug, since a bare `enhancement` is weighed
+// exactly like a scoped `type::chore`.
+const mappedValues = (labels, map, fallback) => {
+  const values = new Set()
   for (const name of labels) {
     const [prefix, value] = splitLabel(name)
-    if (prefix === 'priority' && value.toLowerCase() in PRIORITY_WORDS) return PRIORITY_WORDS[value.toLowerCase()]
+    const mapped = map(prefix, value.toLowerCase())
+    if (mapped !== undefined) values.add(mapped)
   }
-  return 2
+  return values.size ? values : new Set([fallback])
 }
-const pullStatus = (labels, state) => {
-  if (state === 'CLOSED') return 'closed'
-  for (const name of labels) {
-    const [prefix, value] = splitLabel(name)
-    if (prefix === 'status' && ['in_progress', 'blocked', 'deferred'].includes(value.toLowerCase())) return value.toLowerCase()
-  }
-  return 'open'
-}
-// The SET of types the labels could produce, not one type: bd takes the first
-// match in GitHub's own label order and weighs a bare `enhancement` exactly
-// like a scoped `type::chore`, so an issue carrying both has no single answer
-// — and the order this listing reports is not the order bd fetches.
-const pullTypes = labels => {
-  const types = new Set()
-  for (const name of labels) {
-    const [prefix, value] = splitLabel(name)
-    if ((prefix === 'type' || prefix === '') && TYPE_LABELS[value.toLowerCase()]) types.add(TYPE_LABELS[value.toLowerCase()])
-  }
-  return types.size ? types : new Set(['task'])
-}
+const pullTypes = labels => mappedValues(labels, (prefix, value) => (prefix === 'type' || prefix === '' ? TYPE_LABELS[value] : undefined), 'task')
+const pullPriorities = labels => mappedValues(labels, (prefix, value) => (prefix === 'priority' ? PRIORITY_WORDS[value] : undefined), 2)
+const LABEL_STATUSES = ['in_progress', 'blocked', 'deferred']
+const pullStatuses = (labels, state) =>
+  state === 'CLOSED'
+    ? new Set(['closed'])
+    : mappedValues(labels, (prefix, value) => (prefix === 'status' && LABEL_STATUSES.includes(value) ? value : undefined), 'open')
 const pullLabels = labels => labels.filter(name => !SCOPED_PREFIXES.includes(splitLabel(name)[0]))
 // bd's label comparison: trimmed, empties dropped, deduplicated, sorted.
 const normalizedLabels = labels => [...new Set((labels ?? []).map(l => l.trim()).filter(Boolean))].sort().join('\n')
-const spelledType = (labels, type) => {
-  const types = pullTypes(labels)
-  return types.size === 1 && types.has(type)
+
+/**
+ * The label-derived fields, and what the issue's labels could make of each.
+ * One owner for all three: the ambiguity rule is the same rule everywhere, and
+ * the version that had it only for the type silently let an ambiguous priority
+ * label read as converged (a bead is UNGUARDED exactly when the listed order
+ * happens to agree) and let a claim be reverted to `open` unnoticed.
+ */
+const LABEL_FIELDS = [
+  ['issue_type', (bead, issue) => [pullTypes(issue.labels), bead.issue_type]],
+  ['priority', (bead, issue) => [pullPriorities(issue.labels), bead.priority]],
+  ['status', (bead, issue) => [pullStatuses(issue.labels, issue.state), bead.status]],
+]
+/** The labels spell this bead's own value, and nothing else. */
+const spelled = (bead, issue, read) => {
+  const [values, mine] = read(bead, issue)
+  return values.size === 1 && values.has(mine)
 }
 
 /** Whether bd's pull would write this bead at all (its pullIssueEqual, negated). */
 export const pullWouldWrite = (bead, issue) =>
   bead.title !== issue.title ||
   (bead.description ?? '') !== (issue.body ?? '') ||
-  bead.priority !== pullPriority(issue.labels) ||
-  bead.status !== pullStatus(issue.labels, issue.state) ||
-  !spelledType(issue.labels, bead.issue_type) ||
   (bead.assignee ?? '').trim() !== (issue.assignee ?? '').trim() ||
-  normalizedLabels(bead.labels) !== normalizedLabels(pullLabels(issue.labels))
+  normalizedLabels(bead.labels) !== normalizedLabels(pullLabels(issue.labels)) ||
+  LABEL_FIELDS.some(([, read]) => !spelled(bead, issue, read))
 
 /**
  * Beads whose re-apply would LOSE something, with the losses named. bd's pull
@@ -818,9 +827,19 @@ export const pullWouldWrite = (bead, issue) =>
  * not carry back:
  *   - `closed_at`, restamped by the status write, with no bd verb to put it back
  *   - `assignee`, cleared because bd's push never sets a GitHub assignee
- *   - `issue_type`, re-derived from labels that may not spell it uniquely
+ *   - any label-derived field the labels do not uniquely spell (LABEL_FIELDS)
  * A bead the pull would carry faithfully is deliberately absent: a GitHub-side
  * title, body or label edit is an import worth having (#955).
+ *
+ * `overwrites` names the fields GitHub carries faithfully that ALSO diverge
+ * here — the defuse's push writes the local value over them. Declined
+ * alternative: carry those fields onto the bead instead, so nothing is lost
+ * either way. It cannot be done soundly. Nothing here says which SIDE is
+ * newer per field: the issue timestamp moves for a comment as readily as for
+ * an edit, so a bead edited locally and then commented on would have its own
+ * newer title overwritten by GitHub's older one — #647's loss, pointed the
+ * other way. Beads is the source of truth, so the local value wins and the
+ * report names what was overwritten.
  *
  * The candidate test is the issue being newer than the local row, which is a
  * complete superset of what the pull can re-apply: the pull fetches only
@@ -839,15 +858,27 @@ export const planLossyReapplies = (beads, issueByNumber) =>
     const losses = [
       ...(b.status === 'closed' && b.closed_at ? ['closed_at'] : []),
       ...((b.assignee ?? '').trim() && (b.assignee ?? '').trim() !== (issue.assignee ?? '').trim() ? ['assignee'] : []),
-      ...(spelledType(issue.labels, b.issue_type) ? [] : ['issue_type']),
+      ...LABEL_FIELDS.filter(([, read]) => !spelled(b, issue, read)).map(([field]) => field),
     ]
-    return losses.length ? [{ id: b.id, number, priority: b.priority, losses }] : []
+    const overwrites = [
+      ...(b.title !== issue.title ? ['title'] : []),
+      ...((b.description ?? '') !== (issue.body ?? '') ? ['description'] : []),
+      ...(normalizedLabels(b.labels) !== normalizedLabels(pullLabels(issue.labels)) ? ['labels'] : []),
+    ]
+    return losses.length ? [{ id: b.id, number, priority: b.priority, losses, overwrites }] : []
   })
 
-// Beads to hand the pre-pull push. bd 1.2.2 wires no content hook: for every
-// linked bead it GETs the issue and PATCHes only when the local row is
-// STRICTLY newer, so a bead whose listed GitHub copy is same-or-newer costs a
-// GET and changes nothing — skip exactly those. Everything the listing cannot
+// Beads to hand the pre-pull push. bd 1.2.2 wires no content hook — its
+// GitHub command sets PullHooks and never PushHooks, so doPush's ContentEqual
+// is nil and it falls back to the timestamp rule: for every linked bead it
+// GETs the issue and PATCHes whenever the local row is STRICTLY newer, content
+// identical or not. A defuse therefore leaves GitHub newer and drops out of
+// this set next run, rather than being re-offered forever. (Under 1.3.0 the
+// push skips an identical pair instead — at which point the defused row stays
+// local-newer, and stays SAFE for the same reason: its issue is never
+// re-stamped, so no later pull fetches it. See the bd upgrade issue.)
+// A bead whose listed GitHub copy is same-or-newer costs a GET and changes
+// nothing — skip exactly those. Everything the listing cannot
 // prove bd would skip (no ref, a foreign ref, an issue missing from the
 // listing, a missing timestamp) still goes to bd, which decides with a fresh
 // GET as the full push did.
@@ -1447,15 +1478,23 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     const defused = []
     // `bd export` rather than the listing: only it carries assignee, labels
     // and closed_at, and it is one read for the whole tracker either way.
-    for (const { id, number, priority, losses } of planLossyReapplies(exportBeads(env), issueByNumber)) {
-      if (dryRun) {
-        report.push(`[dry-run] would defuse ${id} (#${number}): the pull would lose ${losses.join(', ')}`)
-      } else if (touchBead({ id, priority }, env)) {
-        defused.push(id)
-        report.push(`defused ${id} (#${number}): the pull would have lost ${losses.join(', ')} (#955)`)
-      } else {
-        report.push(`FAILED to defuse ${id} (#${number}) — the pull may lose ${losses.join(', ')}; re-run`)
-      }
+    for (const { id, number, priority, losses, overwrites } of planLossyReapplies(exportBeads(env), issueByNumber)) {
+      // Same reasoning as the close-adoption and snapshot aborts: a touch that
+      // did not land leaves the pull free to make the very write named here,
+      // and closed_at cannot be put back afterwards. Reporting and pulling on
+      // would be reporting the loss while causing it.
+      if (!dryRun && !touchBead({ id, priority }, env))
+        throw new Error(
+          `aborting before the pull: could not defuse ${id} (#${number}) — the pull would lose ${losses.join(', ')} (#955)` +
+            (report.length ? ` (already applied: ${report.join('; ')})` : ''),
+        )
+      // Collected in BOTH modes: the push below is half of the defuse, and a
+      // dry run that left these out would preview a push of zero beads.
+      defused.push(id)
+      report.push(
+        `${dryRun ? '[dry-run] would defuse' : 'defused'} ${id} (#${number}): the pull would lose ${losses.join(', ')} (#955)` +
+          (overwrites.length ? `; the push overwrites GitHub's newer ${overwrites.join(', ')} — re-apply by hand if it was wanted` : ''),
+      )
     }
 
     // 1.5 Push local state out BEFORE anything pulls. bd's pull applies a
