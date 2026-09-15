@@ -256,9 +256,11 @@ export const createDbMirrorSchedule = ({
     // record. Minting it now rather than carrying an "install unknown" state
     // through the run is what keeps ownership decidable: a copy whose install
     // group we do not recognise is a copy nothing can ever reclaim.
-    // Not folder-scoped: it mints an id and touches no status field.
+    // Not folder-scoped: it mints an id and touches no status field. Which is
+    // also why the optional chain cannot swallow a refusal — a write carrying
+    // no folder condition has nothing to refuse.
     const installId =
-      state.installId ?? (await store.recordStatus(userId, {}, {ifDirectoryEpoch: undefined})).installId
+      state.installId ?? (await store.recordStatus(userId, {}, {ifDirectoryEpoch: undefined}))?.installId
     // Unreachable through the real store, which mints on every persisting
     // write; this is the narrowing, and a loud answer for an injected store
     // that does not.

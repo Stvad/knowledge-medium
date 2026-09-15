@@ -10,8 +10,21 @@ import {IdbKeyedStore} from '@/utils/idbKeyedStore.js'
 import {
   DB_MIRROR_DEFAULTS,
   createDbMirrorStore,
+  type DbMirrorState,
   type DbMirrorStore,
 } from '../store.js'
+
+/** `recordStatus` resolves to undefined when its folder condition refused the
+ *  write. A call carrying no condition has nothing to refuse, so this narrows
+ *  by asserting that — rather than with a `!`, which would also swallow a
+ *  regression that made an unconditional write start declining. */
+const recorded = async (
+  write: Promise<DbMirrorState | undefined>,
+): Promise<DbMirrorState> => {
+  const state = await write
+  if (state === undefined) throw new Error('an unconditional recordStatus refused to write')
+  return state
+}
 
 const storedKeys = () =>
   new IdbKeyedStore('km-db-mirror', 'mirror').tx('readonly', s => s.getAllKeys())
@@ -182,7 +195,9 @@ describe('db-mirror store', () => {
     // it as a copy at an unknown time. One owner, so neither has to.
     await store.load(USER)
 
-    const {status} = await store.recordStatus(USER, {lastMirrorAt: Number.NaN, lastBytes: 512}, {ifDirectoryEpoch: undefined})
+    const {status} = await recorded(
+      store.recordStatus(USER, {lastMirrorAt: Number.NaN, lastBytes: 512}, {ifDirectoryEpoch: undefined}),
+    )
 
     expect(status.lastMirrorAt).toBeUndefined()
     expect(status.lastBytes).toBe(512)
@@ -191,7 +206,7 @@ describe('db-mirror store', () => {
   it('records a success and clears the previous failure', async () => {
     await store.load(USER)
     await store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 1, permissionLost: true}, {ifDirectoryEpoch: undefined})
-    const state = await store.recordStatus(USER, {
+    const state = await recorded(store.recordStatus(USER, {
       lastMirrorAt: 100,
       lastMarker: '42',
       lastFilename: 'copy.db',
@@ -199,7 +214,7 @@ describe('db-mirror store', () => {
       lastError: undefined,
       lastErrorAt: undefined,
       permissionLost: false,
-    }, {ifDirectoryEpoch: undefined})
+    }, {ifDirectoryEpoch: undefined}))
 
     expect(state.status).toEqual({
       lastMirrorAt: 100,
@@ -213,7 +228,9 @@ describe('db-mirror store', () => {
   it('remembers the last success when a later run fails', async () => {
     await store.load(USER)
     await store.recordStatus(USER, {lastMirrorAt: 100, lastMarker: '42'}, {ifDirectoryEpoch: undefined})
-    const state = await store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 200}, {ifDirectoryEpoch: undefined})
+    const state = await recorded(
+      store.recordStatus(USER, {lastError: 'quota', lastErrorAt: 200}, {ifDirectoryEpoch: undefined}),
+    )
 
     expect(state.status).toMatchObject({lastMirrorAt: 100, lastMarker: '42', lastError: 'quota'})
   })
@@ -252,6 +269,43 @@ describe('db-mirror store', () => {
 
     expect(store.getSnapshot()).toBe(bobs)
     expect(store.getSnapshot()?.status.lastMarker).toBeUndefined()
+  })
+
+  it('a refused write changes nothing, and wakes nobody to read it', async () => {
+    // A refusal writes the record's own values back, so it is invisible in
+    // storage — which is exactly why it has to be visible in the RESULT, and
+    // why it must not be announced to the other tabs as a change.
+    const tabA = createDbMirrorStore()
+    await tabA.setDirectory(USER, fakeDirectory('Backups'))
+    const stale = (await tabA.load(USER)).directoryEpoch
+    await tabA.setDirectory(USER, fakeDirectory('Elsewhere'))
+    await recorded(
+      tabA.recordStatus(USER, {lastError: 'the new drive is full'}, {ifDirectoryEpoch: undefined}),
+    )
+    // Opened only now: a BroadcastChannel reaches the channels that exist when
+    // the message is posted, so a tab created after the setup writes cannot be
+    // woken by them, and the count below is about the refusal alone.
+    const tabB = createDbMirrorStore()
+    await tabB.load(USER)
+    let wakes = 0
+    const unsubscribe = tabB.subscribe(() => { wakes += 1 })
+
+    const refused = await tabA.recordStatus(
+      USER, {lastError: undefined}, {ifDirectoryEpoch: stale},
+    )
+
+    expect(refused).toBeUndefined()
+    // A fresh reader sees the record the refused write would have cleared.
+    expect((await createDbMirrorStore().load(USER)).status.lastError).toBe('the new drive is full')
+
+    // The count, not `wakes === 0`: a broadcast that had fired would simply not
+    // have arrived yet. A real write after it is the fence — the channel
+    // delivers in order, so once tab B has THAT one, any earlier broadcast has
+    // already landed and been counted.
+    await recorded(tabA.recordStatus(USER, {lastMarker: 'fence'}, {ifDirectoryEpoch: undefined}))
+    await vi.waitFor(() => expect(tabB.getSnapshot()?.status.lastMarker).toBe('fence'))
+    expect(wakes).toBe(1)
+    unsubscribe()
   })
 
   it('picks up a change another tab made', async () => {
