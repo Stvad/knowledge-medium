@@ -102,7 +102,14 @@ export const deleteBlocksThroughUi = async (
 ): Promise<boolean> => {
   if (!await ensureDeletableThroughUi(blocks)) return false
   if (!await confirmBulkDeleteThroughUi(blocks)) return false
-  await beforeWrite?.()
+  if (beforeWrite) {
+    await beforeWrite()
+    // Caller work of unbounded duration — the cut path serializes every
+    // selected subtree and awaits the clipboard API — so the guards are
+    // resolved again rather than writing on a decision taken before it. Gated
+    // on there being such work: without it this is the pass above.
+    if (!await ensureDeletableThroughUi(blocks)) return false
+  }
   const write = async (): Promise<void> => {
     // Leaf-first so each removal can't disturb the next. Owned here, with the
     // ancestor-first order `countBlocksRemovedBy` wants, so callers pass one

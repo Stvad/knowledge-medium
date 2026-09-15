@@ -299,6 +299,27 @@ describe('bulk-delete confirmation', () => {
       expect(beforeWrite).not.toHaveBeenCalled()
     })
 
+    it('re-resolves the guards after it, not just before it', async () => {
+      // The cut path writes the clipboard in here: unbounded caller work, and
+      // the pass this consolidation replaced used to sit after it.
+      const ids = await seedChildren('root', 3, 'few')
+
+      const deleted = await deleteBlocksThroughUi(ids.map(id => repo.block(id)), {
+        beforeWrite: () => {
+          repo.setFacetRuntime(resolveFacetRuntimeSync([
+            kernelDataExtension,
+            blockDeletionGuardsFacet.of(
+              block => (block.id === ids[2] ? 'Nope.' : null),
+              {source: 'test'},
+            ),
+          ]))
+        },
+      })
+
+      expect(deleted).toBe(false)
+      for (const id of ids) expect(await isBlockDeleted(repo, id)).toBe(false)
+    })
+
     it('does not run for a delete a guard refuses', async () => {
       await repo.mutate.createChild({parentId: 'root', id: 'guarded', content: 'g'})
       repo.setFacetRuntime(resolveFacetRuntimeSync([
