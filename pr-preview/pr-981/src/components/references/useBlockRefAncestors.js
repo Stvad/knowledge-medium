@@ -1,1 +1,1 @@
-import{KS as e}from"../../../chunks/app-CbKlrcIy.js";export{e as useBlockRefAncestors};
+import{WS as e}from"../../../chunks/app-DE79Z2FY.js";export{e as useBlockRefAncestors};

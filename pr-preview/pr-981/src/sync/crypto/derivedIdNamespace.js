@@ -1,1 +1,1 @@
-import{Pl as e}from"../../../chunks/app-CbKlrcIy.js";export{e as deriveWorkspaceIdNamespace};
+import{Pl as e}from"../../../chunks/app-DE79Z2FY.js";export{e as deriveWorkspaceIdNamespace};

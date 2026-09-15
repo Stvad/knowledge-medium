@@ -1,1 +1,1 @@
-import{M_ as e,N_ as t,j_ as n}from"../../chunks/app-CbKlrcIy.js";export{n as forgetRememberedWorkspace,e as recallRememberedWorkspace,t as rememberWorkspace};
+import{M_ as e,N_ as t,j_ as n}from"../../chunks/app-DE79Z2FY.js";export{n as forgetRememberedWorkspace,e as recallRememberedWorkspace,t as rememberWorkspace};
