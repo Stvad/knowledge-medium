@@ -1,1 +1,0 @@
-import{eP as e}from"../../../chunks/app-hUZy_mRj.js";export{e as propertyShapeLabel};

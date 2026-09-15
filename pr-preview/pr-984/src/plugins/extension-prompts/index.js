@@ -1,1 +1,0 @@
-import{aw as e,iw as t}from"../../../chunks/app-hUZy_mRj.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

@@ -1,1 +1,0 @@
-import{IC as e,LC as t}from"../../chunks/app-hUZy_mRj.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

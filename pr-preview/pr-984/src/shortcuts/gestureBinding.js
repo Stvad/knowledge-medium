@@ -1,1 +1,0 @@
-import{Hw as e,Uw as t}from"../../chunks/app-hUZy_mRj.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

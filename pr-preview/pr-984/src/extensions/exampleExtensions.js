@@ -1,1 +1,0 @@
-import{FC as e,PC as t}from"../../chunks/app-hUZy_mRj.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
