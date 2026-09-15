@@ -40,6 +40,19 @@
  *    touch, and a converged run costs seconds rather than one GET per bead
  *    per leg (measured: 387 beads, 90s per leg, two legs).
  *
+ * 5. The pull also re-applies a GitHub copy onto any bead whose issue was
+ *    touched past the local row — a comment, a label edit, this run's own
+ *    step-4 close — and that copy drops what GitHub does not carry back: the
+ *    assignee (bd's push never sets one), the close date (the status write
+ *    restamps it, and no bd verb can put it back), and a type the labels do
+ *    not spell uniquely (#955). Note the difference from (4): those rows are
+ *    local-OLDER by construction, so (4)'s snapshot never sees them, and
+ *    closed_at could not be restored afterwards in any case. So the lossy ones
+ *    are DEFUSED before the pull — touched, which makes bd skip them, and
+ *    pushed, which keeps them skipped (planLossyReapplies). Beads the pull
+ *    would carry faithfully are left to it: a GitHub-side title, body or label
+ *    edit still imports.
+ *
  * Accepted race: an issue closed on GitHub DURING the sync window can be
  * re-opened by the in-flight push, and because the reopen is then the state
  * every later fetch sees, no later run re-adopts the close. Inherent to a
@@ -728,6 +741,109 @@ export const planLocalWins = (beads, issueByNumber) =>
     return Date.parse(b.updated_at) > Date.parse(issue.updatedAt) ? [{ id: b.id, number }] : []
   })
 
+// ---- what bd's pull would write ----
+// The pull overwrites a bead from its GitHub copy, and the decision to let it
+// happen has to be made BEFORE it runs — so these replicate bd 1.2.2's
+// GitHub→beads mapping (internal/github/mapping.go, unchanged in 1.3.0-rc.2).
+// Both ways of being wrong are bounded: reading a divergence bd would not see
+// costs one needless touch and push, and missing one leaves today's behaviour.
+// bd splits a label on the FIRST `::`, compares the prefix case-sensitively
+// and the value case-insensitively.
+const TYPE_LABELS = {
+  bug: 'bug',
+  feature: 'feature',
+  enhancement: 'feature',
+  task: 'task',
+  epic: 'epic',
+  chore: 'chore',
+  decision: 'decision',
+  spike: 'spike',
+  story: 'story',
+  milestone: 'milestone',
+}
+const SCOPED_PREFIXES = ['priority', 'status', 'type']
+const splitLabel = name => {
+  const i = name.indexOf('::')
+  return i < 0 ? ['', name] : [name.slice(0, i), name.slice(i + 2)]
+}
+const pullPriority = labels => {
+  for (const name of labels) {
+    const [prefix, value] = splitLabel(name)
+    if (prefix === 'priority' && value.toLowerCase() in PRIORITY_WORDS) return PRIORITY_WORDS[value.toLowerCase()]
+  }
+  return 2
+}
+const pullStatus = (labels, state) => {
+  if (state === 'CLOSED') return 'closed'
+  for (const name of labels) {
+    const [prefix, value] = splitLabel(name)
+    if (prefix === 'status' && ['in_progress', 'blocked', 'deferred'].includes(value.toLowerCase())) return value.toLowerCase()
+  }
+  return 'open'
+}
+// The SET of types the labels could produce, not one type: bd takes the first
+// match in GitHub's own label order and weighs a bare `enhancement` exactly
+// like a scoped `type::chore`, so an issue carrying both has no single answer
+// — and the order this listing reports is not the order bd fetches.
+const pullTypes = labels => {
+  const types = new Set()
+  for (const name of labels) {
+    const [prefix, value] = splitLabel(name)
+    if ((prefix === 'type' || prefix === '') && TYPE_LABELS[value.toLowerCase()]) types.add(TYPE_LABELS[value.toLowerCase()])
+  }
+  return types.size ? types : new Set(['task'])
+}
+const pullLabels = labels => labels.filter(name => !SCOPED_PREFIXES.includes(splitLabel(name)[0]))
+// bd's label comparison: trimmed, empties dropped, deduplicated, sorted.
+const normalizedLabels = labels => [...new Set((labels ?? []).map(l => l.trim()).filter(Boolean))].sort().join('\n')
+const spelledType = (labels, type) => {
+  const types = pullTypes(labels)
+  return types.size === 1 && types.has(type)
+}
+
+/** Whether bd's pull would write this bead at all (its pullIssueEqual, negated). */
+export const pullWouldWrite = (bead, issue) =>
+  bead.title !== issue.title ||
+  (bead.description ?? '') !== (issue.body ?? '') ||
+  bead.priority !== pullPriority(issue.labels) ||
+  bead.status !== pullStatus(issue.labels, issue.state) ||
+  !spelledType(issue.labels, bead.issue_type) ||
+  (bead.assignee ?? '').trim() !== (issue.assignee ?? '').trim() ||
+  normalizedLabels(bead.labels) !== normalizedLabels(pullLabels(issue.labels))
+
+/**
+ * Beads whose re-apply would LOSE something, with the losses named. bd's pull
+ * overwrites any bead its issue was touched past — a comment, a label edit,
+ * this run's own step-4 close — and the copy it writes drops what GitHub does
+ * not carry back:
+ *   - `closed_at`, restamped by the status write, with no bd verb to put it back
+ *   - `assignee`, cleared because bd's push never sets a GitHub assignee
+ *   - `issue_type`, re-derived from labels that may not spell it uniquely
+ * A bead the pull would carry faithfully is deliberately absent: a GitHub-side
+ * title, body or label edit is an import worth having (#955).
+ *
+ * The candidate test is the issue being newer than the local row, which is a
+ * complete superset of what the pull can re-apply: the pull fetches only
+ * issues touched since last_sync and skips any bead touched since then too, so
+ * a bead at least as new as its issue is skipped either way. Missing
+ * timestamps mean "cannot prove the issue is newer" — not a candidate, leaving
+ * today's behaviour rather than touching on a guess.
+ */
+export const planLossyReapplies = (beads, issueByNumber) =>
+  beads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    const issue = number === null ? undefined : issueByNumber.get(number)
+    if (!issue?.updatedAt || !b.updated_at) return []
+    if (Date.parse(issue.updatedAt) <= Date.parse(b.updated_at)) return []
+    if (!pullWouldWrite(b, issue)) return []
+    const losses = [
+      ...(b.status === 'closed' && b.closed_at ? ['closed_at'] : []),
+      ...((b.assignee ?? '').trim() && (b.assignee ?? '').trim() !== (issue.assignee ?? '').trim() ? ['assignee'] : []),
+      ...(spelledType(issue.labels, b.issue_type) ? [] : ['issue_type']),
+    ]
+    return losses.length ? [{ id: b.id, number, priority: b.priority, losses }] : []
+  })
+
 // Beads to hand the pre-pull push. bd 1.2.2 wires no content hook: for every
 // linked bead it GETs the issue and PATCHes only when the local row is
 // STRICTLY newer, so a bead whose listed GitHub copy is same-or-newer costs a
@@ -1030,13 +1146,33 @@ const exportBeads = env =>
     .map(l => JSON.parse(l))
     .filter(r => r._type === 'issue')
 
+// Marks a bead "locally modified since last sync", which is what makes bd's
+// pull skip it — the mark both the defuse (step 1.2) and the comment mirror
+// rely on. A priority write of the CURRENT value is the cheapest thing that
+// bumps updated_at; `bd comment` does not (measured).
+const touchBead = (bead, env) => tryRun('bd', ['update', bead.id, '-p', String(bead.priority)], { env }) !== null
+
 const listAllBeads = () =>
   JSON.parse(run('bd', ['list', '--status', 'open,in_progress,blocked,deferred,closed', '--limit', '0', '--json']))
 
 const FETCH_LIMIT = 5000
 const fetchIssues = () => {
   const rows = JSON.parse(
-    run('gh', ['issue', 'list', '--repo', REPO, '--state', 'all', '--json', 'number,state,labels,updatedAt', '--limit', String(FETCH_LIMIT)]),
+    run('gh', [
+      'issue',
+      'list',
+      '--repo',
+      REPO,
+      '--state',
+      'all',
+      // title/body/assignees are read only to say whether bd's pull would
+      // rewrite a bead (planLossyReapplies) — the bodies triple the payload,
+      // and the alternative is one GET per candidate.
+      '--json',
+      'number,state,labels,updatedAt,title,body,assignees',
+      '--limit',
+      String(FETCH_LIMIT),
+    ]),
   )
   if (rows.length >= FETCH_LIMIT)
     throw new Error(`issue list hit the ${FETCH_LIMIT} fetch limit — raise it before trusting absence-based decisions`)
@@ -1046,7 +1182,20 @@ const fetchIssues = () => {
   // would all be wrong at once.
   if (rows.length === 0) throw new Error('issue list came back empty — refusing absence-based decisions')
   return {
-    issueByNumber: new Map(rows.map(i => [i.number, { state: i.state, labels: i.labels.map(l => l.name), updatedAt: i.updatedAt }])),
+    issueByNumber: new Map(
+      rows.map(i => [
+        i.number,
+        {
+          state: i.state,
+          labels: i.labels.map(l => l.name),
+          updatedAt: i.updatedAt,
+          title: i.title,
+          body: i.body,
+          // bd reads REST's singular `assignee`, which is the first of these.
+          assignee: i.assignees?.[0]?.login ?? '',
+        },
+      ]),
+    ),
     maxKnownIssueNumber: rows.reduce((max, i) => Math.max(max, i.number), 0),
   }
 }
@@ -1210,7 +1359,7 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
       report.push(`[dry-run] would mirror ${publishable.length} comment(s) of ${bead.id} to #${number}`)
       continue
     }
-    if (tryRun('bd', ['update', bead.id, '-p', String(bead.priority)], { env }) === null) {
+    if (!touchBead(bead, env)) {
       report.push(`FAILED to touch ${bead.id} before mirroring — its ${publishable.length} comment(s) wait for the next run`)
       continue
     }
@@ -1285,6 +1434,30 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
           (report.length ? ` (already applied: ${report.join('; ')})` : ''),
       )
 
+    // 1.2 Defuse the re-applies that would lose something (planLossyReapplies
+    // names which). The touch is what makes bd's pull skip the bead, and the
+    // push below is what keeps it skipped: it leaves GitHub newer than the
+    // local row, so the next run neither pushes the bead nor fetches its
+    // issue. Touched but NOT pushed, the row would be pushed next run instead,
+    // and that PATCH is the foreign-looking touch the pull re-applies — the
+    // defuse would walk forward one run at a time forever.
+    // Sitting after close-adoption only saves work — a close bumps updated_at
+    // and takes the bead out of the pull's reach on its own. Before the PUSH
+    // is the position that matters.
+    const defused = []
+    // `bd export` rather than the listing: only it carries assignee, labels
+    // and closed_at, and it is one read for the whole tracker either way.
+    for (const { id, number, priority, losses } of planLossyReapplies(exportBeads(env), issueByNumber)) {
+      if (dryRun) {
+        report.push(`[dry-run] would defuse ${id} (#${number}): the pull would lose ${losses.join(', ')}`)
+      } else if (touchBead({ id, priority }, env)) {
+        defused.push(id)
+        report.push(`defused ${id} (#${number}): the pull would have lost ${losses.join(', ')} (#955)`)
+      } else {
+        report.push(`FAILED to defuse ${id} (#${number}) — the pull may lose ${losses.join(', ')}; re-run`)
+      }
+    }
+
     // 1.5 Push local state out BEFORE anything pulls. bd's pull applies a
     // strictly OLDER GitHub copy over newer local rows (#647) — closes and
     // edits included — so the pull must never see a GitHub copy that lags
@@ -1295,7 +1468,10 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // A dry run cannot re-list, so the closes it would adopt are added by
     // hand: the real close bumps updated_at and puts them in the set.
     const adoptedBeads = closes.length && !dryRun ? listAllBeads() : preBeads
-    const pushSet = [...new Set([...planPrePullPush(adoptedBeads, issueByNumber), ...(dryRun ? closes.map(c => c.id) : [])])]
+    // The defused ids are named outright rather than left to the listing: the
+    // push is half of what the defuse means (see 1.2), so it must not depend
+    // on a re-listing this branch may skip.
+    const pushSet = [...new Set([...planPrePullPush(adoptedBeads, issueByNumber), ...defused, ...(dryRun ? closes.map(c => c.id) : [])])]
     if (dryRun) {
       report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
     } else if (pushSet.length) {

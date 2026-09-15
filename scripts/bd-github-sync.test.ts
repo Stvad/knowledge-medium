@@ -31,6 +31,8 @@ import {
   planClosePushes,
   planCloseReconciliation,
   planLocalWins,
+  planLossyReapplies,
+  pullWouldWrite,
   planMintedNonOpen,
   planPrePullPush,
   planMintedRefs,
@@ -693,6 +695,104 @@ describe('planLocalWins', () => {
   })
 })
 
+describe('pullWouldWrite', () => {
+  // A converged pair: bd's pull skips these, so every case below moves ONE
+  // field and nothing else.
+  const local = bead({ title: 'T', description: 'D', priority: 1, status: 'open', issue_type: 'task', labels: ['ui'] })
+  const remote: IssueInfo = { state: 'OPEN', labels: ['priority::high', 'type::task', 'ui'], title: 'T', body: 'D', assignee: '' }
+
+  it('is false for a converged pair — the touch a comment leaves changes no mapped field', () => {
+    expect(pullWouldWrite(local, remote)).toBe(false)
+  })
+
+  it('sees each mapped field move', () => {
+    expect(pullWouldWrite({ ...local, title: 'other' }, remote)).toBe(true)
+    expect(pullWouldWrite({ ...local, description: 'other' }, remote)).toBe(true)
+    expect(pullWouldWrite({ ...local, status: 'closed' }, remote)).toBe(true)
+    expect(pullWouldWrite({ ...local, assignee: 'Someone' }, remote)).toBe(true)
+    expect(pullWouldWrite({ ...local, labels: ['ui', 'perf'] }, remote)).toBe(true)
+    expect(pullWouldWrite(local, { ...remote, state: 'CLOSED' })).toBe(true)
+  })
+
+  it('reads priority from the machine label only — a bare P1 is not one, unlike deriveLabelPriority', () => {
+    expect(pullWouldWrite(local, { ...remote, labels: ['type::task', 'ui', 'P1'] })).toBe(true)
+    expect(pullWouldWrite({ ...local, priority: 2, labels: ['ui', 'P1'] }, { ...remote, labels: ['type::task', 'ui', 'P1'] })).toBe(false)
+  })
+
+  it('takes a status label over the open state, and ignores it for a closed issue', () => {
+    expect(pullWouldWrite({ ...local, status: 'blocked' }, { ...remote, labels: [...remote.labels, 'status::blocked'] })).toBe(false)
+    expect(pullWouldWrite({ ...local, status: 'closed' }, { ...remote, state: 'CLOSED', labels: [...remote.labels, 'status::blocked'] })).toBe(false)
+  })
+
+  it('counts the type as moved unless the labels spell exactly one, the bead’s own', () => {
+    expect(pullWouldWrite({ ...local, issue_type: 'chore' }, { ...remote, labels: ['priority::high', 'type::chore', 'ui'] })).toBe(false)
+    // `enhancement` and `type::chore` both map, so which one bd picks is a
+    // question of GitHub's label order — never an answer this can rely on.
+    expect(pullWouldWrite({ ...local, issue_type: 'chore' }, { ...remote, labels: ['priority::high', 'type::chore', 'enhancement'] })).toBe(true)
+  })
+
+  it('compares labels as bd does: scoped ones dropped, trimmed, deduplicated, order-free', () => {
+    expect(pullWouldWrite({ ...local, labels: [' ui ', 'ui', ''] }, remote)).toBe(false)
+    expect(pullWouldWrite({ ...local, labels: ['b', 'a'] }, { ...remote, labels: ['type::task', 'priority::high', 'a', 'b'] })).toBe(false)
+  })
+})
+
+describe('planLossyReapplies', () => {
+  const at = (updatedAt: string, over: Partial<IssueInfo> = {}): IssueInfo => ({
+    state: 'OPEN',
+    labels: ['priority::high', 'type::task'],
+    updatedAt,
+    title: 'T',
+    body: 'D',
+    assignee: '',
+    ...over,
+  })
+  const row = (over: Partial<BeadRow>) =>
+    bead({ title: 'T', description: 'D', priority: 1, issue_type: 'task', updated_at: '2026-09-11T00:00:00Z', ...over })
+
+  it('names the close date for a closed bead the pull would rewrite', () => {
+    const beads = [row({ id: 'km-a', status: 'closed', closed_at: '2026-09-01T00:00:00Z', title: 'stale on GitHub' })]
+    expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { state: 'CLOSED' })]]))).toEqual([
+      { id: 'km-a', number: 1, priority: 1, losses: ['closed_at'] },
+    ])
+  })
+
+  it('names the assignee bd never pushed, and the type the labels do not spell', () => {
+    const assigned = [row({ id: 'km-a', assignee: 'Someone' })]
+    expect(planLossyReapplies(assigned, issues([[1, at('2026-09-11T01:00:00Z')]]))[0].losses).toEqual(['assignee'])
+    const ambiguous = [row({ id: 'km-b', issue_type: 'chore' })]
+    const withBareLabel = at('2026-09-11T01:00:00Z', { labels: ['priority::high', 'type::chore', 'enhancement'] })
+    expect(planLossyReapplies(ambiguous, issues([[1, withBareLabel]]))[0].losses).toEqual(['issue_type'])
+  })
+
+  // The case the guard exists for is the one where the pull carries nothing
+  // back: leaving a real import to the pull is the whole reason it is not
+  // simply "defuse every candidate".
+  it('leaves a bead the pull would carry faithfully alone', () => {
+    const edited = [row({ id: 'km-a', title: 'old title' })]
+    expect(planLossyReapplies(edited, issues([[1, at('2026-09-11T01:00:00Z', { title: 'edited on GitHub' })]]))).toEqual([])
+  })
+
+  it('leaves a converged bead alone — the pull skips it, so the touch would be a push for nothing', () => {
+    const closed = [row({ id: 'km-a', status: 'closed', closed_at: '2026-09-01T00:00:00Z' })]
+    expect(planLossyReapplies(closed, issues([[1, at('2026-09-11T01:00:00Z', { state: 'CLOSED' })]]))).toEqual([])
+  })
+
+  it('treats a GitHub-side assignment onto an unassigned bead as an import, not a loss', () => {
+    const beads = [row({ id: 'km-a' })]
+    expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { assignee: 'octocat' })]]))).toEqual([])
+  })
+
+  it('ignores beads the pull cannot reach: local at least as new, unlinked, or either timestamp missing', () => {
+    const assigned = (over: Partial<BeadRow>) => [row({ id: 'km-a', assignee: 'Someone', ...over })]
+    expect(planLossyReapplies(assigned({}), issues([[1, at('2026-09-11T00:00:00Z')]]))).toEqual([])
+    expect(planLossyReapplies(assigned({}), issues([[1, at('2026-09-10T00:00:00Z')]]))).toEqual([])
+    expect(planLossyReapplies(assigned({ external_ref: null }), issues([[1, at('2026-09-11T01:00:00Z')]]))).toEqual([])
+    expect(planLossyReapplies(assigned({ updated_at: undefined }), issues([[1, at('2026-09-11T01:00:00Z')]]))).toEqual([])
+    expect(planLossyReapplies(assigned({}), issues([[1, { ...at('2026-09-11T01:00:00Z'), updatedAt: undefined }]]))).toEqual([])
+  })
+})
+
 describe('planPrePullPush', () => {
   const gh = (updatedAt?: string): IssueInfo => ({ state: 'OPEN', labels: [], updatedAt })
 
@@ -1049,11 +1149,18 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     return { run, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
   }
 
+  // Paired with syncRow to be CONVERGED: same title, body, priority and type,
+  // no GitHub assignee. A test that wants the defuse (step 1.2) to fire moves
+  // one of those apart on purpose — every other test would otherwise pay for a
+  // divergence it never asked about.
   const ghIssue = (number: number, updatedAt: string, state = 'OPEN') => ({
     number,
     state,
-    labels: [{ name: 'priority::high' }],
+    labels: [{ name: 'priority::high' }, { name: 'type::task' }],
     updatedAt,
+    title: 'T',
+    body: 'D',
+    assignees: [],
   })
 
   // The wider row shape `bd list --json` emits — the plan functions' BeadRow
@@ -1067,6 +1174,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     priority: 1,
     title: 'T',
     description: 'D',
+    issue_type: 'task',
     ...over,
   })
 
@@ -1217,7 +1325,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('restored km-t9')
-    expect(shimCalls()).toContain('bd update km-t9 --title T -d D -p 1 -a  -s open')
+    expect(shimCalls()).toContain('bd update km-t9 --title T -d D -p 1 -t task -a  -s open')
     expect(afterPull(shimCalls())).toContain('--issues km-t9')
   })
 
@@ -1351,6 +1459,67 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(log).not.toContain('--push-only')
     expect(log).toContain('bd github sync --pull-only\n')
     expect(log).not.toContain('bd github sync\n')
+  })
+
+  // A closed, assigned bead whose issue GitHub touched last: bd's pull would
+  // clear the assignee and restamp the close date, and neither comes back.
+  const lossyRepo = (over: { failTouchId?: string } = {}) => {
+    const row = syncRow({ id: 'km-l', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    return makeSyncRepo({
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED')],
+      lists: [[row]],
+      shows: [[row]],
+      exportRows: [{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }],
+      ...over,
+    })
+  }
+
+  it('defuses a lossy re-apply before the pull, and pushes it out so it stays defused', () => {
+    const { run, shimCalls } = lossyRepo()
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('defused km-l (#4): the pull would have lost closed_at, assignee')
+    const log = shimCalls()
+    // The order IS the guard: touched before the pull so bd skips the bead,
+    // pushed before the pull so GitHub ends the run newer and the next run
+    // neither pushes it nor fetches its issue.
+    expect(log.indexOf('bd update km-l -p 1')).toBeLessThan(log.indexOf('--push-only'))
+    expect(log).toContain('--push-only --issues km-l')
+    expect(log.indexOf('--push-only')).toBeLessThan(log.indexOf('--pull-only'))
+  })
+
+  it('reports a failed defuse and keeps the untouched bead out of the push', () => {
+    const { run, shimCalls } = lossyRepo({ failTouchId: 'km-l' })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('FAILED to defuse km-l (#4)')
+    expect(shimCalls()).not.toContain('--push-only')
+  })
+
+  it('names what a defuse would cost under --dry-run without touching anything', () => {
+    const { run, shimCalls } = lossyRepo()
+    const r = run('--dry-run')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('[dry-run] would defuse km-l (#4)')
+    expect(shimCalls()).not.toContain('bd update')
+  })
+
+  // The defuse blocks the pull for that bead, so a bead the pull would carry
+  // faithfully must not enter it — a GitHub-side title or label edit is an
+  // import worth having.
+  it('leaves a GitHub-side edit the pull carries faithfully to the pull', () => {
+    const row = syncRow({ id: 'km-f', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z'), title: 'edited on GitHub' }],
+      lists: [[row]],
+      exportRows: [row],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).not.toContain('defused')
+    const log = shimCalls()
+    expect(log).not.toContain('bd update km-f')
+    expect(log).toContain('--pull-only')
   })
 
   // The set is computed from a listing taken AFTER close-adoption: a close
