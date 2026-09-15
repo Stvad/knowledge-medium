@@ -142,7 +142,6 @@ export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promis
  * guards to veto destroying its source block, but REPARENTS the children, so
  * counting the subtree there would warn about blocks that survive.
  *
- *
  * Re-resolves the guards after the dialog closes, so `false` means either "the
  * user declined" or "a guard started refusing while we asked" — both being
  * "don't proceed", which is all any caller does with it. The wait is
