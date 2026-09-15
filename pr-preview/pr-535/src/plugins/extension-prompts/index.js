@@ -1,1 +1,1 @@
-import{QC as e,ZC as t}from"../../../chunks/app-CM0AB7Hx.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
+import{QC as e,ZC as t}from"../../../chunks/app-D9FflrMA.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
