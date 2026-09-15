@@ -91,11 +91,15 @@ export const deleteBlockThroughUi = async (
  *  1..K-1 tombstoned. Making that atomic is the same open item as
  *  `applyToAllBlocksInSelection`'s "one tx so undo collapses the batch" todo.
  *
- *  Both multi-block gestures get this. `cut_selected_blocks` passes its whole
- *  selection here directly; `multi_select.delete_block` fans out per block
- *  through `applyToAllBlocksInSelection`, so it runs the same check once over
- *  the selection as that helper's `preflight` before any block is touched.
- *  `Delete` and `d` on the same selection must not disagree. */
+ *  `multi_select.delete_block` fans out per block through
+ *  `applyToAllBlocksInSelection`, so it runs the same check once over the
+ *  selection as that helper's `preflight` before any block is touched.
+ *
+ *  `cut_selected_blocks` no longer arrives here: cut puts the blocks'
+ *  identity on the clipboard and a later paste relocates them, so it deletes
+ *  nothing (`@/utils/copy.js`'s `cutBlockIdsToClipboard`). `beforeWrite`
+ *  remains for the other gestures that need interstitial work between the
+ *  guards and the write. */
 export const deleteBlocksThroughUi = async (
   blocks: readonly Block[],
   {animate = false, beforeWrite}: DeleteThroughUiOptions = {},
@@ -129,9 +133,9 @@ export const deleteBlocksThroughUi = async (
 
 /**
  * The guard check on its own, toast included. Use this when the gesture has
- * work to do BETWEEN deciding and deleting — `cut_selected_blocks` has to write
- * the clipboard while the blocks still exist, and must not write it at all for
- * a cut the guards will refuse.
+ * work to do BETWEEN deciding and deleting — `deleteSelectedBlocks` computes
+ * its post-delete focus target from the tree before it is torn down, and must
+ * not do that work at all for a delete the guards will refuse.
  */
 export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   await Promise.all(blocks.map(block => block.load()))
