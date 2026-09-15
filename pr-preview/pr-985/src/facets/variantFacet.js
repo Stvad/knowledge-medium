@@ -1,1 +1,1 @@
-import{Fk as e,Ik as t}from"../../chunks/app-CzqEhkaH.js";export{e as defineVariant,t as defineVariantFacet};
+import{Fk as e,Ik as t}from"../../chunks/app-CRSKs5-X.js";export{e as defineVariant,t as defineVariantFacet};
