@@ -1,1 +1,1 @@
-import{fZ as e,pZ as t}from"../../chunks/app-Dfw_99yg.js";export{e as InvalidBlockIdError,t as assertCanonicalBlockId};
+import{fZ as e,pZ as t}from"../../chunks/app-BcdYnsGV.js";export{e as InvalidBlockIdError,t as assertCanonicalBlockId};
