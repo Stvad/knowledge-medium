@@ -8,6 +8,7 @@ import {
   type PropertySchema,
 } from '@/data/api'
 import { Repo } from '@/data/repo'
+import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -497,6 +498,43 @@ describe('findReplaceDataExtension', () => {
       // The ref the user actually set is untouched in both row and cell.
       expect((await load(valueId))?.content).toBe(original)
       expect((await load('owner'))?.properties[relatedSchema.name]).toBe(TARGET)
+    })
+
+    // km-h1hy: a multi-valued property's value children are its MEMBERS, and
+    // a member's content was written under the MEMBER codec — so the guard has
+    // to ask that one. Asking the owning `string-list` codec instead answers
+    // "not a string or url, nothing to lose" and waves through a replacement
+    // that turns the member into a field row: the bit stamps, the row leaves
+    // the value set, and the member vanishes from the list with no error.
+    it('skips a replacement that marks a string-list MEMBER into a field row', async () => {
+      const TAGS_DEF = '88888888-8888-4888-8888-888888888888'
+      const tagsSchema = defineProperty<readonly string[]>('tags', {
+        codec: kernelValuePresetCoresById['string-list'].build(),
+        defaultValue: [],
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const {valueId} = await seedFlippedWorkspaceWithProperty({
+        fieldId: TAGS_DEF,
+        schema: tagsSchema,
+        value: ['plain', 'other'],
+      })
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'plain',
+          replace: `::((${TARGET}))`,
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'plain'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect(result.unparseableProperties).toEqual([tagsSchema.name])
+      expect((await load(valueId))?.content).toBe('plain')
+      expect((await load('owner'))?.properties[tagsSchema.name])
+        .toEqual(['plain', 'other'])
     })
 
     it('skips a replacement that marks the value row into a field row', async () => {

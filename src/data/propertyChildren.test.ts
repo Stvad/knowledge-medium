@@ -3106,6 +3106,25 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect(await memberContents('p', PEOPLE_FIELD_ID)).toEqual(['not a reference'])
     })
 
+    it('retargeting ONE refList member follows into the cell, at its position', async () => {
+      // The concrete payoff of `((id))` members over JSON ids: reference
+      // maintenance (merge retarget, rename) rewrites the span inside the
+      // member row, and the cell follows. A JSON array of bare ids is out of
+      // its reach entirely.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['a-id', 'b-id', 'c-id']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+
+      await repo.tx(tx => tx.update(members[1]!.id, {content: '((b-merged))'}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).people).toEqual(['a-id', 'b-merged', 'c-id'])
+      expect((await memberRows('p', PEOPLE_FIELD_ID))[1]!.reference_target_id)
+        .toBe('b-merged')
+    })
+
     it('two siblings with the same text project as ONE member', async () => {
       const repo = await setupWithLists()
       await createBlock(repo, 'p')

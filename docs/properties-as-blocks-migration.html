@@ -336,8 +336,11 @@
 
 <aside class="doc-status">
   <strong>Status: current (planning), with one §9 correction — and slice C is no
-  longer planning.</strong>
-  <strong>Last verified against code: 2026-08-21, branch
+  longer planning. The &ldquo;scalar-first&rdquo; narrowing in §5 and the
+  &ldquo;refList stays JSON&rdquo; note in §9 are REVERSED as of km-h1hy; both
+  paragraphs now describe the shipped shape.</strong>
+  <strong>Last verified against code: 2026-09-16 for the multi-value shape;
+  2026-08-21 for the rest, branch
   <code>claude/e2ee-synthesis-namespace</code>.</strong>
   That verification covers the entries marked <strong>landed</strong> below
   &mdash; each was checked against the implementation on this branch, not
@@ -998,11 +1001,14 @@ are themselves block references. Same primitive everywhere.
     change <code>name</code> without touching stored children.
   </li>
   <li>
-    <strong>Scalar-first.</strong> The prototype projects one primary value child per
-    field row; list values serialize as JSON into that one child for now.
-    Multi-value-as-N-children is a follow-up slice (§11), not part of the first cut. This
-    is a deliberate narrowing from rev 1, which promised list-cardinality-as-children
-    up front.
+    <strong>Scalar-first, until km-h1hy.</strong> The prototype projected one primary
+    value child per field row and serialized a list as JSON into that one child. That
+    narrowing is REVERSED, before the first flip: a multi-value property is N sibling
+    value children, one per member, sibling order = list order, and the projection is a
+    list aggregate rather than first-wins. A codec opts in by naming its member codec
+    (<code>Codec.member</code>); one that does not keeps the single-child shape. Members
+    are a deduped SET, and an empty list projects as an ABSENT cell key, which reads back
+    as the preset's <code>[]</code> default.
   </li>
   <li>
     Ref-typed values reuse the block-reference primitive: a value child whose content is
@@ -2736,9 +2742,9 @@ supabase skill if it's kept.
     coercing into a fake block id as bare-id storage did. It also puts property
     refs on the reference-maintenance rails: merge-retarget rewrites
     <code>((A))</code>→<code>((B))</code> inside a value and the cell follows.
-    <code>refList</code> stays JSON for now — the direction is "a refList is N
-    <code>((id))</code> sibling values," deferred with the multi-value design pass
-    (it needs list-aggregate projection semantics).</dd>
+    <code>refList</code> is N <code>((id))</code> sibling values, as of km-h1hy — each
+    member is a value row like any scalar ref, on the same reference-maintenance rails
+    and refusing prose the same way.</dd>
 
   <dt><strong>Deleting a referenced block keeps the value dangling — never inline
     it.</strong></dt>

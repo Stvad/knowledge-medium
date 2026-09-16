@@ -17,13 +17,14 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, codecs, defineProperty, ProcessorRejection } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, ProcessorRejection, type AnyCodec } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { propertyChangeScopeProp, propertyNameProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import { kernelValuePresetCoresById } from './kernelValuePresetCores'
 import {
   changedPropertyDefinitionFacts,
   propertyDefinitionFacts,
@@ -37,10 +38,10 @@ const FIELD_ID = 'field-status-migrations'
 const OTHER_WS = 'ws-def-migrations-other'
 const THIRD_WS = 'ws-def-migrations-third'
 
-const schemaWith = (name: string, codec = codecs.string as typeof codecs.string | typeof codecs.number) =>
+const schemaWith = (name: string, codec: AnyCodec = codecs.string) =>
   defineProperty(name, {
     codec: codec as typeof codecs.string,
-    defaultValue: (codec === codecs.number ? 0 : '') as never,
+    defaultValue: (codec === codecs.number ? 0 : codec.member ? [] : '') as never,
     changeScope: ChangeScope.BlockDefault,
   })
 
@@ -531,6 +532,97 @@ describe('codec-change migration', () => {
       )
       expect(row.deleted, `${id} deleted`).toBe(0)
     }
+  })
+})
+
+describe('codec-change migration across the multi-value boundary (km-h1hy)', () => {
+  const statusStringList = schemaWith(
+    'status', kernelValuePresetCoresById['string-list'].build())
+  const statusRefList = schemaWith('status', codecs.refList())
+
+  /** `seedProperty` writes through `statusString`; these need a list-valued
+   *  seed, so set the value under the schema the test starts from. */
+  const seedListProperty = async (
+    repo: Repo, blockId: string, schema: typeof statusStringList, value: readonly string[],
+  ): Promise<string[]> => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: blockId, workspaceId: WS, parentId: null, orderKey: `k-${blockId}`, content: 'host',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    // `schemaWith` widens its codec at runtime but keeps the file's single
+    // `PropertySchema<string>` handle type, so the list value is cast here
+    // exactly as its `defaultValue` is at the declaration.
+    await repo.tx(tx => tx.setProperty(blockId, schema, value as unknown as string),
+      {scope: ChangeScope.BlockDefault})
+    const field = await sharedDb.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
+      [blockId, FIELD_ID],
+    )
+    return (await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [field.id],
+    )).map(row => row.id)
+  }
+
+  it('scalar -> list reads the one value child as a single member', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', 'alpha')
+
+    await republish(repo, statusStringList)
+
+    expect(await cell('p')).toEqual({status: ['alpha']})
+    expect(await rowContent(valueRowId)).toBe('alpha')
+  })
+
+  it('list -> scalar takes the first member and leaves the rest in the tree', async () => {
+    await seedWorkspace('children')
+    const repo = setup(statusStringList)
+    const ids = await seedListProperty(repo, 'p', statusStringList, ['alpha', 'beta'])
+
+    await republish(repo, statusString)
+
+    expect(await cell('p')).toEqual({status: 'alpha'})
+    // The pass never deletes a value row, so the member the scalar codec has
+    // no room for stays visible and fixable rather than vanishing.
+    expect(await rowContent(ids[1]!)).toBe('beta')
+  })
+
+  it('re-encodes every member, not just the first', async () => {
+    await seedWorkspace('children')
+    const repo = setup(statusRefList)
+    const ids = await seedListProperty(repo, 'p', statusRefList, ['a-id', 'b-id'])
+    expect(await rowContent(ids[0]!)).toBe('((a-id))')
+
+    // refList -> string-list: each member was a bare `((id))` span, and the
+    // string member codec has to ESCAPE it — content that reads back as a
+    // reference would be rewritten by a rename or a merge.
+    await republish(repo, statusStringList)
+
+    expect(await cell('p')).toEqual({status: ['((a-id))', '((b-id))']})
+    expect(await rowContent(ids[0]!)).not.toBe('((a-id))')
+    // The SECOND member is the point: a pass that stopped at the first
+    // parseable value — which is what the scalar rule does — would leave this
+    // one span-shaped and in reach of the rewrites the escape exists for.
+    expect(await rowContent(ids[1]!)).not.toBe('((b-id))')
+    expect(await rowContent(ids[1]!)).not.toMatch(/[[(]/)
+  })
+
+  it('reports members that cannot convert and leaves the cell key stale', async () => {
+    await seedWorkspace('children')
+    const repo = setup(statusStringList)
+    await seedListProperty(repo, 'p', statusStringList, ['alpha', 'beta'])
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+
+    // Bare id-shaped strings are exactly what a refList member must refuse —
+    // there is no grammar in them, so nothing can tell one from prose.
+    await republish(repo, statusRefList)
+
+    expect(await cell('p')).toEqual({status: ['alpha', 'beta']})
+    expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
+    expect(errors[0]!.meta).toMatchObject({count: 2})
   })
 })
 
