@@ -895,6 +895,13 @@ export class Repo {
   /** Per workspace, the fieldIds whose definition the resolver could serve on
    *  the previous rebuild — the before-state for "became usable". */
   private readonly usablePropertyDefinitions = new Map<string, ReadonlySet<string>>()
+  /** Per workspace, the fieldIds whose change was DROPPED before it became a
+   *  plan — a contested name, an unresolvable field. Resolver usability cannot
+   *  express those: a definition renamed `A -> B` while a sibling takes `A` is
+   *  usable throughout, and the rebuild that frees `A` again changes neither
+   *  its codec nor its resolvability, so nothing else would look. Re-checked on
+   *  every rebuild until a pass records them. */
+  private readonly deferredPropertyDefinitionFields = new Map<string, Set<string>>()
   /** In-flight property-seed materialization passes (§4.3 of the schema-
    *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
    *  siblings the pass is create/restore-only + idempotent rather than
@@ -1836,6 +1843,13 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
+    // Sampled BEFORE the transaction runs, and compared at record time below.
+    // A user transaction can hold the write lock ahead of a migration chunk,
+    // commit, release — and only reach its own recording continuation after
+    // that chunk has written and cleared. The clear cannot reach an entry that
+    // does not exist yet, and `invalidateReplays` does not either, so without
+    // this the entry lands on the stack holding the whole PRE-migration row.
+    const undoEpochAtStart = this.undoManager.clearEpoch
     // Translation + listener notification happen inside `_runAndDispatch`
     // so all entry points (`tx`, `undo`, `redo`) get uniform error
     // shaping — `repo.tx` just re-throws here.
@@ -1847,8 +1861,15 @@ export class Repo {
     // scopes are filtered inside `record`; zero-write txs have no pinned
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
-    if (result.workspaceId !== null && !opts.skipUndo) {
-      this.undoManagerFor(result.workspaceId).record({
+    const manager = this.undoManagerFor(result.workspaceId ?? NO_ACTIVE_WORKSPACE)
+    if (result.workspaceId !== null && !opts.skipUndo
+      // Dropped rather than recorded: a pass cleared this workspace's history
+      // while this transaction was in flight, so its `before` rows are the ones
+      // that pass has since rewritten. Replaying them would revert its writes
+      // with the new baseline already recorded, which is the same loss the
+      // clear itself exists to prevent.
+      && manager.clearEpoch === undoEpochAtStart) {
+      manager.record({
         scope: opts.scope,
         txId: result.txId,
         snapshots: result.snapshots,
@@ -1894,8 +1915,11 @@ export class Repo {
     if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
     // Sampled before the entry leaves the stack, so the whole gesture — pop
-    // included — sits inside the window the replay validates. Only `clear()`
-    // moves it, so this is the same value either side of the pop.
+    // included — sits inside the window the replay validates. Both `clear()`
+    // and `invalidateReplays()` move it, and a migration calls the latter
+    // while it still holds the write lock — which is how a replay queued
+    // behind a chunk is refused before its stack is ever dropped. Neither can
+    // happen across the pop itself, so this is the same value either side.
     const clearEpoch = manager.clearEpoch
     const entry = manager.popUndo(scope)
     if (entry === null) return false
@@ -4441,6 +4465,14 @@ export class Repo {
     // just performed here instead.
     const resolver = captured?.resolver ?? this.propertySchemaResolverFor(workspaceId)
     const plans = planPropertyDefinitionMigrations(changes, resolver)
+    // Anything the plan dropped is drift this device has seen and not applied.
+    const planned = new Set(plans.map(plan => plan.change.fieldId))
+    const deferred = changes.filter(change => !planned.has(change.fieldId))
+    if (deferred.length > 0) {
+      const owed = this.deferredPropertyDefinitionFields.get(workspaceId) ?? new Set<string>()
+      for (const change of deferred) owed.add(change.fieldId)
+      this.deferredPropertyDefinitionFields.set(workspaceId, owed)
+    }
     if (plans.length === 0) return
     // Re-compared inside every write: this pass uploads, so it answers to
     // `assertUploadingPassMayWrite` like any other one-way pass (#995). The
@@ -4525,7 +4557,9 @@ export class Repo {
     // read below awaits, and an A -> B -> A switch across that await restores
     // the workspace id while moving the generation, so a generation taken
     // there would certify THIS visit for plans belonging to the previous one.
-    const diffing = detectChanges || newlyResolvedCodecs.size > 0 || becameUsable.size > 0
+    const owed = this.deferredPropertyDefinitionFields.get(workspaceId) ?? new Set<string>()
+    const diffing = detectChanges || newlyResolvedCodecs.size > 0
+      || becameUsable.size > 0 || owed.size > 0
     const captured: PropertyDefinitionRebuildSnapshot | null = diffing
       ? {resolver, generation: this.workspaceGeneration}
       : null
@@ -4551,7 +4585,7 @@ export class Repo {
           // only thing that still knows what that codec used to be. Everything
           // else on a non-prime build was already the in-memory diff's to see.
           if (!detectChanges && !newlyResolvedCodecs.has(fieldId)
-            && !becameUsable.has(fieldId)) continue
+            && !becameUsable.has(fieldId) && !owed.has(fieldId)) continue
           const knownType = previous.get(fieldId)
           if (knownType === undefined || knownType === codecType) continue
           const name = facts.get(fieldId)?.name
@@ -4805,6 +4839,14 @@ export class Repo {
       await recordAppliedPropertyDefinitionCodecs(this.db, workspaceId, new Map(
         currentPlans.map(({change, schema}) => [change.fieldId, schema.codec.type]),
       ))
+      // Applied, so no longer owed. Cleared only here, where the baseline has
+      // actually moved — anywhere earlier and a refused pass would forget drift
+      // that is still there.
+      const owed = this.deferredPropertyDefinitionFields.get(workspaceId)
+      if (owed !== undefined) {
+        for (const {change} of currentPlans) owed.delete(change.fieldId)
+        if (owed.size === 0) this.deferredPropertyDefinitionFields.delete(workspaceId)
+      }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       // A refused precondition is not a failure: the baseline still holds the

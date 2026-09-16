@@ -684,12 +684,13 @@ describe('codec-change migration', () => {
     // a writing chunk holds, and must not put the pre-pass row back over what
     // that chunk committed.
     //
-    // It does NOT pin where the invalidation happens. The window that needs
-    // the in-lock position is between the database handing the lock to this
-    // replay and `repo.tx` resolving, and the harness cannot schedule into it —
-    // invalidating after the await passes this too. Kept as documentation of
-    // the scenario, and it would catch a regression that stopped invalidating
-    // at all.
+    // It does NOT pin where the invalidation happens, and carries no timer
+    // pretending otherwise: the window that needs the in-lock position is
+    // between the database handing the lock to this replay and `repo.tx`
+    // resolving, and the harness cannot schedule into it — invalidating after
+    // the await passes this too, with or without a delay here. Kept as
+    // documentation of the scenario, and it would catch a regression that
+    // stopped invalidating at all.
     await seedWorkspace('children')
     const repo = setup()
     const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
@@ -719,7 +720,6 @@ describe('codec-change migration', () => {
     // Queued behind the open transaction: `undo` pops synchronously, then its
     // replay waits for the lock the chunk is holding.
     const undoing = repo.undo(ChangeScope.BlockDefault)
-    for (let turn = 0; turn < 20; turn += 1) await new Promise(r => { setTimeout(r, 5) })
     releaseChunk!()
 
     await expect(undoing).resolves.toBe(false)
@@ -769,6 +769,33 @@ describe('codec-change migration', () => {
     // the cleared history said was no longer safe to restore.
     expect(await rowContent(valueRowId)).toBe(' 42 ')
     expect(await cell('p')).toEqual({status: ' 42 '})
+  }, 20_000)
+
+  it('drops an undo entry whose transaction was recorded after a pass cleared', async () => {
+    // A user transaction can hold the write lock ahead of a migration chunk,
+    // commit, release — and only reach its own recording continuation after
+    // that chunk has written and cleared. The clear cannot reach an entry that
+    // does not exist yet, so without the epoch check it lands on the stack
+    // holding the whole PRE-migration row, and undoing it reverts the pass
+    // with the new baseline already recorded.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    repo.undoManagerFor(WS).clear()
+    expect(undoDepth(repo)).toBe(0)
+
+    // Stands in for the pass clearing between this transaction committing and
+    // its entry being recorded.
+    const cleared = repo.tx(async tx => {
+      await tx.update('p', {content: 'edited while a pass was running'})
+      repo.undoManagerFor(WS).clear()
+    }, {scope: ChangeScope.BlockDefault})
+    await cleared
+
+    // The write stands — only the history entry is dropped.
+    expect(await rowContent('p')).toBe('edited while a pass was running')
+    expect(undoDepth(repo)).toBe(0)
   }, 20_000)
 
   it('leaves the undo history alone when the pass converges without writing', async () => {
@@ -1968,6 +1995,44 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     }, {timeout: 8000})
     expect(await cell('p')).toEqual({status: 42})
     expect(await rowContent(valueRowId)).toBe('42')
+  }, 20_000)
+
+  it('re-detects a change dropped for a contested OLD name, once the contest clears', async () => {
+    // Resolver usability cannot express this one: the renamed definition is
+    // usable throughout, and the rebuild that frees its old name changes
+    // neither its codec nor its resolvability.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await awaitRegistryCodec(repo, 'string')
+    await repo.awaitPropertyDefinitionBaselines()
+
+    // The sibling takes `status`, so a change whose OLD name is `status` is
+    // contested and its plan is dropped.
+    publishPair(repo, state2Number, statusString)
+    await vi.waitFor(() => {
+      expect(repo.propertyDefinitions?.definitionsByFieldId.get(FIELD_ID)?.name)
+        .toBe('state2')
+    }, {timeout: 5000})
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+    expect((await baselineCodecs())[FIELD_ID]).toBe('string')
+
+    // The sibling renames away, freeing `status`. Nothing about this field
+    // changed — only the contest lifted.
+    publishPair(repo, state2Number, otherString)
+
+    await vi.waitFor(async () => {
+      expect(await rowContent(valueRowId)).toBe('42')
+    }, {timeout: 8000})
+    expect((await baselineCodecs())[FIELD_ID]).toBe('number')
+    // ...and the field stops being owed, or every later rebuild would keep
+    // re-checking a drift that has been applied.
+    const owed = (repo as unknown as {
+      deferredPropertyDefinitionFields: Map<string, Set<string>>
+    }).deferredPropertyDefinitionFields.get(WS)
+    expect(owed?.has(FIELD_ID) ?? false).toBe(false)
   }, 20_000)
 
   it('re-detects a definition whose codec drifted while it was SHADOWED', async () => {
