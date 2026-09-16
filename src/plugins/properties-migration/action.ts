@@ -343,22 +343,32 @@ const migrateUnderClaim = async (
       // A rejection whose re-read came back still saying `cell` proves nothing
       // was written, and charging the user their history for an ordinary
       // refusal — a trigger, a permission — would be a cost with no hazard.
-      if (!flipRejectionProvesNoWrite(err)) {
+      const provenNoWrite = flipRejectionProvesNoWrite(err)
+      if (!provenNoWrite) {
         undoDrop.finish()
         undoCleared = true
       }
-      // "so nothing was migrated" is only true because this catch cannot see a
-      // committed flip: the server write is the only thing that throws here.
-      // The definitions minted a moment ago DID land, though — they are inert
-      // at 'cell' and a re-run reuses them, but saying "nothing" would be a
-      // small lie about a write that shows up on the Properties page.
-      banner.fail('Could not switch this workspace to property blocks, so nothing ' +
-        `was migrated: ${err instanceof Error ? err.message : String(err)}` +
-        (synthesized > 0
-          ? ` The ${synthesized.toLocaleString()} definition(s) added just before it ` +
-            'are still there, and do nothing until this runs again.'
-          : '') +
-        undoNote(undoCleared))
+      const cause = err instanceof Error ? err.message : String(err)
+      // The definitions minted a moment ago DID land either way, and saying
+      // "nothing" would be a small lie about a write that shows up on the
+      // Properties page.
+      const minted = synthesized > 0
+        ? ` The ${synthesized.toLocaleString()} definition(s) added just before it are still there.`
+        : ''
+      // TWO ENDINGS, because this catch now knows which one it is and they ask
+      // opposite things of the operator. "Nothing was migrated" is a claim, and
+      // on the ambiguous branch it is one this code has just decided it cannot
+      // make — it dropped the undo history precisely because the flip may have
+      // landed, so telling them it did not would contradict the cost they were
+      // charged and send them to re-run against a graph that already moved.
+      banner.fail(provenNoWrite
+        ? 'Could not switch this workspace to property blocks, so nothing was ' +
+          `migrated: ${cause}${minted} They do nothing until this runs again.` +
+          undoNote(undoCleared)
+        : 'Could not tell whether this workspace was switched to property ' +
+          `blocks: ${cause} It may have been — reload before running this again, ` +
+          `and check the Properties page rather than assuming either way.${minted}` +
+          undoNote(undoCleared))
       return
     }
     // Immediately, not by waiting for the pass's first committed batch. Undo

@@ -1853,6 +1853,14 @@ export class Repo {
         // pin comes from the first write. Still inside the lock, so no other
         // WRITER's clear can have landed since entry; when the two are the same
         // manager (the ordinary case) the entry sample above wins.
+        //
+        // ACCEPTED RESIDUAL: taken here rather than when `TxImpl.pinWorkspace`
+        // fires, so a LOCKLESS drop on the pinned workspace during `fn` is
+        // missed. Reaching it takes all of a foreign-workspace write, a switch
+        // to that workspace mid-transaction, and an ambiguous flip on it in the
+        // same window; the fix is a pin callback threaded through the tx engine.
+        // Recorded rather than built — see the exit check's residual, which is
+        // the same trade in the same pipeline.
         if (tx.meta.workspaceId !== null) {
           sampleEpoch(this.undoManagerFor(tx.meta.workspaceId))
         }
@@ -2397,6 +2405,13 @@ export class Repo {
       // need the lock this replay is holding — so this arm is reachable only
       // from a lockless drop or a bare `clear()`, and abandoning is right for
       // both.
+      //
+      // ACCEPTED RESIDUAL, same one the backfill's exit check records: this is
+      // the end of the replay's callback, not the commit boundary, and `runTx`
+      // awaits two more statements after it. A lockless drop landing in THOSE
+      // still commits the replay. Closing it needs a pre-commit hook in the
+      // pipeline rather than another check here — each one only moves the gap a
+      // few awaits along.
       if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
         throw new UndoHistoryDroppedError(action)
       }
@@ -3532,6 +3547,17 @@ export class Repo {
    * mid-batch is caught by the next batch's entry probe — whereas a workspace
    * switch or a revocation cannot be caught later at all, because the rows are
    * already uploaded by then.
+   *
+   * ACCEPTED RESIDUAL: the exit is the end of the batch's own callback, not the
+   * commit boundary. `runTx` still awaits the same-tx processors, the
+   * `command_events` insert and the `tx_context` clear after this returns, and a
+   * switch or revocation can land in any of them. Closing that needs a
+   * pre-commit hook on `RepoTxOptions` — the pipeline is the only thing that can
+   * be last — which is core tx-API surface and a change of its own. Not taken
+   * here: what remains is a sub-millisecond window inside a held write lock, the
+   * rows carry their own `workspace_id` so a switch cannot misfile them, and the
+   * server's RLS is the real authority on a revoked role, so the worst ending is
+   * an upload the server rejects rather than a row silently in the wrong state.
    */
   private assertBackfillSessionUnchanged(
     workspaceId: string,

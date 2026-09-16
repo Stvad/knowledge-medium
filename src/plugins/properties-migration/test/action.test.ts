@@ -389,6 +389,24 @@ describe('migrate_properties_to_blocks action', () => {
     flipWorkspace.mockResolvedValue({localApplied: true})
   })
 
+  it('tells the operator an ambiguous flip is ambiguous, not that nothing happened', async () => {
+    // The branch that DROPPED their undo history because the flip may have
+    // landed must not then tell them it did not. The two halves of that message
+    // would contradict each other, and "nothing was migrated" sends them to
+    // re-run against a graph that may already have moved.
+    flipWorkspace.mockRejectedValue(new Error('response lost'))
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/could not tell whether/i))
+    expect(progressHandle.fail).not.toHaveBeenCalledWith(
+      expect.stringMatching(/nothing was migrated/i))
+    flipWorkspace.mockReset()
+    flipWorkspace.mockResolvedValue({localApplied: true})
+  })
+
   it('keeps the history when the flip rejection PROVES nothing was written', async () => {
     // The other half of the branch above. When the confirming re-read comes
     // back and still says `cell`, the flip demonstrably did not land — an
@@ -458,7 +476,9 @@ describe('migrate_properties_to_blocks action', () => {
     // The flip is the gesture's FIRST write, so a
     // refusal leaves the graph untouched — which is the part an operator needs
     // told, rather than being left to wonder what landed.
-    flipWorkspace.mockRejectedValue(new Error('workspaces.properties_migration is writable by the workspace owner'))
+    flipWorkspace.mockRejectedValue(Object.assign(
+      new Error('workspaces.properties_migration is writable by the workspace owner'),
+      {flipLanded: false}))
     const {repo, runPass} = makeRepo()
 
     await invoke(repo)
@@ -590,7 +610,8 @@ describe('the graph-wide claim', () => {
     // flip that throws still ends the gesture through the release.
     const log: ClaimStubLog = {events: []}
     const {repo, runPass} = makeRepo(RAN, {log})
-    flipWorkspace.mockRejectedValue(new Error('the server refused'))
+    flipWorkspace.mockRejectedValue(
+      Object.assign(new Error('the server refused'), {flipLanded: false}))
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await invoke(repo)
@@ -804,7 +825,8 @@ describe('the orphan-definition step', () => {
     // the Properties page, so "nothing was migrated" alone would be a small lie.
     planSynthesis.mockResolvedValue(plan(3))
     applySynthesis.mockResolvedValue(synthesized({created: 3, undoHistoryCleared: true}))
-    flipWorkspace.mockRejectedValue(new Error('server said no'))
+    flipWorkspace.mockRejectedValue(
+      Object.assign(new Error('server said no'), {flipLanded: false}))
     const {repo} = makeRepo()
 
     await invoke(repo)
