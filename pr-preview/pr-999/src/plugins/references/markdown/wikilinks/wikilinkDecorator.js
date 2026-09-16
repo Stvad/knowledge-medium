@@ -1,1 +1,1 @@
-import{bb as e,xb as t,yb as n}from"../../../../../chunks/app-BYZOU_qx.js";export{n as isWikilinkDisplayParts,e as resolveWikilinkDisplay,t as wikilinkDisplayDecoratorFacet};
+import{bb as e,xb as t,yb as n}from"../../../../../chunks/app-3J3_uIAO.js";export{n as isWikilinkDisplayParts,e as resolveWikilinkDisplay,t as wikilinkDisplayDecoratorFacet};
