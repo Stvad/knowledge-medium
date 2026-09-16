@@ -1,1 +1,1 @@
-import{Mg as e}from"../../../chunks/app-Dgm8BzCx.js";export{e as BreadcrumbList};
+import{Mg as e}from"../../../chunks/app-DkKEkRzY.js";export{e as BreadcrumbList};

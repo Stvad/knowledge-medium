@@ -1,1 +1,1 @@
-import{_ as e}from"../../chunks/app-Dgm8BzCx.js";export{e as staticAppExtensions};
+import{_ as e}from"../../chunks/app-DkKEkRzY.js";export{e as staticAppExtensions};
