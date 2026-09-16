@@ -1,1 +1,0 @@
-import{s2 as e}from"../../../chunks/app-mL-hulz3.js";export{e as defineQuery};

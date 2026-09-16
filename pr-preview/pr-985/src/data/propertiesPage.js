@@ -1,1 +1,0 @@
-import{_$ as e,v$ as t}from"../../chunks/app-mL-hulz3.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

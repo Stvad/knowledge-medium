@@ -1,1 +1,0 @@
-import{bA as e,yA as t}from"../../../chunks/app-mL-hulz3.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

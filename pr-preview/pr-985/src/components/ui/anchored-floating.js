@@ -1,1 +1,0 @@
-import{XN as e,ZN as t}from"../../../chunks/app-mL-hulz3.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

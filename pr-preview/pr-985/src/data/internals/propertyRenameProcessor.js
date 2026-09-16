@@ -1,1 +1,0 @@
-import{bK as e,vK as t,yK as n}from"../../../chunks/app-mL-hulz3.js";export{t as MIGRATE_PROPERTY_RENAME_PROCESSOR,n as MIGRATE_PROPERTY_RENAME_PROCESSOR_NAME,e as propertyRenameSameTxProcessors};
