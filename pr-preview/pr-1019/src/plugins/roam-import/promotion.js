@@ -1,1 +1,1 @@
-import{Ls as e,Rs as t}from"../../../chunks/app-ByL-T2aE.js";export{e as computePromotedFromChildren,t as detectInlineAttribute};
+import{Ls as e,Rs as t}from"../../../chunks/app-DPwv2AX_.js";export{e as computePromotedFromChildren,t as detectInlineAttribute};
