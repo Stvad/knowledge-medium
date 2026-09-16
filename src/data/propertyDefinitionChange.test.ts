@@ -331,7 +331,7 @@ describe('rename', () => {
     expect(await rowContent(valueRowId)).toBe('done')
   })
 
-  it('is dormant in an un-flipped workspace', async () => {
+  it('is dormant when the definition has no field rows', async () => {
     await seedWorkspace('cell')
     const repo = await setupDefinition()
     await createHost(repo, 'p')
@@ -340,9 +340,32 @@ describe('rename', () => {
 
     await rename(repo, FIELD_ID, 'state')
 
-    // Cell keeps the old key (today's rename semantics), no children exist —
-    // `isPropertyChildBackedWorkspace` keeps the processor dormant.
+    // An un-flipped workspace writes no children, so the consumer probe finds
+    // nothing and the cell keeps the old key — today's rename semantics. The
+    // probe is what makes this so, NOT the workspace's migration flag; see the
+    // stale-flag test below for why that distinction is load-bearing.
     expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('follows the field rows, not a workspace flag this device may be stale on', async () => {
+    // `properties_migration` lives on the workspace ROW and syncs like any
+    // other. A device lagging on it reads `cell` for a graph another device
+    // already flipped and materialized — and gating on it there would skip a
+    // fan-out whose field rows this device is holding, then upload a re-typed
+    // definition its child-backed peers read old encodings through.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
+    await sharedDb.db.writeTransaction(async tx => {
+      await tx.execute(
+        'UPDATE workspaces SET properties_migration = ? WHERE id = ?', ['cell', WS],
+      )
+    })
+
+    await retype(repo, FIELD_ID, 'number')
+
+    expect(await cell('p')).toEqual({status: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
   })
 
   it('does NOT tombstone the field row or value child', async () => {

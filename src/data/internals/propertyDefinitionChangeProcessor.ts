@@ -54,7 +54,16 @@
  * detects. Detecting it where it is DONE rather than sweeping for it
  * afterwards is #1022.
  *
- * Flip-gated: dormant in a 'cell' workspace.
+ * And a third: a re-type in a workspace that genuinely has no field rows yet
+ * fans nothing out, and nothing remembers it for after the flip. Measured
+ * rather than reasoned: the flip materializes children FROM each cell and skips
+ * any key whose cell value will not decode under the CURRENT codec, reporting
+ * the block instead — so a value stranded by such a re-type gets no field row,
+ * and a pass that walks field rows would have nothing to walk. The flip's own
+ * per-key report is the surface for it.
+ *
+ * Dormant until a definition has field rows — see `consumingParentIds`, which
+ * is the gate.
  */
 
 import { z } from 'zod'
@@ -282,12 +291,21 @@ const collectChanges = (
  *  retry the way it used to. */
 export const FIELD_PROBE_CHUNK = 500
 
-/** Parents holding a live field row for any of `fieldIds`.
+/** Parents holding a live field row for any of `fieldIds` — and the only gate
+ *  this pass has.
  *
- *  The Set is load-bearing across chunks, not tidiness: `SELECT DISTINCT`
- *  dedupes only WITHIN one statement, so a parent consuming two changed
- *  definitions that land in different chunks would otherwise be visited — and
- *  re-keyed — twice. */
+ *  Deliberately NOT `isPropertyChildBackedWorkspace`. That flag lives on the
+ *  workspace ROW, which syncs like any other, so a device lagging on it reads
+ *  `cell` for a graph another device already flipped and materialized — and
+ *  would skip a fan-out whose field rows it is holding, uploading a re-typed
+ *  definition that its child-backed peers then read old encodings through. The
+ *  flag was only ever a cheap proxy for this query, which asks the rows
+ *  themselves and cannot be stale about rows this device has.
+ *
+ *  The Set is load-bearing across chunks, not tidiness:
+ *  `SELECT DISTINCT` dedupes only WITHIN one statement, so a parent consuming
+ *  two changed definitions that land in different chunks would otherwise be
+ *  visited — and re-keyed — twice. */
 export const consumingParentIds = async (
   db: Pick<SameTxCtx['db'], 'getAll'>,
   workspaceId: string,
@@ -334,8 +352,12 @@ const applyToParent = async (
 ): Promise<void> => {
   const parent = await ctx.tx.get(parentId)
   // A soft-deleted parent can still own live field rows, so the query that
-  // found it does not settle this. `tx.update` on a tombstone throws, which
-  // would take the user's whole definition edit down with it.
+  // found it does return one. Skipped by choice, not by necessity — `tx.update`
+  // accepts a tombstone: a deleted block's bag is history, and the live set is
+  // bounded by current usage while the tombstoned set is bounded by ALL-TIME
+  // usage, so re-keying it would put an unbounded write in the user's own
+  // transaction. The cost is that restoring such a block revives it under the
+  // old key; #1023 fixes that where it belongs, at restore.
   if (parent === null || parent.deleted) return
   const referenceLookups = sameTxReferenceTargetLookups(ctx.tx)
   const siblings = await ctx.tx.childrenOf(parentId, undefined)
@@ -455,19 +477,6 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
   // stale registry would only widen fact 2's blast radius.
   settledWrites: true,
   apply: async (event, ctx) => {
-    // Defence in depth, and the cheap path for every workspace still on cells:
-    // an un-flipped workspace has no field rows, so the query below already
-    // finds no consumers.
-    //
-    // A re-type in a cell workspace is therefore NOT fanned out, and nothing
-    // remembers it for after the flip. Declined deliberately, and measured
-    // rather than reasoned: the flip materializes children FROM each cell and
-    // skips any key whose cell value will not decode under the CURRENT codec,
-    // reporting the block instead. So a value stranded by a re-type gets no
-    // field row, and a post-flip re-encode — which walks field rows — would
-    // have nothing to walk. The flip's own per-key report is the surface for
-    // this, on both sides of #1013.
-    if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const changes = collectChanges(ctx, event.workspaceId, event.changedRows)
     if (changes.length === 0) return
     const parentIds = await consumingParentIds(
