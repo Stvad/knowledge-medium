@@ -356,10 +356,22 @@ export const materializingTypeSeeds = (
  * Only winning type seeds are scanned (`materializingTypeSeeds`), so a loser
  * install's nested property is never harvested. The returned seeds are appended to
  * the `definitionSeedsFacet` set before the property registry is built, so they
- * flow into schema resolution AND materialization by the same path as any seed. */
+ * flow into schema resolution AND materialization by the same path as any seed.
+ *
+ * The return is therefore a RESOLVED set, and lossy by design: a conflicting
+ * duplicate is decided here and survives only as a console warning, which nothing
+ * downstream can act on. `onConflict` hands that decision out structurally, for a
+ * caller auditing what COULD ship rather than consuming what did — the loser is
+ * production's provider under any toggle profile that drops the winner's type.
+ * It is called after the warning and inside a catch, so a throwing callback
+ * cannot take out the registry this function exists to keep building.
+ *
+ * It does NOT see a cross-owner full declaration: that is skipped earlier as a
+ * pure ref, silently, and an auditor wanting it must look for itself. */
 export const harvestNestedPropertySeeds = (
   snapshot: TypeDefinitionRegistrySnapshot,
   explicitPropertySeeds: readonly AnyPropertySeedDeclaration[],
+  onConflict?: (conflict: {readonly seedKey: string; readonly typeSeedKey: string}) => void,
 ): readonly AnyPropertySeedDeclaration[] => {
   // `providedByKey` tracks the ONE declaration each key resolves to (explicit wins,
   // else the first harvested winner) — the object whose payload the deterministic
@@ -400,6 +412,14 @@ export const harvestNestedPropertySeeds = (
           `${JSON.stringify(key)} that is already declared elsewhere (an explicit seed or an earlier ` +
           'type); keeping the existing declaration — its durable definition is what the block materializes',
         )
+        // After the warn, and guarded: this function must not throw (one bad
+        // contribution cannot be allowed to abort the whole property registry),
+        // and a caller's callback is the one thing in here that could.
+        try {
+          onConflict?.({seedKey: key, typeSeedKey: typeSeed.seedKey})
+        } catch (error) {
+          console.warn('[harvestNestedPropertySeeds] onConflict threw; ignoring', error)
+        }
       }
     }
   }
