@@ -1,1 +1,1 @@
-import{Rw as e,zw as t}from"../../chunks/app-COEcHlwS.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};
+import{Rw as e,zw as t}from"../../chunks/app-CWE3oOGC.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};
