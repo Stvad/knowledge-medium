@@ -358,3 +358,16 @@ export const assertRoundTrippableReferenceLabel = (
 ): void => {
   if (!isRoundTrippableReferenceLabel(label)) throw new LossyLabelError(label, context)
 }
+
+/** The pair, for a name that DOUBLES as its `[[name]]` page — a type
+ *  definition, a property schema. Neither half substitutes for the other (see
+ *  {@link assertRoundTrippableReferenceLabel}), and every such caller wants
+ *  both, so they are applied here once rather than re-derived per site. */
+export const assertWritableLabel = (label: string, context: string): void => {
+  assertNotGrammarShapedLabel(label, context)
+  assertRoundTrippableReferenceLabel(label, context)
+}
+
+/** Non-throwing form, for a caller that has to ask before it decides. */
+export const isWritableLabel = (label: string): boolean =>
+  !isGrammarShapedLabel(label) && isRoundTrippableReferenceLabel(label)

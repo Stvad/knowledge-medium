@@ -219,11 +219,10 @@ describe('core.retargetMergedTypeMembership', () => {
     expect(after.updatedAt).toBeGreaterThan(before.updatedAt)
   })
 
-  // Malformed `types` cells, which only a SYNC-APPLIED row can carry: every
-  // local write path decodes `types` (typeify's `addedTypes`) and throws, but a
-  // synced row bypasses the same-tx pass while the `block_types` triggers still
-  // index it. A raw insert leaves `tx_context.source` NULL — the same shape a
-  // synced row has.
+  // Malformed `types` cells, which only a SYNC-APPLIED row can carry: a synced
+  // row bypasses the same-tx pass that would have normalized the cell, while
+  // the `block_types` triggers still index it. A raw insert leaves
+  // `tx_context.source` NULL — the same shape a synced row has.
   describe('sync-applied malformed membership cells', () => {
     const insertRawMember = async (typesJson: unknown): Promise<void> => {
       await env.h.db.writeTransaction(async tx => {
@@ -244,11 +243,10 @@ describe('core.retargetMergedTypeMembership', () => {
     }
 
     // Both malformed shapes are left strictly alone, and the merge must still
-    // succeed. Not squeamishness: ANY write to such a row dirties it for
-    // typeify's `rerunOnDirtyRows` pass, which decodes the row's BEFORE
-    // snapshot — the malformed value regardless of what we wrote — and throws,
-    // rolling the merge back. Retargeting these rows is impossible in-tx; they
-    // are left for the audit query and an out-of-tx repair.
+    // succeed. Not squeamishness: the shape is not a membership the codec or
+    // the registry accepts, so retargeting it in-tx would mint one the rest of
+    // the system still refuses. These rows are left for the audit query and an
+    // out-of-tx repair.
     //
     // `json_each` over a SCALAR yields the scalar, so a scalar cell IS indexed
     // as a real membership and does reach the processor.
