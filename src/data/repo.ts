@@ -114,6 +114,7 @@ import type { BlockIdPolicy } from './blockId'
 import {
   propertyDefinitionMigrationLabel,
   withoutContestedRenames,
+  type PropertyDefinitionRebuildSnapshot,
   type PropertyDefinitionChange,
   type PropertyDefinitionFactsByFieldId,
   type PropertyDefinitionMigrationPlan,
@@ -3441,7 +3442,10 @@ export class Repo {
       throw Object.assign(new Error(
         `${label} aborted: ${gap.reason}. This pass would scan ` +
         `an incomplete view of the graph and upload a properties bag built from it.`,
-      ), {kind: Repo.TRANSIENT})
+        // Only the gap arm can be cleared by WAITING, and only its transient
+        // half — the durable one is rows nothing is going to retry. A caller
+        // that re-arms itself reads this rather than re-deriving the gap.
+      ), {kind: Repo.TRANSIENT, clearsWhenSyncSettles: gap.transient})
     }
     // AFTER the probe, not before it, and there is deliberately only the one:
     // the probe AWAITS, `setActiveWorkspaceId` is a synchronous field write
@@ -4341,11 +4345,13 @@ export class Repo {
   schedulePropertyDefinitionMigrations(
     workspaceId: string,
     changes: readonly PropertyDefinitionChange[],
-    /** Resolver captured at REBUILD time. The baseline path (#780) computes its
-     *  changes in an async continuation of the rebuild, by which point the
-     *  one-deep retention below may already have evicted `workspaceId` — so it
-     *  captures the resolver synchronously and hands it in here. */
-    capturedResolver?: PropertySchemaResolver,
+    /** The REBUILD's identity, captured synchronously with it. The baseline
+     *  path (#780) computes its changes in an async continuation of the
+     *  rebuild, by which point the one-deep retention below may already have
+     *  evicted `workspaceId` — and the user may already be on a later visit.
+     *  Omitted by the bridge's in-memory diff, which calls this in the
+     *  rebuild's own tick, where sampling both here is the same thing. */
+    captured?: PropertyDefinitionRebuildSnapshot,
   ): void {
     if (this.isReadOnly || !workspaceId || changes.length === 0) return
     // Resolve NOW, not when the deferred job runs. `changes` comes from this
@@ -4363,7 +4369,7 @@ export class Repo {
     // switch. A fieldId that doesn't resolve (shadowed / unavailable, §6) is
     // dropped from the plan — the same skip the run-time check used to do,
     // just performed here instead.
-    const resolver = capturedResolver ?? this.propertySchemaResolverFor(workspaceId)
+    const resolver = captured?.resolver ?? this.propertySchemaResolverFor(workspaceId)
     // Both halves of the shared contested-name refusal — see the helper.
     const safeChanges = withoutContestedRenames(changes, name => {
       const owner = resolver.resolve(name)
@@ -4374,13 +4380,18 @@ export class Repo {
       return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
     })
     if (plans.length === 0) return
-    // Captured with the plans, and re-compared inside every write: this pass
-    // uploads, so it answers to `assertUploadingPassMayWrite` like any other
-    // one-way pass (#995). The generation is the half a workspace ID cannot
-    // express — a job scheduled during one visit to a workspace, run during
-    // the NEXT one (A -> B -> A), was computed against a registry that has
-    // since re-primed and re-detected the drift itself.
-    const generation = this.workspaceGeneration
+    // Re-compared inside every write: this pass uploads, so it answers to
+    // `assertUploadingPassMayWrite` like any other one-way pass (#995). The
+    // generation is the half a workspace ID cannot express — a job computed
+    // during one visit to a workspace and run during the NEXT one (A -> B -> A)
+    // describes a registry that has since re-primed and re-detected the drift
+    // for itself.
+    //
+    // It travels WITH the resolver and is never sampled here when one was
+    // handed in: a caller that captured its resolver in an earlier tick has, by
+    // definition, a rebuild older than this moment, and pairing that rebuild's
+    // plans with this moment's generation would make a stale job look current.
+    const generation = captured?.generation ?? this.workspaceGeneration
     this.propertyDefinitionMigrationJobs.schedule(() =>
       this.runPropertyDefinitionMigrations(workspaceId, plans, resolver, generation),
     )
@@ -4418,17 +4429,22 @@ export class Repo {
     // write to an unsynced table; only the migration is gated, inside
     // `schedulePropertyDefinitionMigrations`.
     //
-    // Captured synchronously with the rebuild — see `capturedResolver` on
-    // `schedulePropertyDefinitionMigrations`. Defence in depth: no test
-    // distinguishes this from capturing inside the continuation.
+    // Captured synchronously with the rebuild — see `captured` on
+    // `schedulePropertyDefinitionMigrations`. The generation rides along
+    // rather than being sampled when the continuation finally schedules: the
+    // read below awaits, and an A -> B -> A switch across that await restores
+    // the workspace id while moving the generation, so a generation taken
+    // there would certify THIS visit for plans belonging to the previous one.
     const diffing = detectChanges || newlyResolvedCodecs.size > 0
-    const resolver = diffing ? this.propertySchemaResolverFor(workspaceId) : null
+    const captured: PropertyDefinitionRebuildSnapshot | null = diffing
+      ? {resolver: this.propertySchemaResolverFor(workspaceId), generation: this.workspaceGeneration}
+      : null
     this.propertyDefinitionBaselineWork = this.propertyDefinitionBaselineWork
       .then(async () => {
         const previous = await observePropertyDefinitionCodecs(
           this.db, workspaceId, codecTypes,
         )
-        if (resolver === null) return
+        if (captured === null) return
         // No baseline yet. Redundant with the diff (an absent fieldId is an
         // ADDED definition, never a change), kept because it is the designed
         // boundary rather than a coincidence of the diff.
@@ -4452,7 +4468,7 @@ export class Repo {
           changes.push({fieldId, oldName: name, newName: name, codecChanged: true})
         }
         if (changes.length > 0) {
-          this.schedulePropertyDefinitionMigrations(workspaceId, changes, resolver)
+          this.schedulePropertyDefinitionMigrations(workspaceId, changes, captured)
         }
       })
       .catch(err => {
@@ -4484,23 +4500,30 @@ export class Repo {
    * is not what a claim fixes either: it arbitrates which DEVICE runs the pass,
    * not how recently that device read the row, so a claimed pass on one device
    * races a user on another exactly the same way.
+   *
+   * Best-effort over the rows this device can SEE, also deliberately. A row
+   * that syncs in after the scan froze its candidate list keeps the old
+   * encoding, and the baseline then records the codec as accounted for — but
+   * that is the same outcome as a row arriving a second after the pass
+   * finished, which is the baseline's documented boundary rather than a race.
+   * Rescanning shrinks the window and cannot close it; what closes it is a
+   * content-driven reconcile, which is a different mechanism and is what
+   * renames already rely on (`propertyDefinitionBaseline.ts`).
    */
   private async runPropertyDefinitionMigrations(
     workspaceId: string,
     plans: readonly PropertyDefinitionMigrationPlan[],
     resolver: PropertySchemaResolver,
     generation: number,
+    /** False once this pass has already been re-armed on the sync gate, so a
+     *  blocker that outlives the gate opening cannot spin. */
+    mayRearm = true,
   ): Promise<void> {
     // Un-flipped: nothing re-keys here, so nothing is recorded either and the
     // drift stays visible to the prime that follows the flip.
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
     const label = propertyDefinitionMigrationLabel(plans)
     try {
-      // A cheap refusal, and nothing more: deleting it fails no test, because
-      // the per-chunk and pre-record checks below decide every outcome it could.
-      // It earns its line by not paying for the child-indexed scan on a device
-      // that already may not write.
-      await this.assertUploadingPassMayWrite(workspaceId, label, generation)
       await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver, generation)
       // This one is load-bearing. The per-chunk check only fires when a chunk
       // WRITES, and a run that finds no candidates opens no transaction at
@@ -4521,6 +4544,32 @@ export class Repo {
       // again once the device is caught up. Logged apart from a real throw so
       // a console full of them reads as deferral rather than damage.
       if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
+        // Waiting is a remedy for exactly one refusal — a transient view gap —
+        // and re-arming matters most in the case that produces it: the device
+        // is still downloading at session start, which is also when the prime
+        // that detected this drift happens. "The next prime" is a workspace
+        // switch or a reload, not the passage of time, so without this the
+        // session runs the new codec against rows still in the old one.
+        //
+        // ONCE. The gate opens on connected-and-not-downloading, which the
+        // staged-rows half of the gap can outlive, so an unbounded re-arm would
+        // fire, refuse, and re-arm again. A stale workspace is not re-armed at
+        // all: waiting cannot un-switch it.
+        if (mayRearm && (err as {clearsWhenSyncSettles?: boolean}).clearsWhenSyncSettles === true) {
+          console.warn(`${reason} Retrying once this device is caught up.`)
+          // Held in a box, not a `const` the callback closes over: an already
+          // open gate fires SYNCHRONOUSLY, before any such binding is
+          // initialised. Firing is its own cleanup, so the disposer only
+          // matters for a gate that parked.
+          const gate: {dispose?: () => void} = {}
+          gate.dispose = this.backfillSyncGate(() => {
+            gate.dispose?.()
+            this.propertyDefinitionMigrationJobs.schedule(() =>
+              this.runPropertyDefinitionMigrations(workspaceId, plans, resolver, generation, false),
+            )
+          })
+          return
+        }
         console.warn(`${reason} The next prime will re-detect it.`)
         return
       }
@@ -4590,6 +4639,16 @@ export class Repo {
 
     // Per changed definition, for the user-facing unparseable-values report.
     const unconvertibleByField = new Map<string, number>()
+    // STICKY across chunks, not per chunk: once the pass has written anything,
+    // every committed chunk after it must clear too. A user edit between two
+    // chunks can CANONICALIZE the row it touches — `setProperty` writes under
+    // the live schema — so the chunk that reaches that row converges and writes
+    // nothing, while the entry that edit left behind still holds the row's
+    // pre-edit, old-codec snapshot. Keying the clear on "this chunk wrote"
+    // preserves exactly that entry. Keying it on "the pass has written" does
+    // not, and still leaves a pass that writes nothing at all costing the user
+    // no history.
+    let everWrote = false
     // `skipUndo` keeps this pass's own writes off the stack but cannot reach
     // the entries already on it — nor the ones the user adds between chunks.
     // See the helper for why that is per chunk rather than once.
@@ -4777,7 +4836,8 @@ export class Repo {
             : `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`)
           : `migrate ${plans.length} property definitions`,
       })
-      if (chunkWrote) clearUndo()
+      everWrote ||= chunkWrote
+      if (everWrote) clearUndo()
     }
 
     // §9: a codec change that strands values must be user-visible, never a

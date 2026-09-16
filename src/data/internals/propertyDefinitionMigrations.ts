@@ -24,6 +24,7 @@
 
 import type { ResolvedPropertySchema } from '@/data/api'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
+import type { PropertySchemaResolver } from './propertySchemaResolution'
 
 export interface PropertyDefinitionChange {
   readonly fieldId: string
@@ -45,6 +46,19 @@ export interface PropertyDefinitionChange {
 export interface PropertyDefinitionMigrationPlan {
   readonly change: PropertyDefinitionChange
   readonly schema: ResolvedPropertySchema<unknown>
+}
+
+/** A registry rebuild's identity, captured SYNCHRONOUSLY with it and carried
+ *  to the deferred pass it schedules.
+ *
+ *  The two fields travel together because they answer the same question —
+ *  "which rebuild is this job's?" — and splitting them is how a stale job gets
+ *  certified as current: plans resolved against an earlier visit's registry,
+ *  paired with the generation of the visit that happens to be live when the
+ *  scheduling continuation finally runs. */
+export interface PropertyDefinitionRebuildSnapshot {
+  readonly resolver: PropertySchemaResolver
+  readonly generation: number
 }
 
 /** How the deferred pass names itself in its own logs and in the aborts
