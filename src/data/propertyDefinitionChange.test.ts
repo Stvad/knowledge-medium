@@ -176,23 +176,27 @@ const setRawValueContent = (valueRowId: string, content: string): Promise<unknow
 describe('withoutContestedRenames', () => {
   const change = (fieldId: string, oldName: string, newName: string) =>
     ({fieldId, oldName, newName})
-  const owners = (map: Record<string, string>) => (name: string) => map[name]
+  /** name -> claimants, WINNER FIRST — the shape the registry's
+   *  `definitionsByName` has, and the multiplicity the un-shadowing refusal
+   *  needs. A single-entry list is the ordinary unshadowed case. */
+  const claimants = (map: Record<string, string[]>) =>
+    (name: string): readonly string[] => map[name] ?? []
 
   it('drops a rename onto a NEW name a different, non-migrating definition owns', () => {
     expect(withoutContestedRenames(
-      [change('a', 'alpha', 'beta')], owners({alpha: 'a', beta: 'b'}),
+      [change('a', 'alpha', 'beta')], claimants({alpha: ['a'], beta: ['b']}),
     )).toEqual([])
   })
 
   it('drops a rename whose OLD name a different definition now answers to', () => {
     expect(withoutContestedRenames(
-      [change('a', 'shared', 'alpha')], owners({shared: 'b'}),
+      [change('a', 'shared', 'alpha')], claimants({shared: ['b', 'a']}),
     )).toEqual([])
   })
 
   it('keeps a swap — each contested name is owned by a peer migrating in the same batch', () => {
     const swap = [change('a', 'alpha', 'beta'), change('b', 'beta', 'alpha')]
-    expect(withoutContestedRenames(swap, owners({alpha: 'a', beta: 'b'})))
+    expect(withoutContestedRenames(swap, claimants({alpha: ['a'], beta: ['b']})))
       .toEqual(swap)
   })
 
@@ -202,8 +206,26 @@ describe('withoutContestedRenames', () => {
     // un-vacates `beta` and takes `a` with it on the next round.
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta'), change('b', 'beta', 'gamma')],
-      owners({alpha: 'a', beta: 'b', gamma: 'c'}),
+      claimants({alpha: ['a'], beta: ['b'], gamma: ['c']}),
     )).toEqual([])
+  })
+
+  it('drops a rename that UN-SHADOWS a peer sharing the old name', () => {
+    // `a` wins `shared` and renames away, which hands `shared` to `b`. Asking
+    // who OWNS `shared` names `a` itself — it still holds it at tx start — so
+    // only the full claimant list can see `b` about to inherit the key this
+    // rename would drop.
+    expect(withoutContestedRenames(
+      [change('a', 'shared', 'alpha')], claimants({shared: ['a', 'b'], alpha: []}),
+    )).toEqual([])
+  })
+
+  it('keeps a codec-only change on a name it shares with a shadowed peer', () => {
+    // The peer under `shared` is the status quo, not something a re-type
+    // creates: nothing is vacated, so the old-name half does not apply.
+    const codecOnly = [change('a', 'shared', 'shared')]
+    expect(withoutContestedRenames(codecOnly, claimants({shared: ['a', 'b']})))
+      .toEqual(codecOnly)
   })
 
   it('refuses the exemption to a codec-only peer, which vacates nothing', () => {
@@ -211,13 +233,13 @@ describe('withoutContestedRenames', () => {
     // cannot free it for `a`.
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta'), change('b', 'beta', 'beta')],
-      owners({alpha: 'a', beta: 'b'}),
+      claimants({alpha: ['a'], beta: ['b']}),
     )).toEqual([change('b', 'beta', 'beta')])
   })
 
   it('keeps an uncontested rename, and a codec-only change that keeps its name', () => {
     const changes = [change('a', 'alpha', 'gamma'), change('b', 'beta', 'beta')]
-    expect(withoutContestedRenames(changes, owners({alpha: 'a', beta: 'b'})))
+    expect(withoutContestedRenames(changes, claimants({alpha: ['a'], beta: ['b']})))
       .toEqual(changes)
   })
 })
@@ -404,6 +426,28 @@ describe('codec change', () => {
     expect(await rowContent(valueRowId)).toBe('42')
     expect(await cell('p')).toEqual({status: 42})
     expect(errors).toEqual([])
+  })
+
+  it('re-encodes on the tx that REPAIRS a definition with no buildable codec', async () => {
+    // A preset that cannot build leaves the definition behaviour-less: the
+    // registry publishes metadata only, and nothing on this device can say what
+    // codec its stored values are in. Repairing it to a working preset is the
+    // only moment the re-encode can happen, and the old codec is not needed to
+    // do it — the conversion parses the child's TEXT under the new one.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
+    await retype(repo, FIELD_ID, 'no-such-preset')
+    await vi.waitFor(() => {
+      if (repo.propertySchemas.get('status') !== undefined) {
+        throw new Error('[test] status still has behaviour in the registry')
+      }
+    }, {timeout: 3000})
+
+    await retype(repo, FIELD_ID, 'number')
+
+    expect(await cell('p')).toEqual({status: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
   })
 
   it('rename + re-type in ONE edit: value rows stay live, cell unsets per §9', async () => {

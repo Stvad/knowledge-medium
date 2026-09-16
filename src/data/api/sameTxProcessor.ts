@@ -224,6 +224,20 @@ export interface SameTxCtx {
     workspaceId: string,
     fieldId: string,
   ): PropertySchemaResolution<unknown>
+  /** Every definition claiming `name` in `workspaceId`, by fieldId, in the
+   *  registry's own winner-first order — the multiplicity the two resolvers
+   *  above collapse.
+   *
+   *  Both of them answer about the WINNER, which is the wrong answer either
+   *  side of a rename. Renaming the winner AWAY hands its name to the next
+   *  claimant, and asking who owns that name while the winner still holds it
+   *  names the renamer itself; renaming a SHADOWED definition is a different
+   *  refusal that "does it resolve" conflates with "does it have a codec".
+   *  Empty when the workspace has no registry snapshot. */
+  propertyDefinitionsClaimingName(
+    workspaceId: string,
+    name: string,
+  ): readonly string[]
 }
 
 /** Thrown by a same-tx processor to reject the user's tx. The

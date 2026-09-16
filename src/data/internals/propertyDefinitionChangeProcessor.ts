@@ -77,12 +77,20 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  * itself vacating. Both halves protect a cell key that isn't this definition's
  * to write:
  *
- *  - NEW name: re-keying under a name someone else owns overwrites that owner's
+ *  - NEW name: re-keying under a name someone else OWNS overwrites that owner's
  *    cell projection with the wrong value — the renamer is likely shadowed
- *    there, not the winner.
- *  - OLD name: a rename UN-SHADOWS any definition that shared the old name, so
- *    afterwards that name answers to the sibling. Dropping it would strand the
- *    sibling's cell.
+ *    there, not the winner. The owner is the winner, so the head claimant
+ *    settles it.
+ *  - OLD name, and only when the candidate actually VACATES it: a rename
+ *    un-shadows every definition that shared that name, so afterwards the name
+ *    answers to a sibling — and dropping the key strands that sibling's cell
+ *    until some unrelated edit reprojects it. The winner cannot answer this
+ *    one: while the renamer still holds the name IT is the winner, so asking
+ *    who owns the old name names the renamer itself and the refusal never
+ *    fires. Every claimant has to be consulted. A codec-only change vacates
+ *    nothing and is not subject to this half at all — it keeps the name it
+ *    already wins, and a peer shadowed under that name is the status quo
+ *    rather than something the change creates.
  *
  * Either way the contested case belongs to the shadowing model's own reconcile
  * (#389 item 8), not to a one-shot re-key.
@@ -95,9 +103,9 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  *  - Dropping a candidate can un-vacate the name that kept ANOTHER one, so this
  *    iterates to a fixpoint.
  *
- * `ownerOfName` answers from the TX-START registry, where a peer owning the new
- * name is one about to leave it. That is what makes the drop-all-then-set-all
- * apply in `rekeyParentPropertyCell` safe.
+ * `claimantsOfName` answers from the TX-START registry, winner first, where a
+ * peer owning the new name is one about to leave it. That is what makes the
+ * drop-all-then-assign-all apply safe.
  */
 export const withoutContestedRenames = <T extends {
   readonly fieldId: string
@@ -105,20 +113,21 @@ export const withoutContestedRenames = <T extends {
   readonly newName: string
 }>(
   candidates: readonly T[],
-  ownerOfName: (name: string) => string | undefined,
+  claimantsOfName: (name: string) => readonly string[],
 ): T[] => {
   let kept: T[] = [...candidates]
   for (;;) {
     const vacating = new Set(kept
       .filter(candidate => candidate.oldName !== candidate.newName)
       .map(candidate => candidate.fieldId))
-    const uncontested = (name: string, self: string): boolean => {
-      const owner = ownerOfName(name)
-      return owner === undefined || owner === self || vacating.has(owner)
-    }
-    const next = kept.filter(candidate =>
-      uncontested(candidate.newName, candidate.fieldId)
-      && uncontested(candidate.oldName, candidate.fieldId))
+    const free = (claimant: string | undefined, self: string): boolean =>
+      claimant === undefined || claimant === self || vacating.has(claimant)
+    const next = kept.filter(candidate => {
+      if (!free(claimantsOfName(candidate.newName)[0], candidate.fieldId)) return false
+      if (candidate.oldName === candidate.newName) return true
+      return claimantsOfName(candidate.oldName)
+        .every(claimant => free(claimant, candidate.fieldId))
+    })
     if (next.length === kept.length) return next
     kept = next
   }
@@ -159,23 +168,39 @@ const collectChanges = (
     const afterMeta = parsePropertyDefinitionMetadata(after)
     const beforeMeta = parsePropertyDefinitionMetadata(before)
     if (!afterMeta || !beforeMeta) continue
-    // A definition SHADOWED at tx start (two sharing a name, §6) resolves as
-    // identity-unavailable, so it is skipped: its consuming cells stay
-    // projected under the old name until the next value edit fires PROJECT,
-    // which loses nothing — the id-addressed field row and value children are
-    // untouched. Re-keying one needs the tangled shadowing×projection model
-    // that #389 item 8 owns, not a bolt-on here. Defence in depth: the
-    // contested-name rule below refuses the same definition from the other
-    // side, seeing the winner own the name and this one not vacate it.
-    if (ctx.resolvePropertySchemaField(workspaceId, after.id).status !== 'resolved') continue
+    // A SEED's name and preset are code-owned and frozen once shipped
+    // (`seedIdentityLedger.ts`), so a change to either across a build is a
+    // deliberate migration (#797) rather than a user edit for this pass to fan
+    // out. The materializer writes those rows under Automation scope, which
+    // would otherwise reach this processor. Unpinned: reaching it needs a
+    // shipped seed to change a frozen field, which the ledger test refuses
+    // first — this keeps the exclusion the registry diff made before #1013,
+    // rather than silently widening the pass to a path designed to be frozen.
+    if (afterMeta.seedKey !== undefined) continue
+    // There is deliberately no eligibility check for SHADOWING here. The
+    // contested-name refusal below already covers both of its shapes from the
+    // other side — a shadowed definition renaming away is refused because a
+    // peer claims the name it vacates, and one re-typing in place is refused
+    // because it is not the head claimant of the name it keeps — and asking the
+    // resolver "does this fieldId resolve" instead would conflate shadowing
+    // with having no buildable codec, which is the repair case below and must
+    // NOT be skipped.
     const schema = tryBuildSchema(after, ctx.valuePresets, afterMeta)
     if (schema === null) continue
     // Read from the block's own rows, not from the registry: the tx-start
     // snapshot is at-or-older than `before`, so a codec change an earlier tx
     // already fanned out would read as this tx's and be re-encoded a second
     // time (idempotent, but it would re-report to the user).
+    //
+    // An unbuildable BEFORE row counts as changed. The old codec is what
+    // DETECTS a change, never what performs one — the conversion parses the
+    // child's TEXT under the new codec either way — so a definition whose
+    // preset or config was broken and has now been repaired re-encodes on the
+    // repairing tx, which is the only moment anything can. Re-parsing under an
+    // unchanged codec is idempotent, so counting it costs nothing when the
+    // repair restored the same type.
     const beforeSchema = tryBuildSchema(before, ctx.valuePresets, beforeMeta)
-    const codecChanged = beforeSchema !== null && beforeSchema.codec.type !== schema.codec.type
+    const codecChanged = beforeSchema === null || beforeSchema.codec.type !== schema.codec.type
     // Every write to a definition block's bag reaches this processor —
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
     // would sweep every consumer of that definition inside the user's tx.
@@ -189,10 +214,8 @@ const collectChanges = (
     })
   }
   // Pass 2: drop a rename onto a COLLIDING new name — see the refusal above.
-  return withoutContestedRenames(candidates, (name) => {
-    const owner = ctx.resolvePropertySchemaName(workspaceId, name)
-    return owner.status === 'resolved' ? owner.schema.fieldId : undefined
-  })
+  return withoutContestedRenames(candidates, (name) =>
+    ctx.propertyDefinitionsClaimingName(workspaceId, name))
 }
 
 const consumingParentIds = async (
@@ -336,6 +359,15 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     // Defence in depth, and the cheap path for every workspace still on cells:
     // an un-flipped workspace has no field rows, so the query below already
     // finds no consumers.
+    //
+    // A re-type in a cell workspace is therefore NOT fanned out, and nothing
+    // remembers it for after the flip. Declined deliberately, and measured
+    // rather than reasoned: the flip materializes children FROM each cell and
+    // skips any key whose cell value will not decode under the CURRENT codec,
+    // reporting the block instead. So a value stranded by a re-type gets no
+    // field row, and a post-flip re-encode — which walks field rows — would
+    // have nothing to walk. The flip's own per-key report is the surface for
+    // this, on both sides of #1013.
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const changes = collectChanges(ctx, event.workspaceId, event.changedRows)
     if (changes.length === 0) return
@@ -343,7 +375,14 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       ctx, event.workspaceId, changes.map(c => c.fieldId),
     )
     if (parentIds.length === 0) return
+    // This tx PARSED each changing definition's row, so its field rows are
+    // recognized without asking the resolver — which would answer
+    // `definition-unavailable` for exactly the one being repaired, and its
+    // consumers are the ones the repair exists to reach. Every OTHER fieldId
+    // encountered walking a parent's children is the resolver's to classify.
+    const changing = new Set(changes.map(change => change.fieldId))
     const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
+      if (changing.has(fieldId)) return true
       const resolution = ctx.resolvePropertySchemaField(event.workspaceId, fieldId)
       return resolution.status === 'resolved'
         || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')

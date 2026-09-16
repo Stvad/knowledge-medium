@@ -467,6 +467,12 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     resolverFor(workspaceId).resolve(name)
   const resolvePropertySchemaField = (workspaceId: string, fieldId: string) =>
     resolverFor(workspaceId).resolveField(fieldId)
+  const propertyDefinitionsClaimingName = (
+    workspaceId: string, name: string,
+  ): readonly string[] =>
+    propertyDefinitionRegistryForWorkspace(workspaceId)
+      ?.definitionsByName.get(name)
+      ?.map(definition => definition.fieldId) ?? []
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
   const value = await db.writeTransaction(async (txDb): Promise<R> => {
@@ -582,6 +588,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               // not require the active workspace to match.
               typeDefinitions: typeDefinitionsForWorkspace(meta.workspaceId),
               resolvePropertySchemaName, resolvePropertySchemaField,
+              propertyDefinitionsClaimingName,
             },
           )
         } finally {
