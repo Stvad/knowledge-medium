@@ -6,7 +6,7 @@
 // below are environment-agnostic and share the file so the rule and the
 // behaviour it exists for sit together.
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from 'vitest'
-import {ChangeScope, seedProperty} from '@/data/api'
+import {ChangeScope, seedProperty, seedType} from '@/data/api'
 import type {AnyPropertySeedDeclaration} from '@/data/propertySeeds'
 import {materializePropertySeeds, propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
@@ -15,7 +15,11 @@ import {
   diffSeedLedger,
   FROZEN_PROPERTY_SEEDS,
   FROZEN_TYPE_SEEDS,
+  indexBySeedKey,
+  RETIRED_PROPERTY_NAMES,
+  RETIRED_TYPE_IDS,
   SEED_LEDGER_RULE,
+  shippedPropertySeeds,
 } from '@/data/seedIdentityLedger'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -29,12 +33,6 @@ let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { await resetTestDb(sharedDb.db) })
-
-const indexBy = <T>(
-  rows: readonly T[],
-  key: (row: T) => string,
-  fields: (row: T) => readonly string[],
-): Map<string, readonly string[]> => new Map(rows.map(row => [key(row), fields(row)]))
 
 /** Every toggle id in the tree, forced ON. A plugin that ships disabled by
  *  default still ships its seeds, and a user who enabled it has values stored
@@ -61,18 +59,19 @@ const shippedSeeds = () => {
     tree,
     {overrides: allTogglesOn(discoverToggleTreeSync(tree)), safeMode: false},
   )
-  return {
-    properties: runtime.read(definitionSeedsFacet),
-    types: runtime.read(typeSeedsFacet),
-  }
+  const types = runtime.read(typeSeedsFacet)
+  return {properties: shippedPropertySeeds(runtime.read(definitionSeedsFacet), types), types}
 }
 
 describe('seed identity ledger', () => {
   it('ships exactly the property seeds the ledger freezes', () => {
     const divergences = diffSeedLedger(
       'property',
-      indexBy(shippedSeeds().properties, seed => seed.seedKey, seed => [seed.name, seed.codec.type]),
-      indexBy(FROZEN_PROPERTY_SEEDS, row => row[0], row => [row[1], row[2]]),
+      indexBySeedKey('shipped property', shippedSeeds().properties,
+        seed => seed.seedKey, seed => [seed.name, seed.presetId, seed.codec.type]),
+      indexBySeedKey('frozen property', FROZEN_PROPERTY_SEEDS,
+        row => row[0], row => [row[1], row[2], row[3]]),
+      new Set(RETIRED_PROPERTY_NAMES),
     )
     expect(divergences, SEED_LEDGER_RULE).toEqual([])
   })
@@ -80,53 +79,138 @@ describe('seed identity ledger', () => {
   it('ships exactly the type seeds the ledger freezes', () => {
     const divergences = diffSeedLedger(
       'type',
-      indexBy(shippedSeeds().types, seed => seed.seedKey, seed => [seed.id]),
-      indexBy(FROZEN_TYPE_SEEDS, row => row[0], row => [row[1]]),
+      indexBySeedKey('shipped type', shippedSeeds().types, seed => seed.seedKey, seed => [seed.id]),
+      indexBySeedKey('frozen type', FROZEN_TYPE_SEEDS, row => row[0], row => [row[1]]),
+      new Set(RETIRED_TYPE_IDS),
     )
     expect(divergences, SEED_LEDGER_RULE).toEqual([])
   })
 })
 
 describe('diffSeedLedger', () => {
-  const frozen = new Map([['k/property/a', ['a:name', 'string']]])
+  const frozen = new Map([['k/property/a', ['a:name', 'string', 'string']]])
+  const none = new Set<string>()
 
   it('reports a renamed seed against the field that moved', () => {
-    expect(diffSeedLedger('property', new Map([['k/property/a', ['a:renamed', 'string']]]), frozen))
-      .toEqual(['k/property/a: name "a:name" -> "a:renamed"'])
+    expect(diffSeedLedger(
+      'property', new Map([['k/property/a', ['a:renamed', 'string', 'string']]]), frozen, none,
+    )).toEqual(['k/property/a: name "a:name" -> "a:renamed"'])
   })
 
   it('reports a re-encoded seed separately from a renamed one', () => {
-    expect(diffSeedLedger('property', new Map([['k/property/a', ['a:name', 'number']]]), frozen))
-      .toEqual(['k/property/a: codec "string" -> "number"'])
+    expect(diffSeedLedger(
+      'property', new Map([['k/property/a', ['a:name', 'number', 'number']]]), frozen, none,
+    )).toEqual([
+      'k/property/a: codec "string" -> "number"',
+      'k/property/a: preset "string" -> "number"',
+    ])
+  })
+
+  // The case `codec.type` alone cannot see: `optional-string` writes `null` for
+  // unset and shares the `'string'` discriminator with its required twin, whose
+  // decode throws on that null.
+  it('reports an optional preset swapped for its required twin, which shares a codec type', () => {
+    expect(diffSeedLedger(
+      'property',
+      new Map([['k/property/a', ['a:name', 'string', 'string']]]),
+      new Map([['k/property/a', ['a:name', 'optional-string', 'string']]]),
+      none,
+    )).toEqual(['k/property/a: preset "optional-string" -> "string"'])
   })
 
   it('reports a seed the ledger has never frozen, with the line to add', () => {
-    expect(diffSeedLedger('property', new Map([['k/property/b', ['b:name', 'boolean']]]), frozen))
-      .toEqual([
-        'k/property/a: the ledger freezes it but nothing ships it — ' +
-          'values stored under "a:name" are now unaddressable',
-        'k/property/b: ships but the ledger does not freeze it — ' +
-          'add ["k/property/b", "b:name", "boolean"]',
-      ])
+    expect(diffSeedLedger(
+      'property', new Map([['k/property/b', ['b:name', 'boolean', 'boolean']]]), frozen, none,
+    )).toEqual([
+      'k/property/a: the ledger freezes it but nothing ships it — ' +
+        'values stored under "a:name" are still there',
+      'k/property/b: ships but the ledger does not freeze it — ' +
+        'add ["k/property/b", "b:name", "boolean", "boolean"]',
+    ])
   })
 
   it('reports a removed seed, whose stored values outlive its declaration', () => {
-    expect(diffSeedLedger('property', new Map(), frozen)).toEqual([
+    expect(diffSeedLedger('property', new Map(), frozen, none)).toEqual([
       'k/property/a: the ledger freezes it but nothing ships it — ' +
-        'values stored under "a:name" are now unaddressable',
+        'values stored under "a:name" are still there',
+    ])
+  })
+
+  it('refuses a new seed that claims a retired property name', () => {
+    expect(diffSeedLedger(
+      'property',
+      new Map([['k/property/b', ['a:retired', 'string', 'string']]]),
+      new Map([['k/property/b', ['a:retired', 'string', 'string']]]),
+      new Set(['a:retired']),
+    )).toEqual([
+      'k/property/b: claims "a:retired", a retired key — values stored under it ' +
+        'are still there and would be adopted under new semantics',
+    ])
+  })
+
+  it('refuses a new type seed that claims a retired type id', () => {
+    expect(diffSeedLedger(
+      'type',
+      new Map([['k/type/b', ['gone']]]),
+      new Map([['k/type/b', ['gone']]]),
+      new Set(['gone']),
+    )).toEqual([
+      'k/type/b: claims "gone", a retired key — values stored under it ' +
+        'are still there and would be adopted under new semantics',
     ])
   })
 
   it('names the type kind by its own frozen field', () => {
     expect(diffSeedLedger(
-      'type',
-      new Map([['k/type/a', ['renamed']]]),
-      new Map([['k/type/a', ['original']]]),
+      'type', new Map([['k/type/a', ['renamed']]]), new Map([['k/type/a', ['original']]]), none,
     )).toEqual(['k/type/a: id "original" -> "renamed"'])
   })
 
   it('is silent when every shipped seed matches', () => {
-    expect(diffSeedLedger('property', new Map(frozen), frozen)).toEqual([])
+    expect(diffSeedLedger('property', new Map(frozen), frozen, none)).toEqual([])
+  })
+})
+
+describe('indexBySeedKey', () => {
+  const row = (key: string, name: string) => ({key, name})
+
+  it('refuses a duplicate seed key rather than keeping the last row', () => {
+    expect(() => indexBySeedKey(
+      'shipped property', [row('k/property/a', 'first'), row('k/property/a', 'second')],
+      r => r.key, r => [r.name],
+    )).toThrow(/duplicate shipped property seed key "k\/property\/a"/)
+  })
+
+  it('indexes distinct keys', () => {
+    expect([...indexBySeedKey(
+      'frozen property', [row('k/property/a', 'a'), row('k/property/b', 'b')],
+      r => r.key, r => [r.name],
+    )]).toEqual([['k/property/a', ['a']], ['k/property/b', ['b']]])
+  })
+})
+
+describe('shippedPropertySeeds', () => {
+  const inlineOnly = seedProperty({
+    seedKey: 'system:ledger-test/property/inline-only', revision: 1,
+    name: 'ledgerTest:inlineOnly', preset: 'string', defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const owningType = seedType({
+    seedKey: 'system:ledger-test/type/owner', revision: 1,
+    id: 'ledgerTest:owner', label: 'Ledger test owner', properties: [inlineOnly],
+  })
+
+  // A property declared ONLY inside a type's `properties` still materializes a
+  // backing block and stores user data (`harvestNestedPropertySeeds`). Reading
+  // `definitionSeedsFacet` alone would leave exactly those outside the ledger.
+  it('includes a property a type seed declares inline and nothing contributes', () => {
+    expect(shippedPropertySeeds([], [owningType]).map(seed => seed.seedKey))
+      .toEqual([inlineOnly.seedKey])
+  })
+
+  it('does not double-count a property both contributed and inlined', () => {
+    expect(shippedPropertySeeds([inlineOnly], [owningType]).map(seed => seed.seedKey))
+      .toEqual([inlineOnly.seedKey])
   })
 })
 
