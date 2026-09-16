@@ -3253,6 +3253,44 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
     })
   })
 
+  describe('a caller that did not observe intent may not reap a member', () => {
+    it('restoring the owner keeps a member that arrived while it was deleted', async () => {
+      // Revival re-materializes names the tx never wrote, from a cell that can
+      // be STALE against the children: sync-apply skips the parent-liveness
+      // trigger, so a peer's member lands under a tombstoned field row. Reaping
+      // it would be silent loss of a value this device never saw — and the
+      // scalar path keeps the same arrival as a live divergent peer, so the
+      // list path reaping it was an asymmetry, not a policy.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+      // The arrival: raw, because sync-apply never passes through `repo.tx`.
+      const arrivedKey = await appendKey(field.id)
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES ('arrived', ?, ?, ?, 'gamma', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, field.id, arrivedKey],
+      )
+
+      await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID))
+        .toEqual(['alpha', 'beta', 'gamma'])
+      // The cell lags the children until the next reprojection (§5's
+      // pending-reprojection rule) — post-flip the children are the truth, and
+      // touching any value row for the field heals it.
+      await repo.tx(tx => tx.update('arrived', {content: 'gamma!'}),
+        {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta', 'gamma!'])
+    })
+  })
+
   describe('merge unions two divergent sets (§5 merge policy)', () => {
     it('folds the source field row and keeps every member once', async () => {
       const repo = await setupWithLists()

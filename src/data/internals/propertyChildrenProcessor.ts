@@ -342,6 +342,24 @@ export interface MaterializeOptions {
    *  the property, not whether it comes back. The cell backfill has no such
    *  contract and would resurrect what the user reaped — declined there. */
   reviveTombstoned?: boolean
+  /** This call did not observe user intent for these names, so it may only ADD
+   *  members, never remove one — the cell→children twin of the projection's
+   *  `'additive'` mode, and for the same reason: an unobserved write must not
+   *  be allowed to reap.
+   *
+   *  The revival path's untouched half is the caller. A restore re-materializes
+   *  names the tx never wrote, from a cell that can be STALE against the
+   *  children — a peer's member can arrive under a tombstoned field row, which
+   *  sync-apply is free to do because it skips the parent-liveness trigger.
+   *  Reaping it is silent loss of a value this device never saw. Measured
+   *  before the flag existed: the arrived member came back `deleted = 1` while
+   *  the scalar path kept the same arrival as a live divergent peer.
+   *
+   *  Only the multi-value branch reads it — a scalar's surplus rows are
+   *  divergent peers it already keeps. The scalar branch still OVERWRITES the
+   *  primary row's content from the cell on the same path, which is the narrower
+   *  half of the same staleness and is tracked separately. */
+  mayNotRemove?: boolean
 }
 
 /** Restore the tombstoned field row backing `fieldId`, together with its value
@@ -496,7 +514,7 @@ export const materializePropertyChildrenForExistingRow = async (
       if (primary.content !== fieldContent) {
         await tx.update(primary.id, {content: fieldContent})
       }
-      await reconcileFieldValueChildren(tx, primary, schema, encoded)
+      await reconcileFieldValueChildren(tx, primary, schema, encoded, opts.mayNotRemove)
     } else {
       const fieldRowId = await tx.create({
         workspaceId: row.workspaceId,
@@ -567,7 +585,8 @@ const materializePropertiesForChangedRow = async (
     tx, row.after, lookups, changed, {reviveTombstoned: true},
   )
   await materializePropertyChildrenForExistingRow(
-    tx, row.after, lookups, untouched, {undecodable: 'skip', reviveTombstoned: true},
+    tx, row.after, lookups, untouched,
+    {undecodable: 'skip', reviveTombstoned: true, mayNotRemove: true},
   )
 }
 
@@ -601,6 +620,8 @@ export const reconcileFieldValueChildren = async (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   schema: AnyPropertySchema,
   encoded: unknown,
+  /** See {@link MaterializeOptions.mayNotRemove}. */
+  mayNotRemove = false,
 ): Promise<void> => {
   // Takes the ENCODED VALUE, not the contents, so the grain cannot be decided
   // by a caller: a scalar has exactly one content here by construction, which
@@ -614,7 +635,7 @@ export const reconcileFieldValueChildren = async (
     await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!)
     return
   }
-  await reconcileMemberValueChildren(tx, fieldRow, values, contents)
+  await reconcileMemberValueChildren(tx, fieldRow, values, contents, mayNotRemove)
 }
 
 const createValueChild = (
@@ -657,6 +678,7 @@ const reconcileMemberValueChildren = async (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   values: readonly BlockData[],
   contents: readonly string[],
+  mayNotRemove: boolean,
 ): Promise<void> => {
   // Match each member to an existing child with that exact content, so a
   // reorder or an insertion keeps every member's ROW IDENTITY — its comments,
@@ -682,7 +704,9 @@ const reconcileMemberValueChildren = async (
   for (const row of surplus) {
     const survivor = kept.find(k => k !== undefined && k.content === row.content)
     if (survivor) await collapseDuplicateValueChild(tx, survivor.id, row)
-    else await deleteSubtreeInTx(tx, row.id)
+    // A caller that did not observe intent for this name may not reap: the
+    // member stays, and the projection picks it up as one more member.
+    else if (!mayNotRemove) await deleteSubtreeInTx(tx, row.id)
   }
 
   // Members permute among the order-key SLOTS the value children already
@@ -692,12 +716,19 @@ const reconcileMemberValueChildren = async (
   // list properties here hold a handful of members, and the alternative —
   // allocating between neighbours — is a second ordering rule to keep correct
   // for a cost nothing has measured.
+  // Only the slots of rows this call is free to move: a member it was not
+  // allowed to reap keeps its own key, or the permutation below would hand its
+  // slot to a different member and leave two rows on one key.
+  const retained = mayNotRemove
+    ? new Set(surplus.filter(row => !kept.some(k => k?.content === row.content))
+      .map(row => row.orderKey))
+    : new Set<string>()
   const freed = kept.filter(k => k !== undefined).map(k => k.orderKey)
   const created = contents.length - freed.length
   const fresh = created > 0
     ? keysBetween(values.map(v => v.orderKey).sort().at(-1) ?? null, null, created)
     : []
-  const slots = [...freed, ...fresh].sort()
+  const slots = [...freed, ...fresh].filter(key => !retained.has(key)).sort()
 
   for (let i = 0; i < contents.length; i++) {
     const orderKey = slots[i]!
