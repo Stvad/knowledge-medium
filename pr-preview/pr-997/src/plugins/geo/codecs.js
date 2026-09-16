@@ -1,2 +1,2 @@
-import{_2 as e}from"../../../chunks/app-CPRHof8H.js";var t=e.optionalRef;export{t as optionalRefCodec};
+import{x2 as e}from"../../../chunks/app-Cc-SpOMu.js";var t=e.optionalRef;export{t as optionalRefCodec};
 //# sourceMappingURL=codecs.js.map

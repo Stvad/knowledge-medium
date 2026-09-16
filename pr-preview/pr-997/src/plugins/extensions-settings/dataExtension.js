@@ -1,1 +1,1 @@
-import{_t as e}from"../../../chunks/app-CPRHof8H.js";export{e as extensionsDataExtension};
+import{_t as e}from"../../../chunks/app-Cc-SpOMu.js";export{e as extensionsDataExtension};

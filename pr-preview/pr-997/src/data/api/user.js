@@ -1,1 +1,1 @@
-import{$0 as e,Q0 as t,Z0 as n}from"../../../chunks/app-CPRHof8H.js";export{n as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,e as systemAuthor};
+import{n2 as e,r2 as t,t2 as n}from"../../../chunks/app-Cc-SpOMu.js";export{n as SYSTEM_AUTHOR_PREFIX,e as isSystemAuthor,t as systemAuthor};

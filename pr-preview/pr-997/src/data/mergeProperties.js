@@ -1,1 +1,1 @@
-import{sq as e}from"../../chunks/app-CPRHof8H.js";export{e as mergeProperties};
+import{lq as e}from"../../chunks/app-Cc-SpOMu.js";export{e as mergeProperties};

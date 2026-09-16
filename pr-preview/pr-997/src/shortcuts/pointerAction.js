@@ -1,1 +1,1 @@
-import{Bw as e,Vw as t}from"../../chunks/app-CPRHof8H.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};
+import{Bw as e,Vw as t}from"../../chunks/app-Cc-SpOMu.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};
