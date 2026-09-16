@@ -1,1 +1,0 @@
-import{Ag as e,Dg as t,Eg as n,Mg as r,Og as i,Tg as a,jg as o,kg as s}from"../../../chunks/app-Mxowflif.js";export{r as BreadcrumbList,s as BreadcrumbRenderer,o as Breadcrumbs,i as PromotableBreadcrumbList,a as breadcrumbRendererContribution,n as breadcrumbsPlugin,e as getBreadcrumbContentPreview,t as usePromotableBreadcrumb};

@@ -1,1 +1,0 @@
-import{Es as e,Ts as t}from"../../../chunks/app-Mxowflif.js";export{t as collectTypeCandidates,e as formatTypeCandidateReport};

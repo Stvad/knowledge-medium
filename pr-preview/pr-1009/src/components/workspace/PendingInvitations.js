@@ -1,1 +1,0 @@
-import{P_ as e}from"../../../chunks/app-Mxowflif.js";export{e as PendingInvitations};

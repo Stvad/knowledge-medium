@@ -1,1 +1,0 @@
-import{bA as e,yA as t}from"../../../chunks/app-Mxowflif.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

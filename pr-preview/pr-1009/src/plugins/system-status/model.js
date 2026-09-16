@@ -1,1 +1,0 @@
-import{pa as e}from"../../../chunks/app-Mxowflif.js";export{e as getSyncIndicatorView};

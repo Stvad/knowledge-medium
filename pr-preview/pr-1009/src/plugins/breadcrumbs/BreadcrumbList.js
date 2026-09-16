@@ -1,1 +1,0 @@
-import{Mg as e}from"../../../chunks/app-Mxowflif.js";export{e as BreadcrumbList};
