@@ -1,0 +1,1 @@
+import{nw as e,rw as t}from"../../../chunks/app-Dkhk__4v.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

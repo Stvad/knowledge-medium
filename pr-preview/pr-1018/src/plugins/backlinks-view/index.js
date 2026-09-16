@@ -1,0 +1,1 @@
+import{gu as e}from"../../../chunks/app-Dkhk__4v.js";export{e as backlinksViewPlugin};

@@ -1,0 +1,1 @@
+import{is as e,rs as t}from"../../../chunks/app-Dkhk__4v.js";export{t as appendTagToBlocks,e as appendTagToContent};

@@ -1,0 +1,1 @@
+import{ew as e,tw as t}from"../../../chunks/app-Dkhk__4v.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

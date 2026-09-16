@@ -1,0 +1,1 @@
+import{CK as e,DK as t,EK as n,TK as r,wK as i}from"../../../chunks/app-Dkhk__4v.js";export{e as MIGRATE_PROPERTY_DEFINITION_PROCESSOR,i as MIGRATE_PROPERTY_DEFINITION_PROCESSOR_NAME,r as REPORT_UNCONVERTIBLE_VALUES,n as REPORT_UNCONVERTIBLE_VALUES_PROCESSOR,t as withoutContestedRenames};

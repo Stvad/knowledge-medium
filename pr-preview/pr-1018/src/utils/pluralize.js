@@ -1,0 +1,1 @@
+import{NE as e,PE as t}from"../../chunks/app-Dkhk__4v.js";export{e as agree,t as pluralize};

@@ -1,0 +1,1 @@
+import{_L as e,gL as t}from"../../../chunks/app-Dkhk__4v.js";export{t as PLACES_UNDER_BLOCK_QUERY,e as placesUnderBlockQuery};

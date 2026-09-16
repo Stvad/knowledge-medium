@@ -1,0 +1,1 @@
+import{d$ as e,u$ as t}from"../../chunks/app-Dkhk__4v.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

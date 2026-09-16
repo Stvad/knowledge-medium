@@ -1,0 +1,1 @@
+import{bA as e,yA as t}from"../../../chunks/app-Dkhk__4v.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
