@@ -1016,7 +1016,7 @@ export const applyPropertyDefinitionSynthesis = async (
     // run that only converged changed nothing and refusing a replay would cost
     // a cmd-Z for no hazard. The POSITION is NOT PINNED, for the same reason
     // the backfill runner's is not.
-    if (created > 0) drop = repo.undoManagerFor(workspaceId).beginHistoryDrop()
+    if (created > 0) drop = repo.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
   }, {
     scope: ChangeScope.BlockDefault,
     description: 'synthesize property definitions',

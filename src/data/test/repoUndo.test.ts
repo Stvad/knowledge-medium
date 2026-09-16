@@ -420,7 +420,7 @@ describe('undo replay uploads (source = user)', () => {
 /** A one-way pass (the props-as-blocks flip, a `WorkspaceBackfill`) drops the
  *  workspace's history so its own writes cannot be reverted onto. These pin the
  *  three orderings that a bare `clear()` after the pass's commit gets wrong —
- *  each is driven with a raw `clear()` / `invalidateReplays()` standing in for
+ *  each is driven with a raw `clear()` / `beginHistoryDrop()` standing in for
  *  the pass, because what is under test is the Repo's side of the contract, not
  *  any one pass.
  *
@@ -482,10 +482,11 @@ describe('undo against a pass that drops the history', () => {
   })
 
   it('refuses a replay a pass invalidated without dropping the stacks', async () => {
-    // `invalidateReplays` is the half a pass calls while it STILL HOLDS the
-    // write lock, before it knows whether its chunk will commit. The stacks
-    // survive — only a replay already in flight is refused — so this pins that
-    // the replay checks the epoch rather than the stack being empty.
+    // BEGINNING a drop is what a pass does while it still holds the write lock,
+    // before it knows whether its chunk will commit. The stacks survive until
+    // the drop is finished — only a replay already in flight is refused — so
+    // this pins that the replay checks the epoch rather than the stack being
+    // empty.
     const {repo} = env
     await seedRoot(repo, 'a', 'original')
     await repo.tx(async (tx) => {
@@ -539,22 +540,21 @@ describe('undo against a pass that drops the history', () => {
     expect(await readContent(repo, 'a')).toBe('original')
   })
 
-  it('keeps the entry of an edit that took the lock mid-drop', async () => {
-    // A drop is ONE event with a duration: it begins when the pass's writes
-    // become visible and ends when the stacks are emptied. An edit that takes
-    // the write lock BETWEEN the two reads post-pass rows and is perfectly safe
-    // to undo — so the finish must not move the epoch a second time, or the
-    // edit is dropped for having sampled in the middle of one event.
+  it('keeps the entry of an edit that took the lock mid-drop, for an IN-LOCK pass', async () => {
+    // The pass committed under the write lock it held, so its writes are
+    // visible the moment that lock is released. An edit that takes the lock
+    // next therefore reads POST-pass rows and is perfectly safe to undo — so
+    // the finish must not move the epoch again, or the edit is dropped for
+    // having sampled in the middle of one event.
     //
-    // This is the ordering the two-call version got wrong, and it is a
-    // regression it introduced: with no epoch at all, the clear empties the
-    // stack and the entry then records onto the empty one, which is what the
-    // user expects.
+    // With no epoch at all, the clear empties the stack and the entry then
+    // records onto the empty one, which is what the user expects; a second
+    // advance here would be a regression against that.
     const {repo} = env
     await seedRoot(repo, 'a', 'original')
 
     // The pass's writes are committed and visible; its drop is under way.
-    const drop = repo.undoManager.beginHistoryDrop()
+    const drop = repo.undoManager.beginHistoryDropInWriteLock()
 
     // The edit takes the lock now, so its `before` rows are post-pass. The
     // pass's finish lands while it holds the lock.
@@ -568,13 +568,39 @@ describe('undo against a pass that drops the history', () => {
     expect(await readContent(repo, 'a')).toBe('original')
   })
 
+  it('drops the entry of an edit that overlapped a pass whose writes land LATER', async () => {
+    // The mirror of the test above, and the reason the two are separate calls.
+    // The props-as-blocks flip holds no write lock: it is a server round trip
+    // and a raw `db.execute`, so its writes land AFTER the drop begins. An edit
+    // that takes the lock in between reads PRE-pass rows — exactly the snapshot
+    // a replay must never restore over the landed flip — so this finish has to
+    // move the epoch as well.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'pre-flip')
+
+    // No lock held: the pass's writes are still in flight.
+    const drop = repo.undoManager.beginHistoryDrop()
+
+    // The edit takes the lock while they are, so its `before` rows predate
+    // them. The pass lands and finishes the drop.
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited while the pass was in flight'})
+      drop.finish()
+    }, {scope: ChangeScope.BlockDefault, description: 'overlapping edit'})
+
+    expect(undoDepth(repo)).toBe(0)
+    expect(await repo.undo()).toBe(false)
+    expect(await readContent(repo, 'a')).toBe('edited while the pass was in flight')
+  })
+
   it('drops an entry whose transaction was recorded after a pass cleared', async () => {
     // A user transaction can hold the write lock ahead of a pass's chunk,
     // commit, release — and only reach its own recording continuation after
     // that chunk has written and cleared. The clear cannot reach an entry that
-    // does not exist yet, and neither can `invalidateReplays`, so without the
-    // epoch check it lands on the stack holding the whole PRE-pass row and
-    // undoing it reverts the pass with its completion already recorded.
+    // does not exist yet, and neither can the epoch move that opened the drop,
+    // so without the epoch check it lands on the stack holding the whole
+    // PRE-pass row and undoing it reverts the pass with its completion already
+    // recorded.
     const {repo} = env
     await seedRoot(repo, 'a', 'original')
     expect(undoDepth(repo)).toBe(0)
@@ -608,7 +634,7 @@ describe('undo against a pass that drops the history', () => {
     let drop: HistoryDrop | undefined
     const holding = repo.tx(async () => {
       await new Promise<void>(resolve => { releaseHolder = () => resolve() })
-      drop = repo.undoManager.beginHistoryDrop()
+      drop = repo.undoManager.beginHistoryDropInWriteLock()
     }, {scope: ChangeScope.BlockDefault})
     await vi.waitFor(() => { expect(releaseHolder).not.toBeNull() }, {timeout: 3000})
 

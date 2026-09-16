@@ -75,7 +75,7 @@ export class UndoManager {
   private readonly redoStacks: Map<ChangeScope, UndoEntry[]> = new Map()
   private readonly listenersByScope: Map<ChangeScope, CallbackSet<[]>> = new Map()
   private readonly maxDepth: number
-  /** Bumped only by {@link clear} and {@link invalidateReplays} — see
+  /** Moved only by {@link clear} and by a {@link HistoryDrop}'s two ends — see
    *  {@link clearEpoch}. */
   private clears = 0
 
@@ -166,7 +166,11 @@ export class UndoManager {
 
   /** Start a one-way pass's history drop, and hand back its second half.
    *
-   *  A drop is ONE event with a DURATION, and both ends matter:
+   *  For a pass that holds NO write lock, so its writes land after the drop
+   *  begins — the props-as-blocks flip is a server round trip and a raw
+   *  `db.execute`. {@link beginHistoryDropInWriteLock} is the other case.
+   *
+   *  A drop is an event with a DURATION, and both ends matter:
    *
    *  - It must begin AT THE LAST MOMENT BEFORE THE PASS'S WRITES BECOME
    *    VISIBLE. `undo()` takes its entry off the stack before awaiting the
@@ -186,12 +190,13 @@ export class UndoManager {
    *    reverted onto, and taking the user's history for it would be a cost with
    *    no cause.
    *
-   *  ONE epoch advance for the pair, and that is the whole reason this is an
-   *  object rather than two calls. A transaction that takes the write lock
-   *  BETWEEN the two describes post-pass state and is perfectly safe to undo; a
-   *  second advance at `finish` would drop its entry for having sampled in the
-   *  middle of one event. `finish` therefore empties the stacks without moving
-   *  the epoch again.
+   *  `finish` ADVANCES THE EPOCH TOO, because this pass's writes had not landed
+   *  when the drop began: a transaction that took the write lock in between
+   *  read PRE-pass rows, so its entry has to go. {@link
+   *  beginHistoryDropInWriteLock} is the variant for a pass whose writes were
+   *  already durable at that point, and it is the one that must be asked for by
+   *  name — picking this one wrongly costs an undo entry, picking that one
+   *  wrongly keeps a replayable pre-pass row.
    *
    *  NOT COMMIT-COUPLED, deliberately. A throw after the drop begins leaves the
    *  epoch advanced over writes that rolled back, costing an already-queued
@@ -201,10 +206,29 @@ export class UndoManager {
    *  rows. A lost undo beats a lost row. */
   beginHistoryDrop(): HistoryDrop {
     this.clears += 1
+    return {finish: () => { this.clears += 1; this.emptyStacks() }}
+  }
+
+  /** A history drop for a pass that is COMMITTING UNDER THE WRITE LOCK IT HOLDS
+   *  RIGHT NOW — the backfill runner's batch, synthesis's mint.
+   *
+   *  ONE epoch advance for the pair, unlike {@link beginHistoryDrop}, and the
+   *  difference is entirely about when the pass's writes become visible. Here
+   *  they are visible the moment the lock is released, so anything that takes
+   *  the lock next reads POST-pass rows and is perfectly safe to undo — and a
+   *  second advance at `finish` would drop a legitimate post-pass edit for
+   *  having sampled in the middle of one event. `finish` therefore empties the
+   *  stacks without moving the epoch again.
+   *
+   *  Everything else — when to begin, and the not-commit-coupled decline —
+   *  is {@link beginHistoryDrop}'s. */
+  beginHistoryDropInWriteLock(): HistoryDrop {
+    this.clears += 1
     return {finish: () => { this.emptyStacks() }}
   }
 
-  /** Bumped by {@link clear} and {@link beginHistoryDrop}, and by nothing else
+  /** Moved by {@link clear} and by the ends of a {@link HistoryDrop}, and by
+   *  nothing else
    *  — deliberately not by an ordinary record or pop, so a caller asking "was
    *  my entry invalidated" cannot read normal activity as invalidation. This
    *  answers only "the history was DROPPED", which is the event that makes an

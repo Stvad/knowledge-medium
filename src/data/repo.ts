@@ -1820,8 +1820,8 @@ export class Repo {
     // What it protects against: a transaction can commit and release the lock
     // ahead of a one-way pass's chunk and only reach its recording
     // continuation after that chunk has written and cleared. The clear cannot
-    // reach an entry that does not exist yet, and neither can
-    // `invalidateReplays`, so the entry would land on the stack holding the
+    // reach an entry that does not exist yet, and neither can the epoch move
+    // that opened the drop, so the entry would land on the stack holding the
     // whole PRE-pass row.
     //
     // Why inside the lock: the same two can be ordered the other way, with the
@@ -1941,11 +1941,11 @@ export class Repo {
     if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
     // Sampled before the entry leaves the stack, so the whole gesture — pop,
-    // replay and push alike — sits inside the window this validates. Both
-    // `clear()` and `invalidateReplays()` move it, and a pass calls the latter
-    // while it still holds the write lock, which is how a replay queued behind
-    // a chunk is refused before its stack is ever dropped. Neither can happen
-    // across the pop itself, so this is the same value either side.
+    // replay and push alike — sits inside the window this validates. A bare
+    // `clear()` moves it, and so does BEGINNING a `HistoryDrop`, which is how a
+    // replay queued behind a pass is refused before its stack is ever dropped.
+    // None of them can happen across the pop itself, so this is the same value
+    // either side.
     const clearEpoch = manager.clearEpoch
     const opposite = action === 'undo' ? 'redo' : 'undo'
     const entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
@@ -3957,7 +3957,7 @@ export class Repo {
             // database handing the lock to a waiting replay and `this.tx`
             // resolving, which the harness cannot schedule into. Kept because
             // what it loses is a committed batch of a once-per-graph migration.
-            return {value, drop: this.undoManagerFor(workspaceId).beginHistoryDrop()}
+            return {value, drop: this.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()}
           }, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,

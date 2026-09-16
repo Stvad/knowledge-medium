@@ -367,6 +367,24 @@ describe('migrate_properties_to_blocks action', () => {
     flipWorkspace.mockResolvedValue({localApplied: true})
   })
 
+  it('drops the history when the flip FAILS ambiguously, not just when it lands', async () => {
+    // `flipWorkspaceToChildBackedProperties` throws only when the PATCH errored
+    // AND the confirming re-read could not be got either — so the server may be
+    // child-backed already. Keeping the history there leaves every pre-flip
+    // entry replayable over a flip that did land, and the epoch has already
+    // moved, so nothing else refuses them. Dropped on the side of the rows.
+    flipWorkspace.mockRejectedValue(new Error('response lost'))
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(finishUndoDrop).toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/undo history for this workspace was cleared/i))
+    flipWorkspace.mockReset()
+    flipWorkspace.mockResolvedValue({localApplied: true})
+  })
+
   it('does not touch undo history for a workspace that was already flipped', async () => {
     // Nothing irreversible happens on that path until the pass itself writes,
     // and the runner clears on its first committed batch.

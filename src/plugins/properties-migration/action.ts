@@ -332,6 +332,14 @@ const migrateUnderClaim = async (
       ;({localApplied} = await flipWorkspaceToChildBackedProperties(repo, workspaceId))
     } catch (err) {
       console.error('[properties-migration] flip failed:', err)
+      // AMBIGUOUS, not "it did not happen": `flipWorkspaceToChildBackedProperties`
+      // throws only when the PATCH errored AND the confirming re-read could not
+      // be got either, so the server may be child-backed already. Keeping the
+      // history would leave every pre-flip entry replayable over a flip that
+      // did land — and the epoch has moved, so nothing else would refuse them.
+      // Dropped on the side of the rows: a lost undo beats a lost row.
+      undoDrop.finish()
+      undoCleared = true
       // "so nothing was migrated" is only true because this catch cannot see a
       // committed flip: the server write is the only thing that throws here.
       // The definitions minted a moment ago DID land, though — they are inert
