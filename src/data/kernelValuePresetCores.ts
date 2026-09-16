@@ -119,6 +119,10 @@ export const optionalNumberValuePresetCore = definePresetCore<number | undefined
 })
 const readonlyStringListCodec: Codec<readonly string[]> = {
   type: 'list',
+  // Member-wise, so it opts into the multi-value child shape: `types` and
+  // `alias` store one value child per member rather than one JSON-text child
+  // per list.
+  member: codecs.string,
   encode: values => values.map(value => codecs.string.encode(value)),
   decode: json => {
     if (!Array.isArray(json)) throw new CodecError('string array', json)

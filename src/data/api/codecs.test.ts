@@ -4,6 +4,7 @@ import {
   CodecError,
   decodeRefListIds,
   isEnumCodec,
+  memberCodecOf,
   isRefCodec,
   isRefListCodec,
   type RefListCodec,
@@ -275,6 +276,7 @@ describe('decodeRefListIds', () => {
     const legacy: RefListCodec = {
       type: 'refList',
       targetTypes: [],
+      member: codecs.ref(),
       encode: v => v.map(item => item),
       decode: j => {
         if (!Array.isArray(j)) throw new CodecError('array', j)
@@ -295,5 +297,48 @@ describe('CodecError', () => {
     const e = new CodecError('string', {weird: 'shape'})
     expect(e.message).toContain('expected string')
     expect(e.message).toContain('object')
+  })
+})
+
+describe('the member capability', () => {
+  /** The contract `Codec.member` states, checked against real values rather
+   *  than against a restatement of each builder: whatever the list codec
+   *  does to a whole array, the member codec does to one element. Every
+   *  multi-value property-child path is built on this equality — materialize
+   *  encodes members one at a time and project rebuilds the array out of
+   *  them, so a codec that breaks it stores children the projection cannot
+   *  turn back into the value. */
+  const memberWise = (codec: {
+    encode(v: never): unknown
+    decode(j: unknown): unknown
+    member?: {encode(v: never): unknown; decode(j: unknown): unknown}
+  }, values: readonly unknown[]): void => {
+    const member = codec.member
+    expect(member).toBeDefined()
+    expect(codec.encode(values as never)).toEqual(
+      values.map(v => member!.encode(v as never)))
+    const encoded = codec.encode(values as never) as unknown[]
+    expect(codec.decode(encoded)).toEqual(encoded.map(e => member!.decode(e)))
+  }
+
+  it('codecs.list encodes and decodes through its member', () => {
+    memberWise(codecs.list(codecs.number), [1, 2, 3])
+  })
+
+  it('codecs.refList encodes and decodes through its member', () => {
+    memberWise(codecs.refList(), ['id-a', 'id-b'])
+  })
+
+  it('a refList member is a ref carrying the same targetTypes', () => {
+    const codec = codecs.refList({targetTypes: ['person']})
+    expect(isRefCodec(codec.member)).toBe(true)
+    expect(codec.member.targetTypes).toEqual(['person'])
+  })
+
+  it('single-valued codecs expose no member', () => {
+    for (const codec of [codecs.string, codecs.number, codecs.boolean,
+      codecs.ref(), codecs.optionalRef(), codecs.date, codecs.url]) {
+      expect(memberCodecOf(codec)).toBeUndefined()
+    }
   })
 })

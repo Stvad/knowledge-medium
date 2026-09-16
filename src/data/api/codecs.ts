@@ -40,6 +40,26 @@ export interface Codec<T> {
    *  Presence of `where` is the authoritative signal that the property
    *  is queryable. */
   readonly where?: WhereCapability<T>
+  /** Optional capability: this codec encodes a LIST, member-wise, through
+   *  `member`. Presence is the authoritative signal that the property is
+   *  MULTI-VALUED — same capability-by-presence discipline as `where` — and
+   *  is what makes properties-as-blocks store one value child PER MEMBER
+   *  instead of the whole array as JSON text in one child (§5/§9). A
+   *  list-shaped codec that does not expose one keeps the single-child
+   *  shape, so opting in is a deliberate act by the codec's author.
+   *
+   *  THE CONTRACT, relied on by both directions of the projection and
+   *  pinned by `codecs.test.ts`: `encode(v)` equals `v.map(member.encode)`
+   *  and `decode(j)` equals `j.map(member.decode)`. A codec whose list
+   *  encoding is not member-wise must not expose a member — the
+   *  materializer would write children the projection cannot rebuild. */
+  readonly member?: AnyCodec
+}
+
+/** A `Codec` whose value is a list encoded member-wise. Narrows the optional
+ *  {@link Codec.member} capability to the member type. */
+export interface ListCodec<T> extends Codec<readonly T[]> {
+  readonly member: Codec<T>
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,6 +77,9 @@ export interface RefCodec extends Codec<string> {
 export interface RefListCodec extends Codec<readonly string[]> {
   readonly type: 'refList'
   readonly targetTypes: readonly string[]
+  /** One ref. See the `refList` builder for why it is the scalar ref codec
+   *  itself rather than a list-shaped lookalike. */
+  readonly member: RefCodec
   /** Lenient element-wise decode for reference projection. Decodes each
    *  element through the element codec, *dropping* (never throwing on)
    *  the ones that fail, and returns the well-formed ids. Non-array input
@@ -163,6 +186,8 @@ const dateCodec: Codec<Date | undefined> = {
 
 const list = <T>(inner: Codec<T>): Codec<T[]> => ({
   type: 'list',
+  // Member-wise by construction, which is exactly what `member` promises.
+  member: inner,
   encode: v => v.map(item => inner.encode(item)),
   decode: j => {
     if (!Array.isArray(j)) throw new CodecError('array', j)
@@ -191,6 +216,12 @@ const refList = (options?: RefCodecOptions): RefListCodec => {
   return {
     type: 'refList',
     targetTypes: normalizeTargetTypes(options),
+    // A refList member is one ref, in every sense that matters downstream:
+    // the same `((id))` value-child content, the same decode that refuses
+    // prose typed into a ref property, the same `targetTypes`. Sharing the
+    // scalar codec is what makes "a refList is N sibling ref values" true
+    // rather than merely analogous.
+    member: ref(options),
     encode: v => v.map(item => stringCodec.encode(item)),
     decode: j => {
       if (!Array.isArray(j)) throw new CodecError('array', j)
@@ -286,6 +317,16 @@ export const isRefCodec = (codec: unknown): codec is RefLikeCodec =>
 
 export const isRefListCodec = (codec: unknown): codec is RefListCodec =>
   typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'refList'
+
+/** The codec for ONE member of a multi-valued property, or undefined when the
+ *  property is single-valued — the one place the multi-value question is
+ *  ASKED, so no call site restates it as a `codec.type` list.
+ *
+ *  Capability-by-presence, not by discriminator: `type` is an open string a
+ *  plugin picks, and two codecs already share `'list'` (the `list` and
+ *  `string-list` presets) while differing in member type, so the type can
+ *  neither answer "is this multi-valued" nor "what is a member". */
+export const memberCodecOf = (codec: AnyCodec): AnyCodec | undefined => codec.member
 
 export const decodeRefId = (codec: RefLikeCodec, value: unknown): string | undefined => {
   try {
