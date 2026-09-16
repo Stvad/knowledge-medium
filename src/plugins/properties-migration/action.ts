@@ -321,6 +321,19 @@ const migrateUnderClaim = async (
       return
     }
     banner.update('Switching this workspace to property blocks…')
+    // BEFORE the flip, not with the `clear()` after it. From the PATCH onward
+    // the workspace is child-backed for the whole graph, and the flip is a
+    // Supabase round trip, a local `db.execute` and a readback — so a replay
+    // already popped by `undo()` has ample room to take the write lock and
+    // commit a whole pre-flip row, `properties_json` included, with the same-tx
+    // processors skipped. The `clear()` below cannot reach it: the entry is off
+    // the stack by then, which is what `invalidateReplays` exists for and why
+    // it needs no transaction of its own.
+    //
+    // Costs an already-queued replay its popped entry if the flip then throws —
+    // the same trade taken in `Repo`'s uploading passes, and a lost cmd-Z there
+    // beats a pre-flip cell landing over live children here.
+    repo.undoManagerFor(workspaceId).invalidateReplays()
     let localApplied: boolean
     try {
       ;({localApplied} = await flipWorkspaceToChildBackedProperties(repo, workspaceId))
@@ -347,6 +360,9 @@ const migrateUnderClaim = async (
     // children are the truth, so the two just diverge. Every way the run can
     // end after this point without writing a batch (a peer holds the claim, the
     // runner defers, there is nothing left to migrate) leaves that window open.
+    //
+    // The DROP half. A replay already in flight when the flip started was
+    // refused by the bump above; this takes the entries still on the stack.
     //
     // THIS DEVICE ONLY, deliberately (#684): a peer that stayed open across the
     // flip keeps its pre-flip entries, and nothing watches the column's arrival

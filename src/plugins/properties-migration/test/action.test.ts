@@ -51,6 +51,7 @@ import { claimStub, type ClaimStubLog } from './claimStub.ts'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
+const invalidateReplays = vi.fn()
 const USER = 'user-1'
 
 const RAN = {outcome: 'ran', undoHistoryCleared: false} as OperatorBackfillResult
@@ -88,7 +89,7 @@ const makeRepo = (
     db: {getAll, getOptional},
     isReadOnly: false,
     workspaceViewGap,
-    undoManagerFor: () => ({clear: clearUndo}),
+    undoManagerFor: () => ({clear: clearUndo, invalidateReplays}),
     // The gesture reaches the pass THROUGH the claim, so the stub is the only
     // route to `runPass`. `repo.runPass` is deliberately
     // ABSENT: a fixture that also answered that call directly would keep
@@ -116,6 +117,7 @@ const invoke = (repo: Repo) =>
 
 afterEach(() => {
   clearUndo.mockReset()
+  invalidateReplays.mockReset()
   showInfo.mockReset()
   dismissToast.mockReset()
   progressHandle.update.mockReset()
@@ -331,6 +333,26 @@ describe('migrate_properties_to_blocks action', () => {
     expect(clearUndo).toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/undo history for this workspace was cleared/i))
+  })
+
+  it('refuses in-flight replays BEFORE the flip, not with the clear after it', async () => {
+    // From the PATCH onward the workspace is child-backed for the whole graph,
+    // and the flip is a network round trip plus two local db calls — room for a
+    // replay `undo()` has already popped to take the write lock and commit a
+    // whole pre-flip row. The `clear()` afterwards cannot reach that entry: it
+    // is off the stack by then. Only the epoch bump refuses it, and it has to
+    // land before the workspace changes underneath.
+    const order: string[] = []
+    invalidateReplays.mockImplementation(() => { order.push('invalidate') })
+    clearUndo.mockImplementation(() => { order.push('clear') })
+    flipWorkspace.mockImplementation(async () => { order.push('flip'); return {localApplied: true} })
+    const {repo} = makeRepo(RAN)
+
+    await invoke(repo)
+
+    expect(order.slice(0, 3)).toEqual(['invalidate', 'flip', 'clear'])
+    flipWorkspace.mockReset()
+    flipWorkspace.mockResolvedValue({localApplied: true})
   })
 
   it('does not touch undo history for a workspace that was already flipped', async () => {

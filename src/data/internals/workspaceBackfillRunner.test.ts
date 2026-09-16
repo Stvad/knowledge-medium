@@ -278,6 +278,95 @@ describe('workspace backfill runner — sync gating', () => {
     expect(batches).toEqual([0])
   })
 
+  it('tells the operator a lost role is not worth retrying', async () => {
+    // `retryable` is the only part of a deferral a human can act on, and the
+    // two paths that produce one must agree. The REFUSAL path already says a
+    // role flip cannot be waited out (`retryableAfter`); the THROW path left it
+    // at the default and told the operator to run it again — for a workspace
+    // this device may no longer write at all.
+    const batches: number[] = []
+    const repo = makeRepo({
+      id: 'operator-role-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    })
+    await seedTarget(repo)
+    const realGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
+      const gap = await realGap()
+      if (batches.length === 1) repo.setReadOnly(true)
+      return gap
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-role-v1')
+    warn.mockRestore()
+
+    expect(batches).toEqual([0])
+    expect(result).toMatchObject({outcome: 'deferred', retryable: false})
+  })
+
+  it('tells the operator a DURABLE view gap is not worth retrying either', async () => {
+    // Same defect, and it predates this pass's role check: the gap refusal
+    // carries `transient`, but the gap THROW discarded it, so rows nothing is
+    // draining reported as "run it again".
+    const batches: number[] = []
+    const repo = makeRepo({
+      id: 'operator-gap-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    })
+    await seedTarget(repo)
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => (
+      batches.length === 1
+        ? {reason: '3 synced row(s) have not reached `blocks`', transient: false}
+        : null
+    ))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-gap-v1')
+    warn.mockRestore()
+
+    expect(batches).toEqual([0])
+    expect(result).toMatchObject({outcome: 'deferred', retryable: false})
+  })
+
+  it('still tells the operator a transient blocker IS worth retrying', async () => {
+    // The other side of the same rule — a thrower that says nothing still means
+    // "worth retrying", which is right for the transient DB failures that make
+    // up most of this path.
+    const batches: number[] = []
+    const repo = makeRepo({
+      id: 'operator-transient-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    })
+    await seedTarget(repo)
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => (
+      batches.length === 1
+        ? {reason: 'synced rows are still draining into `blocks`', transient: true}
+        : null
+    ))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
+    warn.mockRestore()
+
+    expect(result).toMatchObject({outcome: 'deferred', retryable: true})
+  })
+
   it('aborts mid-run when rows start staging between batches', async () => {
     // The pre-run check catches a graph that is already draining; this pins the
     // PER-TRANSACTION one, which is the only thing covering staging that starts

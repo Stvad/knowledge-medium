@@ -3485,7 +3485,10 @@ export class Repo {
       throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: ${gap.reason}. This pass would scan ` +
         `an incomplete view of the graph and upload a properties bag built from it.`,
-      ), {kind: Repo.TRANSIENT})
+        // A DURABLE gap is rows nothing is draining, so telling the operator to
+        // run it again is the forever-retry the flag exists to prevent — the
+        // same answer `retryableAfter` gives this refusal on the claim path.
+      ), {kind: Repo.TRANSIENT, retryable: gap.transient})
     }
     // AFTER the probe, not before it, and deliberately only the one:
     // `setActiveWorkspaceId` is a synchronous field write that a switch lands
@@ -3517,7 +3520,7 @@ export class Repo {
       throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: this device lost write access to `
         + `workspace ${workspaceId} while the pass was running.`,
-      ), {kind: Repo.TRANSIENT})
+      ), {kind: Repo.TRANSIENT, retryable: false})
     }
   }
 
@@ -3548,14 +3551,22 @@ export class Repo {
   ): Promise<BackfillClaimAttempt> {
     const runStale = (): string | null =>
       this.workspaceRunStaleReason(workspaceId, generation)
-    // A role flip to read-only during a deferral window must stop further
-    // writes — re-asked on every attempt, since a run spans several txs.
-    if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
     // Don't even START a pass whose workspace has been re-opened since it was
     // scheduled. `assertBackfillMayWrite` catches this per transaction, but
     // that is one tx too late to avoid the scan a backfill does first.
     const stale = runStale()
     if (stale !== null) return {status: 'refused', refusal: {kind: 'stale', reason: stale}}
+    // A role flip to read-only during a deferral window must stop further
+    // writes — re-asked on every attempt, since a run spans several txs.
+    //
+    // Below the staleness check, so this agrees with `assertBackfillMayWrite`:
+    // `isReadOnly` is the ACTIVE workspace's role, so asked first it answers a
+    // run whose workspace was switched away with "this workspace is read-only"
+    // about one that is writable. DEFENCE IN DEPTH here, unlike there, and no
+    // test pins the order: the operator gesture refuses a read-only workspace
+    // before it reaches this, and the workspace-open path discards which of the
+    // two refused. Kept so the two copies of the rule cannot read as disagreeing.
+    if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
     // An unprimed registry makes the whole graph look like it has zero
     // registered properties, so a pass would find no candidates, write
     // nothing, and then record a PERMANENT per-graph completion — the
@@ -4028,6 +4039,14 @@ export class Repo {
           // filters operator ones out), and without a reason here the caller
           // reports "already done" for a pass that aborted partway through.
           deferred = reason
+          // TRANSIENT says the RUN was abandoned cleanly, not that WAITING will
+          // fix it — a role revocation and a durable view gap are both thrown
+          // this way and neither clears on its own. Carried on the error rather
+          // than defaulted here, so the throw sites answer the same question
+          // `retryableAfter` answers for refusals; a thrower that says nothing
+          // still means "worth retrying", which is right for the transient DB
+          // failures that make up the rest of this path.
+          deferredRetryable = (err as {retryable?: boolean} | null)?.retryable ?? true
           // These clear on their own — the download finishes, the queue drains.
           // Logging and walking away would leave the pass undone for the whole
           // session even though its blocker is momentary, so re-arm and let the
