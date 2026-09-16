@@ -1,10 +1,5 @@
 import type {Plugin} from 'vite'
-
-type ImportMap = {
-  imports?: Record<string, string>
-  integrity?: Record<string, string>
-  [key: string]: unknown
-}
+import {rewriteImportMapScript, type ImportMap} from './importMapHtml'
 
 export const REACT_ESM_VERSION = '19.2.6'
 
@@ -38,9 +33,6 @@ export const productionReactIntegrity = {
   'https://esm.sh/scheduler@0.27.0/es2022/scheduler.mjs': 'sha384-FlH+dunulq4haKZQI6cgqxRdEF65XdB6qi6BJPf2tC0mxkN+PmNGZVIvhcobyxKX',
 }
 
-const importMapScriptPattern =
-  /(<script\b(?=[^>]*\btype=(["'])importmap\2)[^>]*>)([\s\S]*?)(<\/script>)/gi
-
 const isReactImportMap = (importMap: ImportMap): boolean => {
   const imports = importMap.imports ?? {}
   return Object.keys(productionReactImports).some(key =>
@@ -71,21 +63,8 @@ const rewriteImportMap = (importMap: ImportMap): ImportMap => {
   }
 }
 
-const formatImportMap = (importMap: ImportMap): string =>
-  `\n${JSON.stringify(importMap, null, 8).replace(/^/gm, '      ')}\n    `
-
-export function rewriteReactImportMapForProduction(html: string): string {
-  return html.replace(importMapScriptPattern, (match, openTag, _quote, body, closeTag) => {
-    try {
-      const importMap = JSON.parse(body.trim()) as ImportMap
-      const rewritten = rewriteImportMap(importMap)
-      if (rewritten === importMap) return match
-      return `${openTag}${formatImportMap(rewritten)}${closeTag}`
-    } catch {
-      return match
-    }
-  })
-}
+export const rewriteReactImportMapForProduction = (html: string): string =>
+  rewriteImportMapScript(html, rewriteImportMap)
 
 export const reactImportMapProductionPlugin = (): Plugin => ({
   name: 'react-import-map-production',

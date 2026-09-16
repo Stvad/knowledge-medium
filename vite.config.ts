@@ -8,6 +8,7 @@ import wasm from "vite-plugin-wasm"
 import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
+import {vendorImportMapPlugin, vendorInputs} from './vite-plugins/vendorImportMap'
 import {resolveAppVersion} from './scripts/app-version'
 import {globSync} from 'node:fs'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
@@ -130,6 +131,10 @@ export default defineConfig(({command}) => {
                 externals: [isReactImportExternal],
             }),
             reactImportMapProductionPlugin(),
+            // Bundled dependencies importable by bare name from dynamic
+            // extensions (facades over the app chunk + importmap entries). See
+            // vite-plugins/vendorImportMap.ts; tests in vite-plugins/test/.
+            vendorImportMapPlugin({rootDir: __dirname}),
             // Substitutes the theme-boot placeholder tokens in index.html's
             // pre-paint script with the source-of-truth values from
             // src/themeBootDefaults.ts — see that file and
@@ -192,6 +197,8 @@ export default defineConfig(({command}) => {
                 input: {
                     index: path.resolve(__dirname, 'index.html'),
                     ...allSrcEntries(__dirname),
+                    // Bundled dependencies as importable facades (vite-plugins/vendorImportMap.ts).
+                    ...vendorInputs(__dirname),
                 },
                 // input: '/src/main.tsx',
                 // input: {

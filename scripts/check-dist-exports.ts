@@ -114,3 +114,21 @@ const moduleScripts = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8').
 if (moduleScripts.length !== 1) fail(`expected one <script type="module"> in index.html, found ${moduleScripts.length}`)
 
 console.log(`[check-dist-exports] boot shape: one app chunk, a facade entry, one module script.`)
+
+// Vendor facades (vite-plugins/vendorImportMap.ts): a bundled dependency an
+// extension imports by bare name must be a facade over the SAME app chunk the
+// kernel loads — one carrying its own copy is the instanceof failure the plugin
+// exists to prevent. Sampled on the package the editor facet needs.
+const vendorSample = 'vendor/@codemirror/view.js'
+const vendorFile = path.join(distDir, vendorSample)
+if (!fs.existsSync(vendorFile)) fail(`dist/${vendorSample} is missing; no vendor facade was emitted`)
+const vendorText = fs.readFileSync(vendorFile, 'utf8')
+if (!vendorText.includes(`../../chunks/${appChunks[0]}`)) {
+  fail(`${vendorSample} does not re-export from chunks/${appChunks[0]}:\n` + vendorText.slice(0, 300))
+}
+if (!emittedExportNames(vendorText).has('Decoration')) fail(`${vendorSample} lacks the Decoration export`)
+const importMapBody = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8').match(/<script[^>]*type="importmap"[^>]*>([\s\S]*?)<\/script>/)?.[1]
+const importMapEntry = importMapBody ? (JSON.parse(importMapBody) as {imports?: Record<string, string>}).imports?.['@codemirror/view'] : undefined
+if (importMapEntry !== `./${vendorSample}`) fail(`index.html importmap maps @codemirror/view to ${String(importMapEntry)}, expected ./${vendorSample}`)
+
+console.log(`[check-dist-exports] vendor facade: ${vendorSample} re-exports from the app chunk and is mapped in the importmap.`)
