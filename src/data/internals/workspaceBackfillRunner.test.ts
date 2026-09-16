@@ -92,7 +92,7 @@ afterEach(() => { vi.useRealTimers() })
 describe('workspace backfill runner — sync gating', () => {
   /** A gate with the real contract: fires SYNCHRONOUSLY when already settled,
    *  otherwise parks the callback until `open()`. The synchronous-when-settled
-   *  half is load-bearing — `assertBackfillMayWrite` probes with a throwaway
+   *  half is load-bearing — `assertUploadingPassMayWrite` probes with a throwaway
    *  gate before every transaction and reads "fired synchronously" as "still
    *  settled". */
   const controllableGate = () => {

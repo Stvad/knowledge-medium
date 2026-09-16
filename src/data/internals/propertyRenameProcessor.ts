@@ -143,7 +143,10 @@ const rekeyParent = (
   parentId: string,
   renames: readonly RenamedDefinition[],
   isFieldDefinition: IsPropertyFieldDefinition,
-): Promise<void> =>
+): Promise<unknown> =>
+  // The "did it write" answer is the deferred batch's — it decides whether to
+  // clear the undo stack. A rename lands in the user's own editing tx as one
+  // undoable step, so there is nothing here to protect from replay.
   rekeyParentPropertyCell(ctx.tx, parentId, async (siblings) => {
     const oldNames: string[] = []
     const assignments: Array<{name: string; value: unknown}> = []

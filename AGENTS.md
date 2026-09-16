@@ -39,8 +39,9 @@ secret handling:
 - when a task needs secret-backed config, infer variable names from code/docs and have the user provide or set values out of band
 - if a command must touch a secret file, avoid outputting its contents and avoid relaying secret values back to the user
 
-one-shot catch-up passes (two KINDS; picking the wrong one is silent and expensive — full doctrine: `bd recall reference_oneshot_passes_two_kinds`):
+one-shot catch-up passes (THREE shapes; picking the wrong one is silent and expensive — full doctrine: `bd recall reference_oneshot_passes_two_kinds`):
 - DERIVATION passes rebuild local, per-device state and are safe everywhere; DATA MIGRATIONS repair source-of-truth rows and upload them — once per GRAPH, claim in synced data, never from a stale device. Do not merge the two behind one abstraction.
+- the third shape uploads but takes NO claim: a CONVERGENT per-device re-encode, where a claim would not make the pass safer but would make it MISS rows only a late-syncing device holds (the property-definition codec pass, #995). Both must hold: the per-row work converges given a fresh base, AND a device can hold rows no other device will re-run over. Then gate each write on a caught-up view (`assertUploadingPassMayWrite`) instead of claiming — and still clear the undo stack.
 - the two hard rules for a migration that writes: CLEAR the workspace undo stack and tell the user (undo replays whole `before` rows and would revert the migration), and put the "am I safe to write" check INSIDE each writing transaction, not at scheduling time — a chunked pass writes over minutes.
 
 guarding a gesture (refusals, skips, eligibility checks — checklist with the war stories: `bd recall reference_gesture_guard_checklist`): a gesture with an EDIT-MODE branch has TWO write paths and only one is a tx — refuse BEFORE dispatching into the editor; refuse before the EXPENSIVE step (file picker, fetch, block minting), not merely before the write; FILTER INSIDE THE QUERY, before the LIMIT; re-check inside the writing tx, not against a pre-dialog snapshot; and when the same decision exists in two places, extract it.

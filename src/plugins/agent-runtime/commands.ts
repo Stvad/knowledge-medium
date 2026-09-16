@@ -527,7 +527,7 @@ const rematerializeRuntimeWorkspace = async (
   // elsewhere would rewrite rows for a workspace nobody opened — the one thing
   // workspace-scoped maintenance is not allowed to do.
   //
-  // Checked ONCE, unlike `assertBackfillMayWrite`, which re-takes the same
+  // Checked ONCE, unlike `assertUploadingPassMayWrite`, which re-takes the same
   // question inside every writing transaction of a pass of the same duration.
   // Accepted, not overlooked: a user who navigates away mid-pass leaves it
   // writing `blocks` for a workspace they no longer have open, but

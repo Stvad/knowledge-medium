@@ -112,6 +112,7 @@ import {
 import { parseExactReferenceBlockContent } from './referenceBlock'
 import type { BlockIdPolicy } from './blockId'
 import {
+  propertyDefinitionMigrationLabel,
   withoutContestedRenames,
   type PropertyDefinitionChange,
   type PropertyDefinitionFactsByFieldId,
@@ -3352,24 +3353,85 @@ export class Repo {
     return behind
   }
 
-  private async assertBackfillMayWrite(
+  /** Why a deferred pass's workspace is no longer the one it was scheduled
+   *  against, or null. Both arms, because they are different causes and each
+   *  should say its own: switched AWAY (the id differs) and switched away and
+   *  BACK (the id is restored and only the generation moved).
+   *
+   *  One owner for the two callers — `takeBackfillClaim`, which turns it into
+   *  a refusal, and `assertUploadingPassMayWrite`, which throws it. Each used
+   *  to spell the rule out for itself, which is how two copies drift. */
+  private workspaceRunStaleReason(workspaceId: string, generation: number): string | null {
+    if (this._client.activeWorkspaceId !== workspaceId) {
+      return `workspace ${workspaceId} is no longer active, so its writes would land `
+        + 'under the current session\'s access state'
+    }
+    if (this.workspaceGeneration !== generation) {
+      return `workspace ${workspaceId} was re-opened since this pass was scheduled, so `
+        + "the earlier visit's job must not write into the new one"
+    }
+    return null
+  }
+
+  /**
+   * The undo discipline every uploading pass shares: after a transaction it
+   * COMMITS, the workspace must hold no undo entry that predates that write,
+   * and the user must be told — once.
+   *
+   * Returns a callback to invoke after EVERY committed writing transaction,
+   * not only the first. Undo restores a whole `before` row snapshot rather
+   * than a field delta, so an entry the USER creates between two chunks — on a
+   * row a later chunk has not reached yet — carries that row's pre-pass state
+   * and reverts it when replayed, permanently once the pass records itself
+   * applied. Clearing only on the first write leaves exactly that window open
+   * for as long as the pass runs, which for a chunked pass is minutes.
+   *
+   * `announce` fires on the first clear alone: the history is gone either way,
+   * and saying so once is telling the user, while saying it per chunk is
+   * noise.
+   *
+   * Callers invoke it only after a transaction RESOLVES — an aborted one rolled
+   * its writes back and leaves nothing for an entry to be replayed over.
+   */
+  private undoClearingForPassWrites(
     workspaceId: string,
-    backfillId: string,
+    announce: () => void,
+  ): () => void {
+    let announced = false
+    return () => {
+      this.undoManagerFor(workspaceId).clear()
+      if (announced) return
+      announced = true
+      announce()
+    }
+  }
+
+  /**
+   * The "am I safe to write" precondition shared by every deferred pass that
+   * UPLOADS source-of-truth rows — `WorkspaceBackfill` and the
+   * property-definition re-encode (#995).
+   *
+   * One owner, because the rule is one rule: a pass that writes a whole
+   * `properties_json` bag from a view of the graph this device does not
+   * actually hold overwrites concurrent edits it has never seen. The two
+   * callers differ only in what they are called and in how they record having
+   * run, never in when they may write.
+   *
+   * Asked INSIDE each writing transaction, not once before the run — a chunked
+   * pass writes over minutes, so a pre-run check only ever covers the first
+   * batch — and again before any pass records itself as applied, since a run
+   * that finds no candidates never opens a transaction at all and would
+   * otherwise absorb the drift it could not see. Same rule as
+   * [[reference_gesture_guard_checklist]].
+   *
+   * `label` is prefixed into every message and identifies the pass to its own
+   * logs; the two causes below are the caller-independent half.
+   */
+  private async assertUploadingPassMayWrite(
+    workspaceId: string,
+    label: string,
     generation: number,
   ): Promise<void> {
-    if (this.workspaceGeneration !== generation) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} was ` +
-        `re-opened since this pass was scheduled. The earlier visit's job must not ` +
-        `write into the new one.`,
-      ), {kind: Repo.TRANSIENT})
-    }
-    if (this._client.activeWorkspaceId !== workspaceId) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
-        `longer active. Its writes would land under the current session's access state.`,
-      ), {kind: Repo.TRANSIENT})
-    }
     // Re-sampled per transaction while the write lock is held, so a drain
     // cannot commit between this check and the write. Reading through
     // `this.db` rather than the tx handle is deliberate: the drain is excluded
@@ -3377,9 +3439,22 @@ export class Repo {
     const gap = await this.workspaceViewGap(workspaceId)
     if (gap !== null) {
       throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: ${gap.reason}. This pass would scan ` +
+        `${label} aborted: ${gap.reason}. This pass would scan ` +
         `an incomplete view of the graph and upload a properties bag built from it.`,
       ), {kind: Repo.TRANSIENT})
+    }
+    // AFTER the probe, not before it, and there is deliberately only the one:
+    // the probe AWAITS, `setActiveWorkspaceId` is a synchronous field write
+    // that a switch lands cleanly in that window, and a check placed before it
+    // would be describing a workspace this session has since left. Asking
+    // after strictly dominates asking before — a workspace that left and
+    // returned across the probe has moved its generation — so a second copy
+    // ahead of the probe would decide nothing and only look load-bearing. Last
+    // statement before returning to the writer, nothing awaited after it, for
+    // the same reason `takeBackfillClaim` re-asks before its claim write.
+    const stale = this.workspaceRunStaleReason(workspaceId, generation)
+    if (stale !== null) {
+      throw Object.assign(new Error(`${label} aborted: ${stale}.`), {kind: Repo.TRANSIENT})
     }
   }
 
@@ -3408,20 +3483,13 @@ export class Repo {
     backfill: WorkspaceBackfill,
     generation: number,
   ): Promise<BackfillClaimAttempt> {
-    /** Both ways a run can outlive its workspace: switched away (id differs)
-     *  and switched away and back (id restored, generation moved). Identity
-     *  first, so each case reports its own cause. */
     const runStale = (): string | null =>
-      this.activeWorkspaceId !== workspaceId
-        ? `workspace ${workspaceId} is no longer active`
-        : this.workspaceGeneration !== generation
-          ? `workspace ${workspaceId} was re-opened since this run was scheduled`
-          : null
+      this.workspaceRunStaleReason(workspaceId, generation)
     // A role flip to read-only during a deferral window must stop further
     // writes — re-asked on every attempt, since a run spans several txs.
     if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
     // Don't even START a pass whose workspace has been re-opened since it was
-    // scheduled. `assertBackfillMayWrite` catches this per transaction, but
+    // scheduled. `assertUploadingPassMayWrite` catches this per transaction, but
     // that is one tx too late to avoid the scan a backfill does first.
     const stale = runStale()
     if (stale !== null) return {status: 'refused', refusal: {kind: 'stale', reason: stale}}
@@ -3447,7 +3515,7 @@ export class Repo {
     }
     // A pass that claims and uploads from a graph half of which is still
     // ciphertext on disk is the same stale-view write as one that claims
-    // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
+    // mid-drain. The SAME predicate `assertUploadingPassMayWrite` re-asks per
     // transaction — there is deliberately no cheaper approximation for the hot
     // path, because that split is what let the two answers disagree.
     const gap = await this.workspaceViewGap(workspaceId)
@@ -3774,7 +3842,15 @@ export class Repo {
         return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
       const resolver = this.propertySchemaResolverFor(workspaceId)
-      let wrote = false
+      const label = `[workspaceBackfills] "${backfill.id}"`
+      const clearUndo = this.undoClearingForPassWrites(workspaceId, () => {
+        undoHistoryCleared = true
+        console.warn(
+          `[workspaceBackfills] "${backfill.id}" is writing to workspace ` +
+          `${workspaceId}, so its undo history was cleared — replaying an entry ` +
+          `from before the pass would revert it.`,
+        )
+      })
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         // One resolver for the whole run, through the canonical factory: the
@@ -3804,34 +3880,17 @@ export class Repo {
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
           const result = await this.tx(async t => {
-            await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+            await this.assertUploadingPassMayWrite(workspaceId, label, generation)
             return fn(t)
           }, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
             skipUndo: true,
           })
-          // Only once a batch COMMITTED. An aborted one rolled its writes
-          // back, so it leaves nothing on the undo stack to be reverted onto.
-          // Still an over-approximation in one direction — a committed batch
-          // that happened to write nothing counts — which errs toward
-          // clearing, the safe side.
-          //
-          // Cleared HERE rather than after the pass returns: a chunked pass
-          // runs for minutes, and every one of them is a minute in which a
-          // cmd-Z can replay a pre-pass row snapshot over a batch that has
-          // already committed. The window has to close with the FIRST batch,
-          // not with the last.
-          if (!wrote) {
-            wrote = true
-            this.undoManagerFor(workspaceId).clear()
-            undoHistoryCleared = true
-            console.warn(
-              `[workspaceBackfills] "${backfill.id}" is writing to workspace ` +
-              `${workspaceId}, so its undo history was cleared — replaying an entry ` +
-              `from before the pass would revert it.`,
-            )
-          }
+          // Only once a batch COMMITTED, and after EVERY one — see the helper.
+          // An over-approximation in one direction (a committed batch that
+          // happened to write nothing counts), which errs toward clearing.
+          clearUndo()
           return result
         },
       }
@@ -3841,9 +3900,9 @@ export class Repo {
         // no candidates — precisely what a partially materialized graph looks
         // like, since the rows are staged and not yet in `blocks` — would
         // otherwise sail through and record its one-shot marker as done.
-        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+        await this.assertUploadingPassMayWrite(workspaceId, label, generation)
         await backfill.run(ctx)
-        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+        await this.assertUploadingPassMayWrite(workspaceId, label, generation)
         // Only after a clean run — a thrown backfill leaves the claim unset so
         // the next attempt retries (passes are idempotent per row).
         await claim.markComplete(workspaceId, backfill.id)
@@ -4315,8 +4374,15 @@ export class Repo {
       return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
     })
     if (plans.length === 0) return
+    // Captured with the plans, and re-compared inside every write: this pass
+    // uploads, so it answers to `assertUploadingPassMayWrite` like any other
+    // one-way pass (#995). The generation is the half a workspace ID cannot
+    // express — a job scheduled during one visit to a workspace, run during
+    // the NEXT one (A -> B -> A), was computed against a registry that has
+    // since re-primed and re-detected the drift itself.
+    const generation = this.workspaceGeneration
     this.propertyDefinitionMigrationJobs.schedule(() =>
-      this.runPropertyDefinitionMigrations(workspaceId, plans, resolver),
+      this.runPropertyDefinitionMigrations(workspaceId, plans, resolver, generation),
     )
   }
 
@@ -4405,16 +4471,44 @@ export class Repo {
     }
   }
 
+  /**
+   * Run one rebuild's re-encode, then record it in THIS DEVICE's baseline.
+   *
+   * No graph-scoped claim, deliberately (#995). A claim would not make this
+   * pass safer and would make it MISS: a block created offline across the
+   * change uploads after any claimed run has finished, and its cell would keep
+   * the old codec's encoding forever. The stale-base write a claim exists to
+   * prevent is closed directly by `assertUploadingPassMayWrite`, which is sound
+   * here — and only here — because the per-row work is convergent given a fresh
+   * base. The claim's residual race against a concurrent edit on another device
+   * is not what a claim fixes either: it arbitrates which DEVICE runs the pass,
+   * not how recently that device read the row, so a claimed pass on one device
+   * races a user on another exactly the same way.
+   */
   private async runPropertyDefinitionMigrations(
     workspaceId: string,
     plans: readonly PropertyDefinitionMigrationPlan[],
     resolver: PropertySchemaResolver,
+    generation: number,
   ): Promise<void> {
     // Un-flipped: nothing re-keys here, so nothing is recorded either and the
     // drift stays visible to the prime that follows the flip.
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
+    const label = propertyDefinitionMigrationLabel(plans)
     try {
-      await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver)
+      // A cheap refusal, and nothing more: deleting it fails no test, because
+      // the per-chunk and pre-record checks below decide every outcome it could.
+      // It earns its line by not paying for the child-indexed scan on a device
+      // that already may not write.
+      await this.assertUploadingPassMayWrite(workspaceId, label, generation)
+      await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver, generation)
+      // This one is load-bearing. The per-chunk check only fires when a chunk
+      // WRITES, and a run that finds no candidates opens no transaction at
+      // all — which is exactly what a partially materialized graph looks like,
+      // since its rows are staged and not yet in `blocks`. Without this the
+      // pass would sail through and record the drift as applied, on this
+      // device forever.
+      await this.assertUploadingPassMayWrite(workspaceId, label, generation)
       // Only an APPLIED pass advances a known fieldId — a throw, or a pass that
       // never ran, leaves the drift visible to the next prime.
       await recordAppliedPropertyDefinitionCodecs(this.db, workspaceId, new Map(
@@ -4422,8 +4516,15 @@ export class Repo {
       ))
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
-      const names = plans.map(({change}) => `"${change.newName}" (${change.fieldId})`).join(', ')
-      console.error(`[propertyDefinitionMigrations] ${names} failed: ${reason}`)
+      // A refused precondition is not a failure: the baseline still holds the
+      // OLD codec, so the next prime re-detects this exact drift and tries
+      // again once the device is caught up. Logged apart from a real throw so
+      // a console full of them reads as deferral rather than damage.
+      if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
+        console.warn(`${reason} The next prime will re-detect it.`)
+        return
+      }
+      console.error(`${label} failed: ${reason}`)
     }
   }
 
@@ -4446,7 +4547,9 @@ export class Repo {
     workspaceId: string,
     plans: readonly PropertyDefinitionMigrationPlan[],
     resolver: PropertySchemaResolver,
+    generation: number,
   ): Promise<void> {
+    const label = propertyDefinitionMigrationLabel(plans)
     // `plans` arrives pre-resolved (schedule-time capture, see
     // `schedulePropertyDefinitionMigrations`) and `resolver` is the SAME
     // instance that resolved it — both frozen against the registry snapshot
@@ -4487,10 +4590,35 @@ export class Repo {
 
     // Per changed definition, for the user-facing unparseable-values report.
     const unconvertibleByField = new Map<string, number>()
+    // `skipUndo` keeps this pass's own writes off the stack but cannot reach
+    // the entries already on it — nor the ones the user adds between chunks.
+    // See the helper for why that is per chunk rather than once.
+    const clearUndo = this.undoClearingForPassWrites(workspaceId, () => {
+      const message =
+        'Re-encoding property values for a changed type cleared this '
+        + "workspace's undo history — replaying an entry from before the "
+        + 'change would have reverted it.'
+      console.warn(`${label}: ${message}`)
+      // The same channel this pass already reports unconvertible values on.
+      // The doctrine's rule is to clear AND say so: a user who finds cmd-Z
+      // silently empty has no way to connect it to a type change.
+      this.userErrorListeners.notify(new ProcessorRejection(
+        message, 'property.codec-change.undo-cleared', {workspaceId},
+      ))
+    })
     const CHUNK = 100
     for (let i = 0; i < parentIds.length; i += CHUNK) {
       const chunk = parentIds.slice(i, i + CHUNK)
+      // Per CHUNK, and read only once the chunk has COMMITTED: an aborted one
+      // rolled its writes back and leaves nothing for an undo entry to be
+      // replayed over.
+      let chunkWrote = false
       await this.tx(async tx => {
+        // Inside the transaction, after acquisition — `repo.tx` awaits
+        // definition readiness and the write lock, so a check before it can go
+        // stale before `fn` reads a row. Throwing here aborts the tx and the
+        // pass with nothing recorded, so the next prime re-detects the drift.
+        await this.assertUploadingPassMayWrite(workspaceId, label, generation)
         // Flat §9 recognition: field-row selection below keys on the BIT +
         // fieldId (the bit is what keeps a ref-typed value pointing at this
         // very definition from being misread as a field row — no ancestry
@@ -4541,7 +4669,12 @@ export class Repo {
           // rename processor). This computePlan is the codec half — it
           // re-encodes value children under the (possibly new) codec and
           // reports unconvertibles.
-          await rekeyParentPropertyCell(
+          // Assigned through a local, never `chunkWrote = ...` and never
+          // `chunkWrote ||= ...`: the first would let a later parent that
+          // converges on its stored bag erase an earlier parent's write, and
+          // the second SHORT-CIRCUITS — once one parent had written, every
+          // later parent in the chunk would be skipped without being visited.
+          const rewroteCell = await rekeyParentPropertyCell(
             tx, parentId,
             async (siblings) => {
               const oldNames: string[] = []
@@ -4583,6 +4716,7 @@ export class Repo {
                       const canonical = encodedPropertyValueToChildContent(schema, encoded)
                       if (value.content !== canonical) {
                         await tx.update(value.id, {content: canonical}, {skipMetadata: true})
+                        chunkWrote = true
                       }
                     } catch {
                       parentUnconvertible += 1
@@ -4621,6 +4755,7 @@ export class Repo {
               return {oldNames, assignments}
             },
           )
+          if (rewroteCell) chunkWrote = true
         }
       }, {
         // References, not BlockDefault (adversarial-review blocker): a
@@ -4642,6 +4777,7 @@ export class Repo {
             : `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`)
           : `migrate ${plans.length} property definitions`,
       })
+      if (chunkWrote) clearUndo()
     }
 
     // §9: a codec change that strands values must be user-visible, never a
