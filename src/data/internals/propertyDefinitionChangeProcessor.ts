@@ -159,17 +159,14 @@ const collectChanges = (
     const afterMeta = parsePropertyDefinitionMetadata(after)
     const beforeMeta = parsePropertyDefinitionMetadata(before)
     if (!afterMeta || !beforeMeta) continue
-    // A definition SHADOWED at tx start (two defs sharing a name, §6) resolves
-    // as identity-unavailable here, so we skip it — its consuming cells stay
-    // projected under the old name until the next value edit fires PROJECT (no
-    // data loss: the id-addressed field row + value children are untouched).
-    // Re-keying a shadowed def would need the tangled shadowing×projection
-    // model that #389 item 8 owns, not a bolt-on here.
-    // Defence in depth: a definition SHADOWED at tx start (two sharing a name,
-    // §6) is also refused by the contested-name rule below, which sees the
-    // winner owning the name and this one not vacating it. Stated here because
-    // a shadowed definition's cells belong to the shadowing×projection model
-    // that #389 item 8 owns, not to this pass, whichever layer notices first.
+    // A definition SHADOWED at tx start (two sharing a name, §6) resolves as
+    // identity-unavailable, so it is skipped: its consuming cells stay
+    // projected under the old name until the next value edit fires PROJECT,
+    // which loses nothing — the id-addressed field row and value children are
+    // untouched. Re-keying one needs the tangled shadowing×projection model
+    // that #389 item 8 owns, not a bolt-on here. Defence in depth: the
+    // contested-name rule below refuses the same definition from the other
+    // side, seeing the winner own the name and this one not vacate it.
     if (ctx.resolvePropertySchemaField(workspaceId, after.id).status !== 'resolved') continue
     const schema = tryBuildSchema(after, ctx.valuePresets, afterMeta)
     if (schema === null) continue
@@ -191,7 +188,7 @@ const collectChanges = (
       codecChanged,
     })
   }
-  // Pass 2: drop a rename onto a COLLIDING new name — see the shared refusal.
+  // Pass 2: drop a rename onto a COLLIDING new name — see the refusal above.
   return withoutContestedRenames(candidates, (name) => {
     const owner = ctx.resolvePropertySchemaName(workspaceId, name)
     return owner.status === 'resolved' ? owner.schema.fieldId : undefined
