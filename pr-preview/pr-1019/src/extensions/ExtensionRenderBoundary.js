@@ -1,1 +1,1 @@
-import{CD as e}from"../../chunks/app-DtOGfLDp.js";export{e as ExtensionRenderBoundary};
+import{CD as e}from"../../chunks/app-CJyWaXu9.js";export{e as ExtensionRenderBoundary};
