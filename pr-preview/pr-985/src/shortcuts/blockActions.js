@@ -1,1 +1,1 @@
-import{SC as e,_C as t,bC as n,vC as r,xC as i,yC as a}from"../../chunks/app-DVUWNwQ2.js";export{t as bindBlockActionContext,r as createSharedBlockActions,a as enterEditMode,n as extendSelectionDown,i as extendSelectionUp,e as requestEditorFocusIfEditing};
+import{SC as e,_C as t,bC as n,vC as r,xC as i,yC as a}from"../../chunks/app-DWhF_Ad3.js";export{t as bindBlockActionContext,r as createSharedBlockActions,a as enterEditMode,n as extendSelectionDown,i as extendSelectionUp,e as requestEditorFocusIfEditing};
