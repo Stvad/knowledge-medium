@@ -929,6 +929,69 @@ describe('block-type typeify processor', () => {
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
   })
 
+  // The same inlining, on a title that EMBEDS the reference in prose. The
+  // shape of the old content says nothing — `Prefix ((id))` reads as a
+  // perfectly writable name — so what makes this not a rename is that the
+  // label already disagreed with it.
+  it('leaves a type alone when an embedded reference is inlined', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: ['Book'],
+    }, `Prefix ((${'1'.repeat(8)}-1111-4111-8111-111111111111))`)
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Prefix Foo'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
+  // Same two-names-in-one-tx shape the tagging path refuses, on the rename
+  // path: taking either one discards a name the caller wrote explicitly.
+  it('refuses a rename that moves content and label to different names', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+
+    await expect(env.repo.tx(async tx => {
+      await tx.update(id, {content: 'Novel'})
+      await tx.setProperty(id, blockTypeLabelProp, 'Journal')
+    }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({code: BLOCK_TYPE_NAME_CONFLICT})
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('Book')
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    for (const alias of ['Novel', 'Journal']) {
+      expect(await env.repo.query.aliasLookup({workspaceId: WS, alias}).load()).toBeNull()
+    }
+  })
+
+  // Normalizing a padded legacy name moves the claim to the trimmed spelling,
+  // so the stored label has to follow it: `parseTypeDefinitionMetadata` does
+  // not trim, and the registry would publish a name nothing resolves to.
+  it('normalizes the stored label when only its padding changes', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: ' Book ',
+      [aliasesProp.name]: [' Book '],
+    }, ' Book ')
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: 'Book'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect((await rawPropertiesOf(env, id))[blockTypeLabelProp.name]).toBe('Book')
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
   // A legacy row can carry its name in the BODY alone, with no label at all.
   // Clearing that body would drop the type from the registry while its claim
   // stayed put — the same un-naming the emptied-body rule exists to prevent.

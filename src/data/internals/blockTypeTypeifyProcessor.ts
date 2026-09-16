@@ -171,8 +171,8 @@ const completeNewType = async (
   if (name !== '') await claimTypeName(after, name, ctx)
 }
 
-/** A content write on a block that is already a type is a RENAME — content is
- *  the name — so the label, and the claim on that name, follow it. */
+/** A content write on a block that is already a type is a RENAME wherever the
+ *  content WAS its name — so the label, and the claim on that name, follow it. */
 const followRenamedContent = async (
   row: ChangedRow,
   after: BlockData,
@@ -190,27 +190,44 @@ const followRenamedContent = async (
   // both halves — and a label CLEARED in it is the un-naming one, which also
   // releases the claim. Either way the label is the answer and nothing here
   // second-guesses it.
-  const labelMoved = readLabel(before) !== currentLabel
+  const previousLabel = readLabel(before)
+  const labelMoved = previousLabel !== currentLabel
+  const newContent = after.content.trim()
+
+  // Two different names in ONE tx is the shape `completeNewType` refuses, and
+  // it is refused here for the same reason: picking either silently discards a
+  // name the caller wrote explicitly.
+  if (labelMoved && currentLabel !== '' && newContent !== '' && newContent !== currentLabel) {
+    throw new ProcessorRejection(
+      `Can't rename this type: this change gives it two different names — its text ` +
+      `(${JSON.stringify(newContent)}) and its ${blockTypeLabelProp.name} ` +
+      `(${JSON.stringify(currentLabel)}) — but a type has ONE name, the page title that ` +
+      `"[[name]]" resolves to. Write the same name to both.`,
+      BLOCK_TYPE_NAME_CONFLICT,
+      {blockId: row.id, content: after.content, label: currentLabel},
+    )
+  }
+
   // Otherwise the name to keep, in the order the row can hold one: the new
   // body, the label, or — for a legacy row that never had a label at all — the
   // body being cleared. A type named only by its content is still named, and
   // emptying it would otherwise drop the type while its claim stayed put.
-  const name = after.content.trim() || currentLabel || (labelMoved ? '' : before.content.trim())
+  const name = newContent || currentLabel || (labelMoved ? '' : before.content.trim())
   if (name === '') return
-  // A content rewrite is a rename only where the content WAS this type's name.
-  // On a legacy or sync-applied row it may never have been one — a title that
-  // is a bare `((id))`, or one embedding a wikilink — and then the name is the
-  // LABEL. Something rewriting such a title is not renaming anything: it is
-  // `references` inlining a deleted target or retitling a renamed one, inside
-  // that gesture's own tx, and this path may neither take the working label nor
+
+  // A content rewrite is a rename only where the content WAS this type's name,
+  // and the LABEL is what says so. Where the two disagreed, the row is a legacy
+  // or sync-applied one whose title was never its name — prose, or a title
+  // embedding a reference — and whatever rewrote that title is doing something
+  // else inside its own tx: `references` inlining a deleted target, or
+  // retitling a renamed one. This path may neither take the working label nor
   // refuse that tx on its behalf.
   //
   // Unless the LABEL moved in this tx, which is the naming gesture itself: the
   // type editor writes both halves, and that is a rename however drifted the
   // row was. Stepping aside there would leave the new name unclaimed.
   const previousName = before.content.trim()
-  if (!labelMoved && previousName !== '' && !isWritableLabel(previousName)
-    && isWritableLabel(currentLabel)) return
+  if (!labelMoved && previousLabel !== '' && previousLabel !== previousName) return
 
   // Otherwise the new name has to be a name: refuse a REGRESSION, where the one
   // being replaced worked or where the type is being named for the first time
@@ -258,7 +275,11 @@ const followRenamedContent = async (
   // `skipMetadata` on every write here: this reconciles a content change
   // somebody else made, and one that was itself derived would otherwise float
   // the type into recents with nobody having touched it.
-  if (currentLabel !== name) {
+  // Against the STORED spelling, not the trimmed read: a legacy row can hold a
+  // padded `" Book "` label whose trimmed form already equals the name, and
+  // `parseTypeDefinitionMetadata` does not trim — so leaving it stored padded
+  // publishes the type under a name that nothing resolves to.
+  if (safeDecodeRowProperty(after, blockTypeLabelProp) !== name) {
     await ctx.tx.setProperty(row.id, blockTypeLabelProp, name, {skipMetadata: true})
   }
   if (after.content !== name) {
