@@ -19,7 +19,11 @@ vi.mock('@/utils/toast.js', () => ({
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 const flipWorkspace = vi.fn<(repo: unknown, workspaceId: string) => Promise<{localApplied: boolean}>>()
-vi.mock('@/data/workspaces', () => ({
+vi.mock('@/data/workspaces', async (importOriginal) => ({
+  // The predicate is NOT stubbed: it reads the marker the real flip attaches,
+  // and a stub here would let this file agree with itself about which
+  // rejections prove nothing was written.
+  ...(await importOriginal<typeof import('@/data/workspaces')>()),
   flipWorkspaceToChildBackedProperties: (repo: unknown, workspaceId: string) =>
     flipWorkspace(repo, workspaceId),
 }))
@@ -380,6 +384,24 @@ describe('migrate_properties_to_blocks action', () => {
 
     expect(finishUndoDrop).toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/undo history for this workspace was cleared/i))
+    flipWorkspace.mockReset()
+    flipWorkspace.mockResolvedValue({localApplied: true})
+  })
+
+  it('keeps the history when the flip rejection PROVES nothing was written', async () => {
+    // The other half of the branch above. When the confirming re-read comes
+    // back and still says `cell`, the flip demonstrably did not land — an
+    // ordinary refusal, a trigger or a permission — and charging the user their
+    // undo history for it would be a cost with no hazard. The marker is what
+    // tells the two apart; both carry the same underlying PostgREST error.
+    flipWorkspace.mockRejectedValue(Object.assign(new Error('refused'), {flipLanded: false}))
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(finishUndoDrop).not.toHaveBeenCalled()
+    expect(progressHandle.fail).not.toHaveBeenCalledWith(
       expect.stringMatching(/undo history for this workspace was cleared/i))
     flipWorkspace.mockReset()
     flipWorkspace.mockResolvedValue({localApplied: true})

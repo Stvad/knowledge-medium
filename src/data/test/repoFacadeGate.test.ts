@@ -92,6 +92,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
   assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
   workspaceRunStaleReason: 'read — compares two Repo fields; assigns nothing',
+  assertBackfillSessionUnchanged: 'read — throws or returns; assigns no Repo fields',
   backfillSyncSettledNow: 'read — samples the injected gate; assigns no Repo fields',
   syncViewGap: 'read — one query, an observer sample and a gate sample; assigns no Repo fields',
   workspaceViewGap: 'read — syncViewGap plus one query; assigns no Repo fields',

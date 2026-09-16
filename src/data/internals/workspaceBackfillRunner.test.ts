@@ -310,6 +310,37 @@ describe('workspace backfill runner — sync gating', () => {
     expect(result).toMatchObject({outcome: 'deferred', retryable: false})
   })
 
+  it('does not re-arm, or promise a retry, for a blocker nothing will clear', async () => {
+    // `retryable: false` means waiting changes nothing, so a re-arm buys a run
+    // that refuses again — and the log would be telling the operator to wait
+    // for something that is not coming.
+    const batches: number[] = []
+    const repo = makeRepo({
+      id: 'operator-durable-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    })
+    await seedTarget(repo)
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => (
+      batches.length === 1
+        ? {reason: '3 synced row(s) have not reached `blocks`', transient: false}
+        : null
+    ))
+    const scheduled = vi.spyOn(repo, 'scheduleWorkspaceBackfills')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await repo.runWorkspaceBackfillNow(WS, 'operator-durable-v1')
+
+    expect(scheduled).not.toHaveBeenCalled()
+    expect(warn.mock.calls.some(([msg]) =>
+      typeof msg === 'string' && msg.includes('will retry when it clears'))).toBe(false)
+    warn.mockRestore()
+  })
+
   it('tells the operator a DURABLE view gap is not worth retrying either', async () => {
     // Same defect, and it predates this pass's role check: the gap refusal
     // carries `transient`, but the gap THROW discarded it, so rows nothing is
@@ -365,6 +396,67 @@ describe('workspace backfill runner — sync gating', () => {
     warn.mockRestore()
 
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
+  })
+
+  it('aborts a batch whose workspace changed WHILE the batch body ran', async () => {
+    // The entry precondition is as stale by the end of a batch as the commit
+    // pipeline's own gate: `fn` can span a whole insert budget of awaited reads
+    // and writes. A switch landing in there would otherwise commit
+    // source-of-truth rows under a session this device has left.
+    const g = controllableGate()
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-switch-in-body-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async t => {
+            batches.push(i)
+            await t.update('target', {content: `batch ${i}`})
+            // INSIDE the body, after the entry check has passed.
+            if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
+          }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+
+    g.open()
+    await drain(repo)
+
+    // The WRITE, not the batch counter: the counter cannot tell this apart from
+    // the NEXT batch's entry check refusing, which also leaves [0, 1]. Only the
+    // exit check makes batch 1 roll back what it had already written.
+    expect(batches).toEqual([0, 1])
+    expect((await repo.load('target'))?.content).toBe('batch 0')
+  })
+
+  it('aborts a batch whose write access was revoked WHILE the batch body ran', async () => {
+    // Same window, the other arm.
+    const g = controllableGate()
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-revoke-in-body-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async t => {
+            batches.push(i)
+            await t.update('target', {content: `batch ${i}`})
+            if (i === 1) repo.setReadOnly(true)
+          }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+
+    g.open()
+    await drain(repo)
+
+    expect(batches).toEqual([0, 1])
+    expect((await repo.load('target'))?.content).toBe('batch 0')
   })
 
   it('aborts mid-run when rows start staging between batches', async () => {

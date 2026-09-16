@@ -27,6 +27,7 @@ import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { aliasesProp } from '@/data/properties'
 import { Repo } from '../repo'
 import type { HistoryDrop } from '@/data/internals/undoManager'
+import { TxImpl } from '@/data/internals/txEngine'
 
 const WS = 'ws-1'
 
@@ -591,6 +592,38 @@ describe('undo against a pass that drops the history', () => {
     expect(undoDepth(repo)).toBe(0)
     expect(await repo.undo()).toBe(false)
     expect(await readContent(repo, 'a')).toBe('edited while the pass was in flight')
+  })
+
+  it('rolls the replay back when a lockless pass drops the history mid-apply', async () => {
+    // The entry check cannot cover the apply loop, which awaits once per row. A
+    // pass that begins its drop WITHOUT the write lock — the flip is a server
+    // round trip — moves the epoch while the replay is mid-flight, after that
+    // check has passed. Its `finish` can then only suppress the opposite-stack
+    // push; it cannot take back rows the replay has already written. Only
+    // throwing before the commit does.
+    //
+    // The bump is injected INSIDE the loop, at the one point a lockless pass
+    // could reach: the harness cannot schedule into the middle of a held write
+    // lock any other way, and what is asserted afterwards is the row.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    const applyRaw = TxImpl.prototype.applyRaw
+    const spy = vi.spyOn(TxImpl.prototype, 'applyRaw').mockImplementation(
+      async function (this: TxImpl, ...args: Parameters<typeof applyRaw>) {
+        const result = await applyRaw.apply(this, args)
+        repo.undoManager.beginHistoryDrop()
+        return result
+      })
+
+    // False, not a throw, and — the point — the row is untouched: the replay
+    // wrote 'original' and then rolled it back rather than committing it.
+    await expect(repo.undo(ChangeScope.BlockDefault)).resolves.toBe(false)
+    spy.mockRestore()
+    expect(await readContent(repo, 'a')).toBe('edited')
   })
 
   it('drops an entry whose transaction was recorded after a pass cleared', async () => {

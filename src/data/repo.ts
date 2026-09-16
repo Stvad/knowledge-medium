@@ -2384,6 +2384,22 @@ export class Repo {
         if (deferred.length === pending.length) throw lastError
         pending = deferred
       }
+      // AGAIN, before this transaction commits. The check on entry cannot cover
+      // the loop above, which awaits once per row: a pass that begins its drop
+      // WITHOUT holding the write lock — the props-as-blocks flip is a server
+      // round trip — moves the epoch while this replay is mid-flight, and the
+      // entry check has already passed. Its `finish` can then only suppress the
+      // push; it cannot take back rows this transaction has written. Throwing
+      // here rolls them back instead, which is the only thing that actually
+      // abandons the replay.
+      //
+      // An IN-LOCK pass cannot move the epoch inside this window — it would
+      // need the lock this replay is holding — so this arm is reachable only
+      // from a lockless drop or a bare `clear()`, and abandoning is right for
+      // both.
+      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
+        throw new UndoHistoryDroppedError(action)
+      }
     }, {scope: entry.scope, description}, true)
   }
 
@@ -3489,32 +3505,50 @@ export class Repo {
         // same answer `retryableAfter` gives this refusal on the claim path.
       ), {kind: Repo.TRANSIENT, retryable: gap.transient})
     }
-    // AFTER the probe, not before it, and deliberately only the one:
-    // `setActiveWorkspaceId` is a synchronous field write that a switch lands
-    // cleanly in the probe's await window, so a copy ahead of the probe would
-    // be describing a workspace this session has since left. Asking after
-    // strictly dominates asking before — a workspace that left and returned
-    // across the probe has moved its generation — so that second copy would
-    // decide nothing and only look load-bearing.
+    // AFTER the probe, not before it: `setActiveWorkspaceId` and a role change
+    // are synchronous field writes that land cleanly in the probe's await
+    // window, so a copy ahead of the probe would be describing a session this
+    // one has since left. Asking after strictly dominates asking before — a
+    // workspace that left and returned across the probe has moved its
+    // generation — so a second copy there would decide nothing and only look
+    // load-bearing.
+    this.assertBackfillSessionUnchanged(workspaceId, backfillId, generation)
+  }
+
+  /**
+   * The SYNCHRONOUS half of {@link assertBackfillMayWrite}: everything that is
+   * a field read rather than an awaited probe.
+   *
+   * Its own method because it is asked at BOTH ENDS of a batch. The full
+   * precondition runs once on entry, before the batch spends its insert budget;
+   * this runs again after the batch body returns, because that body can span an
+   * entire budget's worth of awaited reads and writes, and both the commit
+   * pipeline's entry-time `isReadOnly` gate and the entry precondition have
+   * long since passed by then. Throwing here rolls the batch back rather than
+   * letting it commit source-of-truth rows under a session it no longer has.
+   *
+   * The GAP is deliberately not re-asked at the exit: it is the one arm that
+   * costs a query inside the write lock, and a view that went incomplete
+   * mid-batch is caught by the next batch's entry probe — whereas a workspace
+   * switch or a revocation cannot be caught later at all, because the rows are
+   * already uploaded by then.
+   */
+  private assertBackfillSessionUnchanged(
+    workspaceId: string,
+    backfillId: string,
+    generation: number,
+  ): void {
     const stale = this.workspaceRunStaleReason(workspaceId, generation)
     if (stale !== null) {
       throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: ${stale}.`,
       ), {kind: Repo.TRANSIENT})
     }
-    // The ROLE, re-sampled here for the same reason: the commit pipeline gates
-    // on `isReadOnly` when the transaction STARTS, and this runs inside it,
-    // after the awaited probe, so a revocation landing in between has already
-    // passed that gate and the pass would upload source-of-truth rows as a
-    // viewer.
-    //
-    // After the staleness check and not before it, because `isReadOnly` is the
-    // ACTIVE workspace's role: asked first, a run whose workspace has been
-    // switched away reports "lost write access to <the workspace it left>",
-    // which is not what happened. Both abort either way — this is about the
-    // message naming the actual cause. Last statement before returning to the
-    // writer, nothing awaited after it, for the same reason `takeBackfillClaim`
-    // re-asks before its claim write.
+    // The ROLE, after the staleness check and not before it, because
+    // `isReadOnly` is the ACTIVE workspace's role: asked first, a run whose
+    // workspace has been switched away reports "lost write access to <the
+    // workspace it left>", which is not what happened. Both abort either way —
+    // this is about the message naming the actual cause.
     if (this.isReadOnly) {
       throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: this device lost write access to `
@@ -3952,6 +3986,10 @@ export class Repo {
           const {value, drop} = await this.tx(async t => {
             await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
             const value = await fn(t)
+            // AGAIN, now the body has returned — see the method. `fn` can span a
+            // whole insert budget, so the entry check above is as stale by here
+            // as the pipeline's own entry-time gate.
+            this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
             // Begun here, while the lock is still held. NOT PINNED, and no
             // test fails without the position: the window is between the
             // database handing the lock to a waiting replay and `this.tx`
@@ -4032,12 +4070,20 @@ export class Repo {
           // still means "worth retrying", which is right for the transient DB
           // failures that make up the rest of this path.
           deferredRetryable = (err as {retryable?: boolean} | null)?.retryable ?? true
-          // These clear on their own — the download finishes, the queue drains.
-          // Logging and walking away would leave the pass undone for the whole
-          // session even though its blocker is momentary, so re-arm and let the
-          // gate + deep-idle deferral bound the retry.
-          console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
-          this.scheduleWorkspaceBackfills(workspaceId)
+          if (deferredRetryable) {
+            // These clear on their own — the download finishes, the queue
+            // drains. Logging and walking away would leave the pass undone for
+            // the whole session even though its blocker is momentary, so re-arm
+            // and let the gate + deep-idle deferral bound the retry.
+            console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
+            this.scheduleWorkspaceBackfills(workspaceId)
+          } else {
+            // A durable gap is rows nothing is draining, and a revoked role
+            // needs the role back — neither is waiting for anything, so a
+            // re-arm buys a run that will refuse again and the message would be
+            // telling the operator to wait for something that is not coming.
+            console.warn(`[workspaceBackfills] ${reason} — not retrying on its own`)
+          }
           return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
         }
         failed = reason
