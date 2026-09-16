@@ -70,7 +70,7 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
     },
     isReadOnly: false,
     workspaceViewGap: async () => null,
-    undoManagerFor: () => ({clear: () => {}, invalidateReplays: () => {}}),
+    undoManagerFor: () => ({clear: () => {}, beginHistoryDrop: () => ({finish: () => {}})}),
     withOperatorBackfillClaim: claimStub(async () => {
       emit?.(reported)
       return {outcome: 'ran' as const, undoHistoryCleared: false}

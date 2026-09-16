@@ -3946,17 +3946,18 @@ export class Repo {
           // definition readiness and the write lock, so a check before it can
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
-          const result = await this.tx(async t => {
+          // One drop per batch, carried OUT of the transaction rather than
+          // assigned into an outer `let`, so the batch cannot reach its
+          // `finish` without having begun one.
+          const {value, drop} = await this.tx(async t => {
             await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
             const value = await fn(t)
-            // This batch's in-lock half — see `UndoManager.invalidateReplays`.
-            //
-            // NOT PINNED, and no test fails without it: the window is between
-            // the database handing the lock to a waiting replay and `this.tx`
+            // Begun here, while the lock is still held. NOT PINNED, and no
+            // test fails without the position: the window is between the
+            // database handing the lock to a waiting replay and `this.tx`
             // resolving, which the harness cannot schedule into. Kept because
             // what it loses is a committed batch of a once-per-graph migration.
-            this.undoManagerFor(workspaceId).invalidateReplays()
-            return value
+            return {value, drop: this.undoManagerFor(workspaceId).beginHistoryDrop()}
           }, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
@@ -3975,7 +3976,7 @@ export class Repo {
           // an empty stack — so one cmd-Z reverts only the tail. Accepted: the
           // user's history is being discarded either way, and the alternative
           // is teaching `record` about groups a pass cannot see.
-          this.undoManagerFor(workspaceId).clear()
+          drop.finish()
           if (!announcedUndoClear) {
             announcedUndoClear = true
             undoHistoryCleared = true
@@ -3985,7 +3986,7 @@ export class Repo {
               `from before the pass would revert it.`,
             )
           }
-          return result
+          return value
         },
       }
       try {

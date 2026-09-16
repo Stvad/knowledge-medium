@@ -26,6 +26,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { aliasesProp } from '@/data/properties'
 import { Repo } from '../repo'
+import type { HistoryDrop } from '@/data/internals/undoManager'
 
 const WS = 'ws-1'
 
@@ -494,7 +495,7 @@ describe('undo against a pass that drops the history', () => {
     const lock = await holdWriteLock(repo)
 
     const undoing = repo.undo(ChangeScope.BlockDefault)
-    repo.undoManager.invalidateReplays()
+    repo.undoManager.beginHistoryDrop()
     lock.release()
     await lock.settled
 
@@ -538,6 +539,35 @@ describe('undo against a pass that drops the history', () => {
     expect(await readContent(repo, 'a')).toBe('original')
   })
 
+  it('keeps the entry of an edit that took the lock mid-drop', async () => {
+    // A drop is ONE event with a duration: it begins when the pass's writes
+    // become visible and ends when the stacks are emptied. An edit that takes
+    // the write lock BETWEEN the two reads post-pass rows and is perfectly safe
+    // to undo — so the finish must not move the epoch a second time, or the
+    // edit is dropped for having sampled in the middle of one event.
+    //
+    // This is the ordering the two-call version got wrong, and it is a
+    // regression it introduced: with no epoch at all, the clear empties the
+    // stack and the entry then records onto the empty one, which is what the
+    // user expects.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+
+    // The pass's writes are committed and visible; its drop is under way.
+    const drop = repo.undoManager.beginHistoryDrop()
+
+    // The edit takes the lock now, so its `before` rows are post-pass. The
+    // pass's finish lands while it holds the lock.
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited after the pass'})
+      drop.finish()
+    }, {scope: ChangeScope.BlockDefault, description: 'post-pass edit'})
+
+    expect(undoDepth(repo)).toBe(1)
+    expect(await repo.undo()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('original')
+  })
+
   it('drops an entry whose transaction was recorded after a pass cleared', async () => {
     // A user transaction can hold the write lock ahead of a pass's chunk,
     // commit, release — and only reach its own recording continuation after
@@ -570,23 +600,26 @@ describe('undo against a pass that drops the history', () => {
     const {repo} = env
     await seedRoot(repo, 'a', 'original')
 
-    // Takes the lock and waits, so the edit below can be INVOKED while it is
-    // held — and bumps only after that, which is what makes a call-time sample
-    // and an in-lock one disagree.
+    // The pass's WHOLE shape, drop and finish alike, because the finish is what
+    // decides this: it empties the stacks without moving the epoch again, so an
+    // edit that sampled between the two keeps its entry. Written with only the
+    // begin, this pinned a sequence production never runs.
     let releaseHolder: (() => void) | null = null
+    let drop: HistoryDrop | undefined
     const holding = repo.tx(async () => {
       await new Promise<void>(resolve => { releaseHolder = () => resolve() })
-      repo.undoManager.invalidateReplays()
+      drop = repo.undoManager.beginHistoryDrop()
     }, {scope: ChangeScope.BlockDefault})
     await vi.waitFor(() => { expect(releaseHolder).not.toBeNull() }, {timeout: 3000})
 
-    // Invoked here, so a call-time sample reads the PRE-bump epoch; it acquires
-    // the lock, and samples, only after the holder has bumped and released.
+    // Invoked here, so a call-time sample reads the PRE-drop epoch; it acquires
+    // the lock, and samples, only after the holder has begun the drop.
     const edit = repo.tx(async (tx) => {
       await tx.update('a', {content: 'edited after the pass'})
     }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
     releaseHolder!()
     await holding
+    drop!.finish()
     await edit
 
     expect(await readContent(repo, 'a')).toBe('edited after the pass')

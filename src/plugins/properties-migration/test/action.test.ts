@@ -60,7 +60,8 @@ import { claimStub, type ClaimStubLog } from './claimStub.ts'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
-const invalidateReplays = vi.fn()
+const finishUndoDrop = vi.fn()
+const beginHistoryDrop = vi.fn(() => ({finish: finishUndoDrop}))
 const USER = 'user-1'
 
 const RAN = {outcome: 'ran', undoHistoryCleared: false} as OperatorBackfillResult
@@ -98,7 +99,7 @@ const makeRepo = (
     db: {getAll, getOptional},
     isReadOnly: false,
     workspaceViewGap,
-    undoManagerFor: () => ({clear: clearUndo, invalidateReplays}),
+    undoManagerFor: () => ({clear: clearUndo, beginHistoryDrop}),
     // The gesture reaches the pass THROUGH the claim, so the stub is the only
     // route to `runPass`. `repo.runPass` is deliberately
     // ABSENT: a fixture that also answered that call directly would keep
@@ -126,7 +127,8 @@ const invoke = (repo: Repo) =>
 
 afterEach(() => {
   clearUndo.mockReset()
-  invalidateReplays.mockReset()
+  finishUndoDrop.mockReset()
+  beginHistoryDrop.mockClear()
   showInfo.mockReset()
   dismissToast.mockReset()
   progressHandle.update.mockReset()
@@ -337,7 +339,10 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
-    expect(clearUndo).toHaveBeenCalled()
+    expect(finishUndoDrop).toHaveBeenCalled()
+    // Through the PAIRED api, never a bare `clear()` — that one cannot reach a
+    // replay `undo()` has already popped, which is the whole hazard here.
+    expect(clearUndo).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/undo history for this workspace was cleared/i))
   })
@@ -350,14 +355,14 @@ describe('migrate_properties_to_blocks action', () => {
     // is off the stack by then. Only the epoch bump refuses it, and it has to
     // land before the workspace changes underneath.
     const order: string[] = []
-    invalidateReplays.mockImplementation(() => { order.push('invalidate') })
-    clearUndo.mockImplementation(() => { order.push('clear') })
+    beginHistoryDrop.mockImplementation(() => { order.push('begin'); return {finish: finishUndoDrop} })
+    finishUndoDrop.mockImplementation(() => { order.push('finish') })
     flipWorkspace.mockImplementation(async () => { order.push('flip'); return {localApplied: true} })
     const {repo} = makeRepo(RAN)
 
     await invoke(repo)
 
-    expect(order.slice(0, 3)).toEqual(['invalidate', 'flip', 'clear'])
+    expect(order.slice(0, 3)).toEqual(['begin', 'flip', 'finish'])
     flipWorkspace.mockReset()
     flipWorkspace.mockResolvedValue({localApplied: true})
   })
@@ -369,6 +374,7 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
+    expect(beginHistoryDrop).not.toHaveBeenCalled()
     expect(clearUndo).not.toHaveBeenCalled()
   })
 

@@ -31,6 +31,7 @@ import {
   ChangeScope, propertyValue,
   type AnyPropertySchema, type AnyValuePresetCore, type BlockData,
 } from '@/data/api'
+import type { HistoryDrop } from '@/data/internals/undoManager'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
@@ -735,6 +736,10 @@ export const applyPropertyDefinitionSynthesis = async (
 
   let created = 0
   let converged = 0
+  /** Set inside the transaction below once it has minted, finished once that
+   *  transaction is durable — see `UndoManager.beginHistoryDrop`. Stays unset
+   *  on an aborted run, which leaves the user's history alone. */
+  let drop: HistoryDrop | undefined
   const registrations: Array<{schema: AnyPropertySchema; blockId: string}> = []
   let lastOrderKey: string | null = null
 
@@ -1006,11 +1011,12 @@ export const applyPropertyDefinitionSynthesis = async (
       created += 1
       registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
     }
-    // The in-lock half — see `UndoManager.invalidateReplays`. Conditional on
-    // having MINTED, the same question the clear below asks: a run that only
-    // converged changed nothing, so refusing a replay would cost a cmd-Z for no
-    // hazard. NOT PINNED, for the same reason the backfill runner's is not.
-    if (created > 0) repo.undoManagerFor(workspaceId).invalidateReplays()
+    // Begun here, while the lock is still held — see
+    // `UndoManager.beginHistoryDrop`. Conditional on having MINTED, because a
+    // run that only converged changed nothing and refusing a replay would cost
+    // a cmd-Z for no hazard. The POSITION is NOT PINNED, for the same reason
+    // the backfill runner's is not.
+    if (created > 0) drop = repo.undoManagerFor(workspaceId).beginHistoryDrop()
   }, {
     scope: ChangeScope.BlockDefault,
     description: 'synthesize property definitions',
@@ -1020,13 +1026,13 @@ export const applyPropertyDefinitionSynthesis = async (
     // committed write with a live undo entry that cmd-Z would delete.
     skipUndo: true,
   })
-  // The drop half, once the transaction has COMMITTED. About the entries
-  // ALREADY on the stack, not this pass's own writes, which are `skipUndo`
-  // above: a key with no definition was a key nothing materialized, so once one
-  // is MINTED a replayed pre-synthesis snapshot writes a cell for a key that
-  // now has children.
-  const undoHistoryCleared = created > 0
-  if (undoHistoryCleared) repo.undoManagerFor(workspaceId).clear()
+  // Finished once the transaction has COMMITTED. About the entries ALREADY on
+  // the stack, not this pass's own writes, which are `skipUndo` above: a key
+  // with no definition was a key nothing materialized, so once one is MINTED a
+  // replayed pre-synthesis snapshot writes a cell for a key that now has
+  // children.
+  const undoHistoryCleared = drop !== undefined
+  drop?.finish()
 
   // Publish synchronously, same reason as `addSchema`: the caller's next step
   // is the backfill, which freezes ONE resolver for the whole multi-minute

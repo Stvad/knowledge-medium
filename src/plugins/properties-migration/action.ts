@@ -321,12 +321,12 @@ const migrateUnderClaim = async (
       return
     }
     banner.update('Switching this workspace to property blocks…')
-    // BEFORE the flip, not with the `clear()` after it — see
-    // `UndoManager.invalidateReplays`. From the PATCH onward the workspace is
-    // child-backed for the whole graph, and the flip is a round trip plus two
-    // local db calls, so a replay `undo()` has already popped has room to
-    // commit a whole pre-flip row over what are now live children.
-    repo.undoManagerFor(workspaceId).invalidateReplays()
+    // BEGUN before the flip, not after it — see `UndoManager.beginHistoryDrop`.
+    // From the PATCH onward the workspace is child-backed for the whole graph,
+    // and the flip is a round trip plus two local db calls, so a replay
+    // `undo()` has already popped has room to commit a whole pre-flip row over
+    // what are now live children.
+    const undoDrop = repo.undoManagerFor(workspaceId).beginHistoryDrop()
     let localApplied: boolean
     try {
       ;({localApplied} = await flipWorkspaceToChildBackedProperties(repo, workspaceId))
@@ -354,8 +354,8 @@ const migrateUnderClaim = async (
     // end after this point without writing a batch (a peer holds the claim, the
     // runner defers, there is nothing left to migrate) leaves that window open.
     //
-    // The DROP half. A replay already in flight when the flip started was
-    // refused by the bump above; this takes the entries still on the stack.
+    // FINISHED here. A replay already in flight when the flip started was
+    // refused when the drop began; this takes the entries still on the stack.
     //
     // THIS DEVICE ONLY, deliberately (#684): a peer that stayed open across the
     // flip keeps its pre-flip entries, and nothing watches the column's arrival
@@ -365,7 +365,7 @@ const migrateUnderClaim = async (
     // does is a stale cell over live children, which the next write to those
     // children projects away. The dialog tells the operator to reload other
     // devices, which is what actually clears them.
-    repo.undoManagerFor(workspaceId).clear()
+    undoDrop.finish()
     undoCleared = true
     flipLanded = true
     if (!localApplied) {
