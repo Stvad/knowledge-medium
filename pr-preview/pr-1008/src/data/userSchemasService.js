@@ -1,1 +1,0 @@
-import{cK as e,dK as t,fK as n,lK as r,sK as i,uK as a}from"../../chunks/app-BsXO-lN6.js";export{i as USER_SCHEMAS_PROJECTOR_ID,e as UserSchemasService,r as isRegistrablePropertyName,a as propertySchemaNameRejection,t as tryBuildSchema,n as userSchemasProjector};

@@ -1,1 +1,0 @@
-import{P_ as e}from"../../../chunks/app-BsXO-lN6.js";export{e as PendingInvitations};
