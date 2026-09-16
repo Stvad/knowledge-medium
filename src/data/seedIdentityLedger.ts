@@ -11,17 +11,26 @@
  * edits do to stored values, the first two driven through a real workspace in
  * `seedIdentityLedger.test.ts`: a RENAME reads as unset (the registry pins to
  * the declared name via `effectivePropertyDefinitionName`, so the old cell
- * survives invisibly and the next write lands beside it); a CODEC change throws
- * on the first read.
+ * survives invisibly and the next write lands beside it); an ENCODING change
+ * either throws on the first read or silently reinterprets the stored value,
+ * and which one you get depends on the codecs — `string` -> `number` throws,
+ * `string-list` -> `refList` quietly decodes strings as refs.
  *
- * A REMOVAL is the one that does NOT lose anything, and it is the reason the
- * retired lists below exist. Once a seedKey stops being declared, its
- * materialized definition row stops being a mirror and speaks for itself — a
- * property row publishes its STORED name (`effectivePropertyDefinitionName`'s
- * second case), a type row is republished read-only under its claimed id. So
- * the cells and tags stay live and addressable. What that leaves behind is a
- * key that looks free and is not: a later seed claiming it reads the previous
- * seed's values as its own, measured in the test below.
+ * A REMOVAL usually does NOT lose anything, and that is the reason the retired
+ * lists below exist. Once a seedKey stops being declared, its materialized
+ * definition row stops being a mirror and speaks for itself — a property row
+ * publishes its STORED name (`effectivePropertyDefinitionName`'s second case),
+ * a type row is republished read-only under its claimed id. What that leaves
+ * behind is a key that looks free and is not: a later seed claiming it reads
+ * the previous seed's values as its own.
+ *
+ * "Usually", because a property row can only publish a usable schema while its
+ * `presetId` still resolves in `repo.valuePresetCores`, which a runtime install
+ * replaces wholesale. A PLUGIN-OWNED preset core leaves with its plugin, so
+ * removing that plugin drops the name out of `schemas` and its cells read as
+ * unset — a removal that behaves like a rename. Seven shipped seeds are in that
+ * position today. Type seeds have no such dependency, so their removal is
+ * unconditional. Both branches are driven through a real workspace below.
  *
  * ENCODING takes two columns because neither subsumes the other. `presetId`
  * alone would miss a codec whose `type` string moved under a stable preset id.
@@ -39,7 +48,16 @@
  * `config` is deliberately NOT frozen: widening one — an enum option added, a
  * `targetTypes` extended — is routine and must stay cheap. Residue: NARROWING a
  * config can make stored values undecodable under an unchanged preset, and
- * nothing here sees it.
+ * nothing here sees it. `defaultValue`, `changeScope` and `hidden` are not
+ * frozen either: they are written into the definition block but nothing stored
+ * is keyed or encoded by them.
+ *
+ * A PLUGIN-OWNED preset core is the sharper residue. Such a core is declared as
+ * `definePresetCore({id: someCodec.type, build: () => someCodec})`, so both
+ * frozen columns are one author-chosen string that no codec behaviour derives:
+ * change what the codec parses and the ledger cannot tell. Treat that string as
+ * a version and bump it. For a `json` preset the ledger freezes nothing about
+ * the payload at all — its shape is a TypeScript interface out of reach here.
  *
  * Seeds declared by DB-stored runtime extensions (`agent-extensions/`) never
  * pass through this build, so their authors carry the rule themselves.
@@ -269,7 +287,8 @@ const LEDGER_KINDS = {
     retiredList: 'RETIRED_PROPERTY_NAMES',
     renameCost: (key: string) => `cells under ${key} stop resolving and read as unset`,
     removalNote: (key: string) =>
-      `the materialized definition row keeps publishing ${key} on its own, so its cells stay live`,
+      `the materialized definition row keeps publishing ${key} on its own, so its cells stay ` +
+      'live — unless its preset core left with the same plugin, when they read as unset instead',
   },
   type: {
     fields: ['id'],
@@ -281,6 +300,14 @@ const LEDGER_KINDS = {
 } as const
 
 export type SeedLedgerKind = keyof typeof LEDGER_KINDS
+
+/** The inventory the ledger compares against, plus the ambiguities harvest
+ *  resolved away — see `shippedPropertySeeds`. */
+export interface ShippedPropertySeeds {
+  readonly seeds: readonly AnyPropertySeedDeclaration[]
+  /** Inline declarations harvest decided against, by the key they contend for. */
+  readonly conflicts: ReadonlyArray<{readonly seedKey: string; readonly typeSeedKey: string}>
+}
 
 /**
  * The property seeds a build ships, composed the way `facetBridge`'s
@@ -313,13 +340,17 @@ export type SeedLedgerKind = keyof typeof LEDGER_KINDS
  * toggle profile that drops the winner is what makes a loser production's, which
  * is why the inventory cannot simply take whichever one an all-enabled build
  * happens to resolve to.
+ *
+ * KNOWN EXCLUSION, neither checked nor reported: a type seed inlining a FULL
+ * declaration owned by a different owner is skipped by harvest as a pure ref,
+ * before the conflict branch and without a warning. Nothing provides it, so it
+ * materializes no block — but the declaration object is still a live handle,
+ * and `set`/`peekRowProperty` go straight through its `name` and `codec` with
+ * no registry involved. Such a plugin can write cells under a name no ledger
+ * row covers. Accepted rather than guarded: catching it here means re-deriving
+ * harvest's own-owner predicate, which is the duplication this file has
+ * repeatedly refused.
  */
-export interface ShippedPropertySeeds {
-  readonly seeds: readonly AnyPropertySeedDeclaration[]
-  /** Inline declarations harvest decided against, by the key they contend for. */
-  readonly conflicts: ReadonlyArray<{readonly seedKey: string; readonly typeSeedKey: string}>
-}
-
 export const shippedPropertySeeds = (
   explicitSeeds: readonly AnyPropertySeedDeclaration[],
   typeSeeds: readonly TypeSeedDeclaration[],
@@ -350,31 +381,41 @@ export const describeHarvestConflicts = (
   'it its own key, or inline the SAME declaration object both places').sort()
 
 /**
- * Index rows by `seedKey`, REFUSING a duplicate rather than collapsing it.
+ * Index rows by `seedKey`, REPORTING a duplicate rather than collapsing it.
  *
  * A bare `new Map(rows.map(...))` keeps the last row for a repeated key, which
  * would quietly undo the comparison in both directions: on the shipped side it
  * hides one of two conflicting declarations, and on the ledger side a
  * duplicated row lets an edited identity sit under a frozen original that no
- * longer matches anything. `indexSeeds` throws on a duplicate seed key for the
- * same reason; so does this.
+ * longer matches anything.
+ *
+ * The duplicates come back as data rather than as a throw, because a throw here
+ * is the least legible failure this file can produce: it loses `SEED_LEDGER_RULE`,
+ * every other divergence, and the remedy, in a design whose whole point is that
+ * each divergence arrives as a line carrying its own. Production's `indexSeeds`
+ * does throw — it has to choose a winner and cannot — but this is an audit.
  */
 export const indexBySeedKey = <T>(
-  label: string,
   rows: readonly T[],
   seedKey: (row: T) => string,
   fields: (row: T) => readonly string[],
-): ReadonlyMap<string, readonly string[]> => {
-  const indexed = new Map<string, readonly string[]>()
+): {index: ReadonlyMap<string, readonly string[]>; duplicates: string[]} => {
+  const index = new Map<string, readonly string[]>()
+  const duplicates = new Set<string>()
   for (const row of rows) {
     const key = seedKey(row)
-    if (indexed.has(key)) {
-      throw new Error(`[seed ledger] duplicate ${label} seed key ${JSON.stringify(key)}`)
-    }
-    indexed.set(key, fields(row))
+    if (index.has(key)) duplicates.add(key)
+    index.set(key, fields(row))
   }
-  return indexed
+  return {index, duplicates: [...duplicates].sort()}
 }
+
+/** The frozen columns each kind compares, so a test can check the ledger's rows
+ *  carry exactly that many beside their seedKey. Without it, a column added to
+ *  `FrozenPropertySeed` but not to `fields` is frozen in the data and compared
+ *  by nothing — the one failure a tripwire cannot afford. */
+export const frozenColumnNames = (kind: SeedLedgerKind): readonly string[] =>
+  LEDGER_KINDS[kind].fields
 
 /**
  * Compare the seeds a build ships against the ledger, keyed by `seedKey`, and
@@ -403,11 +444,18 @@ export const diffSeedLedger = (
   shipped: ReadonlyMap<string, readonly string[]>,
   frozen: ReadonlyMap<string, readonly string[]>,
   retiredKeys: ReadonlySet<string>,
+  duplicateSeedKeys: readonly string[] = [],
 ): string[] => {
   const {fields, retiredList, renameCost, removalNote} = LEDGER_KINDS[kind]
   const divergences: string[] = []
   const say = (subject: string, summary: string, remedy: string) =>
     divergences.push(`${subject}: ${summary} — ${remedy}`)
+
+  for (const seedKey of duplicateSeedKeys) {
+    say(seedKey, 'is declared more than once',
+      'production\'s own `indexSeeds` throws on this rather than choosing; drop one ' +
+      'contribution so there is a single declaration to freeze')
+  }
 
   // Who claims each storage key NOW, and who the ledger says owned it. Column 0
   // is the storage key for both kinds. Everything below that looks at more than
@@ -420,19 +468,46 @@ export const diffSeedLedger = (
   const frozenOwnerByKey = new Map<string, string>()
   for (const [seedKey, frozenFields] of frozen) frozenOwnerByKey.set(frozenFields[0]!, seedKey)
 
-  // CONTENTION. Two seeds on one storage key is not a per-row fault, so no
-  // amount of checking rows one at a time finds it. Production tolerates both
-  // shapes and neither is safe to freeze: `indexSeeds` DROPS a colliding
-  // property seed (so which codec reads the cell depends on which of them
-  // loaded), and type ids are winner-resolved (so the loser's inline-only
-  // properties are never harvested, and become production's under a toggle
-  // profile that disables the winner — which is what makes the inventory
-  // complete only while this holds).
+  /** Another seed claiming `key`. Derived ONCE and read by every remedy that
+   *  depends on it, because whether a vacated key is picked up decides what
+   *  happens to the data — and a branch that answered it for itself is how one
+   *  report came to say the same cells were both abandoned and read. */
+  const successorTo = (key: string, self: string): string | undefined =>
+    claimantsByKey.get(key)?.find(claimant => claimant !== self)
+
+  // A seedKey MOVE: a frozen row and a shipped row agreeing in every stored
+  // column and differing only in the key they are filed under — what renaming a
+  // plugin does to all of its seeds at once, since `seedKeyOwner` makes the
+  // owner prefix load-bearing. Nothing stored moves, because cells are keyed by
+  // the storage key and that did not change. Reported as removal + arrival +
+  // handover it would be three wrong answers, and the retire advice among them
+  // names a key that is still shipped — which the retired-key check would then
+  // refuse, leaving no way to make the ledger green by following it.
+  const movedTo = new Map<string, string>()
+  const movedFrom = new Map<string, string>()
+  for (const [frozenSeedKey, frozenFields] of frozen) {
+    if (shipped.has(frozenSeedKey)) continue
+    const heir = (claimantsByKey.get(frozenFields[0]!) ?? []).find(candidate =>
+      !frozen.has(candidate) && !movedFrom.has(candidate)
+      && fields.every((_, index) => shipped.get(candidate)![index] === frozenFields[index]))
+    if (heir === undefined) continue
+    movedTo.set(frozenSeedKey, heir)
+    movedFrom.set(heir, frozenSeedKey)
+  }
+  for (const [from, to] of movedTo) {
+    say(to, `is ${from} filed under a new seedKey`,
+      `nothing stored moves — the data is keyed by ${JSON.stringify(shipped.get(to)![0])}, which ` +
+      'did not change; update this row\'s seedKey. What DOES change is the deterministic ' +
+      'definition block id, so every workspace keeps the old row orphaned and type rows still ' +
+      'reference it')
+  }
+
   for (const [key, claimants] of claimantsByKey) {
     if (claimants.length < 2) continue
-    say([...claimants].sort().join(' + '), `both claim ${JSON.stringify(key)}`,
+    const sorted = [...claimants].sort()
+    say(sorted.join(' + '), `all claim ${JSON.stringify(key)}`,
       'one storage key cannot have two owners — whichever of them a profile loads ' +
-      'reads the same stored data under its own codec; namespace one of them')
+      'reads the same stored data under its own codec; namespace all but one')
   }
 
   for (const [seedKey, shippedFields] of shipped) {
@@ -443,6 +518,7 @@ export const diffSeedLedger = (
         'the data under it is still there and this seed would inherit it; pick a ' +
         'fresh key, or MIGRATE if adopting it is the intent')
     }
+    if (movedFrom.has(seedKey)) continue
     // HANDOVER — freed in THIS release, so no tombstone exists yet. Only when
     // the prior owner has actually let go: while it still claims the key this
     // is contention, reported above, and calling it a handover would be wrong.
@@ -460,7 +536,7 @@ export const diffSeedLedger = (
         `add [${[seedKey, ...shippedFields].map(v => JSON.stringify(v)).join(', ')}]`)
       continue
     }
-    const renamed = frozenFields[0] !== shippedFields[0]
+    const successor = successorTo(frozenFields[0]!, seedKey)
     fields.forEach((field, index) => {
       const was = frozenFields[index]
       const now = shippedFields[index]
@@ -469,7 +545,6 @@ export const diffSeedLedger = (
       if (index === 0) {
         // Whether the old key is LEFT BEHIND or PICKED UP changes what happens
         // to its data, so it changes the remedy.
-        const successor = claimantsByKey.get(was!)?.find(claimant => claimant !== seedKey)
         say(seedKey, summary, successor === undefined
           ? `${renameCost(JSON.stringify(was))}; revert, or accept the loss and add ` +
             `${JSON.stringify(was)} to ${retiredList}`
@@ -478,23 +553,35 @@ export const diffSeedLedger = (
             'decision, not a tombstone')
         return
       }
+      const renamed = frozenFields[0] !== shippedFields[0]
       say(seedKey, summary, renamed
-        // The rename on this same row already orphaned the old cells, so
-        // nothing reads them under the new encoding.
-        ? 'carried by the rename on this row — the old data is abandoned, not re-read'
-        : 'the key is UNCHANGED, so existing data keeps the old encoding and the new ' +
-          'codec throws on it; discard is not available here — rename as well ' +
-          `(retiring the old key into ${retiredList}), or MIGRATE`)
+        ? successor === undefined
+          // The rename on this same row orphaned the old cells, so nothing
+          // reads them under the new encoding.
+          ? 'carried by the rename on this row — the old data is abandoned, not re-read'
+          : `carried by the rename on this row, but ${successor} claims the old key, so that ` +
+            'data is read under ITS codec — settle the handover first'
+        // NOT "throws": a widening (`string` -> `optional-string`, `ref` ->
+        // `optional-ref`) decodes everything the old codec did, and is the most
+        // common encoding edit there is. Asserting a throw here sent authors to
+        // the two destructive remedies for the one safe case.
+        : 'the key is UNCHANGED, so existing data keeps the old encoding and is read by the ' +
+          'new codec — which may throw on it, silently reinterpret it, or decode it fine if ' +
+          'the change only WIDENS what is accepted. Confirm which; if existing values do not ' +
+          `survive, revert, or rename as well (retiring the old key into ${retiredList}), or MIGRATE`)
     })
   }
   for (const [seedKey, frozenFields] of frozen) {
-    if (shipped.has(seedKey)) continue
+    if (shipped.has(seedKey) || movedTo.has(seedKey)) continue
     const storageKey = JSON.stringify(frozenFields[0])
-    // Removing a seed loses nothing — see the header. What it leaves is a key
-    // that looks free, which is precisely what the retired list is for.
-    say(seedKey, 'the ledger freezes it but nothing ships it',
-      `${removalNote(storageKey)}; delete the row and add ${storageKey} to ` +
-      `${retiredList}, or a later seed claiming ${storageKey} reads those values as its own`)
+    const successor = successorTo(frozenFields[0]!, seedKey)
+    // Removing a seed usually loses nothing — see the header. What it leaves is
+    // a key that looks free, which is precisely what the retired list is for.
+    say(seedKey, 'the ledger freezes it but nothing ships it', successor === undefined
+      ? `${removalNote(storageKey)}; delete the row and add ${storageKey} to ` +
+        `${retiredList}, or a later seed claiming ${storageKey} reads those values as its own`
+      : `${successor} already claims ${storageKey}, so retiring it is not available — that ` +
+        'seed reads the data this one left; settle that handover instead')
   }
   return divergences.sort()
 }
@@ -504,7 +591,7 @@ export const diffSeedLedger = (
 export const SEED_LEDGER_RULE = [
   'A code-owned seed\'s name, preset, codec and type id are FROZEN: user data is',
   'stored UNDER them and no migration exists to move it (issue #797). Each line',
-  'above says what that particular change costs and what to do about it.',
+  'below says what that particular change costs and what to do about it.',
   'Reverting is usually the answer — a spelling here is a storage key that users\'',
   'data is addressed by, not a label. Updating the ledger to make this test pass,',
   'with no note and no decision, is the one move that silently loses data.',

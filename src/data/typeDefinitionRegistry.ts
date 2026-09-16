@@ -362,7 +362,12 @@ export const materializingTypeSeeds = (
  * duplicate is decided here and survives only as a console warning, which nothing
  * downstream can act on. `onConflict` hands that decision out structurally, for a
  * caller auditing what COULD ship rather than consuming what did — the loser is
- * production's provider under any toggle profile that drops the winner's type. */
+ * production's provider under any toggle profile that drops the winner's type.
+ * It is called after the warning and inside a catch, so a throwing callback
+ * cannot take out the registry this function exists to keep building.
+ *
+ * It does NOT see a cross-owner full declaration: that is skipped earlier as a
+ * pure ref, silently, and an auditor wanting it must look for itself. */
 export const harvestNestedPropertySeeds = (
   snapshot: TypeDefinitionRegistrySnapshot,
   explicitPropertySeeds: readonly AnyPropertySeedDeclaration[],
@@ -402,12 +407,19 @@ export const harvestNestedPropertySeeds = (
         // duplicate key outright; harvest can't throw (one bad contribution mustn't
         // abort the whole property registry), so keep the provider and surface the
         // conflict. (An IDENTICAL object — the `todo` embed+seed pattern — is silent.)
-        onConflict?.({seedKey: key, typeSeedKey: typeSeed.seedKey})
         console.warn(
           `[harvestNestedPropertySeeds] type seed ${JSON.stringify(typeSeed.seedKey)} inlines property ` +
           `${JSON.stringify(key)} that is already declared elsewhere (an explicit seed or an earlier ` +
           'type); keeping the existing declaration — its durable definition is what the block materializes',
         )
+        // After the warn, and guarded: this function must not throw (one bad
+        // contribution cannot be allowed to abort the whole property registry),
+        // and a caller's callback is the one thing in here that could.
+        try {
+          onConflict?.({seedKey: key, typeSeedKey: typeSeed.seedKey})
+        } catch (error) {
+          console.warn('[harvestNestedPropertySeeds] onConflict threw; ignoring', error)
+        }
       }
     }
   }
