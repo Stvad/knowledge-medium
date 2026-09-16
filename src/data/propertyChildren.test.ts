@@ -2063,6 +2063,39 @@ describe('revival re-materializes property children (#778)', () => {
         {scope: ChangeScope.BlockDefault}),
     ).rejects.toThrow(/does not decode/)
   })
+  it('a pre-existing value that decodes but cannot be RENDERED does not block the restore', async () => {
+    // The second leg of the rejection. `codecs.ref().decode` accepts any
+    // string, so a cell holding a NAME passes the decode and fails one step
+    // later at `referenceBlockContentForId`, which refuses content that cannot
+    // be read back as `((id))`. While the exemption covered only the decode,
+    // this shape still aborted the restore — the same permanently
+    // un-restorable row the exemption exists to prevent, reached the other way.
+    const REL_FIELD_ID = 'field-rel-children'
+    const relSchema = defineProperty<string>('rel', {
+      codec: codecs.ref(),
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    registerDefinition(repo, 'test-rel-definition', REL_FIELD_ID, relSchema)
+    // Raw UPDATE: the shape a legacy row or a sync arrival has locally.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: 'done', [relSchema.name]: 'Someone Else'}), 'p'],
+    )
+
+    await deleteAndRestore(repo)
+
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(0)
+    // The key that CAN be carried came back with its value…
+    expect(await liveValueContents('p')).toEqual(['done'])
+    // …and the one that cannot is left exactly as the revival found it.
+    expect(await liveFieldRowsFor(REL_FIELD_ID)('p')).toEqual([])
+    expect((await bagOf('p'))[relSchema.name]).toBe('Someone Else')
+  })
   it('still rejects an undecodable value the RESTORING tx itself writes', async () => {
     // The exemption above is scoped to "this tx wrote no property value". A tx
     // that restores AND raw-writes junk in one go must not launder past the

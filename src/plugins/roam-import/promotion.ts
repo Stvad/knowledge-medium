@@ -60,6 +60,21 @@ export interface PromotionOptions {
    *  decision has to happen HERE, before bubbling, because dropping the
    *  property afterwards would destroy the only remaining copy of the text. */
   acceptKey?: (propName: string) => boolean
+  /** Decline a key whose FINALIZED value this rejects — the value half of
+   *  `acceptKey`, and the only one that can answer, since a key's value is not
+   *  known until every sibling and child bullet has been folded into it
+   *  (scalar vs list, page-token explosion).
+   *
+   *  A declined key is withdrawn whole: it never enters `promoted`, and every
+   *  uid that fed it is removed from `bubbled`, so a SUBTRACTIVE consumer
+   *  keeps those bullets and the text survives verbatim. Withdrawing without
+   *  un-bubbling would destroy it, which is why promotion tracks which uids
+   *  produced which key rather than only that a uid was consumed.
+   *
+   *  What a caller passes: `promotedValueAcceptorFor(repo)` — the value has to
+   *  be one its key's existing definition can carry, or post-flip the
+   *  materialize processor rejects the whole writing transaction (#594). */
+  acceptValue?: (propName: string, value: unknown) => boolean
 }
 
 /** Walk a parent's direct children and compute case-1/2/3/4 promotion.
@@ -78,13 +93,18 @@ export const computePromotedFromChildren = (
   const accumulator = new Map<string, unknown[]>()
   const diagnostics: string[] = []
   const newlyBubbled = new Set<string>()
+  /** propName → the bubbled uids that fed it. A bubbled uid feeds exactly one
+   *  key (its own `key::`), so a withdrawal is exact rather than approximate. */
+  const sourceUids = new Map<string, Set<string>>()
   const namespacePrefix = options.namespacePrefix ?? 'roam'
   const transformKey = options.transformKey ?? ((key: string) => key)
   const acceptKey = options.acceptKey ?? (() => true)
-  const accepts = (key: string): boolean => acceptKey(`${namespacePrefix}:${transformKey(key)}`)
+  const acceptValue = options.acceptValue ?? (() => true)
+  const nameOf = (key: string): string => `${namespacePrefix}:${transformKey(key)}`
+  const accepts = (key: string): boolean => acceptKey(nameOf(key))
 
   const push = (key: string, value: unknown) => {
-    const propName = `${namespacePrefix}:${transformKey(key)}`
+    const propName = nameOf(key)
     const list = accumulator.get(propName) ?? []
     list.push(typeof value === 'string' ? normalizeRoamPropertyValue(value) : value)
     accumulator.set(propName, list)
@@ -107,6 +127,10 @@ export const computePromotedFromChildren = (
     }
 
     newlyBubbled.add(block.uid)
+    const propName = nameOf(attr.key)
+    const sources = sourceUids.get(propName) ?? new Set<string>()
+    sources.add(block.uid)
+    sourceUids.set(propName, sources)
     if (attr.value.trim() !== '') push(attr.key, attr.value)
 
     for (const sub of block.children ?? []) {
@@ -124,35 +148,43 @@ export const computePromotedFromChildren = (
 
   for (const child of children) consume(child, 0)
 
-  // Finalize: scalar for length-1, list for length>1, then post-process
-  // any scalar that's a sequence of `[[X]]` tokens into a page list (case 3).
   const promoted: Record<string, unknown> = {}
   for (const [key, values] of accumulator) {
-    if (values.length === 1) {
-      const single = values[0]
-      if (typeof single === 'string') {
-        const exploded = explodePageTokens(single)
-        promoted[key] = exploded ?? single
-      } else {
-        promoted[key] = single
-      }
-    } else {
-      // Multi-value: keep each string item but flatten any page-token
-      // strings so a mix like ['[[a]] [[b]]', '[[c]]'] becomes
-      // ['[[a]]', '[[b]]', '[[c]]'].
-      const flat: unknown[] = []
-      for (const v of values) {
-        if (typeof v === 'string') {
-          const exploded = explodePageTokens(v)
-          if (exploded) flat.push(...exploded)
-          else flat.push(v)
-        } else {
-          flat.push(v)
-        }
-      }
-      promoted[key] = flat
+    const value = finalizeValue(values)
+    if (!acceptValue(key, value)) {
+      // Withdraw the whole key and give its bullets back. All-or-nothing per
+      // key because the cell is: one key holds one value, so a batch with one
+      // unusable member has no partial form to keep.
+      for (const uid of sourceUids.get(key) ?? []) newlyBubbled.delete(uid)
+      diagnostics.push(
+        `Declined to promote "${key}": its value cannot be stored under that ` +
+        `name. Left as ordinary content.`,
+      )
+      continue
     }
+    promoted[key] = value
   }
 
   return {promoted, diagnostics, bubbled: newlyBubbled}
+}
+
+/** Fold a key's accumulated values into the single value the cell will hold:
+ *  scalar for length-1, list for length>1, and either way a scalar that is a
+ *  sequence of `[[X]]` tokens becomes a page list (case 3). */
+const finalizeValue = (values: readonly unknown[]): unknown => {
+  if (values.length === 1) {
+    const single = values[0]
+    if (typeof single !== 'string') return single
+    return explodePageTokens(single) ?? single
+  }
+  // Multi-value: keep each string item but flatten any page-token strings so a
+  // mix like ['[[a]] [[b]]', '[[c]]'] becomes ['[[a]]', '[[b]]', '[[c]]'].
+  const flat: unknown[] = []
+  for (const v of values) {
+    if (typeof v !== 'string') { flat.push(v); continue }
+    const exploded = explodePageTokens(v)
+    if (exploded) flat.push(...exploded)
+    else flat.push(v)
+  }
+  return flat
 }

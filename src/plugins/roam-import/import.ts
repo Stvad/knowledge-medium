@@ -72,6 +72,7 @@ import type { RoamMemoImportPlanSummary } from './roamMemo'
 import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
+  dropPlannedValuesThatCannotBeStored,
   normalizeListPropertyValues,
   normalizeRefPropertyValues,
   normalizeStringPropertyValues,
@@ -338,6 +339,11 @@ export const importRoam = async (
       plan.diagnostics,
     )
   }
+  // Before reference projection, not after: a key dropped here must take its
+  // projected backlink with it rather than leave one pointing at a value the
+  // block no longer carries.
+  dropPlannedValuesThatCannotBeStored(allPlannedBlocks, repo, plan.diagnostics)
+
   for (const block of allPlannedBlocks) {
     // Planner site: no separate prior row, so after === before === block.
     block.references = referencesWithProjectedProperties(

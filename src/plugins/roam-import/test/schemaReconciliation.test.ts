@@ -9,12 +9,14 @@ import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { Repo } from '@/data/repo'
 import {
   applySchemaReconciliation,
+  dropPlannedValuesThatCannotBeStored,
   ensurePromotedPropertySchemas,
   isRegistrablePropertyName,
   collectSchemaReconciliationPlan,
   normalizeListPropertyValues,
   normalizeRefPropertyValues,
   normalizeStringPropertyValues,
+  promotedValueAcceptorFor,
 } from '../schemaReconciliation'
 
 const WS = 'ws-roam'
@@ -528,8 +530,10 @@ describe('ensurePromotedPropertySchemas', () => {
   })
 
   it('reports a value no reshaping can fix, since post-flip that write is rejected', async () => {
-    // Normalization only covers string and list; a narrower pre-existing
-    // schema can still receive text that cannot be made to fit (#594).
+    // Reshaping only reaches string and list; a narrower pre-existing schema
+    // can still receive text that cannot be made to fit. This is the RESIDUE
+    // path — a caller that declines at promotion (promotedValueAcceptorFor)
+    // never gets here — so the note is all that is left to do about it.
     await env.repo.userSchemas.addSchema({name: 'matrix:count', presetId: 'number'})
 
     const notes = await ensurePromotedPropertySchemas(env.repo, [
@@ -537,7 +541,7 @@ describe('ensurePromotedPropertySchemas', () => {
     ])
 
     expect(notes.join(' ')).toMatch(/matrix:count/)
-    expect(notes.join(' ')).toMatch(/does not decode/i)
+    expect(notes.join(' ')).toMatch(/cannot hold/i)
   })
 
   it('abandons the batch when the active workspace changes mid-registration', async () => {
@@ -590,6 +594,75 @@ describe('ensurePromotedPropertySchemas', () => {
 
   it('is a no-op for an empty batch', async () => {
     await expect(ensurePromotedPropertySchemas(env.repo, [])).resolves.toEqual([])
+  })
+})
+
+describe('promotedValueAcceptorFor', () => {
+  // Pass it as `PromotionOptions.acceptValue`. What it protects is the write:
+  // post-flip the materialize processor rejects a value its key's definition
+  // cannot hold and rolls the whole transaction back, which for a poll-driven
+  // caller that holds its cursor on failure is a permanent stall (#594).
+  it('accepts a name with no definition — the mint fits the value by construction', () => {
+    expect(promotedValueAcceptorFor(env.repo)('matrix:brand-new', 'anything at all')).toBe(true)
+  })
+
+  it('declines text a narrower existing definition cannot hold', async () => {
+    await env.repo.userSchemas.addSchema({name: 'matrix:count', presetId: 'number'})
+
+    expect(promotedValueAcceptorFor(env.repo)('matrix:count', 'many')).toBe(false)
+  })
+
+  it('accepts what reshaping can still fit, so a decline is a last resort', async () => {
+    // A `string` definition takes a promoted array as JSON text, and a `list`
+    // definition takes a scalar wrapped — the same reshaping
+    // `ensurePromotedPropertySchemas` applies before the write, asked here.
+    await env.repo.userSchemas.addSchema({name: 'matrix:topic', presetId: 'string'})
+    await env.repo.userSchemas.addSchema({name: 'matrix:tag', presetId: 'list'})
+    const accepts = promotedValueAcceptorFor(env.repo)
+
+    expect(accepts('matrix:topic', ['one', 'two'])).toBe(true)
+    expect(accepts('matrix:tag', 'solo')).toBe(true)
+  })
+
+  it('declines a name that decodes but could never be written as a value child', async () => {
+    // The `ref` leg: its codec takes any string, so this one only fails when
+    // the value is rendered into its child's content. Asking the codec alone
+    // would wave it through and stall the caller one step later.
+    await env.repo.userSchemas.addSchema({name: 'matrix:assignee', presetId: 'ref'})
+
+    expect(promotedValueAcceptorFor(env.repo)('matrix:assignee', 'Some Person')).toBe(false)
+  })
+})
+
+describe('dropPlannedValuesThatCannotBeStored', () => {
+  it('drops the value and says which block it came from', async () => {
+    await env.repo.userSchemas.addSchema({name: 'roam:count', presetId: 'number'})
+    const blocks = [block('b1', {'roam:count': 'many', 'roam:kept': 'yes'})]
+    const diagnostics: string[] = []
+
+    dropPlannedValuesThatCannotBeStored(blocks, env.repo, diagnostics)
+
+    expect(blocks[0]!.properties).toEqual({'roam:kept': 'yes'})
+    expect(diagnostics.join(' ')).toContain('b1')
+    expect(diagnostics.join(' ')).toContain('roam:count')
+  })
+
+  it('reshapes rather than drops when a fit exists', async () => {
+    await env.repo.userSchemas.addSchema({name: 'roam:topic', presetId: 'list'})
+    const blocks = [block('b1', {'roam:topic': 'solo'})]
+
+    dropPlannedValuesThatCannotBeStored(blocks, env.repo, [])
+
+    expect(blocks[0]!.properties['roam:topic']).toEqual(['solo'])
+  })
+
+  it('leaves a key with no definition alone — nothing is known about what fits', () => {
+    // Also what makes it safe in a dry run, where nothing has been registered.
+    const blocks = [block('b1', {'roam:unregistered': {deep: 'shape'}})]
+
+    dropPlannedValuesThatCannotBeStored(blocks, env.repo, [])
+
+    expect(blocks[0]!.properties['roam:unregistered']).toEqual({deep: 'shape'})
   })
 })
 

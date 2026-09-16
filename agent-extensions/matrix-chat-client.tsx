@@ -31,6 +31,8 @@ import {
   computePromotedFromChildren,
   ensurePromotedPropertySchemas,
   isRegistrablePropertyName,
+  promotedValueAcceptorFor,
+  type PromotionOptions,
 } from '@/plugins/roam-import/plan.js'
 import { navigate } from '@/utils/navigation.js'
 import {
@@ -517,17 +519,27 @@ const parseMarkdownToBlockDefinitions = (markdownText: string): BlockDef[] => {
 // event's own timestamp.
 
 const matrixEventUrl = (roomId: string, eventId: string) => `https://matrix.to/#/${roomId}/${eventId}`
-const matrixPromotionOptions = {
+/** Ingest promotes SUBTRACTIVELY (the bullet is dropped once hoisted), so
+ *  every reason a key cannot become a property has to be known HERE, before
+ *  bubbling — afterwards the bullet is gone and dropping the key destroys the
+ *  only copy of the text. Both declines leave the bullet exactly as the user
+ *  wrote it.
+ *
+ *  By NAME: a name no definition can be registered for. `[[Page]]:: value` is
+ *  the form that hits this (the name would contain `]]`).
+ *
+ *  By VALUE: a name whose definition already exists and cannot hold what this
+ *  message says — `count:: many` under a `number`. Post-flip that write is
+ *  rejected by the materialize processor and the whole ingest transaction
+ *  rolls back; since a failed write deliberately holds the sync cursor, the
+ *  same event would then be retried forever and ingest would stop for good
+ *  (#594). */
+const matrixPromotionOptions = (repo: any): PromotionOptions => ({
   namespacePrefix: 'matrix',
   transformKey: (key: string) => key.toLowerCase(),
-  // Ingest promotes SUBTRACTIVELY (the bullet is dropped once hoisted), so a
-  // key that can never get a definition must be declined HERE — before
-  // bubbling — or the text is lost outright: the bullet is gone and the
-  // property would have to be dropped for lacking a definition. Declining
-  // leaves the bullet exactly as the user wrote it. `[[Page]]:: value` is the
-  // form that hits this (the name would contain `]]`).
   acceptKey: isRegistrablePropertyName,
-}
+  acceptValue: promotedValueAcceptorFor(repo),
+})
 
 const propertyValues = (value: unknown): unknown[] => Array.isArray(value) ? value : [value]
 
@@ -564,19 +576,26 @@ const toRoamBlock = (block: BlockDef, path: number[]): any => ({
   children: (block.children ?? []).map((child, index) => toRoamBlock(child, [...path, index])),
 })
 
-const withPromotedMatrixProperties = (blocks: BlockDef[], bubbled = new Set<string>(), path: number[] = []): BlockDef[] =>
+interface PromotionWalk {
+  options: PromotionOptions
+  bubbled: Set<string>
+  diagnostics: string[]
+}
+
+const withPromotedMatrixProperties = (blocks: BlockDef[], walk: PromotionWalk, path: number[] = []): BlockDef[] =>
   blocks.flatMap((block, index) => {
     const blockPath = [...path, index]
     const children = Array.isArray(block.children) ? block.children : []
     const promotion = computePromotedFromChildren(
       children.map((child, childIndex) => toRoamBlock(child, [...blockPath, childIndex])),
-      bubbled,
-      matrixPromotionOptions,
+      walk.bubbled,
+      walk.options,
     )
 
-    for (const uid of promotion.bubbled) bubbled.add(uid)
+    for (const uid of promotion.bubbled) walk.bubbled.add(uid)
+    walk.diagnostics.push(...promotion.diagnostics)
 
-    const promotedChildren = withPromotedMatrixProperties(children, bubbled, blockPath)
+    const promotedChildren = withPromotedMatrixProperties(children, walk, blockPath)
     const next: BlockDef = {
       ...block,
       properties: mergeProperties(block.properties, promotion.promoted),
@@ -589,7 +608,7 @@ const withPromotedMatrixProperties = (blocks: BlockDef[], bubbled = new Set<stri
     // survives; a consumed attr that still has non-attr children is kept so they
     // aren't orphaned. (Diverges from the Roam importer, which preserves attr
     // blocks for fidelity; chat ingest wants the literal bullet gone.)
-    if (bubbled.has(blockPathUid(blockPath)) && !next.children) return []
+    if (walk.bubbled.has(blockPathUid(blockPath)) && !next.children) return []
     return [next]
   })
 
@@ -608,11 +627,22 @@ const nestTopLevelBlocksUnderFirst = (blocks: BlockDef[]): BlockDef[] => {
 const flattenBlockDefs = (blocks: BlockDef[]): BlockDef[] =>
   blocks.flatMap(block => [block, ...flattenBlockDefs(block.children ?? [])])
 
-const createBlocksFromEvent = (event: any, matrixClient: any): BlockDef[] => {
+const createBlocksFromEvent = (
+  event: any,
+  matrixClient: any,
+  repo: any,
+): {tree: BlockDef[]; diagnostics: string[]} => {
   const text = getMessageText(event, matrixClient)
-  return withPromotedMatrixProperties(
+  const walk: PromotionWalk = {
+    options: matrixPromotionOptions(repo),
+    bubbled: new Set<string>(),
+    diagnostics: [],
+  }
+  const tree = withPromotedMatrixProperties(
     nestTopLevelBlocksUnderFirst(parseMarkdownToBlockDefinitions(text)),
+    walk,
   )
+  return {tree, diagnostics: walk.diagnostics}
 }
 
 // ---------------------------------------------------------------------------
@@ -719,7 +749,9 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
   // `addSchema` does its own writes and cannot run inside the tx below, and a
   // key that lands definition-less is skipped by property migration forever
   // (#501). Built out here so the same tree is registered and then written.
-  const messageTree = createBlocksFromEvent(event, matrixClient)
+  const {tree: messageTree, diagnostics: promotionDiagnostics} =
+    createBlocksFromEvent(event, matrixClient, repo)
+  for (const note of promotionDiagnostics) console.warn('[matrix] promotion:', note)
   // `addSchema` targets whatever workspace is ACTIVE, while the write below
   // targets the `workspaceId` captured above. A switch during the awaits
   // already behind us would register these names into the new workspace and

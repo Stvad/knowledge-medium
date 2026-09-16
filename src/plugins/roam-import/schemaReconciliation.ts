@@ -16,9 +16,13 @@
  *  reject the raw token strings on first read.
  */
 
-import type { BlockData } from '@/data/api'
+import type { AnyPropertySchema, BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
+import {
+  propertyCellValueRejection,
+  type PropertyCellValueRejection,
+} from '@/data/propertyChildren'
 import {
   ROAM_PAGE_ALIAS_PROP,
   collectAliasesFromRoamSemanticRefListValue,
@@ -296,6 +300,48 @@ const jsonStringify = (value: unknown): string => {
   }
 }
 
+/** The ONE reshaping rule, by codec type: how a promoted value that does not
+ *  fit its codec is made to fit, where a fit is reachable at all.
+ *
+ *  Two cases only, and both exist because promotion's own shape (scalar for a
+ *  single occurrence, array for repeated/child-list ones) is per BLOCK while a
+ *  definition is per NAME. Nothing here can make text a number or a name an
+ *  id — those keys are declined at promotion instead (`acceptValue`).
+ *
+ *  Every reshaping caller routes through this: the two name-set passes below,
+ *  which the importer drives off its own classification, and
+ *  {@link fitPromotedValueToSchema}, which the streaming path drives off the
+ *  effective registry. A second copy would be a rule that reshapes one way at
+ *  plan time and another at write time. */
+const reshapeForCodecType = (codecType: string, value: unknown): unknown => {
+  if (codecType === 'string' && typeof value !== 'string') return jsonStringify(value)
+  if (codecType === 'list' && !Array.isArray(value)) return [value]
+  return value
+}
+
+/** Can `schema` carry `value`, after the reshaping that is available to it?
+ *
+ *  `fits` carries the value to STORE, which may differ from the one passed in.
+ *  `unfit` means no reshaping helps: post-flip the materialize processor
+ *  rejects a write of it and rolls the whole transaction back, so a producer
+ *  asks this BEFORE the write and declines the key instead (#594).
+ *
+ *  The acceptance half is `propertyCellValueRejection` — the same function the
+ *  processor rejects with, deliberately, rather than a decode of our own that
+ *  could come to disagree with it. */
+export type PromotedValueFit =
+  | {readonly kind: 'fits'; readonly value: unknown}
+  | {readonly kind: 'unfit'; readonly rejection: PropertyCellValueRejection}
+
+export const fitPromotedValueToSchema = (
+  schema: AnyPropertySchema,
+  value: unknown,
+): PromotedValueFit => {
+  const reshaped = reshapeForCodecType(schema.codec.type, value)
+  const rejection = propertyCellValueRejection(schema, reshaped)
+  return rejection ? {kind: 'unfit', rejection} : {kind: 'fits', value: reshaped}
+}
+
 /** String-schema normalization for mixed Roam attributes. Some Roam
  *  fields are scalar on most pages but multi-value arrays on a few
  *  pages (`email::` with child bullets, `Twitter::` with multiple
@@ -311,9 +357,7 @@ export const normalizeStringPropertyValues = (
     if (!block.properties) continue
     for (const name of stringPropertyNames) {
       if (!(name in block.properties)) continue
-      const raw = block.properties[name]
-      if (typeof raw === 'string') continue
-      block.properties[name] = jsonStringify(raw)
+      block.properties[name] = reshapeForCodecType('string', block.properties[name])
     }
   }
 }
@@ -332,9 +376,49 @@ export const normalizeListPropertyValues = (
     if (!block.properties) continue
     for (const name of listPropertyNames) {
       if (!(name in block.properties)) continue
-      const raw = block.properties[name]
-      if (Array.isArray(raw)) continue
-      block.properties[name] = [raw]
+      block.properties[name] = reshapeForCodecType('list', block.properties[name])
+    }
+  }
+}
+
+/** Last gate before the import writes: make every planned value fit the
+ *  definition it will be stored under, and DROP the ones no reshaping fits.
+ *
+ *  Runs AFTER the ref/string/list normalizations, never before — those are
+ *  what turn `[[X]]` tokens into ids and scalars into lists, so asking earlier
+ *  would decline values that were about to become valid.
+ *
+ *  Dropping is the lesser loss here, and only here: the importer's promotion
+ *  is ADDITIVE, so an attribute's `key:: value` bullet survives as an ordinary
+ *  block whatever happens to the property. Post-flip the alternative is not
+ *  "store it anyway" but a processor rejection that aborts the whole batch, so
+ *  the choice is a reported per-value skip against a failed import.
+ *
+ *  A name with no registered definition is left ALONE: nothing is known about
+ *  what would fit, and property migration skips such keys rather than
+ *  rejecting them. That is also what makes this safe in a dry run, where no
+ *  definition has been registered yet. */
+export const dropPlannedValuesThatCannotBeStored = (
+  blocks: ReadonlyArray<BlockData>,
+  repo: Repo,
+  diagnostics: string[],
+): void => {
+  for (const block of blocks) {
+    if (!block.properties) continue
+    for (const name of Object.keys(block.properties)) {
+      const schema = repo.propertySchemas.get(name)
+      if (!schema) continue
+      const fit = fitPromotedValueToSchema(schema, block.properties[name])
+      if (fit.kind === 'fits') {
+        block.properties[name] = fit.value
+        continue
+      }
+      diagnostics.push(
+        `Block ${block.id}: dropped property "${name}" — its "${schema.codec.type}" definition ` +
+        `cannot hold ${formatSampleValue(block.properties[name])}. The source text is kept on ` +
+        'the block; widen or correct that definition and re-import to store it.',
+      )
+      delete block.properties[name]
     }
   }
 }
@@ -512,43 +596,28 @@ export const ensurePromotedPropertySchemas = async (
     }
   }
 
-  // Normalize against the EFFECTIVE registry, not merely what this call
-  // registered. A value that does not decode under its key's schema is not
-  // cosmetic: post-flip `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR` decodes
-  // during the write and THROWS, rolling the whole transaction back — and a
-  // poll-driven caller that holds its cursor on failure then retries the same
-  // event forever. Reshaping the value is the lesser evil.
-  const stringNames = new Set<string>()
-  const listNames = new Set<string>()
-  for (const name of names) {
-    const codecType = repo.propertySchemas.get(name)?.codec.type
-    if (codecType === 'string') stringNames.add(name)
-    else if (codecType === 'list') listNames.add(name)
-  }
-  normalizeStringPropertyValues(asBlocks, stringNames)
-  normalizeListPropertyValues(asBlocks, listNames)
-
-  // One postcondition covering both ways a key can still be un-carryable:
-  // no definition at all, or a value that will not decode under the
-  // definition it has. Reported, never enforced — see the note on this
-  // helper: refusing the write trades a recoverable state for a stalled
-  // caller, and both cases are swept by §9 orphan synthesis before any flip.
+  // Reshape against the EFFECTIVE registry, not merely what this call
+  // registered, and report in the same pass — one walk, one rule
+  // (`fitPromotedValueToSchema`), so what is reshaped and what is reported
+  // can never be two different answers. A value that its key's definition
+  // cannot carry is not cosmetic: post-flip
+  // `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR` rejects it during the write and
+  // rolls the whole transaction back — and a poll-driven caller that holds its
+  // cursor on failure then retries the same event forever.
   const missing: string[] = []
-  const undecodable: string[] = []
+  const unfit = new Set<string>()
   for (const name of names) {
     const schema = repo.propertySchemas.get(name)
     if (!schema) { missing.push(name); continue }
     for (const bag of bags) {
       const properties = bag.properties
       if (!properties || !(name in properties)) continue
-      try {
-        schema.codec.decode(properties[name])
-      } catch {
-        undecodable.push(name)
-        break
-      }
+      const fit = fitPromotedValueToSchema(schema, properties[name])
+      if (fit.kind === 'fits') properties[name] = fit.value
+      else unfit.add(name)
     }
   }
+  const undecodable = [...unfit]
   if (missing.length > 0) {
     notes.push(
       `${missing.length} promoted key(s) have NO definition and will be skipped by property `
@@ -558,20 +627,54 @@ export const ensurePromotedPropertySchemas = async (
     )
   }
   if (undecodable.length > 0) {
-    // Normalization only covers `string` and `list`. A key whose existing
-    // schema is narrower (url, number, boolean, date…) can still receive
-    // arbitrary promoted text that no reshaping fixes — and post-flip that
-    // aborts the writing transaction. Tracked in #594; reported loudly here
-    // because the caller cannot otherwise tell it is about to write a value
-    // its own schema rejects.
+    // Reshaping only reaches `string` and `list`. A key whose existing schema
+    // is narrower (url, number, boolean, date…) can still receive arbitrary
+    // promoted text that no reshaping fixes — and post-flip that aborts the
+    // writing transaction.
+    //
+    // Still reported rather than enforced, because by here it is too late to
+    // enforce anything: a subtractive caller has already dropped the source
+    // bullet, so dropping the key would destroy the text. The refusal belongs
+    // at promotion — `promotedValueAcceptorFor` — which is why what reaches
+    // this note is the residue: a caller that does not decline at promotion, a
+    // key that is not promoted at all, or a definition edited in the window
+    // between the two.
     notes.push(
-      `${undecodable.length} promoted key(s) carry a value that does not decode under their `
-      + `existing definition: ${undecodable.map(n => JSON.stringify(n)).join(', ')}. `
-      + 'This value cannot be made to fit by reshaping; widen or correct that definition. '
-      + 'In a child-backed workspace a write like this is REJECTED by the materialize '
-      + 'processor, so it must be resolved before that workspace flips.',
+      `${undecodable.length} promoted key(s) carry a value their existing definition `
+      + `cannot hold: ${undecodable.map(n => JSON.stringify(n)).join(', ')}. `
+      + 'This value cannot be made to fit by reshaping; widen or correct that definition, '
+      + 'or decline the key at promotion. In a child-backed workspace a write like this '
+      + 'is REJECTED by the materialize processor, so it must be resolved before that '
+      + 'workspace flips.',
     )
   }
 
   return notes
+}
+
+/** The promotion-time twin of {@link ensurePromotedPropertySchemas}: may this
+ *  finalized promoted value become a property under this name?
+ *
+ *  Pass it as `PromotionOptions.acceptValue`. A key it rejects is withdrawn
+ *  before any bullet is consumed, so the text stays where the user wrote it —
+ *  which is the whole reason the check has to happen at promotion rather than
+ *  at write time, where a subtractive consumer has already dropped the bullet
+ *  and dropping the key would destroy the only copy.
+ *
+ *  A name with NO definition is ACCEPTED: `ensurePromotedPropertySchemas`
+ *  mints one from the values in hand, so it fits by construction. The keys
+ *  this declines are the ones whose definition already exists and is narrower
+ *  than the text — a `number` that meets "many", a `ref` that meets a person's
+ *  name (#594).
+ *
+ *  It reads the registry at promotion time, so a definition edited between
+ *  here and the write is not covered; that residue lands in
+ *  `ensurePromotedPropertySchemas`'s report, and post-flip in the processor's
+ *  rejection. */
+export const promotedValueAcceptorFor = (
+  repo: Repo,
+): ((propName: string, value: unknown) => boolean) => (propName, value) => {
+  const schema = repo.propertySchemas.get(propName)
+  if (!schema) return true
+  return fitPromotedValueToSchema(schema, value).kind === 'fits'
 }
