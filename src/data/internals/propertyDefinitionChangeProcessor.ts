@@ -228,7 +228,7 @@ const collectChanges = (
   ctx: SameTxCtx,
   workspaceId: string,
   changedRows: ReadonlyArray<{before: BlockData | null; after: BlockData | null}>,
-): DefinitionChange[] => {
+): DefinitionChange[] | 'unjudgeable' => {
   // Pass 1: candidate changes (name or codec differs, definition resolvable at
   // tx start, after-row buildable).
   const candidates: DefinitionChange[] = []
@@ -296,6 +296,18 @@ const collectChanges = (
       schema,
       encodingChanged,
     })
+  }
+  if (candidates.length === 0) return []
+  // Whether a name can be judged is a property of the WORKSPACE, not of the
+  // name, so one lookup settles it for every candidate. Answered here rather
+  // than left to the refusal below because the two decisions are different: the
+  // refusal decides whether a NAME is this definition's to write, and dropping
+  // a candidate there is correct and silent. Having no registry at all is not a
+  // verdict about any name — it means the fan-out cannot run, and letting the
+  // definition row commit without it would leave every consumer in the old
+  // encoding with nothing left to repair them.
+  if (ctx.propertyDefinitionsClaimingName(workspaceId, candidates[0]!.newName) === null) {
+    return 'unjudgeable'
   }
   // Pass 2: drop a rename onto a COLLIDING new name — see the refusal above.
   return withoutContestedRenames(candidates, (name) =>
@@ -496,6 +508,21 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
   settledWrites: true,
   apply: async (event, ctx) => {
     const changes = collectChanges(ctx, event.workspaceId, event.changedRows)
+    if (changes === 'unjudgeable') {
+      // Refuse the whole tx rather than commit half of it. `repo.tx` surfaces a
+      // ProcessorRejection to the toast layer and rolls back, so the definition
+      // row does not land either — which is the point: a re-typed definition
+      // whose consumers were never re-encoded has no repair path left, and a
+      // client with no registry for this workspace cannot recognize its field
+      // rows or judge its names well enough to provide one.
+      throw new ProcessorRejection(
+        'cannot edit a property definition in a workspace this client has no '
+        + 'definition registry for: its consuming blocks could not be updated '
+        + 'to match. Open that workspace and try again.',
+        'property.definition-change.unjudgeable',
+        {workspaceId: event.workspaceId},
+      )
+    }
     if (changes.length === 0) return
     const parentIds = await consumingParentIds(
       ctx.db, event.workspaceId, changes.map(c => c.fieldId),

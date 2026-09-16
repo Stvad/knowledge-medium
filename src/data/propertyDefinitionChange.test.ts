@@ -46,12 +46,14 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { await resetTestDb(sharedDb.db) })
 afterEach(() => { vi.useRealTimers() })
 
-const seedWorkspace = async (propertiesMigration: string): Promise<void> => {
+const seedWorkspace = async (
+  propertiesMigration: string, id = WS,
+): Promise<void> => {
   await sharedDb.db.execute(
     `INSERT INTO workspaces
        (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
      VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, ?)`,
-    [WS, propertiesMigration],
+    [id, propertiesMigration],
   )
 }
 
@@ -61,11 +63,11 @@ const seedWorkspace = async (propertiesMigration: string): Promise<void> => {
  *  entry the processor's identity gate consults and the codec it re-encodes
  *  under both come from this row, exactly as they do in the app. */
 const createDefinition = async (
-  repo: Repo, fieldId: string, name: string, presetId: string,
+  repo: Repo, fieldId: string, name: string, presetId: string, workspaceId = WS,
 ): Promise<void> => {
   await repo.tx(async tx => {
     await tx.create({
-      id: fieldId, workspaceId: WS, parentId: null, orderKey: `k-${fieldId}`, content: name,
+      id: fieldId, workspaceId, parentId: null, orderKey: `k-${fieldId}`, content: name,
       properties: {
         types: [PROPERTY_SCHEMA_TYPE],
         [propertyNameProp.name]: name,
@@ -674,6 +676,47 @@ describe('codec change', () => {
     expect(await isLive(valueRowId), valueRowId).toBe(true)
     expect(errors).toHaveLength(1)
     expect(errors[0]!.meta).toMatchObject({name: 'state', count: 1})
+  })
+})
+
+describe('a workspace this client cannot judge', () => {
+  it('refuses the edit rather than committing it without its fan-out', async () => {
+    // `propertySchemaResolverFor` retains only the active workspace and the
+    // immediately previous one, so two further switches evict this one. The
+    // registry then answers nothing for it — which is not a verdict that its
+    // names are free, it means the fan-out cannot run at all. Committing the
+    // definition row alone would leave every consumer in the old encoding with
+    // nothing left to repair them, so the whole tx is refused.
+    await seedWorkspace('children')
+    await seedWorkspace('children', 'ws-elsewhere')
+    await seedWorkspace('children', 'ws-further')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    const errors = collectUserErrors(repo)
+
+    // Retention keeps the last workspace that actually BUILT a registry, so the
+    // intermediate one needs a definition of its own to displace this one.
+    repo.setActiveWorkspaceId('ws-elsewhere')
+    await createDefinition(repo, 'field-elsewhere', 'other', 'string', 'ws-elsewhere')
+    await vi.waitFor(() => {
+      if (repo.propertyDefinitions?.workspaceId !== 'ws-elsewhere') {
+        throw new Error('[test] ws-elsewhere has not primed')
+      }
+    }, {timeout: 3000})
+    repo.setActiveWorkspaceId('ws-further')
+    await vi.waitFor(() => {
+      if (repo.propertySchemaResolverFor(WS).resolve('status').status === 'resolved') {
+        throw new Error('[test] the definition\'s workspace is still retained')
+      }
+    }, {timeout: 3000})
+    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
+      code: 'property.definition-change.unjudgeable',
+    })
+
+    // Neither half landed: the definition keeps its name and the consumer its key.
+    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
+    expect(await cell('p')).toEqual({status: 'done'})
+    expect(errors.map(e => e.code)).toEqual(['property.definition-change.unjudgeable'])
   })
 })
 
