@@ -693,8 +693,8 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   // the same tx, and (b) a row that STOPPED being a field row this tx
   // (derive cleared the stamp after this processor's stale-column
   // ancestry read skipped it) still gets its bag materialized. The
-  // rename processor's cell re-keys are settledWrites and never reach
-  // this re-run — see MIGRATE_PROPERTY_RENAME_PROCESSOR.
+  // definition-change processor's cell re-keys are settledWrites and never
+  // reach this re-run — see MIGRATE_PROPERTY_DEFINITION_PROCESSOR.
   rerunOnDirtyRows: true,
   apply: async (event, ctx) => {
     // Workspace flip gate (§6): one predicate, checked once — a tx pins a

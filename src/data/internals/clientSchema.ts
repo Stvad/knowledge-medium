@@ -1238,20 +1238,6 @@ export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
   VALUES (?, strftime('%s', 'now') * 1000)
 `
 
-/** Per-workspace record of the property definitions this device has accounted
- *  for (`property_definition_baseline:<workspaceId>` → a JSON `value`), owned
- *  by `propertyDefinitionBaseline.ts`. */
-export const PROPERTY_DEFINITION_BASELINE_PREFIX = 'property_definition_baseline:'
-
-export const SELECT_PROPERTY_DEFINITION_BASELINE_SQL = `
-  SELECT value FROM client_schema_state WHERE key = ?
-`
-
-export const RECORD_PROPERTY_DEFINITION_BASELINE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at, value)
-  VALUES (?, strftime('%s', 'now') * 1000, ?)
-`
-
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS`).

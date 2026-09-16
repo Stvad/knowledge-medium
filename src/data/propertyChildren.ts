@@ -247,7 +247,7 @@ const isEscapedEnvelope = (trimmed: string): boolean =>
  *  in as a VALUE, an envelope escapes again (the quoted-form recursion, and
  *  correctly so — a value that happens to look like an envelope is still a
  *  value). Nothing double-escapes today because every re-encode path decodes
- *  first (`runPropertyDefinitionMigrationBatch`, the materialize processor).
+ *  first (`core.migratePropertyDefinition`, the materialize processor).
  *  A future one must too; content is not a value. */
 const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
   const trimmed = s.trim()

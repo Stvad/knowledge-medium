@@ -31,6 +31,7 @@ import type {
   AnyPostCommitProcessor,
   AnyPropertySchema,
   AnySameTxProcessor,
+  AnyValuePresetCore,
   SameTxTypeOwnership,
   BlockData,
   ChangedRow,
@@ -319,6 +320,10 @@ export interface RunTxParams<R> {
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Registered value presets, captured at that same boundary. Lets a same-tx
+   *  processor build a codec the frozen `propertySchemas` cannot answer for —
+   *  see `SameTxCtx.valuePresets`. */
+  valuePresets: ReadonlyMap<string, AnyValuePresetCore>
   /** Tx-start-captured type-ownership factory, resolved once the tx's workspace
    *  is known — the same shape (and the same fail-closed rule) as
    *  `propertyDefinitionRegistryForWorkspace`. */
@@ -372,7 +377,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const {
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
-    mutators, processors, sameTxProcessors, propertySchemas,
+    mutators, processors, sameTxProcessors, propertySchemas, valuePresets,
     typeDefinitionsForWorkspace,
     propertyDefinitionRegistryForWorkspace,
     propertySchemaWorkspaceId,
@@ -571,7 +576,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               emittedEvents,
             },
             {
-              tx, db: txDb, propertySchemas,
+              tx, db: txDb, propertySchemas, valuePresets,
               // Resolved against the TX's pinned workspace, not the active one:
               // `TxImpl` pins from the first write, and the merge mutator does
               // not require the active workspace to match.

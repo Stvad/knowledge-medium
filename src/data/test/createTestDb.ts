@@ -54,7 +54,6 @@ import {
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
-  PROPERTY_DEFINITION_BASELINE_PREFIX,
   RECONCILE_RESCAN_MARKER_PREFIX,
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
@@ -369,9 +368,6 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
       )
       await tx.execute(
         `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
-      )
-      await tx.execute(
-        `DELETE FROM client_schema_state WHERE key LIKE '${PROPERTY_DEFINITION_BASELINE_PREFIX}%'`,
       )
     }
     // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id

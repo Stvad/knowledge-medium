@@ -216,7 +216,7 @@ export const applyContentReplaceMutator = defineMutator<
       // surfaced to the user who ran the replace.
       //
       // Default: SKIP the write rather than write-then-report, matching the
-      // §9 migration precedent (`runPropertyDefinitionMigrationBatch`) — it
+      // §9 precedent (`core.migratePropertyDefinition`) — it
       // never writes a value it can't convert, preserving the original
       // (still-valid) text. Writing the broken text would be "replace
       // succeeded, property silently detached". The skip is returned in

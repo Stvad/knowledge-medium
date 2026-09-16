@@ -49,6 +49,7 @@
 import type { BlockData } from './blockData'
 import type { TypeContribution } from './blockType'
 import type { AnyPropertySchema, PropertySchemaResolution } from './propertySchema'
+import type { AnyValuePresetCore } from './valuePresetCore'
 import type { ChangeScope } from './changeScope'
 import type { ChangedRow } from './processor'
 import type { Tx } from './tx'
@@ -134,7 +135,7 @@ export type SameTxProcessor = {
    *  re-run as apparent user intent. A later unsettled write to the
    *  same field path un-settles it: last writer wins, matching the
    *  sequential processor order. Canonical
-   *  consumers: `core.migratePropertyRename`, whose consuming-cell
+   *  consumers: `core.migratePropertyDefinition`, whose consuming-cell
    *  re-keys would otherwise be re-read by a re-run MATERIALIZE
    *  against the stale tx-start registry and misinterpreted as a
    *  user's key deletion, and PROJECT's cell writes (including the
@@ -186,6 +187,14 @@ export interface SameTxCtx {
   db: SameTxReadDb
   /** Merged property-schema registry snapshotted at tx start. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Registered value presets, snapshotted at tx start alongside
+   *  `propertySchemas`. What `propertySchemas` CANNOT give you: a codec for a
+   *  definition as the tx is about to leave it. That registry is frozen at tx
+   *  start, so it still answers with the OLD codec for a definition this tx
+   *  re-types; `tryBuildSchema(row, valuePresets, metadata)` builds the new one
+   *  from the definition row's own staged bag. Consumer:
+   *  `core.migratePropertyDefinition`. */
+  valuePresets: ReadonlyMap<string, AnyValuePresetCore>
   /** Type-definition ownership for THIS TX'S workspace, snapshotted at tx start.
    *  `null` when no workspace is pinned, or when the tx's workspace is not the
    *  one whose registry was captured — fail closed rather than answer ownership
