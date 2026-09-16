@@ -68,9 +68,17 @@
  * else in the tree records it.
  */
 
-/** A frozen row. Column 0 is always the STORAGE KEY — the property name, or the
- *  type id written into `typesProp` — which is what makes one comparison and
- *  one retired-key check serve both kinds. */
+/** A frozen row, filed under its `seedKey` at column 0 and carrying the STORAGE
+ *  KEY — the property name, or the type id written into `typesProp` — at column
+ *  1.
+ *
+ *  `indexBySeedKey` lifts the seedKey out into the map key, so the rows
+ *  `diffSeedLedger` compares start AT the storage key. That is what lets one
+ *  comparison and one retired-key check serve both kinds, and it is why every
+ *  `[0]` in that function means the storage key while every `[0]` in a tuple
+ *  here means the seedKey. Do not read one for the other: applying the
+ *  retired-key check to a tuple's column 0 would test the seedKey, which no
+ *  stored value is addressed by. */
 export type FrozenPropertySeed = readonly [
   seedKey: string,
   name: string,

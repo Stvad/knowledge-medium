@@ -61,10 +61,13 @@ const allTogglesOn = (nodes: readonly ToggleNode[], into = new Map<string, boole
  *  and a seed missing from the union is a seed the ledger cannot see.
  *
  *  The lists DO overlap (plugins bundle their own data extension), and what
- *  makes the union safe is that `walkAppExtensionSync` dedupes by node
- *  reference — not that the lists are disjoint. A plugin that wrapped its data
- *  extension in a freshly built array would double-contribute every seed in it,
- *  which now surfaces as a duplicate-seedKey divergence rather than silently. */
+ *  makes the union safe is that `walkAppExtensionSync` skips a
+ *  `FacetContribution` it has already visited — dedup is by CONTRIBUTION
+ *  identity, checked only at that leaf, not by the array nodes above it. So
+ *  re-wrapping the same contributions in a fresh array is still safe; what
+ *  would double-contribute is rebuilding the contribution OBJECTS, e.g. a
+ *  plugin that calls `definitionSeedsFacet.of(...)` afresh per reference. That
+ *  now surfaces as a duplicate-seedKey divergence rather than silently. */
 const shippedSeeds = () => {
   const {repo} = createTestRepo({db: sharedDb.db})
   const tree = [...staticAppExtensions({repo}), ...staticDataExtensions]
@@ -684,9 +687,9 @@ describe('what a seed change does to values already stored', () => {
   // The condition on "a removal loses nothing": a property row publishes a
   // usable schema only while its preset core still resolves, and a runtime
   // install replaces `valuePresetCores` wholesale — so a PLUGIN-OWNED core
-  // leaves with its plugin and the removal behaves like a rename instead. Seven
-  // shipped seeds are in that position; the kernel-preset test above cannot see
-  // it, which is what made the unconditional claim look verified.
+  // leaves with its plugin and the removal behaves like a rename instead. The
+  // kernel-preset test above uses a core that never goes away, so it cannot see
+  // this branch at all.
   it('a removed seed whose PRESET also left reads as unset, not live', async () => {
     const pluginCodec = {
       type: 'ledgerTest:custom',
