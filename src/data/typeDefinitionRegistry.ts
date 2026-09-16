@@ -356,10 +356,17 @@ export const materializingTypeSeeds = (
  * Only winning type seeds are scanned (`materializingTypeSeeds`), so a loser
  * install's nested property is never harvested. The returned seeds are appended to
  * the `definitionSeedsFacet` set before the property registry is built, so they
- * flow into schema resolution AND materialization by the same path as any seed. */
+ * flow into schema resolution AND materialization by the same path as any seed.
+ *
+ * The return is therefore a RESOLVED set, and lossy by design: a conflicting
+ * duplicate is decided here and survives only as a console warning, which nothing
+ * downstream can act on. `onConflict` hands that decision out structurally, for a
+ * caller auditing what COULD ship rather than consuming what did — the loser is
+ * production's provider under any toggle profile that drops the winner's type. */
 export const harvestNestedPropertySeeds = (
   snapshot: TypeDefinitionRegistrySnapshot,
   explicitPropertySeeds: readonly AnyPropertySeedDeclaration[],
+  onConflict?: (conflict: {readonly seedKey: string; readonly typeSeedKey: string}) => void,
 ): readonly AnyPropertySeedDeclaration[] => {
   // `providedByKey` tracks the ONE declaration each key resolves to (explicit wins,
   // else the first harvested winner) — the object whose payload the deterministic
@@ -395,6 +402,7 @@ export const harvestNestedPropertySeeds = (
         // duplicate key outright; harvest can't throw (one bad contribution mustn't
         // abort the whole property registry), so keep the provider and surface the
         // conflict. (An IDENTICAL object — the `todo` embed+seed pattern — is silent.)
+        onConflict?.({seedKey: key, typeSeedKey: typeSeed.seedKey})
         console.warn(
           `[harvestNestedPropertySeeds] type seed ${JSON.stringify(typeSeed.seedKey)} inlines property ` +
           `${JSON.stringify(key)} that is already declared elsewhere (an explicit seed or an earlier ` +
