@@ -9,7 +9,7 @@ import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { Repo } from '@/data/repo'
 import {
   applySchemaReconciliation,
-  dropPlannedValuesThatCannotBeStored,
+  fitPlannedPropertyValues,
   ensurePromotedPropertySchemas,
   isRegistrablePropertyName,
   collectSchemaReconciliationPlan,
@@ -634,24 +634,28 @@ describe('promotedValueAcceptorFor', () => {
   })
 })
 
-describe('dropPlannedValuesThatCannotBeStored', () => {
-  it('drops the value and says which block it came from', async () => {
+describe('fitPlannedPropertyValues', () => {
+  it('reports an unstorable value and KEEPS it, naming the block and the key', async () => {
+    // Removing it would be silent loss for a key with no source bullet behind
+    // it: `propertiesFromRoam` lifts raw Roam `:block/props` straight into the
+    // bag, so there is nothing else holding that text. Leaving it makes the
+    // post-flip failure loud instead, with this diagnostic already naming it.
     await env.repo.userSchemas.addSchema({name: 'roam:count', presetId: 'number'})
     const blocks = [block('b1', {'roam:count': 'many', 'roam:kept': 'yes'})]
     const diagnostics: string[] = []
 
-    dropPlannedValuesThatCannotBeStored(blocks, env.repo, diagnostics)
+    fitPlannedPropertyValues(blocks, env.repo, diagnostics)
 
-    expect(blocks[0]!.properties).toEqual({'roam:kept': 'yes'})
+    expect(blocks[0]!.properties).toEqual({'roam:count': 'many', 'roam:kept': 'yes'})
     expect(diagnostics.join(' ')).toContain('b1')
     expect(diagnostics.join(' ')).toContain('roam:count')
   })
 
-  it('reshapes rather than drops when a fit exists', async () => {
+  it('reshapes a value a fit exists for', async () => {
     await env.repo.userSchemas.addSchema({name: 'roam:topic', presetId: 'list'})
     const blocks = [block('b1', {'roam:topic': 'solo'})]
 
-    dropPlannedValuesThatCannotBeStored(blocks, env.repo, [])
+    fitPlannedPropertyValues(blocks, env.repo, [])
 
     expect(blocks[0]!.properties['roam:topic']).toEqual(['solo'])
   })
@@ -660,7 +664,7 @@ describe('dropPlannedValuesThatCannotBeStored', () => {
     // Also what makes it safe in a dry run, where nothing has been registered.
     const blocks = [block('b1', {'roam:unregistered': {deep: 'shape'}})]
 
-    dropPlannedValuesThatCannotBeStored(blocks, env.repo, [])
+    fitPlannedPropertyValues(blocks, env.repo, [])
 
     expect(blocks[0]!.properties['roam:unregistered']).toEqual({deep: 'shape'})
   })

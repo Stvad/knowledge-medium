@@ -381,24 +381,28 @@ export const normalizeListPropertyValues = (
   }
 }
 
-/** Last gate before the import writes: make every planned value fit the
- *  definition it will be stored under, and DROP the ones no reshaping fits.
+/** Last pass before the import writes: reshape every planned value to fit the
+ *  definition it will be stored under, and REPORT the ones no reshaping fits.
  *
  *  Runs AFTER the ref/string/list normalizations, never before — those are
  *  what turn `[[X]]` tokens into ids and scalars into lists, so asking earlier
- *  would decline values that were about to become valid.
+ *  would report values that were about to become valid.
  *
- *  Dropping is the lesser loss here, and only here: the importer's promotion
- *  is ADDITIVE, so an attribute's `key:: value` bullet survives as an ordinary
- *  block whatever happens to the property. Post-flip the alternative is not
- *  "store it anyway" but a processor rejection that aborts the whole batch, so
- *  the choice is a reported per-value skip against a failed import.
+ *  It does NOT remove an unfit value, which is the difference between this
+ *  caller and the streaming one. A key here can reach the bag without a source
+ *  bullet behind it at all (`propertiesFromRoam` lifts raw Roam `:block/props`
+ *  straight into properties), so removal is not "the text stays on the block"
+ *  for every key it would touch — it is silent loss for some of them. What is
+ *  left instead is loud: post-flip the write is rejected and the import fails
+ *  with this diagnostic already naming the block and the key. The streaming
+ *  path can decline because it decides BEFORE consuming the bullet; this one
+ *  cannot, so it reports.
  *
  *  A name with no registered definition is left ALONE: nothing is known about
  *  what would fit, and property migration skips such keys rather than
  *  rejecting them. That is also what makes this safe in a dry run, where no
  *  definition has been registered yet. */
-export const dropPlannedValuesThatCannotBeStored = (
+export const fitPlannedPropertyValues = (
   blocks: ReadonlyArray<BlockData>,
   repo: Repo,
   diagnostics: string[],
@@ -414,11 +418,12 @@ export const dropPlannedValuesThatCannotBeStored = (
         continue
       }
       diagnostics.push(
-        `Block ${block.id}: dropped property "${name}" — its "${schema.codec.type}" definition ` +
-        `cannot hold ${formatSampleValue(block.properties[name])}. The source text is kept on ` +
-        'the block; widen or correct that definition and re-import to store it.',
+        `Block ${block.id}: property "${name}" cannot be stored — its ` +
+        `"${schema.codec.type}" definition cannot hold ` +
+        `${formatSampleValue(block.properties[name])}. Widen or correct that ` +
+        'definition before importing; in a child-backed workspace this value is ' +
+        'rejected by the materialize processor and the import fails.',
       )
-      delete block.properties[name]
     }
   }
 }

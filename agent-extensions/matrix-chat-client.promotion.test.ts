@@ -21,10 +21,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 //
 // The stub answers BY CURSOR, the way a homeserver does, and that is what
 // makes a stall observable: a client that does not advance its cursor is
-// handed the same events again, forever. An earlier version of this file
-// returned a queue of bodies regardless of `since` — under which the
-// "ingest keeps going" test passed with the guard deleted, because the failing
-// message was silently replaced by the next one instead of being re-delivered.
+// handed the same events again, forever. A stub that ignored `since` would
+// hand out the next message instead, and no test here could see a stall.
 const timeline = new Map<string, unknown>()
 vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({
   createClient: () => ({
