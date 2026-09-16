@@ -83,6 +83,24 @@ import {
 
 export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR_NAME = 'core.migratePropertyDefinition'
 
+/** `tryBuildSchema` answers `null` for a preset it cannot find or configure, but
+ *  `preset.build` is extension code and can THROW. The projector already treats
+ *  that as "no behaviour" and publishes metadata only; here an escape would
+ *  abort the USER'S transaction — and for a definition whose preset throws, the
+ *  transaction it would abort is the one repairing it. Same answer as null. Not
+ *  logged: the projector warns for the same row on its own rebuild. */
+const buildSchemaOrNull = (
+  row: BlockData,
+  presets: SameTxCtx['valuePresets'],
+  metadata: NonNullable<ReturnType<typeof parsePropertyDefinitionMetadata>>,
+): AnyPropertySchema | null => {
+  try {
+    return tryBuildSchema(row, presets, metadata)
+  } catch {
+    return null
+  }
+}
+
 export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUnconvertible'
 
 /**
@@ -116,9 +134,22 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  *  - Dropping a candidate can un-vacate the name that kept ANOTHER one, so this
  *    iterates to a fixpoint.
  *
- * `claimantsOfName` answers from the TX-START registry, winner first, where a
- * peer owning the new name is one about to leave it. That is what makes the
- * drop-all-then-assign-all apply safe.
+ * Two things the TX-START registry cannot tell `claimantsOfName`, both handled
+ * here because both make a re-key write a key that is not this definition's:
+ *
+ *  - It answers `null` for a workspace it has no snapshot of, and that is not
+ *    "nobody claims this name" — it is "nothing here can be judged". Every
+ *    candidate is dropped, matching the resolvers, which fail closed in the
+ *    same situation rather than reporting names as free.
+ *  - It cannot see what this BATCH creates. Two definitions renamed onto one
+ *    previously unclaimed name each see it free, and the apply would then
+ *    assign that key twice with the last writer winning — which need not be the
+ *    definition the rebuilt registry picks. A destination claimed twice inside
+ *    the batch is contested by the batch itself.
+ *
+ * Otherwise `claimantsOfName` answers winner first, where a peer owning the new
+ * name is one about to leave it. That is what makes the drop-all-then-assign-all
+ * apply safe.
  */
 export const withoutContestedRenames = <T extends {
   readonly fieldId: string
@@ -126,20 +157,33 @@ export const withoutContestedRenames = <T extends {
   readonly newName: string
 }>(
   candidates: readonly T[],
-  claimantsOfName: (name: string) => readonly string[],
+  claimantsOfName: (name: string) => readonly string[] | null,
 ): T[] => {
   let kept: T[] = [...candidates]
   for (;;) {
     const vacating = new Set(kept
       .filter(candidate => candidate.oldName !== candidate.newName)
       .map(candidate => candidate.fieldId))
+    // Counted over MOVES only. A codec-only change is not arriving anywhere —
+    // it keeps a name it already owns — so it neither contends for a
+    // destination nor loses its own to a peer moving onto it (that peer is
+    // refused by the head-claimant test below instead).
+    const arrivals = new Map<string, number>()
+    for (const candidate of kept) {
+      if (candidate.oldName === candidate.newName) continue
+      arrivals.set(candidate.newName, (arrivals.get(candidate.newName) ?? 0) + 1)
+    }
     const free = (claimant: string | undefined, self: string): boolean =>
       claimant === undefined || claimant === self || vacating.has(claimant)
     const next = kept.filter(candidate => {
-      if (!free(claimantsOfName(candidate.newName)[0], candidate.fieldId)) return false
-      if (candidate.oldName === candidate.newName) return true
-      return claimantsOfName(candidate.oldName)
-        .every(claimant => free(claimant, candidate.fieldId))
+      const moves = candidate.oldName !== candidate.newName
+      if (moves && (arrivals.get(candidate.newName) ?? 0) > 1) return false
+      const arriving = claimantsOfName(candidate.newName)
+      if (arriving === null || !free(arriving[0], candidate.fieldId)) return false
+      if (!moves) return true
+      const leaving = claimantsOfName(candidate.oldName)
+      return leaving !== null
+        && leaving.every(claimant => free(claimant, candidate.fieldId))
     })
     if (next.length === kept.length) return next
     kept = next
@@ -198,7 +242,7 @@ const collectChanges = (
     // resolver "does this fieldId resolve" instead would conflate shadowing
     // with having no buildable codec, which is the repair case below and must
     // NOT be skipped.
-    const schema = tryBuildSchema(after, ctx.valuePresets, afterMeta)
+    const schema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
     if (schema === null) continue
     // Read from the block's own rows, not from the registry: the tx-start
     // snapshot is at-or-older than `before`, so a codec change an earlier tx
@@ -212,7 +256,7 @@ const collectChanges = (
     // repairing tx, which is the only moment anything can. Re-parsing under an
     // unchanged codec is idempotent, so counting it costs nothing when the
     // repair restored the same type.
-    const beforeSchema = tryBuildSchema(before, ctx.valuePresets, beforeMeta)
+    const beforeSchema = buildSchemaOrNull(before, ctx.valuePresets, beforeMeta)
     const codecChanged = beforeSchema === null || beforeSchema.codec.type !== schema.codec.type
     // Every write to a definition block's bag reaches this processor —
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
@@ -231,24 +275,41 @@ const collectChanges = (
     ctx.propertyDefinitionsClaimingName(workspaceId, name))
 }
 
-const consumingParentIds = async (
-  ctx: SameTxCtx,
+/** One bound variable per changed definition would blow
+ *  SQLITE_MAX_VARIABLE_NUMBER on a scripted transaction that edits a whole
+ *  registry's worth of them — and this probe runs INSIDE the user's tx, so the
+ *  throw takes their entire edit down rather than costing a deferred pass a
+ *  retry the way it used to. */
+export const FIELD_PROBE_CHUNK = 500
+
+/** Parents holding a live field row for any of `fieldIds`.
+ *
+ *  The Set is load-bearing across chunks, not tidiness: `SELECT DISTINCT`
+ *  dedupes only WITHIN one statement, so a parent consuming two changed
+ *  definitions that land in different chunks would otherwise be visited — and
+ *  re-keyed — twice. */
+export const consumingParentIds = async (
+  db: Pick<SameTxCtx['db'], 'getAll'>,
   workspaceId: string,
   fieldIds: readonly string[],
+  chunkSize = FIELD_PROBE_CHUNK,
 ): Promise<string[]> => {
-  // §9 selection discipline: field-row discovery keys on the BIT plus the
-  // target (an unmarked `((fieldId))` link row is not a consumer), and
-  // `parent_id IS NOT NULL` — a marked workspace-root row is user content,
-  // not a field row (§9 root half) — never re-key it.
-  const rows = await ctx.db.getAll<{parent_id: string | null}>(
-    `SELECT DISTINCT parent_id FROM blocks
-      WHERE workspace_id = ? AND reference_target_id IN (${fieldIds.map(() => '?').join(', ')})
-        AND is_field_form = 1
-        AND deleted = 0 AND parent_id IS NOT NULL`,
-    [workspaceId, ...fieldIds],
-  )
   const set = new Set<string>()
-  for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
+  for (let i = 0; i < fieldIds.length; i += chunkSize) {
+    const chunk = fieldIds.slice(i, i + chunkSize)
+    // §9 selection discipline: field-row discovery keys on the BIT plus the
+    // target (an unmarked `((fieldId))` link row is not a consumer), and
+    // `parent_id IS NOT NULL` — a marked workspace-root row is user content,
+    // not a field row (§9 root half) — never re-key it.
+    const rows = await db.getAll<{parent_id: string | null}>(
+      `SELECT DISTINCT parent_id FROM blocks
+        WHERE workspace_id = ? AND reference_target_id IN (${chunk.map(() => '?').join(', ')})
+          AND is_field_form = 1
+          AND deleted = 0 AND parent_id IS NOT NULL`,
+      [workspaceId, ...chunk],
+    )
+    for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
+  }
   return [...set]
 }
 
@@ -410,7 +471,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     const changes = collectChanges(ctx, event.workspaceId, event.changedRows)
     if (changes.length === 0) return
     const parentIds = await consumingParentIds(
-      ctx, event.workspaceId, changes.map(c => c.fieldId),
+      ctx.db, event.workspaceId, changes.map(c => c.fieldId),
     )
     if (parentIds.length === 0) return
     // This tx PARSED each changing definition's row, so its field rows are

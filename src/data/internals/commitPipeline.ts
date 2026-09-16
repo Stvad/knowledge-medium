@@ -472,9 +472,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     resolverFor(workspaceId).resolveField(fieldId)
   const propertyDefinitionsClaimingName = (
     workspaceId: string, name: string,
-  ): readonly string[] => {
+  ): readonly string[] | null => {
     const snapshot = propertyDefinitionRegistryForWorkspace(workspaceId)
-    return snapshot === null ? [] : propertyDefinitionClaimantsForName(snapshot, name)
+    return snapshot === null ? null : propertyDefinitionClaimantsForName(snapshot, name)
   }
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.

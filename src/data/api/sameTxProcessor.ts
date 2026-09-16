@@ -233,11 +233,15 @@ export interface SameTxCtx {
    *  claimant, and asking who owns that name while the winner still holds it
    *  names the renamer itself; renaming a SHADOWED definition is a different
    *  refusal that "does it resolve" conflates with "does it have a codec".
-   *  Empty when the workspace has no registry snapshot. */
+   *  `null` — never an empty list — when this workspace has NO registry
+   *  snapshot (a genuinely foreign workspace, or before its projection primes).
+   *  Empty would read as "nobody claims this name", which is the permissive
+   *  answer to every question a caller asks here; the resolvers fail closed in
+   *  that situation and so must anything built on this. */
   propertyDefinitionsClaimingName(
     workspaceId: string,
     name: string,
-  ): readonly string[]
+  ): readonly string[] | null
 }
 
 /** Thrown by a same-tx processor to reject the user's tx. The

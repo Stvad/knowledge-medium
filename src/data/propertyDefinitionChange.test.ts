@@ -19,13 +19,22 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, type AnyPropertySchema, type ProcessorRejection } from '@/data/api'
+import {
+  ChangeScope,
+  type AnyPropertySchema,
+  type AnyValuePresetCore,
+  type ProcessorRejection,
+} from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { valuePresetCoresFacet } from '@/data/facets'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { presetIdProp, propertyChangeScopeProp, propertyNameProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { withoutContestedRenames } from './internals/propertyDefinitionChangeProcessor'
+import {
+  consumingParentIds,
+  withoutContestedRenames,
+} from './internals/propertyDefinitionChangeProcessor'
 import type { Repo } from './repo'
 
 const WS = 'ws-def-change'
@@ -147,8 +156,16 @@ const seedProperty = async (
 }
 
 /** A workspace with one live `status` definition at `FIELD_ID`. */
-const setupDefinition = async (presetId = 'string'): Promise<Repo> => {
-  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+const setupDefinition = async (
+  presetId = 'string', extensions?: readonly AnyValuePresetCore[],
+): Promise<Repo> => {
+  const {repo} = createTestRepo({
+    db: sharedDb.db,
+    user: {id: 'user-1'},
+    ...(extensions
+      ? {extensions: extensions.map(core => valuePresetCoresFacet.of(core, {source: 'test'}))}
+      : {}),
+  })
   repo.setActiveWorkspaceId(WS)
   await createDefinition(repo, FIELD_ID, 'status', presetId)
   await awaitDefinition(repo, 'status', presetId)
@@ -242,10 +259,59 @@ describe('withoutContestedRenames', () => {
     )).toEqual([change('b', 'beta', 'beta')])
   })
 
+  it('drops two renames converging on one previously unclaimed name', () => {
+    // Neither sees a tx-start claimant for `gamma`, so only the batch itself
+    // can tell they collide. Letting both through assigns that key twice and
+    // the last writer wins — which need not be the definition the rebuilt
+    // registry picks.
+    expect(withoutContestedRenames(
+      [change('a', 'alpha', 'gamma'), change('b', 'beta', 'gamma')],
+      claimants({alpha: ['a'], beta: ['b']}),
+    )).toEqual([])
+  })
+
+  // `null` is "nothing here can be judged", not "nobody claims this name" — the
+  // permissive reading would approve a rename onto a seed-owned key in a
+  // workspace with no registry snapshot. Split per NAME because either clause
+  // alone drops the candidate, so a single test with both unknown leaves
+  // whichever one is deleted covered by the other.
+  it('refuses a rename whose DESTINATION cannot be judged', () => {
+    expect(withoutContestedRenames(
+      [change('a', 'alpha', 'beta')],
+      (name) => name === 'beta' ? null : [],
+    )).toEqual([])
+  })
+
+  it('refuses a rename whose VACATED name cannot be judged', () => {
+    expect(withoutContestedRenames(
+      [change('a', 'alpha', 'beta')],
+      (name) => name === 'alpha' ? null : [],
+    )).toEqual([])
+  })
+
   it('keeps an uncontested rename, and a codec-only change that keeps its name', () => {
     const changes = [change('a', 'alpha', 'gamma'), change('b', 'beta', 'beta')]
     expect(withoutContestedRenames(changes, claimants({alpha: ['a'], beta: ['b']})))
       .toEqual(changes)
+  })
+})
+
+describe('consumingParentIds', () => {
+  it('unions parents across chunks instead of re-visiting one twice', async () => {
+    // SELECT DISTINCT dedupes only WITHIN a statement, so a parent consuming
+    // two changed definitions that land in different chunks comes back once per
+    // chunk — and re-keying it twice is what the Set exists to prevent.
+    const calls: unknown[][] = []
+    const db = {
+      getAll: async <T,>(_sql: string, params?: unknown[]): Promise<T[]> => {
+        calls.push(params ?? [])
+        return [{parent_id: 'shared'}] as T[]
+      },
+    }
+
+    expect(await consumingParentIds(db, WS, ['f1', 'f2'], 1)).toEqual(['shared'])
+    expect(calls).toHaveLength(2)
+    expect(calls.map(params => params[1])).toEqual(['f1', 'f2'])
   })
 })
 
@@ -471,6 +537,35 @@ describe('codec change', () => {
 
     expect(await rowContent(valueRowId)).not.toBe('((target))')
     expect(await referenceTargetOf(valueRowId)).toBeNull()
+  })
+
+  it('survives a preset whose build THROWS, and still repairs off it', async () => {
+    // `preset.build` is extension code. The projector catches a throw and
+    // publishes metadata only; here an escape would abort the user's own
+    // transaction — and the transaction it would abort is the one repairing the
+    // broken definition.
+    const throwing = {
+      id: 'test-throwing-preset',
+      build: () => { throw new Error('[test] preset build failed') },
+      defaultValue: '',
+    } as unknown as AnyValuePresetCore
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string', [throwing])
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
+
+    await retype(repo, FIELD_ID, throwing.id)
+    await vi.waitFor(() => {
+      if (repo.propertySchemas.get('status') !== undefined) {
+        throw new Error('[test] status still has behaviour in the registry')
+      }
+    }, {timeout: 3000})
+    // The re-type onto the broken preset built nothing, so nothing fanned out.
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+
+    await retype(repo, FIELD_ID, 'number')
+
+    expect(await cell('p')).toEqual({status: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
   })
 
   it('rename + re-type in ONE edit: value rows stay live, cell unsets per §9', async () => {
