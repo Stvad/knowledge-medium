@@ -1,0 +1,1 @@
+import{Rw as e,zw as t}from"../../chunks/app-B3dORhpE.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

@@ -1,0 +1,1 @@
+import{ew as e,tw as t}from"../../../chunks/app-B3dORhpE.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

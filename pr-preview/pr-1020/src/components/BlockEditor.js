@@ -1,0 +1,1 @@
+import{_O as e}from"../../chunks/app-B3dORhpE.js";export{e as BlockEditor};

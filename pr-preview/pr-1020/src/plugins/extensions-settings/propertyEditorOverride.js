@@ -1,0 +1,1 @@
+import{vt as e}from"../../../chunks/app-B3dORhpE.js";export{e as extensionsOverridesUi};

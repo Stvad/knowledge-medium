@@ -1,0 +1,1 @@
+import{_$ as e,v$ as t}from"../../chunks/app-B3dORhpE.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
