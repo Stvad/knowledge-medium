@@ -1,1 +1,1 @@
-import{HC as e,UC as t}from"../../chunks/app-kJVoZsp4.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
+import{HC as e,UC as t}from"../../chunks/app-DE7eVC3D.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

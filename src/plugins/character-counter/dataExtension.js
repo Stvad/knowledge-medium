@@ -1,1 +1,1 @@
-import{LR as e}from"../../../chunks/app-kJVoZsp4.js";export{e as characterCounterDataExtension};
+import{LR as e}from"../../../chunks/app-DE7eVC3D.js";export{e as characterCounterDataExtension};

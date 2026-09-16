@@ -1,1 +1,1 @@
-import{Bk as e,zk as t}from"../../chunks/app-kJVoZsp4.js";export{t as markdownExtensionsFacet,e as resolveMarkdownRenderConfig};
+import{Bk as e,zk as t}from"../../chunks/app-DE7eVC3D.js";export{t as markdownExtensionsFacet,e as resolveMarkdownRenderConfig};
