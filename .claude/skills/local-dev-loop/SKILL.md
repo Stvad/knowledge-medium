@@ -130,11 +130,13 @@ confirmed on a component-only module Fast Refresh *did* self-accept
 (`src/components/BlockComponent.tsx`) and a pure-function module with no JSX
 (`src/utils/routing.ts`), both splitting identically. The timestamp itself keeps changing on further
 edits — the only load-bearing fact is that it never cleans until restart.
-Export shape instead gates whether the split is *observable*: it surfaces as
-a bug only when something compares identity across the boundary
-(`createContext()`, a singleton store/Map, `instanceof`), never for
-pure-function/component-only exports, since nothing compares those with
-`===`. (One round of testing; untested: new-file, delete, rename cases.)
+Usage instead gates whether the split is *observable*: it surfaces as a bug
+only when something compares identity across the boundary — `createContext()`,
+a singleton store/Map, `instanceof`, a function or component used as a
+Map/registry key, React comparing element types (a component reached through
+both URLs remounts instead of updating). Exports that are only ever *called*
+across the boundary split just the same and show nothing. (One round of
+testing; untested: new-file, delete, rename cases.)
 
 ## What does NOT match production
 
