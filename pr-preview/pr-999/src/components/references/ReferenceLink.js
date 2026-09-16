@@ -1,1 +1,1 @@
-import{Ov as e,kv as t}from"../../../chunks/app-DREeDr8g.js";export{e as ReferenceLink,t as classifyReferenceClick};
+import{Ov as e,kv as t}from"../../../chunks/app-BmcGUND_.js";export{e as ReferenceLink,t as classifyReferenceClick};
