@@ -1,1 +1,0 @@
-import{pa as e}from"../../../chunks/app-DZhwmkwg.js";export{e as getSyncIndicatorView};

@@ -1,1 +1,0 @@
-import{_x as e}from"../../../chunks/app-DZhwmkwg.js";export{e as openKeybindingsSettingsAction};
