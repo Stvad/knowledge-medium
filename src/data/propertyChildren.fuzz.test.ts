@@ -47,7 +47,13 @@ import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
 import { utf16UnitArb } from '@/test/arbitraries/utf16'
 import { ChangeScope, CodecError, codecs, defineProperty, type PropertySchema } from '@/data/api'
-import { valueChildContentToEncoded, encodedToValueChildContent } from './propertyChildren'
+import {
+  childContentsToEncodedPropertyValue,
+  encodedPropertyValueToChildContents,
+  encodedToValueChildContent,
+  valueChildContentToEncoded,
+} from './propertyChildren'
+import { kernelValuePresetCoresById } from './kernelValuePresetCores'
 import { parseExactReferenceBlockContent } from './referenceBlock'
 // Tests are exempt from `boundary/no-core-to-plugin-imports`, and the inline
 // parser is the other reader this content must be inert to.
@@ -337,5 +343,68 @@ describe('number: blank content is unparseable, never a silent zero', () => {
       expect(() => valueChildContentToEncoded(numberSchema, content), `content ${JSON.stringify(content)}`)
         .toThrow(CodecError)
     }
+  })
+})
+
+describe('multi-value: N contents round-trip to the DEDUPED list (km-h1hy)', () => {
+  const stringListSchema = defineProperty<readonly string[]>('sl', {
+    codec: kernelValuePresetCoresById['string-list'].build(),
+    defaultValue: [], changeScope: ChangeScope.BlockDefault,
+  })
+  const refListSchema = defineProperty<readonly string[]>('rl', {
+    codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault,
+  })
+
+  /** The whole-property round trip, as the projection actually performs it:
+   *  encode to N contents, then aggregate those contents back. The oracle is
+   *  the list with duplicates removed, keeping first occurrence — members are
+   *  a SET, which is a property of the model rather than of this encoding, so
+   *  it belongs in the expectation and not in a filter on the input. */
+  const roundTrips = (schema: typeof stringListSchema, members: readonly string[]): void => {
+    const contents = encodedPropertyValueToChildContents(
+      schema, schema.codec.encode(members))
+    const deduped = [...new Set(members)]
+    expect(childContentsToEncodedPropertyValue(schema, contents))
+      .toEqual(deduped.length === 0 ? undefined : deduped)
+  }
+
+  it('string-list: arbitrary members, including ones shaped like the grammar', () => {
+    fc.assert(
+      fc.property(fc.array(textArb, {maxLength: 6}), members => {
+        roundTrips(stringListSchema, members)
+      }),
+      fuzzParams(150),
+    )
+  })
+
+  it('no member content is a WHOLE-content reference', () => {
+    // The escape rule applies per MEMBER now. Same two legs as the scalar
+    // string case above and for the same reasons: the whole-block reader must
+    // see nothing in ANY member, or that member is re-roled out of the value
+    // set; an escaped one must also be inert to the inline reader, which a
+    // rename rewrites through. A span embedded in prose stays verbatim and
+    // does still index inline (#756) — a design question, not a misread.
+    fc.assert(
+      fc.property(fc.array(textArb, {maxLength: 6}), members => {
+        // Per MEMBER, through the grain encoder: the contents the projection
+        // sees are DEDUPED, so they cannot be zipped back against the input.
+        for (const member of stringListSchema.codec.encode(members) as string[]) {
+          const content = encodedToValueChildContent(stringListSchema, member)
+          expect(parseExactReferenceBlockContent(content)).toBeNull()
+          if (content !== member) expect(parseReferences(content)).toEqual([])
+        }
+      }),
+      fuzzParams(150),
+    )
+  })
+
+  it('refList: id members round-trip through their `((id))` spans', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.stringMatching(/^[A-Za-z0-9-]{1,12}$/), {maxLength: 6}),
+        members => { roundTrips(refListSchema, members) },
+      ),
+      fuzzParams(150),
+    )
   })
 })
