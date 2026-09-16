@@ -1,1 +1,1 @@
-import{Aw as e,kw as t}from"../chunks/app-Ba90uTBR.js";export{t as checkForAppUpdate,e as registerServiceWorker};
+import{Aw as e,kw as t}from"../chunks/app-mL-hulz3.js";export{t as checkForAppUpdate,e as registerServiceWorker};
