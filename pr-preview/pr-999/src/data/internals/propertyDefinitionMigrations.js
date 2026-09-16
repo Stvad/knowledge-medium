@@ -1,1 +1,1 @@
-import{CK as e,SK as t,wK as n,xK as r}from"../../../chunks/app-Bm7rdTD3.js";export{r as changedPropertyDefinitionFacts,t as propertyDefinitionFacts,e as propertyDefinitionMigrationLabel,n as withoutContestedRenames};
+import{CK as e,SK as t,wK as n,xK as r}from"../../../chunks/app-BYZOU_qx.js";export{r as changedPropertyDefinitionFacts,t as propertyDefinitionFacts,e as propertyDefinitionMigrationLabel,n as withoutContestedRenames};
