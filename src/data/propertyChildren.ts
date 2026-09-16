@@ -41,6 +41,8 @@
 
 import {
   CodecError,
+  memberCodecOf,
+  type AnyCodec,
   type AnyPropertySchema,
   type BlockData,
   type PropertySchema,
@@ -146,14 +148,26 @@ const jsonFromContent = (content: string): unknown => {
   }
 }
 
-const codecAcceptsNull = (schema: AnyPropertySchema): boolean => {
+const codecAcceptsNull = (codec: AnyCodec): boolean => {
   try {
-    schema.codec.decode(null)
+    codec.decode(null)
     return true
   } catch {
     return false
   }
 }
+
+/** The codec ONE value child's content is encoded by: the MEMBER codec for a
+ *  multi-valued property, the property's own codec otherwise.
+ *
+ *  The grain question asked in ONE place. Every path that touches a single
+ *  value child — materialize, project, the deferred re-encode, find-replace's
+ *  write guard — has to agree about it, and a site reaching for `schema.codec`
+ *  directly would read a list codec's whole-array grammar against one member's
+ *  text: `["a","b"]` and the string `a` are both "not an array", so the errors
+ *  are silent rather than loud. */
+export const valueChildCodec = (schema: AnyPropertySchema): AnyCodec =>
+  memberCodecOf(schema.codec) ?? schema.codec
 
 /** The characters every reference span OPENS with. Escaping these is what
  *  makes {@link escapeContent}'s output inert to BOTH readers of the grammar:
@@ -202,8 +216,12 @@ export const contentLosesPropertyValue = (
   schema: AnyPropertySchema,
   content: string,
 ): boolean => {
-  if (schema.codec.type !== 'string' && schema.codec.type !== 'url') return false
-  if (codecAcceptsNull(schema) && content.trim() === 'null') return true
+  // At GRAIN (`valueChildCodec`): the row being rewritten is ONE value child,
+  // so a `string-list` member is governed by the string rules its own content
+  // was written under, not by the list codec's.
+  const codec = valueChildCodec(schema)
+  if (codec.type !== 'string' && codec.type !== 'url') return false
+  if (codecAcceptsNull(codec) && content.trim() === 'null') return true
   return parseExactReferenceBlockContent(content)?.fieldForm === true
     || hasLoneSurrogate(content)
 }
@@ -249,14 +267,14 @@ const isEscapedEnvelope = (trimmed: string): boolean =>
  *  value). Nothing double-escapes today because every re-encode path decodes
  *  first (`runPropertyDefinitionMigrationBatch`, the materialize processor).
  *  A future one must too; content is not a value. */
-const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
+const needsEscape = (codec: AnyCodec, s: string): boolean => {
   const trimmed = s.trim()
-  if (codecAcceptsNull(schema) && trimmed === 'null') return true
+  if (codecAcceptsNull(codec) && trimmed === 'null') return true
   if (verbatimContentLosesValue(s)) return true
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
     try {
       const parsed: unknown = JSON.parse(trimmed)
-      if (typeof parsed === 'string') return needsEscape(schema, parsed)
+      if (typeof parsed === 'string') return needsEscape(codec, parsed)
     } catch {
       // not valid JSON — falls through to "no escaping needed"
     }
@@ -264,10 +282,10 @@ const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
   return false
 }
 
-const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): string => {
+const encodedValueToContent = (codec: AnyCodec, encoded: unknown): string => {
   if (encoded === undefined) return ''
-  if (encoded === null) return codecAcceptsNull(schema) ? 'null' : ''
-  if (schema.codec.type === 'ref') {
+  if (encoded === null) return codecAcceptsNull(codec) ? 'null' : ''
+  if (codec.type === 'ref') {
     // A ref value child holds the reference in editable `((id))` form — the
     // same block-reference affordance as everywhere else, and the same shape
     // as the field row's own `((fieldId))` — so `core.deriveReferenceTarget`
@@ -289,17 +307,17 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     return referenceBlockContentForId(encoded)
   }
   if (
-    schema.codec.type === 'string'
-    || schema.codec.type === 'url'
+    codec.type === 'string'
+    || codec.type === 'url'
   ) {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
-    return needsEscape(schema, encoded) ? escapeContent(encoded) : encoded
+    return needsEscape(codec, encoded) ? escapeContent(encoded) : encoded
   }
-  if (schema.codec.type === 'date') {
+  if (codec.type === 'date') {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
     return encoded
   }
-  if (schema.codec.type === 'number' || schema.codec.type === 'boolean') {
+  if (codec.type === 'number' || codec.type === 'boolean') {
     return String(encoded)
   }
   const serialized = JSON.stringify(encoded)
@@ -307,7 +325,7 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
 }
 
 const contentToEncodedValue = (
-  schema: AnyPropertySchema,
+  codec: AnyCodec,
   content: string,
 ): unknown => {
   // Unwrap ONLY what `escapeContent` could have produced. Quote-wrapping alone
@@ -318,20 +336,20 @@ const contentToEncodedValue = (
   // what makes the envelope inert: a real envelope carries NO literal `[` or
   // `(`, so content that has one was written by someone else and is text.
   if (
-    (schema.codec.type === 'string' || schema.codec.type === 'url')
+    (codec.type === 'string' || codec.type === 'url')
     && isEscapedEnvelope(content.trim())
   ) {
     try {
       const parsed: unknown = JSON.parse(content.trim())
-      if (typeof parsed === 'string' && needsEscape(schema, parsed)) return parsed
+      if (typeof parsed === 'string' && needsEscape(codec, parsed)) return parsed
     } catch {
       // not valid JSON — falls through to the sentinel/default handling below
     }
   }
-  if (content.trim() === 'null' && codecAcceptsNull(schema)) {
-    return schema.codec.encode(schema.codec.decode(null))
+  if (content.trim() === 'null' && codecAcceptsNull(codec)) {
+    return codec.encode(codec.decode(null))
   }
-  switch (schema.codec.type) {
+  switch (codec.type) {
     case 'ref': {
       // The gate is this content's FORM, never `reference_target_id`'s
       // nullness (§9). The column is not the "is this a ref
@@ -386,39 +404,34 @@ const contentToEncodedValue = (
   }
 }
 
-/** Serialize a typed property value into the editable content of its
- *  backing child. Scalars stay human-readable; structured values fall
- *  back to their codec-encoded JSON. */
-export const propertyValueToChildContent = <T>(
-  schema: PropertySchema<T>,
-  value: T,
-): string => encodedValueToContent(schema, schema.codec.encode(value))
-
-export const encodedPropertyValueToChildContent = (
+/** Encode ONE value child's content, at {@link valueChildCodec} grain — a
+ *  whole scalar value, or one member of a multi-valued property. */
+export const encodedToValueChildContent = (
   schema: AnyPropertySchema,
   encoded: unknown,
-): string => encodedValueToContent(schema, encoded)
+): string => encodedValueToContent(valueChildCodec(schema), encoded)
 
-/** Parse a property-value child back into the canonical encoded value
- *  stored on the parent cell. Throws when the child content cannot be
- *  interpreted for this field's current codec.
+/** Parse ONE value child's content back into its canonical encoded form, at
+ *  {@link valueChildCodec} grain. Throws when the content cannot be
+ *  interpreted under that codec.
  *
  *  A function of `content` ALONE — for every codec including `ref`, which
  *  parses the id out of the id-carrying span rather than reading the derived
  *  column (see the `ref` case). That makes this decode answerable about
  *  PROPOSED content, which is what find-replace's value guard needs, and
  *  independent of whether a row's stamp has landed yet. */
-export const propertyChildContentToEncodedValue = (
+export const valueChildContentToEncoded = (
   schema: AnyPropertySchema,
   content: string,
 ): unknown => {
-  const encoded = contentToEncodedValue(schema, content)
+  const codec = valueChildCodec(schema)
+  const encoded = contentToEncodedValue(codec, content)
   // Decode and re-encode so tolerant user text ("1" for number,
   // date strings, etc.) lands in the same canonical JSON shape as
   // tx.setProperty would have stored directly.
-  const decoded = schema.codec.decode(encoded)
+  const decoded = codec.decode(encoded)
   try {
-    return schema.codec.encode(decoded)
+    return codec.encode(decoded)
   } catch {
     // Lenient-read codec whose write side is stricter than its read side —
     // `enum` is the case that matters: `decode` deliberately accepts a value
@@ -432,6 +445,108 @@ export const propertyChildContentToEncodedValue = (
     // than canonicalizing. A genuine shape error still throws out of `decode`.
     return encoded
   }
+}
+
+/**
+ * The content of EVERY value child backing one encoded property value, in
+ * sibling order — one for a single-valued property, one PER MEMBER for a
+ * multi-valued one (§5/§9: a refList is N sibling `((id))` values, not a JSON
+ * array in one child). Sibling order IS list order; the reconciler that writes
+ * these keeps the two the same and the projection reads them back in it.
+ *
+ * MEMBERS ARE A SET, deduped by content. Three things collapse into that one
+ * rule: a value written twice concurrently, a divergent pair arriving from two
+ * devices, and a list literally containing the same member twice. The merge
+ * policy is already union-with-dedupe, so the alternative would be a list that
+ * accumulates duplicates every time two devices touch it — and no kernel list
+ * property (`types`, `alias`, `block-type:properties`) wants multiplicity. A
+ * property that genuinely needs a multiset is not list-shaped; it is `json`.
+ *
+ * By CONTENT and not by decoded value, because content is what the sibling set
+ * holds and what the reconciler matches on — equal content always means an
+ * equal value, so this is the stricter of the two and needs no second rule.
+ */
+export const encodedPropertyValueToChildContents = (
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): string[] => {
+  const member = memberCodecOf(schema.codec)
+  if (member === undefined) return [encodedValueToContent(schema.codec, encoded)]
+  // Callers reach here only past their own decode gate, which a list codec
+  // fails on anything but an array — so this is a broken-codec assertion, not
+  // a user-reachable path.
+  if (!Array.isArray(encoded)) throw new CodecError('array', encoded)
+  const contents: string[] = []
+  const seen = new Set<string>()
+  for (const item of encoded) {
+    const content = encodedValueToContent(member, item)
+    if (seen.has(content)) continue
+    seen.add(content)
+    contents.push(content)
+  }
+  return contents
+}
+
+/** The same, from a typed value — `tx.setProperty`'s dual-write. */
+export const propertyValueToChildContents = <T>(
+  schema: PropertySchema<T>,
+  value: T,
+): string[] => encodedPropertyValueToChildContents(schema, schema.codec.encode(value))
+
+/**
+ * Aggregate a field row's value children back into the property's encoded
+ * value — `undefined` when nothing parses, which the projection reads as
+ * §9's "key unset, rows stay visible and fixable".
+ *
+ * Single-valued: first parseable wins, unparseable siblings skipped (a
+ * divergent peer is a surfaced conflict, and the cell shows the winner).
+ * Multi-valued: every parseable member, in sibling order, deduped as
+ * {@link encodedPropertyValueToChildContents} describes. An unparseable MEMBER
+ * drops only itself — the same rule `decodeRefListIds` already applies to a
+ * malformed element of a stored list (#189), for the same reason: one bad
+ * member must not strip the whole field.
+ *
+ * EMPTY AND UNSET COINCIDE, deliberately: no parseable member returns
+ * `undefined` rather than `[]`, so a list-valued key is absent from the cell
+ * exactly when it has no members — and reads back as the preset's `[]`
+ * default. Distinguishing them would need "the key is present and empty" to
+ * mean something no reader asks, while costing a second state that the
+ * zero-children field row cannot express anyway.
+ *
+ * NO whole-list canonicalization: members are canonicalized one at a time, and
+ * the `member` contract (`encode` is element-wise) makes the array of
+ * canonical members the canonical array. Doing it again through the list codec
+ * would also make one member's shape error throw away every other member.
+ */
+export const childContentsToEncodedPropertyValue = (
+  schema: AnyPropertySchema,
+  contents: Iterable<string>,
+): unknown | undefined => {
+  if (memberCodecOf(schema.codec) === undefined) {
+    for (const content of contents) {
+      try {
+        return valueChildContentToEncoded(schema, content)
+      } catch {
+        // Invalid child text should not preserve a stale parent cell
+        // projection. Skip it; if none parse the key is left unset.
+      }
+    }
+    return undefined
+  }
+  const members: unknown[] = []
+  const seen = new Set<string>()
+  for (const content of contents) {
+    // Marked seen before the decode, so a repeated UNPARSEABLE member is
+    // dropped once rather than retried per sibling.
+    if (seen.has(content)) continue
+    seen.add(content)
+    try {
+      members.push(valueChildContentToEncoded(schema, content))
+    } catch {
+      // Drop only this member — see the note above.
+    }
+  }
+  return members.length === 0 ? undefined : members
 }
 
 export const propertiesEqual = (

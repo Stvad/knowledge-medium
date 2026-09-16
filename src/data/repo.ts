@@ -122,10 +122,10 @@ import {
   recordAppliedPropertyDefinitionCodecs,
 } from './internals/propertyDefinitionBaseline'
 import {
-  encodedPropertyValueToChildContent,
+  encodedToValueChildContent,
   isFieldValueChild,
   isPropertyFieldInstance,
-  propertyChildContentToEncodedValue,
+  valueChildContentToEncoded,
   rekeyParentPropertyCell,
   type IsPropertyFieldDefinition,
 } from './propertyChildren'
@@ -4570,7 +4570,7 @@ export class Repo {
                     .filter(isFieldValueChild)
                   for (const value of values) {
                     try {
-                      const encoded = propertyChildContentToEncodedValue(schema, value.content)
+                      const encoded = valueChildContentToEncoded(schema, value.content)
                       if (!hasProjection) {
                         projected = encoded
                         hasProjection = true
@@ -4580,7 +4580,7 @@ export class Repo {
                       // Every change that reaches this batch is a codec change
                       // (the bridge filters to one, the baseline emits only
                       // those), so re-encoding is always what was asked for.
-                      const canonical = encodedPropertyValueToChildContent(schema, encoded)
+                      const canonical = encodedToValueChildContent(schema, encoded)
                       if (value.content !== canonical) {
                         await tx.update(value.id, {content: canonical}, {skipMetadata: true})
                       }

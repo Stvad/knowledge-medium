@@ -57,7 +57,7 @@ import { getModePin, type ModePin } from '@/sync/keys/modePin'
 import { readContentKeyHmac } from '@/sync/keys/resolver'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 import {
-  encodedPropertyValueToChildContent, propertyChildContentToEncodedValue,
+  encodedToValueChildContent, valueChildContentToEncoded,
 } from '@/data/propertyChildren'
 import {
   OBJECT_BAG, keyOf, requirePropertyRegistryFor, scanPropertyKeys,
@@ -213,8 +213,8 @@ const containsNonFinite = (value: unknown): boolean => {
 const survivesChildRoundTrip = (schema: AnyPropertySchema, encoded: unknown): boolean => {
   if (containsNonFinite(encoded)) return false
   try {
-    const content = encodedPropertyValueToChildContent(schema, encoded)
-    return jsonValuesEqual(propertyChildContentToEncodedValue(schema, content), encoded)
+    const content = encodedToValueChildContent(schema, encoded)
+    return jsonValuesEqual(valueChildContentToEncoded(schema, content), encoded)
   } catch {
     return false
   }

@@ -50,7 +50,7 @@ import { withoutContestedRenames } from './propertyDefinitionMigrations'
 import {
   isFieldValueChild,
   isPropertyFieldInstance,
-  propertyChildContentToEncodedValue,
+  valueChildContentToEncoded,
   rekeyParentPropertyCell,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
@@ -161,7 +161,7 @@ const rekeyParent = (
           .filter(isFieldValueChild)
         for (const value of values) {
           try {
-            projected = propertyChildContentToEncodedValue(rename.schema, value.content)
+            projected = valueChildContentToEncoded(rename.schema, value.content)
             hasProjection = true
             break
           } catch {

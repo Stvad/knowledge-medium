@@ -12,7 +12,7 @@ import {
   kernelContentKey,
 } from '@/data/invalidation'
 import {
-  propertyChildContentToEncodedValue,
+  valueChildContentToEncoded,
   resolvePropertyValueFieldSchema,
   contentLosesPropertyValue,
 } from '@/data/propertyChildren'
@@ -230,7 +230,7 @@ export const applyContentReplaceMutator = defineMutator<
       const schema = await resolvePropertyValueFieldSchema(tx, current)
       if (schema !== null && !force) {
         // The check is on the PROPOSED content, and asking it takes nothing
-        // but that string: `propertyChildContentToEncodedValue` decodes a ref
+        // but that string: `valueChildContentToEncoded` decodes a ref
         // value by parsing the id out of its id-carrying span, so there is no
         // derived column to project first (#443 group 3). It used to resolve
         // `deriveReferenceColumns` here — an async alias lookup per candidate
@@ -249,7 +249,7 @@ export const applyContentReplaceMutator = defineMutator<
         // refuses instead and offers "replace anyway" like every other skip.
         const unsafeToWrite = (() => {
           try {
-            propertyChildContentToEncodedValue(schema, replaced.content)
+            valueChildContentToEncoded(schema, replaced.content)
           } catch {
             return true
           }

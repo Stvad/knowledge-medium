@@ -7,8 +7,8 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty, propertyValue, type AnyPropertySchema, type BlockData } from '@/data/api'
-import { keyAtStart } from './orderKey'
+import { ChangeScope, codecs, defineProperty, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema } from '@/data/api'
+import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -16,13 +16,20 @@ import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
-  encodedPropertyValueToChildContent,
-  propertyChildContentToEncodedValue,
-  propertyValueToChildContent,
+  encodedToValueChildContent,
+  valueChildContentToEncoded,
 } from './propertyChildren'
 import { propertyDefinitionBlockId } from './definitionSeeds'
 import { addBlockTypeToProperties, aliasesProp, blockTypeLabelProp, typesProp } from './properties'
 import { BLOCK_TYPE_TYPE } from './blockTypes'
+import { kernelValuePresetCoresById } from './kernelValuePresetCores'
+
+/** One scalar value's child content. Every schema in this file is
+ *  single-valued, so grain and property value are the same thing here. */
+const propertyValueToChildContent = <T>(
+  schema: PropertySchema<T>,
+  value: T,
+): string => encodedToValueChildContent(schema, schema.codec.encode(value))
 
 const WS = 'ws-prop-children'
 const STATUS_FIELD_ID = 'field-status-children'
@@ -103,13 +110,14 @@ const createBlock = async (repo: Repo, id: string, content = ''): Promise<void> 
 interface ChildRow {
   id: string
   content: string
+  order_key: string
   reference_target_id: string | null
   deleted: number
 }
 
 const childrenRows = async (parentId: string): Promise<ChildRow[]> =>
   sharedDb.db.getAll<ChildRow>(
-    `SELECT id, content, reference_target_id, deleted FROM blocks
+    `SELECT id, content, order_key, reference_target_id, deleted FROM blocks
       WHERE parent_id = ? ORDER BY order_key, id`,
     [parentId],
   )
@@ -143,7 +151,7 @@ const cellValue = async (id: string): Promise<unknown> =>
 const expectEscapedEnvelope = (schema: typeof statusSchema, value: string, content: string): void => {
   expect(content).not.toBe(value)
   expect(content).not.toMatch(/[[(]/)
-  expect(propertyChildContentToEncodedValue(schema, content)).toBe(value)
+  expect(valueChildContentToEncoded(schema, content)).toBe(value)
 }
 
 describe('dormant at properties_migration = cell', () => {
@@ -2428,12 +2436,12 @@ describe('content <-> value codecs: lenient-read codecs keep values the write si
     expect(() => currentOptionsSchema.codec.encode('urgent')).toThrow()
 
     // Must NOT throw — throwing marks it unparseable and the caller drops the cell key.
-    expect(propertyChildContentToEncodedValue(currentOptionsSchema, content)).toBe('urgent')
+    expect(valueChildContentToEncoded(currentOptionsSchema, content)).toBe('urgent')
   })
 
   it('still canonicalizes values that ARE in the current option set', () => {
     const content = propertyValueToChildContent(currentOptionsSchema, 'high')
-    expect(propertyChildContentToEncodedValue(currentOptionsSchema, content)).toBe('high')
+    expect(valueChildContentToEncoded(currentOptionsSchema, content)).toBe('high')
   })
 
   it('a genuine shape error still throws (decode failure is not swallowed)', () => {
@@ -2442,7 +2450,7 @@ describe('content <-> value codecs: lenient-read codecs keep values the write si
       defaultValue: 0,
       changeScope: ChangeScope.BlockDefault,
     })
-    expect(() => propertyChildContentToEncodedValue(numberSchema, 'not-a-number')).toThrow()
+    expect(() => valueChildContentToEncoded(numberSchema, 'not-a-number')).toThrow()
   })
 })
 
@@ -2464,7 +2472,7 @@ describe('content <-> value codecs: blank numeric content is unparseable, not ze
       expect(Number(content)).toBe(0)
       expect(Number.isFinite(Number(content))).toBe(true)
 
-      expect(() => propertyChildContentToEncodedValue(numberSchema, content)).toThrow()
+      expect(() => valueChildContentToEncoded(numberSchema, content)).toThrow()
     },
   )
 
@@ -2472,7 +2480,7 @@ describe('content <-> value codecs: blank numeric content is unparseable, not ze
     // The value blank must NOT be confused with: 0 has its own content ('0').
     const content = propertyValueToChildContent(numberSchema, 0)
     expect(content).toBe('0')
-    expect(propertyChildContentToEncodedValue(numberSchema, content)).toBe(0)
+    expect(valueChildContentToEncoded(numberSchema, content)).toBe(0)
   })
 })
 
@@ -2490,32 +2498,32 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     const content = propertyValueToChildContent(nullableStringSchema, 'null')
     expect(content).toBe(JSON.stringify('null'))
     expect(content).not.toBe('null')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBe('null')
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBe('null')
   })
 
   it('the string value " null " (trims to the token) round-trips', () => {
     const content = propertyValueToChildContent(nullableStringSchema, ' null ')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBe(' null ')
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBe(' null ')
   })
 
   it('the string value \'"null"\' (a quoted-null literal) round-trips', () => {
     const content = propertyValueToChildContent(nullableStringSchema, '"null"')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBe('"null"')
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBe('"null"')
   })
 
   it('encoded null still materializes as content "null" and parses back to encoded null', () => {
-    const content = encodedPropertyValueToChildContent(nullableStringSchema, null)
+    const content = encodedToValueChildContent(nullableStringSchema, null)
     expect(content).toBe('null')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBeNull()
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBeNull()
   })
 
   it('ordinary strings are stored verbatim, unchanged', () => {
     expect(propertyValueToChildContent(nullableStringSchema, 'hello')).toBe('hello')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, 'hello')).toBe('hello')
+    expect(valueChildContentToEncoded(nullableStringSchema, 'hello')).toBe('hello')
 
     const withQuotes = 'say "hi"'
     expect(propertyValueToChildContent(nullableStringSchema, withQuotes)).toBe(withQuotes)
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, withQuotes)).toBe(withQuotes)
+    expect(valueChildContentToEncoded(nullableStringSchema, withQuotes)).toBe(withQuotes)
   })
 
   it('a non-null-accepting string schema stores "null" verbatim — no escaping needed', () => {
@@ -2523,7 +2531,7 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     // never applies to it and there's nothing to escape.
     const content = propertyValueToChildContent(statusSchema, 'null')
     expect(content).toBe('null')
-    expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe('null')
+    expect(valueChildContentToEncoded(statusSchema, content)).toBe('null')
   })
 })
 
@@ -2572,7 +2580,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
   it('leaves strings content CAN hold verbatim (valid pairs, NUL, controls, padding)', () => {
     for (const value of ['a😀b', 'a\u0000b', 'a\u0001\u001Fb', '  padded  ', 'a\r\nb', '((']) {
       expect(propertyValueToChildContent(statusSchema, value)).toBe(value)
-      expect(propertyChildContentToEncodedValue(statusSchema, value)).toBe(value)
+      expect(valueChildContentToEncoded(statusSchema, value)).toBe(value)
     }
   })
 
@@ -2588,7 +2596,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
       .not.toBe(propertyValueToChildContent(statusSchema, inner))
     for (const value of [inner, quoted, JSON.stringify(quoted)]) {
       const content = propertyValueToChildContent(statusSchema, value)
-      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+      expect(valueChildContentToEncoded(statusSchema, content)).toBe(value)
     }
   })
 
@@ -2597,7 +2605,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
   it('an ordinary quoted string is still stored verbatim, quotes and all', () => {
     const value = '"hello"'
     expect(propertyValueToChildContent(statusSchema, value)).toBe(value)
-    expect(propertyChildContentToEncodedValue(statusSchema, value)).toBe(value)
+    expect(valueChildContentToEncoded(statusSchema, value)).toBe(value)
   })
 
   // The EMBED forms. `((id))` was escaped and `!((id))` was
@@ -2610,7 +2618,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
   ])('escapes the embed form %j, which the whole-block reader alone misses', value => {
     const content = propertyValueToChildContent(statusSchema, value)
     expect(content).not.toBe(value)
-    expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+    expect(valueChildContentToEncoded(statusSchema, content)).toBe(value)
   })
 
   // Quote-wrapping alone was treated as "this is an escaped
@@ -2618,7 +2626,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
   // A real envelope carries no literal span opener; this content does.
   it('does not unwrap quoted text that escapeContent could not have produced', () => {
     for (const content of ['"[[Page]]"', `"::((${SAMPLE_UUID}))"`, '"(x)"']) {
-      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(content)
+      expect(valueChildContentToEncoded(statusSchema, content)).toBe(content)
     }
   })
 
@@ -2628,7 +2636,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
   it('still unwraps a genuine envelope', () => {
     for (const value of [`::((${SAMPLE_UUID}))`, '[[Page]]', '"null"', 'a\uD800b']) {
       const content = propertyValueToChildContent(statusSchema, value)
-      expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe(value)
+      expect(valueChildContentToEncoded(statusSchema, content)).toBe(value)
     }
   })
 
@@ -2640,7 +2648,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
     })
     const content = propertyValueToChildContent(refSchema, UUID)
     expect(content).toBe(`((${UUID}))`)
-    expect(propertyChildContentToEncodedValue(refSchema, content)).toBe(UUID)
+    expect(valueChildContentToEncoded(refSchema, content)).toBe(UUID)
   })
 })
 
@@ -2665,7 +2673,7 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
 
   it('writes a ref value as `((id))`, not the bare id', () => {
     expect(propertyValueToChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
-    expect(encodedPropertyValueToChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
+    expect(encodedToValueChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
   })
 
   // Regression: `referenceBlockContentForId` was hardened to
@@ -2676,17 +2684,17 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
   // column stays NULL, and the projection reads the key as unset.
   it('renders an exactly-empty ref as empty content, but rejects a whitespace-only id', () => {
     expect(propertyValueToChildContent(refSchema, '')).toBe('')
-    expect(encodedPropertyValueToChildContent(refSchema, '')).toBe('')
+    expect(encodedToValueChildContent(refSchema, '')).toBe('')
     // A whitespace-only id is a MALFORMED reference, not a clear:
     // matching it as "empty" would silently unset the property; it must reach
     // `referenceBlockContentForId`, which throws on whitespace/parens ids.
     expect(() => propertyValueToChildContent(refSchema, '   ')).toThrow()
-    expect(() => encodedPropertyValueToChildContent(refSchema, '   ')).toThrow()
+    expect(() => encodedToValueChildContent(refSchema, '   ')).toThrow()
   })
 
   it('reads the bare id back out of the `((id))` span', () => {
     const content = propertyValueToChildContent(refSchema, 'block-abc')
-    expect(propertyChildContentToEncodedValue(refSchema, content)).toBe('block-abc')
+    expect(valueChildContentToEncoded(refSchema, content)).toBe('block-abc')
   })
 
   it('accepts the aliased blockref form, keeping the id and dropping the label', () => {
@@ -2694,7 +2702,7 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
     // merge rewrite pins a span to. A ref VALUE written that way still names
     // an id, so it decodes; the label is display text the cell has no room for.
     const uuid = '0123abcd-4567-89ef-0123-456789abcdef'
-    expect(propertyChildContentToEncodedValue(refSchema, `[Mary](((${uuid})))`)).toBe(uuid)
+    expect(valueChildContentToEncoded(refSchema, `[Mary](((${uuid})))`)).toBe(uuid)
   })
 
   it('rejects prose typed into a ref value instead of coercing it', () => {
@@ -2702,7 +2710,7 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
     // throws → the projection skips it → the cell key reads unset while the
     // row text is preserved.
     expect(() =>
-      propertyChildContentToEncodedValue(refSchema, 'saw a bug in prod today'),
+      valueChildContentToEncoded(refSchema, 'saw a bug in prod today'),
     ).toThrow()
   })
 
@@ -2712,7 +2720,7 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
   // into the cell. The end-to-end test above is the one that proves the column
   // really is populated; here it's the form alone that decides.
   it('rejects a whole-block wikilink', () => {
-    expect(() => propertyChildContentToEncodedValue(refSchema, '[[Mary]]')).toThrow()
+    expect(() => valueChildContentToEncoded(refSchema, '[[Mary]]')).toThrow()
   })
 
   // ...and it must be THIS clause doing the refusing, not a downstream codec.
@@ -2723,24 +2731,24 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
   // clause here would stop the value scan on a wikilink row and skip a later
   // sibling that does name an id.
   it('rejects a wikilink in an OPTIONAL ref too, where no codec catches it', () => {
-    expect(() => propertyChildContentToEncodedValue(optionalRefSchema, '[[Mary]]')).toThrow()
+    expect(() => valueChildContentToEncoded(optionalRefSchema, '[[Mary]]')).toThrow()
   })
 
   it('rejects the MARKED id-carrying form — `::((id))` is a field row, not a value', () => {
     // §7: the marker makes the row machinery. Load-bearing through
     // find-replace, whose guard asks this function about PROPOSED content.
-    expect(() => propertyChildContentToEncodedValue(refSchema, `::((${STATUS_FIELD_ID}))`))
+    expect(() => valueChildContentToEncoded(refSchema, `::((${STATUS_FIELD_ID}))`))
       .toThrow()
   })
 
   it('an optional ref preserves an explicit null (sentinel wins over the form check)', () => {
-    const content = encodedPropertyValueToChildContent(optionalRefSchema, null)
+    const content = encodedToValueChildContent(optionalRefSchema, null)
     expect(content).toBe('null')
     // Must NOT throw despite `null` being no reference form at all — the
     // generic null sentinel runs first, so an intentionally-unset optional ref
     // decodes to its unset form (encoded as null, like every other
     // null-accepting codec).
-    expect(propertyChildContentToEncodedValue(optionalRefSchema, content)).toBeNull()
+    expect(valueChildContentToEncoded(optionalRefSchema, content)).toBeNull()
   })
 })
 
@@ -2887,5 +2895,334 @@ describe('block-type typeify amendments materialize in the same tx (§5/§9 proc
       const values = (await childrenRows(fields[0]!.id)).filter(v => v.deleted === 0)
       expect(values.length, `${name} value child`).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('multi-value properties are N sibling value children (km-h1hy)', () => {
+  const TAGS_FIELD_ID = 'field-tags-children'
+  const PEOPLE_FIELD_ID = 'field-people-children'
+  const BAG_FIELD_ID = 'field-bag-children'
+
+  /** `string-list`: the preset behind the kernel's own `types` and `alias`. */
+  const tagsSchema = defineProperty<readonly string[]>('tags', {
+    codec: kernelValuePresetCoresById['string-list'].build(),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+  /** `refList`: members are `((id))` spans, like a scalar ref. */
+  const peopleSchema = defineProperty<readonly string[]>('people', {
+    codec: codecs.refList(),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+  /** `list`: the identity codec over unknown members — what synthesis picks
+   *  for an importer's array-valued key. */
+  const bagSchema = defineProperty<unknown[]>('bag', {
+    codec: codecs.list(codecs.unsafeIdentity<unknown>()),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  const setupWithLists = async (): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    registerDefinition(repo, 'test-tags-definition', TAGS_FIELD_ID, tagsSchema)
+    registerDefinition(repo, 'test-people-definition', PEOPLE_FIELD_ID, peopleSchema)
+    registerDefinition(repo, 'test-bag-definition', BAG_FIELD_ID, bagSchema)
+    return repo
+  }
+
+  const fieldRowFor = async (parentId: string, fieldId: string): Promise<ChildRow> => {
+    const rows = (await liveFieldRowsFor(fieldId)(parentId))
+    expect(rows).toHaveLength(1)
+    return rows[0]!
+  }
+
+  /** The member contents under a field row, in sibling order — the shape the
+   *  whole slice is about, read the way the projection reads it. */
+  const memberContents = async (parentId: string, fieldId: string): Promise<string[]> => {
+    const field = await fieldRowFor(parentId, fieldId)
+    return (await childrenRows(field.id))
+      .filter(v => v.deleted === 0)
+      .map(v => v.content)
+  }
+
+  /** A valid order key after everything currently under `parentId` — hand-
+   *  written keys are not fractional indices and the generator refuses them. */
+  const appendKey = async (parentId: string): Promise<string> =>
+    keysBetween((await childrenRows(parentId)).at(-1)?.order_key ?? null, null, 1)[0]!
+
+  const memberRows = async (parentId: string, fieldId: string): Promise<ChildRow[]> => {
+    const field = await fieldRowFor(parentId, fieldId)
+    return (await childrenRows(field.id)).filter(v => v.deleted === 0)
+  }
+
+  describe('materialize: one child per member', () => {
+    it('string-list writes one plain child per member, in list order', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'beta', 'gamma'])
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta', 'gamma'])
+    })
+
+    it('refList writes each member as an `((id))` span with its column stamped', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['mary-id', 'john-id']),
+        {scope: ChangeScope.BlockDefault})
+
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+      expect(members.map(m => m.content)).toEqual(['((mary-id))', '((john-id))'])
+      // Each member is a real reference to reference maintenance — which is
+      // the whole reason a refList is not stored as JSON ids.
+      expect(members.map(m => m.reference_target_id)).toEqual(['mary-id', 'john-id'])
+      // The cell still keeps bare ids.
+      expect((await bagOf('p')).people).toEqual(['mary-id', 'john-id'])
+    })
+
+    it('a list member that is itself an object is JSON at MEMBER grain', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [{a: 1}, 'plain', 2]),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', BAG_FIELD_ID)).toEqual(['{"a":1}', '"plain"', '2'])
+      expect((await bagOf('p')).bag).toEqual([{a: 1}, 'plain', 2])
+    })
+
+    it('an empty list and an unset key coincide — no children, no cell key', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, []),
+        {scope: ChangeScope.BlockDefault})
+
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      expect((await childrenRows(field.id)).filter(v => v.deleted === 0)).toEqual([])
+      // The key is absent rather than `[]`, and reads back as the preset's
+      // `[]` default — the two states the field row cannot tell apart.
+      expect((await bagOf('p')).tags).toBeUndefined()
+    })
+
+    it('duplicate members collapse: the value set is a SET', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['x', 'y', 'x']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['x', 'y'])
+      expect((await bagOf('p')).tags).toEqual(['x', 'y'])
+    })
+  })
+
+  describe('project: the siblings ARE the list', () => {
+    it('editing one member re-projects only that position', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', TAGS_FIELD_ID)
+
+      await repo.tx(tx => tx.update(members[1]!.id, {content: 'BETA'}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'BETA'])
+    })
+
+    it('deleting one member drops it from the list and keeps the rest', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', TAGS_FIELD_ID)
+
+      await repo.tx(tx => tx.delete(members[1]!.id), {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'gamma'])
+    })
+
+    it('adding a member is creating a sibling — no property API involved', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+
+      const omegaKey = await appendKey(field.id)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: field.id, content: 'omega', orderKey: omegaKey,
+      }), {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'omega'])
+    })
+
+    it('reordering the siblings reorders the list', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      const members = await memberRows('p', TAGS_FIELD_ID)
+
+      // Move the last member to the front.
+      const front = keysBetween(null, members[0]!.order_key, 1)[0]!
+      await repo.tx(tx => tx.move(members[2]!.id, {parentId: field.id, orderKey: front}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['gamma', 'alpha', 'beta'])
+      expect((await bagOf('p')).tags).toEqual(['gamma', 'alpha', 'beta'])
+    })
+
+    it('an unparseable MEMBER drops only itself', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['mary-id', 'john-id']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+
+      // Prose typed into a ref member — the shape the design refuses to
+      // coerce. The row keeps its text and stays fixable in the tree.
+      await repo.tx(tx => tx.update(members[0]!.id, {content: 'lunch with Mary'}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).people).toEqual(['john-id'])
+      expect(await memberContents('p', PEOPLE_FIELD_ID))
+        .toEqual(['lunch with Mary', '((john-id))'])
+    })
+
+    it('every member unparseable reads as unset, rows intact', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['mary-id']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+
+      await repo.tx(tx => tx.update(members[0]!.id, {content: 'not a reference'}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).people).toBeUndefined()
+      expect(await memberContents('p', PEOPLE_FIELD_ID)).toEqual(['not a reference'])
+    })
+
+    it('two siblings with the same text project as ONE member', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+
+      // What a divergent concurrent write of the same member arrives as.
+      const twinKey = await appendKey(field.id)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: field.id, content: 'alpha', orderKey: twinKey,
+      }), {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha'])
+    })
+  })
+
+  describe('the cell write is authoritative for the members it names', () => {
+    it('re-setting a list to a subset removes the dropped members', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha'])
+      expect((await bagOf('p')).tags).toEqual(['alpha'])
+    })
+
+    it('a member keeps its ROW IDENTITY across a reorder through the cell', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+      const before = await memberRows('p', TAGS_FIELD_ID)
+      // A comment under a member — ordinary user content hanging off the row.
+      const commentKey = await appendKey(before[0]!.id)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: before[0]!.id, content: 'why alpha',
+        orderKey: commentKey,
+      }), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['beta', 'alpha']),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', TAGS_FIELD_ID)
+      expect(after.map(m => m.content)).toEqual(['beta', 'alpha'])
+      // The SAME rows, permuted — not two rows rewritten in place, which
+      // would have left the comment under 'beta'.
+      expect(after.map(m => m.id)).toEqual([before[1]!.id, before[0]!.id])
+      expect((await childrenRows(before[0]!.id)).map(c => c.content)).toEqual(['why alpha'])
+    })
+
+    it('writing the same list again writes nothing', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+      const before = await memberRows('p', TAGS_FIELD_ID)
+
+      await repo.tx(tx => tx.update('p', {properties: {tags: ['alpha', 'beta']}}),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', TAGS_FIELD_ID)
+      expect(after.map(m => ({id: m.id, content: m.content})))
+        .toEqual(before.map(m => ({id: m.id, content: m.content})))
+    })
+
+    it('a raw cell write materializes members, replacing a legacy JSON-text child', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      // The shape a pre-km-h1hy build wrote: the whole list as JSON in ONE
+      // child. It is NOT specially decoded — at member grain it is one
+      // string member, and no heuristic can tell it from a member whose text
+      // happens to look like JSON (`["a","b"]` is a legal string). Nothing
+      // in production holds one: no workspace was flipped before this
+      // landed, which is the reason the ambiguity costs nothing.
+      const legacyKey = await appendKey(field.id)
+      const legacy = await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: field.id, orderKey: legacyKey,
+        content: JSON.stringify(['beta', 'gamma']),
+      }), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual(['alpha', '["beta","gamma"]'])
+
+      // The next cell write heals it: the legacy child matches no member and
+      // is reaped, and the members it stood for become real siblings.
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'beta', 'gamma'])
+      expect(await memberRows('p', TAGS_FIELD_ID)).not.toContainEqual(
+        expect.objectContaining({id: legacy}))
+    })
+  })
+
+  describe('merge unions two divergent sets (§5 merge policy)', () => {
+    it('folds the source field row and keeps every member once', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'into')
+      await createBlock(repo, 'from')
+      await repo.tx(tx => tx.setProperty('into', tagsSchema, ['shared', 'mine']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('from', tagsSchema, ['shared', 'theirs']),
+        {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(async tx => {
+        const into = await tx.get('into')
+        const from = await tx.get('from')
+        await mergeBlocksInTx(tx, {into: into!, from: from!})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('into', TAGS_FIELD_ID))
+        .toEqual(['shared', 'mine', 'theirs'])
+      expect((await bagOf('into')).tags).toEqual(['shared', 'mine', 'theirs'])
+    })
   })
 })
