@@ -524,7 +524,13 @@ export const encodedPropertyValueToChildContents = (
   // fails on anything but an array — so this is a broken-codec assertion, not
   // a user-reachable path.
   if (!Array.isArray(encoded)) throw new CodecError('array', encoded)
-  const contents = encoded.map(item => encodedValueToContent(member, item))
+  // `undefined` is ABSENCE to a scalar codec, which renders it as empty
+  // content. An array ELEMENT cannot be absent: `JSON.stringify` writes it as
+  // `null`, so that is what the cell already stores for it, and rendering it as
+  // empty content instead would make the same `setProperty` call succeed before
+  // the flip and fail after it. Normalize to the persisted form first.
+  const contents = encoded.map(item =>
+    encodedValueToContent(member, item === undefined ? null : item))
   // Empty content is how a codec spells ABSENCE — `codecs.ref` renders a
   // cleared ref that way, and that is a documented non-round-trip a SCALAR can
   // afford, because a scalar may be cleared. A list member may not: the

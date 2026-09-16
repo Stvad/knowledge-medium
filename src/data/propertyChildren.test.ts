@@ -3026,7 +3026,11 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await bagOf('p')).bag).toEqual([{a: 1}, 'plain', 2])
     })
 
-    it('an empty list and an unset key coincide — no children, no cell key', async () => {
+    it('an EXPLICITLY empty list keeps its key; unsetting removes the field row', async () => {
+      // The live field row is what tells the two apart. Reading an empty list
+      // as an absent key made the write disappear — `getProperty` would answer
+      // the schema's `defaultValue`, which is a different value for any list
+      // schema whose default is not `[]`.
       const repo = await setupWithLists()
       await createBlock(repo, 'p')
       await repo.tx(tx => tx.setProperty('p', tagsSchema, []),
@@ -3034,9 +3038,13 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
 
       const field = await fieldRowFor('p', TAGS_FIELD_ID)
       expect((await childrenRows(field.id)).filter(v => v.deleted === 0)).toEqual([])
-      // The key is absent rather than `[]`, and reads back as the preset's
-      // `[]` default — the two states the field row cannot tell apart.
+      expect((await bagOf('p')).tags).toEqual([])
+
+      // Unsetting is what removes the key, and it takes the field row with it.
+      await repo.tx(tx => tx.unsetProperty('p', tagsSchema),
+        {scope: ChangeScope.BlockDefault})
       expect((await bagOf('p')).tags).toBeUndefined()
+      expect(await liveFieldRowsFor(TAGS_FIELD_ID)('p')).toEqual([])
     })
 
     it('a member repeated in the value is a repeated sibling', async () => {
@@ -3148,7 +3156,9 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
         .toEqual(['lunch with Mary', '((john-id))'])
     })
 
-    it('every member unparseable reads as unset, rows intact', async () => {
+    it('every member unparseable reads as an empty list, rows intact', async () => {
+      // The field row is still there, so the property is still SET — it just
+      // has no readable member. The rows keep their text and stay fixable.
       const repo = await setupWithLists()
       await createBlock(repo, 'p')
       await repo.tx(tx => tx.setProperty('p', peopleSchema, ['mary-id']),
@@ -3158,8 +3168,26 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       await repo.tx(tx => tx.update(members[0]!.id, {content: 'not a reference'}),
         {scope: ChangeScope.BlockDefault})
 
-      expect((await bagOf('p')).people).toBeUndefined()
+      expect((await bagOf('p')).people).toEqual([])
       expect(await memberContents('p', PEOPLE_FIELD_ID)).toEqual(['not a reference'])
+    })
+
+    it('deleting the last member row unsets the key', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['solo']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      const members = await memberRows('p', TAGS_FIELD_ID)
+
+      // The MEMBER goes, not the field row: the property is still set, and now
+      // explicitly empty.
+      await repo.tx(tx => tx.delete(members[0]!.id), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual([])
+
+      // The FIELD ROW going is what unsets it.
+      await repo.tx(tx => tx.delete(field.id), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toBeUndefined()
     })
 
     it('retargeting ONE refList member follows into the cell, at its position', async () => {
@@ -3361,6 +3389,22 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect(after[1]!.content).toBe(' 1 ')
       expect((await childrenRows(before[0]!.id)).filter(c => c.deleted === 0)
         .map(c => c.content)).toEqual(['why 1'])
+    })
+
+    it('stores an undefined member as null, the same as the cell would', async () => {
+      // `undefined` is ABSENCE to a scalar codec, which renders it as empty
+      // content. An array ELEMENT cannot be absent — `JSON.stringify` writes it
+      // as `null`, which is what the cell already holds for it — so rendering
+      // it as empty content would make this same call succeed before the flip
+      // and fail after it.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [undefined, 'x']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', BAG_FIELD_ID)).toEqual(['null', '"x"'])
+      expect((await bagOf('p')).bag).toEqual([null, 'x'])
     })
 
     it('refuses a list member whose content cannot be read back', async () => {

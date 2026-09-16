@@ -211,7 +211,18 @@ const projectedFieldValue = async (
       contents.push(value.content)
     }
   }
-  return childContentsToEncodedPropertyValue(schema, contents)
+  // NO field row at all: the key is unset. That is the only thing that unsets a
+  // multi-valued property, and it is what deleting the field row means.
+  if (fieldRows.length === 0) return undefined
+  const aggregate = childContentsToEncodedPropertyValue(schema, contents)
+  // A LIVE field row with nothing parseable under it is an EXPLICITLY EMPTY
+  // list, not an absent key. Reading it as absent made a `setProperty(x, [])`
+  // write disappear: the key was deleted and `getProperty` answered the
+  // schema's `defaultValue`, which is a DIFFERENT value for any list schema
+  // whose default is not `[]`. The field row is what tells the two apart, and
+  // it is present here.
+  if (aggregate === undefined && memberCodecOf(schema.codec) !== undefined) return []
+  return aggregate
 }
 
 // §9 selection: the bit + target pair (the JS twin of
@@ -828,14 +839,17 @@ const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<v
   }
 }
 
-/** §9 dedup, VALUE-child form (shared by the same-tx materializer and
- *  `tx.setProperty`'s dual-write): the survivor is picked deterministically
- *  by `(order_key, id)` — arbitrary relative to content — so the loser may
- *  carry user-authored sub-children (a comment thread under the losing
- *  value). Relocate those under the survivor BEFORE deleting; a bare
- *  subtree-delete would silently tombstone them, and a shallow delete would
- *  orphan them live under a tombstone (the two divergent semantics the
- *  spike's call sites had — unified here). */
+/** §9 dedup, VALUE-child form: the survivor is picked deterministically by
+ *  `(order_key, id)` — arbitrary relative to content — so the loser may carry
+ *  user-authored sub-children (a comment thread under the losing value).
+ *  Relocate those under the survivor BEFORE deleting; a bare subtree-delete
+ *  would silently tombstone them, and a shallow delete would orphan them live
+ *  under a tombstone (the two divergent semantics the spike's call sites had —
+ *  unified here).
+ *
+ *  WHETHER to fold is the caller's call, and it differs by grain: an
+ *  equal-valued sibling is a redundant copy of ONE value to a scalar, and an
+ *  occurrence to a list. */
 export const collapseDuplicateValueChild = async (
   tx: Tx,
   survivorValueId: string,
@@ -857,13 +871,16 @@ export const collapseDuplicateValueChild = async (
  *  settled policy is union-with-dedupe, so `mergeBlocksInTx` relies on this
  *  fold — and separating them costs a second policy axis on a function that
  *  already carries one, to buy row identity in a conflict that is already
- *  ambiguous about whether the two rows were ever distinct. A field row holds a SET of value children,
- *  deduped by content — so a duplicate's value that MATCHES an existing
- *  survivor value folds into it (sub-children relocate), and a DIVERGENT value
- *  is kept as a peer SIBLING value under the survivor field row. Projection
- *  reads the first value, so the cell keeps the survivor's winner while the
- *  conflicting value stays visible and reconcilable — never nested under the
- *  winner as if it were an annotation, never dropped. */
+ *  ambiguous about whether the two rows were ever distinct.
+ *
+ *  A duplicate's value that MATCHES an existing survivor value folds into it
+ *  (sub-children relocate), and one that does not is kept as a peer SIBLING
+ *  value under the survivor field row — never nested under the winner as if it
+ *  were an annotation, never dropped. What the CELL then reads is not this
+ *  helper's to say and differs by grain: a scalar keeps the first parseable
+ *  value, so a conflicting peer stays visible beside it, while a multi-valued
+ *  one aggregates every parseable member, duplicates included
+ *  (`childContentsToEncodedPropertyValue`). */
 export const collapseDuplicateFieldRow = async (
   tx: Tx,
   survivorFieldRowId: string,
