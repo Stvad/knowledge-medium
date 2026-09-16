@@ -1,0 +1,1 @@
+import{Al as e,Dl as t,El as n,Ml as r,Nl as i,Ol as a,jl as o,kl as s}from"../../../chunks/app-ByL-T2aE.js";export{n as PROVE_DISTINCT_VALUE_LIMIT,t as applyPropertyDefinitionSynthesis,a as flipBlockedBySynthesis,s as keyCannotBeDefined,e as planPropertyDefinitionSynthesis,o as provePresetId,r as resolveSynthesisNamespace,i as synthesizedPropertyDefinitionBlockId};

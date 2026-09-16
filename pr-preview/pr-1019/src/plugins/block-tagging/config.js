@@ -1,0 +1,1 @@
+import{ds as e,fs as t,gs as n,hs as r,ls as i,ms as a,ps as o,us as s}from"../../../chunks/app-ByL-T2aE.js";export{i as blockTaggingPrefsType,s as blockTagsConfigCodec,e as blockTagsConfigPresetCore,t as blockTagsConfigProp,o as isValidTagName,a as normalizeBlockTagsConfig,r as selectableTagNames,n as tagNameIssue};
