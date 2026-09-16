@@ -1,1 +1,1 @@
-import{WT as e}from"../../chunks/app-CXR4aVcH.js";export{e as BlockLoadingPlaceholder};
+import{WT as e}from"../../chunks/app-DREeDr8g.js";export{e as BlockLoadingPlaceholder};

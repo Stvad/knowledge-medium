@@ -1,1 +1,1 @@
-import{fO as e,pO as t}from"../../chunks/app-CXR4aVcH.js";export{e as defaultPasteDecision,t as pasteDecisionVerb};
+import{fO as e,pO as t}from"../../chunks/app-DREeDr8g.js";export{e as defaultPasteDecision,t as pasteDecisionVerb};
