@@ -1,1 +1,1 @@
-import{h as e}from"../../chunks/app-B95gQG0Z.js";export{e as AppRuntimeProvider};
+import{h as e}from"../../chunks/app-Bwd4Gjey.js";export{e as AppRuntimeProvider};
