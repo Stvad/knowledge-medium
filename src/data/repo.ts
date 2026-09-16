@@ -122,6 +122,7 @@ import {
   recordAppliedPropertyDefinitionCodecs,
 } from './internals/propertyDefinitionBaseline'
 import {
+  childContentsToEncodedPropertyValue,
   encodedToValueChildContent,
   isFieldValueChild,
   isPropertyFieldInstance,
@@ -4547,8 +4548,11 @@ export class Repo {
               const oldNames: string[] = []
               const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
               for (const {change, schema} of plans) {
-                let projected: unknown
-                let hasProjection = false
+                // Every value child's canonical content, across this
+                // definition's field rows — one for a scalar, one per MEMBER
+                // for a list, which is what makes the projection below the
+                // same aggregate `core.projectPropertyChildren` computes.
+                const canonicalContents: string[] = []
                 let parentUnconvertible = 0
                 let sawFieldRow = false
                 // Field-row content is `::((fieldId))` — id-addressed and
@@ -4570,11 +4574,11 @@ export class Repo {
                     .filter(isFieldValueChild)
                   for (const value of values) {
                     try {
+                      // At value-child GRAIN, both ways: under a list codec
+                      // this row holds ONE member, and reading it against the
+                      // whole-array grammar would make every member
+                      // unconvertible.
                       const encoded = valueChildContentToEncoded(schema, value.content)
-                      if (!hasProjection) {
-                        projected = encoded
-                        hasProjection = true
-                      }
                       // Canonicalize the child content under the new codec so
                       // the stored text matches what setProperty would write.
                       // Every change that reaches this batch is a codec change
@@ -4584,6 +4588,7 @@ export class Repo {
                       if (value.content !== canonical) {
                         await tx.update(value.id, {content: canonical}, {skipMetadata: true})
                       }
+                      canonicalContents.push(canonical)
                     } catch {
                       parentUnconvertible += 1
                     }
@@ -4600,7 +4605,9 @@ export class Repo {
                 }
 
                 if (change.oldName !== schema.name) oldNames.push(change.oldName)
-                if (hasProjection) {
+                const projected = childContentsToEncodedPropertyValue(
+                  schema, canonicalContents)
+                if (projected !== undefined) {
                   assignments.push({name: schema.name, value: projected, unset: false})
                 } else if (parentUnconvertible === 0) {
                   assignments.push({name: schema.name, value: undefined, unset: true})

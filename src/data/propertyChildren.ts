@@ -549,6 +549,36 @@ export const childContentsToEncodedPropertyValue = (
   return members.length === 0 ? undefined : members
 }
 
+/**
+ * Does `encoded` come back UNCHANGED through the value-child machinery?
+ *
+ * The machinery's own question, asked by running it rather than by reasoning
+ * about what a value looks like: encode it into the children it implies, then
+ * project those back. `propertyDefinitionSynthesis` needs it to prove a preset
+ * can carry a key's stored values before applying a definition retroactively.
+ *
+ * At WHOLE-PROPERTY grain, so a multi-valued schema is asked about all of its
+ * members at once. Two values of a list-valued property answer `false` here
+ * and that is the honest answer, not a gap: an EMPTY list projects as unset
+ * (it reads back as the preset's `[]` default, which this byte-identity
+ * question does not accept), and a list holding the same member twice loses
+ * the duplicate, because the value children are a set. Neither is reachable
+ * from synthesis today — its ladder holds no list preset — so whoever adds one
+ * decides what to do about them then, with the keys reported as unmigratable
+ * rather than silently rewritten.
+ */
+export const valueSurvivesChildRoundTrip = (
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): boolean => {
+  try {
+    const contents = encodedPropertyValueToChildContents(schema, encoded)
+    return jsonValuesEqual(childContentsToEncodedPropertyValue(schema, contents), encoded)
+  } catch {
+    return false
+  }
+}
+
 export const propertiesEqual = (
   a: Record<string, unknown>,
   b: Record<string, unknown>,

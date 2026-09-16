@@ -20,7 +20,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { WorkspaceBackfillContext } from '@/data/facets'
 import {
-  CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, ROWS_PER_KEY, TARGET_INSERT_ROWS,
+  CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, rowsForValue, TARGET_INSERT_ROWS,
   onPropertyCellBackfillProgress, runPropertyCellBackfill,
 } from './propertyCellBackfill'
 
@@ -44,6 +44,14 @@ const extraProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+const tagsProp = seedProperty({
+  seedKey: 'test/property/tags',
+  revision: 1,
+  name: 'demo:tags',
+  preset: 'string-list',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 let sharedDb: TestDb
 let repo: Repo
 
@@ -58,6 +66,7 @@ beforeEach(async () => {
     kernelDataExtension,
     definitionSeedsFacet.of(noteProp, {source: 'test'}),
     definitionSeedsFacet.of(extraProp, {source: 'test'}),
+    definitionSeedsFacet.of(tagsProp, {source: 'test'}),
   ], {repo, workspaceId: WS, safeMode: false}))
 })
 
@@ -99,7 +108,7 @@ const rawCell = async (id: string, properties: Record<string, unknown>) => {
 /** Enough blocks to span two write batches, derived from the budget rather than
  *  written as a literal: a fixed count silently stops crossing a boundary if the
  *  budget ever moves, and nothing would fail. */
-const TWO_BATCHES = TARGET_INSERT_ROWS / ROWS_PER_KEY + 10
+const TWO_BATCHES = TARGET_INSERT_ROWS / rowsForValue('one scalar') + 10
 
 /** `count` blocks, each carrying one registered cell key. One transaction, not
  *  one per block: the pass batches on inserted ROWS and reads cells off
@@ -250,7 +259,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     expect(result.outcome).toBe('ran')
     expect(await fieldRowCount()).toBe(ids.length)
     // TWO_BATCHES follows the budget's VALUE; this pins the batching RULE it
-    // assumes. Drop the ROWS_PER_KEY factor from the drain loop — a real bug,
+    // assumes. Charge one row per key instead of `rowsForValue` — a real bug,
     // doubling every transaction — and the fixture collapses to one batch: this
     // test stops crossing a boundary, and the whole file still passes.
     expect(batchSizes[0]).toBeLessThan(ids.length)
@@ -541,5 +550,56 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     await repo.awaitWorkspaceBackfills()
 
     expect(await fieldRowCount()).toBe(0)
+  })
+})
+
+describe('multi-value cells (km-h1hy)', {timeout: 30_000}, () => {
+  it('builds one value row per member, in list order', async () => {
+    await create('b1', {'demo:tags': ['alpha', 'beta', 'gamma']})
+    await flip()
+
+    expect((await run()).outcome).toBe('ran')
+
+    const fields = await fieldRowsOf('b1')
+    expect(fields).toHaveLength(1)
+    // The shape the pass has to build ONCE — landing it after the flip would
+    // mean a second uploading migration over every array-valued cell.
+    expect(fields[0]!.values).toEqual(['alpha', 'beta', 'gamma'])
+  })
+
+  it('charges the write budget per MEMBER, not per key', async () => {
+    // The budget is spent in SQL and the estimate is stated in JS, so the two
+    // are copies of one rule and can drift. Run the real candidate query
+    // against bags whose answer `rowsForValue` already knows.
+    const bags: Record<string, unknown>[] = [
+      {'demo:note': 'scalar'},
+      {'demo:tags': ['a', 'b', 'c', 'd']},
+      {'demo:note': 'scalar', 'demo:tags': ['a', 'b']},
+      {'demo:tags': []},
+    ]
+    for (const [i, bag] of bags.entries()) await create(`r${i}`, bag)
+
+    const rows = await repo.db.getAll<{id: string; rows: number}>(
+      CANDIDATE_SQL, [WS, '', 10])
+
+    expect(rows.map(r => r.rows)).toEqual(bags.map(bag =>
+      Object.values(bag).reduce<number>((sum, v) => sum + rowsForValue(v), 0)))
+    // And the member count is what moves it — a four-member list is not two
+    // rows.
+    expect(rows[1]!.rows).toBe(5)
+  })
+
+  it('a list-heavy block heavier than the whole budget still gets its own batch', async () => {
+    // The "always at least one" rule, now reachable from a single block: one
+    // key with enough members to outweigh TARGET_INSERT_ROWS on its own. Left
+    // to the budget alone the drain loop would admit nothing and spin
+    // committing empty transactions.
+    const members = Array.from({length: TARGET_INSERT_ROWS + 5}, (_, i) => `m${i}`)
+    await create('heavy', {'demo:tags': members})
+    await flip()
+
+    expect((await run()).outcome).toBe('ran')
+
+    expect((await fieldRowsOf('heavy'))[0]!.values).toEqual(members)
   })
 })

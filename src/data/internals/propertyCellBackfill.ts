@@ -46,10 +46,23 @@ export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
  *  write and the sync drain queued behind it. */
 export const TARGET_INSERT_ROWS = 190
 
-/** A registered key costs a field row and its value row. Over-counts a key
- *  that is unregistered or already materialized, which errs toward smaller
- *  transactions. */
-export const ROWS_PER_KEY = 2
+/** What a key's rows are COUNTED as, when SQL can see the value but not the
+ *  codec. A key costs its field row plus one value row per value, and the only
+ *  thing that makes a key multi-valued at this level is its value being an
+ *  array — so {@link CANDIDATE_SQL} charges an array N + 1 and everything else
+ *  2. Named here because the estimate and the thing it estimates have to be
+ *  read together.
+ *
+ *  Over-counts in three ways, all toward SMALLER transactions: a key that is
+ *  unregistered or already materialized, and an array stored under a codec
+ *  that is NOT list-shaped (`raw-json`), whose whole array is one value child.
+ *  Under-counting is the direction that matters, and the multi-value shape is
+ *  why a flat 2 no longer holds: the largest live list keys carry several
+ *  members each, so a block-counted batch of them would hold the single SQLite
+ *  writer for several times its budget with every user write and the sync drain
+ *  queued behind it. */
+export const rowsForValue = (value: unknown): number =>
+  1 + (Array.isArray(value) ? value.length : 1)
 
 /** Candidates fetched per scan query. Independent of the write budget: this
  *  bounds how often the pass pays for a cursor seek, the budget bounds how
@@ -72,8 +85,9 @@ const CARRIES_A_PROPERTY = `
      AND EXISTS (SELECT 1 FROM json_each(b.properties_json))`
 
 /**
- * Blocks carrying any property, oldest id first, with the key count the write
- * budget is drawn against.
+ * Blocks carrying any property, oldest id first, with the ROW count the write
+ * budget is drawn against ({@link rowsForValue} states what that count is and
+ * which way it errs).
  *
  * Deliberately NOT narrowed to "blocks that still owe children". A first
  * attempt compared key count against field-row count, which is not the
@@ -90,7 +104,9 @@ const CARRIES_A_PROPERTY = `
  */
 export const CANDIDATE_SQL = `
   SELECT b.id AS id,
-         (SELECT COUNT(*) FROM json_each(b.properties_json)) AS keys
+         (SELECT SUM(1 + CASE WHEN e.type = 'array'
+                              THEN json_array_length(e.value) ELSE 1 END)
+            FROM json_each(b.properties_json) e) AS rows
     FROM blocks b
    WHERE b.workspace_id = ?
      AND b.deleted = 0
@@ -316,10 +332,10 @@ const sweep = async (
   }
 
   let cursor = ''
-  let queued: {id: string; keys: number}[] = []
+  let queued: {id: string; rows: number}[] = []
   for (;;) {
     if (queued.length === 0) {
-      queued = await ctx.getAll<{id: string; keys: number}>(
+      queued = await ctx.getAll<{id: string; rows: number}>(
         CANDIDATE_SQL, [ctx.workspaceId, cursor, SCAN_PAGE],
       )
       if (queued.length === 0) return
@@ -333,10 +349,10 @@ const sweep = async (
     const batch: {id: string}[] = []
     let budget = 0
     while (queued.length > 0 && (batch.length === 0
-           || budget + queued[0]!.keys * ROWS_PER_KEY <= TARGET_INSERT_ROWS)) {
+           || budget + queued[0]!.rows <= TARGET_INSERT_ROWS)) {
       const next = queued.shift()!
       batch.push(next)
-      budget += next.keys * ROWS_PER_KEY
+      budget += next.rows
     }
 
     await ctx.tx(async tx => {
