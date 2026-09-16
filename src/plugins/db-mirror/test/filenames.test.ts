@@ -40,11 +40,21 @@ describe('dbMirrorFilename', () => {
     expect([later, earlier].sort()).toEqual([earlier, later])
   })
 
-  it('gives two runs in the same second different names', () => {
-    // The name is what makes a failed run's cleanup provably its own entry:
-    // no other run can be holding a name carrying this run's token.
-    const names = new Set(Array.from({length: 200}, () => dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)))
-    expect(names.size).toBe(200)
+  it('gives two runs in the same second different names, varying nothing else', () => {
+    // The token keeps two runs that share a second off ONE name. It is NOT what
+    // makes a failed run's cleanup its own entry: `claimFreshEntry` in
+    // `mirror.ts` refuses a name that already exists, so a collision costs a
+    // run rather than another run's file. So this asserts the token varies —
+    // sampling draws for uniqueness would assert collision resistance, which is
+    // a property of the token's width and flakes at any sample size.
+    const first = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)
+    const second = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)
+
+    expect(first).not.toBe(second)
+    // Spelled out rather than compared to each other, so a pair that stopped
+    // parsing at all could not satisfy this by both being undefined.
+    const carried = {at: AT, installId: INSTALL_A, incarnation: TAG}
+    expect([parse(first), parse(second)]).toEqual([carried, carried])
   })
 })
 
