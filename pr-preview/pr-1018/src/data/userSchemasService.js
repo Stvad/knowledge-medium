@@ -1,1 +1,1 @@
-import{AK as e,MK as t,NK as n,OK as r,jK as i,kK as a}from"../../chunks/app-Dkhk__4v.js";export{r as USER_SCHEMAS_PROJECTOR_ID,a as UserSchemasService,e as isRegistrablePropertyName,i as propertySchemaNameRejection,t as tryBuildSchema,n as userSchemasProjector};
+import{AK as e,MK as t,NK as n,OK as r,jK as i,kK as a}from"../../chunks/app-CPCuon-V.js";export{r as USER_SCHEMAS_PROJECTOR_ID,a as UserSchemasService,e as isRegistrablePropertyName,i as propertySchemaNameRejection,t as tryBuildSchema,n as userSchemasProjector};
