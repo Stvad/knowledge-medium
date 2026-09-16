@@ -145,61 +145,90 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  *  - Dropping a candidate can un-vacate the name that kept ANOTHER one, so this
  *    iterates to a fixpoint.
  *
- * Two things the TX-START registry cannot tell `claimantsOfName`, both handled
- * here because both make a re-key write a key that is not this definition's:
+ * `claimOf` answers who will hold a name once THIS TX COMMITS, which the
+ * tx-start registry alone cannot say. Three rounds of review each found another
+ * source it was missing — a shadowed peer the winner lookup hides, a workspace
+ * with no snapshot, a peer moving onto the same destination, a tombstoned
+ * definition revived beside the rename — so it is derived once now rather than
+ * accumulated. The two halves read it differently, and the difference is the
+ * whole rule:
  *
- *  - It answers `null` for a workspace it has no snapshot of, and that is not
- *    "nobody claims this name" — it is "nothing here can be judged". Every
- *    candidate is dropped, matching the resolvers, which fail closed in the
- *    same situation rather than reporting names as free.
- *  - It cannot see what this BATCH creates. Two definitions renamed onto one
- *    previously unclaimed name each see it free, and the apply would then
- *    assign that key twice with the last writer winning — which need not be the
- *    definition the rebuilt registry picks. A destination claimed twice inside
- *    the batch is contested by the batch itself.
+ *  - The DESTINATION is contested when the tx-start OWNER is not free, or —
+ *    for a candidate that is itself ARRIVING — when any other definition
+ *    arrives at it too. The owner settles the first half because only the
+ *    winner projects, so a peer shadowed under the destination is not harmed by
+ *    a write it never sees. The second takes no vacating exemption: a peer that
+ *    leaves its own name is still arriving at this one, and two definitions
+ *    landing on one key means the later write wins a race the rebuilt registry
+ *    may then decide the other way. An incumbent re-typing in place races
+ *    nobody — the peer moving onto ITS name is refused by the first half.
+ *  - The name being VACATED is contested when ANY claimant, at tx start or
+ *    arriving, is not free. Every one of them inherits the key this rename
+ *    drops, and stranding a sibling's cell is the same damage whichever of them
+ *    ends up the winner.
  *
- * Otherwise `claimantsOfName` answers winner first, where a peer owning the new
- * name is one about to leave it. That is what makes the drop-all-then-assign-all
- * apply safe.
+ * `null` is not "nobody claims it" — it is a workspace with no registry, where
+ * nothing can be judged. The caller refuses the transaction rather than
+ * committing a definition change it cannot fan out.
+ *
+ * A candidate dropped here belongs to the shadowing model's own reconcile
+ * (#389 item 8), not to a one-shot re-key. Dropping one can un-vacate the name
+ * that kept ANOTHER, so this iterates to a fixpoint.
  */
+export interface NameClaim {
+  /** Claimants at TX START, winner first. The head is the one that projects. */
+  readonly atTxStart: readonly string[]
+  /** Definitions this tx leaves live under the name that did NOT hold it at tx
+   *  start — created, revived, or renamed onto it. Their rank against each
+   *  other is decided by the rebuilt registry, not knowable here. */
+  readonly arriving: readonly string[]
+}
+
 export const withoutContestedRenames = <T extends {
   readonly fieldId: string
   readonly oldName: string
   readonly newName: string
 }>(
   candidates: readonly T[],
-  claimantsOfName: (name: string) => readonly string[] | null,
+  claimOf: (name: string) => NameClaim | null,
 ): T[] => {
   let kept: T[] = [...candidates]
   for (;;) {
     const vacating = new Set(kept
       .filter(candidate => candidate.oldName !== candidate.newName)
       .map(candidate => candidate.fieldId))
-    // Counted over MOVES only. A codec-only change is not arriving anywhere —
-    // it keeps a name it already owns — so it neither contends for a
-    // destination nor loses its own to a peer moving onto it (that peer is
-    // refused by the head-claimant test below instead).
-    const arrivals = new Map<string, number>()
-    for (const candidate of kept) {
-      if (candidate.oldName === candidate.newName) continue
-      arrivals.set(candidate.newName, (arrivals.get(candidate.newName) ?? 0) + 1)
-    }
     const free = (claimant: string | undefined, self: string): boolean =>
       claimant === undefined || claimant === self || vacating.has(claimant)
     const next = kept.filter(candidate => {
       const moves = candidate.oldName !== candidate.newName
-      if (moves && (arrivals.get(candidate.newName) ?? 0) > 1) return false
-      const arriving = claimantsOfName(candidate.newName)
-      if (arriving === null || !free(arriving[0], candidate.fieldId)) return false
+      const destination = claimOf(candidate.newName)
+      if (destination === null) return false
+      if (!free(destination.atTxStart[0], candidate.fieldId)) return false
+      // Only a candidate that is itself ARRIVING races the others. An incumbent
+      // re-typing in place is not moving onto anything; the peer trying to take
+      // its name is the one refused, by the owner test above.
+      if (moves && destination.arriving.some(claimant => claimant !== candidate.fieldId)) {
+        return false
+      }
       if (!moves) return true
-      const leaving = claimantsOfName(candidate.oldName)
-      return leaving !== null
-        && leaving.every(claimant => free(claimant, candidate.fieldId))
+      const vacated = claimOf(candidate.oldName)
+      return vacated !== null
+        && [...vacated.atTxStart, ...vacated.arriving]
+          .every(claimant => free(claimant, candidate.fieldId))
     })
     if (next.length === kept.length) return next
     kept = next
   }
 }
+
+type CollectedChanges =
+  | 'unjudgeable'
+  | {
+      readonly changes: DefinitionChange[]
+      /** Definitions RENAMED in this tx whose rows build no codec on either
+       *  side, so the fan-out cannot reproject their consumers' cells. */
+      readonly unbuildableRenames: readonly string[]
+    }
 
 interface DefinitionChange {
   readonly fieldId: string
@@ -228,10 +257,13 @@ const collectChanges = (
   ctx: SameTxCtx,
   workspaceId: string,
   changedRows: ReadonlyArray<{before: BlockData | null; after: BlockData | null}>,
-): DefinitionChange[] | 'unjudgeable' => {
-  // Pass 1: candidate changes (name or codec differs, definition resolvable at
-  // tx start, after-row buildable).
+): CollectedChanges => {
+  // Pass 1: candidate changes (name or encoding differs, some row buildable).
   const candidates: DefinitionChange[] = []
+  const unbuildableRenames: string[] = []
+  /** Any name this tx touches — enough to ask whether the WORKSPACE can be
+   *  judged at all, which is not a question about the name. */
+  let probeName: string | null = null
   for (const {before, after} of changedRows) {
     // `after.deleted` is defence in depth — deleting a definition is its own
     // operation, and a tx that deletes without also editing the name or preset
@@ -260,16 +292,37 @@ const collectChanges = (
     const afterSchema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
     const beforeSchema = buildSchemaOrNull(before, ctx.valuePresets, beforeMeta)
     const schema = afterSchema ?? beforeSchema
-    if (schema === null) continue
+    if (schema === null) {
+      // NEITHER row builds a codec, so there is nothing to reproject a cell
+      // with. A rename here cannot be dropped silently: consumers keep the old
+      // key, and the transaction that eventually repairs the preset cannot
+      // remove it, because by then both sides carry the new name. Held for the
+      // caller, which refuses the tx if any of these actually has consumers.
+      if (beforeMeta.name !== afterMeta.name) {
+        unbuildableRenames.push(after.id)
+        probeName ??= afterMeta.name
+      }
+      continue
+    }
     // The PRESET is the discriminator, not `codec.type`. A codec's type string
     // is not its identity: `optional-string` and `string` both report 'string'
     // while the optional one stores an unset value as `null`, which the
     // required one reads back as literal text — so switching between twins
     // changes the stored encoding without changing the type, and the
     // seed-identity rules freeze preset AND codec for exactly that reason.
-    // Preset CONFIG is deliberately not part of it: a config tweak keeps the
-    // encoding, and a codec that reads leniently across one (enum's removed
-    // option) means to PRESERVE such a value rather than have a pass rewrite it.
+    // Neither test subsumes the other, so both run. A preset id catches twins
+    // that share a type; the BUILT type catches a configurable preset whose
+    // `build(config)` returns a different codec under the same id, which only
+    // extension presets do — and only the built codec can report it, since the
+    // id did not move. (An earlier round dropped the type comparison as
+    // redundant; it is redundant only for kernel presets, whose build ignores
+    // config for this purpose.)
+    //
+    // A config edit that changes neither is deliberately NOT a change, keeping
+    // the choice the registry diff made: the encoding is the same, and a codec
+    // that reads leniently across such an edit — enum keeping a value whose
+    // option was removed — means to PRESERVE it rather than have a pass sweep
+    // every consumer to rewrite it identically.
     //
     // Read from the block's own rows, not from the registry: the tx-start
     // snapshot is at-or-older than `before`, so a change an earlier tx already
@@ -284,11 +337,13 @@ const collectChanges = (
     const encodingChanged = afterSchema !== null && (
       beforeSchema === null
       || peekRowProperty(before, presetIdProp) !== peekRowProperty(after, presetIdProp)
+      || beforeSchema.codec.type !== afterSchema.codec.type
     )
     // Every write to a definition block's bag reaches this processor —
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
     // would sweep every consumer of that definition inside the user's tx.
     if (beforeMeta.name === afterMeta.name && !encodingChanged) continue
+    probeName ??= afterMeta.name
     candidates.push({
       fieldId: after.id,
       oldName: beforeMeta.name,
@@ -297,7 +352,27 @@ const collectChanges = (
       encodingChanged,
     })
   }
-  if (candidates.length === 0) return []
+  if (candidates.length === 0 && unbuildableRenames.length === 0) {
+    return {changes: [], unbuildableRenames}
+  }
+  // Every definition this tx leaves live under a name it did NOT hold at tx
+  // start. The registry lists none of them: a created row has no entry, a
+  // revived one lost its entry when it was tombstoned, and a renamed one is
+  // still filed under its old name. A revived or created claimant never becomes
+  // a candidate either — nothing about its own name changed — so this is the
+  // only place it can be seen.
+  const arrivingByName = new Map<string, string[]>()
+  for (const {before, after} of changedRows) {
+    if (after === null || after.deleted) continue
+    const afterMeta = parsePropertyDefinitionMetadata(after)
+    if (!afterMeta || afterMeta.seedKey !== undefined) continue
+    const heldBefore = before !== null && !before.deleted
+      && parsePropertyDefinitionMetadata(before)?.name === afterMeta.name
+    if (heldBefore) continue
+    const arriving = arrivingByName.get(afterMeta.name) ?? []
+    arriving.push(after.id)
+    arrivingByName.set(afterMeta.name, arriving)
+  }
   // Whether a name can be judged is a property of the WORKSPACE, not of the
   // name, so one lookup settles it for every candidate. Answered here rather
   // than left to the refusal below because the two decisions are different: the
@@ -306,12 +381,20 @@ const collectChanges = (
   // verdict about any name — it means the fan-out cannot run, and letting the
   // definition row commit without it would leave every consumer in the old
   // encoding with nothing left to repair them.
-  if (ctx.propertyDefinitionsClaimingName(workspaceId, candidates[0]!.newName) === null) {
+  if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName!) === null) {
     return 'unjudgeable'
   }
-  // Pass 2: drop a rename onto a COLLIDING new name — see the refusal above.
-  return withoutContestedRenames(candidates, (name) =>
-    ctx.propertyDefinitionsClaimingName(workspaceId, name))
+  // Pass 2: drop a rename whose destination or vacated name is contested — see
+  // the refusal above for how the two halves differ.
+  return {
+    changes: withoutContestedRenames(candidates, (name) => {
+      const atTxStart = ctx.propertyDefinitionsClaimingName(workspaceId, name)
+      return atTxStart === null
+        ? null
+        : {atTxStart, arriving: arrivingByName.get(name) ?? []}
+    }),
+    unbuildableRenames,
+  }
 }
 
 /** One bound variable per changed definition would blow
@@ -507,8 +590,8 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
   // stale registry would only widen fact 2's blast radius.
   settledWrites: true,
   apply: async (event, ctx) => {
-    const changes = collectChanges(ctx, event.workspaceId, event.changedRows)
-    if (changes === 'unjudgeable') {
+    const collected = collectChanges(ctx, event.workspaceId, event.changedRows)
+    if (collected === 'unjudgeable') {
       // Refuse the whole tx rather than commit half of it. `repo.tx` surfaces a
       // ProcessorRejection to the toast layer and rolls back, so the definition
       // row does not land either — which is the point: a re-typed definition
@@ -522,6 +605,24 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         'property.definition-change.unjudgeable',
         {workspaceId: event.workspaceId},
       )
+    }
+    const {changes, unbuildableRenames} = collected
+    if (unbuildableRenames.length > 0) {
+      // Only a rename with CONSUMERS strands anything; one on an unused
+      // definition is the user's to make, and telling them to repair a preset
+      // first would be friction for nothing.
+      const stranded = await consumingParentIds(
+        ctx.db, event.workspaceId, unbuildableRenames,
+      )
+      if (stranded.length > 0) {
+        throw new ProcessorRejection(
+          'cannot rename a property definition whose value type does not load: '
+          + 'the blocks using it could not be updated to the new name. Fix the '
+          + 'property type first, then rename.',
+          'property.definition-rename.unbuildable',
+          {fieldIds: [...unbuildableRenames]},
+        )
+      }
     }
     if (changes.length === 0) return
     const parentIds = await consumingParentIds(

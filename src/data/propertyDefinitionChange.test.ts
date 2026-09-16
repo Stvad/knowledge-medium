@@ -21,6 +21,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ChangeScope,
+  codecs,
   type AnyPropertySchema,
   type AnyValuePresetCore,
   type ProcessorRejection,
@@ -29,7 +30,12 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { valuePresetCoresFacet } from '@/data/facets'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
-import { presetIdProp, propertyChangeScopeProp, propertyNameProp } from '@/data/properties'
+import {
+  presetConfigProp,
+  presetIdProp,
+  propertyChangeScopeProp,
+  propertyNameProp,
+} from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import {
   consumingParentIds,
@@ -207,28 +213,36 @@ const setRawValueContent = (valueRowId: string, content: string): Promise<unknow
 describe('withoutContestedRenames', () => {
   const change = (fieldId: string, oldName: string, newName: string) =>
     ({fieldId, oldName, newName})
-  /** name -> claimants, WINNER FIRST — the shape the registry's
-   *  `definitionsByName` has, and the multiplicity the un-shadowing refusal
-   *  needs. A single-entry list is the ordinary unshadowed case. */
-  const claimants = (map: Record<string, string[]>) =>
-    (name: string): readonly string[] => map[name] ?? []
+  /** name -> who holds it at TX START, winner first. A single-entry list is the
+   *  ordinary unshadowed case; the multiplicity is what the un-shadowing
+   *  refusal needs. `arriving` defaults to the candidates that rename onto the
+   *  name, which is what the batch itself contributes. */
+  const claimants = (
+    atTxStart: Record<string, string[]>,
+    arriving: Record<string, string[]> = {},
+  ) => (name: string) => ({
+    atTxStart: atTxStart[name] ?? [],
+    arriving: arriving[name] ?? [],
+  })
 
   it('drops a rename onto a NEW name a different, non-migrating definition owns', () => {
     expect(withoutContestedRenames(
-      [change('a', 'alpha', 'beta')], claimants({alpha: ['a'], beta: ['b']}),
+      [change('a', 'alpha', 'beta')], claimants({alpha: ['a'], beta: ['b']}, {beta: ['a']}),
     )).toEqual([])
   })
 
   it('drops a rename whose OLD name a different definition now answers to', () => {
     expect(withoutContestedRenames(
-      [change('a', 'shared', 'alpha')], claimants({shared: ['b', 'a']}),
+      [change('a', 'shared', 'alpha')], claimants({shared: ['b', 'a']}, {alpha: ['a']}),
     )).toEqual([])
   })
 
   it('keeps a swap — each contested name is owned by a peer migrating in the same batch', () => {
     const swap = [change('a', 'alpha', 'beta'), change('b', 'beta', 'alpha')]
-    expect(withoutContestedRenames(swap, claimants({alpha: ['a'], beta: ['b']})))
-      .toEqual(swap)
+    expect(withoutContestedRenames(
+      swap,
+      claimants({alpha: ['a'], beta: ['b']}, {beta: ['a'], alpha: ['b']}),
+    )).toEqual(swap)
   })
 
   it('re-contests a rename whose exempting peer was itself dropped', () => {
@@ -237,7 +251,7 @@ describe('withoutContestedRenames', () => {
     // un-vacates `beta` and takes `a` with it on the next round.
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta'), change('b', 'beta', 'gamma')],
-      claimants({alpha: ['a'], beta: ['b'], gamma: ['c']}),
+      claimants({alpha: ['a'], beta: ['b'], gamma: ['c']}, {beta: ['a'], gamma: ['b']}),
     )).toEqual([])
   })
 
@@ -247,7 +261,7 @@ describe('withoutContestedRenames', () => {
     // only the full claimant list can see `b` about to inherit the key this
     // rename would drop.
     expect(withoutContestedRenames(
-      [change('a', 'shared', 'alpha')], claimants({shared: ['a', 'b'], alpha: []}),
+      [change('a', 'shared', 'alpha')], claimants({shared: ['a', 'b']}, {alpha: ['a']}),
     )).toEqual([])
   })
 
@@ -264,7 +278,7 @@ describe('withoutContestedRenames', () => {
     // cannot free it for `a`.
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta'), change('b', 'beta', 'beta')],
-      claimants({alpha: ['a'], beta: ['b']}),
+      claimants({alpha: ['a'], beta: ['b']}, {beta: ['a']}),
     )).toEqual([change('b', 'beta', 'beta')])
   })
 
@@ -275,7 +289,7 @@ describe('withoutContestedRenames', () => {
     // registry picks.
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'gamma'), change('b', 'beta', 'gamma')],
-      claimants({alpha: ['a'], beta: ['b']}),
+      claimants({alpha: ['a'], beta: ['b']}, {gamma: ['a', 'b']}),
     )).toEqual([])
   })
 
@@ -284,24 +298,46 @@ describe('withoutContestedRenames', () => {
   // workspace with no registry snapshot. Split per NAME because either clause
   // alone drops the candidate, so a single test with both unknown leaves
   // whichever one is deleted covered by the other.
+  it('drops a rename whose VACATED name a definition arriving in this tx will hold', () => {
+    // The mirror of the un-shadowing rule: whoever inherits the key this rename
+    // drops is stranded by it, and a definition revived onto that name in the
+    // same tx inherits it just as a shadowed peer would.
+    expect(withoutContestedRenames(
+      [change('a', 'alpha', 'beta')],
+      claimants({alpha: ['a']}, {beta: ['a'], alpha: ['revived']}),
+    )).toEqual([])
+  })
+
+  it('drops a rename onto a name a definition REVIVED in the same tx will hold', () => {
+    // The revived definition is absent from the tx-start registry and never
+    // becomes a candidate — nothing about its own name changed — so only the
+    // arrival list can see it. Its rank against the renamer is the rebuilt
+    // registry's to decide, which may hand it cells the renamer wrote.
+    expect(withoutContestedRenames(
+      [change('a', 'alpha', 'gamma')],
+      claimants({alpha: ['a']}, {gamma: ['a', 'revived']}),
+    )).toEqual([])
+  })
+
   it('refuses a rename whose DESTINATION cannot be judged', () => {
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta')],
-      (name) => name === 'beta' ? null : [],
+      (name) => name === 'beta' ? null : {atTxStart: [], arriving: []},
     )).toEqual([])
   })
 
   it('refuses a rename whose VACATED name cannot be judged', () => {
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta')],
-      (name) => name === 'alpha' ? null : [],
+      (name) => name === 'alpha' ? null : {atTxStart: [], arriving: []},
     )).toEqual([])
   })
 
   it('keeps an uncontested rename, and a codec-only change that keeps its name', () => {
     const changes = [change('a', 'alpha', 'gamma'), change('b', 'beta', 'beta')]
-    expect(withoutContestedRenames(changes, claimants({alpha: ['a'], beta: ['b']})))
-      .toEqual(changes)
+    expect(withoutContestedRenames(
+      changes, claimants({alpha: ['a'], beta: ['b']}, {gamma: ['a']}),
+    )).toEqual(changes)
   })
 })
 
@@ -648,6 +684,72 @@ describe('codec change', () => {
     // lie when the edit produced no new type, and the stale value predates it.
     expect(errors).toEqual([])
     expect(await rowContent(staleRowId)).toBe('not a number')
+  })
+
+  it('re-encodes when CONFIG changes the built codec under one preset id', async () => {
+    // An extension preset may build a different codec from its config. The
+    // preset id does not move, so only the built codec's type reports it.
+    const configurable = {
+      id: 'test-configurable-preset',
+      configCodec: {
+        type: 'test-config',
+        encode: (c: unknown) => c,
+        decode: (j: unknown) => j ?? {as: 'string'},
+      },
+      // Absence-aware pair: `defaultValue: undefined` normalizes under BOTH,
+      // which a required string/number pair has no value that does — and a
+      // preset whose default cannot build is a different bug than this one.
+      build: (config: {as?: string} | undefined) =>
+        config?.as === 'number' ? codecs.optionalNumber : codecs.optionalString,
+      defaultValue: undefined,
+    } as unknown as AnyValuePresetCore
+
+    await seedWorkspace('children')
+    const repo = await setupDefinition(configurable.id, [configurable], 'string')
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
+
+    await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, {as: 'number'}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cell('p')).toEqual({status: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
+  })
+
+  it('refuses a rename when NEITHER row builds a codec and consumers exist', async () => {
+    // Nothing can reproject the cell, and the transaction that eventually
+    // repairs the preset cannot drop the old key either — by then both sides
+    // carry the new name. Refusing keeps the two halves together.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await retype(repo, FIELD_ID, 'no-such-preset')
+    await vi.waitFor(() => {
+      if (repo.propertySchemas.get('status') !== undefined) {
+        throw new Error('[test] status still has behaviour in the registry')
+      }
+    }, {timeout: 3000})
+
+    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
+      code: 'property.definition-rename.unbuildable',
+    })
+    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
+    expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('allows that rename when the definition has no consumers', async () => {
+    // Friction for nothing otherwise: there is no cell to strand.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await retype(repo, FIELD_ID, 'no-such-preset')
+    await vi.waitFor(() => {
+      if (repo.propertySchemas.get('status') !== undefined) {
+        throw new Error('[test] status still has behaviour in the registry')
+      }
+    }, {timeout: 3000})
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('state')
   })
 
   it('rename + re-type in ONE edit: value rows stay live, cell unsets per §9', async () => {
