@@ -884,9 +884,6 @@ export class Repo {
    *  handle `awaitPropertyDefinitionBaselines()` has to drain, which every
    *  integration test depends on. */
   private propertyDefinitionBaselineWork: Promise<void> = Promise.resolve()
-  /** Serializes the deferred re-encode passes, so two rebuilds of the same
-   *  definition cannot interleave. See `schedulePropertyDefinitionMigrations`. */
-  private propertyDefinitionMigrationWork: Promise<void> = Promise.resolve()
   /** Workspaces with a drift re-detect already waiting on the sync gate. Every
    *  definition refused during one gap would otherwise park its own listener,
    *  and they all fire before any of their passes records — so they re-detect
@@ -4405,29 +4402,18 @@ export class Repo {
     // definition, a rebuild older than this moment, and pairing that rebuild's
     // plans with this moment's generation would make a stale job look current.
     const generation = captured?.generation ?? this.workspaceGeneration
-    // SERIALIZED, not merely deferred. A definition can change twice inside one
-    // deferral window (`string -> number -> string`), and both rebuilds enqueue
-    // their own captured plans under the same workspace generation — a rebuild
-    // does not move it. Run independently, the smaller pass can finish first,
-    // after which the older one re-encodes the rows and records the
-    // INTERMEDIATE codec as the baseline. Ordering them by schedule time makes
-    // the last rebuild the last writer, which is the one that matches the
-    // registry.
-    //
-    // The intermediate pass still writes and uploads before the later one
-    // overwrites it. That is accepted: it converges, and coalescing by fieldId
-    // would have to decide which captured plan is newer, which is the
-    // bookkeeping this ordering avoids.
-    this.propertyDefinitionMigrationJobs.schedule(() => {
-      const work = this.propertyDefinitionMigrationWork.then(() =>
-        this.runPropertyDefinitionMigrations(workspaceId, plans, resolver, generation),
-      )
-      // The chain must not break on a pass that throws — `runPropertyDefinition
-      // Migrations` handles its own errors, so this only catches a bug in it —
-      // and the caller awaits the same promise so the drain still covers it.
-      this.propertyDefinitionMigrationWork = work.catch(() => {})
-      return work
-    })
+    // The stack as the user's own history stands NOW, not when the deferred job
+    // finally runs. The deferral is deep idle — tens of seconds — and an edit
+    // inside it can canonicalize a candidate under the new codec while leaving
+    // an entry holding the old one. Sampled here, that edit is inside the
+    // window the pass compares against; sampled at run time it is invisible,
+    // because it happened before the sampling started.
+    const undoWatermark = this.undoManagerFor(workspaceId).revision(ChangeScope.BlockDefault)
+    this.propertyDefinitionMigrationJobs.schedule(() =>
+      this.runPropertyDefinitionMigrations(
+        workspaceId, plans, resolver, generation, undoWatermark,
+      ),
+    )
   }
 
   /** Test helper — drains migration passes whose deferral timer has fired. */
@@ -4544,14 +4530,16 @@ export class Repo {
     // gate fires SYNCHRONOUSLY, before any such binding is initialised.
     const gate: {dispose?: () => void} = {}
     gate.dispose = this.backfillSyncGate(() => {
-      // Released as the re-detect is enqueued, not when it finishes: a drift
-      // detected AFTER this point is a different rebuild's and deserves its own
-      // retry. Nothing else tracks the listener — a workspace switch between
-      // the gate firing and the job running is past any disposal a switch
-      // handler could do, so the re-detect checks for itself either way.
-      this.pendingDriftRedetects.delete(workspaceId)
       gate.dispose?.()
       this.propertyDefinitionMigrationJobs.schedule(async () => {
+        // Released where the re-detect RUNS, not where the gate fires. Between
+        // those two is a deep-idle deferral, and the gate is open across it —
+        // so a pass refused in that window would find no marker, park a second
+        // listener that fires at once, and both scans would then read the same
+        // unchanged baseline. Nothing else tracks the listener: a workspace
+        // switch in that window is past any disposal a switch handler could do,
+        // so the re-detect checks for itself either way.
+        this.pendingDriftRedetects.delete(workspaceId)
         this.redetectPropertyDefinitionDrift(workspaceId)
         await this.awaitPropertyDefinitionBaselines()
       })
@@ -4616,15 +4604,37 @@ export class Repo {
     plans: readonly PropertyDefinitionMigrationPlan[],
     resolver: PropertySchemaResolver,
     generation: number,
+    /** The user's undo revision as of SCHEDULING — see the scheduler. */
+    undoWatermark: number,
   ): Promise<void> {
+    // SUPERSEDED plans do not run. A definition can change more than once
+    // inside one deferral window (`string -> number -> string`), and each
+    // rebuild enqueues its own captured plans under the same workspace
+    // generation, because a rebuild does not move it. Executing an older one
+    // re-encodes rows to a codec the workspace no longer uses and records it as
+    // the baseline — and if it then aborts partway on a transient gap, the rows
+    // it already rewrote are stranded: the final pass's re-detect compares the
+    // live codec against a baseline that still matches it and sees no drift.
+    //
+    // Validating instead of ordering is what makes that unreachable rather than
+    // merely unlikely. Ordering the passes only decided who wrote LAST; the
+    // intermediate pass still wrote, which is the half that strands rows. Here
+    // the intermediate pass writes nothing at all.
+    //
+    // Only when the live registry is this workspace's. When it is not, the
+    // workspace is not active and the staleness check below is the answer;
+    // judging plans against another workspace's codecs is not.
+    const live = this._propertyDefinitionRegistry
+    const currentPlans = live !== null && live.workspaceId === workspaceId
+      ? plans.filter(({change, schema}) =>
+        live.schemasByFieldId.get(change.fieldId)?.codec.type === schema.codec.type)
+      : plans
+    if (currentPlans.length === 0) return
     // Un-flipped: nothing re-keys here, so nothing is recorded either and the
     // drift stays visible to the prime that follows the flip.
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
-    const label = propertyDefinitionMigrationLabel(plans)
+    const label = propertyDefinitionMigrationLabel(currentPlans)
     const undoManager = this.undoManagerFor(workspaceId)
-    // How many times the user's stack has changed as the pass begins. Compared
-    // again below — see there for what it answers that `everWrote` cannot.
-    const undoWatermark = undoManager.revision(ChangeScope.BlockDefault)
     const clearUndo = this.undoClearingForPassWrites(workspaceId, () => {
       const message =
         'Re-encoding property values for a changed type cleared this '
@@ -4640,7 +4650,7 @@ export class Repo {
     })
     try {
       const wrote = await this.runPropertyDefinitionMigrationBatch(
-        workspaceId, plans, resolver, generation, clearUndo,
+        workspaceId, currentPlans, resolver, generation, clearUndo,
       )
       // This one is load-bearing. The per-chunk check only fires when a chunk
       // WRITES, and a run that finds no candidates opens no transaction at
@@ -4671,7 +4681,7 @@ export class Repo {
       // Only an APPLIED pass advances a known fieldId — a throw, or a pass that
       // never ran, leaves the drift visible to the next prime.
       await recordAppliedPropertyDefinitionCodecs(this.db, workspaceId, new Map(
-        plans.map(({change, schema}) => [change.fieldId, schema.codec.type]),
+        currentPlans.map(({change, schema}) => [change.fieldId, schema.codec.type]),
       ))
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)

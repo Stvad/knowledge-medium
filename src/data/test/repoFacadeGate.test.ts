@@ -273,9 +273,6 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   pendingNameRederives: 'shared Map (session bookkeeping)',
   nameRederiveDrainScheduled: 'shared Set (session bookkeeping)',
   propertyDefinitionMigrationJobs: 'shared job queue (enqueued via constructor-bound facetBridge)',
-  propertyDefinitionMigrationWork:
-    'data field — a promise the chain replaces; the passes it sequences are enqueued via '
-    + 'the facetBridge-bound schedule',
   propertyDefinitionBaselineWork: 'data field — a promise the chain replaces; captures no repo beyond the constructor-bound facetBridge path that appends to it',
 }
 

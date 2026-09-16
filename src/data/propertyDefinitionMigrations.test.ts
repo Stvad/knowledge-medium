@@ -1422,60 +1422,110 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
   }, 20_000)
 
-  it('runs two rebuilds of one definition in order, never interleaved', async () => {
-    // `string -> number -> string` inside one deferral window: both rebuilds
-    // capture their own plans under the SAME workspace generation, because a
-    // rebuild does not move it. Run independently, the smaller pass finishes
-    // first and the older one then re-encodes the rows and records the
-    // intermediate codec as the baseline.
+  it('drops a plan the live registry has already superseded', async () => {
+    // `string -> number -> string` inside one deferral window. Both rebuilds
+    // capture their own plans under the same workspace generation, because a
+    // rebuild does not move it. Running the older one re-encodes rows to a
+    // codec the workspace no longer uses and records it — and if it aborts
+    // partway on a transient gap, the rows it already rewrote are stranded,
+    // because the final pass's re-detect finds the live codec and the baseline
+    // agreeing. Validating means the intermediate pass writes nothing at all.
     await seedWorkspace('children')
     const repo = setup()
-    await seedProperty(repo, 'p', ' 42 ')
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
     await repo.awaitPropertyDefinitionBaselines()
 
-    const order: string[] = []
-    let release: (() => void) | null = null
-    let calls = 0
+    // Captured while the registry said `number`...
+    publishDefinition(repo, statusNumber)
+    await awaitRegistry(repo, WS, 'status')
+    const snapshot = rebuildSnapshot(repo)
+    // ...and superseded before the deferred job runs.
+    publishDefinition(repo, statusString)
+    await awaitRegistry(repo, WS, 'status')
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
+
+    const runs = vi.spyOn(
+      repo as unknown as {runPropertyDefinitionMigrations: () => Promise<void>},
+      'runPropertyDefinitionMigrations',
+    )
+    // Typed with its plans argument, which is the thing asserted on below.
     const batch = vi.spyOn(
-      repo as unknown as {runPropertyDefinitionMigrationBatch: () => Promise<boolean>},
+      repo as unknown as {
+        runPropertyDefinitionMigrationBatch: (
+          workspaceId: string,
+          plans: ReadonlyArray<{schema: {codec: {type: string}}}>,
+        ) => Promise<boolean>
+      },
       'runPropertyDefinitionMigrationBatch',
-    ).mockImplementation(async () => {
-      calls += 1
-      const nth = calls
-      order.push(`enter${nth}`)
-      // The first pass is still in flight when the second's timer fires, which
-      // is the whole window the race lives in.
-      if (nth === 1) await new Promise<void>(resolve => { release = () => resolve() })
-      order.push(`exit${nth}`)
-      return false
-    })
+    )
 
     vi.useFakeTimers()
-    const snapshot = rebuildSnapshot(repo)
-    repo.schedulePropertyDefinitionMigrations(
-      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], snapshot,
-    )
     repo.schedulePropertyDefinitionMigrations(
       WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], snapshot,
     )
     await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
     vi.useRealTimers()
 
-    await vi.waitFor(() => { expect(order).toContain('enter1') }, {timeout: 5000})
-    // A real window before asserting the absence, because there is no positive
-    // signal to fence on: unserialized, the second pass reaches the batch only
-    // after its own DB reads, so releasing immediately would let it run second
-    // for the wrong reason and the test would pass with the chain deleted.
-    for (let turn = 0; turn < 40; turn += 1) {
-      await new Promise(resolve => { setTimeout(resolve, 5) })
-      if (order.includes('enter2')) break
-    }
-    expect(order).not.toContain('enter2')
-    release!()
-    await repo.awaitPropertyDefinitionMigrations()
+    // The pass RAN and refused its own plan — not "the job never fired". The
+    // batch may still be reached by the workspace's own legitimate `string`
+    // pass, so this asks which PLANS got there rather than whether anything did.
+    expect(runs).toHaveBeenCalled()
+    const migratedCodecs = batch.mock.calls.flatMap(
+      ([, batchPlans]) => batchPlans.map(plan => plan.schema.codec.type))
+    expect(migratedCodecs).not.toContain('number')
+    runs.mockRestore()
     batch.mockRestore()
 
-    expect(order).toEqual(['enter1', 'exit1', 'enter2', 'exit2'])
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+  }, 20_000)
+
+  it('watermarks the undo stack at SCHEDULING, not when the deferred job runs', async () => {
+    // The deferral is deep idle — tens of seconds — and an edit inside it can
+    // canonicalize a candidate under the new codec while leaving an entry
+    // holding the old one. Sampled when the job starts, that edit already
+    // happened and is invisible; the pass then converges, writes nothing, sees
+    // an unchanged revision, and records.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    publishDefinition(repo, statusNumber)
+    await awaitRegistry(repo, WS, 'status')
+    // Waited on the OUTCOME: the workspace's own migration is deferred, and
+    // draining does not advance its timer — left pending it fires inside the
+    // window below and announces a clear of its own.
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({status: 42})
+    }, {timeout: 8000})
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
+    const snapshot = rebuildSnapshot(repo)
+    // Subscribed after the workspace's own migration has run: its clear is
+    // announced by its own pass, and counting both would say nothing.
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+
+    vi.useFakeTimers()
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], snapshot,
+    )
+    // Lands in the deferral window: the timer is armed but has not fired, and
+    // `repo.tx` needs no timer of its own.
+    await repo.tx(tx => tx.setProperty('p', statusNumber, 99 as never),
+      {scope: ChangeScope.BlockDefault})
+    expect(undoDepth(repo)).toBeGreaterThan(0)
+    await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
+    vi.useRealTimers()
+
+    // The row was already canonical by the time the pass reached it, so it
+    // wrote nothing — and the entry the edit left behind is the one the record
+    // would have made permanent.
+    expect(undoDepth(repo)).toBe(0)
+    expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
   }, 20_000)
 
   it('parks ONE re-detect per workspace, however many passes the gap refuses', async () => {
