@@ -120,9 +120,8 @@ describe('diffSeedLedger', () => {
     ])
   })
 
-  // The remedy that a single blanket instruction got wrong: with the key
-  // unchanged nothing is abandoned, so "discard" ships the very crash the
-  // ledger exists to prevent.
+  // With the key unchanged nothing is abandoned, so a remedy offering "discard"
+  // here ships the very crash the ledger exists to prevent.
   it('refuses to offer discard for an encoding change at an unchanged key', () => {
     const divergences = diffSeedLedger(
       'property', new Map([['k/property/a', ['a:name', 'number', 'number']]]), frozen, none,
@@ -427,12 +426,10 @@ describe('what a seed change does to values already stored', () => {
   /** Registry reads race the definition PROJECTORS, which deliver on a
    *  subscription tick after materialization rather than inside `release`. Poll
    *  the outcome instead of sleeping on it (AGENTS.md); a real regression still
-   *  fails, it just takes the budget to say so. Measured at ~15-35ms per test,
-   *  so 2s is ample and stays strictly under the 5s default test timeout — an
-   *  inner budget at or above the outer one could never report its own failure.
-   *
-   *  Caught the honest way: the type-removal assertion below failed ~2 runs in
-   *  6 before this, and five green runs in a row had said it was stable. */
+   *  fails, it just takes the budget to say so. These tests measure at ~15-35ms,
+   *  so 2s is ample, and it stays strictly under the 5s default test timeout —
+   *  an inner budget at or above the outer one could never report its own
+   *  failure. */
   const settle = (assertion: () => void): Promise<void> =>
     vi.waitFor(assertion, {timeout: 2_000})
 

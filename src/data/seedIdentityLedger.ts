@@ -216,11 +216,11 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
  * name retired before seeds existed still belongs here. Its seedKey is
  * irrelevant; the cells are keyed by the name.
  *
- * COMPLETENESS BOUND, so nobody reads the list as exhaustive: it was seeded from
- * the keys a live workspace actually holds orphaned data under (`pnpm agent
- * audit-properties`, plus a `types` scan) intersected with names git history
- * shows were once shipped declarations. An older name that left no surviving row
- * in that graph is not here. Add one when you find it.
+ * NOT EXHAUSTIVE, and cannot be: a key qualifies only once someone notices it.
+ * The way to find more is `pnpm agent audit-properties` (plus a `types` scan for
+ * ids), intersected against names git history shows were once declarations — an
+ * older key that left no surviving row in the graph you scan stays invisible.
+ * Add one whenever you find it.
  */
 
 /** Property names no shipped seed may claim. Each was a declaration once. */
@@ -362,9 +362,9 @@ export const indexBySeedKey = <T>(
  * the four divergences do not share one. In particular an ENCODING change at an
  * UNCHANGED name cannot be discarded at all: nothing is abandoned, the existing
  * cells keep the old representation under the same key, and the new codec
- * throws on them — the exact crash this file exists to prevent, reachable by
- * following a "discard" instruction to the letter. Rename or migrate are its
- * only answers. A blanket instruction said "discard" to it for one round.
+ * throws on them. Rename or migrate are its only answers, and a remedy that
+ * offers "discard" there hands back the exact crash this file exists to
+ * prevent.
  */
 export const diffSeedLedger = (
   kind: SeedLedgerKind,
