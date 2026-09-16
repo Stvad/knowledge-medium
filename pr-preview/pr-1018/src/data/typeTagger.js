@@ -1,1 +1,1 @@
-import{AH as e}from"../../chunks/app-CQ6k_8dT.js";export{e as TypeTagger};
+import{AH as e}from"../../chunks/app-DjICwAJu.js";export{e as TypeTagger};
