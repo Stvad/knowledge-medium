@@ -701,6 +701,34 @@ const reconcileSingleValueChild = async (
   }
 }
 
+/**
+ * How one property's value children are compared to EACH OTHER: by decoded
+ * value for a multi-valued property, by raw text otherwise.
+ *
+ * One factory, because two places ask — the member reconciler and the
+ * duplicate-field-row collapse — and a disagreement between them is silent in
+ * both directions. Measured with them apart: the collapse moved two rows the
+ * reconciler would have called equal (` 1 ` and `1`), the merged cell had
+ * already deduped them, so nothing reconciled and the projection published the
+ * member twice.
+ */
+const memberKeyFn = (
+  schema: AnyPropertySchema | null,
+): ((content: string) => string) => {
+  if (schema === null || memberCodecOf(schema.codec) === undefined) {
+    return content => `c${content}`
+  }
+  return content => {
+    try {
+      return `v${JSON.stringify(stableJsonValue(valueChildContentToEncoded(schema, content)))}`
+    } catch {
+      // Unparseable text keys on itself, so it matches nothing and stays
+      // surplus, which is what it is.
+      return `c${content}`
+    }
+  }
+}
+
 const reconcileMemberValueChildren = async (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
@@ -709,19 +737,11 @@ const reconcileMemberValueChildren = async (
   contents: readonly string[],
   mayNotRemove: boolean,
 ): Promise<void> => {
-  // Match by VALUE, not by raw text. A member a person spelled ` 1 ` or
-  // `{ "a": 1 }` projects to exactly the value the canonical text projects to,
-  // and matching on text alone reaps that row — with its comments, its own
-  // properties and its history — to mint a replacement for a value that never
-  // changed. A row whose content does not parse keys on the text instead, so it
-  // matches nothing and stays surplus, which is what it is.
-  const keyOf = (content: string): string => {
-    try {
-      return `v${JSON.stringify(stableJsonValue(valueChildContentToEncoded(schema, content)))}`
-    } catch {
-      return `c${content}`
-    }
-  }
+  // By VALUE, not raw text: a member a person spelled ` 1 ` projects to exactly
+  // what the canonical text projects to, and matching on text alone reaps that
+  // row — with its comments, its own properties and its history — to mint a
+  // replacement for a value that never changed.
+  const keyOf = memberKeyFn(schema)
   const keyByRow = new Map(values.map(value => [value.id, keyOf(value.content)]))
 
   // Occurrence by occurrence, so a list holding one member twice consumes two
@@ -859,6 +879,13 @@ export const collapseDuplicateFieldRow = async (
   const duplicateChildren = await tx.childrenOf(
     duplicate.id, undefined,
   )
+  // The SAME comparison the member reconciler uses — see `memberKeyFn` for
+  // what a disagreement between the two costs. Resolves to raw-text matching
+  // for a scalar, and for a field row whose definition does not resolve.
+  const fieldId = getPropertyFieldTargetId(duplicate)
+  const keyOf = memberKeyFn(fieldId === undefined
+    ? null
+    : tx.resolvePropertyFieldSchema(duplicate.workspaceId, fieldId))
   for (const child of duplicateChildren) {
     const survivorChildren = await tx.childrenOf(
       survivorFieldRowId, undefined,
@@ -887,7 +914,7 @@ export const collapseDuplicateFieldRow = async (
     const survivorValues = survivorChildren.filter(isFieldValueChild)
     const match = mayNotRemove
       ? undefined
-      : survivorValues.find(v => v.content === child.content)
+      : survivorValues.find(v => keyOf(v.content) === keyOf(child.content))
     if (match) {
       await collapseDuplicateValueChild(tx, match.id, child)
     } else {

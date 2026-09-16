@@ -53,6 +53,12 @@ export const TARGET_INSERT_ROWS = 190
  *  2. Named here because the estimate and the thing it estimates have to be
  *  read together.
  *
+ *  An EMPTY array is charged two, not one: this layer cannot see the codec, and
+ *  under a non-list one (`raw-json`) an empty array is still a value child
+ *  holding `[]`. Charging one there is the only way this estimate could
+ *  UNDER-count, which is the direction that matters; a genuine empty list
+ *  property is merely over-counted by one.
+ *
  *  Over-counts in three ways, all toward SMALLER transactions: a key that is
  *  unregistered or already materialized, and an array stored under a codec
  *  that is NOT list-shaped (`raw-json`), whose whole array is one value child.
@@ -62,7 +68,7 @@ export const TARGET_INSERT_ROWS = 190
  *  writer for several times its budget with every user write and the sync drain
  *  queued behind it. */
 export const rowsForValue = (value: unknown): number =>
-  1 + (Array.isArray(value) ? value.length : 1)
+  1 + Math.max(1, Array.isArray(value) ? value.length : 1)
 
 /** Candidates fetched per scan query. Independent of the write budget: this
  *  bounds how often the pass pays for a cursor seek, the budget bounds how
@@ -105,7 +111,7 @@ const CARRIES_A_PROPERTY = `
 export const CANDIDATE_SQL = `
   SELECT b.id AS id,
          (SELECT SUM(1 + CASE WHEN e.type = 'array'
-                              THEN json_array_length(e.value) ELSE 1 END)
+                              THEN MAX(1, json_array_length(e.value)) ELSE 1 END)
             FROM json_each(b.properties_json) e) AS rows
     FROM blocks b
    WHERE b.workspace_id = ?

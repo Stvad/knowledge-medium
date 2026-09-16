@@ -3476,6 +3476,33 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
   })
 
   describe('merge unions two divergent sets (§5 merge policy)', () => {
+    it('folds members that are EQUAL though spelled differently', async () => {
+      // The cell merge dedupes by value, so the collapse has to compare the
+      // same way. Comparing raw text moved both rows under the survivor, the
+      // merged cell was already deduped so nothing reconciled them, and the
+      // projection then published the member twice over it.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'into')
+      await createBlock(repo, 'from')
+      await repo.tx(tx => tx.setProperty('into', bagSchema, [1]),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('from', bagSchema, [1]),
+        {scope: ChangeScope.BlockDefault})
+      // Same value, different editable spelling — what a person types.
+      const fromMember = (await memberRows('from', BAG_FIELD_ID))[0]!
+      await repo.tx(tx => tx.update(fromMember.id, {content: ' 1 '}),
+        {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(async tx => {
+        const into = await tx.get('into')
+        const from = await tx.get('from')
+        await mergeBlocksInTx(tx, {into: into!, from: from!})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('into')).bag).toEqual([1])
+      expect(await memberContents('into', BAG_FIELD_ID)).toHaveLength(1)
+    })
+
     it('folds the source field row and keeps every member once', async () => {
       const repo = await setupWithLists()
       await createBlock(repo, 'into')

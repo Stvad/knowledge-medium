@@ -532,6 +532,15 @@ export const encodedPropertyValueToChildContents = (
   // member shorter, with no error anywhere. Refuse it, so the write is
   // rejected with a reason (`propertyCellValueRejection` asks this same
   // question) instead of silently losing the member.
+  //
+  // HERE and not in `codecs.refList().encode`, which would also catch the
+  // pre-flip window where no value child is written at all. Tried, and
+  // reverted: a refList's member IS the scalar ref codec, so refusing `''` in
+  // the list while the member accepts it breaks the `Codec.member` contract
+  // that the list's encode is its member's applied element-wise — the codec
+  // fuzz suites fail on it. Pre-flip the cell is still the truth and nothing
+  // is lost; the cell → children pass REPORTS such a key with its block id and
+  // leaves it cell-only, which is that window's designed safety net.
   for (const [i, content] of contents.entries()) {
     if (content !== '') continue
     try {
