@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
 import {
   dbMirrorFilename,
   incarnationTagOf,
@@ -44,17 +44,31 @@ describe('dbMirrorFilename', () => {
     // The token keeps two runs that share a second off ONE name. It is NOT what
     // makes a failed run's cleanup its own entry: `claimFreshEntry` in
     // `mirror.ts` refuses a name that already exists, so a collision costs a
-    // run rather than another run's file. So this asserts the token varies —
-    // sampling draws for uniqueness would assert collision resistance, which is
-    // a property of the token's width and flakes at any sample size.
-    const first = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)
-    const second = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)
+    // run rather than another run's file.
+    //
+    // The draws are STUBBED because the property is that the token varies, not
+    // that random draws are collision-free — that second one is a claim about
+    // the token's width, and there is no sample size at which observing it
+    // stops flaking. The two differ in every position, so the names differ
+    // whatever window `randomToken` slices out of them.
+    const draw = vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-0000-0000-000000000000')
+      .mockReturnValueOnce('11111111-1111-1111-1111-111111111111')
+    try {
+      const first = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)
+      const second = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)
 
-    expect(first).not.toBe(second)
-    // Spelled out rather than compared to each other, so a pair that stopped
-    // parsing at all could not satisfy this by both being undefined.
-    const carried = {at: AT, installId: INSTALL_A, incarnation: TAG}
-    expect([parse(first), parse(second)]).toEqual([carried, carried])
+      // Without this the test still passes on real entropy if the token ever
+      // stops coming from `randomUUID` — silently random again, and flaky again.
+      expect(draw).toHaveBeenCalledTimes(2)
+      expect(first).not.toBe(second)
+      // Spelled out rather than compared to each other, so a pair that stopped
+      // parsing at all could not satisfy this by both being undefined.
+      const carried = {at: AT, installId: INSTALL_A, incarnation: TAG}
+      expect([parse(first), parse(second)]).toEqual([carried, carried])
+    } finally {
+      draw.mockRestore()
+    }
   })
 })
 
