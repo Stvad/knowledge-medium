@@ -47,6 +47,15 @@ export interface PropertyDefinitionMigrationPlan {
   readonly schema: ResolvedPropertySchema<unknown>
 }
 
+/** How the deferred pass names itself in its own logs and in the aborts
+ *  `assertUploadingPassMayWrite` throws. One owner, so the run and the batch
+ *  it delegates to are greppable as the same pass. */
+export const propertyDefinitionMigrationLabel = (
+  plans: readonly PropertyDefinitionMigrationPlan[],
+): string =>
+  '[propertyDefinitionMigrations] '
+  + plans.map(({change}) => `"${change.newName}" (${change.fieldId})`).join(', ')
+
 /** The identity-stable facts a definition-migration diff compares, per durable
  *  fieldId. `codecType` is absent when the registry carried the definition's
  *  metadata but no resolved schema (its preset plugin hasn't loaded). */

@@ -463,14 +463,19 @@ export interface CellRekeyPlan {
  *  first parseable value under the tx-start codec; the batch iterates all
  *  values, canonicalizes them under the possibly-new codec, and counts
  *  unconvertibles). The write is `skipMetadata` machinery, not a "last edited"
- *  bump. */
+ *  bump.
+ *  Returns whether the cell was actually REWRITTEN — false for a missing or
+ *  deleted parent, and for a plan that converges on the bag already stored.
+ *  The deferred batch clears the workspace's undo stack the first time it
+ *  writes (#995), and a pass that converged on every parent it visited must
+ *  not cost the user their history. */
 export const rekeyParentPropertyCell = async (
   tx: Tx,
   parentId: string,
   computePlan: (children: readonly BlockData[]) => Promise<CellRekeyPlan>,
-): Promise<void> => {
+): Promise<boolean> => {
   const parent = await tx.get(parentId)
-  if (parent === null || parent.deleted) return
+  if (parent === null || parent.deleted) return false
   const {oldNames, assignments} = await computePlan(
     await tx.childrenOf(parentId, undefined),
   )
@@ -480,8 +485,9 @@ export const rekeyParentPropertyCell = async (
     if (assignment.unset) delete next[assignment.name]
     else next[assignment.name] = assignment.value
   }
-  if (propertiesEqual(parent.properties, next)) return
+  if (propertiesEqual(parent.properties, next)) return false
   await tx.update(parentId, {properties: next}, {skipMetadata: true})
+  return true
 }
 
 /** Shared by `isPropertyValueRow` / `resolvePropertyValueFieldSchema`: the

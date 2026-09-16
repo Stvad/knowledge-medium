@@ -145,6 +145,21 @@ const baselineCodecs = async (workspaceId = WS): Promise<Record<string, string>>
   return (JSON.parse(row?.value ?? '{}') as {codecs?: Record<string, string>}).codecs ?? {}
 }
 
+/** The pass reports on ONE channel (`repo.onUserError`) and has two things to
+ *  say — unconvertible values, and a cleared undo stack. An assertion about
+ *  either must not be perturbed by the other arriving beside it. */
+const rejectionsWithCode = (
+  errors: readonly ProcessorRejection[], code: string,
+): ProcessorRejection[] => errors.filter(error => error.code === code)
+
+const UNCONVERTIBLE = 'property.codec-change.unconvertible'
+const UNDO_CLEARED = 'property.codec-change.undo-cleared'
+
+/** How deep the workspace's cmd-Z stack is — the thing a migration's writes
+ *  can be silently reverted from. */
+const undoDepth = (repo: Repo): number =>
+  repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo
+
 const rowContent = async (id: string): Promise<string> =>
   (await sharedDb.db.get<{content: string}>(
     'SELECT content FROM blocks WHERE id = ?', [id],
@@ -462,9 +477,51 @@ describe('codec-change migration', () => {
     // The stale (pre-migration, old-codec) value is what's left in place.
     expect(await cell('p')).toEqual({status: 'not a number'})
     expect(await rowContent(valueRowId)).toBe('not a number')
-    expect(errors).toHaveLength(1)
-    expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
-    expect(errors[0]!.meta).toMatchObject({count: 1})
+    expect(rejectionsWithCode(errors, UNCONVERTIBLE)).toHaveLength(1)
+    expect(rejectionsWithCode(errors, UNCONVERTIBLE)[0]!.meta).toMatchObject({count: 1})
+  })
+
+  it('clears the workspace undo history on the first chunk that writes, and says so', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+    // The user's own edits, made BEFORE the codec change. An undo entry
+    // restores a whole `before` row snapshot rather than a field delta, so any
+    // one of these replays the pre-migration bag over a re-encoded row — and
+    // permanently, because the baseline has by then recorded the drift as
+    // applied and no later prime re-detects it. `skipUndo` keeps this pass's
+    // own writes off the stack; it cannot reach the entries already on it.
+    expect(undoDepth(repo)).toBeGreaterThan(0)
+
+    await republish(repo, statusNumber)
+
+    expect(await cell('p')).toEqual({status: 42})
+    expect(undoDepth(repo)).toBe(0)
+    // Cleared AND surfaced: a user who finds cmd-Z silently empty has no way
+    // to connect it to a property type change.
+    expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
+  })
+
+  it('leaves the undo history alone when the pass converges without writing', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', 'not a number')
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+    const before = undoDepth(repo)
+    expect(before).toBeGreaterThan(0)
+
+    // Every value is unconvertible, so the cell converges on the bag it already
+    // holds and no row is rewritten. There is nothing for an undo entry to be
+    // replayed over, and costing the user their history anyway is the
+    // over-approximation worth not having.
+    await republish(repo, statusNumber)
+
+    expect(rejectionsWithCode(errors, UNCONVERTIBLE)).toHaveLength(1)
+    expect(undoDepth(repo)).toBe(before)
+    expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(0)
   })
 
   it('all-unconvertible: the field row and value child stay live (deleted = 0), never tombstoned', async () => {
@@ -520,9 +577,8 @@ describe('codec-change migration', () => {
     // and the unconvertible count is surfaced to the user.
     expect(await rowContent(valueRowId)).toBe('not a number')
     expect(await rowContent(fieldRowId)).toBe(`::((${FIELD_ID}))`)
-    expect(errors).toHaveLength(1)
-    expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
-    expect(errors[0]!.meta).toMatchObject({count: 1})
+    expect(rejectionsWithCode(errors, UNCONVERTIBLE)).toHaveLength(1)
+    expect(rejectionsWithCode(errors, UNCONVERTIBLE)[0]!.meta).toMatchObject({count: 1})
 
     // The field row and its value child stay live — never tombstoned.
     for (const id of [fieldRowId, valueRowId]) {
@@ -876,34 +932,165 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
   }, 20_000)
 
-  it('migrates against the resolver captured at rebuild time, after the workspace falls out of retention', async () => {
+  it('refuses to write into a workspace the session has switched away from', async () => {
     await seedWorkspace('children')
     const repo = setup()
-    await seedProperty(repo, 'p', ' 42 ')
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
     publishDefinition(repo, statusNumber)
     await awaitRegistry(repo, WS, 'status')
     // Captured the way the baseline path captures it: synchronously with the
     // rebuild, BEFORE its async read of the stored baseline.
     const resolver = repo.propertySchemaResolverFor(WS)
 
-    // Two further switches evict WS from the one-deep active/previous retention
-    // `propertySchemaResolverFor` serves from — the window in which a deferred
-    // pass that re-resolved late would drop its migrations silently. Each switch
-    // must actually PRIME a registry: the previous-slot rotation only happens
-    // when a non-null snapshot is replaced.
     for (const workspaceId of [OTHER_WS, THIRD_WS]) {
       repo.setActiveWorkspaceId(workspaceId)
       await awaitRegistry(repo, workspaceId)
     }
-    expect(repo.propertySchemaResolverFor(WS).resolveField(FIELD_ID).status).not.toBe('resolved')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     repo.schedulePropertyDefinitionMigrations(
       WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], resolver,
     )
 
-    await vi.waitFor(async () => {
-      expect(await cell('p')).toEqual({status: 42})
+    // The pass RAN and refused — asserted on the refusal, not on the absence of
+    // a write, which a pass whose deferral timer had simply not fired yet would
+    // also satisfy.
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.flat().join(' ')).toContain('is no longer active')
     }, {timeout: 5000})
+    warn.mockRestore()
+
+    // `repo.tx` pins to whatever workspace is active, so a write here would
+    // land WS's rows under THIRD_WS's access state and undo stack — and the
+    // read-only gate would be answering for the wrong workspace's role.
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+  }, 20_000)
+
+  it('refuses a pass scheduled during an EARLIER visit to the same workspace', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    publishDefinition(repo, statusNumber)
+    await awaitRegistry(repo, WS, 'status')
+    const resolver = repo.propertySchemaResolverFor(WS)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    vi.useFakeTimers()
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], resolver,
+    )
+    // Away and back INSIDE the deferral window. The workspace id is restored,
+    // so identity alone reads as "still here" — only the generation says this
+    // job was computed during a visit that has since ended. The return visit
+    // primes and re-detects the same drift for itself, which is why refusing
+    // here loses nothing.
+    repo.setActiveWorkspaceId(OTHER_WS)
+    repo.setActiveWorkspaceId(WS)
+    await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
+    vi.useRealTimers()
+
+    expect(warn.mock.calls.flat().join(' ')).toContain('was re-opened')
+    warn.mockRestore()
+  }, 20_000)
+
+  it('records nothing when the view gaps while the batch is running', async () => {
+    await seedWorkspace('children')
+    let settled = true
+    const {repo} = createTestRepo({
+      db: sharedDb.db, user: {id: 'user-1'},
+      backfillSyncGate: (cb) => { if (settled) cb(); return () => {} },
+    })
+    repo.setActiveWorkspaceId(WS)
+    publishDefinition(repo, statusString)
+    await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Stands in for a long chunked run that commits nothing: the device falls
+    // behind the server while the batch is in flight. The check before the SCAN
+    // ran while it was still caught up, and a batch that wrote no chunk opened
+    // no transaction to re-check inside — so the check before the RECORD is the
+    // only thing between a half-seen graph and a drift marked applied forever.
+    const batch = vi.spyOn(
+      repo as unknown as {runPropertyDefinitionMigrationBatch: () => Promise<void>},
+      'runPropertyDefinitionMigrationBatch',
+    ).mockImplementation(async () => { settled = false })
+
+    await changeWhileInactive(repo, statusNumber)
+
+    // Waited on the REFUSAL, which is strictly after the point the record would
+    // have been written — reading the baseline on `batch` having been called
+    // would pass before the record had a chance to happen.
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.flat().join(' ')).toContain('not caught up with the server')
+    }, {timeout: 5000})
+    warn.mockRestore()
+    batch.mockRestore()
+
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+  }, 20_000)
+
+  it('aborts when the role turns read-only inside the deferral window', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    publishDefinition(repo, statusNumber)
+    await awaitRegistry(repo, WS, 'status')
+    const resolver = repo.propertySchemaResolverFor(WS)
+    const failure = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    // The schedule-time `isReadOnly` check cannot cover this: the role arrives
+    // from the server asynchronously and the batch runs on deep idle, so a pass
+    // scheduled while this device was an editor routinely runs after it has
+    // stopped being one. What catches it is the commit pipeline's own gate,
+    // re-sampled per transaction — `References` is a rejected scope in
+    // read-only, so the chunk throws before `fn` reads a row. Nothing here
+    // restates that check, which is why this test exists to pin it.
+    vi.useFakeTimers()
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], resolver,
+    )
+    repo.setReadOnly(true)
+    await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
+    vi.useRealTimers()
+
+    expect(failure.mock.calls.flat().join(' ')).toContain('rejected in read-only mode')
+    failure.mockRestore()
+    repo.setReadOnly(false)
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+  }, 20_000)
+
+  it('writes nothing and records nothing while this device is behind the server', async () => {
+    await seedWorkspace('children')
+    // A gate that never fires its callback is exactly how
+    // `backfillSyncSettledNow` reads "still downloading, disconnected, or a
+    // download error".
+    const {repo} = createTestRepo({
+      db: sharedDb.db, user: {id: 'user-1'}, backfillSyncGate: () => () => {},
+    })
+    repo.setActiveWorkspaceId(WS)
+    publishDefinition(repo, statusString)
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await changeWhileInactive(repo, statusNumber)
+
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.flat().join(' ')).toContain('not caught up with the server')
+    }, {timeout: 5000})
+    warn.mockRestore()
+
+    // The whole hazard in one pair. Re-encoding from here uploads a properties
+    // bag built from rows this device has not caught up on, overwriting edits
+    // it has never seen; recording it would hide the drift from every later
+    // prime. The baseline still holds the OLD codec, so the next prime retries.
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
   }, 20_000)
 })
 

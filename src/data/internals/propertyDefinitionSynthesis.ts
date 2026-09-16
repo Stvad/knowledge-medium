@@ -739,7 +739,7 @@ export const applyPropertyDefinitionSynthesis = async (
     // block afterwards does not unpublish the id.
     //
     // The view gap is re-asked in full, the same discipline
-    // `assertBackfillMayWrite` follows: a delivery that cannot be applied can
+    // `assertUploadingPassMayWrite` follows: a delivery that cannot be applied can
     // land between the preflight and the lock, and a key whose real definition
     // is the one left unapplied still reads as ORPHANED to the plan we are
     // about to write from. Affordable here only because the durable half is a
@@ -755,7 +755,7 @@ export const applyPropertyDefinitionSynthesis = async (
     // failing.
     //
     // Read through `repo.db` rather than a tx handle, deliberately and for the
-    // same reason `assertBackfillMayWrite` does: a concurrent drain is excluded
+    // same reason `assertUploadingPassMayWrite` does: a concurrent drain is excluded
     // by the write lock, not by read isolation.
     const lateGap = await repo.workspaceViewGap(workspaceId)
     if (lateGap !== null) {
