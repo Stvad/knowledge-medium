@@ -798,6 +798,40 @@ describe('codec-change migration', () => {
     expect(undoDepth(repo)).toBe(0)
   }, 20_000)
 
+  it('keeps the undo entry of an edit that was merely INVOKED while a pass held the lock', async () => {
+    // The reverse ordering of the test above, and the one a call-time sample
+    // gets wrong: this edit does not commit ahead of the pass, it only starts
+    // while the pass holds the lock. Its `before` rows are the migrated ones,
+    // so undoing it is safe — discarding the entry would silently cost the
+    // user their own edit.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    repo.undoManagerFor(WS).clear()
+
+    // Takes the lock and waits, so the edit below can be INVOKED while it is
+    // held — and bumps only after that, which is what makes a call-time sample
+    // and an in-lock one disagree.
+    let releaseHolder: (() => void) | null = null
+    const holding = repo.tx(async () => {
+      await new Promise<void>(resolve => { releaseHolder = () => resolve() })
+      repo.undoManagerFor(WS).invalidateReplays()
+    }, {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => { expect(releaseHolder).not.toBeNull() }, {timeout: 5000})
+
+    // Invoked here, so a call-time sample reads the PRE-bump epoch; it acquires
+    // the lock, and samples, only after the holder has bumped and released.
+    const edit = repo.tx(tx => tx.update('p', {content: 'edited after the pass'}),
+      {scope: ChangeScope.BlockDefault})
+    releaseHolder!()
+    await holding
+    await edit
+
+    expect(await rowContent('p')).toBe('edited after the pass')
+    expect(undoDepth(repo)).toBe(1)
+  }, 20_000)
+
   it('leaves the undo history alone when the pass converges without writing', async () => {
     await seedWorkspace('children')
     const repo = setup()

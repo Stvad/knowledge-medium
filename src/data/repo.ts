@@ -1843,18 +1843,31 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
-    // Sampled BEFORE the transaction runs, and compared at record time below.
-    // A user transaction can hold the write lock ahead of a migration chunk,
-    // commit, release — and only reach its own recording continuation after
-    // that chunk has written and cleared. The clear cannot reach an entry that
-    // does not exist yet, and `invalidateReplays` does not either, so without
-    // this the entry lands on the stack holding the whole PRE-migration row.
-    const undoEpochAtStart = this.undoManager.clearEpoch
+    // Sampled once this transaction HOLDS the write lock — not when it was
+    // called — and compared at record time below.
+    //
+    // What it protects against: a transaction can commit and release the lock
+    // ahead of a migration chunk and only reach its recording continuation
+    // after that chunk has written and cleared. The clear cannot reach an entry
+    // that does not exist yet, and `invalidateReplays` cannot either, so the
+    // entry would land on the stack holding the whole PRE-migration row.
+    //
+    // Why inside the lock: the same two can be ordered the other way, with the
+    // edit merely INVOKED while a chunk holds the lock and executing after it
+    // commits. Sampled at call time, that edit reads the pre-clear epoch and is
+    // discarded although its `before` rows are the migrated ones and it is
+    // perfectly safe to undo. Inside the lock, the sample is taken at the same
+    // moment as the rows the entry describes, which is what makes the two
+    // comparable at all.
+    let undoEpochAtLock = this.undoManager.clearEpoch
     // Translation + listener notification happen inside `_runAndDispatch`
     // so all entry points (`tx`, `undo`, `redo`) get uniform error
     // shaping — `repo.tx` just re-throws here.
     const result: Awaited<ReturnType<typeof this._runAndDispatch<R>>> =
-      await this._runAndDispatch(fn, opts)
+      await this._runAndDispatch(async (tx) => {
+        undoEpochAtLock = this.undoManager.clearEpoch
+        return fn(tx)
+      }, opts)
     // Step 7 of the §10 pipeline — record undo entry into the tx's pinned
     // workspace's manager, so a later cmd-Z only ever acts on entries from
     // the workspace the user is looking at (issue #186). Non-undoable
@@ -1868,7 +1881,7 @@ export class Repo {
       // that pass has since rewritten. Replaying them would revert its writes
       // with the new baseline already recorded, which is the same loss the
       // clear itself exists to prevent.
-      && manager.clearEpoch === undoEpochAtStart) {
+      && manager.clearEpoch === undoEpochAtLock) {
       manager.record({
         scope: opts.scope,
         txId: result.txId,
@@ -5161,6 +5174,18 @@ export class Repo {
           // passes either way; it is documentation, not evidence. Kept because
           // invalidating inside the lock is unconditionally safer than after
           // it, and the cost is one counter increment.
+          //
+          // NOT COMMIT-COUPLED, accepted. A processor, a seed-write guard or
+          // the commit itself can still throw after this line, and SQLite then
+          // rolls the chunk back while the epoch stays advanced — costing a
+          // replay that was already queued its popped entry, one lost cmd-Z on
+          // an error path. Restoring the epoch on abort is the obvious repair
+          // and is the wrong trade: bumps happen under this same lock, so a
+          // restore can clobber a real one and let a replay that should have
+          // been refused revert committed rows. A lost undo beats a lost row.
+          // (The other half of that finding is gone rather than accepted: a
+          // concurrent transaction samples its epoch INSIDE the lock, so it
+          // reads the bumped value and keeps its entry.)
           if (chunkWrote) clearUndo.invalidateReplays()
         }, {
           // References, not BlockDefault (adversarial-review blocker): a
