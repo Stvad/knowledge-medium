@@ -1029,6 +1029,81 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     warn.mockRestore()
   }, 20_000)
 
+  it('clears the undo history after EVERY writing chunk, and tells the user once', async () => {
+    // A user edit made BETWEEN two chunks lands an undo entry whose `before`
+    // snapshot holds the OLD encoding of a row the later chunk has not reached
+    // yet. Replaying it reverts that row's migration — permanently, since the
+    // baseline records the pass as applied — so clearing on the first write
+    // alone leaves the window open for as long as the pass runs. Measured at
+    // ~3s; budgeted for the ~6x the full suite's contention adds.
+    await seedWorkspace('children')
+    const repo = setup()
+    const hostIds = Array.from({length: 101}, (_, i) => `host-${String(i).padStart(3, '0')}`)
+    await repo.tx(async tx => {
+      for (const id of hostIds) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: `k-${id}`, content: 'host'})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    for (const id of hostIds) {
+      await repo.tx(tx => tx.setProperty(id, statusString, ' 42 '),
+        {scope: ChangeScope.BlockDefault})
+    }
+    await repo.awaitPropertyDefinitionBaselines()
+    const cleared = vi.spyOn(repo.undoManagerFor(WS), 'clear')
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+
+    await changeWhileInactive(repo, statusNumber)
+
+    // Fenced on the LAST parent, which lives in the second chunk — so both
+    // chunks have committed by the time the counts are read.
+    await vi.waitFor(async () => {
+      expect(await cell('host-100')).toEqual({status: 42})
+    }, {timeout: 8000})
+
+    expect(cleared).toHaveBeenCalledTimes(2)
+    // Told once, though. The history is gone either way and repeating it per
+    // chunk is noise.
+    expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
+  }, 30_000)
+
+  it('re-checks the workspace after the gap probe awaits', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    publishDefinition(repo, statusNumber)
+    await awaitRegistry(repo, WS, 'status')
+    const resolver = repo.propertySchemaResolverFor(WS)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // The gap probe reads the DB, so it yields — and `setActiveWorkspaceId` is
+    // a synchronous field write that lands cleanly in that window. Checking
+    // identity only BEFORE the probe leaves the pass writing one workspace's
+    // rows under another's access state.
+    // Switched on every probe but the FIRST: that one is the check before the
+    // scan, and every probe after it comes from inside a chunk's transaction —
+    // which is the window that matters, since a check ahead of the probe would
+    // catch a switch that had already happened by the time the chunk started.
+    let probes = 0
+    const gap = vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => {
+      probes += 1
+      if (probes > 1) repo.setActiveWorkspaceId(OTHER_WS)
+      return null
+    })
+
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], resolver,
+    )
+
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.flat().join(' ')).toContain('is no longer active')
+    }, {timeout: 5000})
+    warn.mockRestore()
+    gap.mockRestore()
+
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+  }, 20_000)
+
   it('stops mid-pass when the view gaps between chunks', async () => {
     // The doctrine's actual rule, and the one position a pre-run check can
     // never cover: the batch chunks at 100 parents and a big pass writes over
