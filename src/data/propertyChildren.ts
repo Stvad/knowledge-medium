@@ -572,12 +572,16 @@ export const encodedPropertyValueToChildContents = (
  * malformed element of a stored list (#189), for the same reason: one bad
  * member must not strip the whole field.
  *
- * EMPTY AND UNSET COINCIDE, deliberately: no parseable member returns
- * `undefined` rather than `[]`, so a list-valued key is absent from the cell
- * exactly when it has no members — and reads back as the preset's `[]`
- * default. Distinguishing them would need "the key is present and empty" to
- * mean something no reader asks, while costing a second state that the
- * zero-children field row cannot express anyway.
+ * CALLED ONLY WHEN A LIVE FIELD ROW WAS OBSERVED, which is what lets a
+ * multi-valued property with no parseable member answer `[]` rather than
+ * `undefined`: the field row's existence IS the difference between an
+ * explicitly empty list and an unset key, and removing the field row is how a
+ * property is unset. Every caller gates on that first — the projection on
+ * `fieldRows.length`, the rename and the deferred re-encode on `sawFieldRow` —
+ * so the rule lives here rather than at each of them, and they cannot drift
+ * into disagreeing about what an empty field row means. They did: this rule
+ * was briefly only in the projection, and a rename then read a stored `[]`
+ * back as the schema's default while a codec change tombstoned the field row.
  *
  * NO whole-list canonicalization: members are canonicalized one at a time, and
  * the `member` contract (`encode` is element-wise) makes the array of
@@ -607,7 +611,7 @@ export const childContentsToEncodedPropertyValue = (
       // Drop only this member — see the note above.
     }
   }
-  return members.length === 0 ? undefined : members
+  return members
 }
 
 /**
@@ -619,12 +623,7 @@ export const childContentsToEncodedPropertyValue = (
  * can carry a key's stored values before applying a definition retroactively.
  *
  * At WHOLE-PROPERTY grain, so a multi-valued schema is asked about all of its
- * members at once. One value of a list-valued property answers `false` here
- * and that is the honest answer, not a gap: an EMPTY list projects as unset,
- * so it reads back as the preset's `[]` default rather than byte-identically.
- * It is not reachable from synthesis today — its ladder holds no list preset —
- * so whoever adds one decides what to do about it then, with the keys reported
- * as unmigratable rather than silently rewritten.
+ * members at once.
  */
 export const valueSurvivesChildRoundTrip = (
   schema: AnyPropertySchema,

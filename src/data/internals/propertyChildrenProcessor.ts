@@ -212,17 +212,11 @@ const projectedFieldValue = async (
     }
   }
   // NO field row at all: the key is unset. That is the only thing that unsets a
-  // multi-valued property, and it is what deleting the field row means.
+  // multi-valued property, and it is the precondition
+  // `childContentsToEncodedPropertyValue` is documented to be called under —
+  // it answers `[]` for a live field row with nothing parseable under it.
   if (fieldRows.length === 0) return undefined
-  const aggregate = childContentsToEncodedPropertyValue(schema, contents)
-  // A LIVE field row with nothing parseable under it is an EXPLICITLY EMPTY
-  // list, not an absent key. Reading it as absent made a `setProperty(x, [])`
-  // write disappear: the key was deleted and `getProperty` answered the
-  // schema's `defaultValue`, which is a DIFFERENT value for any list schema
-  // whose default is not `[]`. The field row is what tells the two apart, and
-  // it is present here.
-  if (aggregate === undefined && memberCodecOf(schema.codec) !== undefined) return []
-  return aggregate
+  return childContentsToEncodedPropertyValue(schema, contents)
 }
 
 // §9 selection: the bit + target pair (the JS twin of

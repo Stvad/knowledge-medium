@@ -633,6 +633,32 @@ describe('codec-change migration across the multi-value boundary (km-h1hy)', () 
     expect(await rowContent(ids[1]!)).toBe('y')
   })
 
+  it('a codec change keeps an EXPLICITLY empty list, field row and all', async () => {
+    // The empty-list rule lives in the shared aggregate, so every caller that
+    // has seen a field row gets it. When it lived only in the projection, this
+    // pass read a stored `[]` as "nothing projected", unset the key, and
+    // MATERIALIZE then tombstoned the field row the empty list was stored in.
+    await seedWorkspace('children')
+    const repo = setup(statusStringList)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'p', workspaceId: WS, parentId: null, orderKey: 'k-p', content: 'host',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusStringList, [] as unknown as string),
+      {scope: ChangeScope.BlockDefault})
+    const field = await sharedDb.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
+      ['p', FIELD_ID])
+
+    await republish(repo, statusRefList)
+
+    expect(await cell('p')).toEqual({status: []})
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [field.id])
+    expect(row.deleted).toBe(0)
+  })
+
   it('list -> SCALAR never overwrites a leading unconvertible member', async () => {
     // The scalar destination has no member codec, so the whole-list guard did
     // not apply and the scalar value was published. MATERIALIZE then took the

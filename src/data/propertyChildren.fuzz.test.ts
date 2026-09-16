@@ -346,7 +346,7 @@ describe('number: blank content is unparseable, never a silent zero', () => {
   })
 })
 
-describe('multi-value: N contents round-trip to the list, duplicates and all (km-h1hy)', () => {
+describe('multi-value: N contents round-trip to the list, duplicates and empties included', () => {
   const stringListSchema = defineProperty<readonly string[]>('sl', {
     codec: kernelValuePresetCoresById['string-list'].build(),
     defaultValue: [], changeScope: ChangeScope.BlockDefault,
@@ -357,15 +357,14 @@ describe('multi-value: N contents round-trip to the list, duplicates and all (km
 
   /** The whole-property round trip, as the projection actually performs it:
    *  encode to N contents, then aggregate those contents back. The oracle is
-   *  the list ITSELF — multiplicity included, which is the point: a repeated
-   *  member is a repeated sibling, not a redundancy. The one value that does
-   *  not come back as itself is the empty list, which projects as unset and
-   *  reads back through the preset's `[]` default. */
+   *  the list ITSELF, with no exceptions — multiplicity included, which is the
+   *  point (a repeated member is a repeated sibling, not a redundancy), and the
+   *  empty list included too, since a live field row with no member is an
+   *  explicitly empty list rather than an absent key. */
   const roundTrips = (schema: typeof stringListSchema, members: readonly string[]): void => {
     const contents = encodedPropertyValueToChildContents(
       schema, schema.codec.encode(members))
-    expect(childContentsToEncodedPropertyValue(schema, contents))
-      .toEqual(members.length === 0 ? undefined : members)
+    expect(childContentsToEncodedPropertyValue(schema, contents)).toEqual(members)
   }
 
   it('string-list: arbitrary members, including ones shaped like the grammar', () => {
