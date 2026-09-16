@@ -28,9 +28,10 @@
  * `presetId` still resolves in `repo.valuePresetCores`, which a runtime install
  * replaces wholesale. A PLUGIN-OWNED preset core leaves with its plugin, so
  * removing that plugin drops the name out of `schemas` and its cells read as
- * unset — a removal that behaves like a rename. Seven shipped seeds are in that
- * position today. Type seeds have no such dependency, so their removal is
- * unconditional. Both branches are driven through a real workspace below.
+ * unset — a removal that behaves like a rename. Any seed whose preset is not a
+ * kernel id is in that position. Type seeds have no such dependency, so their
+ * removal is unconditional. Both branches are driven through a real workspace
+ * below.
  *
  * ENCODING takes two columns because neither subsumes the other. `presetId`
  * alone would miss a codec whose `type` string moved under a stable preset id.

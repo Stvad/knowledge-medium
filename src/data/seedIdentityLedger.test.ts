@@ -44,9 +44,9 @@ beforeEach(async () => { await resetTestDb(sharedDb.db) })
 /** Every toggle id in the tree, forced ON. A plugin that ships disabled by
  *  default still ships its seeds, and a user who enabled it has values stored
  *  under them — so resolving at the defaults would leave exactly those seeds
- *  outside the ledger, silently. Vacuous today (the three default-off plugins
- *  declare none), which is why deleting this fails nothing: it is what stops
- *  the first one that does from opening that gap. */
+ *  outside the ledger, silently. Unpinned while no default-off plugin declares
+ *  a seed — deleting it fails nothing — which is exactly why it has to stay:
+ *  it is what stops the first one that does from opening that gap. */
 const allTogglesOn = (nodes: readonly ToggleNode[], into = new Map<string, boolean>()) => {
   for (const node of nodes) {
     into.set(node.handle.id, true)
@@ -101,10 +101,9 @@ describe('seed identity ledger', () => {
   // dropping the rest, so the loser never appears in the inventory at all — and
   // becomes production's provider under any toggle profile that drops the
   // winner's type. The ledger has to see the ambiguity, not the resolution.
-  // Vacuous over the production set today — 59 inline entries ARE full
-  // declarations, but every one is the SAME OBJECT as its explicit
-  // contribution, so harvest never has to choose. The mechanism is pinned by
-  // the unit test below.
+  // Unpinned over the production set: inline declarations DO exist there, but
+  // each is the same object as its explicit contribution, so harvest never has
+  // to choose. The mechanism is pinned by the unit test below.
   it('ships no inline property declaration that harvest had to drop', () => {
     expect(describeHarvestConflicts(shippedSeeds().conflicts), SEED_LEDGER_RULE).toEqual([])
   })
@@ -489,9 +488,9 @@ describe('shippedPropertySeeds', () => {
  * declaration and reads it back.
  *
  * These are characterization tests: they assert the damage, not a fix. Nothing
- * in the app repairs either case, so if one of them ever starts failing,
- * something grew a repair path and the ledger's rule #3 has an answer it did
- * not have before.
+ * in the app repairs any of it, so if one of them ever starts failing,
+ * something grew a repair path — and the MIGRATE remedy, which today has
+ * nothing to point at, has an answer it did not have before.
  */
 describe('what a seed change does to values already stored', () => {
   const WS = 'ws-seed-identity'
