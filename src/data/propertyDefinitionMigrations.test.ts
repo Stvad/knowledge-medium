@@ -1172,22 +1172,55 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
   }, 20_000)
 
-  it('re-arms at most once, so a gap the sync gate cannot see does not spin', async () => {
+  it('keeps retrying while the gap stays transient, past the gate opening', async () => {
+    // The gate answers connected-and-not-downloading; the materialization
+    // drain settles separately. A single retry lands in that window and gives
+    // up, leaving the session running the new codec against old encodings.
     await seedWorkspace('children')
     const {repo} = createTestRepo({
       db: sharedDb.db,
       user: {id: 'user-1'},
-      // Always open. The gate answers "connected and not downloading", which
-      // the STAGED-ROWS half of a view gap outlives — so an unbounded re-arm
-      // would fire, refuse, and re-arm again for the rest of the session.
+      backfillSyncGate: (cb) => { cb(); return () => {} },
+    })
+    repo.setActiveWorkspaceId(WS)
+    publishDefinition(repo, statusString)
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    // Open gate, staged rows still draining — for several attempts.
+    let gapsLeft = 4
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => {
+      if (gapsLeft <= 0) return null
+      gapsLeft -= 1
+      return {reason: 'synced rows are still draining into `blocks`', transient: true}
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await changeWhileInactive(repo, statusNumber)
+
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({status: 42})
+    }, {timeout: 8000})
+    warn.mockRestore()
+    expect(await rowContent(valueRowId)).toBe('42')
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
+  }, 20_000)
+
+  it('does not retry a DURABLE gap, which nothing is working to clear', async () => {
+    await seedWorkspace('children')
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
       backfillSyncGate: (cb) => { cb(); return () => {} },
     })
     repo.setActiveWorkspaceId(WS)
     publishDefinition(repo, statusString)
     await seedProperty(repo, 'p', ' 42 ')
     await repo.awaitPropertyDefinitionBaselines()
+    // Rows this device downloaded and could not apply. Waiting never clears
+    // it, so re-arming on the gate would spin for the rest of the session.
     vi.spyOn(repo, 'workspaceViewGap').mockResolvedValue({
-      reason: 'synced rows are still draining into `blocks`', transient: true,
+      reason: '3 synced row(s) have not reached `blocks` on this device',
+      transient: false,
     })
     const runs = vi.spyOn(
       repo as unknown as {runPropertyDefinitionMigrations: () => Promise<void>},
@@ -1196,16 +1229,109 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await changeWhileInactive(repo, statusNumber)
-
-    await vi.waitFor(() => {
-      expect(runs.mock.calls.length).toBeGreaterThanOrEqual(2)
-    }, {timeout: 5000})
+    await vi.waitFor(() => { expect(runs.mock.calls.length).toBeGreaterThanOrEqual(1) }, {timeout: 5000})
     await repo.awaitPropertyDefinitionMigrations()
     await repo.awaitPropertyDefinitionMigrations()
     warn.mockRestore()
 
-    // The original run and exactly one retry, then it stops asking.
-    expect(runs.mock.calls.length).toBe(2)
+    expect(runs.mock.calls.length).toBe(1)
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+  }, 20_000)
+
+  it('retries the DETECTION, so a change superseded while parked is not resurrected', async () => {
+    // The hazard a parked PLAN has: the same definition changes again while the
+    // retry waits, and a registry rebuild does not move the workspace
+    // generation — so the superseded plan passes every freshness check and
+    // re-encodes the rows, and the baseline, to the intermediate codec.
+    await seedWorkspace('children')
+    let gapped = true
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: (cb) => { cb(); return () => {} },
+    })
+    repo.setActiveWorkspaceId(WS)
+    publishDefinition(repo, statusString)
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () =>
+      (gapped ? {reason: 'synced rows are still draining into `blocks`', transient: true} : null))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // string -> number is detected and refused, so a retry is parked.
+    await changeWhileInactive(repo, statusNumber)
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.flat().join(' ')).toContain('Re-detecting')
+    }, {timeout: 5000})
+
+    // ...and then the definition goes BACK to string while the retry waits.
+    // Re-detection reads the live registry, which now agrees with the
+    // baseline, so there is nothing to migrate. Replaying the parked plans
+    // would re-encode to the number codec the workspace no longer uses.
+    publishDefinition(repo, statusString)
+    await awaitRegistry(repo, WS, 'status')
+    gapped = false
+    await vi.waitFor(async () => {
+      await repo.awaitPropertyDefinitionMigrations()
+      await repo.awaitPropertyDefinitionBaselines()
+      expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+    }, {timeout: 8000})
+    warn.mockRestore()
+
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+    expect(await cell('p')).toEqual({status: ' 42 '})
+  }, 20_000)
+
+  it('drops a parked re-detect whose workspace the session has since left', async () => {
+    // The listener outlives the switch on purpose — a switch between the gate
+    // FIRING and the deep-idle job running is past anything a switch handler
+    // could dispose. What holds this up is the write-time staleness check, not
+    // the re-detect's own identity guard (which is defence in depth and fails
+    // nothing when deleted): the re-detect may well diff the wrong registry,
+    // and the pass it schedules is refused before it can write.
+    await seedWorkspace('children')
+    let openGate: (() => void) | null = null
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: (cb) => { openGate = cb; return () => { openGate = null } },
+    })
+    repo.setActiveWorkspaceId(WS)
+    publishDefinition(repo, statusString)
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await changeWhileInactive(repo, statusNumber)
+    await vi.waitFor(() => { expect(openGate).not.toBeNull() }, {timeout: 5000})
+
+    // The session moves to another workspace, whose registry answers to the
+    // SAME fieldId at a different codec — the shape that makes a cross-workspace
+    // fold visible rather than a silent no-op.
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-status-definition-other',
+      [{
+        metadata: {
+          fieldId: FIELD_ID, workspaceId: OTHER_WS, createdAt: 1, name: 'status',
+          changeScope: ChangeScope.BlockDefault, hidden: false, origin: 'user' as const,
+        },
+        schema: statusNumber,
+      }],
+      {workspaceId: OTHER_WS},
+    )
+    repo.setActiveWorkspaceId(OTHER_WS)
+    await awaitRegistry(repo, OTHER_WS)
+
+    openGate!()
+    await vi.waitFor(async () => {
+      await repo.awaitPropertyDefinitionMigrations()
+      await repo.awaitPropertyDefinitionBaselines()
+    }, {timeout: 5000})
+    warn.mockRestore()
+
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
     expect(await cell('p')).toEqual({status: ' 42 '})
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
   }, 20_000)

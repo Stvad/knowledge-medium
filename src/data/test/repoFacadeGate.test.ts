@@ -176,6 +176,11 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   referenceTargetLookupsVia: 'private read — builds resolver closures, assigns no fields',
   runPropertyDefinitionMigrations: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runPropertyDefinitionMigrationBatch: 'private; jobs are enqueued via the facetBridge-bound schedule',
+  redetectPropertyDefinitionDriftWhenCaughtUp:
+    'private; reached only from that pass, so the closure it parks on the sync gate '
+    + 'captures the real repo',
+  redetectPropertyDefinitionDrift:
+    'private; same path, and re-enters syncPropertyDefinitionBaseline above',
   swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
 
   // ── test-only escape hatches (assign fields — never call on a facade) ──

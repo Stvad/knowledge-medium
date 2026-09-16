@@ -112,6 +112,7 @@ import {
 import { parseExactReferenceBlockContent } from './referenceBlock'
 import type { BlockIdPolicy } from './blockId'
 import {
+  propertyDefinitionFacts,
   propertyDefinitionMigrationLabel,
   withoutContestedRenames,
   type PropertyDefinitionRebuildSnapshot,
@@ -528,6 +529,10 @@ export interface OperatorBackfillResult {
    *  that carry no reason. */
   retryable?: boolean
 }
+
+/** A re-detect names no newly-resolved codecs: it diffs the whole live registry
+ *  against the baseline, which is what `detectChanges` already means. */
+const EMPTY_FIELD_ID_SET: ReadonlySet<string> = new Set()
 
 /** Why a backfill cannot run at all when the composition root wired no claim
  *  seam. */
@@ -4477,6 +4482,63 @@ export class Repo {
       })
   }
 
+  /**
+   * Re-run drift DETECTION for `workspaceId` once this device is caught up.
+   *
+   * Parks on the sync gate rather than re-queueing the pass that was refused.
+   * Replaying captured plans is what makes a parked retry dangerous: the same
+   * definition can change AGAIN while the retry waits, and a registry rebuild
+   * does not move the workspace generation, so the superseded plan passes every
+   * freshness check and re-encodes the rows — and the baseline — back to the
+   * intermediate codec. Re-detecting cannot resurrect it: the diff reads the
+   * CURRENT registry against the durable baseline, which still holds the
+   * pre-change codec, so the plans that come out describe the definition as it
+   * is now. It is the path a prime already takes.
+   *
+   * Re-armed for as long as the gap stays TRANSIENT, not a fixed number of
+   * times: the gate answers connected-and-not-downloading while the
+   * materialization drain settles separately, so a single retry lands in that
+   * window and gives up. It cannot spin — every cycle goes through the gate AND
+   * the deep-idle deferral, one listener is parked per workspace, and a DURABLE
+   * gap is never re-armed because nothing is working to clear it.
+   */
+  private redetectPropertyDefinitionDriftWhenCaughtUp(workspaceId: string): void {
+    // Held in a box, not a `const` the callback closes over: an already open
+    // gate fires SYNCHRONOUSLY, before any such binding is initialised. Nothing
+    // tracks the parked listener — it is the re-detect below that decides
+    // whether firing does anything, and it has to make that decision anyway:
+    // a switch between the gate firing and the deep-idle job running is past
+    // any disposal a switch handler could do.
+    const gate: {dispose?: () => void} = {}
+    gate.dispose = this.backfillSyncGate(() => {
+      gate.dispose?.()
+      this.propertyDefinitionMigrationJobs.schedule(async () => {
+        this.redetectPropertyDefinitionDrift(workspaceId)
+        await this.awaitPropertyDefinitionBaselines()
+      })
+    })
+  }
+
+  /** Diff the LIVE registry against the durable baseline again, exactly as a
+   *  prime does.
+   *
+   *  DEFENCE IN DEPTH, and deleting it fails no test: the registry snapshot is
+   *  the ACTIVE workspace's, so after a switch this would diff one workspace's
+   *  facts against another's baseline — but the fold is add-only and any pass
+   *  it scheduled is refused at write time by `assertUploadingPassMayWrite`,
+   *  which is what actually stops the cross-workspace write. What is left is
+   *  recording a foreign fieldId this workspace never observed, which needs a
+   *  fieldId shared across two workspaces to matter at all. Kept because
+   *  "re-detect for the workspace whose registry this is" is the function's
+   *  contract, not because it is load-bearing. */
+  private redetectPropertyDefinitionDrift(workspaceId: string): void {
+    const snapshot = this._propertyDefinitionRegistry
+    if (snapshot === null || snapshot.workspaceId !== workspaceId) return
+    this.syncPropertyDefinitionBaseline(workspaceId, propertyDefinitionFacts(snapshot), {
+      detectChanges: true, newlyResolvedCodecs: EMPTY_FIELD_ID_SET,
+    })
+  }
+
   /** Test helper — settles the baseline chain, including work enqueued by a
    *  rebuild that ran while we were awaiting an earlier link. */
   async awaitPropertyDefinitionBaselines(): Promise<void> {
@@ -4515,9 +4577,6 @@ export class Repo {
     plans: readonly PropertyDefinitionMigrationPlan[],
     resolver: PropertySchemaResolver,
     generation: number,
-    /** False once this pass has already been re-armed on the sync gate, so a
-     *  blocker that outlives the gate opening cannot spin. */
-    mayRearm = true,
   ): Promise<void> {
     // Un-flipped: nothing re-keys here, so nothing is recorded either and the
     // drift stays visible to the prime that follows the flip.
@@ -4545,29 +4604,16 @@ export class Repo {
       // a console full of them reads as deferral rather than damage.
       if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
         // Waiting is a remedy for exactly one refusal — a transient view gap —
-        // and re-arming matters most in the case that produces it: the device
-        // is still downloading at session start, which is also when the prime
-        // that detected this drift happens. "The next prime" is a workspace
-        // switch or a reload, not the passage of time, so without this the
-        // session runs the new codec against rows still in the old one.
+        // and it matters most in the case that produces it: the device is still
+        // downloading at session start, which is also when the prime that
+        // detected this drift happens. "The next prime" is a workspace switch
+        // or a reload, not the passage of time, so without a retry the session
+        // runs the new codec against rows still in the old one.
         //
-        // ONCE. The gate opens on connected-and-not-downloading, which the
-        // staged-rows half of the gap can outlive, so an unbounded re-arm would
-        // fire, refuse, and re-arm again. A stale workspace is not re-armed at
-        // all: waiting cannot un-switch it.
-        if (mayRearm && (err as {clearsWhenSyncSettles?: boolean}).clearsWhenSyncSettles === true) {
-          console.warn(`${reason} Retrying once this device is caught up.`)
-          // Held in a box, not a `const` the callback closes over: an already
-          // open gate fires SYNCHRONOUSLY, before any such binding is
-          // initialised. Firing is its own cleanup, so the disposer only
-          // matters for a gate that parked.
-          const gate: {dispose?: () => void} = {}
-          gate.dispose = this.backfillSyncGate(() => {
-            gate.dispose?.()
-            this.propertyDefinitionMigrationJobs.schedule(() =>
-              this.runPropertyDefinitionMigrations(workspaceId, plans, resolver, generation, false),
-            )
-          })
+        // What is retried is the DETECTION, never THESE plans — see the helper.
+        if ((err as {clearsWhenSyncSettles?: boolean}).clearsWhenSyncSettles === true) {
+          console.warn(`${reason} Re-detecting once this device is caught up.`)
+          this.redetectPropertyDefinitionDriftWhenCaughtUp(workspaceId)
           return
         }
         console.warn(`${reason} The next prime will re-detect it.`)
