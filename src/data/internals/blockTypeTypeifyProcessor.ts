@@ -118,6 +118,11 @@ const moveTypeClaim = async (
 ): Promise<void> => {
   const claimed = await claimedAliases(ctx.tx, after)
   const held = retiring !== undefined && claimed.includes(retiring)
+  // A release with nothing to release is not a write. `setProperty` elides a
+  // write that changes the stored value nothing, but `undefined` -> `[]` IS a
+  // change: without this it materializes an empty alias bag on a row that never
+  // had one.
+  if (name === null && !held) return
   // In PLACE when a name is being retired: the first entry is what a block is
   // displayed as (the sidebar reads `aliases[0]`), so a rename must not promote
   // some other alias by appending. Same replacement `alias.sync`'s rule 1 would
@@ -192,9 +197,8 @@ const followRenamedContent = async (
 
   const currentLabel = readLabel(after)
   // A label written in THIS tx is the naming gesture — the type editor writes
-  // both halves — and a label CLEARED in it is the un-naming one, which also
-  // releases the claim. Either way the label is the answer and nothing here
-  // second-guesses it.
+  // both halves — and a label CLEARED in it is the un-naming one. Either way
+  // the label is the answer and nothing here second-guesses it.
   const previousLabel = readLabel(before)
   const labelMoved = previousLabel !== currentLabel
   const newContent = after.content.trim()
@@ -224,6 +228,23 @@ const followRenamedContent = async (
     : before.content
   const previousName = previousLabel !== '' ? previousLabel : before.content.trim()
 
+  // Retire what the stored BAG shows, not what the index knows. Every other
+  // reactor to a rename diffs the bag — `references.renameBacklinks` reads
+  // `getAliases(row.before)` — so releasing a claim only the index can see
+  // strands the inbound `[[old name]]` links nothing will rewrite. It doubles
+  // as what the merge offer may drop, and matches the empty list `alias.sync`
+  // reports for its A3 drift case.
+  // The claim that SPELLS the old name. Anything that writes a type name writes
+  // the trimmed spelling, and a legacy row can have stored a padded one — in
+  // EITHER field that can hold the name, which is why both are candidates here
+  // and only where they really are that name. An entry matching none of them is
+  // a user's own alias, however similar it looks, and this rename does not get
+  // to retire it.
+  const oldNameSpellings = [previousStored, before.content, previousName]
+    .filter(spelling => spelling !== '' && spelling.trim() === previousName)
+  const claims = getAliases(before)
+  const retiring = oldNameSpellings.find(spelling => claims.includes(spelling))
+
   // An emptied body names nothing, so the type keeps its name and the body is
   // restored to it — un-naming a type is the type editor's gesture, which
   // releases the alias too. Whitespace counts as empty: aliasSync's blank guard
@@ -233,7 +254,22 @@ const followRenamedContent = async (
   // cleared. A type named only by its content is still named, and emptying it
   // would otherwise drop the type while its claim stayed put.
   const name = newContent || currentLabel || (labelMoved ? '' : previousName)
-  if (name === '') return
+  if (name === '') {
+    // Nothing names this row any more — the un-naming gesture. `tryBuildType`
+    // drops a label-less block, so the type is gone and its claim goes with it;
+    // left behind, `[[old name]]` resolves to a blank typeless block and holds
+    // that name against anyone re-creating a type with it. `writeBlockTypeLabel`
+    // does this for the type editor, which was the only caller that ever
+    // reached it — an agent or an import clearing both fields did not.
+    //
+    // Unconditional: a row that never had a name has nothing to retire, and
+    // `moveTypeClaim` returns without writing rather than materializing an
+    // empty bag. Clearing the LABEL alone does not come through here at all —
+    // this path is gated on content changing, and that transition stays the
+    // editor's.
+    await moveTypeClaim(after, null, ctx, {retiring, skipMetadata: true})
+    return
+  }
 
   // A content rewrite is a rename only where the content WAS this type's name,
   // and the LABEL is what says so. Where the two disagreed, the row is a legacy
@@ -254,23 +290,6 @@ const followRenamedContent = async (
   // unwritable still gets its spellings reconciled — that cannot make an
   // unlinkable name worse.
   if (previousName === '' || isWritableLabel(previousName)) assertWritableTypeName(name)
-
-  // Retire what the stored BAG shows, not what the index knows. Every other
-  // reactor to a rename diffs the bag — `references.renameBacklinks` reads
-  // `getAliases(row.before)` — so releasing a claim only the index can see
-  // strands the inbound `[[old name]]` links nothing will rewrite. It doubles
-  // as what the merge offer may drop, and matches the empty list `alias.sync`
-  // reports for its A3 drift case.
-  // The claim that SPELLS the old name. Anything that writes a type name writes
-  // the trimmed spelling, and a legacy row can have stored a padded one — in
-  // EITHER field that can hold the name, which is why both are candidates here
-  // and only where they really are that name. An entry matching none of them is
-  // a user's own alias, however similar it looks, and this rename does not get
-  // to retire it.
-  const oldNameSpellings = [previousStored, before.content, previousName]
-    .filter(spelling => spelling !== '' && spelling.trim() === previousName)
-  const claims = getAliases(before)
-  const retiring = oldNameSpellings.find(spelling => claims.includes(spelling))
 
   // The whole claim moves HERE — old name retired, new one taken — rather than
   // being left to `aliasSyncProcessor`: that plugin is togglable, AND it has

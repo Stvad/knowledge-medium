@@ -563,9 +563,10 @@ describe('block-type typeify processor', () => {
   })
 
   // A content rewrite on a block that is ALREADY a type — the agent bridge,
-  // an import — is a RENAME: aliasSync already moves the alias to the new
-  // content, so the label has to move with it or the type stays registered
-  // under a name nothing resolves to.
+  // an import — is a RENAME, and this processor moves all three spellings
+  // itself: kernel processors run before plugin ones, so `alias.sync` finds the
+  // bag already reconciled and no-ops. Leaving the alias to it would register
+  // the type under a name nothing resolves to wherever the plugin is off.
   it('follows a content rewrite on an existing type with its label and alias', async () => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
@@ -1056,6 +1057,51 @@ describe('block-type typeify processor', () => {
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Novel')
     expect(row!.properties[aliasesProp.name]).toEqual(['Novel'])
     expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
+  })
+
+  // Un-naming a type through a plain write, the way an import or the agent
+  // bridge does it. The type editor releases the claim itself; nothing released
+  // it for these callers, so `[[Book]]` went on resolving to a blank, typeless
+  // block — and held the name against re-creating a type called `Book`.
+  it('releases the claim when an import clears a type\'s name outright', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    const seeded = await env.repo.load(id)
+
+    await env.repo.tx(
+      tx => tx.update(id, {
+        content: '',
+        properties: {...seeded!.properties, [blockTypeLabelProp.name]: ''},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('')
+    expect(row!.properties[aliasesProp.name]).toEqual([])
+    expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
+  })
+
+  // A user's own alias is not the type's name and survives the un-naming.
+  it('keeps a user alias when an import clears a type\'s name', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await env.repo.tx(
+      tx => tx.setProperty(id, aliasesProp, ['Book', 'Reading']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const seeded = await env.repo.load(id)
+
+    await env.repo.tx(
+      tx => tx.update(id, {
+        content: '',
+        properties: {...seeded!.properties, [blockTypeLabelProp.name]: ''},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[aliasesProp.name]).toEqual(['Reading'])
   })
 
   // A legacy row can carry its name in the BODY alone, with no label at all.
