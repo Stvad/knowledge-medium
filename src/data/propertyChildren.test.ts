@@ -3006,14 +3006,37 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await bagOf('p')).tags).toBeUndefined()
     })
 
-    it('duplicate members collapse: the value set is a SET', async () => {
+    it('a member repeated in the value is a repeated sibling', async () => {
+      // Multiplicity is the VALUE's, not a redundancy to fold: a list may
+      // legitimately hold the same member twice. The scalar rule one grain up
+      // folds equal-content siblings because there they are copies of one
+      // value; here they are two members and folding would rewrite the list.
       const repo = await setupWithLists()
       await createBlock(repo, 'p')
-      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['x', 'y', 'x']),
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [2, 2, 3, 5, 5]),
         {scope: ChangeScope.BlockDefault})
 
-      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['x', 'y'])
-      expect((await bagOf('p')).tags).toEqual(['x', 'y'])
+      expect(await memberContents('p', BAG_FIELD_ID)).toEqual(['2', '2', '3', '5', '5'])
+      expect((await bagOf('p')).bag).toEqual([2, 2, 3, 5, 5])
+    })
+
+    it('dropping ONE of two equal members leaves the other', async () => {
+      // The reconciler matches members to rows one-for-one, so the row a
+      // shortened list no longer asks for is the surplus one — not both, and
+      // not the wrong one.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [2, 2, 3]),
+        {scope: ChangeScope.BlockDefault})
+      const before = await memberRows('p', BAG_FIELD_ID)
+
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [2, 3]),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', BAG_FIELD_ID)
+      expect(after.map(m => m.content)).toEqual(['2', '3'])
+      expect(after.map(m => m.id)).toEqual([before[0]!.id, before[2]!.id])
+      expect((await bagOf('p')).bag).toEqual([2, 3])
     })
   })
 
@@ -3125,19 +3148,26 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
         .toBe('b-merged')
     })
 
-    it('two siblings with the same text project as ONE member', async () => {
+    it('two siblings with the same text are two members, conflict left visible', async () => {
+      // What two devices concurrently writing overlapping lists arrives as.
+      // The duplicate is NOT collapsed: the user resolves it by deleting a
+      // row, which is what the scalar rule does with a divergent peer rather
+      // than silently choosing one.
       const repo = await setupWithLists()
       await createBlock(repo, 'p')
       await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
         {scope: ChangeScope.BlockDefault})
       const field = await fieldRowFor('p', TAGS_FIELD_ID)
 
-      // What a divergent concurrent write of the same member arrives as.
       const twinKey = await appendKey(field.id)
       await repo.tx(tx => tx.create({
         workspaceId: WS, parentId: field.id, content: 'alpha', orderKey: twinKey,
       }), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'alpha'])
 
+      // ...and resolving it is an ordinary block delete.
+      const members = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.delete(members[1]!.id), {scope: ChangeScope.BlockDefault})
       expect((await bagOf('p')).tags).toEqual(['alpha'])
     })
   })

@@ -589,12 +589,12 @@ const materializePropertiesForChangedRow = async (
  *   write's surfaced conflict and is KEPT (§9), with only exact duplicates of
  *   what we just wrote folded in.
  *
- *   MULTI-VALUED — the sibling set IS the value. An extra child is a member,
- *   so "the list is now [a]" has to be able to remove one: members not named by
- *   the cell are deleted. Divergence is not lost by that — concurrent writes
- *   diverge as ARRIVALS, which never pass through here, and the projection
- *   unions them (`childContentsToEncodedPropertyValue`). What passes through
- *   here is a local write, which is intent.
+ *   MULTI-VALUED — the siblings ARE the value, multiplicity included. An extra
+ *   child is a member, so "the list is now [a]" has to be able to remove one:
+ *   members not named by the cell are deleted, and a cell asking for `[2, 2]`
+ *   keeps two rows. Divergence is not lost by that — concurrent writes diverge
+ *   as ARRIVALS, which never pass through here, and stay as visible sibling
+ *   rows. What passes through here is a local write, which is intent.
  */
 export const reconcileFieldValueChildren = async (
   tx: Tx,
@@ -674,10 +674,11 @@ const reconcileMemberValueChildren = async (
   // agree on which of several equal-content rows survives.
   const surplus = values.filter(value => !kept.includes(value))
 
-  // A surplus row whose content EQUALS a member we are keeping is a duplicate
-  // of it, and folds — the loser's user-authored sub-children relocate under
-  // the survivor instead of being tombstoned with it. A surplus row naming no
-  // member is a member the cell removed.
+  // A surplus row whose content EQUALS a member we are keeping is one copy too
+  // many — the match above consumed one row per member the cell asked for, so
+  // anything left over is beyond that count — and it folds, relocating its
+  // user-authored sub-children under the survivor instead of being tombstoned
+  // with it. A surplus row naming no member is a member the cell removed.
   for (const row of surplus) {
     const survivor = kept.find(k => k !== undefined && k.content === row.content)
     if (survivor) await collapseDuplicateValueChild(tx, survivor.id, row)

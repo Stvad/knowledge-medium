@@ -346,7 +346,7 @@ describe('number: blank content is unparseable, never a silent zero', () => {
   })
 })
 
-describe('multi-value: N contents round-trip to the DEDUPED list (km-h1hy)', () => {
+describe('multi-value: N contents round-trip to the list, duplicates and all (km-h1hy)', () => {
   const stringListSchema = defineProperty<readonly string[]>('sl', {
     codec: kernelValuePresetCoresById['string-list'].build(),
     defaultValue: [], changeScope: ChangeScope.BlockDefault,
@@ -357,15 +357,15 @@ describe('multi-value: N contents round-trip to the DEDUPED list (km-h1hy)', () 
 
   /** The whole-property round trip, as the projection actually performs it:
    *  encode to N contents, then aggregate those contents back. The oracle is
-   *  the list with duplicates removed, keeping first occurrence — members are
-   *  a SET, which is a property of the model rather than of this encoding, so
-   *  it belongs in the expectation and not in a filter on the input. */
+   *  the list ITSELF — multiplicity included, which is the point: a repeated
+   *  member is a repeated sibling, not a redundancy. The one value that does
+   *  not come back as itself is the empty list, which projects as unset and
+   *  reads back through the preset's `[]` default. */
   const roundTrips = (schema: typeof stringListSchema, members: readonly string[]): void => {
     const contents = encodedPropertyValueToChildContents(
       schema, schema.codec.encode(members))
-    const deduped = [...new Set(members)]
     expect(childContentsToEncodedPropertyValue(schema, contents))
-      .toEqual(deduped.length === 0 ? undefined : deduped)
+      .toEqual(members.length === 0 ? undefined : members)
   }
 
   it('string-list: arbitrary members, including ones shaped like the grammar', () => {

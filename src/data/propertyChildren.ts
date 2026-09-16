@@ -453,17 +453,21 @@ export const valueChildContentToEncoded = (
  * array in one child). Sibling order IS list order; the reconciler that writes
  * these keeps the two the same and the projection reads them back in it.
  *
- * MEMBERS ARE A SET, deduped by content. Three things collapse into that one
- * rule: a value written twice concurrently, a divergent pair arriving from two
- * devices, and a list literally containing the same member twice. The merge
- * policy is already union-with-dedupe, so the alternative would be a list that
- * accumulates duplicates every time two devices touch it — and no kernel list
- * property (`types`, `alias`, `block-type:properties`) wants multiplicity. A
- * property that genuinely needs a multiset is not list-shaped; it is `json`.
+ * MULTIPLICITY IS PRESERVED: `[2, 2, 3]` is three value children, and a member
+ * repeated in the value is a repeated sibling. The value children are NOT
+ * deduped, though the scalar rule one grain up does fold equal-content
+ * siblings — there they are redundant copies of ONE value, so folding loses
+ * nothing, while here they are two members and folding would silently rewrite
+ * the user's list.
  *
- * By CONTENT and not by decoded value, because content is what the sibling set
- * holds and what the reconciler matches on — equal content always means an
- * equal value, so this is the stricter of the two and needs no second rule.
+ * Its cost is that two devices concurrently writing `[a, b]` and `[a, c]`
+ * converge to `[a, b, a, c]` rather than `[a, b, c]`. That is a conflict left
+ * VISIBLE for the user to resolve by deleting a row, which is exactly what the
+ * scalar rule does with a divergent peer instead of silently choosing — set
+ * semantics here would have been the one place the model quietly decided.
+ * Properties that are genuinely sets (`types`, `alias`) get that from their
+ * WRITERS, which already refuse a member they hold (`addBlockTypeToProperties`),
+ * and their side indexes absorb a duplicate through `INSERT OR IGNORE`.
  */
 export const encodedPropertyValueToChildContents = (
   schema: AnyPropertySchema,
@@ -475,15 +479,7 @@ export const encodedPropertyValueToChildContents = (
   // fails on anything but an array — so this is a broken-codec assertion, not
   // a user-reachable path.
   if (!Array.isArray(encoded)) throw new CodecError('array', encoded)
-  const contents: string[] = []
-  const seen = new Set<string>()
-  for (const item of encoded) {
-    const content = encodedValueToContent(member, item)
-    if (seen.has(content)) continue
-    seen.add(content)
-    contents.push(content)
-  }
-  return contents
+  return encoded.map(item => encodedValueToContent(member, item))
 }
 
 /**
@@ -493,8 +489,9 @@ export const encodedPropertyValueToChildContents = (
  *
  * Single-valued: first parseable wins, unparseable siblings skipped (a
  * divergent peer is a surfaced conflict, and the cell shows the winner).
- * Multi-valued: every parseable member, in sibling order, deduped as
- * {@link encodedPropertyValueToChildContents} describes. An unparseable MEMBER
+ * Multi-valued: every parseable member, in sibling order, multiplicity and all
+ * ({@link encodedPropertyValueToChildContents} says why the members are not a
+ * set). An unparseable MEMBER
  * drops only itself — the same rule `decodeRefListIds` already applies to a
  * malformed element of a stored list (#189), for the same reason: one bad
  * member must not strip the whole field.
@@ -527,12 +524,7 @@ export const childContentsToEncodedPropertyValue = (
     return undefined
   }
   const members: unknown[] = []
-  const seen = new Set<string>()
   for (const content of contents) {
-    // Marked seen before the decode, so a repeated UNPARSEABLE member is
-    // dropped once rather than retried per sibling.
-    if (seen.has(content)) continue
-    seen.add(content)
     try {
       members.push(valueChildContentToEncoded(schema, content))
     } catch {
@@ -551,14 +543,12 @@ export const childContentsToEncodedPropertyValue = (
  * can carry a key's stored values before applying a definition retroactively.
  *
  * At WHOLE-PROPERTY grain, so a multi-valued schema is asked about all of its
- * members at once. Two values of a list-valued property answer `false` here
- * and that is the honest answer, not a gap: an EMPTY list projects as unset
- * (it reads back as the preset's `[]` default, which this byte-identity
- * question does not accept), and a list holding the same member twice loses
- * the duplicate, because the value children are a set. Neither is reachable
- * from synthesis today — its ladder holds no list preset — so whoever adds one
- * decides what to do about them then, with the keys reported as unmigratable
- * rather than silently rewritten.
+ * members at once. One value of a list-valued property answers `false` here
+ * and that is the honest answer, not a gap: an EMPTY list projects as unset,
+ * so it reads back as the preset's `[]` default rather than byte-identically.
+ * It is not reachable from synthesis today — its ladder holds no list preset —
+ * so whoever adds one decides what to do about it then, with the keys reported
+ * as unmigratable rather than silently rewritten.
  */
 export const valueSurvivesChildRoundTrip = (
   schema: AnyPropertySchema,
