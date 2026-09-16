@@ -221,7 +221,22 @@ export class UndoManager {
    *  stacks without moving the epoch again.
    *
    *  Everything else — when to begin, and the not-commit-coupled decline —
-   *  is {@link beginHistoryDrop}'s. */
+   *  is {@link beginHistoryDrop}'s.
+   *
+   *  ACCEPTED RESIDUAL: `finish` empties the stacks WHOLESALE, so an entry
+   *  recorded between the pass's commit and the caller reaching `finish` is
+   *  erased even though it describes post-pass rows. Not the same window the
+   *  single advance fixed — that one is an entry recorded AFTER `finish`, which
+   *  is preserved — this is the continuation race just before it.
+   *
+   *  Left because of what it actually costs. A chunked pass drops per batch, so
+   *  an edit in ANY inter-batch window is taken by the next batch's drop
+   *  regardless; the only entry this loses is one recorded in the continuation
+   *  window of the LAST batch, and the user has just been told the history was
+   *  discarded. Closing it means either stamping each entry with the epoch it
+   *  was recorded at and filtering instead of clearing — a change to the undo
+   *  record itself — or coupling the clear to the commit, which is the pipeline
+   *  seam this cannot reach from here. */
   beginHistoryDropInWriteLock(): HistoryDrop {
     this.clears += 1
     return {finish: () => { this.emptyStacks() }}
