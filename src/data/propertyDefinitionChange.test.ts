@@ -155,8 +155,9 @@ const seedProperty = async (
   return {fieldRowId: field.id, valueRowId: valueRow.id}
 }
 
-/** A workspace with one live `status` definition at `FIELD_ID`. */
-/** @param codecType what the preset's codec reports, which is NOT the preset id
+/** A workspace with one live `status` definition at `FIELD_ID`.
+ *
+ *  @param codecType what the preset's codec reports, which is NOT the preset id
  *  — `optional-string` builds a codec of type `string`. Defaults to the preset
  *  id because the two coincide for `string` / `number` / `ref`, and every
  *  caller that needs a twin passes it. */
