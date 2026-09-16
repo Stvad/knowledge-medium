@@ -1,1 +1,1 @@
-import{wd as e}from"../../../../../chunks/app-CvVMpUdx.js";export{e as remarkWikilinks};
+import{wd as e}from"../../../../../chunks/app-CZrF3vJm.js";export{e as remarkWikilinks};
