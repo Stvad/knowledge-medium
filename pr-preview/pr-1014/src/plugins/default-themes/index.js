@@ -1,1 +1,1 @@
-import{_v as e,nv as t,tv as n,vv as r}from"../../../chunks/app-BiguiPf6.js";export{e as DEFAULT_THEME_ID_DARK,r as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,n as defaultThemesPlugin};
+import{_v as e,nv as t,tv as n,vv as r}from"../../../chunks/app-D6nKOtVN.js";export{e as DEFAULT_THEME_ID_DARK,r as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,n as defaultThemesPlugin};

@@ -1,1 +1,1 @@
-import{dK as e,fK as t,hK as n,mK as r,pK as i,uK as a}from"../../chunks/app-BiguiPf6.js";export{a as USER_SCHEMAS_PROJECTOR_ID,e as UserSchemasService,t as isRegistrablePropertyName,i as propertySchemaNameRejection,r as tryBuildSchema,n as userSchemasProjector};
+import{dK as e,fK as t,hK as n,mK as r,pK as i,uK as a}from"../../chunks/app-D6nKOtVN.js";export{a as USER_SCHEMAS_PROJECTOR_ID,e as UserSchemasService,t as isRegistrablePropertyName,i as propertySchemaNameRejection,r as tryBuildSchema,n as userSchemasProjector};

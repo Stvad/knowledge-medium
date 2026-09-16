@@ -1,1 +1,1 @@
-import{GC as e,KC as t}from"../../chunks/app-BiguiPf6.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
+import{GC as e,KC as t}from"../../chunks/app-D6nKOtVN.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

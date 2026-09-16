@@ -1,1 +1,1 @@
-import{Hu as e,Vu as t}from"../../../../chunks/app-BiguiPf6.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};
+import{Hu as e,Vu as t}from"../../../../chunks/app-D6nKOtVN.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};

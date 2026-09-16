@@ -1,1 +1,1 @@
-import{Bk as e,Vk as t}from"../../chunks/app-BiguiPf6.js";export{e as isFocalRender,t as useIsFocalRender};
+import{Bk as e,Vk as t}from"../../chunks/app-D6nKOtVN.js";export{e as isFocalRender,t as useIsFocalRender};

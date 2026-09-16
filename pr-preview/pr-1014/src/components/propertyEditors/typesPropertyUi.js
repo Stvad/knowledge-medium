@@ -1,1 +1,1 @@
-import{QS as e,XS as t,ZS as n}from"../../../chunks/app-BiguiPf6.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};
+import{QS as e,XS as t,ZS as n}from"../../../chunks/app-D6nKOtVN.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};

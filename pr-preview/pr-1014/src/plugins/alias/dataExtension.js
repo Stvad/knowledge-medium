@@ -1,1 +1,1 @@
-import{tB as e}from"../../../chunks/app-BiguiPf6.js";export{e as aliasDataExtension};
+import{tB as e}from"../../../chunks/app-D6nKOtVN.js";export{e as aliasDataExtension};

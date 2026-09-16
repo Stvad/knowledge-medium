@@ -1,1 +1,1 @@
-import{bx as e}from"../../../chunks/app-BiguiPf6.js";export{e as openKeybindingsSettingsAction};
+import{bx as e}from"../../../chunks/app-D6nKOtVN.js";export{e as openKeybindingsSettingsAction};

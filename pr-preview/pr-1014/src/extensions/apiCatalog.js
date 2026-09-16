@@ -1,1 +1,1 @@
-import{Cl as e,wl as t}from"../../chunks/app-BiguiPf6.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};
+import{Cl as e,wl as t}from"../../chunks/app-D6nKOtVN.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};

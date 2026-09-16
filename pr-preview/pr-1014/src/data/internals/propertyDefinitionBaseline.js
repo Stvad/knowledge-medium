@@ -1,1 +1,1 @@
-import{JH as e,YH as t}from"../../../chunks/app-BiguiPf6.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};
+import{JH as e,YH as t}from"../../../chunks/app-D6nKOtVN.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};

@@ -1,1 +1,1 @@
-import{OF as e,kF as t}from"../../../chunks/app-BiguiPf6.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};
+import{OF as e,kF as t}from"../../../chunks/app-D6nKOtVN.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};

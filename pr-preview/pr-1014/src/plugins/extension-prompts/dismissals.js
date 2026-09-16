@@ -1,1 +1,1 @@
-import{_w as e,gw as t,hw as n}from"../../../chunks/app-BiguiPf6.js";export{n as ExtensionPromptDismissalStore,t as extensionPromptDismissals,e as useExtensionPromptDismissals};
+import{_w as e,gw as t,hw as n}from"../../../chunks/app-D6nKOtVN.js";export{n as ExtensionPromptDismissalStore,t as extensionPromptDismissals,e as useExtensionPromptDismissals};

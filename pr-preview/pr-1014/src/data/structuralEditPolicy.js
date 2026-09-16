@@ -1,1 +1,1 @@
-import{FC as e,IC as t}from"../../chunks/app-BiguiPf6.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
+import{FC as e,IC as t}from"../../chunks/app-D6nKOtVN.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

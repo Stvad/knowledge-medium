@@ -1,1 +1,1 @@
-import{bI as e,vI as t,yI as n}from"../../chunks/app-BiguiPf6.js";export{t as parseLiteralDailyPageTitle,n as parseRelativeDate,e as relativeDateCandidates};
+import{bI as e,vI as t,yI as n}from"../../chunks/app-D6nKOtVN.js";export{t as parseLiteralDailyPageTitle,n as parseRelativeDate,e as relativeDateCandidates};
