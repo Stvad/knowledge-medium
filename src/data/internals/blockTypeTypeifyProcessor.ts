@@ -95,7 +95,13 @@ const readLabel = (row: BlockData): string =>
 const assertWritableTypeName = (name: string): void =>
   assertWritableLabel(name, 'Block type label')
 
-/** Claim `name` for this type, retiring `retiring` in the SAME write.
+/** Move this type's claim: retire `retiring` and take `name`, in ONE write.
+ *
+ *  `name` is null where the new name CANNOT be claimed. Retiring and claiming
+ *  answer different questions — the type stopped having the old name either
+ *  way — so the release still happens. Leaving it holds that spelling against
+ *  any other block taking it, and permanently: the next rename computes what to
+ *  retire from the content it finds then, which no longer spells this one.
  *
  *  One write rather than append-then-retire: the intermediate bag goes through
  *  the maintenance trigger too, so it would re-insert the name being given up,
@@ -104,22 +110,25 @@ const assertWritableTypeName = (name: string): void =>
  *
  *  Accepted: a claim moved on a RERUN lands after `references.renameBacklinks`,
  *  so the old name's inbound spans are left alone — #991, not this write. */
-const claimTypeName = async (
+const moveTypeClaim = async (
   after: BlockData,
-  name: string,
+  name: string | null,
   ctx: SameTxCtx,
   {retiring, ...writeOptions}: {retiring?: string} & TxWriteOpts = {},
 ): Promise<void> => {
   const claimed = await claimedAliases(ctx.tx, after)
+  const held = retiring !== undefined && claimed.includes(retiring)
   // In PLACE when a name is being retired: the first entry is what a block is
   // displayed as (the sidebar reads `aliases[0]`), so a rename must not promote
   // some other alias by appending. Same replacement `alias.sync`'s rule 1 would
   // have made — this write just gets there first.
-  const renamed = retiring !== undefined && claimed.includes(retiring)
-    ? claimed.map(alias => (alias === retiring ? name : alias))
-    : [...claimed, name]
+  const next = name === null
+    ? (held ? claimed.filter(alias => alias !== retiring) : claimed)
+    : held
+      ? claimed.map(alias => (alias === retiring ? name : alias))
+      : [...claimed, name]
   // `setProperty` elides a write that changes nothing, so no guard here.
-  await ctx.tx.setProperty(after.id, aliasesProp, [...new Set(renamed)], writeOptions)
+  await ctx.tx.setProperty(after.id, aliasesProp, [...new Set(next)], writeOptions)
 }
 
 const completeNewType = async (
@@ -168,7 +177,7 @@ const completeNewType = async (
   if (name !== '' && after.content !== name) {
     await ctx.tx.update(row.id, {content: name})
   }
-  if (name !== '') await claimTypeName(after, name, ctx)
+  if (name !== '') await moveTypeClaim(after, name, ctx)
 }
 
 /** A content write on a block that is already a type is a RENAME wherever the
@@ -236,32 +245,34 @@ const followRenamedContent = async (
   // unlinkable name worse.
   if (previousName === '' || isWritableLabel(previousName)) assertWritableTypeName(name)
 
-  // Only a name that CAN be linked to is claimed. An unwritable one buys
-  // nothing by being claimed, and refusing its collision would abort whatever
-  // tx is doing the rewriting — the same unrelated rename the check above
-  // steps aside for.
-  if (isWritableLabel(name)) {
-    // Retire what the stored BAG shows, not what the index knows. Every other
-    // reactor to a rename diffs the bag — `references.renameBacklinks` reads
-    // `getAliases(row.before)` — so releasing a claim only the index can see
-    // strands the inbound `[[old name]]` links nothing will rewrite. It
-    // doubles as what the merge offer may drop, and matches the empty list
-    // `alias.sync` reports for its A3 drift case.
-    // The claim that SPELLS the old name — as stored, or as trimmed. Those are
-    // the only two spellings anything writes: every writer of a type name
-    // writes the trimmed one, and a legacy row can carry the padded one in both
-    // its content and its bag. An entry matching neither is a user's own alias,
-    // however similar it looks, and this rename does not get to retire it.
-    const oldNameSpellings = [before.content, before.content.trim()]
-    const claims = getAliases(before)
-    const retiring = oldNameSpellings.find(spelling => spelling !== '' && claims.includes(spelling))
+  // Retire what the stored BAG shows, not what the index knows. Every other
+  // reactor to a rename diffs the bag — `references.renameBacklinks` reads
+  // `getAliases(row.before)` — so releasing a claim only the index can see
+  // strands the inbound `[[old name]]` links nothing will rewrite. It doubles
+  // as what the merge offer may drop, and matches the empty list `alias.sync`
+  // reports for its A3 drift case.
+  // The claim that SPELLS the old name — as stored, or as trimmed. Those are
+  // the only two spellings anything writes: every writer of a type name writes
+  // the trimmed one, and a legacy row can carry the padded one in both its
+  // content and its bag. An entry matching neither is a user's own alias,
+  // however similar it looks, and this rename does not get to retire it.
+  const oldNameSpellings = [before.content, before.content.trim()]
+  const claims = getAliases(before)
+  const retiring = oldNameSpellings.find(spelling => spelling !== '' && claims.includes(spelling))
 
-    // The whole claim moves HERE — old name retired, new one taken — rather
-    // than being left to `aliasSyncProcessor`: that plugin is togglable, and a
-    // type the registry publishes under a name nothing resolves to is the bug
-    // this path exists to close. A name another block holds is refused for the
-    // same reason, and refused BEFORE the writes below. The plugin then finds
-    // the bag already reconciled and no-ops; it is not a step this depends on.
+  // The whole claim moves HERE — old name retired, new one taken — rather than
+  // being left to `aliasSyncProcessor`: that plugin is togglable, AND it has
+  // already had its only pass-one slot by the time a late writer dirties this
+  // row, so on that path nothing else would move the claim at all. A name
+  // another block holds is refused for the same reason, and refused BEFORE the
+  // writes below. The plugin then finds the bag already reconciled and no-ops;
+  // it is not a step this depends on.
+  //
+  // Only a name that CAN be linked to is claimed: an unwritable one buys
+  // nothing by being claimed, and refusing its collision would abort whatever
+  // tx is doing the rewriting — the same unrelated rename the check above steps
+  // aside for. The old claim is released either way.
+  if (isWritableLabel(name)) {
     await assertAliasClaimable(ctx.tx, {
       alias: name,
       blockId: row.id,
@@ -269,7 +280,9 @@ const followRenamedContent = async (
       dropSourceAliases: retiring === undefined ? [] : [retiring],
       collisionOrigin: 'content-rename',
     })
-    await claimTypeName(after, name, ctx, {retiring, skipMetadata: true})
+    await moveTypeClaim(after, name, ctx, {retiring, skipMetadata: true})
+  } else {
+    await moveTypeClaim(after, null, ctx, {retiring, skipMetadata: true})
   }
 
   // `skipMetadata` on every write here: this reconciles a content change

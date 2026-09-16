@@ -801,9 +801,12 @@ describe('block-type typeify processor', () => {
     expect(row!.content).toBe('See [[Bar]]')
     // Still unlinkable — that is the row's pre-existing condition, and not
     // something an unrelated rename gets to pay for. What this path can do is
-    // keep the three spellings saying the same thing.
+    // keep content and label saying the same thing, and stop claiming the name
+    // the type no longer has. Neither spelling was ever resolvable, so nothing
+    // is lost by releasing it — and the kernel does that whether or not the
+    // alias plugin is loaded to notice.
     expect(row!.properties[blockTypeLabelProp.name]).toBe('See [[Bar]]')
-    expect(row!.properties[aliasesProp.name]).toEqual(['See [[Bar]]'])
+    expect(row!.properties[aliasesProp.name]).toEqual([])
   })
 
   // A type tagged blank is UNNAMED, not broken: the first name it is given is

@@ -25,7 +25,8 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, blockTypeLabelProp } from '@/data/properties'
+import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
@@ -1367,5 +1368,45 @@ describe('rename — claimants of the released alias (§11 group 2)', () => {
     expect((await env.read('s'))!.content).toBe('see [[Win]] please')
     expect(await refsOf('s')).toEqual([{id: seatId, alias: 'Win'}])
     expect((await env.read(seatId))!.deleted).toBe(0)
+  })
+})
+
+describe('rename — a legacy type whose own name is not writable', () => {
+  // The ordering this path actually has, which a direct `tx.update` cannot
+  // reproduce: `renameBacklinks` runs in pass ONE and rewrites this type's
+  // content, `alias.sync` has already had its only slot and does not rerun,
+  // and the kernel typeify processor reruns on the row it dirtied. Driving the
+  // rewrite with `tx.update` instead lets `alias.sync` run afterwards and
+  // repair the bag, which hides whether typeify moved the claim itself.
+  it('retires the old claim when the rewritten name cannot be claimed', async () => {
+    await seedTarget('t', 'Foo', ['Foo'])
+    await seedSource('ty', 'See [[Foo]]')
+    // Now a legacy type: its name lives in content, label and claim, and none
+    // of those spellings can be written as `[[name]]`.
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [
+        JSON.stringify({
+          types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+          [blockTypeLabelProp.name]: 'See [[Foo]]',
+          [aliasesProp.name]: ['See [[Foo]]'],
+        }),
+        'ty',
+      ])
+    })
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['Bar']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const row = (await env.read('ty'))!
+    const props = JSON.parse(row.properties_json) as Record<string, unknown>
+    expect(row.content).toBe('See [[Bar]]')
+    expect(props[blockTypeLabelProp.name]).toBe('See [[Bar]]')
+    // The claim on the name this type no longer has is RELEASED. Neither
+    // spelling resolves — `[[See [[Bar]]]]` does not parse — but leaving the
+    // old one claimed holds that spelling against any other block taking it.
+    expect(props[aliasesProp.name] ?? []).toEqual([])
   })
 })
