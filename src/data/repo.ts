@@ -884,6 +884,9 @@ export class Repo {
    *  handle `awaitPropertyDefinitionBaselines()` has to drain, which every
    *  integration test depends on. */
   private propertyDefinitionBaselineWork: Promise<void> = Promise.resolve()
+  /** Serializes the deferred re-encode passes, so two rebuilds of the same
+   *  definition cannot interleave. See `schedulePropertyDefinitionMigrations`. */
+  private propertyDefinitionMigrationWork: Promise<void> = Promise.resolve()
   /** Workspaces with a drift re-detect already waiting on the sync gate. Every
    *  definition refused during one gap would otherwise park its own listener,
    *  and they all fire before any of their passes records — so they re-detect
@@ -4402,9 +4405,29 @@ export class Repo {
     // definition, a rebuild older than this moment, and pairing that rebuild's
     // plans with this moment's generation would make a stale job look current.
     const generation = captured?.generation ?? this.workspaceGeneration
-    this.propertyDefinitionMigrationJobs.schedule(() =>
-      this.runPropertyDefinitionMigrations(workspaceId, plans, resolver, generation),
-    )
+    // SERIALIZED, not merely deferred. A definition can change twice inside one
+    // deferral window (`string -> number -> string`), and both rebuilds enqueue
+    // their own captured plans under the same workspace generation — a rebuild
+    // does not move it. Run independently, the smaller pass can finish first,
+    // after which the older one re-encodes the rows and records the
+    // INTERMEDIATE codec as the baseline. Ordering them by schedule time makes
+    // the last rebuild the last writer, which is the one that matches the
+    // registry.
+    //
+    // The intermediate pass still writes and uploads before the later one
+    // overwrites it. That is accepted: it converges, and coalescing by fieldId
+    // would have to decide which captured plan is newer, which is the
+    // bookkeeping this ordering avoids.
+    this.propertyDefinitionMigrationJobs.schedule(() => {
+      const work = this.propertyDefinitionMigrationWork.then(() =>
+        this.runPropertyDefinitionMigrations(workspaceId, plans, resolver, generation),
+      )
+      // The chain must not break on a pass that throws — `runPropertyDefinition
+      // Migrations` handles its own errors, so this only catches a bug in it —
+      // and the caller awaits the same promise so the drain still covers it.
+      this.propertyDefinitionMigrationWork = work.catch(() => {})
+      return work
+    })
   }
 
   /** Test helper — drains migration passes whose deferral timer has fired. */

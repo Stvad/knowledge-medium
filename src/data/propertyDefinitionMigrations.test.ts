@@ -1382,6 +1382,62 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
   }, 20_000)
 
+  it('runs two rebuilds of one definition in order, never interleaved', async () => {
+    // `string -> number -> string` inside one deferral window: both rebuilds
+    // capture their own plans under the SAME workspace generation, because a
+    // rebuild does not move it. Run independently, the smaller pass finishes
+    // first and the older one then re-encodes the rows and records the
+    // intermediate codec as the baseline.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+
+    const order: string[] = []
+    let release: (() => void) | null = null
+    let calls = 0
+    const batch = vi.spyOn(
+      repo as unknown as {runPropertyDefinitionMigrationBatch: () => Promise<boolean>},
+      'runPropertyDefinitionMigrationBatch',
+    ).mockImplementation(async () => {
+      calls += 1
+      const nth = calls
+      order.push(`enter${nth}`)
+      // The first pass is still in flight when the second's timer fires, which
+      // is the whole window the race lives in.
+      if (nth === 1) await new Promise<void>(resolve => { release = () => resolve() })
+      order.push(`exit${nth}`)
+      return false
+    })
+
+    vi.useFakeTimers()
+    const snapshot = rebuildSnapshot(repo)
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], snapshot,
+    )
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], snapshot,
+    )
+    await vi.runAllTimersAsync()
+    vi.useRealTimers()
+
+    await vi.waitFor(() => { expect(order).toContain('enter1') }, {timeout: 5000})
+    // A real window before asserting the absence, because there is no positive
+    // signal to fence on: unserialized, the second pass reaches the batch only
+    // after its own DB reads, so releasing immediately would let it run second
+    // for the wrong reason and the test would pass with the chain deleted.
+    for (let turn = 0; turn < 40; turn += 1) {
+      await new Promise(resolve => { setTimeout(resolve, 5) })
+      if (order.includes('enter2')) break
+    }
+    expect(order).not.toContain('enter2')
+    release!()
+    await repo.awaitPropertyDefinitionMigrations()
+    batch.mockRestore()
+
+    expect(order).toEqual(['enter1', 'exit1', 'enter2', 'exit2'])
+  }, 20_000)
+
   it('parks ONE re-detect per workspace, however many passes the gap refuses', async () => {
     // One gap refuses every definition that primes during it. A listener each
     // would all fire before any of their passes records, re-detect against the
