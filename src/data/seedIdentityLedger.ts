@@ -294,9 +294,15 @@ export type SeedLedgerKind = keyof typeof LEDGER_KINDS
  * silently — the one class of seed nothing else would ever freeze.
  *
  * `projectedDefinitions` is empty and the workspace id is a placeholder: both
- * only scope PROJECTED rows, and a declaration inventory has none. What the
- * registry contributes here is its winner set, so a type seed contested on `id`
- * is skipped — the same seeds production would decline to materialize.
+ * only scope PROJECTED rows, and a declaration inventory has none.
+ *
+ * COMPLETENESS rests on `diffSeedLedger` refusing two type seeds that contend
+ * for one `id`. The registry hands back a WINNER set, so a contested seed is
+ * skipped here and its inline-only properties never reach the ledger — while a
+ * toggle profile that disables the winner makes the loser production's. Refusing
+ * the contention is what makes one winner set the same as the union, so this
+ * cannot silently under-report; if it ever does hold two, the type tripwire
+ * fails and says so rather than this returning a quiet subset.
  */
 export const shippedPropertySeeds = (
   explicitSeeds: readonly AnyPropertySeedDeclaration[],
@@ -368,16 +374,53 @@ export const diffSeedLedger = (
 ): string[] => {
   const {fields, retiredList, renameCost, removalNote} = LEDGER_KINDS[kind]
   const divergences: string[] = []
-  const say = (seedKey: string, summary: string, remedy: string) =>
-    divergences.push(`${seedKey}: ${summary} — ${remedy}`)
+  const say = (subject: string, summary: string, remedy: string) =>
+    divergences.push(`${subject}: ${summary} — ${remedy}`)
+
+  // Who claims each storage key NOW, and who the ledger says owned it. Column 0
+  // is the storage key for both kinds. Everything below that looks at more than
+  // one row at a time reads these two.
+  const claimantsByKey = new Map<string, string[]>()
   for (const [seedKey, shippedFields] of shipped) {
-    // Column 0 is the storage key for both kinds, so this one check covers a
-    // reclaimed property name and a reclaimed type id alike.
+    const key = shippedFields[0]!
+    claimantsByKey.set(key, [...(claimantsByKey.get(key) ?? []), seedKey])
+  }
+  const frozenOwnerByKey = new Map<string, string>()
+  for (const [seedKey, frozenFields] of frozen) frozenOwnerByKey.set(frozenFields[0]!, seedKey)
+
+  // CONTENTION. Two seeds on one storage key is not a per-row fault, so no
+  // amount of checking rows one at a time finds it. Production tolerates both
+  // shapes and neither is safe to freeze: `indexSeeds` DROPS a colliding
+  // property seed (so which codec reads the cell depends on which of them
+  // loaded), and type ids are winner-resolved (so the loser's inline-only
+  // properties are never harvested, and become production's under a toggle
+  // profile that disables the winner — which is what makes the inventory
+  // complete only while this holds).
+  for (const [key, claimants] of claimantsByKey) {
+    if (claimants.length < 2) continue
+    say([...claimants].sort().join(' + '), `both claim ${JSON.stringify(key)}`,
+      'one storage key cannot have two owners — whichever of them a profile loads ' +
+      'reads the same stored data under its own codec; namespace one of them')
+  }
+
+  for (const [seedKey, shippedFields] of shipped) {
     const storageKey = shippedFields[0]!
+    // Freed in an EARLIER release and recorded; see the retired lists.
     if (retiredKeys.has(storageKey)) {
       say(seedKey, `claims ${JSON.stringify(storageKey)}, a retired storage key`,
         'the data under it is still there and this seed would inherit it; pick a ' +
         'fresh key, or MIGRATE if adopting it is the intent')
+    }
+    // HANDOVER — freed in THIS release, so no tombstone exists yet. Only when
+    // the prior owner has actually let go: while it still claims the key this
+    // is contention, reported above, and calling it a handover would be wrong.
+    const priorOwner = frozenOwnerByKey.get(storageKey)
+    if (priorOwner !== undefined && priorOwner !== seedKey
+      && shipped.get(priorOwner)?.[0] !== storageKey) {
+      say(seedKey, `takes over ${JSON.stringify(storageKey)} from ${priorOwner}`,
+        'the data under it does not move with the seed that left, so this seed reads ' +
+        'it as its own; retiring the key cannot help while this seed claims it — use ' +
+        'a genuinely fresh key, or MIGRATE deliberately')
     }
     const frozenFields = frozen.get(seedKey)
     if (!frozenFields) {
@@ -392,9 +435,15 @@ export const diffSeedLedger = (
       if (was === now) return
       const summary = `${field} ${JSON.stringify(was)} -> ${JSON.stringify(now)}`
       if (index === 0) {
-        say(seedKey, summary,
-          `${renameCost(JSON.stringify(was))}; revert, or accept the loss and add ` +
-          `${JSON.stringify(was)} to ${retiredList}`)
+        // Whether the old key is LEFT BEHIND or PICKED UP changes what happens
+        // to its data, so it changes the remedy.
+        const successor = claimantsByKey.get(was!)?.find(claimant => claimant !== seedKey)
+        say(seedKey, summary, successor === undefined
+          ? `${renameCost(JSON.stringify(was))}; revert, or accept the loss and add ` +
+            `${JSON.stringify(was)} to ${retiredList}`
+          : `${successor} now claims ${JSON.stringify(was)}, so that data is not lost — ` +
+            'it is read by that seed instead; this is a handover and needs a MIGRATE ' +
+            'decision, not a tombstone')
         return
       }
       say(seedKey, summary, renamed

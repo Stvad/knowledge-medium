@@ -222,6 +222,80 @@ describe('diffSeedLedger', () => {
     ).map(line => line.split(' — ')[0])).toEqual(['k/type/b: claims "gone", a retired storage key'])
   })
 
+  // Two seeds on one storage key is not a per-row fault, so checking rows one at
+  // a time can never find it. Production tolerates both shapes — a colliding
+  // property seed is DROPPED, a contested type id is winner-resolved — and in
+  // both the outcome depends on which of them a profile loaded.
+  it('refuses two shipped seeds that claim one storage key', () => {
+    expect(diffSeedLedger(
+      'property',
+      new Map([
+        ['k/property/b', ['a:name', 'string', 'string']],
+        ['k/property/a', ['a:name', 'string', 'string']],
+      ]),
+      new Map([
+        ['k/property/a', ['a:name', 'string', 'string']],
+        ['k/property/b', ['a:name', 'string', 'string']],
+      ]),
+      none,
+    )).toEqual([
+      'k/property/a + k/property/b: both claim "a:name" — one storage key cannot have ' +
+        'two owners — whichever of them a profile loads reads the same stored data ' +
+        'under its own codec; namespace one of them',
+    ])
+  })
+
+  it('refuses contending type ids too, which is what keeps the inventory complete', () => {
+    expect(diffSeedLedger(
+      'type',
+      new Map([['k/type/a', ['shared']], ['k/type/b', ['shared']]]),
+      new Map([['k/type/a', ['shared']], ['k/type/b', ['shared']]]),
+      none,
+    ).map(line => line.split(' — ')[0]))
+      .toEqual(['k/type/a + k/type/b: both claim "shared"'])
+  })
+
+  // A key freed and reclaimed in ONE release has no tombstone yet, and the
+  // rename remedy would have called its data lost while the successor reads it.
+  it('reports a storage key handed from one seed to another in the same release', () => {
+    const divergences = diffSeedLedger(
+      'property',
+      new Map([
+        ['k/property/a', ['a:moved-on', 'string', 'string']],
+        ['k/property/b', ['a:name', 'string', 'string']],
+      ]),
+      new Map([
+        ['k/property/a', ['a:name', 'string', 'string']],
+        ['k/property/b', ['b:name', 'string', 'string']],
+      ]),
+      none,
+    )
+    expect(divergences.map(line => line.split(' — ')[0])).toEqual([
+      'k/property/a: name "a:name" -> "a:moved-on"',
+      'k/property/b: name "b:name" -> "a:name"',
+      'k/property/b: takes over "a:name" from k/property/a',
+    ])
+    // The vacating seed is told its data is picked up, not lost.
+    expect(divergences[0]).toContain('k/property/b now claims "a:name", so that data is not lost')
+    expect(divergences[0]).not.toContain('read as unset')
+  })
+
+  // While the prior owner still holds the key this is contention, not a
+  // handover; saying "takes over" would be wrong.
+  it('does not call it a handover while the prior owner still claims the key', () => {
+    const divergences = diffSeedLedger(
+      'property',
+      new Map([
+        ['k/property/a', ['a:name', 'string', 'string']],
+        ['k/property/b', ['a:name', 'string', 'string']],
+      ]),
+      new Map([['k/property/a', ['a:name', 'string', 'string']]]),
+      none,
+    )
+    expect(divergences.some(line => line.includes('takes over'))).toBe(false)
+    expect(divergences.some(line => line.includes('both claim'))).toBe(true)
+  })
+
   it('is silent when every shipped seed matches', () => {
     expect(diffSeedLedger('property', new Map(frozen), frozen, none)).toEqual([])
   })
