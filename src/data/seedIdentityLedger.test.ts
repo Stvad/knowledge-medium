@@ -333,7 +333,7 @@ describe('diffSeedLedger', () => {
   // moves. Reported as removal + arrival + handover that is three wrong answers,
   // and the retire advice among them names a key that is still shipped — which
   // the retired-key check would then refuse, leaving the ledger un-greenable.
-  it('reports a seedKey move as one line, not a removal plus an arrival', () => {
+  it('reports a vacated-and-reclaimed key as one line, not a removal plus an arrival', () => {
     const divergences = diffSeedLedger(
       'property',
       new Map([['system:places/property/lat', ['place:lat', 'number', 'number']]]),
@@ -342,10 +342,29 @@ describe('diffSeedLedger', () => {
     )
     expect(divergences).toHaveLength(1)
     expect(divergences[0]).toContain(
-      'system:places/property/lat: is system:geo/property/lat filed under a new seedKey')
-    expect(divergences[0]).toContain('nothing stored moves')
-    expect(divergences[0]).toContain('the old row orphaned')
+      'system:geo/property/lat + system:places/property/lat: ' +
+      'system:geo/property/lat is gone and system:places/property/lat arrives')
     expect(divergences[0]).not.toContain('RETIRED_PROPERTY_NAMES')
+  })
+
+  // The pair is indistinguishable from the declarations, so the line must carry
+  // BOTH readings — inferring continuity would exempt a genuine reclaim from
+  // the arrival, handover and removal checks that exist to catch it. For type
+  // seeds the only frozen column is the id, so ANY removal-plus-addition on one
+  // id lands here.
+  it('refuses to pick between a refile and a reclaim, and says what each costs', () => {
+    const divergences = diffSeedLedger(
+      'type',
+      new Map([['k/type/newcomer', ['widget']]]),
+      new Map([['k/type/departed', ['widget']]]),
+      none,
+    )
+    expect(divergences).toHaveLength(1)
+    expect(divergences[0]).toContain('indistinguishable from here, so decide which it is')
+    expect(divergences[0]).toContain('ONE seed refiled under a new seedKey')
+    expect(divergences[0]).toContain(
+      'DIFFERENT seeds: k/type/newcomer inherits what k/type/departed stored')
+    expect(divergences[0]).toContain('MIGRATE deliberately')
   })
 
   it('does not read a move into rows that also changed a stored column', () => {
@@ -361,8 +380,8 @@ describe('diffSeedLedger', () => {
     ])
   })
 
-  // The removal and handover branches used to answer this independently, and
-  // one report told the author the same cells were both dead and read.
+  // Both branches read one answer for "is the vacated key picked up?", so a
+  // report cannot call the same cells abandoned in one line and read in another.
   it('tells the vacating seed and the successor the same story', () => {
     const divergences = diffSeedLedger(
       'property',

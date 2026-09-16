@@ -344,12 +344,13 @@ export interface ShippedPropertySeeds {
  * KNOWN EXCLUSION, neither checked nor reported: a type seed inlining a FULL
  * declaration owned by a different owner is skipped by harvest as a pure ref,
  * before the conflict branch and without a warning. Nothing provides it, so it
- * materializes no block — but the declaration object is still a live handle,
- * and `set`/`peekRowProperty` go straight through its `name` and `codec` with
- * no registry involved. Such a plugin can write cells under a name no ledger
- * row covers. Accepted rather than guarded: catching it here means re-deriving
- * harvest's own-owner predicate, which is the duplication this file has
- * repeatedly refused.
+ * materializes no definition block — and therefore nothing can WRITE through it
+ * either: every typed write passes `requireWritablePropertySchema`, which throws
+ * when the schema does not resolve. Reads through the handle need no registry,
+ * so a value stored by some other route would still be read; such a value has no
+ * definition at all, which is what `pnpm agent audit-properties` reports as an
+ * unregistered key. Accepted on that basis rather than guarded, since catching
+ * it here means a second copy of harvest's own-owner predicate.
  */
 export const shippedPropertySeeds = (
   explicitSeeds: readonly AnyPropertySeedDeclaration[],
@@ -468,21 +469,29 @@ export const diffSeedLedger = (
   const frozenOwnerByKey = new Map<string, string>()
   for (const [seedKey, frozenFields] of frozen) frozenOwnerByKey.set(frozenFields[0]!, seedKey)
 
-  /** Another seed claiming `key`. Derived ONCE and read by every remedy that
-   *  depends on it, because whether a vacated key is picked up decides what
-   *  happens to the data — and a branch that answered it for itself is how one
-   *  report came to say the same cells were both abandoned and read. */
+  /** Another seed claiming `key`. Whether a vacated key is picked up decides
+   *  what happens to the data under it, so every remedy that mentions that data
+   *  reads this one answer; a branch deriving it independently can contradict
+   *  its neighbour in the same report. */
   const successorTo = (key: string, self: string): string | undefined =>
     claimantsByKey.get(key)?.find(claimant => claimant !== self)
 
-  // A seedKey MOVE: a frozen row and a shipped row agreeing in every stored
-  // column and differing only in the key they are filed under — what renaming a
-  // plugin does to all of its seeds at once, since `seedKeyOwner` makes the
-  // owner prefix load-bearing. Nothing stored moves, because cells are keyed by
-  // the storage key and that did not change. Reported as removal + arrival +
-  // handover it would be three wrong answers, and the retire advice among them
-  // names a key that is still shipped — which the retired-key check would then
-  // refuse, leaving no way to make the ledger green by following it.
+  // A frozen row leaves and a shipped row arrives on its storage key with every
+  // frozen column equal. TWO things look exactly like this from here and only
+  // the author can tell them apart: one seed REFILED under a new seedKey (what
+  // renaming a plugin does to all of its seeds at once, since `seedKeyOwner`
+  // makes the owner prefix load-bearing), or a DIFFERENT seed arriving on a key
+  // the other just freed. Nothing in the declarations distinguishes them — for
+  // type seeds the only frozen column is the id — so this reports the fork and
+  // refuses to pick, rather than inferring continuity and quietly exempting the
+  // pair from the arrival, handover and removal checks that would have caught
+  // the second case.
+  //
+  // Those three checks are still suppressed for the pair, because on the refile
+  // reading they produce three wrong answers whose retire advice names a key
+  // that is still shipped — which the retired-key check then refuses, leaving no
+  // way to make the ledger green by following it. The one line below has to
+  // carry both readings instead.
   const movedTo = new Map<string, string>()
   const movedFrom = new Map<string, string>()
   for (const [frozenSeedKey, frozenFields] of frozen) {
@@ -495,11 +504,15 @@ export const diffSeedLedger = (
     movedFrom.set(heir, frozenSeedKey)
   }
   for (const [from, to] of movedTo) {
-    say(to, `is ${from} filed under a new seedKey`,
-      `nothing stored moves — the data is keyed by ${JSON.stringify(shipped.get(to)![0])}, which ` +
-      'did not change; update this row\'s seedKey. What DOES change is the deterministic ' +
-      'definition block id, so every workspace keeps the old row orphaned and type rows still ' +
-      'reference it')
+    const key = JSON.stringify(shipped.get(to)![0])
+    say([from, to].sort().join(' + '),
+      `${from} is gone and ${to} arrives on ${key} with every frozen column equal`,
+      'indistinguishable from here, so decide which it is. ONE seed refiled under a new ' +
+      'seedKey: nothing stored moves (the data is keyed by ' + key + ', which did not ' +
+      'change), so update the row\'s seedKey — but note the deterministic definition block ' +
+      'id DOES change, leaving the old row orphaned in every workspace with type rows still ' +
+      `referencing it. DIFFERENT seeds: ${to} inherits what ${from} stored, so give it a ` +
+      'genuinely fresh key, or MIGRATE deliberately')
   }
 
   for (const [key, claimants] of claimantsByKey) {
