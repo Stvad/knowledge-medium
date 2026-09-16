@@ -822,6 +822,51 @@ describe('a workspace this client cannot judge', () => {
   })
 })
 
+describe('claimants the batch itself adds or removes', () => {
+  const FIELD_PEER = 'field-peer-change'
+
+  it('drops a rename onto the name of a definition RESTORED in the same tx', async () => {
+    // `tx.restore` flips `deleted` and rewrites an identical properties bag, and
+    // the field watch compares by value — so a properties-only watch never sees
+    // the revived claimant at all, and the rename lands on a key the rebuilt
+    // registry may award to it.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await createDefinition(repo, FIELD_PEER, 'archived', 'string')
+    await awaitDefinition(repo, 'archived', 'string')
+    await repo.tx(tx => tx.delete(FIELD_PEER), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      await tx.restore(FIELD_PEER)
+      await tx.setProperty(FIELD_ID, propertyNameProp, 'archived')
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Refused: the consumer keeps its old key rather than writing a value under
+    // a name the restored definition is about to own.
+    expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('renames onto the name of a definition DELETED in the same tx', async () => {
+    // The peer is in the tx-start claimant list and can never be `vacating`,
+    // which holds only rename candidates — so it would contest a destination it
+    // is about to leave empty, and the fan-out would be skipped while the
+    // definition row took the new name anyway.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await createDefinition(repo, FIELD_PEER, 'retired', 'string')
+    await awaitDefinition(repo, 'retired', 'string')
+
+    await repo.tx(async tx => {
+      await tx.delete(FIELD_PEER)
+      await tx.setProperty(FIELD_ID, propertyNameProp, 'retired')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cell('p')).toEqual({retired: 'done'})
+  })
+})
+
 describe('names a SEED claims', () => {
   it('refuses a rename onto a seed name whose definition row has not materialized', async () => {
     // `types` is a kernel seed. Until its row materializes it lives only in

@@ -176,7 +176,9 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  * that kept ANOTHER, so this iterates to a fixpoint.
  */
 export interface NameClaim {
-  /** Claimants at TX START, winner first. The head is the one that projects. */
+  /** Claimants at TX START that this tx does not REMOVE, winner first. The head
+   *  is the one that projects — and a deleted owner hands that role to the next
+   *  claimant, which is why removals are filtered out rather than noted. */
   readonly atTxStart: readonly string[]
   /** Definitions this tx leaves live under the name that did NOT hold it at tx
    *  start — created, revived, or renamed onto it. Their rank against each
@@ -361,6 +363,18 @@ const collectChanges = (
   // still filed under its old name. A revived or created claimant never becomes
   // a candidate either — nothing about its own name changed — so this is the
   // only place it can be seen.
+  // Claimants this tx REMOVES. They sit in the tx-start list and can never
+  // reach `vacating`, which holds only kept rename candidates — so without
+  // this, renaming onto the name of a definition deleted in the same tx is
+  // refused as contested by a claimant that will not exist, while the
+  // definition row still takes the new name and its consumers keep the old key.
+  const departed = new Set<string>()
+  for (const {before, after} of changedRows) {
+    if (before === null || before.deleted) continue
+    if ((after === null || after.deleted) && parsePropertyDefinitionMetadata(before)) {
+      departed.add(before.id)
+    }
+  }
   const arrivingByName = new Map<string, string[]>()
   for (const {before, after} of changedRows) {
     if (after === null || after.deleted) continue
@@ -391,7 +405,10 @@ const collectChanges = (
       const atTxStart = ctx.propertyDefinitionsClaimingName(workspaceId, name)
       return atTxStart === null
         ? null
-        : {atTxStart, arriving: arrivingByName.get(name) ?? []}
+        : {
+          atTxStart: atTxStart.filter(fieldId => !departed.has(fieldId)),
+          arriving: arrivingByName.get(name) ?? [],
+        }
     }),
     unbuildableRenames,
   }
@@ -576,7 +593,13 @@ const applyToParent = async (
 
 export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
   name: MIGRATE_PROPERTY_DEFINITION_PROCESSOR_NAME,
-  watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  // `deleted` as well as `properties`, because the claim model in
+  // `collectChanges` has to see definitions this tx REMOVES or REVIVES, and
+  // neither touches the bag. The field watch compares by VALUE, so a
+  // `tx.restore` that rewrites an identical properties_json does not register
+  // as a properties change at all. Ordinary block deletes now reach this
+  // processor and stop at the first metadata parse, before any query.
+  watches: {kind: 'field', table: 'blocks', fields: ['properties', 'deleted']},
   // settledWrites (issue #402): the consuming-cell re-keys and value-child
   // re-encodes this processor writes must NOT mark rows dirty for the
   // derivation re-run pass. The re-run's MATERIALIZE resolves names against the
