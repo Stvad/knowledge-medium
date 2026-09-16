@@ -679,6 +679,59 @@ describe('codec-change migration', () => {
     expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
   }, 20_000)
 
+  it('refuses a replay queued behind a chunk, which commits before the clear runs', async () => {
+    // Drives the queued-replay scenario end to end: a replay waits on the lock
+    // a writing chunk holds, and must not put the pre-pass row back over what
+    // that chunk committed.
+    //
+    // It does NOT pin where the invalidation happens. The window that needs
+    // the in-lock position is between the database handing the lock to this
+    // replay and `repo.tx` resolving, and the harness cannot schedule into it —
+    // invalidating after the await passes this too. Kept as documentation of
+    // the scenario, and it would catch a regression that stopped invalidating
+    // at all.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    expect(undoDepth(repo)).toBeGreaterThan(0)
+
+    // The probe runs INSIDE the chunk's transaction, so it is a fence on "the
+    // lock is held right now".
+    let releaseChunk: (() => void) | null = null
+    let announceChunk: (() => void) | null = null
+    const chunkInFlight = new Promise<void>(resolve => { announceChunk = resolve })
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => {
+      if (announceChunk !== null) {
+        announceChunk()
+        announceChunk = null
+        await new Promise<void>(resolve => { releaseChunk = () => resolve() })
+      }
+      return null
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // Real timers throughout: the fencing below is on the pass's own progress,
+    // not on a clock the test advances.
+    publishDefinition(repo, statusNumber)
+    await chunkInFlight
+
+    // Queued behind the open transaction: `undo` pops synchronously, then its
+    // replay waits for the lock the chunk is holding.
+    const undoing = repo.undo(ChangeScope.BlockDefault)
+    for (let turn = 0; turn < 20; turn += 1) await new Promise(r => { setTimeout(r, 5) })
+    releaseChunk!()
+
+    await expect(undoing).resolves.toBe(false)
+    await vi.waitFor(async () => {
+      expect(await rowContent(valueRowId)).toBe('42')
+    }, {timeout: 8000})
+    warn.mockRestore()
+
+    // The migration's write stands; the replay did not put the old encoding back.
+    expect(await cell('p')).toEqual({status: 42})
+  }, 20_000)
+
   it('abandons an undo replay whose history was dropped while it was in flight', async () => {
     // `undo()` takes the entry OFF its stack and then awaits the replay, so a
     // pass clearing the history in that window cannot reach it — `clear()` only
@@ -737,6 +790,41 @@ describe('codec-change migration', () => {
     expect(undoDepth(repo)).toBe(before)
     expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(0)
   })
+
+  it('keeps the value rows after a REAL rename whose values all fail to convert', async () => {
+    // Documents an ACCEPTED gap, and why it is the better of the two states.
+    // The same-tx rename processor has already MOVED the old-codec projection
+    // to the new name, so dropping `oldName` removes a key that is no longer
+    // there and the stale value rides on under the new name — §9 asks for
+    // unset. Writing that unset is what this test measures the cost of: the
+    // batch goes through an ordinary `repo.tx`, so MATERIALIZE reads the
+    // missing key as a user deletion and tombstones the value rows §9 promises
+    // are preserved. Declaring the write settled is what makes it safe (#800).
+    await seedWorkspace('children')
+    const repo = await setupWithRealDefinition()
+    const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'not a number')
+    expect(await cell('p')).toEqual({status: 'not a number'})
+
+    // A real definition edit: the block is renamed (same-tx processor re-keys
+    // the cell to `state2`) and the codec changes with it.
+    await renameDefinitionBlock(repo, FIELD_ID, 'state2')
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({state2: 'not a number'})
+    }, {timeout: 8000})
+    await republish(repo, state2Number)
+
+    // The stale value rides under the new name — not §9's unset, but the rows
+    // it derived from stay live and fixable by hand, which is the guarantee
+    // that matters.
+    expect(await cell('p')).toEqual({state2: 'not a number'})
+    expect(await rowContent(valueRowId)).toBe('not a number')
+    for (const id of [fieldRowId, valueRowId]) {
+      const row = await sharedDb.db.get<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [id],
+      )
+      expect(row.deleted, `${id} deleted`).toBe(0)
+    }
+  }, 20_000)
 
   it('all-unconvertible: the field row and value child stay live (deleted = 0), never tombstoned', async () => {
     await seedWorkspace('children')

@@ -3443,13 +3443,22 @@ export class Repo {
   private undoClearingForPassWrites(
     workspaceId: string,
     announce: () => void,
-  ): () => void {
+  ): {
+    /** Call INSIDE the writing transaction, while the lock is still held — see
+     *  `UndoManager.invalidateReplays`. */
+    invalidateReplays: () => void
+    /** Call after that transaction has COMMITTED. */
+    clearHistory: () => void
+  } {
     let announced = false
-    return () => {
-      this.undoManagerFor(workspaceId).clear()
-      if (announced) return
-      announced = true
-      announce()
+    return {
+      invalidateReplays: () => { this.undoManagerFor(workspaceId).invalidateReplays() },
+      clearHistory: () => {
+        this.undoManagerFor(workspaceId).clear()
+        if (announced) return
+        announced = true
+        announce()
+      },
     }
   }
 
@@ -3941,7 +3950,12 @@ export class Repo {
           // the run with no marker recorded, so the next open retries.
           const result = await this.tx(async t => {
             await this.assertUploadingPassMayWrite(workspaceId, label, generation)
-            return fn(t)
+            const value = await fn(t)
+            // While the lock is STILL HELD: a replay queued behind this
+            // transaction would otherwise acquire it first, read an unchanged
+            // epoch, and write the pre-pass row back over what just committed.
+            clearUndo.invalidateReplays()
+            return value
           }, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
@@ -3950,7 +3964,7 @@ export class Repo {
           // Only once a batch COMMITTED, and after EVERY one — see the helper.
           // An over-approximation in one direction (a committed batch that
           // happened to write nothing counts), which errs toward clearing.
-          clearUndo()
+          clearUndo.clearHistory()
           return result
         },
       }
@@ -4784,7 +4798,7 @@ export class Repo {
       // depth. Not consulted once the pass has written, where every clear has
       // already rebased the stack and anything above it postdates the writes.
       if (!wrote && undoManager.revision(ChangeScope.BlockDefault) !== undoWatermark) {
-        clearUndo()
+        clearUndo.clearHistory()
       }
       // Only an APPLIED pass advances a known fieldId — a throw, or a pass that
       // never ran, leaves the drift visible to the next prime.
@@ -4848,7 +4862,7 @@ export class Repo {
     plans: readonly PropertyDefinitionMigrationPlan[],
     resolver: PropertySchemaResolver,
     generation: number,
-    clearUndo: () => void,
+    clearUndo: {invalidateReplays: () => void; clearHistory: () => void},
     /** Throws when a later rebuild has superseded this batch — see the caller.
      *  Asked per chunk for the same reason the write-safety check is: the
      *  registry can move while the chunk loop runs. */
@@ -5068,16 +5082,23 @@ export class Repo {
                   } else if (parentUnconvertible === 0) {
                     assignments.push({name: schema.name, value: undefined, unset: true})
                   }
-                  // else (all-unconvertible): leave the new key unset — no
-                  // assignment.
-                  //   - rename: the old key is dropped and the new key stays
-                  //     absent → the cell shows unset for the unparseable values,
-                  //     §9's contract. Re-keying the stale value under the new name
-                  //     would violate §9 (cell derives from children).
-                  //   - no rename: the existing key rides untouched (no old name to
-                  //     drop, no assignment) so a stale-but-fixable value stays
-                  //     visible; the next valid edit reprojects and heals it
-                  //     (§5 pending-reprojection).
+                  // ALL-UNCONVERTIBLE leaves the key alone, and where a rename
+                  // has already been applied that means a stale value rides on
+                  // under the NEW name rather than reading unset as §9 asks.
+                  // Accepted, because the alternative is worse and the fix is
+                  // not available here: the same-tx rename processor has
+                  // already MOVED the old projection to the new name, so an
+                  // explicit unset is the only way to clear it — and this batch
+                  // writes through an ordinary `repo.tx`, so MATERIALIZE reads
+                  // that missing key as a user deletion and TOMBSTONES the very
+                  // value rows §9 promises are preserved (measured, not
+                  // reasoned). Declaring the write settled is what makes the
+                  // unset safe, and that is #800.
+                  //
+                  // Without a rename the value rides deliberately: it is stale
+                  // but fixable, and the next valid edit reprojects and heals
+                  // it (§5 pending-reprojection).
+                  //
                   // This pass NEVER deletes value rows, so they stay live
                   // unconditionally and the unconvertible COUNT is surfaced below.
                 }
@@ -5086,6 +5107,19 @@ export class Repo {
             )
             if (rewroteCell) chunkWrote = true
           }
+          // While the lock is STILL HELD — see `UndoManager.invalidateReplays`.
+          // Only when this chunk WROTE: an aborted or converged chunk leaves
+          // nothing for a replay to land on top of.
+          //
+          // NOT PINNED, and not for want of trying: the window it closes is
+          // between the database handing the lock to a waiting replay and
+          // `repo.tx` resolving here, and the harness cannot schedule into it —
+          // clearing after the await wins every time under test. The
+          // accompanying test drives the queued-replay scenario end to end and
+          // passes either way; it is documentation, not evidence. Kept because
+          // invalidating inside the lock is unconditionally safer than after
+          // it, and the cost is one counter increment.
+          if (chunkWrote) clearUndo.invalidateReplays()
         }, {
           // References, not BlockDefault (adversarial-review blocker): a
           // BlockDefault tx lands on the user's cmd-Z stack — a rename backing
@@ -5107,7 +5141,7 @@ export class Repo {
             : `migrate ${plans.length} property definitions`,
         })
         everWrote ||= chunkWrote
-        if (everWrote) clearUndo()
+        if (everWrote) clearUndo.clearHistory()
       }
     } finally {
       reportUnconvertibles()

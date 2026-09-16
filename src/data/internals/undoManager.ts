@@ -155,7 +155,19 @@ export class UndoManager {
     return this.listenersFor(scope).add(listener)
   }
 
-  /** Bumped by {@link clear} alone.
+  /** Invalidate replays already in flight WITHOUT dropping the stacks.
+   *
+   *  A pass must do this while it still holds the write lock: a queued replay
+   *  that acquires the lock first reads an unchanged epoch, passes, and writes
+   *  the pre-pass row back over what the pass just committed. Dropping the
+   *  stacks is the separate, after-commit half — an aborted transaction leaves
+   *  nothing to be reverted onto, and taking the user's history for it would be
+   *  a cost with no cause. */
+  invalidateReplays(): void {
+    this.clears += 1
+  }
+
+  /** Bumped by {@link clear} and {@link invalidateReplays}, and by nothing else.
    *
    *  `revision` cannot serve: it moves on every record and pop, so a caller
    *  asking "was my entry invalidated" would read ordinary activity as
