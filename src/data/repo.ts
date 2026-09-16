@@ -4622,9 +4622,9 @@ export class Repo {
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
     const label = propertyDefinitionMigrationLabel(plans)
     const undoManager = this.undoManagerFor(workspaceId)
-    // The top of the user's stack as the pass begins. Compared again below —
-    // see there for what it answers that `everWrote` cannot.
-    const undoWatermark = undoManager.peekUndo(ChangeScope.BlockDefault)?.txId ?? null
+    // How many times the user's stack has changed as the pass begins. Compared
+    // again below — see there for what it answers that `everWrote` cannot.
+    const undoWatermark = undoManager.revision(ChangeScope.BlockDefault)
     const clearUndo = this.undoClearingForPassWrites(workspaceId, () => {
       const message =
         'Re-encoding property values for a changed type cleared this '
@@ -4658,11 +4658,14 @@ export class Repo {
       //
       // The watermark is what separates that from an ordinary converged pass —
       // rows a peer already migrated, which is the common shape on a receiving
-      // device and must NOT cost the user their history. It asks only "was
-      // anything recorded on this workspace's stack while the pass ran". Not
-      // consulted once the pass has written, where every clear has already
-      // rebased the stack to empty and any entry above it postdates the writes.
-      if (!wrote && (undoManager.peekUndo(ChangeScope.BlockDefault)?.txId ?? null) !== undoWatermark) {
+      // device and must NOT cost the user their history. It asks only "did
+      // anything happen to this workspace's stack while the pass ran". A
+      // REVISION rather than the top entry, because a grouped multi-transaction
+      // action merges its later steps into the entry already on top and keeps
+      // that entry's `txId` — invisible to anything comparing identity or
+      // depth. Not consulted once the pass has written, where every clear has
+      // already rebased the stack and anything above it postdates the writes.
+      if (!wrote && undoManager.revision(ChangeScope.BlockDefault) !== undoWatermark) {
         clearUndo()
       }
       // Only an APPLIED pass advances a known fieldId — a throw, or a pass that

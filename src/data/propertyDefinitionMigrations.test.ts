@@ -582,6 +582,46 @@ describe('codec-change migration', () => {
     expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
   }, 20_000)
 
+  it('clears when the racing edit is a later STEP of a grouped user action', async () => {
+    // The merge case. `record` folds a grouped step into the entry already on
+    // top and deliberately keeps that entry's `txId`, so a multi-transaction
+    // user action is invisible to anything comparing the top entry — or the
+    // depth, which a merge also leaves equal.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+    await repo.awaitPropertyDefinitionBaselines()
+
+    // Step one of the user's action, on top of the stack as the pass begins.
+    await repo.tx(tx => tx.update('p', {content: 'host edited'}),
+      {scope: ChangeScope.BlockDefault, groupId: 'grouped-edit'})
+    const topBefore = repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)
+    const depthBefore = undoDepth(repo)
+
+    // Step two lands inside the pass's window and canonicalizes the candidate.
+    const batch = vi.spyOn(
+      repo as unknown as {runPropertyDefinitionMigrationBatch: () => Promise<boolean>},
+      'runPropertyDefinitionMigrationBatch',
+    ).mockImplementation(async () => {
+      await repo.tx(tx => tx.setProperty('p', statusNumber, 42 as never),
+        {scope: ChangeScope.BlockDefault, groupId: 'grouped-edit'})
+      // Merged, not pushed: same entry, same id, same depth.
+      expect(repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)?.txId)
+        .toBe(topBefore?.txId)
+      expect(undoDepth(repo)).toBe(depthBefore)
+      return false
+    })
+
+    await republish(repo, statusNumber)
+    batch.mockRestore()
+
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
+    expect(undoDepth(repo)).toBe(0)
+    expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
+  }, 20_000)
+
   it('leaves the undo history alone when the pass converges without writing', async () => {
     await seedWorkspace('children')
     const repo = setup()

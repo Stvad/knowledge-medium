@@ -167,6 +167,19 @@ export class UndoManager {
     for (const scope of touched) this.notify(scope)
   }
 
+  /** How many times either stack for `scope` has changed.
+   *
+   *  For a caller that must know whether ANYTHING was recorded, merged, undone
+   *  or redone across a window — not whether the stack looks different at the
+   *  end of it. The top entry's `txId` cannot answer that: `record` MERGES a
+   *  grouped step into the entry already on top and deliberately keeps that
+   *  entry's original `txId`, so a multi-transaction user action is invisible
+   *  to anyone comparing it. Depth cannot either — a merge leaves it equal, and
+   *  so does an edit-then-undo. */
+  revision(scope: ChangeScope): number {
+    return this.revisions.get(scope) ?? 0
+  }
+
   /** Stack depths — used by UI to enable / disable undo/redo buttons. */
   depths(scope: ChangeScope): { undo: number; redo: number } {
     return {
@@ -198,6 +211,8 @@ export class UndoManager {
     return stack
   }
 
+  private readonly revisions = new Map<ChangeScope, number>()
+
   private listenersFor(scope: ChangeScope): CallbackSet<[]> {
     let set = this.listenersByScope.get(scope)
     if (!set) {
@@ -207,7 +222,11 @@ export class UndoManager {
     return set
   }
 
+  /** Bumped here rather than at each mutation site because "the stacks for this
+   *  scope changed" and "subscribers must re-read" are the same event, and one
+   *  owner is what keeps a new mutation from updating only one of them. */
   private notify(scope: ChangeScope): void {
+    this.revisions.set(scope, this.revision(scope) + 1)
     this.listenersByScope.get(scope)?.notify()
   }
 }
