@@ -1104,6 +1104,79 @@ describe('block-type typeify processor', () => {
     expect(row!.properties[aliasesProp.name]).toEqual(['Reading'])
   })
 
+  // Clearing the label while writing a body is still an UN-naming: the label is
+  // the naming gesture, so a body written beside it does not get to outrank it
+  // and hand the type a name the caller never chose.
+  it('un-names a type when the label is cleared beside a new body', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    const seeded = await env.repo.load(id)
+
+    await env.repo.tx(
+      tx => tx.update(id, {
+        content: 'Notes',
+        properties: {...seeded!.properties, [blockTypeLabelProp.name]: ''},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('')
+    expect(row!.properties[aliasesProp.name]).toEqual([])
+    for (const alias of ['Book', 'Notes']) {
+      expect(await env.repo.query.aliasLookup({workspaceId: WS, alias}).load()).toBeNull()
+    }
+  })
+
+  // A name somebody WROTE is always checked, even on a row whose name was
+  // already broken. The exemption for an unwritable predecessor is there for
+  // derived rewrites, which never move the label.
+  it('refuses an explicit rename between two unwritable names', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'See [[Foo]]',
+      [aliasesProp.name]: ['See [[Foo]]'],
+    }, 'See [[Foo]]')
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {
+        content: 'See [[Bar]]',
+        properties: {
+          types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+          [blockTypeLabelProp.name]: 'See [[Bar]]',
+          [aliasesProp.name]: ['See [[Foo]]'],
+        },
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(LossyLabelError)
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('See [[Foo]]')
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('See [[Foo]]')
+  })
+
+  // `readLabel` trims to decide the label is blank; the registry reader does
+  // not trim. Leaving the padding stored would keep the row published as a type
+  // named whitespace, which is exactly what un-naming just said it is not.
+  it('clears a whitespace label when un-naming a type', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    const seeded = await env.repo.load(id)
+
+    await env.repo.tx(
+      tx => tx.update(id, {
+        content: '',
+        properties: {...seeded!.properties, [blockTypeLabelProp.name]: '   '},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect((await rawPropertiesOf(env, id))[blockTypeLabelProp.name]).toBe('')
+    expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
+  })
+
   // A legacy row can carry its name in the BODY alone, with no label at all.
   // Clearing that body would drop the type from the registry while its claim
   // stayed put — the same un-naming the emptied-body rule exists to prevent.
@@ -1185,6 +1258,30 @@ describe('block-type typeify processor', () => {
 
       expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
       expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
+    })
+
+    // A bag holding BOTH spellings of the old name spells it twice. Retiring
+    // only the first left the type answering to the other — which `alias.sync`
+    // happened to clean up, so with the plugin off the old name survived for
+    // good. The kernel's result must not depend on an optional plugin.
+    it('retires every spelling of the old name, not just the first', async () => {
+      env = await setup({alias: false})
+      const id = await tagBlockType(env, 'Book')
+      await rawProperties(env, id, {
+        types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+        [blockTypeLabelProp.name]: ' Book ',
+        [aliasesProp.name]: [' Book ', 'Book'],
+      }, 'Book')
+
+      await env.repo.tx(
+        tx => tx.update(id, {content: 'Novel'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+
+      expect((await rawPropertiesOf(env, id))[aliasesProp.name]).toEqual(['Novel'])
+      for (const alias of ['Book', ' Book ']) {
+        expect(await env.repo.query.aliasLookup({workspaceId: WS, alias}).load()).toBeNull()
+      }
     })
 
     // The other legacy spelling: content and claim BOTH padded, which is a

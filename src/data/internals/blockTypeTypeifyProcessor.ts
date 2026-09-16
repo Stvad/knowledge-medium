@@ -114,24 +114,37 @@ const moveTypeClaim = async (
   after: BlockData,
   name: string | null,
   ctx: SameTxCtx,
-  {retiring, ...writeOptions}: {retiring?: string} & TxWriteOpts = {},
+  {retiring = [], ...writeOptions}: {retiring?: readonly string[]} & TxWriteOpts = {},
 ): Promise<void> => {
   const claimed = await claimedAliases(ctx.tx, after)
-  const held = retiring !== undefined && claimed.includes(retiring)
+  const held = claimed.some(alias => retiring.includes(alias))
   // A release with nothing to release is not a write. `setProperty` elides a
   // write that changes the stored value nothing, but `undefined` -> `[]` IS a
   // change: without this it materializes an empty alias bag on a row that never
   // had one.
   if (name === null && !held) return
-  // In PLACE when a name is being retired: the first entry is what a block is
-  // displayed as (the sidebar reads `aliases[0]`), so a rename must not promote
-  // some other alias by appending. Same replacement `alias.sync`'s rule 1 would
-  // have made — this write just gets there first.
-  const next = name === null
-    ? (held ? claimed.filter(alias => alias !== retiring) : claimed)
-    : held
-      ? claimed.map(alias => (alias === retiring ? name : alias))
-      : [...claimed, name]
+  // EVERY spelling of the old name goes, not the first one found: a bag holding
+  // both `" Book "` and `Book` spells the old name twice, and retiring one left
+  // the type answering to the other — which `alias.sync` then cleaned up, so
+  // the kernel's result depended on an optional plugin being installed.
+  //
+  // The new name lands in the FIRST retired slot: the first entry is what a
+  // block is displayed as (the sidebar reads `aliases[0]`), so a rename must
+  // not promote some other alias by appending. Same replacement `alias.sync`'s
+  // rule 1 would have made — this write just gets there first.
+  const next: string[] = []
+  let placed = false
+  for (const alias of claimed) {
+    if (!retiring.includes(alias)) {
+      next.push(alias)
+      continue
+    }
+    if (name !== null && !placed) {
+      next.push(name)
+      placed = true
+    }
+  }
+  if (name !== null && !placed) next.push(name)
   // `setProperty` elides a write that changes nothing, so no guard here.
   await ctx.tx.setProperty(after.id, aliasesProp, [...new Set(next)], writeOptions)
 }
@@ -243,17 +256,20 @@ const followRenamedContent = async (
   const oldNameSpellings = [previousStored, before.content, previousName]
     .filter(spelling => spelling !== '' && spelling.trim() === previousName)
   const claims = getAliases(before)
-  const retiring = oldNameSpellings.find(spelling => claims.includes(spelling))
+  const retiring = claims.filter(claim => oldNameSpellings.includes(claim))
 
-  // An emptied body names nothing, so the type keeps its name and the body is
-  // restored to it — un-naming a type is the type editor's gesture, which
-  // releases the alias too. Whitespace counts as empty: aliasSync's blank guard
-  // is `=== ''`, so `"   "` would otherwise be claimed as the name. Otherwise
-  // the name to keep, in the order the row can hold one: the new body, the
-  // label, or — for a legacy row that never had a label at all — the body being
-  // cleared. A type named only by its content is still named, and emptying it
-  // would otherwise drop the type while its claim stayed put.
-  const name = newContent || currentLabel || (labelMoved ? '' : previousName)
+  // A label written in THIS tx settles the name outright, blank INCLUDED: that
+  // is the naming gesture, and a caller clearing it is un-naming the type on
+  // purpose. Letting a body written in the same tx outrank it reversed that
+  // gesture silently. (Two different non-blank names in one tx never reach
+  // here — the conflict above refuses them.)
+  //
+  // Otherwise the body is the name, and an emptied body names nothing: the type
+  // keeps the name it had and the body is restored to it, rather than the type
+  // being dropped while its claim stays put. Whitespace counts as empty —
+  // aliasSync's blank guard is `=== ''`, so `"   "` would otherwise be claimed
+  // as the name.
+  const name = labelMoved ? currentLabel : (newContent || previousName)
   if (name === '') {
     // Nothing names this row any more — the un-naming gesture. `tryBuildType`
     // drops a label-less block, so the type is gone and its claim goes with it;
@@ -268,6 +284,15 @@ const followRenamedContent = async (
     // this path is gated on content changing, and that transition stays the
     // editor's.
     await moveTypeClaim(after, null, ctx, {retiring, skipMetadata: true})
+    // And the STORED label, which `readLabel` trimmed to reach this branch:
+    // `parseTypeDefinitionMetadata` does not trim, so a whitespace-only label
+    // keeps the row published as a type named whitespace — a type this branch
+    // just declared gone, with nothing resolving to it. Guarded rather than
+    // unconditional: `'' !== undefined`, so writing it onto a row that never
+    // had a label would materialize the key.
+    if (safeDecodeRowProperty(after, blockTypeLabelProp) !== '') {
+      await ctx.tx.setProperty(row.id, blockTypeLabelProp, '', {skipMetadata: true})
+    }
     return
   }
 
@@ -284,12 +309,16 @@ const followRenamedContent = async (
   // row was. Stepping aside there would leave the new name unclaimed.
   if (!labelMoved && previousName !== before.content.trim()) return
 
-  // Otherwise the new name has to be a name: refuse a REGRESSION, where the one
-  // being replaced worked or where the type is being named for the first time
-  // (an UNNAMED type is not a broken one). A row whose name was already
-  // unwritable still gets its spellings reconciled — that cannot make an
-  // unlinkable name worse.
-  if (previousName === '' || isWritableLabel(previousName)) assertWritableTypeName(name)
+  // The new name has to BE a name whenever somebody chose it: a label written in
+  // this tx is a choice, so it is always checked, however broken the row it
+  // lands on. The exemption is for DERIVED rewrites, which never move the label
+  // — refuse a REGRESSION there, where the name being replaced worked or where
+  // the type is being named for the first time (an UNNAMED type is not a broken
+  // one), and otherwise let an already-unwritable row have its spellings
+  // reconciled, which cannot make an unlinkable name worse.
+  if (labelMoved || previousName === '' || isWritableLabel(previousName)) {
+    assertWritableTypeName(name)
+  }
 
   // The whole claim moves HERE — old name retired, new one taken — rather than
   // being left to `aliasSyncProcessor`: that plugin is togglable, AND it has
@@ -308,7 +337,7 @@ const followRenamedContent = async (
       alias: name,
       blockId: row.id,
       workspaceId: after.workspaceId,
-      dropSourceAliases: retiring === undefined ? [] : [retiring],
+      dropSourceAliases: retiring,
       collisionOrigin: 'content-rename',
     })
     await moveTypeClaim(after, name, ctx, {retiring, skipMetadata: true})
