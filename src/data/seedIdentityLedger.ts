@@ -266,6 +266,9 @@ export const RETIRED_PROPERTY_NAMES: readonly string[] = [
   'focusedVisualTargetKey',
   // `extensionDisabledProp` — extension enablement moved to the overrides map.
   'system:disabled',
+  // `typeProp` — a block's types moved to the `types` list, which one string
+  // could not hold.
+  'type',
   // Retired when the pane view mode (`panelViewModeProp`) took over selecting
   // the video-notes renderer; a per-block flag could not express it.
   'video:playerView',
