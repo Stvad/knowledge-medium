@@ -444,10 +444,6 @@ export const materializePropertyChildrenForExistingRow = async (
       continue
     }
 
-    // `propertyCellValueRejection` is the shared owner of "can this value be
-    // carried", asked here and by every producer that refuses a value BEFORE
-    // the write (content promotion — see `promotedValueAcceptorFor`). One
-    // function so a producer's guard cannot drift from what this rejects.
     const rejection = propertyCellValueRejection(schema, encoded)
     if (rejection) {
       // The cell holds a value its schema's codec refuses — almost always a
@@ -472,16 +468,14 @@ export const materializePropertyChildrenForExistingRow = async (
       // entire flip. That caller must catch per row and report the offending
       // block, not let one bad value throw the whole pass.
       if (undecodable === 'skip') continue
+      const failure = rejection.reason === 'decode'
+        ? `does not decode under the "${schema.codec.type}" codec`
+        : `decodes under the "${schema.codec.type}" codec but cannot be written ` +
+          'as a value child'
       throw new Error(
-        rejection.reason === 'decode'
-          ? `Cannot materialize property "${name}" on block ${row.id}: its cell ` +
-            `value does not decode under the "${schema.codec.type}" codec. Write ` +
-            `property values through tx.setProperty / block.set, not a raw ` +
-            `tx.update({properties}).`
-          : `Cannot materialize property "${name}" on block ${row.id}: its cell ` +
-            `value decodes under the "${schema.codec.type}" codec but cannot be ` +
-            `written as a value child. Write property values through ` +
-            `tx.setProperty / block.set, not a raw tx.update({properties}).`,
+        `Cannot materialize property "${name}" on block ${row.id}: its cell ` +
+        `value ${failure}. Write property values through tx.setProperty / ` +
+        `block.set, not a raw tx.update({properties}).`,
         {cause: rejection.cause},
       )
     }

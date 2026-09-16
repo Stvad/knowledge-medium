@@ -115,7 +115,7 @@ export const computePromotedFromChildren = (
   const newlyBubbled = new Set<string>()
   /** propName → the bubbled uids that fed it. A bubbled uid feeds exactly one
    *  key (its own `key::`), so a withdrawal is exact rather than approximate. */
-  const sourceUids = new Map<string, Set<string>>()
+  const sourceUids = new Map<string, string[]>()
   const namespacePrefix = options.namespacePrefix ?? 'roam'
   const transformKey = options.transformKey ?? ((key: string) => key)
   const acceptKey = options.acceptKey ?? (() => true)
@@ -148,8 +148,8 @@ export const computePromotedFromChildren = (
 
     newlyBubbled.add(block.uid)
     const propName = nameOf(attr.key)
-    const sources = sourceUids.get(propName) ?? new Set<string>()
-    sources.add(block.uid)
+    const sources = sourceUids.get(propName) ?? []
+    sources.push(block.uid)
     sourceUids.set(propName, sources)
     if (attr.value.trim() !== '') push(attr.key, attr.value)
 

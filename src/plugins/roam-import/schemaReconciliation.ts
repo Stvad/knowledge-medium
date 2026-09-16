@@ -19,10 +19,7 @@
 import type { AnyPropertySchema, BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
-import {
-  propertyCellValueRejection,
-  type PropertyCellValueRejection,
-} from '@/data/propertyChildren'
+import { propertyCellValueRejection } from '@/data/propertyChildren'
 import {
   ROAM_PAGE_ALIAS_PROP,
   collectAliasesFromRoamSemanticRefListValue,
@@ -64,15 +61,17 @@ interface SampledNameStats {
 const SCHEMA_NEAR_MISS_THRESHOLD = 0.85
 const SCHEMA_NEAR_MISS_MIN_VALUES = 10
 
-const formatSampleValue = (value: unknown): string => {
-  let formatted: string
+const jsonStringify = (value: unknown): string => {
   try {
     const json = JSON.stringify(value)
-    formatted = json === undefined ? String(value) : json
+    return json === undefined ? String(value) : json
   } catch {
-    formatted = String(value)
+    return String(value)
   }
-  const normalized = formatted.replace(/\s+/g, ' ').trim()
+}
+
+const formatSampleValue = (value: unknown): string => {
+  const normalized = jsonStringify(value).replace(/\s+/g, ' ').trim()
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized
 }
 
@@ -291,15 +290,6 @@ export const applySchemaReconciliation = async (
   }
 }
 
-const jsonStringify = (value: unknown): string => {
-  try {
-    const json = JSON.stringify(value)
-    return json === undefined ? String(value) : json
-  } catch {
-    return String(value)
-  }
-}
-
 /** The ONE reshaping rule, by codec type: how a promoted value that does not
  *  fit its codec is made to fit, where a fit is reachable at all.
  *
@@ -308,83 +298,38 @@ const jsonStringify = (value: unknown): string => {
  *  definition is per NAME. Nothing here can make text a number or a name an
  *  id — those keys are declined at promotion instead (`acceptValue`).
  *
- *  Every reshaping caller routes through this: the two name-set passes below,
- *  which the importer drives off its own classification, and
- *  {@link fitPromotedValueToSchema}, which the streaming path drives off the
- *  effective registry. A second copy would be a rule that reshapes one way at
- *  plan time and another at write time. */
+ *  A second copy would be a rule that reshapes one way at plan time and
+ *  another at write time. */
 const reshapeForCodecType = (codecType: string, value: unknown): unknown => {
   if (codecType === 'string' && typeof value !== 'string') return jsonStringify(value)
   if (codecType === 'list' && !Array.isArray(value)) return [value]
   return value
 }
 
-/** Can `schema` carry `value`, after the reshaping that is available to it?
+/** The value to STORE under `schema` — which may differ from the one passed
+ *  in — or null when no reshaping fits.
  *
- *  `fits` carries the value to STORE, which may differ from the one passed in.
- *  `unfit` means no reshaping helps: post-flip the materialize processor
- *  rejects a write of it and rolls the whole transaction back, so a producer
- *  asks this BEFORE the write and declines the key instead (#594).
+ *  Null means a producer must not write it: post-flip the materialize
+ *  processor rejects such a value and rolls the whole transaction back, so the
+ *  key is declined or reported BEFORE the write instead (#594). Boxed rather
+ *  than returned bare, because the value that fits may itself be undefined.
  *
  *  The acceptance half is `propertyCellValueRejection` — the same function the
  *  processor rejects with, deliberately, rather than a decode of our own that
- *  could come to disagree with it. */
-export type PromotedValueFit =
-  | {readonly kind: 'fits'; readonly value: unknown}
-  | {readonly kind: 'unfit'; readonly rejection: PropertyCellValueRejection}
-
-export const fitPromotedValueToSchema = (
+ *  could come to disagree with it. Note the opposite polarity of the two: that
+ *  one returns null when a value is FINE, this one when it is not. */
+const fittedPromotedValue = (
   schema: AnyPropertySchema,
   value: unknown,
-): PromotedValueFit => {
+): {readonly value: unknown} | null => {
   // Reshape only what needs it. Reshaping keys off the CODEC TYPE, not off the
   // value, so asking second would rewrite values that were already fine: a
   // `null` under an optional-string definition means unset and decodes, but
   // the string codec type would turn it into the four-character text "null",
   // which also decodes — a silent edit that nothing downstream could spot.
-  if (!propertyCellValueRejection(schema, value)) return {kind: 'fits', value}
+  if (!propertyCellValueRejection(schema, value)) return {value}
   const reshaped = reshapeForCodecType(schema.codec.type, value)
-  const rejection = propertyCellValueRejection(schema, reshaped)
-  return rejection ? {kind: 'unfit', rejection} : {kind: 'fits', value: reshaped}
-}
-
-/** String-schema normalization for mixed Roam attributes. Some Roam
- *  fields are scalar on most pages but multi-value arrays on a few
- *  pages (`email::` with child bullets, `Twitter::` with multiple
- *  accounts, etc.). When reconciliation chooses the string preset for
- *  that mixed field, preserve the non-string JSON shape as a JSON text
- *  value so the registered string codec can decode it. */
-export const normalizeStringPropertyValues = (
-  blocks: ReadonlyArray<BlockData>,
-  stringPropertyNames: ReadonlySet<string>,
-): void => {
-  if (stringPropertyNames.size === 0) return
-  for (const block of blocks) {
-    if (!block.properties) continue
-    for (const name of stringPropertyNames) {
-      if (!(name in block.properties)) continue
-      block.properties[name] = reshapeForCodecType('string', block.properties[name])
-    }
-  }
-}
-
-/** List-schema normalization for Roam attributes. Promotion emits a
- *  scalar for single `key:: value` occurrences and an array for
- *  repeated/child-list occurrences. When schema reconciliation picks
- *  the list preset, wrap the scalar cases so every stored value matches
- *  the list codec shape instead of being rejected on decode. */
-export const normalizeListPropertyValues = (
-  blocks: ReadonlyArray<BlockData>,
-  listPropertyNames: ReadonlySet<string>,
-): void => {
-  if (listPropertyNames.size === 0) return
-  for (const block of blocks) {
-    if (!block.properties) continue
-    for (const name of listPropertyNames) {
-      if (!(name in block.properties)) continue
-      block.properties[name] = reshapeForCodecType('list', block.properties[name])
-    }
-  }
+  return propertyCellValueRejection(schema, reshaped) ? null : {value: reshaped}
 }
 
 /** Last pass before the import writes: reshape every planned value to fit the
@@ -394,15 +339,10 @@ export const normalizeListPropertyValues = (
  *  what turn `[[X]]` tokens into ids and scalars into lists, so asking earlier
  *  would report values that were about to become valid.
  *
- *  It does NOT remove an unfit value, which is the difference between this
- *  caller and the streaming one. A key here can reach the bag without a source
- *  bullet behind it at all (`propertiesFromRoam` lifts raw Roam `:block/props`
- *  straight into properties), so removal is not "the text stays on the block"
- *  for every key it would touch — it is silent loss for some of them. What is
- *  left instead is loud: post-flip the write is rejected and the import fails
- *  with this diagnostic already naming the block and the key. The streaming
- *  path can decline because it decides BEFORE consuming the bullet; this one
- *  cannot, so it reports.
+ *  Reports rather than removes, unlike the streaming caller: a key here can
+ *  reach the bag with no source bullet behind it at all (`propertiesFromRoam`
+ *  lifts raw Roam `:block/props` straight into properties), so removal would
+ *  be silent loss for some of the keys it touches.
  *
  *  A name with no registered definition is left ALONE: nothing is known about
  *  what would fit, and property migration skips such keys rather than
@@ -418,9 +358,9 @@ export const fitPlannedPropertyValues = (
     for (const name of Object.keys(block.properties)) {
       const schema = repo.propertySchemas.get(name)
       if (!schema) continue
-      const fit = fitPromotedValueToSchema(schema, block.properties[name])
-      if (fit.kind === 'fits') {
-        block.properties[name] = fit.value
+      const fitted = fittedPromotedValue(schema, block.properties[name])
+      if (fitted) {
+        block.properties[name] = fitted.value
         continue
       }
       diagnostics.push(
@@ -582,7 +522,6 @@ export const ensurePromotedPropertySchemas = async (
   // than half-landed somewhere else. Checking only around the whole call is
   // not enough; the window is between the keys.
   const pinnedWorkspaceId = repo.activeWorkspaceId
-  const registeredNow = new Map<string, string>()
   for (const entry of toRegister) {
     if (repo.activeWorkspaceId !== pinnedWorkspaceId) {
       notes.push(
@@ -598,7 +537,6 @@ export const ensurePromotedPropertySchemas = async (
     try {
       await repo.userSchemas.addSchema(
         config ? {name: entry.name, presetId, config} : {name: entry.name, presetId})
-      registeredNow.set(entry.name, presetId)
     } catch (err) {
       notes.push(
         `Could not register promoted property ${JSON.stringify(entry.name)} `
@@ -609,12 +547,8 @@ export const ensurePromotedPropertySchemas = async (
 
   // Reshape against the EFFECTIVE registry, not merely what this call
   // registered, and report in the same pass — one walk, one rule
-  // (`fitPromotedValueToSchema`), so what is reshaped and what is reported
-  // can never be two different answers. A value that its key's definition
-  // cannot carry is not cosmetic: post-flip
-  // `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR` rejects it during the write and
-  // rolls the whole transaction back — and a poll-driven caller that holds its
-  // cursor on failure then retries the same event forever.
+  // (`fittedPromotedValue`), so what is reshaped and what is reported can
+  // never be two different answers.
   const missing: string[] = []
   const unfitNames = new Set<string>()
   for (const name of names) {
@@ -623,8 +557,8 @@ export const ensurePromotedPropertySchemas = async (
     for (const bag of bags) {
       const properties = bag.properties
       if (!properties || !(name in properties)) continue
-      const fit = fitPromotedValueToSchema(schema, properties[name])
-      if (fit.kind === 'fits') properties[name] = fit.value
+      const fitted = fittedPromotedValue(schema, properties[name])
+      if (fitted) properties[name] = fitted.value
       else unfitNames.add(name)
     }
   }
@@ -638,18 +572,10 @@ export const ensurePromotedPropertySchemas = async (
     )
   }
   if (unfit.length > 0) {
-    // Reshaping only reaches `string` and `list`. A key whose existing schema
-    // is narrower (url, number, boolean, date…) can still receive arbitrary
-    // promoted text that no reshaping fixes — and post-flip that aborts the
-    // writing transaction.
-    //
-    // Still reported rather than enforced, because by here it is too late to
-    // enforce anything: a subtractive caller has already dropped the source
-    // bullet, so dropping the key would destroy the text. The refusal belongs
-    // at promotion — `promotedValueAcceptorFor` — which is why what reaches
-    // this note is the residue: a caller that does not decline at promotion, a
-    // key that is not promoted at all, or a definition edited in the window
-    // between the two.
+    // What reaches this note is the RESIDUE, since the refusal belongs at
+    // promotion (`promotedValueAcceptorFor`): a caller that does not decline
+    // there, a key that is not promoted at all, or a definition edited in the
+    // window between the two.
     notes.push(
       `${unfit.length} promoted key(s) carry a value their existing definition `
       + `cannot hold: ${unfit.map(n => JSON.stringify(n)).join(', ')}. `
@@ -688,5 +614,5 @@ export const promotedValueAcceptorFor = (
 ): ((propName: string, value: unknown) => boolean) => (propName, value) => {
   const schema = repo.propertySchemas.get(propName)
   if (!schema) return true
-  return fitPromotedValueToSchema(schema, value).kind === 'fits'
+  return fittedPromotedValue(schema, value) !== null
 }

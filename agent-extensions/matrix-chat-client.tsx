@@ -98,7 +98,7 @@ const RESTART_EVENT = 'matrix:ingest:restart'
 // attributes promoted out of message *content* (which keep the `matrix:*`
 // namespace — see matrixPromotionOptions below).
 
-const homeserverProp = seedProperty({
+export const homeserverProp = seedProperty({
   seedKey: extensionPropertySeedKey('homeserver'),
   revision: 1,
   name: 'matrix:homeserver',
@@ -106,7 +106,7 @@ const homeserverProp = seedProperty({
   defaultValue: 'https://matrix.org',
   changeScope: ChangeScope.BlockDefault,
 })
-const roomIdProp = seedProperty({
+export const roomIdProp = seedProperty({
   seedKey: extensionPropertySeedKey('room-id'),
   revision: 1,
   name: 'matrix:roomId',
@@ -114,7 +114,7 @@ const roomIdProp = seedProperty({
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const autoStartProp = seedProperty({
+export const autoStartProp = seedProperty({
   seedKey: extensionPropertySeedKey('auto-start'),
   revision: 1,
   name: 'matrix:autoStart',
@@ -175,7 +175,7 @@ const eventTimestampProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-const matrixChatPrefsType = seedType({
+export const matrixChatPrefsType = seedType({
   seedKey: extensionTypeSeedKey('prefs'),
   revision: 1,
   id: 'matrix-chat-prefs',
@@ -519,21 +519,10 @@ const parseMarkdownToBlockDefinitions = (markdownText: string): BlockDef[] => {
 // event's own timestamp.
 
 const matrixEventUrl = (roomId: string, eventId: string) => `https://matrix.to/#/${roomId}/${eventId}`
-/** Ingest promotes SUBTRACTIVELY (the bullet is dropped once hoisted), so
- *  every reason a key cannot become a property has to be known HERE, before
- *  bubbling — afterwards the bullet is gone and dropping the key destroys the
- *  only copy of the text. Both declines leave the bullet exactly as the user
- *  wrote it.
- *
- *  By NAME: a name no definition can be registered for. `[[Page]]:: value` is
- *  the form that hits this (the name would contain `]]`).
- *
- *  By VALUE: a name whose definition already exists and cannot hold what this
- *  message says — `count:: many` under a `number`. Post-flip that write is
- *  rejected by the materialize processor and the whole ingest transaction
- *  rolls back; since a failed write deliberately holds the sync cursor, the
- *  same event would then be retried forever and ingest would stop for good
- *  (#594). */
+/** Ingest promotes SUBTRACTIVELY, so both declines have to happen here, before
+ *  bubbling — see `PromotionOptions.acceptKey` / `acceptValue` for why. By
+ *  NAME: `[[Page]]:: value`, whose name would contain `]]`. By VALUE:
+ *  `count:: many` under an existing `number` definition (#594). */
 const matrixPromotionOptions = (repo: any): PromotionOptions => ({
   namespacePrefix: 'matrix',
   transformKey: (key: string) => key.toLowerCase(),
@@ -1001,7 +990,7 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
 // the effect runtime calls our cleanup on hot-reload / disable, and we abort
 // the in-flight poll there.
 
-const matrixIngestEffect = {
+export const matrixIngestEffect = {
   id: 'matrix-chat-client.ingest',
   start: ({repo}: {repo: any}) => {
     let currentAbort: AbortController | null = null

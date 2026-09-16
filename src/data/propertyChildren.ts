@@ -405,9 +405,8 @@ export const encodedPropertyValueToChildContent = (
  *  ONE owner for the question `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR`
  *  rejects a write over, so a producer that wants to refuse a value BEFORE
  *  the write asks exactly what the processor will ask rather than a
- *  hand-rolled decode that drifts from it. Content promotion is that
- *  producer: it manufactures values out of arbitrary user text, and post-flip
- *  a value its key's codec refuses aborts the writing transaction.
+ *  hand-rolled decode that drifts from it. Content promotion is one such
+ *  producer.
  *
  *  TWO legs, because the processor takes two steps on a cell value that can
  *  fail. The second is not redundant: `codecs.ref().decode` accepts any

@@ -4,16 +4,13 @@
 // promotion, its own write — against a CHILD-BACKED workspace, because that is
 // the only configuration in which the hazard exists.
 //
-// What it pins (#594): a `key:: value` in a message whose key already has a
-// definition too narrow to hold the text used to abort the writing
-// transaction, via the materialize processor's rejection. Ingest holds its
-// sync cursor on a failed write on purpose (Matrix offers an event once), so
-// that abort meant the same event was retried forever and ingest stopped for
-// good. The guard declines that one key at promotion instead.
+// What it pins (#594): a `key:: value` whose key already has a too-narrow
+// definition must not reach the write — post-flip that aborts the tx, and
+// ingest holds its cursor on a failed write.
 //
-// The assertions are on VALUES, never counts, and the mixed case is the point:
-// one message carries a key that cannot be stored and a key that can, so a
-// blanket refusal fails this as loudly as no refusal at all.
+// The mixed case is the point: one message carries a key that cannot be stored
+// and a key that can, so a blanket refusal fails this as loudly as no refusal
+// at all.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The extension imports the matrix SDK from a URL, which no test runner can
@@ -61,7 +58,13 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
 
-import matrixContributions from './matrix-chat-client.tsx'
+import matrixContributions, {
+  autoStartProp,
+  homeserverProp,
+  matrixChatPrefsType,
+  matrixIngestEffect,
+  roomIdProp,
+} from './matrix-chat-client.tsx'
 
 const WS = 'ws-matrix'
 const HOMESERVER = 'https://matrix.test'
@@ -70,19 +73,11 @@ const TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
 const NEXT_BATCH_KEY = `knowledge-medium:matrix-messages:state:v1:${HOMESERVER}:${ROOM}`
 
 /** The app shell owns mounts and effects; a repo-level runtime takes neither.
- *  The effect object itself is pulled out separately and started by hand —
- *  `effect.start({repo})` is exactly what `liveRuntime` calls. */
-const contributions = matrixContributions as unknown as Array<{
-  facet?: {id: string}
-  value?: unknown
-}>
-const matrixDataExtensions = contributions
+ *  `matrixIngestEffect.start({repo})` is then called by hand — exactly what
+ *  `liveRuntime` does with it. */
+const matrixDataExtensions = (matrixContributions as unknown as Array<{facet?: {id: string}}>)
   .filter(c => 'facet' in c && c.facet?.id !== 'core.app-mounts' && c.facet?.id !== 'core.app-effects')
-  .map(c => c as unknown) as unknown as AppExtension[]
-const ingestEffect = contributions
-  .find(c => c.facet?.id === 'core.app-effects')!.value as {
-    start: (ctx: {repo: Repo}) => (() => void) | void
-  }
+  .map(c => c as unknown) as AppExtension[]
 
 let sharedDb: TestDb
 let stopIngest: (() => void) | void
@@ -118,22 +113,16 @@ const setup = async (): Promise<Repo> => {
  *  cursor: ingest deliberately ignores the events of a cursor-less first sync
  *  (that call only establishes a position), so without one no message is ever
  *  read. */
-const contributionValue = (facetId: string, match: (value: any) => boolean): any =>
-  contributions.find(c => c.facet?.id === facetId && match(c.value))!.value
-
 const configureIngest = async (repo: Repo): Promise<void> => {
   window.localStorage.setItem(TOKEN_KEY, 'secret-token')
   window.localStorage.setItem(
     NEXT_BATCH_KEY,
     JSON.stringify({nextBatch: 'cursor-0', savedAt: 1}),
   )
-  const prefsType = contributionValue('data.type-seeds', v => v?.id === 'matrix-chat-prefs')
-  const seed = (name: string) =>
-    contributionValue('data.definition-seeds', v => v?.name === name)
-  const block = await getPluginPrefsBlock(repo, WS, repo.user, prefsType)
-  await block.set(seed('matrix:homeserver'), HOMESERVER)
-  await block.set(seed('matrix:roomId'), ROOM)
-  await block.set(seed('matrix:autoStart'), true)
+  const block = await getPluginPrefsBlock(repo, WS, repo.user, matrixChatPrefsType)
+  await block.set(homeserverProp, HOMESERVER)
+  await block.set(roomIdProp, ROOM)
+  await block.set(autoStartProp, true)
 }
 
 const messageEvent = (eventId: string, body: string) => ({
@@ -149,10 +138,9 @@ const syncBody = (nextBatch: string, events: unknown[]) => ({
   rooms: {join: {[ROOM]: {timeline: {events}}}},
 })
 
-interface Row {id: string; content: string; parent_id: string | null; properties_json: string}
-const rowByContent = async (content: string): Promise<Row | undefined> =>
-  (await sharedDb.db.getAll<Row>(
-    'SELECT id, content, parent_id, properties_json FROM blocks WHERE deleted = 0 AND content = ?',
+const rowByContent = async (content: string): Promise<{id: string} | undefined> =>
+  (await sharedDb.db.getAll<{id: string}>(
+    'SELECT id FROM blocks WHERE deleted = 0 AND content = ?',
     [content],
   ))[0]
 
@@ -205,7 +193,7 @@ describe('matrix ingest into a child-backed workspace', () => {
         messageEvent('$evt-1', '- hello\n  - count:: many\n  - note:: from the room'),
       ]))
 
-      stopIngest = ingestEffect.start({repo})
+      stopIngest = matrixIngestEffect.start({repo})
 
       const message = await vi.waitFor(async () => {
         const row = await rowByContent('hello')
@@ -260,7 +248,7 @@ describe('matrix ingest into a child-backed workspace', () => {
       ].join('\n')),
     ]))
 
-    stopIngest = ingestEffect.start({repo})
+    stopIngest = matrixIngestEffect.start({repo})
 
     const message = await vi.waitFor(async () => {
       const row = await rowByContent('hello')
@@ -290,7 +278,7 @@ describe('matrix ingest into a child-backed workspace', () => {
       messageEvent('$evt-2', '- second'),
     ]))
 
-    stopIngest = ingestEffect.start({repo})
+    stopIngest = matrixIngestEffect.start({repo})
 
     await vi.waitFor(async () => {
       expect(await rowByContent('second'), 'ingest stalled on the first message').toBeDefined()

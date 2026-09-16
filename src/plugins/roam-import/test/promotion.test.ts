@@ -1,14 +1,13 @@
 // @vitest-environment node
 //
-// The promotion core's two declines, by NAME and by VALUE. Both exist for one
-// consumer property: a SUBTRACTIVE consumer drops the source bullet once its
-// text has been hoisted, so a key that cannot become a property has to be
-// refused here — before bubbling — or the text is gone and nothing holds it.
+// The promotion core's decline by VALUE. (The by-NAME decline is pinned in
+// plan.test.ts.)
 //
-// What that makes load-bearing is the un-bubbling, not the absence of the key:
-// a withdrawal that left its uids marked as consumed would read to such a
-// consumer as "already hoisted, safe to drop", which is the data loss the
-// decline exists to prevent.
+// What is load-bearing is not the absence of the key but what happens to its
+// bullets: a SUBTRACTIVE consumer drops whatever promotion reports as
+// consumed, so a withdrawal that left those uids marked consumed would destroy
+// the text, and one that forgot to report them as `declined` would let a
+// deeper pass re-judge and hoist them anyway.
 import { describe, expect, it } from 'vitest'
 import { computePromotedFromChildren } from '../promotion'
 import type { RoamBlock } from '../types'
@@ -25,13 +24,6 @@ const promote = (
 })
 
 describe('computePromotedFromChildren: declining by value', () => {
-  it('withdraws the key AND gives its bullet back, so subtractive callers keep the text', () => {
-    const result = promote([child('u1', 'count:: many')], () => false)
-
-    expect(result.promoted).toEqual({})
-    expect([...result.bubbled]).toEqual([])
-  })
-
   it('withdraws only the declined key when one parent carries both kinds', () => {
     // The mixed case is the one a single-key test cannot see: a decline that
     // is chosen per CALL rather than per KEY passes with one key and destroys
@@ -43,6 +35,10 @@ describe('computePromotedFromChildren: declining by value', () => {
 
     expect(result.promoted).toEqual({'test:note': 'from the room'})
     expect([...result.bubbled]).toEqual(['u2'])
+    // Reported, not merely un-bubbled: a caller walking deeper has to keep
+    // treating it as decided, or it gets promoted one level down instead.
+    expect([...result.declined]).toEqual(['u1'])
+    expect(result.diagnostics.join(' ')).toContain('test:count')
   })
 
   it('judges the FINALIZED value, not each occurrence, since that is what the cell holds', () => {
@@ -71,19 +67,6 @@ describe('computePromotedFromChildren: declining by value', () => {
     )
 
     expect(result.promoted).toEqual({'test:meta': 'outer'})
-    expect([...result.bubbled]).toEqual(['u1'])
-  })
-
-  it('reports the declined key, so a consumer can say why a bullet stayed', () => {
-    const result = promote([child('u1', 'count:: many')], () => false)
-
-    expect(result.diagnostics.join(' ')).toContain('test:count')
-  })
-
-  it('promotes normally when nothing declines — the default accepts', () => {
-    const result = promote([child('u1', 'count:: many')])
-
-    expect(result.promoted).toEqual({'test:count': 'many'})
     expect([...result.bubbled]).toEqual(['u1'])
   })
 })
