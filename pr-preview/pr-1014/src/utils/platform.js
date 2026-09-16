@@ -1,1 +1,1 @@
-import{HM as e,UM as t}from"../../chunks/app-Bh_TZrnn.js";export{e as isIOS,t as isMacPlatform};
+import{BM as e,zM as t}from"../../chunks/app-DZhwmkwg.js";export{t as isIOS,e as isMacPlatform};

@@ -1,1 +1,1 @@
-import{tA as e}from"../../../chunks/app-Bh_TZrnn.js";export{e as PropertyRow};
+import{Qk as e}from"../../../chunks/app-DZhwmkwg.js";export{e as PropertyRow};

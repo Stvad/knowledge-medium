@@ -1,1 +1,1 @@
-import{WT as e}from"../../chunks/app-Bh_TZrnn.js";export{e as LazyBlockComponent};
+import{VT as e}from"../../chunks/app-DZhwmkwg.js";export{e as LazyBlockComponent};
