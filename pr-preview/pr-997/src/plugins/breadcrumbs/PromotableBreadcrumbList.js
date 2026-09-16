@@ -1,1 +1,1 @@
-import{Og as e}from"../../../chunks/app-Ci2F9fz9.js";export{e as PromotableBreadcrumbList};
+import{Og as e}from"../../../chunks/app-CvVMpUdx.js";export{e as PromotableBreadcrumbList};

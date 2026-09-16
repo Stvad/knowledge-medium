@@ -1,1 +1,1 @@
-import{VT as e}from"../../chunks/app-Ci2F9fz9.js";export{e as LazyBlockComponent};
+import{VT as e}from"../../chunks/app-CvVMpUdx.js";export{e as LazyBlockComponent};
