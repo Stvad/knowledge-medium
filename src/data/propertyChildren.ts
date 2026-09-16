@@ -45,7 +45,6 @@ import {
   type AnyCodec,
   type AnyPropertySchema,
   type BlockData,
-  type PropertySchema,
   type Tx,
 } from '@/data/api'
 import {
@@ -486,12 +485,6 @@ export const encodedPropertyValueToChildContents = (
   }
   return contents
 }
-
-/** The same, from a typed value — `tx.setProperty`'s dual-write. */
-export const propertyValueToChildContents = <T>(
-  schema: PropertySchema<T>,
-  value: T,
-): string[] => encodedPropertyValueToChildContents(schema, schema.codec.encode(value))
 
 /**
  * Aggregate a field row's value children back into the property's encoded

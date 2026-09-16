@@ -93,7 +93,6 @@ import { keyAtStart } from '@/data/orderKey'
 import {
   isPropertyFieldInstance,
   propertyFieldContent,
-  propertyValueToChildContents,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 import { reconcileFieldValueChildren } from './propertyChildrenProcessor'
@@ -1420,7 +1419,6 @@ export class TxImpl implements Tx {
     schema: PropertySchema<T> & {readonly fieldId: string},
     value: T,
   ): Promise<void> {
-    const contents = propertyValueToChildContents(schema, value)
     const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
       SELECT_PROPERTY_FIELD_CHILD_SQL,
       [parent.workspaceId, parent.id, schema.fieldId],
@@ -1431,7 +1429,7 @@ export class TxImpl implements Tx {
       if (existing.content !== propertyFieldContent(schema.fieldId)) {
         await this.update(existing.id, {content: propertyFieldContent(schema.fieldId)})
       }
-      await reconcileFieldValueChildren(this, existing, schema, contents)
+      await reconcileFieldValueChildren(this, existing, schema, schema.codec.encode(value))
       return
     }
 
@@ -1449,7 +1447,8 @@ export class TxImpl implements Tx {
       content: propertyFieldContent(schema.fieldId),
     })
     await reconcileFieldValueChildren(
-      this, {id: fieldRowId, workspaceId: parent.workspaceId}, schema, contents,
+      this, {id: fieldRowId, workspaceId: parent.workspaceId}, schema,
+      schema.codec.encode(value),
     )
   }
 

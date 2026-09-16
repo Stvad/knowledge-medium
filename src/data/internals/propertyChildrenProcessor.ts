@@ -490,16 +490,13 @@ export const materializePropertyChildrenForExistingRow = async (
       }
     }
 
-    // One content per value child — one for a scalar, one per MEMBER for a
-    // multi-valued property (§5/§9).
-    const contents = encodedPropertyValueToChildContents(schema, encoded)
     const [primary, ...duplicates] = fieldRows
     if (primary) {
       const fieldContent = propertyFieldContent(schema.fieldId)
       if (primary.content !== fieldContent) {
         await tx.update(primary.id, {content: fieldContent})
       }
-      await reconcileFieldValueChildren(tx, primary, schema, contents)
+      await reconcileFieldValueChildren(tx, primary, schema, encoded)
     } else {
       const fieldRowId = await tx.create({
         workspaceId: row.workspaceId,
@@ -512,7 +509,7 @@ export const materializePropertyChildrenForExistingRow = async (
         content: propertyFieldContent(schema.fieldId),
       })
       await reconcileFieldValueChildren(
-        tx, {id: fieldRowId, workspaceId: row.workspaceId}, schema, contents,
+        tx, {id: fieldRowId, workspaceId: row.workspaceId}, schema, encoded,
       )
     }
 
@@ -603,13 +600,18 @@ export const reconcileFieldValueChildren = async (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   schema: AnyPropertySchema,
-  contents: readonly string[],
+  encoded: unknown,
 ): Promise<void> => {
+  // Takes the ENCODED VALUE, not the contents, so the grain cannot be decided
+  // by a caller: a scalar has exactly one content here by construction, which
+  // is what lets the single-value branch below take a `string` rather than a
+  // list it has to defend against being empty.
+  const contents = encodedPropertyValueToChildContents(schema, encoded)
   // §9 value set: bit-filtered, in `(order_key, id)` order — a nested marked
   // row under the field row is its own machinery, never a value candidate.
   const values = await fieldValueChildren(tx, fieldRow.id)
   if (memberCodecOf(schema.codec) === undefined) {
-    await reconcileSingleValueChild(tx, fieldRow, values, contents[0] ?? '')
+    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!)
     return
   }
   await reconcileMemberValueChildren(tx, fieldRow, values, contents)
