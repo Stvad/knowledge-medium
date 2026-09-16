@@ -85,54 +85,88 @@ describe('seed identity ledger', () => {
     )
     expect(divergences, SEED_LEDGER_RULE).toEqual([])
   })
+
+  // A self-consistency check on the ledger DATA, which the two tripwires above
+  // only catch while shipped and frozen agree: a key cannot be both live and
+  // retired, and listing it twice would make the refusal depend on iteration
+  // order.
+  it('retires no key that is still a live storage key, and retires none twice', () => {
+    const live = new Set([
+      ...FROZEN_PROPERTY_SEEDS.map(row => row[1]),
+      ...FROZEN_TYPE_SEEDS.map(row => row[1]),
+    ])
+    const retired = [...RETIRED_PROPERTY_NAMES, ...RETIRED_TYPE_IDS]
+    expect(retired.filter(key => live.has(key))).toEqual([])
+    expect(retired).toHaveLength(new Set(retired).size)
+  })
 })
 
 describe('diffSeedLedger', () => {
   const frozen = new Map([['k/property/a', ['a:name', 'string', 'string']]])
   const none = new Set<string>()
 
-  it('reports a renamed seed against the field that moved', () => {
+  it('reports a rename against the cells it strands, and where to retire the key', () => {
     expect(diffSeedLedger(
       'property', new Map([['k/property/a', ['a:renamed', 'string', 'string']]]), frozen, none,
-    )).toEqual(['k/property/a: name "a:name" -> "a:renamed"'])
+    )).toEqual([
+      'k/property/a: name "a:name" -> "a:renamed" — cells under "a:name" stop resolving ' +
+        'and read as unset; revert, or accept the loss and add "a:name" to RETIRED_PROPERTY_NAMES',
+    ])
   })
 
-  it('reports a re-encoded seed separately from a renamed one', () => {
-    expect(diffSeedLedger(
+  // The remedy that a single blanket instruction got wrong: with the key
+  // unchanged nothing is abandoned, so "discard" ships the very crash the
+  // ledger exists to prevent.
+  it('refuses to offer discard for an encoding change at an unchanged key', () => {
+    const divergences = diffSeedLedger(
       'property', new Map([['k/property/a', ['a:name', 'number', 'number']]]), frozen, none,
-    )).toEqual([
-      'k/property/a: codec "string" -> "number"',
-      'k/property/a: preset "string" -> "number"',
-    ])
+    )
+    expect(divergences).toHaveLength(2)
+    for (const line of divergences) {
+      expect(line).toContain('the key is UNCHANGED')
+      expect(line).toContain('rename as well')
+    }
+    expect(divergences[0]).toContain('codec "string" -> "number"')
+    expect(divergences[1]).toContain('preset "string" -> "number"')
+  })
+
+  it('treats an encoding change as carried when the same row also renames', () => {
+    const divergences = diffSeedLedger(
+      'property', new Map([['k/property/a', ['a:renamed', 'number', 'number']]]), frozen, none,
+    )
+    expect(divergences.filter(line => line.includes('the old data is abandoned'))).toHaveLength(2)
+    expect(divergences.some(line => line.includes('the key is UNCHANGED'))).toBe(false)
   })
 
   // The case `codec.type` alone cannot see: `optional-string` writes `null` for
   // unset and shares the `'string'` discriminator with its required twin, whose
   // decode throws on that null.
   it('reports an optional preset swapped for its required twin, which shares a codec type', () => {
-    expect(diffSeedLedger(
+    const divergences = diffSeedLedger(
       'property',
       new Map([['k/property/a', ['a:name', 'string', 'string']]]),
       new Map([['k/property/a', ['a:name', 'optional-string', 'string']]]),
       none,
-    )).toEqual(['k/property/a: preset "optional-string" -> "string"'])
+    )
+    expect(divergences).toHaveLength(1)
+    expect(divergences[0]).toContain('preset "optional-string" -> "string"')
   })
 
   it('reports a seed the ledger has never frozen, with the line to add', () => {
     expect(diffSeedLedger(
       'property', new Map([['k/property/b', ['b:name', 'boolean', 'boolean']]]), frozen, none,
-    )).toEqual([
-      'k/property/a: the ledger freezes it but nothing ships it — ' +
-        'values stored under "a:name" are still there',
-      'k/property/b: ships but the ledger does not freeze it — ' +
-        'add ["k/property/b", "b:name", "boolean", "boolean"]',
+    ).map(line => line.split(' — ')[1])).toEqual([
+      'cells under "a:name" stop resolving and read as unset; delete the row and ' +
+        'add "a:name" to RETIRED_PROPERTY_NAMES',
+      'add ["k/property/b", "b:name", "boolean", "boolean"]',
     ])
   })
 
   it('reports a removed seed, whose stored values outlive its declaration', () => {
     expect(diffSeedLedger('property', new Map(), frozen, none)).toEqual([
-      'k/property/a: the ledger freezes it but nothing ships it — ' +
-        'values stored under "a:name" are still there',
+      'k/property/a: the ledger freezes it but nothing ships it — cells under "a:name" ' +
+        'stop resolving and read as unset; delete the row and add "a:name" to ' +
+        'RETIRED_PROPERTY_NAMES',
     ])
   })
 
@@ -143,8 +177,20 @@ describe('diffSeedLedger', () => {
       new Map([['k/property/b', ['a:retired', 'string', 'string']]]),
       new Set(['a:retired']),
     )).toEqual([
-      'k/property/b: claims "a:retired", a retired key — values stored under it ' +
-        'are still there and would be adopted under new semantics',
+      'k/property/b: claims "a:retired", a retired storage key — the data under it is ' +
+        'still there and this seed would inherit it; pick a fresh key, or MIGRATE if ' +
+        'adopting it is the intent',
+    ])
+  })
+
+  // Same table, so a type-seed remedy cannot be left behind: its cost sentence
+  // and its retired list are the type ones, not the property ones.
+  it('names the type kind by its own field, cost and retired list', () => {
+    expect(diffSeedLedger(
+      'type', new Map([['k/type/a', ['renamed']]]), new Map([['k/type/a', ['original']]]), none,
+    )).toEqual([
+      'k/type/a: id "original" -> "renamed" — blocks tagged "original" silently lose the ' +
+        'type; revert, or accept the loss and add "original" to RETIRED_TYPE_IDS',
     ])
   })
 
@@ -154,16 +200,7 @@ describe('diffSeedLedger', () => {
       new Map([['k/type/b', ['gone']]]),
       new Map([['k/type/b', ['gone']]]),
       new Set(['gone']),
-    )).toEqual([
-      'k/type/b: claims "gone", a retired key — values stored under it ' +
-        'are still there and would be adopted under new semantics',
-    ])
-  })
-
-  it('names the type kind by its own frozen field', () => {
-    expect(diffSeedLedger(
-      'type', new Map([['k/type/a', ['renamed']]]), new Map([['k/type/a', ['original']]]), none,
-    )).toEqual(['k/type/a: id "original" -> "renamed"'])
+    ).map(line => line.split(' — ')[0])).toEqual(['k/type/b: claims "gone", a retired storage key'])
   })
 
   it('is silent when every shipped seed matches', () => {

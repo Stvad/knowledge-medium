@@ -195,39 +195,79 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
  * a seed is RENAMED off it — and neither deletes one cell or one type tag. Both
  * land here.
  *
- * Without this, the active ledger alone cannot tell a rename from a removal
- * plus an unrelated new seed, and a freed key is worse than merely forgotten: a
- * LATER seed, under any seedKey, may claim it and silently adopt the orphaned
- * values — resurrecting them under new semantics, or throwing on the first
- * decode under an incompatible codec. So a shipped seed claiming a key listed
- * here is a divergence, not a fresh start.
+ * Without this, the active ledger alone cannot tell a rename from a removal plus
+ * an unrelated new seed, and a freed key is worse than merely forgotten: a LATER
+ * seed, under any seedKey, may claim it and silently adopt the orphaned values —
+ * resurrected under new semantics, or thrown on at the first decode under an
+ * incompatible codec. So a shipped seed claiming a key listed here is a
+ * divergence, not a fresh start. Reclaiming one deliberately (you want the old
+ * values, under the old key) is the MIGRATE answer, not a line deletion.
  *
- * Reclaiming one deliberately (you want the old values, under the old key) is
- * the MIGRATE answer, not a line deletion.
+ * Note these are keyed by the STORAGE key, not by `seedKey` — which is why a
+ * name retired before seeds existed still belongs here. Its seedKey is
+ * irrelevant; the cells are keyed by the name.
+ *
+ * COMPLETENESS BOUND, so nobody reads the list as exhaustive: it was seeded from
+ * the keys a live workspace actually holds orphaned data under (`pnpm agent
+ * audit-properties`, plus a `types` scan) intersected with names git history
+ * shows were once shipped declarations. An older name that left no surviving row
+ * in that graph is not here. Add one when you find it.
  */
 
-/** Retired property names. Both lists are empty: `seedProperty` landed
- *  2026-07-12 and no seed has been renamed, re-typed or removed since. The
- *  pre-seed property renames (`focusedBlockId`, `backlinks:filter`,
- *  `video:playerView`) are out of scope — nothing declares their seedKeys. */
-export const RETIRED_PROPERTY_NAMES: readonly string[] = []
+/** Property names no shipped seed may claim. Each was a declaration once. */
+export const RETIRED_PROPERTY_NAMES: readonly string[] = [
+  // Renamed to `backlinks:predicates` when the filter shape changed from
+  // {includeIds, removeIds} to predicate arrays; values were not convertible
+  // and were discarded deliberately.
+  'backlinks:filter',
+  // Same change, the daily-note defaults half: renamed to
+  // `dailyNotes:backlinksPredicates`.
+  'dailyNotes:backlinksDefaults',
+  // Retired when focus moved to a rendered location (`focusedBlockLocation`):
+  // an unscoped block id could not say WHICH rendering held the cursor.
+  'focusedBlockId',
+  // Retired with the same render-scope migration.
+  'focusedVisualTargetKey',
+  // `extensionDisabledProp` — extension enablement moved to the overrides map.
+  'system:disabled',
+  // Retired when the pane view mode (`panelViewModeProp`) took over selecting
+  // the video-notes renderer; a per-block flag could not express it.
+  'video:playerView',
+]
 
-/** Retired type ids — a block still tagged with one keeps the tag forever. */
-export const RETIRED_TYPE_IDS: readonly string[] = []
+/** Type ids no shipped seed may claim — a block tagged with one keeps the tag
+ *  forever, so reusing an id silently re-types someone else's blocks. */
+export const RETIRED_TYPE_IDS: readonly string[] = [
+  // Per-block view selection replaced the prefs block.
+  'backlinks-view-prefs',
+  // Generalized into the user-applicable `map` type.
+  'panel:locations',
+  // `USER_PREFS_TYPE` — preferences moved onto per-plugin sub-blocks.
+  'user-prefs',
+]
 
 import {isPropertySeedDeclaration, type AnyPropertySeedDeclaration} from '@/data/propertySeeds'
 import type {TypeSeedDeclaration} from '@/data/typeSeeds'
 import {buildTypeDefinitionRegistry, harvestNestedPropertySeeds} from '@/data/typeDefinitionRegistry'
 
-/** What a ledger row is called, per kind, so one divergence formatter serves
- *  both. Adding a frozen column means adding it here and to the projection the
- *  caller feeds in — not a second copy of the comparison. */
-const FROZEN_FIELDS = {
-  property: ['name', 'preset', 'codec'],
-  type: ['id'],
+/** Everything that differs between the two kinds: the columns a row carries,
+ *  the retired list that governs its storage key, and what losing that key
+ *  actually costs a user. One table, so a remedy cannot be written for property
+ *  seeds and forgotten for type seeds. */
+const LEDGER_KINDS = {
+  property: {
+    fields: ['name', 'preset', 'codec'],
+    retiredList: 'RETIRED_PROPERTY_NAMES',
+    cost: (key: string) => `cells under ${key} stop resolving and read as unset`,
+  },
+  type: {
+    fields: ['id'],
+    retiredList: 'RETIRED_TYPE_IDS',
+    cost: (key: string) => `blocks tagged ${key} silently lose the type`,
+  },
 } as const
 
-export type SeedLedgerKind = keyof typeof FROZEN_FIELDS
+export type SeedLedgerKind = keyof typeof LEDGER_KINDS
 
 /**
  * The property seeds a build ships, composed the way `facetBridge`'s
@@ -287,19 +327,25 @@ export const indexBySeedKey = <T>(
 
 /**
  * Compare the seeds a build ships against the ledger, keyed by `seedKey`, and
- * describe every divergence in a line a reviewer can act on.
+ * describe every divergence as a line carrying its OWN remedy.
  *
  * Exact set equality in BOTH directions, because all three divergences are the
  * same hazard wearing different clothes: an unlisted seed is one whose spelling
- * nothing has frozen yet, a ledger row with no seed is data addressed by a name
+ * nothing has frozen yet, a ledger row with no seed is data addressed by a key
  * the build stopped declaring, and a changed field is the rename or encoding
  * change itself. Accepting either set difference silently would also reopen the
  * loophole the file exists to close — a rename spelled as one deletion plus one
- * addition.
+ * addition. `retiredKeys` closes what set equality cannot see: a storage key an
+ * earlier removal or rename freed, which a new seed would otherwise inherit
+ * along with its orphaned values.
  *
- * `retiredKeys` closes what set equality alone cannot see: a storage key that a
- * removal or an earlier rename freed, which a new seed under a different
- * seedKey would otherwise inherit along with its orphaned values.
+ * The remedy belongs on the LINE and not in one blanket instruction, because
+ * the four divergences do not share one. In particular an ENCODING change at an
+ * UNCHANGED name cannot be discarded at all: nothing is abandoned, the existing
+ * cells keep the old representation under the same key, and the new codec
+ * throws on them — the exact crash this file exists to prevent, reachable by
+ * following a "discard" instruction to the letter. Rename or migrate are its
+ * only answers. A blanket instruction said "discard" to it for one round.
  */
 export const diffSeedLedger = (
   kind: SeedLedgerKind,
@@ -307,61 +353,62 @@ export const diffSeedLedger = (
   frozen: ReadonlyMap<string, readonly string[]>,
   retiredKeys: ReadonlySet<string>,
 ): string[] => {
-  const fields = FROZEN_FIELDS[kind]
+  const {fields, retiredList, cost} = LEDGER_KINDS[kind]
   const divergences: string[] = []
+  const say = (seedKey: string, summary: string, remedy: string) =>
+    divergences.push(`${seedKey}: ${summary} — ${remedy}`)
   for (const [seedKey, shippedFields] of shipped) {
     // Column 0 is the storage key for both kinds, so this one check covers a
     // reclaimed property name and a reclaimed type id alike.
     const storageKey = shippedFields[0]!
     if (retiredKeys.has(storageKey)) {
-      divergences.push(
-        `${seedKey}: claims ${JSON.stringify(storageKey)}, a retired key — values ` +
-        'stored under it are still there and would be adopted under new semantics',
-      )
+      say(seedKey, `claims ${JSON.stringify(storageKey)}, a retired storage key`,
+        'the data under it is still there and this seed would inherit it; pick a ' +
+        'fresh key, or MIGRATE if adopting it is the intent')
     }
     const frozenFields = frozen.get(seedKey)
     if (!frozenFields) {
-      divergences.push(
-        `${seedKey}: ships but the ledger does not freeze it — add ` +
-        `[${[seedKey, ...shippedFields].map(v => JSON.stringify(v)).join(', ')}]`,
-      )
+      say(seedKey, 'ships but the ledger does not freeze it',
+        `add [${[seedKey, ...shippedFields].map(v => JSON.stringify(v)).join(', ')}]`)
       continue
     }
+    const renamed = frozenFields[0] !== shippedFields[0]
     fields.forEach((field, index) => {
       const was = frozenFields[index]
       const now = shippedFields[index]
-      if (was !== now) {
-        divergences.push(
-          `${seedKey}: ${field} ${JSON.stringify(was)} -> ${JSON.stringify(now)}`,
-        )
+      if (was === now) return
+      const summary = `${field} ${JSON.stringify(was)} -> ${JSON.stringify(now)}`
+      if (index === 0) {
+        say(seedKey, summary,
+          `${cost(JSON.stringify(was))}; revert, or accept the loss and add ` +
+          `${JSON.stringify(was)} to ${retiredList}`)
+        return
       }
+      say(seedKey, summary, renamed
+        // The rename on this same row already orphaned the old cells, so
+        // nothing reads them under the new encoding.
+        ? 'carried by the rename on this row — the old data is abandoned, not re-read'
+        : 'the key is UNCHANGED, so existing data keeps the old encoding and the new ' +
+          'codec throws on it; discard is not available here — rename as well ' +
+          `(retiring the old key into ${retiredList}), or MIGRATE`)
     })
   }
   for (const [seedKey, frozenFields] of frozen) {
     if (shipped.has(seedKey)) continue
-    divergences.push(
-      `${seedKey}: the ledger freezes it but nothing ships it — ` +
-      `values stored under ${JSON.stringify(frozenFields[0])} are still there`,
-    )
+    const storageKey = JSON.stringify(frozenFields[0])
+    say(seedKey, 'the ledger freezes it but nothing ships it',
+      `${cost(storageKey)}; delete the row and add ${storageKey} to ${retiredList}`)
   }
   return divergences.sort()
 }
 
-/** Printed with the failing assertion: the decision the divergence demands. */
+/** Printed with the failing assertion. Framing only — each divergence line
+ *  carries its own remedy, because they do not share one. */
 export const SEED_LEDGER_RULE = [
-  'A code-owned seed\'s name, preset, codec and type id are FROZEN: values',
-  'already stored under the old spelling/encoding do not move, and no migration',
-  'exists to move them (issue #797). Pick one and say which in the PR:',
-  '  1. REVERT — the spelling is a storage key that users\' data is addressed by,',
-  '     not a label. This is the usual answer.',
-  '  2. DISCARD — the stored values are worthless (UI state) or unconvertible',
-  '     (the shape itself changed). Update the ledger line, leave a comment above',
-  '     it saying so, and move any key you FREED — by renaming off it or by',
-  '     deleting its row — into RETIRED_PROPERTY_NAMES / RETIRED_TYPE_IDS. The',
-  '     cells and type tags under it do not go away, and the next seed to claim',
-  '     that key would inherit them.',
-  '  3. MIGRATE — the values must be carried across. Nothing does that today;',
-  '     it is a per-graph data migration that has to be built first.',
-  'Updating the ledger to make this test pass, with no note and no decision, is',
-  'the one move that silently loses data.',
+  'A code-owned seed\'s name, preset, codec and type id are FROZEN: user data is',
+  'stored UNDER them and no migration exists to move it (issue #797). Each line',
+  'above says what that particular change costs and what to do about it.',
+  'Reverting is usually the answer — a spelling here is a storage key that users\'',
+  'data is addressed by, not a label. Updating the ledger to make this test pass,',
+  'with no note and no decision, is the one move that silently loses data.',
 ].join('\n')
