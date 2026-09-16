@@ -155,9 +155,33 @@ export class UndoManager {
     return this.listenersFor(scope).add(listener)
   }
 
+  /** Invalidate replays already in flight WITHOUT dropping the stacks.
+   *
+   *  A pass must do this while it still holds the write lock: a queued replay
+   *  that acquires the lock first reads an unchanged epoch, passes, and writes
+   *  the pre-pass row back over what the pass just committed. Dropping the
+   *  stacks is the separate, after-commit half — an aborted transaction leaves
+   *  nothing to be reverted onto, and taking the user's history for it would be
+   *  a cost with no cause. */
+  invalidateReplays(): void {
+    this.clears += 1
+  }
+
+  /** Bumped by {@link clear} and {@link invalidateReplays}, and by nothing else
+   *  — deliberately not by an ordinary record or pop, so a caller asking "was
+   *  my entry invalidated" cannot read normal activity as invalidation. This
+   *  answers only "the history was DROPPED", which is the event that makes an
+   *  entry already taken off the stack unsafe to replay. */
+  get clearEpoch(): number {
+    return this.clears
+  }
+
+  private clears = 0
+
   /** Drop all stacks (for tests + an eventual "clear history" UX).
    *  Notifies subscribers on every scope that previously had state. */
   clear(): void {
+    this.clears += 1
     const touched = new Set<ChangeScope>([
       ...this.undoStacks.keys(),
       ...this.redoStacks.keys(),

@@ -20,7 +20,7 @@
  *     by checking ps_crud row count grew after the undo replay
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, ReadOnlyError } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
@@ -414,4 +414,166 @@ describe('undo replay uploads (source = user)', () => {
     // Undo must produce its own ps_crud row(s) so the inverse syncs.
     expect(afterUndo).toBeGreaterThan(afterEdit)
   })
+})
+
+/** A one-way pass (the props-as-blocks flip, a `WorkspaceBackfill`) drops the
+ *  workspace's history so its own writes cannot be reverted onto. These pin the
+ *  three orderings that a bare `clear()` after the pass's commit gets wrong —
+ *  each is driven with a raw `clear()` / `invalidateReplays()` standing in for
+ *  the pass, because what is under test is the Repo's side of the contract, not
+ *  any one pass.
+ *
+ *  All of this protects the tab that cleared, and only that tab. Another tab's
+ *  `UndoManager` is a different object holding its own stale entries; that is
+ *  issue #1007 and is not addressed here. */
+describe('undo against a pass that drops the history', () => {
+  const undoDepth = (repo: Repo): number =>
+    repo.undoManager.depths(ChangeScope.BlockDefault).undo
+
+  it('abandons a replay whose history was dropped while it was in flight', async () => {
+    // `undo()` takes the entry OFF its stack and then awaits the replay, so a
+    // pass clearing the history in that window cannot reach it — `clear()` only
+    // empties the manager. Left unchecked, the replay lands after the pass's
+    // commit and restores the pre-pass state of a row it has already recorded
+    // as done.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    // The write lock is HELD while the replay queues behind it, which is the
+    // ordering that matters: clearing before `_replay` is even called would
+    // also be caught by a check outside the transaction, and this is about the
+    // check being inside it.
+    let releaseLock: (() => void) | null = null
+    const holdingLock = repo.tx(
+      async () => { await new Promise<void>(resolve => { releaseLock = () => resolve() }) },
+      {scope: ChangeScope.BlockDefault},
+    )
+    await vi.waitFor(() => { expect(releaseLock).not.toBeNull() }, {timeout: 3000})
+
+    // `undo` pops synchronously and only then awaits the replay, so by the next
+    // line the entry is already off the stack and its transaction is queued.
+    const undoing = repo.undo(ChangeScope.BlockDefault)
+    repo.undoManager.clear()
+    releaseLock!()
+    await holdingLock
+
+    // False, not a throw: from the user's side the gesture had nothing valid
+    // to act on.
+    await expect(undoing).resolves.toBe(false)
+    // The row is untouched — the replay refused rather than writing back a
+    // snapshot the cleared history said was no longer safe to restore.
+    expect(await readContent(repo, 'a')).toBe('edited')
+  }, 20_000)
+
+  it('abandons a redo replay on the same terms', async () => {
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+    expect(await repo.undo()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('original')
+
+    let releaseLock: (() => void) | null = null
+    const holdingLock = repo.tx(
+      async () => { await new Promise<void>(resolve => { releaseLock = () => resolve() }) },
+      {scope: ChangeScope.BlockDefault},
+    )
+    await vi.waitFor(() => { expect(releaseLock).not.toBeNull() }, {timeout: 3000})
+
+    const redoing = repo.redo(ChangeScope.BlockDefault)
+    repo.undoManager.clear()
+    releaseLock!()
+    await holdingLock
+
+    await expect(redoing).resolves.toBe(false)
+    expect(await readContent(repo, 'a')).toBe('original')
+  }, 20_000)
+
+  it('refuses a replay a pass invalidated without dropping the stacks', async () => {
+    // `invalidateReplays` is the half a pass calls while it STILL HOLDS the
+    // write lock, before it knows whether its chunk will commit. The stacks
+    // survive — only a replay already in flight is refused — so this pins that
+    // the replay checks the epoch rather than the stack being empty.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    let releaseLock: (() => void) | null = null
+    const holdingLock = repo.tx(
+      async () => { await new Promise<void>(resolve => { releaseLock = () => resolve() }) },
+      {scope: ChangeScope.BlockDefault},
+    )
+    await vi.waitFor(() => { expect(releaseLock).not.toBeNull() }, {timeout: 3000})
+
+    const undoing = repo.undo(ChangeScope.BlockDefault)
+    repo.undoManager.invalidateReplays()
+    releaseLock!()
+    await holdingLock
+
+    await expect(undoing).resolves.toBe(false)
+    expect(await readContent(repo, 'a')).toBe('edited')
+  }, 20_000)
+
+  it('drops an entry whose transaction was recorded after a pass cleared', async () => {
+    // A user transaction can hold the write lock ahead of a pass's chunk,
+    // commit, release — and only reach its own recording continuation after
+    // that chunk has written and cleared. The clear cannot reach an entry that
+    // does not exist yet, and neither can `invalidateReplays`, so without the
+    // epoch check it lands on the stack holding the whole PRE-pass row and
+    // undoing it reverts the pass with its completion already recorded.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    expect(undoDepth(repo)).toBe(0)
+
+    // Stands in for the pass clearing between this transaction committing and
+    // its entry being recorded.
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited while a pass was running'})
+      repo.undoManager.clear()
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    // The write stands — only the history entry goes.
+    expect(await readContent(repo, 'a')).toBe('edited while a pass was running')
+    expect(undoDepth(repo)).toBe(0)
+  }, 20_000)
+
+  it('keeps the entry of an edit that was merely INVOKED while a pass held the lock', async () => {
+    // The reverse ordering of the test above, and the one a call-time sample
+    // gets wrong: this edit does not commit ahead of the pass, it only STARTS
+    // while the pass holds the lock, so it executes after that chunk commits
+    // and its `before` rows are the rewritten ones. Undoing it is safe, and
+    // discarding the entry would silently cost the user their own edit.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+
+    // Takes the lock and waits, so the edit below can be INVOKED while it is
+    // held — and bumps only after that, which is what makes a call-time sample
+    // and an in-lock one disagree.
+    let releaseHolder: (() => void) | null = null
+    const holding = repo.tx(async () => {
+      await new Promise<void>(resolve => { releaseHolder = () => resolve() })
+      repo.undoManager.invalidateReplays()
+    }, {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => { expect(releaseHolder).not.toBeNull() }, {timeout: 3000})
+
+    // Invoked here, so a call-time sample reads the PRE-bump epoch; it acquires
+    // the lock, and samples, only after the holder has bumped and released.
+    const edit = repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited after the pass'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+    releaseHolder!()
+    await holding
+    await edit
+
+    expect(await readContent(repo, 'a')).toBe('edited after the pass')
+    expect(undoDepth(repo)).toBe(1)
+    expect(await repo.undo()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('original')
+  }, 20_000)
 })
