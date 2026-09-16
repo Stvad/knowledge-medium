@@ -1,0 +1,1 @@
+import{am as e,im as t}from"../../../chunks/app-BiguiPf6.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};

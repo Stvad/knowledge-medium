@@ -1,0 +1,1 @@
+import{a2 as e,o2 as t,s2 as n}from"../../../chunks/app-BiguiPf6.js";export{e as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,n as systemAuthor};

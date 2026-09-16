@@ -1,0 +1,1 @@
+import{Jl as e,ql as t}from"../../../chunks/app-BiguiPf6.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};

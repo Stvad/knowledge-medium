@@ -1,0 +1,1 @@
+import{Uw as e,Ww as t}from"../../chunks/app-BiguiPf6.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

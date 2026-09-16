@@ -1,0 +1,1 @@
+import{MS as e,NS as t,PS as n,jS as r}from"../../../chunks/app-BiguiPf6.js";export{r as DEFAULT_QUICK_ACTION_ITEMS,e as SWIPE_RIGHT_BLOCK_ACTION_ID,t as isQuickActionItem,n as quickActionItemsFacet};

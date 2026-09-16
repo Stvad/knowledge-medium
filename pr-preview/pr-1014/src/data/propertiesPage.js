@@ -1,0 +1,1 @@
+import{S$ as e,x$ as t}from"../../chunks/app-BiguiPf6.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

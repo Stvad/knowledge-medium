@@ -1,0 +1,1 @@
+import{CA as e,SA as t}from"../../../chunks/app-BiguiPf6.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

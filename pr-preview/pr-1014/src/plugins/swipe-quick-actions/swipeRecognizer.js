@@ -1,0 +1,1 @@
+import{fS as e,mS as t,pS as n}from"../../../chunks/app-BiguiPf6.js";export{e as SWIPE_QUICK_ACTIONS_GESTURE_ID,n as SWIPE_TRIGGER_PX,t as swipeRecognizer};

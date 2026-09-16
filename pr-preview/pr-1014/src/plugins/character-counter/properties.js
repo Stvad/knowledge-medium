@@ -1,0 +1,1 @@
+import{GR as e,UR as t,WR as n}from"../../../chunks/app-BiguiPf6.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};

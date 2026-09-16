@@ -1,0 +1,1 @@
+import{Im as e,Jm as t,Xm as n,Ym as r,Zm as i}from"../../../chunks/app-BiguiPf6.js";export{r as EXTENSIONS_PAGE_TITLE,n as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,e as onboardingPlugin,t as seedTutorial};

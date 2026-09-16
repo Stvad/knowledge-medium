@@ -1,0 +1,1 @@
+import{dw as e,gt as t,uw as n}from"../../../chunks/app-BiguiPf6.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

@@ -1,0 +1,1 @@
+import{IE as e,LE as t}from"../../chunks/app-BiguiPf6.js";export{e as agree,t as pluralize};

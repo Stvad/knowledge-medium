@@ -1,0 +1,1 @@
+import{_j as e,vj as t}from"../../chunks/app-BiguiPf6.js";export{e as MOBILE_BREAKPOINT_QUERY,t as isMobileViewport};

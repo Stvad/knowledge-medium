@@ -1,0 +1,1 @@
+import{aM as e,iM as t}from"../../../chunks/app-BiguiPf6.js";export{t as isPropertyPanelHiddenProperty,e as isPropertyPanelReadOnlyProperty};

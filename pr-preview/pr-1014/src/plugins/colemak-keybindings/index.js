@@ -1,0 +1,1 @@
+import{dh as e,lh as t,uh as n}from"../../../chunks/app-BiguiPf6.js";export{t as COLEMAK_KEYBINDINGS_PLUGIN_ID,n as colemakKeybindingsPlugin,e as colemakMovementKeybindingOverrides};

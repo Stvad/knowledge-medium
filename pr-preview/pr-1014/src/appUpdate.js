@@ -1,0 +1,1 @@
+import{Fw as e,Pw as t}from"../chunks/app-BiguiPf6.js";export{t as appUpdate,e as useAppUpdateAvailable};

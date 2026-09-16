@@ -1,0 +1,1 @@
+import{Mw as e,Nw as t}from"../chunks/app-BiguiPf6.js";export{e as checkForAppUpdate,t as registerServiceWorker};

@@ -1,0 +1,1 @@
+import{Gp as e,Hp as t,Kp as n,Up as r,Vp as i,Wp as a,qp as o}from"../../../chunks/app-BiguiPf6.js";export{i as BINARY_ENVELOPE_MAGIC,t as BINARY_ENVELOPE_MIN_BYTES,r as BINARY_ENVELOPE_OVERHEAD_BYTES,a as BINARY_MAGIC_BYTES,e as decodeBinaryEnvelope,n as encodeBinaryEnvelope,o as hasBinaryEnvelopeMagic};

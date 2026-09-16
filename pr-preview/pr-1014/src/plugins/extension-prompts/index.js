@@ -1,0 +1,1 @@
+import{iw as e,rw as t}from"../../../chunks/app-BiguiPf6.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

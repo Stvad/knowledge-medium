@@ -1,0 +1,1 @@
+import{Al as e,Fl as t,Il as n,Ml as r,Nl as i,Pl as a,jl as o,kl as s}from"../../../chunks/app-BiguiPf6.js";export{s as PROVE_DISTINCT_VALUE_LIMIT,e as applyPropertyDefinitionSynthesis,o as flipBlockedBySynthesis,r as keyCannotBeDefined,i as planPropertyDefinitionSynthesis,a as provePresetId,t as resolveSynthesisNamespace,n as synthesizedPropertyDefinitionBlockId};

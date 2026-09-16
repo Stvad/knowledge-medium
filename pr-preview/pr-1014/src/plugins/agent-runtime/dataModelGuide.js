@@ -1,0 +1,1 @@
+import{tu as e}from"../../../chunks/app-BiguiPf6.js";export{e as DATA_MODEL_GUIDE};

@@ -1,0 +1,1 @@
+import{DB as e,OB as t,kB as n}from"../../chunks/app-BiguiPf6.js";export{e as SYNCED_TABLES,t as syncedWriteTarget,n as writeTargets};

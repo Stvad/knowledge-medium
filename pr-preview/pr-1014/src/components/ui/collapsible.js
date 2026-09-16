@@ -1,0 +1,1 @@
+"use client";import{Gk as e,Kk as t,qk as n}from"../../../chunks/app-BiguiPf6.js";export{e as Collapsible,t as CollapsibleContent,n as CollapsibleTrigger};

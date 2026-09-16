@@ -1,0 +1,1 @@
+import{NC as e,PC as t}from"../../chunks/app-BiguiPf6.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

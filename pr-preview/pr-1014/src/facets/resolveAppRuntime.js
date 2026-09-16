@@ -1,0 +1,1 @@
+import{dT as e,uT as t}from"../../chunks/app-BiguiPf6.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};
