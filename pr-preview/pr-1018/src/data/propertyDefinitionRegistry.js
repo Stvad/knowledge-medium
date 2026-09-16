@@ -1,1 +1,1 @@
-import{AH as e,MH as t,NH as n,PH as r,jH as i}from"../../chunks/app-CK0Ocuwe.js";export{e as buildPropertyDefinitionRegistry,i as buildUnboundPropertySchemas,t as effectivePropertyDefinitionName,n as resolveDefinitionSource,r as resolveEditorOverride};
+import{Gq as e,Hq as t,Kq as n,Uq as r,Vq as i,Wq as a}from"../../chunks/app-mvlkLjhc.js";export{i as buildPropertyDefinitionRegistry,t as buildUnboundPropertySchemas,r as effectivePropertyDefinitionName,a as propertyDefinitionClaimantsForName,e as resolveDefinitionSource,n as resolveEditorOverride};

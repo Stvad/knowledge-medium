@@ -1,1 +1,1 @@
-import{Qx as e}from"../../../chunks/app-CK0Ocuwe.js";export{e as CommandPaletteHeaderItem};
+import{Qx as e}from"../../../chunks/app-mvlkLjhc.js";export{e as CommandPaletteHeaderItem};

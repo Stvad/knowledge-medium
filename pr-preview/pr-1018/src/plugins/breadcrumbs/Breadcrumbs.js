@@ -1,1 +1,1 @@
-import{jg as e}from"../../../chunks/app-CK0Ocuwe.js";export{e as Breadcrumbs};
+import{jg as e}from"../../../chunks/app-mvlkLjhc.js";export{e as Breadcrumbs};

@@ -1,1 +1,1 @@
-import{Qz as e}from"../../../chunks/app-CK0Ocuwe.js";export{e as aliasDataExtension};
+import{Qz as e}from"../../../chunks/app-mvlkLjhc.js";export{e as aliasDataExtension};
