@@ -72,9 +72,8 @@ import type { RoamMemoImportPlanSummary } from './roamMemo'
 import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
-  normalizeListPropertyValues,
+  fitPlannedPropertyValues,
   normalizeRefPropertyValues,
-  normalizeStringPropertyValues,
 } from './schemaReconciliation'
 
 type AliasIdMap = ReadonlyMap<string, string>
@@ -115,8 +114,6 @@ const TAG_TO_TYPE: Readonly<Record<RoamTodoState, RoamTypeMapping>> = {
 }
 
 const ROAM_SOURCE_PREFIXES = ['roam:']
-const isRoamSourceField = (name: string): boolean =>
-  ROAM_SOURCE_PREFIXES.some(prefix => name.startsWith(prefix))
 const PAGE_SOURCE_FIELDS = [aliasesProp.name, typesProp.name]
 
 interface PageReconciliation {
@@ -288,30 +285,6 @@ export const importRoam = async (
     log(`Registered ${reconciliation.toRegister.length} property schemas (${sinceLastPhase()})`)
   }
 
-  // String-schema normalization. Mixed scalar/list Roam attributes can
-  // legitimately fall back to the string preset; convert the list/object
-  // cases to JSON text so the resulting stored shape matches the schema.
-  const stringPropertyNames = new Set<string>()
-  for (const r of reconciliation.toRegister) {
-    if (r.presetId === 'string' && isRoamSourceField(r.name)) stringPropertyNames.add(r.name)
-  }
-  for (const [name, schema] of repo.propertySchemas) {
-    if (schema.codec.type === 'string' && isRoamSourceField(name)) stringPropertyNames.add(name)
-  }
-  normalizeStringPropertyValues(allPlannedBlocks, stringPropertyNames)
-
-  // List-schema normalization. Mixed scalar/list Roam attributes now
-  // classify as list properties; wrap scalar occurrences so the stored
-  // shape consistently matches the registered list codec.
-  const listPropertyNames = new Set<string>()
-  for (const r of reconciliation.toRegister) {
-    if (r.presetId === 'list' && isRoamSourceField(r.name)) listPropertyNames.add(r.name)
-  }
-  for (const [name, schema] of repo.propertySchemas) {
-    if (schema.codec.type === 'list' && isRoamSourceField(name)) listPropertyNames.add(name)
-  }
-  normalizeListPropertyValues(allPlannedBlocks, listPropertyNames)
-
   // §8.7 ref-token-→-id normalization. For every property classified
   // as refList here AND for any pre-existing ref/refList schema the
   // dump's values land on, walk planned blocks and replace `[[X]]`
@@ -338,6 +311,19 @@ export const importRoam = async (
       plan.diagnostics,
     )
   }
+  // Before reference projection, so the value a backlink is projected from is
+  // the same one that will be written.
+  //
+  // Logged as well as collected: `plan.diagnostics` only reaches the caller
+  // through the summary this function RETURNS, and the write transactions below
+  // are not wrapped — post-flip a value this pass reported is exactly what
+  // aborts one of them, so the summary never arrives and the note explaining
+  // the abort would go with it.
+  const unstorable: string[] = []
+  fitPlannedPropertyValues(allPlannedBlocks, repo, unstorable)
+  for (const note of unstorable) log(note)
+  plan.diagnostics.push(...unstorable)
+
   for (const block of allPlannedBlocks) {
     // Planner site: no separate prior row, so after === before === block.
     block.references = referencesWithProjectedProperties(

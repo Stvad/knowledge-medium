@@ -68,9 +68,16 @@ export {
 // `PromotionOptions.acceptKey` + `isRegistrablePropertyName`. What it does
 // mutate is values, normalizing them to match the codec it registered — so
 // pass the blocks you are about to write, not copies.
+//
+// The same shape one level down, for the same reason: a key whose definition
+// already exists and is NARROWER than the text (a `number` meeting "many")
+// cannot be reshaped to fit, and post-flip that write is rejected outright.
+// Decline those upstream too, via `PromotionOptions.acceptValue` +
+// `promotedValueAcceptorFor` (#594).
 export {
   ensurePromotedPropertySchemas,
   isRegistrablePropertyName,
+  promotedValueAcceptorFor,
   type PromotedPropertyBag,
 } from './schemaReconciliation'
 export {
