@@ -1,1 +1,1 @@
-import{XZ as e,ZZ as t}from"../../chunks/app-Ab9rXYlc.js";export{e as getOrCreateMigrationsPage,t as migrationsPageBlockId};
+import{XZ as e,ZZ as t}from"../../chunks/app-CfQqL4E4.js";export{e as getOrCreateMigrationsPage,t as migrationsPageBlockId};
