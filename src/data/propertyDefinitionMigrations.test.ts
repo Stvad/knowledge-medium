@@ -1857,6 +1857,67 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
   }, 30_000)
 
+  it('re-detects drift dropped while the device was a viewer, when write access returns', async () => {
+    // A promotion arrives from the server without a workspace switch, so no
+    // prime follows it — the session would otherwise run the new codec against
+    // old-encoded rows until a reload.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await awaitRegistryCodec(repo, 'string')
+    await repo.awaitPropertyDefinitionBaselines()
+
+    repo.setReadOnly(true)
+    await changeWhileInactive(repo, statusNumber)
+    // Dropped, and the baseline kept the old codec so it stays visible.
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+
+    repo.setReadOnly(false)
+
+    await vi.waitFor(async () => {
+      expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
+    }, {timeout: 8000})
+    expect(await cell('p')).toEqual({status: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
+  }, 20_000)
+
+  it('re-detects a definition whose codec drifted while it was SHADOWED', async () => {
+    // While shadowed the field cannot be migrated, so the drift has to stay in
+    // the baseline. The rebuild that un-shadows it is neither a codec change
+    // nor an undefined-to-defined codec transition, so nothing else looks.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await awaitRegistryCodec(repo, 'string')
+    await repo.awaitPropertyDefinitionBaselines()
+
+    // The elder definition takes `status`, shadowing this one, and the codec
+    // changes underneath it in the same rebuild.
+    publishPair(repo, statusNumber, statusString)
+    await vi.waitFor(() => {
+      expect(repo.propertySchemaResolverFor(WS).resolveField(FIELD_ID).status)
+        .not.toBe('resolved')
+    }, {timeout: 5000})
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+    // Only this field's entry: the pair's other definition is folded in too.
+    expect((await baselineCodecs())[FIELD_ID]).toBe('string')
+
+    // The shadow is lifted; the field becomes usable at its new codec.
+    publishPair(repo, statusNumber, otherString)
+    await vi.waitFor(() => {
+      expect(repo.propertySchemaResolverFor(WS).resolveField(FIELD_ID).status)
+        .toBe('resolved')
+    }, {timeout: 5000})
+
+    await vi.waitFor(async () => {
+      expect(await rowContent(valueRowId)).toBe('42')
+    }, {timeout: 8000})
+    expect((await baselineCodecs())[FIELD_ID]).toBe('number')
+  }, 20_000)
+
   it('watermarks the undo stack at SCHEDULING, not when the deferred job runs', async () => {
     // The deferral is deep idle — tens of seconds — and an edit inside it can
     // canonicalize a candidate under the new codec while leaving an entry
@@ -1997,6 +2058,38 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
 
     // The second refusal found a re-detect already waiting and added nothing.
     expect(parks).toBe(1)
+  }, 20_000)
+
+  it('aborts when write access is revoked while the gap probe awaits', async () => {
+    // The commit pipeline gates on the role when the TRANSACTION starts. This
+    // runs inside it, after an awaited probe, so a revocation landing in
+    // between has already passed that gate — and the pass would upload source
+    // rows as a viewer.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    publishDefinition(repo, statusNumber)
+    await awaitRegistryCodec(repo, 'number')
+    const snapshot = rebuildSnapshot(repo)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const gap = vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => {
+      repo.setReadOnly(true)
+      return null
+    })
+
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], snapshot,
+    )
+
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.flat().join(' ')).toContain('lost write access')
+    }, {timeout: 5000})
+    warn.mockRestore()
+    gap.mockRestore()
+    repo.setReadOnly(false)
+
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
   }, 20_000)
 
   it('re-checks the workspace after the gap probe awaits', async () => {

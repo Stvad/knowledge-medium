@@ -892,6 +892,9 @@ export class Repo {
    *  and they all fire before any of their passes records — so they re-detect
    *  against the same old baseline and each enqueue a full-workspace pass. */
   private readonly pendingDriftRedetects = new Set<string>()
+  /** Per workspace, the fieldIds whose definition the resolver could serve on
+   *  the previous rebuild — the before-state for "became usable". */
+  private readonly usablePropertyDefinitions = new Map<string, ReadonlySet<string>>()
   /** In-flight property-seed materialization passes (§4.3 of the schema-
    *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
    *  siblings the pass is create/restore-only + idempotent rather than
@@ -1810,6 +1813,14 @@ export class Repo {
     if (this.isReadOnly === value) return
     this.isReadOnly = value
     this.readOnlyListeners.notify()
+    // A codec rebuild that landed while this device was a viewer dropped its
+    // migration, and the baseline deliberately kept the old codec so it stays
+    // visible. Nothing else would look again: a promotion arrives from the
+    // server without a workspace switch, so no prime follows it, and the
+    // session would run the new codec against old-encoded rows until a reload.
+    if (!value && this._client.activeWorkspaceId !== null) {
+      this.redetectPropertyDefinitionDrift(this._client.activeWorkspaceId)
+    }
   }
 
   /** Fires when `isReadOnly` changes. A role change arrives from the server and
@@ -3482,6 +3493,16 @@ export class Repo {
         // that re-arms itself reads this rather than re-deriving the gap.
       ), {kind: Repo.TRANSIENT, clearsWhenSyncSettles: gap.transient})
     }
+    // The ROLE, re-sampled here for the same reason. The commit pipeline gates
+    // on `isReadOnly` when the transaction STARTS; this runs inside it, after
+    // an awaited probe, so a revocation that lands in between has already
+    // passed that gate and the pass would upload source rows as a viewer.
+    if (this.isReadOnly) {
+      throw Object.assign(new Error(
+        `${label} aborted: this device lost write access to workspace ${workspaceId} `
+        + 'while the pass was running.',
+      ), {kind: Repo.TRANSIENT})
+    }
     // AFTER the probe, not before it, and there is deliberately only the one:
     // the probe AWAITS, `setActiveWorkspaceId` is a synchronous field write
     // that a switch lands cleanly in that window, and a check placed before it
@@ -4455,10 +4476,29 @@ export class Repo {
     // Defence in depth — the bridge only calls this with a built registry's own
     // workspaceId, which is never empty.
     if (!workspaceId) return
+    // USABLE definitions only, decided by the resolver rather than by whether
+    // the registry happens to hold a schema. `schemasByFieldId` keeps one for a
+    // SHADOWED definition, so folding its codec in would record a before-state
+    // for a field this device cannot migrate — and then, when the definition
+    // that shadowed it is renamed away, nothing would read as changed and the
+    // drift would be gone from the only place that remembered it.
+    const resolver = this.propertySchemaResolverFor(workspaceId)
+    const usable = new Set<string>()
     const codecTypes = new Map<string, string>()
     for (const [fieldId, fact] of facts) {
+      if (resolver.resolveField(fieldId).status !== 'resolved') continue
+      usable.add(fieldId)
       if (fact.codecType !== undefined) codecTypes.set(fieldId, fact.codecType)
     }
+    // Becoming usable is the other half of that: a definition that is no longer
+    // shadowed has a recorded codec it never got to migrate from, and the
+    // rebuild that un-shadows it is neither a codec change nor an
+    // undefined-to-defined codec transition, so nothing else would look.
+    const previouslyUsable = this.usablePropertyDefinitions.get(workspaceId)
+    this.usablePropertyDefinitions.set(workspaceId, usable)
+    const becameUsable = previouslyUsable === undefined
+      ? new Set<string>()
+      : new Set([...usable].filter(fieldId => !previouslyUsable.has(fieldId)))
     // Deliberately NOT read-only-gated: `App` pins the workspace before
     // resolving the role, so gating would make that pin record nothing — and no
     // later build is a prime, so the session ends blind. Recording is a local
@@ -4471,9 +4511,9 @@ export class Repo {
     // read below awaits, and an A -> B -> A switch across that await restores
     // the workspace id while moving the generation, so a generation taken
     // there would certify THIS visit for plans belonging to the previous one.
-    const diffing = detectChanges || newlyResolvedCodecs.size > 0
+    const diffing = detectChanges || newlyResolvedCodecs.size > 0 || becameUsable.size > 0
     const captured: PropertyDefinitionRebuildSnapshot | null = diffing
-      ? {resolver: this.propertySchemaResolverFor(workspaceId), generation: this.workspaceGeneration}
+      ? {resolver, generation: this.workspaceGeneration}
       : null
     this.propertyDefinitionBaselineWork = this.propertyDefinitionBaselineWork
       .then(async () => {
@@ -4496,7 +4536,8 @@ export class Repo {
           // undefined-to-defined as no change, and the durable baseline is the
           // only thing that still knows what that codec used to be. Everything
           // else on a non-prime build was already the in-memory diff's to see.
-          if (!detectChanges && !newlyResolvedCodecs.has(fieldId)) continue
+          if (!detectChanges && !newlyResolvedCodecs.has(fieldId)
+            && !becameUsable.has(fieldId)) continue
           const knownType = previous.get(fieldId)
           if (knownType === undefined || knownType === codecType) continue
           const name = facts.get(fieldId)?.name
