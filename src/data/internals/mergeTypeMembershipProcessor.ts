@@ -24,13 +24,13 @@ import {
   CORE_BLOCK_MERGED_EVENT,
   defineSameTxProcessor,
   type AnySameTxProcessor,
-  type BlockData,
   type CoreBlockMergedEvent,
   type SameTxCtx,
   type SameTxTypeOwnership,
 } from '@/data/api'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { setBlockTypesInProperties, typesProp } from '@/data/properties'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { typeMembershipTokenFor } from '@/data/typeDefinitionMetadata'
 
 export const RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME =
@@ -110,26 +110,9 @@ const resolveTerminalDestination = async (
   return null
 }
 
-/** A row's `types` tokens when the cell is well-formed, else `null` — "says
- *  nothing", which is not "says no tokens".
- *
- *  The obvious tolerant decode gets one half wrong. It must not THROW
- *  (`getBlockTypes` does, so a malformed synced cell would roll back the merge)
- *  and must not ACCEPT (reading the scalar `types: "block-type"` as a one-element
- *  list would let a malformed ordinary block pass the ownership gate, which the
- *  codec and registry both refuse). */
-const wellFormedTypeTokens = (row: BlockData): readonly string[] | null => {
-  const raw = row.properties[typesProp.name]
-  if (raw === undefined) return []
-  if (!Array.isArray(raw)) return null
-  return raw.every((el): el is string => typeof el === 'string')
-    ? (raw as readonly string[])
-    : null
-}
-
 /** `unchanged` — this cell doesn't name the merged-away type; `rewritten` —
- *  `value` is the new raw cell; `undecodable` — the cell names it but its shape
- *  makes an in-tx retarget impossible (see `rewriteTypeToken`). */
+ *  `value` is the new raw cell; `undecodable` — the cell names it in a shape
+ *  this deliberately does not rewrite (see `rewriteTypeToken`). */
 type TypeCellRewrite =
   | {outcome: 'unchanged'}
   | {outcome: 'rewritten'; value: readonly string[]}
@@ -139,11 +122,12 @@ type TypeCellRewrite =
  *  `rewriteRefValue` does for ref cells), so a malformed cell is recognized
  *  rather than throwing a `CodecError` that would roll back the merge.
  *
- *  A malformed cell is left untouched because it CANNOT be retargeted in this
- *  tx: any write dirties the row for typeify's `rerunOnDirtyRows` pass, which
- *  decodes the BEFORE snapshot — still malformed — and throws. Such cells reach
- *  here from sync-applied rows, which bypass the same-tx pass while the
- *  `block_types` triggers still index them.
+ *  A malformed cell is left untouched by CHOICE, not because a write would
+ *  abort (typeify reads both snapshots tolerantly now): the shape is not a
+ *  membership the codec or the registry accepts, so rewriting it in-tx would
+ *  mint one the rest of the system still refuses. Repair belongs to the audit
+ *  query, out of tx. Such cells reach here from sync-applied rows, which bypass
+ *  the same-tx pass while the `block_types` triggers still index them.
  *
  *  No `projectedIdOf` trim: membership tokens are compared verbatim everywhere,
  *  so `' x'` and `'x'` are different tokens and trimming would retarget one that
@@ -251,8 +235,10 @@ const retargetTypeMembership = async (
   // defined it. Retargeting then moves members off a definition that still
   // exists. An effective merge is one whose source is tombstoned.
   if (from === null || !from.deleted) return
-  const fromTokens = wellFormedTypeTokens(from)
-  if (fromTokens === null || !fromTokens.includes(BLOCK_TYPE_TYPE)) return
+  // Tolerant on purpose, and fail-closed: a cell the codec refuses (the scalar
+  // `types: "block-type"` a sync-applied row can carry) must neither throw out
+  // of the merge nor read as a type the registry would refuse.
+  if (!safeDecodeRowProperty(from, typesProp).includes(BLOCK_TYPE_TYPE)) return
   // …and the tag alone is not ownership; see `tokenOwnedByOther`.
   if (tokenOwnedByOther(ownership, event.fromId, from.id)) return
 
@@ -277,7 +263,8 @@ const retargetTypeMembership = async (
       console.warn(
         `[${RETARGET_MERGED_TYPE_MEMBERSHIP_PROCESSOR_NAME}] block ${id} still tags the ` +
         `merged-away type ${event.fromId}, but its "types" cell is not a string list; ` +
-        'left as-is — retargeting it would abort the merge (see rewriteTypeToken)',
+        'left as-is — the shape is not a membership the codec or registry accepts ' +
+        '(see rewriteTypeToken)',
       )
       continue
     }

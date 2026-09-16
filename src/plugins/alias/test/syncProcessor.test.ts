@@ -132,6 +132,24 @@ describe('alias.sync — Case A3 (drift heal)', () => {
   })
 })
 
+describe('alias.sync — rule 1 needs an entry that is still there', () => {
+  // Rule 1 REPLACES an entry, so it must be in both bags. Dropping the old
+  // name in the same tx that renames the content is A3's shape, not A1's — the
+  // heal below adds the new content rather than the rename silently doing
+  // nothing. (Keyed on the tx-start bag alone, this case wrote nothing.)
+  it('heals additively when the tx itself removed the old entry', async () => {
+    await createTarget('t', 'Old', ['Old', 'Other'])
+    await env.repo.tx(async tx => {
+      await tx.update('t', {content: 'New'})
+      await tx.setProperty('t', aliasesProp, ['Other'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('New')
+    expect(await readAliases('t')).toEqual(['Other', 'New'])
+  })
+})
+
 describe('alias.sync — Case AR1 (alias rename, content matches removed alias)', () => {
   it('rewrites content to the added alias', async () => {
     await createTarget('t', 'Foo', ['Foo'])

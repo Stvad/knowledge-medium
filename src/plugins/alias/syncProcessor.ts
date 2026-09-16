@@ -44,7 +44,6 @@
  */
 
 import {
-  ProcessorRejection,
   defineSameTxProcessor,
   type AnySameTxProcessor,
   type BlockData,
@@ -57,6 +56,7 @@ import {
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import { aliasesProp, getAliases } from '@/data/properties'
+import { assertAliasClaimable } from '@/data/aliasClaim'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 
@@ -114,9 +114,18 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
     // `""` alias entry.
     if (after.content === '') return null
 
-    if (afterAliases.includes(before.content)) {
+    if (beforeAliases.includes(before.content) && afterAliases.includes(before.content)) {
       // Rule 1 (A1, A2): replace old content's alias entry with new
       // content; dedupe.
+      //
+      // Present in BOTH bags. Tx-start, because an entry that only appeared
+      // DURING this tx was not a name this rename is retiring, and
+      // `references.renameBacklinks` — which diffs the tx-start bag — cannot
+      // see it go; retiring one anyway releases a name whose inbound spans
+      // nothing will rewrite (the kernel repairing a malformed cell is how
+      // that happens in practice). And current, because there has to be an
+      // entry left to replace: one the tx itself removed falls through to the
+      // additive heal below, which is the answer A3 already gives.
       const replaced = dedupe(
         afterAliases.map(a => (a === before.content ? after.content : a)),
       )
@@ -171,21 +180,13 @@ const assertNoAliasCollision = async (
 ): Promise<void> => {
   if (plan.aliasesNext === null) return
   for (const alias of plan.aliasesNext) {
-    const claimant = await ctx.tx.aliasLookup(alias, plan.workspaceId)
-    if (claimant === null || claimant.id === plan.id) continue
-    throw new ProcessorRejection(
-      `Alias "${alias}" is already used by another block`,
-      'alias.collision',
-      {
-        alias,
-        conflictingBlockId: claimant.id,
-        conflictingBlockTitle: claimant.content.slice(0, 80),
-        workspaceId: plan.workspaceId,
-        attemptedOn: plan.id,
-        dropSourceAliases: [...plan.dropSourceAliasesOnCollision],
-        collisionOrigin: 'content-rename',
-      },
-    )
+    await assertAliasClaimable(ctx.tx, {
+      alias,
+      blockId: plan.id,
+      workspaceId: plan.workspaceId,
+      dropSourceAliases: plan.dropSourceAliasesOnCollision,
+      collisionOrigin: 'content-rename',
+    })
   }
 }
 
