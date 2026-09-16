@@ -1,1 +1,1 @@
-import{BJ as e,zJ as t}from"../../chunks/app-Cc-SpOMu.js";export{t as parsePropertyDefinitionMetadata,e as propertySchemaOriginForSeedKey};
+import{BJ as e,zJ as t}from"../../chunks/app-COEcHlwS.js";export{t as parsePropertyDefinitionMetadata,e as propertySchemaOriginForSeedKey};
