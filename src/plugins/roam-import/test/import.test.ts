@@ -230,6 +230,50 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(page?.updated_at).toBeGreaterThan(1_600_000_000_000)
   })
 
+  it('reports a value a pre-existing definition cannot hold, and keeps it', async () => {
+    // Promotion invents keys from block text, so a key can meet a definition
+    // that predates the import and is narrower than the text. Removing the
+    // value is not available here: `propertiesFromRoam` lifts raw Roam props
+    // into the bag with no bullet behind them, so the pass reports instead.
+    await env.repo.userSchemas.addSchema({name: 'roam:count', presetId: 'number'})
+
+    const summary = await importRoam([{
+      title: 'counts',
+      uid: 'countsPage',
+      children: [{string: 'count:: many', uid: 'countsBlock'}],
+    }], env.repo, {workspaceId: WORKSPACE, currentUserId: USER_ID})
+
+    const notes = summary.diagnostics.join(' ')
+    expect(notes).toContain('roam:count')
+    expect(notes).toContain(roamBlockId(WORKSPACE, 'countsPage'))
+    // Reported, not removed — the page still carries the value it cannot store.
+    const page = await readBlock(roamBlockId(WORKSPACE, 'countsPage'))
+    const props = JSON.parse(page!.properties_json) as Record<string, unknown>
+    expect(props['roam:count']).toBe('many')
+  })
+
+  it('asks AFTER ref tokens are resolved, so a resolvable alias is not reported', async () => {
+    // What pins the pass's POSITION. A `[[Some Target]]` token cannot be
+    // rendered as `((id))` while it is still a token — it has a space in it —
+    // so a pass that ran before `normalizeRefPropertyValues` would report this
+    // as unstorable, when in fact it is about to become a resolved id.
+    await env.repo.userSchemas.addSchema({name: 'roam:target', presetId: 'ref'})
+
+    const summary = await importRoam([
+      {title: 'Some Target', uid: 'targetPage'},
+      {
+        title: 'pointer',
+        uid: 'pointerPage',
+        children: [{string: 'target:: [[Some Target]]', uid: 'pointerBlock'}],
+      },
+    ], env.repo, {workspaceId: WORKSPACE, currentUserId: USER_ID})
+
+    expect(summary.diagnostics.join(' ')).not.toContain('roam:target')
+    const page = await readBlock(roamBlockId(WORKSPACE, 'pointerPage'))
+    const props = JSON.parse(page!.properties_json) as Record<string, unknown>
+    expect(props['roam:target']).toBe(roamBlockId(WORKSPACE, 'targetPage'))
+  })
+
   it('preserves Roam source-only fields as namespaced properties', async () => {
     const sourceFieldExport: RoamExport = [{
       title: 'source fields',

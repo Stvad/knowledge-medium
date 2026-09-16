@@ -578,7 +578,14 @@ const toRoamBlock = (block: BlockDef, path: number[]): any => ({
 
 interface PromotionWalk {
   options: PromotionOptions
+  /** Uids whose own text was hoisted — their bullets are subtracted. */
   bubbled: Set<string>
+  /** Every uid the walk has already decided about, bubbled or declined. This
+   *  is what deeper passes are given, NOT `bubbled`: a declined bullet that
+   *  stayed eligible would be re-judged one level down against fewer of its
+   *  key's values, accepted there, and hoisted onto a parent this level is
+   *  already dropping. */
+  settled: Set<string>
   diagnostics: string[]
 }
 
@@ -588,11 +595,15 @@ const withPromotedMatrixProperties = (blocks: BlockDef[], walk: PromotionWalk, p
     const children = Array.isArray(block.children) ? block.children : []
     const promotion = computePromotedFromChildren(
       children.map((child, childIndex) => toRoamBlock(child, [...blockPath, childIndex])),
-      walk.bubbled,
+      walk.settled,
       walk.options,
     )
 
-    for (const uid of promotion.bubbled) walk.bubbled.add(uid)
+    for (const uid of promotion.bubbled) {
+      walk.bubbled.add(uid)
+      walk.settled.add(uid)
+    }
+    for (const uid of promotion.declined) walk.settled.add(uid)
     walk.diagnostics.push(...promotion.diagnostics)
 
     const promotedChildren = withPromotedMatrixProperties(children, walk, blockPath)
@@ -606,9 +617,15 @@ const withPromotedMatrixProperties = (blocks: BlockDef[], walk: PromotionWalk, p
     // its parent's props AND whose whole subtree was consumed — the value lives
     // on as the derived prop. The anchor (root) is never bubbled, so it always
     // survives; a consumed attr that still has non-attr children is kept so they
-    // aren't orphaned. (Diverges from the Roam importer, which preserves attr
-    // blocks for fidelity; chat ingest wants the literal bullet gone.)
-    if (walk.bubbled.has(blockPathUid(blockPath)) && !next.children) return []
+    // aren't orphaned, which is also what keeps a DECLINED bullet nested under a
+    // bubbled one. (Diverges from the Roam importer, which preserves attr blocks
+    // for fidelity; chat ingest wants the literal bullet gone.)
+    //
+    // `!next.properties` is defence in depth, and deleting it fails no test:
+    // `settled` already stops a deeper pass promoting anything onto a node this
+    // one consumed. It is here because dropping a node discards its properties
+    // silently, so the day that stops holding should not be a data-loss day.
+    if (walk.bubbled.has(blockPathUid(blockPath)) && !next.children && !next.properties) return []
     return [next]
   })
 
@@ -636,6 +653,7 @@ const createBlocksFromEvent = (
   const walk: PromotionWalk = {
     options: matrixPromotionOptions(repo),
     bubbled: new Set<string>(),
+    settled: new Set<string>(),
     diagnostics: [],
   }
   const tree = withPromotedMatrixProperties(

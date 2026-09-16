@@ -240,6 +240,44 @@ describe('matrix ingest into a child-backed workspace', () => {
     30_000,
   )
 
+  it('keeps a declined bullet declined, even where the value would narrow enough to fit', async () => {
+    // A withdrawal has to survive the rest of the walk. The same key can
+    // accumulate from several depths at once: judged together they are a list,
+    // and judged one level down the nested one alone is a scalar a `date` can
+    // hold. If the withdrawal only un-bubbles, the deeper pass re-promotes
+    // that bullet onto its parent — a parent the parent-level pass already
+    // consumed and is about to drop, taking the rescued value with it.
+    const repo = await setup()
+    await repo.userSchemas.addSchema({name: 'matrix:when', presetId: 'date'})
+    await configureIngest(repo)
+
+    timeline.set('cursor-0', syncBody('cursor-1', [
+      messageEvent('$evt-1', [
+        '- hello',
+        '  - note:: from the room',
+        '    - when:: 2026-01-01',
+        '  - when:: 2026-02-02',
+      ].join('\n')),
+    ]))
+
+    stopIngest = ingestEffect.start({repo})
+
+    const message = await vi.waitFor(async () => {
+      const row = await rowByContent('hello')
+      expect(row, 'the message never landed').toBeDefined()
+      return row!
+    }, {timeout: 10_000, interval: 50})
+
+    // Neither date can be stored under a `date` definition as a pair, so both
+    // bullets stay. The one that would fit alone must not be spirited away.
+    const everyContent = (await sharedDb.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE deleted = 0',
+    )).map(r => r.content)
+    expect(everyContent).toContain('when:: 2026-01-01')
+    expect(everyContent).toContain('when:: 2026-02-02')
+    expect((await cellBag(message.id))['matrix:when']).toBeUndefined()
+  }, 30_000)
+
   it('keeps ingesting the next message after one carried an unstorable key', async () => {
     const repo = await setup()
     await repo.userSchemas.addSchema({name: 'matrix:count', presetId: 'number'})

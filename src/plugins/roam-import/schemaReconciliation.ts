@@ -337,6 +337,12 @@ export const fitPromotedValueToSchema = (
   schema: AnyPropertySchema,
   value: unknown,
 ): PromotedValueFit => {
+  // Reshape only what needs it. Reshaping keys off the CODEC TYPE, not off the
+  // value, so asking second would rewrite values that were already fine: a
+  // `null` under an optional-string definition means unset and decodes, but
+  // the string codec type would turn it into the four-character text "null",
+  // which also decodes — a silent edit that nothing downstream could spot.
+  if (!propertyCellValueRejection(schema, value)) return {kind: 'fits', value}
   const reshaped = reshapeForCodecType(schema.codec.type, value)
   const rejection = propertyCellValueRejection(schema, reshaped)
   return rejection ? {kind: 'unfit', rejection} : {kind: 'fits', value: reshaped}
@@ -669,8 +675,9 @@ export const ensurePromotedPropertySchemas = async (
  *  A name with NO definition is ACCEPTED: `ensurePromotedPropertySchemas`
  *  mints one from the values in hand, so it fits by construction. The keys
  *  this declines are the ones whose definition already exists and is narrower
- *  than the text — a `number` that meets "many", a `ref` that meets a person's
- *  name (#594).
+ *  than the text — a `number` that meets "many", a `ref` that meets text no
+ *  `((id))` can carry (#594). A `ref` meeting a one-word value is NOT declined;
+ *  see `propertyCellValueRejection`, whose question this has to match.
  *
  *  It reads the registry at promotion time, so a definition edited between
  *  here and the write is not covered; that residue lands in

@@ -412,8 +412,15 @@ export const encodedPropertyValueToChildContent = (
  *  TWO legs, because the processor takes two steps on a cell value that can
  *  fail. The second is not redundant: `codecs.ref().decode` accepts any
  *  string, while `referenceBlockContentForId` refuses one that cannot be read
- *  back as `((id))` — so a ref-typed key meeting a name rather than an id
- *  passes the decode and throws at the render. */
+ *  back as `((id))` — so a ref-typed key meeting `Some Person` passes the
+ *  decode and throws at the render.
+ *
+ *  Note what that does NOT cover: `Mary` is refused by neither leg, so a
+ *  ref-typed key can still take a one-word value and store it as a block id
+ *  nothing resolves. This asks exactly what the processor asks, and the
+ *  processor accepts that — a stricter rule belongs in a producer's own
+ *  acceptance check, never here, or the two would disagree about what a write
+ *  may contain. */
 export interface PropertyCellValueRejection {
   readonly reason: 'decode' | 'content'
   readonly cause: unknown

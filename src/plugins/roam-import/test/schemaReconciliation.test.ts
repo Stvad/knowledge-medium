@@ -624,10 +624,12 @@ describe('promotedValueAcceptorFor', () => {
     expect(accepts('matrix:tag', 'solo')).toBe(true)
   })
 
-  it('declines a name that decodes but could never be written as a value child', async () => {
+  it('declines a ref value that decodes but could never be written as a value child', async () => {
     // The `ref` leg: its codec takes any string, so this one only fails when
     // the value is rendered into its child's content. Asking the codec alone
-    // would wave it through and stall the caller one step later.
+    // would wave it through and stall the caller one step later. Scoped to
+    // values no `((id))` can carry — a one-word value is accepted, matching
+    // what the processor itself accepts.
     await env.repo.userSchemas.addSchema({name: 'matrix:assignee', presetId: 'ref'})
 
     expect(promotedValueAcceptorFor(env.repo)('matrix:assignee', 'Some Person')).toBe(false)

@@ -341,7 +341,16 @@ export const importRoam = async (
   }
   // Before reference projection, so the value a backlink is projected from is
   // the same one that will be written.
-  fitPlannedPropertyValues(allPlannedBlocks, repo, plan.diagnostics)
+  //
+  // Logged as well as collected: `plan.diagnostics` only reaches the caller
+  // through the summary this function RETURNS, and the write transactions below
+  // are not wrapped — post-flip a value this pass reported is exactly what
+  // aborts one of them, so the summary never arrives and the note explaining
+  // the abort would go with it.
+  const unstorable: string[] = []
+  fitPlannedPropertyValues(allPlannedBlocks, repo, unstorable)
+  for (const note of unstorable) log(note)
+  plan.diagnostics.push(...unstorable)
 
   for (const block of allPlannedBlocks) {
     // Planner site: no separate prior row, so after === before === block.

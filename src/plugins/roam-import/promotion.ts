@@ -40,6 +40,13 @@ export const detectInlineAttribute = (
  *     deeper promotion pass on a kept intermediate block consults
  *     this set so it doesn't re-bubble the same descendants onto
  *     itself and produce duplicate property entries.
+ *   - `declined` lists uids whose key `acceptValue` withdrew. They are
+ *     NOT bubbled — their bullets stay — but a caller that walks deeper
+ *     must go on treating them as decided, together with `bubbled`. A
+ *     deeper pass sees fewer of the key's values (one branch of the tree
+ *     rather than all of them), so it can accept what this level refused
+ *     and hoist the bullet onto a parent that is itself about to be
+ *     dropped — destroying the text this withdrawal just rescued.
  *   - `diagnostics` surfaces unusual structures (e.g. attr nesting
  *     deeper than two levels) so the post-import log can flag them.
  */
@@ -47,6 +54,7 @@ export interface PromotionResult {
   promoted: Record<string, unknown>
   diagnostics: string[]
   bubbled: Set<string>
+  declined: Set<string>
 }
 
 export interface PromotionOptions {
@@ -66,14 +74,26 @@ export interface PromotionOptions {
    *  (scalar vs list, page-token explosion).
    *
    *  A declined key is withdrawn whole: it never enters `promoted`, and every
-   *  uid that fed it is removed from `bubbled`, so a SUBTRACTIVE consumer
-   *  keeps those bullets and the text survives verbatim. Withdrawing without
-   *  un-bubbling would destroy it, which is why promotion tracks which uids
-   *  produced which key rather than only that a uid was consumed.
+   *  uid that fed it moves from `bubbled` to `declined`, so a SUBTRACTIVE
+   *  consumer keeps those bullets and the text survives verbatim.
+   *
+   *  Two obligations on that consumer, both load-bearing:
+   *  - carry `declined` into the deeper passes alongside `bubbled` (see
+   *    {@link PromotionResult});
+   *  - keep a BUBBLED node that still has children, since a withdrawn bullet
+   *    can sit under one. `bubbled` says its own text was hoisted, never that
+   *    its subtree is expendable.
    *
    *  What a caller passes: `promotedValueAcceptorFor(repo)` — the value has to
    *  be one its key's existing definition can carry, or post-flip the
-   *  materialize processor rejects the whole writing transaction (#594). */
+   *  materialize processor rejects the whole writing transaction (#594).
+   *
+   *  Weaker than `acceptKey` in one respect, because it can only answer once
+   *  the whole chain has been walked: a declined key's SUB-attributes have
+   *  already been hoisted to this parent under their own keys, whereas
+   *  `acceptKey` returns before recursing and leaves them for the deeper pass
+   *  to hoist onto the declined block itself. Same tree, different owner,
+   *  decided by which decline fired. Nothing is lost either way. */
   acceptValue?: (propName: string, value: unknown) => boolean
 }
 
@@ -149,13 +169,17 @@ export const computePromotedFromChildren = (
   for (const child of children) consume(child, 0)
 
   const promoted: Record<string, unknown> = {}
+  const declined = new Set<string>()
   for (const [key, values] of accumulator) {
     const value = finalizeValue(values)
     if (!acceptValue(key, value)) {
       // Withdraw the whole key and give its bullets back. All-or-nothing per
       // key because the cell is: one key holds one value, so a batch with one
       // unusable member has no partial form to keep.
-      for (const uid of sourceUids.get(key) ?? []) newlyBubbled.delete(uid)
+      for (const uid of sourceUids.get(key) ?? []) {
+        newlyBubbled.delete(uid)
+        declined.add(uid)
+      }
       diagnostics.push(
         `Declined to promote "${key}": its value cannot be stored under that ` +
         `name. Left as ordinary content.`,
@@ -165,7 +189,7 @@ export const computePromotedFromChildren = (
     promoted[key] = value
   }
 
-  return {promoted, diagnostics, bubbled: newlyBubbled}
+  return {promoted, diagnostics, bubbled: newlyBubbled, declined}
 }
 
 /** Fold a key's accumulated values into the single value the cell will hold:
