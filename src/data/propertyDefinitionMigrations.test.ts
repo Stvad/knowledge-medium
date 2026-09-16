@@ -691,18 +691,26 @@ describe('codec-change migration', () => {
     await repo.awaitPropertyDefinitionBaselines()
     expect(undoDepth(repo)).toBeGreaterThan(0)
 
-    // Stands in for the migration committing while the replay is queued behind
-    // the write lock: the history is dropped after the entry was popped.
+    // The write lock is HELD while the replay queues behind it, which is the
+    // ordering that matters: clearing before `_replay` is even called would
+    // also be caught by a check outside the transaction, and this test is
+    // about the check being inside it.
     const manager = repo.undoManagerFor(WS)
-    const original = manager.popUndo.bind(manager)
-    const popped = vi.spyOn(manager, 'popUndo').mockImplementation((scope) => {
-      const entry = original(scope)
-      if (entry !== null) manager.clear()
-      return entry
-    })
+    let releaseLock: (() => void) | null = null
+    const holdingLock = repo.tx(
+      async () => { await new Promise<void>(resolve => { releaseLock = () => resolve() }) },
+      {scope: ChangeScope.BlockDefault},
+    )
+    await vi.waitFor(() => { expect(releaseLock).not.toBeNull() }, {timeout: 5000})
 
-    await expect(repo.undo(ChangeScope.BlockDefault)).resolves.toBe(false)
-    popped.mockRestore()
+    // `undo` pops synchronously and only then awaits the replay, so by the next
+    // line the entry is already off the stack and its transaction is queued.
+    const undoing = repo.undo(ChangeScope.BlockDefault)
+    manager.clear()
+    releaseLock!()
+    await holdingLock
+
+    await expect(undoing).resolves.toBe(false)
 
     // The row is untouched: the replay refused rather than writing a snapshot
     // the cleared history said was no longer safe to restore.
@@ -1728,22 +1736,37 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
    *  running" has, which cannot be produced by publishing mid-batch without
    *  racing the rebuild. The predicate itself is pinned by the superseded and
    *  shadowed tests above; these two pin that each POSITION asks it and stops. */
-  const supersedeAfterFirstCheck = (repo: Repo) => {
+  const supersedeAfterChecks = (repo: Repo, current: number) => {
     let checks = 0
     return vi.spyOn(
       repo as unknown as {
         propertyDefinitionBatchSuperseded: (...args: unknown[]) => boolean
       },
       'propertyDefinitionBatchSuperseded',
-    ).mockImplementation(() => checks++ > 0)
+    ).mockImplementation(() => checks++ >= current)
   }
 
   it('stops mid-batch when a later rebuild supersedes the plans between chunks', async () => {
+    // 101 parents, so the supersession lands on the SECOND chunk — after the
+    // first has committed. With one parent the batch has one chunk and the
+    // check would be pinned only for the first transaction, which is the
+    // position that was never in doubt. Measured at ~3s.
     await seedWorkspace('children')
     const repo = setup()
-    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    const hostIds = Array.from({length: 101}, (_, i) => `host-${String(i).padStart(3, '0')}`)
+    await repo.tx(async tx => {
+      for (const id of hostIds) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: `k-${id}`, content: 'host'})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    for (const id of hostIds) {
+      await repo.tx(tx => tx.setProperty(id, statusString, ' 42 '),
+        {scope: ChangeScope.BlockDefault})
+    }
     await repo.awaitPropertyDefinitionBaselines()
-    const superseded = supersedeAfterFirstCheck(repo)
+    // Pre-scan check, then the first chunk's — superseded from the second
+    // chunk on.
+    const superseded = supersedeAfterChecks(repo, 2)
     const redetected = vi.spyOn(
       repo as unknown as {redetectPropertyDefinitionDrift: (workspaceId: string) => void},
       'redetectPropertyDefinitionDrift',
@@ -1761,10 +1784,10 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     const redetects = redetected.mock.calls.length
     redetected.mockRestore()
 
-    // The chunk aborted before writing, and nothing was recorded — so the
-    // superseding pass still has the drift to repair.
-    expect(await rowContent(valueRowId)).toBe(' 42 ')
-    expect(await cell('p')).toEqual({status: ' 42 '})
+    // The first chunk committed; the second aborted; nothing was recorded — so
+    // the drift is still there for the superseding pass to repair.
+    expect(await cell('host-000')).toEqual({status: 42})
+    expect(await cell('host-100')).toEqual({status: ' 42 '})
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
     // And it re-detected rather than waiting for a prime: the rebuild that
     // superseded the batch need not have scheduled a pass of its own.
@@ -1782,7 +1805,7 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     await awaitRegistryCodec(repo, 'string')
     await repo.awaitPropertyDefinitionBaselines()
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
-    const superseded = supersedeAfterFirstCheck(repo)
+    const superseded = supersedeAfterChecks(repo, 1)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await changeWhileInactive(repo, statusNumber)
