@@ -3406,6 +3406,38 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'alpha'])
     })
 
+    it('keeps a twin that arrived under a DUPLICATE field row', async () => {
+      // The collapse of duplicate field rows runs before the reconciler is
+      // handed the policy, so it has to carry it too: folding a member on the
+      // way past removes the occurrence the reconciler was meant to preserve,
+      // and the reconciler never learns it existed.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+      const dupKey = await appendKey('p')
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, reference_target_id, is_field_form, deleted,
+           created_at, updated_at, user_updated_at, created_by, updated_by)
+         VALUES ('dupfield', ?, 'p', ?, ?, '{}', ?, 1, 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, dupKey, propertyFieldContent(TAGS_FIELD_ID), TAGS_FIELD_ID],
+      )
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES ('twin', ?, 'dupfield', 'a0', 'alpha', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS],
+      )
+
+      await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'alpha'])
+    })
+
     it('restoring the owner keeps a member that arrived while it was deleted', async () => {
       // Revival re-materializes names the tx never wrote, from a cell that can
       // be STALE against the children: sync-apply skips the parent-liveness

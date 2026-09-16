@@ -633,6 +633,31 @@ describe('codec-change migration across the multi-value boundary (km-h1hy)', () 
     expect(await rowContent(ids[1]!)).toBe('y')
   })
 
+  it('list -> SCALAR never overwrites a leading unconvertible member', async () => {
+    // The scalar destination has no member codec, so the whole-list guard did
+    // not apply and the scalar value was published. MATERIALIZE then took the
+    // scalar branch, overwrote the FIRST value row — the unconvertible one —
+    // with the published text, and folded the row that had converted. The
+    // pass reports that original text is preserved unchanged, so this has to
+    // hold for both grains, which is why the rule is now simply "publish
+    // nothing when anything failed to convert".
+    await seedWorkspace('children')
+    const repo = setup(statusStringList)
+    const ids = await seedListProperty(repo, 'p', statusStringList, ['bad', ' 1 '])
+
+    await republish(repo, statusNumber)
+
+    // The unconvertible row keeps its exact text, which is what the pass tells
+    // the user it does.
+    expect(await rowContent(ids[0]!)).toBe('bad')
+    // The CONVERTIBLE row is canonicalized — that is the re-encode doing its
+    // job, and it is not what the preservation promise is about.
+    expect(await rowContent(ids[1]!)).toBe('1')
+    const live = await sharedDb.db.getAll<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id IN (?, ?) ORDER BY id', [ids[0]!, ids[1]!])
+    expect(live.map(r => r.deleted)).toEqual([0, 0])
+  })
+
   it('reports members that cannot convert and leaves the cell key stale', async () => {
     await seedWorkspace('children')
     const repo = setup(statusStringList)

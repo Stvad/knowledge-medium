@@ -37,7 +37,6 @@ import {
   ProcessorRejection,
   QueryNotRegisteredError,
   derivedRefKey,
-  memberCodecOf,
   reconcileDerived,
 } from '@/data/api'
 import {
@@ -4608,23 +4607,27 @@ export class Repo {
                 if (change.oldName !== schema.name) oldNames.push(change.oldName)
                 const projected = childContentsToEncodedPropertyValue(
                   schema, canonicalContents)
-                // A PARTIAL list must not be published. The cell write below is
-                // an ordinary `tx.update`, so MATERIALIZE runs on it in the same
-                // tx, reconciles the members it names, and TOMBSTONES the rows
-                // it does not — which for a list is precisely the unconvertible
-                // rows this pass promises to leave in the tree with their text
-                // intact. Measured: the unconvertible member came back
-                // `deleted = 1`. A SCALAR needs no such rule — its unconvertible
-                // sibling is a divergent peer that materialize keeps.
-                const wholeList = parentUnconvertible === 0
-                  || memberCodecOf(schema.codec) === undefined
-                if (projected !== undefined && wholeList) {
-                  assignments.push({name: schema.name, value: projected, unset: false})
-                } else if (parentUnconvertible === 0) {
-                  assignments.push({name: schema.name, value: undefined, unset: true})
+                // PUBLISH NOTHING WHEN ANYTHING FAILED TO CONVERT. The cell
+                // write below is an ordinary `tx.update`, so MATERIALIZE runs on
+                // it in the same tx and reconciles the children against what was
+                // published — over the very rows this pass reports as preserved
+                // unchanged. Measured both ways: a partial LIST had its
+                // unconvertible member tombstoned, and a list migrated to a
+                // SCALAR had the unconvertible row's text overwritten with the
+                // converted value and the converted row folded away. One rule
+                // for both grains, because the promise is the same for both.
+                if (parentUnconvertible === 0) {
+                  if (projected !== undefined) {
+                    assignments.push({name: schema.name, value: projected, unset: false})
+                  } else {
+                    assignments.push({name: schema.name, value: undefined, unset: true})
+                  }
                 }
-                // else (all-unconvertible, or a list that lost members): leave
-                // the key as found — no assignment.
+                // else (anything unconvertible): no assignment, so the key
+                // keeps whatever it held. The CHILDREN of convertible members
+                // are still canonicalized above, and `core.projectPropertyChildren`
+                // re-derives the cell from them — that write is `settledWrites`,
+                // so it reaches no materializer and reconciles over nothing.
                 //   - rename: the old key is dropped and the new key stays
                 //     absent → the cell shows unset for the unparseable values,
                 //     §9's contract. Re-keying the stale value under the new name

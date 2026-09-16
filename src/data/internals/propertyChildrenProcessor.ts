@@ -542,7 +542,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // it. The scalar direction was insensitive to the order, which is why it
       // sat after.
       for (const child of duplicates) {
-        await collapseDuplicateFieldRow(tx, primary.id, child)
+        await collapseDuplicateFieldRow(tx, primary.id, child, opts.mayNotRemove)
       }
       await reconcileFieldValueChildren(tx, primary, schema, encoded, opts.mayNotRemove)
     } else {
@@ -837,6 +837,13 @@ export const collapseDuplicateFieldRow = async (
   tx: Tx,
   survivorFieldRowId: string,
   duplicate: BlockData,
+  /** See {@link MaterializeOptions.mayNotRemove}. A fold here takes a member
+   *  row away exactly as the reconciler's does, and it happens BEFORE the
+   *  reconciler is handed the policy — so a caller that may not reap has to
+   *  say so here too, or an arrival that duplicated an existing member is
+   *  collapsed on the way past and the reconciler never sees the occurrence
+   *  it was meant to preserve. */
+  mayNotRemove = false,
 ): Promise<void> => {
   const duplicateChildren = await tx.childrenOf(
     duplicate.id, undefined,
@@ -859,7 +866,7 @@ export const collapseDuplicateFieldRow = async (
         && childFieldId !== undefined
         && getPropertyFieldTargetId(c) === childFieldId)
       if (survivorOwn) {
-        await collapseDuplicateFieldRow(tx, survivorOwn.id, child)
+        await collapseDuplicateFieldRow(tx, survivorOwn.id, child, mayNotRemove)
       } else {
         const anchor = survivorChildren.at(-1)?.orderKey ?? null
         await tx.move(child.id, {parentId: survivorFieldRowId, orderKey: keysBetween(anchor, null, 1)[0]!})
@@ -867,7 +874,9 @@ export const collapseDuplicateFieldRow = async (
       continue
     }
     const survivorValues = survivorChildren.filter(isFieldValueChild)
-    const match = survivorValues.find(v => v.content === child.content)
+    const match = mayNotRemove
+      ? undefined
+      : survivorValues.find(v => v.content === child.content)
     if (match) {
       await collapseDuplicateValueChild(tx, match.id, child)
     } else {

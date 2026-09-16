@@ -1006,9 +1006,11 @@ are themselves block references. Same primitive everywhere.
     narrowing is REVERSED, before the first flip: a multi-value property is N sibling
     value children, one per member, sibling order = list order, and the projection is a
     list aggregate rather than first-wins. A codec opts in by naming its member codec
-    (<code>Codec.member</code>); one that does not keeps the single-child shape. Members
-    are a deduped SET, and an empty list projects as an ABSENT cell key, which reads back
-    as the preset's <code>[]</code> default.
+    (<code>Codec.member</code>); one that does not keeps the single-child shape. The members
+    are an ORDERED LIST with multiplicity preserved &mdash; <code>[2, 2, 3]</code> is three
+    value children, and reconciliation removes only the surplus occurrences, one at a time
+    &mdash; and an empty list projects as an ABSENT cell key, which reads back as the
+    preset's <code>[]</code> default.
   </li>
   <li>
     Ref-typed values reuse the block-reference primitive: a value child whose content is
