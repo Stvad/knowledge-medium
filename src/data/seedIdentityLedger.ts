@@ -296,26 +296,58 @@ export type SeedLedgerKind = keyof typeof LEDGER_KINDS
  * `projectedDefinitions` is empty and the workspace id is a placeholder: both
  * only scope PROJECTED rows, and a declaration inventory has none.
  *
- * COMPLETENESS rests on `diffSeedLedger` refusing two type seeds that contend
- * for one `id`. The registry hands back a WINNER set, so a contested seed is
- * skipped here and its inline-only properties never reach the ledger — while a
- * toggle profile that disables the winner makes the loser production's. Refusing
- * the contention is what makes one winner set the same as the union, so this
- * cannot silently under-report; if it ever does hold two, the type tripwire
- * fails and says so rather than this returning a quiet subset.
+ * COMPLETENESS has two conditions, and BOTH are checked rather than assumed,
+ * because each is a place production RESOLVES an ambiguity it is this file's job
+ * to see:
+ *
+ *   - the registry hands back a WINNER set of types, so a seed contested on `id`
+ *     is skipped here and its inline-only properties never reach the ledger.
+ *     `diffSeedLedger` refuses that contention, which is what makes one winner
+ *     set equal to the union.
+ *   - harvest keeps the FIRST declaration for a seed key and drops a conflicting
+ *     duplicate, so the loser is invisible in its return value. `conflicts`
+ *     carries those out (they cannot be recovered from `seeds` — only the
+ *     winner object survives), and the caller refuses them.
+ *
+ * Either ambiguity therefore fails loudly instead of leaving a quiet subset. A
+ * toggle profile that drops the winner is what makes a loser production's, which
+ * is why the inventory cannot simply take whichever one an all-enabled build
+ * happens to resolve to.
  */
+export interface ShippedPropertySeeds {
+  readonly seeds: readonly AnyPropertySeedDeclaration[]
+  /** Inline declarations harvest decided against, by the key they contend for. */
+  readonly conflicts: ReadonlyArray<{readonly seedKey: string; readonly typeSeedKey: string}>
+}
+
 export const shippedPropertySeeds = (
   explicitSeeds: readonly AnyPropertySeedDeclaration[],
   typeSeeds: readonly TypeSeedDeclaration[],
   workspaceId = 'seed-ledger-inventory',
-): readonly AnyPropertySeedDeclaration[] => {
+): ShippedPropertySeeds => {
   const typeDefinitions = buildTypeDefinitionRegistry({
     workspaceId, projectedDefinitions: new Map(), seeds: typeSeeds,
   })
-  const harvested = harvestNestedPropertySeeds(typeDefinitions, explicitSeeds)
-    .filter(isPropertySeedDeclaration)
-  return harvested.length > 0 ? [...explicitSeeds, ...harvested] : explicitSeeds
+  const conflicts: Array<{seedKey: string; typeSeedKey: string}> = []
+  const harvested = harvestNestedPropertySeeds(
+    typeDefinitions, explicitSeeds, conflict => conflicts.push(conflict),
+  ).filter(isPropertySeedDeclaration)
+  return {
+    seeds: harvested.length > 0 ? [...explicitSeeds, ...harvested] : explicitSeeds,
+    conflicts,
+  }
 }
+
+/** Describe each dropped inline declaration in a line a reviewer can act on —
+ *  the same currency `diffSeedLedger` deals in, since it is the same failure:
+ *  something that can ship is not in the ledger. */
+export const describeHarvestConflicts = (
+  conflicts: ShippedPropertySeeds['conflicts'],
+): string[] => conflicts.map(({seedKey, typeSeedKey}) =>
+  `${typeSeedKey}: inlines a declaration for ${JSON.stringify(seedKey)} that another ` +
+  'declaration already provides — harvest keeps the first, so this one never reaches ' +
+  'the ledger and becomes production\'s under any profile that drops the winner; give ' +
+  'it its own key, or inline the SAME declaration object both places').sort()
 
 /**
  * Index rows by `seedKey`, REFUSING a duplicate rather than collapsing it.

@@ -17,6 +17,7 @@ import {
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
 import {propertyNameProp, typesProp} from '@/data/properties'
 import {
+  describeHarvestConflicts,
   diffSeedLedger,
   FROZEN_PROPERTY_SEEDS,
   FROZEN_TYPE_SEEDS,
@@ -65,7 +66,8 @@ const shippedSeeds = () => {
     {overrides: allTogglesOn(discoverToggleTreeSync(tree)), safeMode: false},
   )
   const types = runtime.read(typeSeedsFacet)
-  return {properties: shippedPropertySeeds(runtime.read(definitionSeedsFacet), types), types}
+  const properties = shippedPropertySeeds(runtime.read(definitionSeedsFacet), types)
+  return {properties: properties.seeds, conflicts: properties.conflicts, types}
 }
 
 describe('seed identity ledger', () => {
@@ -89,6 +91,16 @@ describe('seed identity ledger', () => {
       new Set(RETIRED_TYPE_IDS),
     )
     expect(divergences, SEED_LEDGER_RULE).toEqual([])
+  })
+
+  // Harvest RESOLVES a conflicting inline declaration by keeping the first and
+  // dropping the rest, so the loser never appears in the inventory at all — and
+  // becomes production's provider under any toggle profile that drops the
+  // winner's type. The ledger has to see the ambiguity, not the resolution.
+  // Vacuous over the production set today (nothing inlines a declaration at
+  // all); the mechanism itself is pinned by the unit test below.
+  it('ships no inline property declaration that harvest had to drop', () => {
+    expect(describeHarvestConflicts(shippedSeeds().conflicts), SEED_LEDGER_RULE).toEqual([])
   })
 
   // A self-consistency check on the ledger DATA, which the two tripwires above
@@ -333,13 +345,37 @@ describe('shippedPropertySeeds', () => {
   // backing block and stores user data (`harvestNestedPropertySeeds`). Reading
   // `definitionSeedsFacet` alone would leave exactly those outside the ledger.
   it('includes a property a type seed declares inline and nothing contributes', () => {
-    expect(shippedPropertySeeds([], [owningType]).map(seed => seed.seedKey))
+    expect(shippedPropertySeeds([], [owningType]).seeds.map(seed => seed.seedKey))
       .toEqual([inlineOnly.seedKey])
   })
 
   it('does not double-count a property both contributed and inlined', () => {
-    expect(shippedPropertySeeds([inlineOnly], [owningType]).map(seed => seed.seedKey))
+    expect(shippedPropertySeeds([inlineOnly], [owningType]).seeds.map(seed => seed.seedKey))
       .toEqual([inlineOnly.seedKey])
+    expect(shippedPropertySeeds([inlineOnly], [owningType]).conflicts).toEqual([])
+  })
+
+  // Two types of the SAME owner inlining DIFFERENT declarations for one key.
+  // Their type ids differ, so the contention check cannot see it, and harvest
+  // returns only the winner — the loser is recoverable solely as a conflict.
+  it('reports an inline declaration harvest dropped, which its return value cannot show', () => {
+    const rival = seedProperty({
+      seedKey: inlineOnly.seedKey, revision: 1,
+      name: 'ledgerTest:rivalSpelling', preset: 'number', defaultValue: 0,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const rivalType = seedType({
+      seedKey: 'system:ledger-test/type/rival', revision: 1,
+      id: 'ledgerTest:rival', label: 'Ledger test rival', properties: [rival],
+    })
+
+    const {seeds, conflicts} = shippedPropertySeeds([], [owningType, rivalType])
+    expect(seeds.map(seed => seed.name)).toEqual([inlineOnly.name])
+    expect(conflicts).toEqual([
+      {seedKey: inlineOnly.seedKey, typeSeedKey: rivalType.seedKey},
+    ])
+    expect(describeHarvestConflicts(conflicts)[0])
+      .toContain('inlines a declaration for "system:ledger-test/property/inline-only"')
   })
 })
 
