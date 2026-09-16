@@ -4532,16 +4532,26 @@ export class Repo {
     gate.dispose = this.backfillSyncGate(() => {
       gate.dispose?.()
       this.propertyDefinitionMigrationJobs.schedule(async () => {
-        // Released where the re-detect RUNS, not where the gate fires. Between
-        // those two is a deep-idle deferral, and the gate is open across it —
-        // so a pass refused in that window would find no marker, park a second
-        // listener that fires at once, and both scans would then read the same
-        // unchanged baseline. Nothing else tracks the listener: a workspace
-        // switch in that window is past any disposal a switch handler could do,
-        // so the re-detect checks for itself either way.
-        this.pendingDriftRedetects.delete(workspaceId)
-        this.redetectPropertyDefinitionDrift(workspaceId)
-        await this.awaitPropertyDefinitionBaselines()
+        try {
+          this.redetectPropertyDefinitionDrift(workspaceId)
+          await this.awaitPropertyDefinitionBaselines()
+        } finally {
+          // Held for the DURATION of the work, not until some chosen instant
+          // inside it. Released at the gate, at the job's start, or anywhere
+          // before the fold settles, there is always a later window in which a
+          // refused pass finds no marker, parks a listener the open gate fires
+          // at once, and lands a second scan on the same unchanged baseline.
+          // Tying the marker to the work removes the choice, and with it the
+          // class.
+          //
+          // The cost of holding rather than releasing early: drift arising
+          // after this fold's own diff and before this line does not park a
+          // retry of its own. It is covered by the fold in all but that window
+          // — the diff reads the whole live registry — and what escapes is
+          // repaired at the next prime rather than duplicated now, which is the
+          // better of the two residuals.
+          this.pendingDriftRedetects.delete(workspaceId)
+        }
       })
     })
   }

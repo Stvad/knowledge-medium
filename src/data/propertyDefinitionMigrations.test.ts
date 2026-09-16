@@ -923,6 +923,22 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     }, {timeout: 5000})
   }
 
+  /** Wait for the registry to carry a specific CODEC for FIELD_ID.
+   *
+   *  `awaitRegistry(repo, WS, 'status')` cannot serve here: `statusString` and
+   *  `statusNumber` share the name, so it returns the moment either is
+   *  published and a test that then acts is racing the rebuild it meant to
+   *  wait for. */
+  const awaitRegistryCodec = async (repo: Repo, codecType: string): Promise<void> => {
+    await vi.waitFor(() => {
+      const live = repo.propertyDefinitions
+      if (live?.workspaceId !== WS
+        || live.schemasByFieldId.get(FIELD_ID)?.codec.type !== codecType) {
+        throw new Error(`[test] registry has not primed on the ${codecType} codec yet`)
+      }
+    }, {timeout: 5000})
+  }
+
   /** Switch away from WS, apply `next` to WS's (now invisible) definition
    *  bucket, then switch back.
    *
@@ -1404,7 +1420,7 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     // baseline, so there is nothing to migrate. Replaying the parked plans
     // would re-encode to the number codec the workspace no longer uses.
     publishDefinition(repo, statusString)
-    await awaitRegistry(repo, WS, 'status')
+    await awaitRegistryCodec(repo, 'string')
     gapped = false
     await vi.waitFor(async () => {
       await repo.awaitPropertyDefinitionMigrations()
@@ -1659,6 +1675,48 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     // would have made permanent.
     expect(undoDepth(repo)).toBe(0)
     expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
+  }, 20_000)
+
+  it('holds the re-detect marker until the baseline fold settles', async () => {
+    // Released anywhere before the fold finishes, there is a window in which a
+    // refused pass finds no marker, parks a listener the open gate fires at
+    // once, and lands a second scan on the same unchanged baseline.
+    await seedWorkspace('children')
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: (cb) => { cb(); return () => {} },
+    })
+    repo.setActiveWorkspaceId(WS)
+    publishDefinition(repo, statusString)
+    await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    vi.spyOn(repo, 'workspaceViewGap').mockResolvedValue({
+      reason: 'synced rows are still draining into `blocks`', transient: true,
+    })
+    const marker = repo as unknown as {pendingDriftRedetects: Set<string>}
+    // Wrapped rather than replaced: the assertion is about WHEN the marker is
+    // released relative to the real fold, so the real fold has to run.
+    const prototype = Object.getPrototypeOf(repo) as {
+      redetectPropertyDefinitionDrift: (workspaceId: string) => void
+    }
+    const real = prototype.redetectPropertyDefinitionDrift
+    let heldDuringRedetect: boolean | null = null
+    const redetect = vi.spyOn(
+      repo as unknown as typeof prototype, 'redetectPropertyDefinitionDrift',
+    ).mockImplementation((workspaceId: string) => {
+      heldDuringRedetect ??= marker.pendingDriftRedetects.has(WS)
+      real.call(repo, workspaceId)
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await changeWhileInactive(repo, statusNumber)
+    await vi.waitFor(() => { expect(redetect).toHaveBeenCalled() }, {timeout: 5000})
+    await repo.awaitPropertyDefinitionMigrations()
+    warn.mockRestore()
+    redetect.mockRestore()
+
+    expect(heldDuringRedetect).toBe(true)
   }, 20_000)
 
   it('parks ONE re-detect per workspace, however many passes the gap refuses', async () => {
