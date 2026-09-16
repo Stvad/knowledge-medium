@@ -1,0 +1,1 @@
+import{GH as e,KH as t}from"../../../chunks/app-BGy_V-gI.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};

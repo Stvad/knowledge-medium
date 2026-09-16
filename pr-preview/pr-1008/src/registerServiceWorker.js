@@ -1,0 +1,1 @@
+import{Aw as e,kw as t}from"../chunks/app-BGy_V-gI.js";export{t as checkForAppUpdate,e as registerServiceWorker};

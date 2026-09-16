@@ -1,0 +1,1 @@
+import{nM as e,tM as t}from"../../../chunks/app-BGy_V-gI.js";export{t as isPropertyPanelHiddenProperty,e as isPropertyPanelReadOnlyProperty};

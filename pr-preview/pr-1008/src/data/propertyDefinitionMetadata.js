@@ -1,0 +1,1 @@
+import{BJ as e,zJ as t}from"../../chunks/app-BGy_V-gI.js";export{t as parsePropertyDefinitionMetadata,e as propertySchemaOriginForSeedKey};

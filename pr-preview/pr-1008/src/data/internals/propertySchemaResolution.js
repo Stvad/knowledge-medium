@@ -1,0 +1,1 @@
+import{FJ as e,IJ as t,LJ as n,NJ as r,PJ as i,RJ as a}from"../../../chunks/app-BGy_V-gI.js";export{r as createPropertySchemaResolver,i as isResolvedPropertySchema,e as propertySchemaResolverForWorkspace,t as requireWritablePropertySchema,n as resolveSelectedPropertyDefinition,a as unavailablePropertySchemaResolver};

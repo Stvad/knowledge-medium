@@ -1,0 +1,1 @@
+import{Cl as e,Sl as t,Tl as n,wl as r}from"../../../chunks/app-BGy_V-gI.js";export{t as PROVENANCE_BLOCKS_PER_KEY,e as PROVENANCE_KEY_LIMIT,r as auditPropertyRegistration,n as describeUnregisteredProperty};

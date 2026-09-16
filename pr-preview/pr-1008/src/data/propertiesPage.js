@@ -1,0 +1,1 @@
+import{_$ as e,v$ as t}from"../../chunks/app-BGy_V-gI.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
