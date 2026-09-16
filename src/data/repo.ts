@@ -4446,14 +4446,18 @@ export class Repo {
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
     const label = propertyDefinitionMigrationLabel(plans)
     try {
-      // Before the SCAN, so a pass that would read an incomplete graph never
-      // opens a transaction — and, decisively, before the record below. The
-      // per-transaction check only fires when a chunk WRITES: a run that sees
-      // no candidates because half the workspace is still staged would
-      // otherwise sail through and record the drift as applied, on this device
-      // forever. Same three positions, same reasons, as `runWorkspaceBackfills`.
+      // A cheap refusal, and nothing more: deleting it fails no test, because
+      // the per-chunk and pre-record checks below decide every outcome it could.
+      // It earns its line by not paying for the child-indexed scan on a device
+      // that already may not write.
       await this.assertUploadingPassMayWrite(workspaceId, label, generation)
       await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver, generation)
+      // This one is load-bearing. The per-chunk check only fires when a chunk
+      // WRITES, and a run that finds no candidates opens no transaction at
+      // all — which is exactly what a partially materialized graph looks like,
+      // since its rows are staged and not yet in `blocks`. Without this the
+      // pass would sail through and record the drift as applied, on this
+      // device forever.
       await this.assertUploadingPassMayWrite(workspaceId, label, generation)
       // Only an APPLIED pass advances a known fieldId — a throw, or a pass that
       // never ran, leaves the drift visible to the next prime.
@@ -4607,9 +4611,12 @@ export class Repo {
           // rename processor). This computePlan is the codec half — it
           // re-encodes value children under the (possibly new) codec and
           // reports unconvertibles.
-          // `||=`, never `=`: a later parent that converges on its stored bag
-          // must not erase an earlier parent's write.
-          chunkWrote ||= await rekeyParentPropertyCell(
+          // Assigned through a local, never `chunkWrote = ...` and never
+          // `chunkWrote ||= ...`: the first would let a later parent that
+          // converges on its stored bag erase an earlier parent's write, and
+          // the second SHORT-CIRCUITS — once one parent had written, every
+          // later parent in the chunk would be skipped without being visited.
+          const rewroteCell = await rekeyParentPropertyCell(
             tx, parentId,
             async (siblings) => {
               const oldNames: string[] = []
@@ -4690,6 +4697,7 @@ export class Repo {
               return {oldNames, assignments}
             },
           )
+          if (rewroteCell) chunkWrote = true
         }
       }, {
         // References, not BlockDefault (adversarial-review blocker): a

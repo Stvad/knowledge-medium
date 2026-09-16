@@ -484,7 +484,11 @@ describe('codec-change migration', () => {
   it('clears the workspace undo history on the first chunk that writes, and says so', async () => {
     await seedWorkspace('children')
     const repo = setup()
-    await seedProperty(repo, 'p', ' 42 ')
+    // `42`, not ` 42 `: the text is already canonical under the new codec, so
+    // the CELL re-key is the only thing that writes. Seeding a value that also
+    // needed re-encoding would let the two write detectors cover for each
+    // other, and neither would be pinned.
+    const {valueRowId} = await seedProperty(repo, 'p', '42')
     const errors: ProcessorRejection[] = []
     repo.onUserError(err => { errors.push(err) })
     // The user's own edits, made BEFORE the codec change. An undo entry
@@ -498,9 +502,39 @@ describe('codec-change migration', () => {
     await republish(repo, statusNumber)
 
     expect(await cell('p')).toEqual({status: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
     expect(undoDepth(repo)).toBe(0)
     // Cleared AND surfaced: a user who finds cmd-Z silently empty has no way
     // to connect it to a property type change.
+    expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
+  })
+
+  it('clears the undo history when only a VALUE row needs re-encoding', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+    // The shape sync leaves behind: the CELL arrived already re-encoded from a
+    // device that migrated, while this device still holds the old value text —
+    // cell and children are separate rows and LWW settles them independently.
+    // A raw write is how that shape is produced: it maintains the trigger-backed
+    // side indexes but fires no post-commit processor, exactly like an applied
+    // sync row.
+    await sharedDb.db.writeTransaction(async tx => {
+      await tx.execute(`UPDATE blocks SET properties_json = ? WHERE id = 'p'`,
+        [JSON.stringify({status: 42})])
+    })
+    expect(undoDepth(repo)).toBeGreaterThan(0)
+
+    await republish(repo, statusNumber)
+
+    // Only the value row is rewritten — the cell converges on what it already
+    // holds — so the cell re-key reports no write and the value re-encode is
+    // the sole reason the user's history has to go.
+    expect(await rowContent(valueRowId)).toBe('42')
+    expect(await cell('p')).toEqual({status: 42})
+    expect(undoDepth(repo)).toBe(0)
     expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
   })
 
@@ -994,6 +1028,60 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     expect(warn.mock.calls.flat().join(' ')).toContain('was re-opened')
     warn.mockRestore()
   }, 20_000)
+
+  it('stops mid-pass when the view gaps between chunks', async () => {
+    // The doctrine's actual rule, and the one position a pre-run check can
+    // never cover: the batch chunks at 100 parents and a big pass writes over
+    // minutes, so the device can fall behind the server between chunk 1 and
+    // chunk 50. Measured at ~3s; budgeted for the ~6x stretch the full suite's
+    // one-worker-per-core contention adds.
+    await seedWorkspace('children')
+    let settled = true
+    const {repo} = createTestRepo({
+      db: sharedDb.db, user: {id: 'user-1'},
+      backfillSyncGate: (cb) => { if (settled) cb(); return () => {} },
+    })
+    repo.setActiveWorkspaceId(WS)
+    publishDefinition(repo, statusString)
+
+    // 101 parents: one full chunk plus a remainder. Created in two transactions
+    // rather than 101 — the pass reads rows, not tx boundaries.
+    const hostIds = Array.from({length: 101}, (_, i) => `host-${String(i).padStart(3, '0')}`)
+    await repo.tx(async tx => {
+      for (const id of hostIds) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: `k-${id}`, content: 'host'})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    for (const id of hostIds) {
+      await repo.tx(tx => tx.setProperty(id, statusString, ' 42 '),
+        {scope: ChangeScope.BlockDefault})
+    }
+    await repo.awaitPropertyDefinitionBaselines()
+
+    // Fenced on the pass's own "a chunk COMMITTED" signal rather than a timer
+    // or a sample count: the undo clear fires immediately after the first
+    // chunk's transaction resolves, which is exactly the boundary this test
+    // needs to fall behind on.
+    repo.onUserError(err => { if (err.code === UNDO_CLEARED) settled = false })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await changeWhileInactive(repo, statusNumber)
+
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.flat().join(' ')).toContain('not caught up with the server')
+    }, {timeout: 5000})
+    warn.mockRestore()
+
+    // The first chunk landed and the second refused: a partially applied pass,
+    // which is fine because every row is convergent and nothing was recorded.
+    const migrated = await sharedDb.db.get<{n: number}>(
+      `SELECT COUNT(*) AS n FROM blocks
+        WHERE workspace_id = ? AND json_extract(properties_json, '$.status') = 42`,
+      [WS],
+    )
+    expect(migrated.n).toBe(100)
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+  }, 30_000)
 
   it('records nothing when the view gaps while the batch is running', async () => {
     await seedWorkspace('children')
