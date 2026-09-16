@@ -1,1 +1,1 @@
-import{NE as e,PE as t}from"../../chunks/app-DkKEkRzY.js";export{e as agree,t as pluralize};
+import{NE as e,PE as t}from"../../chunks/app-CEt_ilmY.js";export{e as agree,t as pluralize};
