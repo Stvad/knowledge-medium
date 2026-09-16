@@ -616,18 +616,21 @@ describe('codec-change migration across the multi-value boundary (km-h1hy)', () 
     // their text intact. Measured before the guard: the unconvertible member
     // came back `deleted = 1`.
     await seedWorkspace('children')
-    const repo = setup(statusRefList)
-    const ids = await seedListProperty(repo, 'p', statusRefList, ['a-id', 'b-id'])
-    // One member made unreadable under the NEW codec, one still fine.
-    await repo.tx(tx => tx.update(ids[1]!, {content: 'plain text'}),
+    const repo = setup(statusStringList)
+    const ids = await seedListProperty(repo, 'p', statusStringList, ['x', 'y'])
+    // Member 0 is hand-edited into a bare span, which the NEW ref member codec
+    // converts; member 1 stays prose, which it refuses. Edited through the
+    // tree rather than set through the cell, because the string member codec
+    // would ESCAPE a span written as a value.
+    await repo.tx(tx => tx.update(ids[0]!, {content: '((a-id))'}),
       {scope: ChangeScope.BlockDefault})
 
-    await republish(repo, statusStringList)
+    await republish(repo, statusRefList)
 
     const live = await sharedDb.db.getAll<{id: string; deleted: number}>(
-      'SELECT id, deleted FROM blocks WHERE id IN (?, ?)', [ids[0]!, ids[1]!])
+      'SELECT id, deleted FROM blocks WHERE id IN (?, ?) ORDER BY id', [ids[0]!, ids[1]!])
     expect(live.map(r => r.deleted)).toEqual([0, 0])
-    expect(await rowContent(ids[1]!)).toBe('plain text')
+    expect(await rowContent(ids[1]!)).toBe('y')
   })
 
   it('reports members that cannot convert and leaves the cell key stale', async () => {

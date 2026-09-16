@@ -335,6 +335,24 @@ describe('the member capability', () => {
     expect(codec.member.targetTypes).toEqual(['person'])
   })
 
+  it('derives a refList member for a codec authored before the capability', () => {
+    // `isRefListCodec` narrows on the discriminator alone, so a DB-stored
+    // extension this build never type-checked can reach the value-child code
+    // with no `member`. Its member is DETERMINED by the type rather than
+    // guessed, and deriving it is what keeps such a codec on the N-`((id))`
+    // -children shape instead of one JSON child. Unit-level because no
+    // installed extension exists to drive it through the app.
+    const legacy = {
+      type: 'refList',
+      targetTypes: ['person'],
+      encode: (v: readonly string[]) => [...v],
+      decode: (j: unknown) => j as string[],
+    } as unknown as RefListCodec
+    const member = memberCodecOf(legacy)
+    expect(isRefCodec(member)).toBe(true)
+    expect((member as RefListCodec).targetTypes).toEqual(['person'])
+  })
+
   it('single-valued codecs expose no member', () => {
     for (const codec of [codecs.string, codecs.number, codecs.boolean,
       codecs.ref(), codecs.optionalRef(), codecs.date, codecs.url]) {
