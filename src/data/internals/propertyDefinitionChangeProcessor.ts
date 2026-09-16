@@ -18,8 +18,9 @@
  *    before/after instead: the name via `parsePropertyDefinitionMetadata`, the
  *    codec via `tryBuildSchema` over the staged row and `ctx.valuePresets` —
  *    which builds from the row plus the preset map and consults no registry.
- *    The registry answers exactly one question here: is this definition the
- *    workspace's winner for its name (a shadowed one is skipped).
+ *    The registry is still what RECOGNIZES a field row (`reference_target_id`
+ *    -> definition) and what says which definition owns a name, and both of
+ *    those are answers about tx-start state, which is what they should be.
  *
  * 2. Because the registry is stale in-tx, `MATERIALIZE_PROPERTY_CHILDREN` would
  *    still resolve the DROPPED old name to this definition and take its
@@ -52,9 +53,7 @@ import {
   definePostCommitProcessor,
   defineSameTxProcessor,
   ProcessorRejection,
-  type AnyPostCommitProcessor,
   type AnyPropertySchema,
-  type AnySameTxProcessor,
   type BlockData,
   type SameTxCtx,
 } from '@/data/api'
@@ -64,8 +63,8 @@ import {
   encodedPropertyValueToChildContent,
   isFieldValueChild,
   isPropertyFieldInstance,
+  propertiesEqual,
   propertyChildContentToEncodedValue,
-  rekeyParentPropertyCell,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 
@@ -153,6 +152,9 @@ const collectChanges = (
   // tx start, after-row buildable).
   const candidates: DefinitionChange[] = []
   for (const {before, after} of changedRows) {
+    // `after.deleted` is defence in depth — deleting a definition is its own
+    // operation, and a tx that deletes without also editing the name or preset
+    // stops at the no-change guard below.
     if (after === null || after.deleted || before === null) continue
     const afterMeta = parsePropertyDefinitionMetadata(after)
     const beforeMeta = parsePropertyDefinitionMetadata(before)
@@ -163,6 +165,11 @@ const collectChanges = (
     // data loss: the id-addressed field row + value children are untouched).
     // Re-keying a shadowed def would need the tangled shadowing×projection
     // model that #389 item 8 owns, not a bolt-on here.
+    // Defence in depth: a definition SHADOWED at tx start (two sharing a name,
+    // §6) is also refused by the contested-name rule below, which sees the
+    // winner owning the name and this one not vacating it. Stated here because
+    // a shadowed definition's cells belong to the shadowing×projection model
+    // that #389 item 8 owns, not to this pass, whichever layer notices first.
     if (ctx.resolvePropertySchemaField(workspaceId, after.id).status !== 'resolved') continue
     const schema = tryBuildSchema(after, ctx.valuePresets, afterMeta)
     if (schema === null) continue
@@ -172,6 +179,9 @@ const collectChanges = (
     // time (idempotent, but it would re-report to the user).
     const beforeSchema = tryBuildSchema(before, ctx.valuePresets, beforeMeta)
     const codecChanged = beforeSchema !== null && beforeSchema.codec.type !== schema.codec.type
+    // Every write to a definition block's bag reaches this processor —
+    // MATERIALIZE's own field-row bookkeeping included. Without this, each one
+    // would sweep every consumer of that definition inside the user's tx.
     if (beforeMeta.name === afterMeta.name && !codecChanged) continue
     candidates.push({
       fieldId: after.id,
@@ -209,91 +219,106 @@ const consumingParentIds = async (
   return [...set]
 }
 
-/** Apply every change that owns a field row under ONE parent. The shared
- *  `rekeyParentPropertyCell` owns the parent guard and the swap-safe
- *  drop-all-then-set-all apply; this supplies only the per-parent PLAN —
- *  re-encode the value children under the after-codec, project the first
- *  parseable one, drop the old name, set the new. */
-const applyToParent = (
+/** Apply every change that owns a field row under ONE parent, in one cell write.
+ *
+ *  SWAP-SAFE, and that is why the drops and the assignments are collected for
+ *  EVERY change first and applied in two phases: with `a->b` and `b->a` in one
+ *  tx, dropping and assigning per change in turn makes b's drop delete the key
+ *  a just assigned, and one of the two values is gone. Two phases have no
+ *  intermediate state at all — the swap lands as one write.
+ *
+ *  No ancestry gate (§9 flat recognition): ANY block owning recognized field
+ *  rows — value rows and field rows included — re-keys like every other owner;
+ *  its `::` children are its field rows at any depth. The write is
+ *  `skipMetadata` machinery, not a "last edited" bump. */
+const applyToParent = async (
   ctx: SameTxCtx,
   parentId: string,
   changes: readonly DefinitionChange[],
   isFieldDefinition: IsPropertyFieldDefinition,
   unconvertibleByField: Map<string, number>,
-): Promise<void> =>
-  rekeyParentPropertyCell(ctx.tx, parentId, async (siblings) => {
-    const oldNames: string[] = []
-    const assignments: Array<{name: string; value: unknown; unset?: boolean}> = []
-    for (const change of changes) {
-      let projected: unknown
-      let hasProjection = false
-      let sawFieldRow = false
-      // Unparseable value children. Complete when the codec changed (every
-      // value is visited) or when nothing projected (the early exit below never
-      // fired) — and those are the only two states it is read in.
-      let unconvertible = 0
-      for (const sibling of siblings) {
-        if ((sibling.referenceTargetId ?? null) !== change.fieldId) continue
-        if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
-        sawFieldRow = true
-        // A rename is done with this definition once one value has projected: it
-        // rewrites no content, so the rest are not its business. A codec change
-        // must see every one of them — each is re-encoded, and the ones that
-        // cannot convert are counted for the report below.
-        if (hasProjection && !change.codecChanged) continue
-        // §9 value set: bit-filtered — nested marked rows are machinery.
-        const values = (await ctx.tx.childrenOf(sibling.id, undefined))
-          .filter(isFieldValueChild)
-        for (const value of values) {
-          if (hasProjection && !change.codecChanged) break
-          let encoded: unknown
-          try {
-            encoded = propertyChildContentToEncodedValue(change.schema, value.content)
-          } catch {
-            unconvertible += 1
-            continue
-          }
-          if (!hasProjection) {
-            projected = encoded
-            hasProjection = true
-          }
-          if (!change.codecChanged) continue
-          // Canonicalize the stored text under the new codec so it reads back as
-          // what `setProperty` would have written.
-          const canonical = encodedPropertyValueToChildContent(change.schema, encoded)
-          if (value.content !== canonical) {
-            await ctx.tx.update(value.id, {content: canonical}, {skipMetadata: true})
-          }
+): Promise<void> => {
+  const parent = await ctx.tx.get(parentId)
+  // A soft-deleted parent can still own live field rows, so the query that
+  // found it does not settle this. `tx.update` on a tombstone throws, which
+  // would take the user's whole definition edit down with it.
+  if (parent === null || parent.deleted) return
+  const siblings = await ctx.tx.childrenOf(parentId, undefined)
+  // Collected across EVERY change, then applied in two phases below — see the
+  // swap note in this function's doc.
+  const oldNames: string[] = []
+  const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
+  for (const change of changes) {
+    let projected: unknown
+    let hasProjection = false
+    let sawFieldRow = false
+    let unconvertible = 0
+    for (const sibling of siblings) {
+      if ((sibling.referenceTargetId ?? null) !== change.fieldId) continue
+      if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
+      sawFieldRow = true
+      // §9 value set: bit-filtered — nested marked rows are machinery.
+      const values = (await ctx.tx.childrenOf(sibling.id, undefined))
+        .filter(isFieldValueChild)
+      for (const value of values) {
+        let encoded: unknown
+        try {
+          encoded = propertyChildContentToEncodedValue(change.schema, value.content)
+        } catch {
+          unconvertible += 1
+          continue
+        }
+        if (!hasProjection) {
+          projected = encoded
+          hasProjection = true
+        }
+        if (!change.codecChanged) continue
+        // Canonicalize the stored text under the new codec so it reads back as
+        // what `setProperty` would have written.
+        const canonical = encodedPropertyValueToChildContent(change.schema, encoded)
+        if (value.content !== canonical) {
+          await ctx.tx.update(value.id, {content: canonical}, {skipMetadata: true})
         }
       }
-      // This parent carries no field row for this definition — its cell keys
-      // for it are none of this change's business.
-      if (!sawFieldRow) continue
-      if (change.codecChanged && unconvertible > 0) {
-        unconvertibleByField.set(
-          change.fieldId,
-          (unconvertibleByField.get(change.fieldId) ?? 0) + unconvertible,
-        )
-      }
-      if (change.oldName !== change.newName) oldNames.push(change.oldName)
-      if (hasProjection) {
-        assignments.push({name: change.newName, value: projected})
-      } else if (unconvertible === 0) {
-        assignments.push({name: change.newName, value: undefined, unset: true})
-      }
-      // else (all-unconvertible): leave the new key unset — no assignment.
-      //   - rename: the old key is dropped and the new key stays absent, so the
-      //     cell shows unset for the unparseable values, §9's contract. Re-keying
-      //     a stale value under the new name would violate §9 (cell derives from
-      //     children).
-      //   - no rename: the existing key rides untouched, so a stale-but-fixable
-      //     value stays visible; the next valid edit reprojects and heals it
-      //     (§5 pending-reprojection). Unsetting it instead tombstones the value
-      //     rows — MATERIALIZE reads the missing key as a user deletion (#800).
-      // This pass NEVER deletes value rows; the unconvertible COUNT is reported.
     }
-    return {oldNames, assignments}
-  })
+    // This parent carries no field row for this definition, so its cell keys
+    // for it are none of this change's business. Defence in depth: MATERIALIZE
+    // gives every recognized key a field row, so a parent reached by the query
+    // above normally has one for whichever change put it there.
+    if (!sawFieldRow) continue
+    if (change.codecChanged && unconvertible > 0) {
+      unconvertibleByField.set(
+        change.fieldId,
+        (unconvertibleByField.get(change.fieldId) ?? 0) + unconvertible,
+      )
+    }
+    if (change.oldName !== change.newName) oldNames.push(change.oldName)
+    if (hasProjection) assignments.push({name: change.newName, value: projected, unset: false})
+    else if (unconvertible === 0) {
+      assignments.push({name: change.newName, value: undefined, unset: true})
+    }
+    // else (all-unconvertible): leave the new key as it is.
+    //   - rename: the old key is dropped and the new key stays absent, so the
+    //     cell shows unset for the unparseable values, §9's contract. Re-keying
+    //     a stale value under the new name would violate §9 (cell derives from
+    //     children).
+    //   - no rename: the existing key rides untouched, so a stale-but-fixable
+    //     value stays visible; the next valid edit reprojects and heals it
+    //     (§5 pending-reprojection). Unsetting it instead costs the value rows:
+    //     the name still resolves to this definition, so the next tx to touch
+    //     this parent hands MATERIALIZE a missing key and it tombstones them as
+    //     a user deletion.
+    // This pass NEVER deletes value rows; the unconvertible COUNT is reported.
+  }
+  const next = {...parent.properties}
+  for (const name of oldNames) delete next[name]
+  for (const assignment of assignments) {
+    if (assignment.unset) delete next[assignment.name]
+    else next[assignment.name] = assignment.value
+  }
+  if (propertiesEqual(parent.properties, next)) return
+  await ctx.tx.update(parentId, {properties: next}, {skipMetadata: true})
+}
 
 export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
   name: MIGRATE_PROPERTY_DEFINITION_PROCESSOR_NAME,
@@ -311,6 +336,9 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
   // stale registry would only widen fact 2's blast radius.
   settledWrites: true,
   apply: async (event, ctx) => {
+    // Defence in depth, and the cheap path for every workspace still on cells:
+    // an un-flipped workspace has no field rows, so the query below already
+    // finds no consumers.
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const changes = collectChanges(ctx, event.workspaceId, event.changedRows)
     if (changes.length === 0) return
@@ -381,11 +409,3 @@ export const REPORT_UNCONVERTIBLE_VALUES = definePostCommitProcessor<Unconvertib
     ))
   },
 })
-
-export const propertyDefinitionSameTxProcessors: ReadonlyArray<AnySameTxProcessor> = [
-  MIGRATE_PROPERTY_DEFINITION_PROCESSOR,
-]
-
-export const propertyDefinitionPostCommitProcessors: ReadonlyArray<AnyPostCommitProcessor> = [
-  REPORT_UNCONVERTIBLE_VALUES,
-]

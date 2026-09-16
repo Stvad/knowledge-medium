@@ -439,51 +439,6 @@ export const propertiesEqual = (
   b: Record<string, unknown>,
 ): boolean => jsonValuesEqual(a, b)
 
-/** The names to drop and the assignments to set on ONE parent's cell — the
- *  divergent value-handling half of a definition re-key, computed by the
- *  caller from the parent's live children. */
-export interface CellRekeyPlan {
-  readonly oldNames: readonly string[]
-  readonly assignments: ReadonlyArray<{name: string; value: unknown; unset?: boolean}>
-}
-
-/** Apply a swap-safe property-cell re-key to one parent — shared by the same-tx
- *  rename processor (`core.migratePropertyRename`) and the deferred codec-change
- *  batch (`Repo.runPropertyDefinitionMigrationBatch`). Owns the parts that must
- *  stay IDENTICAL across both, so the load-bearing invariant lives in one place:
- *   - the parent guard (skip a missing/deleted parent);
- *   - the SWAP-SAFE apply — drop EVERY old name before assigning ANY new one, so
- *     a name swap (`a<->b` in one tx) never leaves an intermediate `{b:<a>}` that
- *     clobbers b (and `propertiesEqual` skips the write when nothing changed).
- *  No ancestry gate exists anymore (§9 flat recognition): ANY block owning
- *  recognized field rows — value rows and field rows included — re-keys like
- *  every other owner; its `::` children are its field rows at any depth.
- *  `computePlan` receives the parent's live children and returns the drops +
- *  assignments — the ONLY part the two callers differ in (rename projects the
- *  first parseable value under the tx-start codec; the batch iterates all
- *  values, canonicalizes them under the possibly-new codec, and counts
- *  unconvertibles). The write is `skipMetadata` machinery, not a "last edited"
- *  bump. */
-export const rekeyParentPropertyCell = async (
-  tx: Tx,
-  parentId: string,
-  computePlan: (children: readonly BlockData[]) => Promise<CellRekeyPlan>,
-): Promise<void> => {
-  const parent = await tx.get(parentId)
-  if (parent === null || parent.deleted) return
-  const {oldNames, assignments} = await computePlan(
-    await tx.childrenOf(parentId, undefined),
-  )
-  const next = {...parent.properties}
-  for (const name of oldNames) delete next[name]
-  for (const assignment of assignments) {
-    if (assignment.unset) delete next[assignment.name]
-    else next[assignment.name] = assignment.value
-  }
-  if (propertiesEqual(parent.properties, next)) return
-  await tx.update(parentId, {properties: next}, {skipMetadata: true})
-}
-
 /** Shared by `isPropertyValueRow` / `resolvePropertyValueFieldSchema`: the
  *  field row `source` is a value child of, or null when `source` isn't a
  *  property value child at all — its parent, when that parent is a

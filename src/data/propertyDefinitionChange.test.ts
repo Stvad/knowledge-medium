@@ -166,6 +166,13 @@ const collectUserErrors = (repo: Repo): ProcessorRejection[] => {
   return errors
 }
 
+/** Overwrite a value child's text directly — the shape a synced row has, and
+ *  the only way to get value text the local codec would not have written. */
+const setRawValueContent = (valueRowId: string, content: string): Promise<unknown> =>
+  sharedDb.db.writeTransaction(async tx => {
+    await tx.execute('UPDATE blocks SET content = ? WHERE id = ?', [content, valueRowId])
+  })
+
 describe('withoutContestedRenames', () => {
   const change = (fieldId: string, oldName: string, newName: string) =>
     ({fieldId, oldName, newName})
@@ -259,6 +266,45 @@ describe('rename', () => {
     // KERNEL_SAME_TX_PROCESSORS to dodge it — assert the rows survived.
     expect(await isLive(fieldRowId), fieldRowId).toBe(true)
     expect(await isLive(valueRowId), valueRowId).toBe(true)
+  })
+
+  it('leaves value text alone, and reports nothing, even when it is stale', async () => {
+    // A rename does not change the codec, so a value the codec would write
+    // differently is the user's text, not a conversion candidate: re-encoding
+    // it here would normalize `1.50` to `1.5` behind their back, and an
+    // unparseable one is pre-existing staleness, not "could not convert to the
+    // new type". Both were the deferred batch's behavior, and both were wrong
+    // (#800 item 2).
+    await seedWorkspace('children')
+    const repo = await setupDefinition('number')
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 42)
+    const {valueRowId: staleRowId} = await seedProperty(repo, 'q', 'status', 7)
+    await setRawValueContent(valueRowId, '1.50')
+    await setRawValueContent(staleRowId, 'not a number')
+    const errors = collectUserErrors(repo)
+
+    await rename(repo, FIELD_ID, 'state')
+    await repo.awaitProcessors()
+
+    expect(await rowContent(valueRowId)).toBe('1.50')
+    expect(await rowContent(staleRowId)).toBe('not a number')
+    expect(errors).toEqual([])
+  })
+
+  it('skips a soft-deleted consumer instead of failing the whole edit', async () => {
+    // A tombstoned parent keeps its live field rows, so the consumer query
+    // still returns it — and `tx.update` on a tombstone throws, which would
+    // roll the user's rename back over a block they already deleted.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await seedProperty(repo, 'gone', 'status', 'done')
+    await repo.tx(tx => tx.delete('gone'), {scope: ChangeScope.BlockDefault})
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect(await cell('p')).toEqual({state: 'done'})
+    expect(await cell('gone')).toEqual({status: 'done'})
   })
 
   it('is ONE undoable step', async () => {
