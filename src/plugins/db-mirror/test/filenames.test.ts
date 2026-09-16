@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
 import {
   dbMirrorFilename,
   incarnationTagOf,
@@ -40,11 +40,30 @@ describe('dbMirrorFilename', () => {
     expect([later, earlier].sort()).toEqual([earlier, later])
   })
 
-  it('gives two runs in the same second different names', () => {
-    // The name is what makes a failed run's cleanup provably its own entry:
-    // no other run can be holding a name carrying this run's token.
-    const names = new Set(Array.from({length: 200}, () => dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)))
-    expect(names.size).toBe(200)
+  it('gives two runs in the same second different names, varying nothing else', () => {
+    // What the token does and does not guarantee is at `randomToken`. The
+    // property HERE is that it varies, not that draws are collision-free — that
+    // second one is a claim about the token's width, and no sample size makes
+    // observing it stop flaking, so the draws are stubbed. The two UUIDs differ
+    // in every position, so the names differ whatever window is sliced out.
+    const draw = vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-0000-0000-000000000000')
+      .mockReturnValueOnce('11111111-1111-1111-1111-111111111111')
+    try {
+      const first = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)
+      const second = dbMirrorFilename(DB, INSTALL_A, BEFORE, AT)
+
+      // Without this the test still passes on real entropy if the token ever
+      // stops coming from `randomUUID` — silently random again, and flaky again.
+      expect(draw).toHaveBeenCalledTimes(2)
+      expect(first).not.toBe(second)
+      // Spelled out rather than compared to each other, so a pair that stopped
+      // parsing at all could not satisfy this by both being undefined.
+      const carried = {at: AT, installId: INSTALL_A, incarnation: TAG}
+      expect([parse(first), parse(second)]).toEqual([carried, carried])
+    } finally {
+      draw.mockRestore()
+    }
   })
 })
 
