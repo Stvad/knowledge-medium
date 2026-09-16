@@ -207,7 +207,10 @@ const publishPair = (
   repo.setRuntimeContributions(
     projectedPropertyDefinitionsFacet,
     'test-status-definition',
-    [[FIELD_ID, first], [OTHER_FIELD_ID, second]].map(([fieldId, schema], index) => ({
+    // OTHER_FIELD_ID is the ELDER of the pair: a name it takes shadows
+    // FIELD_ID's claim on the same name, which is the direction the shadowing
+    // test needs.
+    [[OTHER_FIELD_ID, second], [FIELD_ID, first]].map(([fieldId, schema], index) => ({
       metadata: {
         fieldId: fieldId as string,
         workspaceId: WS,
@@ -1632,6 +1635,124 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     batch.mockRestore()
   }, 20_000)
 
+  it('drops a plan whose field has become SHADOWED, though the registry entry is unchanged', async () => {
+    // `schemasByFieldId` deliberately keeps a schema for a shadowed definition,
+    // so comparing registry entries by hand sees this field as untouched — its
+    // own name and codec never changed. The resolver, which is what the batch
+    // writes through, reports it unavailable, and running the plan anyway
+    // writes its value into a cell key another definition now owns.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    publishPair(repo, statusNumber, otherString)
+    await awaitRegistryCodec(repo, 'number')
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({status: 42})
+    }, {timeout: 8000})
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
+    const snapshot = rebuildSnapshot(repo)
+
+    // The OTHER definition is renamed onto `status`, shadowing this one — its
+    // own entry in the registry is untouched.
+    publishPair(repo, statusNumber, statusString)
+    // Asserted, not assumed: the whole test rests on which of the two the
+    // resolver picks, and a plan for an unshadowed field is not the case here.
+    await vi.waitFor(() => {
+      expect(repo.propertySchemaResolverFor(WS).resolveField(FIELD_ID).status)
+        .not.toBe('resolved')
+    }, {timeout: 5000})
+    // ...while its own registry entry is untouched, which is what a hand-rolled
+    // comparison of those entries would have read.
+    expect(repo.propertyDefinitions?.schemasByFieldId.get(FIELD_ID)?.codec.type).toBe('number')
+    expect(repo.propertyDefinitions?.definitionsByFieldId.get(FIELD_ID)?.name).toBe('status')
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
+
+    const batch = spyOnMigrationBatch(repo)
+    vi.useFakeTimers()
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], snapshot,
+    )
+    await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
+    vi.useRealTimers()
+
+    expect(planFieldIdsReaching(batch)).not.toContain(FIELD_ID)
+    batch.mockRestore()
+
+    // Nothing of the shadowed definition's was rewritten or tombstoned.
+    expect(await rowContent(valueRowId)).toBe('42')
+    for (const id of [fieldRowId, valueRowId]) {
+      const row = await sharedDb.db.get<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [id],
+      )
+      expect(row.deleted, `${id} deleted`).toBe(0)
+    }
+  }, 20_000)
+
+  /** Make the batch read as current on the first check and superseded on every
+   *  one after it — the shape "a definition changed while the pass was already
+   *  running" has, which cannot be produced by publishing mid-batch without
+   *  racing the rebuild. The predicate itself is pinned by the superseded and
+   *  shadowed tests above; these two pin that each POSITION asks it and stops. */
+  const supersedeAfterFirstCheck = (repo: Repo) => {
+    let checks = 0
+    return vi.spyOn(
+      repo as unknown as {
+        propertyDefinitionBatchSuperseded: (...args: unknown[]) => boolean
+      },
+      'propertyDefinitionBatchSuperseded',
+    ).mockImplementation(() => checks++ > 0)
+  }
+
+  it('stops mid-batch when a later rebuild supersedes the plans between chunks', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    const superseded = supersedeAfterFirstCheck(repo)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await changeWhileInactive(repo, statusNumber)
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.flat().join(' ')).toContain('have changed since')
+    }, {timeout: 5000})
+    warn.mockRestore()
+    superseded.mockRestore()
+
+    // The chunk aborted before writing, and nothing was recorded — so the
+    // superseding pass still has the drift to repair.
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+    expect(await cell('p')).toEqual({status: ' 42 '})
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+  }, 20_000)
+
+  it('records nothing when the plans are superseded and there was no chunk to catch it', async () => {
+    // No consuming rows, so the batch opens no transaction at all and the
+    // per-chunk check never fires. The check before the RECORD is the only one
+    // left between a superseded pass and a baseline that hides the drift.
+    await seedWorkspace('children')
+    const repo = setup()
+    // The baseline has to hold `string` before the change, or there is no drift
+    // to detect and no pass to supersede.
+    await awaitRegistryCodec(repo, 'string')
+    await repo.awaitPropertyDefinitionBaselines()
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+    const superseded = supersedeAfterFirstCheck(repo)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await changeWhileInactive(repo, statusNumber)
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.flat().join(' ')).toContain('have changed since')
+    }, {timeout: 5000})
+    warn.mockRestore()
+    superseded.mockRestore()
+
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+  }, 20_000)
+
   it('watermarks the undo stack at SCHEDULING, not when the deferred job runs', async () => {
     // The deferral is deep idle — tens of seconds — and an edit inside it can
     // canonicalize a candidate under the new codec while leaving an entry
@@ -1688,35 +1809,52 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
       backfillSyncGate: (cb) => { cb(); return () => {} },
     })
     repo.setActiveWorkspaceId(WS)
+    // `statusString`, because `seedProperty` writes through that instance —
+    // publishing the number one would leave its write resolving as shadowed.
     publishDefinition(repo, statusString)
     await seedProperty(repo, 'p', ' 42 ')
     await repo.awaitPropertyDefinitionBaselines()
     vi.spyOn(repo, 'workspaceViewGap').mockResolvedValue({
       reason: 'synced rows are still draining into `blocks`', transient: true,
     })
+    const snapshot = rebuildSnapshot(repo)
     const marker = repo as unknown as {pendingDriftRedetects: Set<string>}
-    // Wrapped rather than replaced: the assertion is about WHEN the marker is
-    // released relative to the real fold, so the real fold has to run.
-    const prototype = Object.getPrototypeOf(repo) as {
-      redetectPropertyDefinitionDrift: (workspaceId: string) => void
-    }
-    const real = prototype.redetectPropertyDefinitionDrift
-    let heldDuringRedetect: boolean | null = null
-    const redetect = vi.spyOn(
-      repo as unknown as typeof prototype, 'redetectPropertyDefinitionDrift',
-    ).mockImplementation((workspaceId: string) => {
-      heldDuringRedetect ??= marker.pendingDriftRedetects.has(WS)
-      real.call(repo, workspaceId)
-    })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    await changeWhileInactive(repo, statusNumber)
-    await vi.waitFor(() => { expect(redetect).toHaveBeenCalled() }, {timeout: 5000})
+    // Everything below runs off ARMED timers, so the fold can be blocked before
+    // anything fires — sampling at the start of the re-detect instead would
+    // still pass with the release moved to just after that call, which is the
+    // regression this exists to catch.
+    vi.useFakeTimers()
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true}], snapshot,
+    )
+    let releaseFold: (() => void) | null = null
+    const fold = vi.spyOn(repo, 'awaitPropertyDefinitionBaselines')
+      .mockImplementation(() => new Promise<void>(resolve => { releaseFold = () => resolve() }))
+    await vi.runAllTimersAsync()
+    // The refused pass arms the re-detect's own deferral only once it settles,
+    // which is after the first sweep has run out of timers — so it takes a
+    // drain and a second sweep. Draining again here would hang on the fold
+    // this test is deliberately holding open.
+    await repo.awaitPropertyDefinitionMigrations()
+    await vi.runAllTimersAsync()
+    vi.useRealTimers()
+
+    // The pass was refused, parked a re-detect, and that re-detect is now
+    // waiting on its fold.
+    expect(releaseFold).not.toBeNull()
+    expect(marker.pendingDriftRedetects.has(WS)).toBe(true)
+
+    releaseFold!()
+    fold.mockRestore()
     await repo.awaitPropertyDefinitionMigrations()
     warn.mockRestore()
-    redetect.mockRestore()
 
-    expect(heldDuringRedetect).toBe(true)
+    // ...and released once it settles, or nothing would ever re-detect again.
+    await vi.waitFor(() => {
+      expect(marker.pendingDriftRedetects.has(WS)).toBe(false)
+    }, {timeout: 5000})
   }, 20_000)
 
   it('parks ONE re-detect per workspace, however many passes the gap refuses', async () => {

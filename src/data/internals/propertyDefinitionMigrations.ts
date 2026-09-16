@@ -61,6 +61,46 @@ export interface PropertyDefinitionRebuildSnapshot {
   readonly generation: number
 }
 
+/**
+ * The plans a resolver produces for a set of definition changes — the whole
+ * decision, contested-name refusal included.
+ *
+ * ONE owner, because it is asked twice and the two answers must be the same
+ * question. Schedule time builds the batch with it; run time rebuilds against
+ * the LIVE resolver and refuses the batch when the answer has moved. A run-time
+ * check that compared registry maps by hand instead would be a DIFFERENT and
+ * weaker question: `schemasByFieldId` deliberately keeps a schema for a
+ * SHADOWED definition, so a field another definition has since been renamed
+ * onto still looks unchanged there, while the resolver — the thing the batch
+ * actually writes through — reports it unavailable.
+ *
+ * A fieldId that does not resolve (shadowed / unavailable, §6) is dropped.
+ */
+export const planPropertyDefinitionMigrations = (
+  changes: readonly PropertyDefinitionChange[],
+  resolver: PropertySchemaResolver,
+): PropertyDefinitionMigrationPlan[] => {
+  // Both halves of the shared contested-name refusal — see the helper.
+  const safeChanges = withoutContestedRenames(changes, name => {
+    const owner = resolver.resolve(name)
+    return owner.status === 'resolved' ? owner.schema.fieldId : undefined
+  })
+  return safeChanges.flatMap(change => {
+    const resolution = resolver.resolveField(change.fieldId)
+    return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
+  })
+}
+
+/** What a batch depends on staying true: which definitions it covers, under
+ *  which names, at which codecs. Compared rather than the schema objects, which
+ *  a rebuild may legitimately re-mint. */
+export const propertyDefinitionPlanIdentity = (
+  plans: readonly PropertyDefinitionMigrationPlan[],
+): string => plans
+  .map(({change, schema}) => `${change.fieldId}\u0000${schema.name}\u0000${schema.codec.type}`)
+  .sort()
+  .join('\u0001')
+
 /** How the deferred pass names itself in its own logs and in the aborts
  *  `assertUploadingPassMayWrite` throws. One owner, so the run and the batch
  *  it delegates to are greppable as the same pass. */

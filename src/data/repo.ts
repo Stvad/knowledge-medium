@@ -112,9 +112,10 @@ import {
 import { parseExactReferenceBlockContent } from './referenceBlock'
 import type { BlockIdPolicy } from './blockId'
 import {
+  planPropertyDefinitionMigrations,
   propertyDefinitionFacts,
   propertyDefinitionMigrationLabel,
-  withoutContestedRenames,
+  propertyDefinitionPlanIdentity,
   type PropertyDefinitionRebuildSnapshot,
   type PropertyDefinitionChange,
   type PropertyDefinitionFactsByFieldId,
@@ -4380,15 +4381,7 @@ export class Repo {
     // dropped from the plan — the same skip the run-time check used to do,
     // just performed here instead.
     const resolver = captured?.resolver ?? this.propertySchemaResolverFor(workspaceId)
-    // Both halves of the shared contested-name refusal — see the helper.
-    const safeChanges = withoutContestedRenames(changes, name => {
-      const owner = resolver.resolve(name)
-      return owner.status === 'resolved' ? owner.schema.fieldId : undefined
-    })
-    const plans: PropertyDefinitionMigrationPlan[] = safeChanges.flatMap(change => {
-      const resolution = resolver.resolveField(change.fieldId)
-      return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
-    })
+    const plans = planPropertyDefinitionMigrations(changes, resolver)
     if (plans.length === 0) return
     // Re-compared inside every write: this pass uploads, so it answers to
     // `assertUploadingPassMayWrite` like any other one-way pass (#995). The
@@ -4411,7 +4404,7 @@ export class Repo {
     const undoWatermark = this.undoManagerFor(workspaceId).revision(ChangeScope.BlockDefault)
     this.propertyDefinitionMigrationJobs.schedule(() =>
       this.runPropertyDefinitionMigrations(
-        workspaceId, plans, resolver, generation, undoWatermark,
+        workspaceId, changes, plans, resolver, generation, undoWatermark,
       ),
     )
   }
@@ -4586,6 +4579,27 @@ export class Repo {
     }
   }
 
+  /** Has the live registry moved away from what this batch was built for?
+   *
+   *  Asked with the SAME builder that produced the batch, against a live
+   *  resolver — never by comparing registry entries by hand, which cannot see a
+   *  field that has become shadowed or a name that has become contested since.
+   *
+   *  Answers false when the live registry is not this workspace's: the
+   *  workspace is not active, which is the staleness check's question, and
+   *  judging plans against another workspace's definitions is not an answer. */
+  private propertyDefinitionBatchSuperseded(
+    workspaceId: string,
+    changes: readonly PropertyDefinitionChange[],
+    plans: readonly PropertyDefinitionMigrationPlan[],
+  ): boolean {
+    const live = this._propertyDefinitionRegistry
+    if (live === null || live.workspaceId !== workspaceId) return false
+    return propertyDefinitionPlanIdentity(
+      planPropertyDefinitionMigrations(changes, this.propertySchemaResolverFor(workspaceId)),
+    ) !== propertyDefinitionPlanIdentity(plans)
+  }
+
   /**
    * Run one rebuild's re-encode, then record it in THIS DEVICE's baseline.
    *
@@ -4611,6 +4625,7 @@ export class Repo {
    */
   private async runPropertyDefinitionMigrations(
     workspaceId: string,
+    changes: readonly PropertyDefinitionChange[],
     plans: readonly PropertyDefinitionMigrationPlan[],
     resolver: PropertySchemaResolver,
     generation: number,
@@ -4626,42 +4641,35 @@ export class Repo {
     // already rewrote are stranded: the final pass's re-detect compares the
     // live definition against a baseline that now matches it and sees no drift.
     //
-    // Validating instead of ordering is what makes that unreachable rather than
-    // merely unlikely. Ordering the passes only decided who wrote LAST; the
-    // intermediate pass still wrote, which is the half that strands rows.
-    //
-    // NAME as well as codec. A rename-and-retype that is renamed BACK
-    // (`a -> b`, then `b -> a`) leaves the codec matching, and the plan still
-    // carries `oldName: a` against `schema.name: b` — so it would drop the cell
-    // key the workspace uses today and write the obsolete one, which the
-    // materializer reads as a user deletion and answers by tombstoning that
-    // definition's field rows.
-    //
     // ALL OR NOTHING, because `withoutContestedRenames` cleared this batch
     // COLLECTIVELY: a name swap is admitted only because each participant
     // vacates the name the other is taking. Dropping one participant and
-    // keeping the other re-keys into a name that is no longer vacant, with the
-    // same tombstoning consequence. A per-plan filter cannot express a property
-    // that was never per-plan.
+    // keeping the other re-keys into a name that is no longer vacant, and the
+    // materializer answers a cell key that went missing by tombstoning that
+    // definition's field rows. The predicate is the whole batch's, for the same
+    // reason.
     //
-    // Only when the live registry is this workspace's. When it is not, the
-    // workspace is not active and the staleness check below is the answer;
-    // judging plans against another workspace's definitions is not.
-    const live = this._propertyDefinitionRegistry
-    if (live !== null && live.workspaceId === workspaceId) {
-      const superseded = plans.some(({change, schema}) =>
-        live.schemasByFieldId.get(change.fieldId)?.codec.type !== schema.codec.type
-        || live.definitionsByFieldId.get(change.fieldId)?.name !== schema.name)
-      if (superseded) {
-        // Nothing is recorded, so the baseline still holds every pre-change
-        // codec in this batch — including those of plans that were still
-        // current. Re-detecting hands them to a pass built from the live
-        // registry rather than leaving them to the next prime, which is a
-        // workspace switch or a reload. It cannot loop: those plans are
-        // derived FROM the registry this check compares against.
-        this.redetectPropertyDefinitionDrift(workspaceId)
-        return
-      }
+    // AND AGAIN inside every writing transaction, and before the record — the
+    // same three positions, and the same reason, as the write-safety check
+    // beside it. A definition can change while the candidate scan or the chunk
+    // loop is running, and the newer job starts independently; checked once, an
+    // older pass keeps re-encoding later chunks after the newer one finished.
+    const assertBatchCurrent = (): void => {
+      if (!this.propertyDefinitionBatchSuperseded(workspaceId, changes, plans)) return
+      throw Object.assign(new Error(
+        `${propertyDefinitionMigrationLabel(plans)} aborted: the definitions it was built `
+        + 'for have changed since. A pass built from the live registry supersedes it.',
+      ), {kind: Repo.TRANSIENT, batchSuperseded: true})
+    }
+    if (this.propertyDefinitionBatchSuperseded(workspaceId, changes, plans)) {
+      // Nothing is recorded, so the baseline still holds every pre-change codec
+      // in this batch — including those of plans that were still current.
+      // Re-detecting hands them to a pass built from the live registry rather
+      // than leaving them to the next prime, which is a workspace switch or a
+      // reload. It cannot loop: those plans are derived FROM the registry this
+      // check compares against.
+      this.redetectPropertyDefinitionDrift(workspaceId)
+      return
     }
     const currentPlans = plans
     // Un-flipped: nothing re-keys here, so nothing is recorded either and the
@@ -4684,7 +4692,7 @@ export class Repo {
     })
     try {
       const wrote = await this.runPropertyDefinitionMigrationBatch(
-        workspaceId, currentPlans, resolver, generation, clearUndo,
+        workspaceId, currentPlans, resolver, generation, clearUndo, assertBatchCurrent,
       )
       // This one is load-bearing. The per-chunk check only fires when a chunk
       // WRITES, and a run that finds no candidates opens no transaction at
@@ -4693,6 +4701,7 @@ export class Repo {
       // pass would sail through and record the drift as applied, on this
       // device forever.
       await this.assertUploadingPassMayWrite(workspaceId, label, generation)
+      assertBatchCurrent()
       // A pass that wrote has already cleared, after each of its chunks. A pass
       // that wrote NOTHING has not — and can still owe a clear, because the
       // convergence may be the USER's: an edit landing between the candidate
@@ -4765,6 +4774,10 @@ export class Repo {
     resolver: PropertySchemaResolver,
     generation: number,
     clearUndo: () => void,
+    /** Throws when a later rebuild has superseded this batch — see the caller.
+     *  Asked per chunk for the same reason the write-safety check is: the
+     *  registry can move while the chunk loop runs. */
+    assertBatchCurrent: () => void,
   ): Promise<boolean> {
     const label = propertyDefinitionMigrationLabel(plans)
     // `plans` arrives pre-resolved (schedule-time capture, see
@@ -4830,6 +4843,7 @@ export class Repo {
         // stale before `fn` reads a row. Throwing here aborts the tx and the
         // pass with nothing recorded, so the next prime re-detects the drift.
         await this.assertUploadingPassMayWrite(workspaceId, label, generation)
+        assertBatchCurrent()
         // Flat §9 recognition: field-row selection below keys on the BIT +
         // fieldId (the bit is what keeps a ref-typed value pointing at this
         // very definition from being misread as a field row — no ancestry

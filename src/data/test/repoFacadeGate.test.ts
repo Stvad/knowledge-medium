@@ -179,6 +179,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   redetectPropertyDefinitionDriftWhenCaughtUp:
     'private; reached only from that pass, so the closure it parks on the sync gate '
     + 'captures the real repo',
+  propertyDefinitionBatchSuperseded: 'read — resolves and compares; assigns no Repo fields',
   redetectPropertyDefinitionDrift:
     'private; same path, and re-enters syncPropertyDefinitionBaseline above',
   swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
