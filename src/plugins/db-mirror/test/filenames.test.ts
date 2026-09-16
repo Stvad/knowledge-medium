@@ -41,16 +41,11 @@ describe('dbMirrorFilename', () => {
   })
 
   it('gives two runs in the same second different names, varying nothing else', () => {
-    // The token keeps two runs that share a second off ONE name. It is NOT what
-    // makes a failed run's cleanup its own entry: `claimFreshEntry` in
-    // `mirror.ts` refuses a name that already exists, so a collision costs a
-    // run rather than another run's file.
-    //
-    // The draws are STUBBED because the property is that the token varies, not
-    // that random draws are collision-free — that second one is a claim about
-    // the token's width, and there is no sample size at which observing it
-    // stops flaking. The two differ in every position, so the names differ
-    // whatever window `randomToken` slices out of them.
+    // What the token does and does not guarantee is at `randomToken`. The
+    // property HERE is that it varies, not that draws are collision-free — that
+    // second one is a claim about the token's width, and no sample size makes
+    // observing it stop flaking, so the draws are stubbed. The two UUIDs differ
+    // in every position, so the names differ whatever window is sliced out.
     const draw = vi.spyOn(crypto, 'randomUUID')
       .mockReturnValueOnce('00000000-0000-0000-0000-000000000000')
       .mockReturnValueOnce('11111111-1111-1111-1111-111111111111')

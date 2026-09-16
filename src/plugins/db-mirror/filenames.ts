@@ -29,9 +29,9 @@
  * taken while the database could not be identified; `governedBy` in `mirror.ts`
  * owns the reason it exists.
  *
- * The final group is unique per RUN, so two runs that share a second do not
- * contend for one name. It is not what makes a failed run's cleanup its own
- * entry: `claimFreshEntry` proves that, by refusing a name that already exists.
+ * The final group separates runs rather than identifying them: a random per-run
+ * suffix, so two runs that share a second normally get different names.
+ * {@link randomToken} owns what that does and does not guarantee.
  */
 import {fnv1a32Hex} from '@/utils/fnv1a.js'
 
@@ -56,10 +56,12 @@ const parseMirrorTimestamp = (stamp: string): number | undefined => {
   return mirrorTimestamp(at) === stamp ? at : undefined
 }
 
-/** Per-run suffix. Six hex characters, from the same CSPRNG as `randomUUID`, is
- *  far more than enough to keep two runs that share a second off one name. A
- *  collision costs a run, not a file: `claimFreshEntry` in `mirror.ts` refuses a
- *  name that already exists, so such a run writes nothing and deletes nothing. */
+/** Per-run suffix, six hex characters from the same CSPRNG as `randomUUID`. Two
+ *  runs that share a second normally get different names, but 24 bits can
+ *  repeat, so a collision costs a RUN and not a file: `claimFreshEntry` in
+ *  `mirror.ts` refuses a name that already exists, and the refused run writes
+ *  nothing and deletes nothing. That is also why the token is NOT what makes a
+ *  failed run's cleanup its own entry — the probe is. */
 const randomToken = (): string =>
   crypto.randomUUID().replace(/-/g, '').slice(0, 6)
 
