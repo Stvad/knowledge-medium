@@ -207,6 +207,77 @@ describe('workspace backfill runner — sync gating', () => {
     expect(runs).toEqual([])
   })
 
+  it('aborts a batch when write access is revoked while the gap probe is in flight', async () => {
+    // The commit pipeline gates on `isReadOnly` when the transaction STARTS, so
+    // a revocation between two batches is already refused there. This is the
+    // window that gate cannot see: the precondition runs INSIDE the transaction
+    // and awaits a probe, and a role change is a synchronous field write that
+    // lands cleanly in that await. Unre-sampled, this batch uploads
+    // source-of-truth rows as a viewer.
+    const g = controllableGate()
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-role-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+    const realGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
+      const gap = await realGap()
+      // Only once the first batch is through, so the run gets far enough to
+      // show that the SECOND batch is the one refused — and late enough that
+      // the transaction it refuses had already passed the pipeline's own gate.
+      if (batches.length === 1) repo.setReadOnly(true)
+      return gap
+    })
+
+    g.open()
+    await drain(repo)
+
+    expect(batches).toEqual([0])
+  })
+
+  it('aborts a batch when the workspace changes while the gap probe is in flight', async () => {
+    // POSITION, not outcome. The probe AWAITS, and `setActiveWorkspaceId` is a
+    // synchronous field write that lands cleanly in that window — so a staleness
+    // check placed BEFORE the probe has already passed by the time the write
+    // happens, and this batch would go on to upload into the session's new
+    // access state. The sibling tests above leave the workspace between batches,
+    // which a check on either side of the probe catches.
+    const g = controllableGate()
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-switch-in-probe-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+    const realGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
+      const gap = await realGap()
+      // Only once the first batch is through, so the run gets far enough to
+      // show that the SECOND batch is the one refused.
+      if (batches.length === 1) repo.setActiveWorkspaceId(OTHER_WS)
+      return gap
+    })
+
+    g.open()
+    await drain(repo)
+
+    expect(batches).toEqual([0])
+  })
+
   it('aborts mid-run when rows start staging between batches', async () => {
     // The pre-run check catches a graph that is already draining; this pins the
     // PER-TRANSACTION one, which is the only thing covering staging that starts

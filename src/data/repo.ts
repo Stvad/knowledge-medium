@@ -3414,24 +3414,32 @@ export class Repo {
     return behind
   }
 
+  /** Why a run's workspace is no longer the one it was scheduled against, or
+   *  null. Both arms, because they are different causes and each should say its
+   *  own: switched AWAY (the id differs) and switched away and BACK (the id is
+   *  restored and only the generation moved). Identity first, so a plain
+   *  departure is not reported as a re-open.
+   *
+   *  One owner for the two callers — `takeBackfillClaim`, which turns it into a
+   *  refusal, and `assertBackfillMayWrite`, which throws it. Each used to spell
+   *  the rule out for itself, which is how two copies drift. */
+  private workspaceRunStaleReason(workspaceId: string, generation: number): string | null {
+    if (this._client.activeWorkspaceId !== workspaceId) {
+      return `workspace ${workspaceId} is no longer active, so its writes would land `
+        + "under the current session's access state"
+    }
+    if (this.workspaceGeneration !== generation) {
+      return `workspace ${workspaceId} was re-opened since this pass was scheduled, so `
+        + "the earlier visit's job must not write into the new one"
+    }
+    return null
+  }
+
   private async assertBackfillMayWrite(
     workspaceId: string,
     backfillId: string,
     generation: number,
   ): Promise<void> {
-    if (this.workspaceGeneration !== generation) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} was ` +
-        `re-opened since this pass was scheduled. The earlier visit's job must not ` +
-        `write into the new one.`,
-      ), {kind: Repo.TRANSIENT})
-    }
-    if (this._client.activeWorkspaceId !== workspaceId) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
-        `longer active. Its writes would land under the current session's access state.`,
-      ), {kind: Repo.TRANSIENT})
-    }
     // Re-sampled per transaction while the write lock is held, so a drain
     // cannot commit between this check and the write. Reading through
     // `this.db` rather than the tx handle is deliberate: the drain is excluded
@@ -3441,6 +3449,38 @@ export class Repo {
       throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: ${gap.reason}. This pass would scan ` +
         `an incomplete view of the graph and upload a properties bag built from it.`,
+      ), {kind: Repo.TRANSIENT})
+    }
+    // AFTER the probe, not before it, and deliberately only the one:
+    // `setActiveWorkspaceId` is a synchronous field write that a switch lands
+    // cleanly in the probe's await window, so a copy ahead of the probe would
+    // be describing a workspace this session has since left. Asking after
+    // strictly dominates asking before — a workspace that left and returned
+    // across the probe has moved its generation — so that second copy would
+    // decide nothing and only look load-bearing.
+    const stale = this.workspaceRunStaleReason(workspaceId, generation)
+    if (stale !== null) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: ${stale}.`,
+      ), {kind: Repo.TRANSIENT})
+    }
+    // The ROLE, re-sampled here for the same reason: the commit pipeline gates
+    // on `isReadOnly` when the transaction STARTS, and this runs inside it,
+    // after the awaited probe, so a revocation landing in between has already
+    // passed that gate and the pass would upload source-of-truth rows as a
+    // viewer.
+    //
+    // After the staleness check and not before it, because `isReadOnly` is the
+    // ACTIVE workspace's role: asked first, a run whose workspace has been
+    // switched away reports "lost write access to <the workspace it left>",
+    // which is not what happened. Both abort either way — this is about the
+    // message naming the actual cause. Last statement before returning to the
+    // writer, nothing awaited after it, for the same reason `takeBackfillClaim`
+    // re-asks before its claim write.
+    if (this.isReadOnly) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: this device lost write access to `
+        + `workspace ${workspaceId} while the pass was running.`,
       ), {kind: Repo.TRANSIENT})
     }
   }
@@ -3470,15 +3510,8 @@ export class Repo {
     backfill: WorkspaceBackfill,
     generation: number,
   ): Promise<BackfillClaimAttempt> {
-    /** Both ways a run can outlive its workspace: switched away (id differs)
-     *  and switched away and back (id restored, generation moved). Identity
-     *  first, so each case reports its own cause. */
     const runStale = (): string | null =>
-      this.activeWorkspaceId !== workspaceId
-        ? `workspace ${workspaceId} is no longer active`
-        : this.workspaceGeneration !== generation
-          ? `workspace ${workspaceId} was re-opened since this run was scheduled`
-          : null
+      this.workspaceRunStaleReason(workspaceId, generation)
     // A role flip to read-only during a deferral window must stop further
     // writes — re-asked on every attempt, since a run spans several txs.
     if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
