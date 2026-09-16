@@ -3335,6 +3335,34 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await bagOf('p')).tags).toEqual(['b', 'a'])
     })
 
+    it('matches a member by VALUE, so a hand-spelled row keeps its identity', async () => {
+      // ` 1 ` and `1` project to the same member. Matching on raw text instead
+      // would reap the row the person edited, and its comment with it, to mint
+      // a replacement for a value that never changed.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [1, 2]),
+        {scope: ChangeScope.BlockDefault})
+      const before = await memberRows('p', BAG_FIELD_ID)
+      await repo.tx(tx => tx.update(before[0]!.id, {content: ' 1 '}),
+        {scope: ChangeScope.BlockDefault})
+      const noteKey = await appendKey(before[0]!.id)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: before[0]!.id, orderKey: noteKey, content: 'why 1',
+      }), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [2, 1]),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', BAG_FIELD_ID)
+      expect(after.map(m => m.id)).toEqual([before[1]!.id, before[0]!.id])
+      // Its own spelling survives too — the row matched by value, so there is
+      // nothing to canonicalize and no reason to edit a person's text.
+      expect(after[1]!.content).toBe(' 1 ')
+      expect((await childrenRows(before[0]!.id)).filter(c => c.deleted === 0)
+        .map(c => c.content)).toEqual(['why 1'])
+    })
+
     it('refuses a list member whose content cannot be read back', async () => {
       // `codecs.refList` accepts an empty id, and the ref encoder renders a
       // cleared ref as empty content. A scalar may be cleared; a member may
@@ -3352,6 +3380,32 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
   })
 
   describe('a caller that did not observe intent may not reap a member', () => {
+    it('keeps an arrived member that DUPLICATES one already there', async () => {
+      // `mayNotRemove` has to govern folding too, not just deletion: a fold
+      // takes the row away just the same, and multiplicity is part of a list's
+      // value, so collapsing an unobserved arrival onto its twin shortens the
+      // list exactly as reaping it would.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+      const arrivedKey = await appendKey(field.id)
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES ('twin', ?, ?, ?, 'alpha', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, field.id, arrivedKey],
+      )
+
+      await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'alpha'])
+    })
+
     it('restoring the owner keeps a member that arrived while it was deleted', async () => {
       // Revival re-materializes names the tx never wrote, from a cell that can
       // be STALE against the children: sync-apply skips the parent-liveness

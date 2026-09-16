@@ -61,8 +61,9 @@ import {
   propertiesEqual,
   propertyCellValueRejection,
   propertyFieldContent,
+  valueChildContentToEncoded,
 } from '@/data/propertyChildren'
-import { jsonValuesEqual } from './jsonCanonical'
+import { jsonValuesEqual, stableJsonValue } from './jsonCanonical'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
@@ -662,7 +663,7 @@ export const reconcileFieldValueChildren = async (
     await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!)
     return
   }
-  await reconcileMemberValueChildren(tx, fieldRow, values, contents, mayNotRemove)
+  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, mayNotRemove)
 }
 
 const createValueChild = (
@@ -703,37 +704,57 @@ const reconcileSingleValueChild = async (
 const reconcileMemberValueChildren = async (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
   values: readonly BlockData[],
   contents: readonly string[],
   mayNotRemove: boolean,
 ): Promise<void> => {
-  // Match each member to an existing child with that exact content, so a
-  // reorder or an insertion keeps every member's ROW IDENTITY — its comments,
-  // its own properties, its history. Rewriting content position-wise instead
-  // would silently move a member's sub-children onto a different member.
+  // Match by VALUE, not by raw text. A member a person spelled ` 1 ` or
+  // `{ "a": 1 }` projects to exactly the value the canonical text projects to,
+  // and matching on text alone reaps that row — with its comments, its own
+  // properties and its history — to mint a replacement for a value that never
+  // changed. A row whose content does not parse keys on the text instead, so it
+  // matches nothing and stays surplus, which is what it is.
+  const keyOf = (content: string): string => {
+    try {
+      return `v${JSON.stringify(stableJsonValue(valueChildContentToEncoded(schema, content)))}`
+    } catch {
+      return `c${content}`
+    }
+  }
+  const keyByRow = new Map(values.map(value => [value.id, keyOf(value.content)]))
+
+  // Occurrence by occurrence, so a list holding one member twice consumes two
+  // rows and a shortened list drops the surplus one rather than the wrong one.
   const unused = new Map<string, BlockData[]>()
   for (const value of values) {
-    const bucket = unused.get(value.content)
+    const key = keyByRow.get(value.id)!
+    const bucket = unused.get(key)
     if (bucket) bucket.push(value)
-    else unused.set(value.content, [value])
+    else unused.set(key, [value])
   }
-  const kept = contents.map(content => unused.get(content)?.shift())
+  const kept = contents.map(content => unused.get(keyOf(content))?.shift())
 
   // Everything unmatched, in the order the value set was read, so replicas
-  // agree on which of several equal-content rows survives.
+  // agree on which of several equal rows survives.
   const surplus = values.filter(value => !kept.includes(value))
 
-  // A surplus row whose content EQUALS a member we are keeping is one copy too
-  // many — the match above consumed one row per member the cell asked for, so
-  // anything left over is beyond that count — and it folds, relocating its
-  // user-authored sub-children under the survivor instead of being tombstoned
-  // with it. A surplus row naming no member is a member the cell removed.
-  for (const row of surplus) {
-    const survivor = kept.find(k => k !== undefined && k.content === row.content)
-    if (survivor) await collapseDuplicateValueChild(tx, survivor.id, row)
-    // A caller that did not observe intent for this name may not reap: the
-    // member stays, and the projection picks it up as one more member.
-    else if (!mayNotRemove) await deleteSubtreeInTx(tx, row.id)
+  // `mayNotRemove` governs EVERY removal, folding included: a fold takes a row
+  // away, and multiplicity is part of a list's value, so a repeated member that
+  // arrived unobserved has to survive one too. Checking it only on the delete
+  // branch let an arrival that duplicated an existing member be collapsed.
+  if (!mayNotRemove) {
+    for (const row of surplus) {
+      // A surplus row equal to a member we are keeping is one copy too many —
+      // the match above consumed one row per member the cell asked for — and it
+      // folds, relocating its user-authored sub-children under the survivor
+      // instead of being tombstoned with it. A surplus row matching no member
+      // is a member the cell removed.
+      const survivor = kept.find(k =>
+        k !== undefined && keyByRow.get(k.id) === keyByRow.get(row.id))
+      if (survivor) await collapseDuplicateValueChild(tx, survivor.id, row)
+      else await deleteSubtreeInTx(tx, row.id)
+    }
   }
 
   // Members permute among the order-key SLOTS the value children already
@@ -743,6 +764,7 @@ const reconcileMemberValueChildren = async (
   // list properties here hold a handful of members, and the alternative —
   // allocating between neighbours — is a second ordering rule to keep correct
   // for a cost nothing has measured.
+  //
   // DISTINCT slots: synced or imported rows can share an `order_key`, and a
   // tied pair cannot express an order at all — SQLite falls back to the id, so
   // a reorder completes and then projects back in the old order. Collapsing the
@@ -765,6 +787,9 @@ const reconcileMemberValueChildren = async (
       await createValueChild(tx, fieldRow, contents[i]!, orderKey)
       continue
     }
+    // Content is deliberately NOT rewritten to the canonical spelling: the row
+    // matched BY VALUE, so its text already projects to what the cell asks for,
+    // and rewriting it would edit text a person chose for no gain.
     if (existing.orderKey !== orderKey) {
       await tx.move(existing.id, {parentId: fieldRow.id, orderKey})
     }
