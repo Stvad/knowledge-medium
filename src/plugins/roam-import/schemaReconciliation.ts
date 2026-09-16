@@ -605,7 +605,7 @@ export const ensurePromotedPropertySchemas = async (
   // rolls the whole transaction back — and a poll-driven caller that holds its
   // cursor on failure then retries the same event forever.
   const missing: string[] = []
-  const unfit = new Set<string>()
+  const unfitNames = new Set<string>()
   for (const name of names) {
     const schema = repo.propertySchemas.get(name)
     if (!schema) { missing.push(name); continue }
@@ -614,10 +614,10 @@ export const ensurePromotedPropertySchemas = async (
       if (!properties || !(name in properties)) continue
       const fit = fitPromotedValueToSchema(schema, properties[name])
       if (fit.kind === 'fits') properties[name] = fit.value
-      else unfit.add(name)
+      else unfitNames.add(name)
     }
   }
-  const undecodable = [...unfit]
+  const unfit = [...unfitNames]
   if (missing.length > 0) {
     notes.push(
       `${missing.length} promoted key(s) have NO definition and will be skipped by property `
@@ -626,7 +626,7 @@ export const ensurePromotedPropertySchemas = async (
       + '`kmagent audit-properties` lists them.',
     )
   }
-  if (undecodable.length > 0) {
+  if (unfit.length > 0) {
     // Reshaping only reaches `string` and `list`. A key whose existing schema
     // is narrower (url, number, boolean, date…) can still receive arbitrary
     // promoted text that no reshaping fixes — and post-flip that aborts the
@@ -640,8 +640,8 @@ export const ensurePromotedPropertySchemas = async (
     // key that is not promoted at all, or a definition edited in the window
     // between the two.
     notes.push(
-      `${undecodable.length} promoted key(s) carry a value their existing definition `
-      + `cannot hold: ${undecodable.map(n => JSON.stringify(n)).join(', ')}. `
+      `${unfit.length} promoted key(s) carry a value their existing definition `
+      + `cannot hold: ${unfit.map(n => JSON.stringify(n)).join(', ')}. `
       + 'This value cannot be made to fit by reshaping; widen or correct that definition, '
       + 'or decline the key at promotion. In a child-backed workspace a write like this '
       + 'is REJECTED by the materialize processor, so it must be resolved before that '
