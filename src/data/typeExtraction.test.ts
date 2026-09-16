@@ -995,6 +995,69 @@ describe('block-type typeify processor', () => {
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
   })
 
+  // A DRIFTED legacy row — label `Book`, title something else — renamed
+  // explicitly by writing both fields, the shape an import or extension uses.
+  // The name being replaced is the LABEL, and it worked, so the new one has to
+  // work too; keying that check on the old TITLE skipped it and stored a name
+  // nothing can link to.
+  it('refuses an explicit rename of a drifted type to an unwritable name', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: ['Book'],
+    }, 'See [[Foo]]')
+
+    await expect(env.repo.tx(
+      tx => tx.update(id, {
+        content: 'See [[Bar]]',
+        properties: {
+          types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+          [blockTypeLabelProp.name]: 'See [[Bar]]',
+          [aliasesProp.name]: ['Book'],
+        },
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(LossyLabelError)
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('See [[Foo]]')
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
+  // The same drifted row renamed to a name that DOES work: the claim to retire
+  // is the one spelling the old LABEL. Looking for the old title instead found
+  // nothing to retire and appended, leaving the type claiming both names.
+  it('retires the old label when a drifted type is renamed explicitly', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [blockTypeLabelProp.name]: 'Book',
+      [aliasesProp.name]: ['Book'],
+    }, 'See [[Foo]]')
+
+    await env.repo.tx(
+      tx => tx.update(id, {
+        content: 'Novel',
+        properties: {
+          types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+          [blockTypeLabelProp.name]: 'Novel',
+          [aliasesProp.name]: ['Book'],
+        },
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('Novel')
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Novel')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Novel'])
+    expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
+  })
+
   // A legacy row can carry its name in the BODY alone, with no label at all.
   // Clearing that body would drop the type from the registry while its claim
   // stayed put — the same un-naming the emptied-body rule exists to prevent.
@@ -1050,10 +1113,17 @@ describe('block-type typeify processor', () => {
   describe('with the alias plugin off', () => {
     // The type editor writing BOTH halves is the naming gesture, however
     // drifted the row was — so the new name is claimed here rather than being
-    // left to a plugin that may not be installed. The old name is not retired:
-    // it was never what the content said, and releasing a claim on the strength
-    // of a LABEL cannot tell the type's own name from a user alias equal to it.
-    it('claims the new name when a legacy drifted type is renamed explicitly', async () => {
+    // left to a plugin that may not be installed, and the old one is retired.
+    //
+    // Reverses a decline recorded here earlier — that a LABEL match cannot tell
+    // the type's own name from a user alias equal to it. An EXACT match of the
+    // label IS that name, and a user alias equal to it is the same single
+    // entry, so nothing distinguishable is lost. A near match (`" Book "`
+    // beside the name `Book`) is a different string and survives, which is what
+    // that concern was really about. Not retiring stranded the claim for good:
+    // the next rename looks for the name it finds THEN, which no longer spells
+    // this one.
+    it('moves the claim when a legacy drifted type is renamed explicitly', async () => {
       env = await setup({alias: false})
       const id = await tagBlockType(env, 'Book')
       await rawProperties(env, id, {
@@ -1068,7 +1138,7 @@ describe('block-type typeify processor', () => {
       }, {scope: ChangeScope.BlockDefault})
 
       expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Novel'}).load())?.id).toBe(id)
-      expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+      expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()).toBeNull()
     })
 
     // The other legacy spelling: content and claim BOTH padded, which is a

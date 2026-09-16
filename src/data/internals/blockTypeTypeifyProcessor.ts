@@ -213,6 +213,17 @@ const followRenamedContent = async (
     )
   }
 
+  // The name this row HAD, in the two spellings anything writes it: as STORED,
+  // and as trimmed. The LABEL is that name wherever the two fields disagree — a
+  // legacy or sync-applied row's title may never have been its name — and the
+  // title otherwise, which is every row this code writes. Three decisions below
+  // turn on it, and keying any of them on the title alone mis-reads a drifted
+  // row: what it steps aside for, what it validates against, what it retires.
+  const previousStored = previousLabel !== ''
+    ? safeDecodeRowProperty(before, blockTypeLabelProp)
+    : before.content
+  const previousName = previousLabel !== '' ? previousLabel : before.content.trim()
+
   // An emptied body names nothing, so the type keeps its name and the body is
   // restored to it — un-naming a type is the type editor's gesture, which
   // releases the alias too. Whitespace counts as empty: aliasSync's blank guard
@@ -221,7 +232,7 @@ const followRenamedContent = async (
   // label, or — for a legacy row that never had a label at all — the body being
   // cleared. A type named only by its content is still named, and emptying it
   // would otherwise drop the type while its claim stayed put.
-  const name = newContent || currentLabel || (labelMoved ? '' : before.content.trim())
+  const name = newContent || currentLabel || (labelMoved ? '' : previousName)
   if (name === '') return
 
   // A content rewrite is a rename only where the content WAS this type's name,
@@ -235,8 +246,7 @@ const followRenamedContent = async (
   // Unless the LABEL moved in this tx, which is the naming gesture itself: the
   // type editor writes both halves, and that is a rename however drifted the
   // row was. Stepping aside there would leave the new name unclaimed.
-  const previousName = before.content.trim()
-  if (!labelMoved && previousLabel !== '' && previousLabel !== previousName) return
+  if (!labelMoved && previousName !== before.content.trim()) return
 
   // Otherwise the new name has to be a name: refuse a REGRESSION, where the one
   // being replaced worked or where the type is being named for the first time
@@ -251,14 +261,16 @@ const followRenamedContent = async (
   // strands the inbound `[[old name]]` links nothing will rewrite. It doubles
   // as what the merge offer may drop, and matches the empty list `alias.sync`
   // reports for its A3 drift case.
-  // The claim that SPELLS the old name — as stored, or as trimmed. Those are
-  // the only two spellings anything writes: every writer of a type name writes
-  // the trimmed one, and a legacy row can carry the padded one in both its
-  // content and its bag. An entry matching neither is a user's own alias,
-  // however similar it looks, and this rename does not get to retire it.
-  const oldNameSpellings = [before.content, before.content.trim()]
+  // The claim that SPELLS the old name. Anything that writes a type name writes
+  // the trimmed spelling, and a legacy row can have stored a padded one — in
+  // EITHER field that can hold the name, which is why both are candidates here
+  // and only where they really are that name. An entry matching none of them is
+  // a user's own alias, however similar it looks, and this rename does not get
+  // to retire it.
+  const oldNameSpellings = [previousStored, before.content, previousName]
+    .filter(spelling => spelling !== '' && spelling.trim() === previousName)
   const claims = getAliases(before)
-  const retiring = oldNameSpellings.find(spelling => spelling !== '' && claims.includes(spelling))
+  const retiring = oldNameSpellings.find(spelling => claims.includes(spelling))
 
   // The whole claim moves HERE — old name retired, new one taken — rather than
   // being left to `aliasSyncProcessor`: that plugin is togglable, AND it has
