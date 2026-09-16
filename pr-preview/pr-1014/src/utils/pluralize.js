@@ -1,1 +1,1 @@
-import{IE as e,LE as t}from"../../chunks/app-D6nKOtVN.js";export{e as agree,t as pluralize};
+import{IE as e,LE as t}from"../../chunks/app-Bh_TZrnn.js";export{e as agree,t as pluralize};
