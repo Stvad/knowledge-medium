@@ -205,6 +205,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   inFlightOperatorBackfills: 'data field — a Set of in-flight keys; holds no reference to the Repo',
+  pendingDriftRedetects: 'data field — a Set of workspace ids; holds no reference to the Repo',
   requestedWrites: 'data field — a counter written only by _runAndDispatch on the real repo',
   _propertyDefinitionRegistry: 'data field',
   _previousPropertyDefinitionRegistry: 'data field',

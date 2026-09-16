@@ -547,6 +547,41 @@ describe('codec-change migration', () => {
     expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
   })
 
+  it('clears when the USER canonicalized the only candidate, so the pass wrote nothing', async () => {
+    // The whole-pass version of the intervening-edit case. The user edits the
+    // only candidate between the scan and its chunk, which canonicalizes it
+    // under the live schema and leaves an entry holding the OLD encoding. The
+    // chunk then finds nothing to do, so a rule keyed on "the pass wrote"
+    // preserves that entry — and the record below makes it permanent.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+    await repo.awaitPropertyDefinitionBaselines()
+
+    // Stand in for the user's edit landing inside the pass's window: the
+    // candidate scan has run, and the row is canonical by the time the chunk
+    // reaches it.
+    const batch = vi.spyOn(
+      repo as unknown as {runPropertyDefinitionMigrationBatch: () => Promise<boolean>},
+      'runPropertyDefinitionMigrationBatch',
+    ).mockImplementation(async () => {
+      await repo.tx(tx => tx.setProperty('p', statusNumber, 42 as never),
+        {scope: ChangeScope.BlockDefault})
+      return false
+    })
+    expect(undoDepth(repo)).toBeGreaterThan(0)
+
+    await republish(repo, statusNumber)
+    batch.mockRestore()
+
+    // The pass recorded, so the entry the edit left behind would be permanent.
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
+    expect(undoDepth(repo)).toBe(0)
+    expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
+  }, 20_000)
+
   it('leaves the undo history alone when the pass converges without writing', async () => {
     await seedWorkspace('children')
     const repo = setup()
@@ -1345,6 +1380,44 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     expect(await rowContent(valueRowId)).toBe(' 42 ')
     expect(await cell('p')).toEqual({status: ' 42 '})
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+  }, 20_000)
+
+  it('parks ONE re-detect per workspace, however many passes the gap refuses', async () => {
+    // One gap refuses every definition that primes during it. A listener each
+    // would all fire before any of their passes records, re-detect against the
+    // same unchanged baseline, and enqueue that many full-workspace passes.
+    await seedWorkspace('children')
+    // A PARK is a gate call whose disposer is not invoked synchronously;
+    // `backfillSyncSettledNow` samples the very same gate and disposes at once,
+    // so counting calls would count those too.
+    let openGate: (() => void) | null = null
+    let parks = 0
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: (cb) => {
+        let disposed = false
+        queueMicrotask(() => { if (!disposed) { parks += 1; openGate = cb } })
+        return () => { disposed = true; if (openGate === cb) openGate = null }
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    publishDefinition(repo, statusString)
+    await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // Two refusals in the same gap: each workspace round trip primes and
+    // re-detects the drift the previous one could not record.
+    await changeWhileInactive(repo, statusNumber)
+    await vi.waitFor(() => { expect(parks).toBe(1) }, {timeout: 5000})
+    await changeWhileInactive(repo, statusNumber)
+    await repo.awaitPropertyDefinitionMigrations()
+    await new Promise(resolve => queueMicrotask(() => resolve(null)))
+    warn.mockRestore()
+
+    // The second refusal found a re-detect already waiting and added nothing.
+    expect(parks).toBe(1)
   }, 20_000)
 
   it('re-checks the workspace after the gap probe awaits', async () => {

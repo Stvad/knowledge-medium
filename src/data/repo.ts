@@ -884,6 +884,11 @@ export class Repo {
    *  handle `awaitPropertyDefinitionBaselines()` has to drain, which every
    *  integration test depends on. */
   private propertyDefinitionBaselineWork: Promise<void> = Promise.resolve()
+  /** Workspaces with a drift re-detect already waiting on the sync gate. Every
+   *  definition refused during one gap would otherwise park its own listener,
+   *  and they all fire before any of their passes records — so they re-detect
+   *  against the same old baseline and each enqueue a full-workspace pass. */
+  private readonly pendingDriftRedetects = new Set<string>()
   /** In-flight property-seed materialization passes (§4.3 of the schema-
    *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
    *  siblings the pass is create/restore-only + idempotent rather than
@@ -4499,18 +4504,29 @@ export class Repo {
    * times: the gate answers connected-and-not-downloading while the
    * materialization drain settles separately, so a single retry lands in that
    * window and gives up. It cannot spin — every cycle goes through the gate AND
-   * the deep-idle deferral, one listener is parked per workspace, and a DURABLE
-   * gap is never re-armed because nothing is working to clear it.
+   * the deep-idle deferral, and a DURABLE gap is never re-armed because nothing
+   * is working to clear it.
+   *
+   * COALESCED per workspace, because one gap refuses every definition that
+   * primes during it: a listener each would all fire before any of their passes
+   * records, re-detect against the same unchanged baseline, and enqueue that
+   * many full-workspace passes — repeating the candidate scan, splitting the
+   * writes across jobs, and clearing and announcing once per job. One re-detect
+   * answers for all of them, since it diffs the whole registry.
    */
   private redetectPropertyDefinitionDriftWhenCaughtUp(workspaceId: string): void {
+    if (this.pendingDriftRedetects.has(workspaceId)) return
+    this.pendingDriftRedetects.add(workspaceId)
     // Held in a box, not a `const` the callback closes over: an already open
-    // gate fires SYNCHRONOUSLY, before any such binding is initialised. Nothing
-    // tracks the parked listener — it is the re-detect below that decides
-    // whether firing does anything, and it has to make that decision anyway:
-    // a switch between the gate firing and the deep-idle job running is past
-    // any disposal a switch handler could do.
+    // gate fires SYNCHRONOUSLY, before any such binding is initialised.
     const gate: {dispose?: () => void} = {}
     gate.dispose = this.backfillSyncGate(() => {
+      // Released as the re-detect is enqueued, not when it finishes: a drift
+      // detected AFTER this point is a different rebuild's and deserves its own
+      // retry. Nothing else tracks the listener — a workspace switch between
+      // the gate firing and the job running is past any disposal a switch
+      // handler could do, so the re-detect checks for itself either way.
+      this.pendingDriftRedetects.delete(workspaceId)
       gate.dispose?.()
       this.propertyDefinitionMigrationJobs.schedule(async () => {
         this.redetectPropertyDefinitionDrift(workspaceId)
@@ -4582,8 +4598,27 @@ export class Repo {
     // drift stays visible to the prime that follows the flip.
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
     const label = propertyDefinitionMigrationLabel(plans)
+    const undoManager = this.undoManagerFor(workspaceId)
+    // The top of the user's stack as the pass begins. Compared again below —
+    // see there for what it answers that `everWrote` cannot.
+    const undoWatermark = undoManager.peekUndo(ChangeScope.BlockDefault)?.txId ?? null
+    const clearUndo = this.undoClearingForPassWrites(workspaceId, () => {
+      const message =
+        'Re-encoding property values for a changed type cleared this '
+        + "workspace's undo history — replaying an entry from before the "
+        + 'change would have reverted it.'
+      console.warn(`${label}: ${message}`)
+      // The same channel this pass already reports unconvertible values on.
+      // The doctrine's rule is to clear AND say so: a user who finds cmd-Z
+      // silently empty has no way to connect it to a type change.
+      this.userErrorListeners.notify(new ProcessorRejection(
+        message, 'property.codec-change.undo-cleared', {workspaceId},
+      ))
+    })
     try {
-      await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver, generation)
+      const wrote = await this.runPropertyDefinitionMigrationBatch(
+        workspaceId, plans, resolver, generation, clearUndo,
+      )
       // This one is load-bearing. The per-chunk check only fires when a chunk
       // WRITES, and a run that finds no candidates opens no transaction at
       // all — which is exactly what a partially materialized graph looks like,
@@ -4591,6 +4626,22 @@ export class Repo {
       // pass would sail through and record the drift as applied, on this
       // device forever.
       await this.assertUploadingPassMayWrite(workspaceId, label, generation)
+      // A pass that wrote has already cleared, after each of its chunks. A pass
+      // that wrote NOTHING has not — and can still owe a clear, because the
+      // convergence may be the USER's: an edit landing between the candidate
+      // scan and that row's chunk canonicalizes the value under the live schema
+      // and leaves an entry holding the OLD encoding. The chunk then finds
+      // nothing to do, and the record below makes that entry permanent.
+      //
+      // The watermark is what separates that from an ordinary converged pass —
+      // rows a peer already migrated, which is the common shape on a receiving
+      // device and must NOT cost the user their history. It asks only "was
+      // anything recorded on this workspace's stack while the pass ran". Not
+      // consulted once the pass has written, where every clear has already
+      // rebased the stack to empty and any entry above it postdates the writes.
+      if (!wrote && (undoManager.peekUndo(ChangeScope.BlockDefault)?.txId ?? null) !== undoWatermark) {
+        clearUndo()
+      }
       // Only an APPLIED pass advances a known fieldId — a throw, or a pass that
       // never ran, leaves the drift visible to the next prime.
       await recordAppliedPropertyDefinitionCodecs(this.db, workspaceId, new Map(
@@ -4643,7 +4694,8 @@ export class Repo {
     plans: readonly PropertyDefinitionMigrationPlan[],
     resolver: PropertySchemaResolver,
     generation: number,
-  ): Promise<void> {
+    clearUndo: () => void,
+  ): Promise<boolean> {
     const label = propertyDefinitionMigrationLabel(plans)
     // `plans` arrives pre-resolved (schedule-time capture, see
     // `schedulePropertyDefinitionMigrations`) and `resolver` is the SAME
@@ -4681,7 +4733,7 @@ export class Repo {
       }
     }
     const parentIds = [...parentIdSet]
-    if (parentIds.length === 0) return
+    if (parentIds.length === 0) return false
 
     // Per changed definition, for the user-facing unparseable-values report.
     const unconvertibleByField = new Map<string, number>()
@@ -4695,22 +4747,6 @@ export class Repo {
     // not, and still leaves a pass that writes nothing at all costing the user
     // no history.
     let everWrote = false
-    // `skipUndo` keeps this pass's own writes off the stack but cannot reach
-    // the entries already on it — nor the ones the user adds between chunks.
-    // See the helper for why that is per chunk rather than once.
-    const clearUndo = this.undoClearingForPassWrites(workspaceId, () => {
-      const message =
-        'Re-encoding property values for a changed type cleared this '
-        + "workspace's undo history — replaying an entry from before the "
-        + 'change would have reverted it.'
-      console.warn(`${label}: ${message}`)
-      // The same channel this pass already reports unconvertible values on.
-      // The doctrine's rule is to clear AND say so: a user who finds cmd-Z
-      // silently empty has no way to connect it to a type change.
-      this.userErrorListeners.notify(new ProcessorRejection(
-        message, 'property.codec-change.undo-cleared', {workspaceId},
-      ))
-    })
     const CHUNK = 100
     for (let i = 0; i < parentIds.length; i += CHUNK) {
       const chunk = parentIds.slice(i, i + CHUNK)
@@ -4908,6 +4944,7 @@ export class Repo {
         {fieldId: change.fieldId, name: schema.name, count: unconvertible},
       ))
     }
+    return everWrote
   }
 
   /**
