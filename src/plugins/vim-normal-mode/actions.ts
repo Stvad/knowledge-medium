@@ -15,7 +15,7 @@ import {
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
-import { pasteFromClipboard } from '@/paste/operations.js'
+import { pasteOrMove } from '@/paste/pasteOrMove.js'
 import {
   bindBlockActionContext,
   createSharedBlockActions,
@@ -291,10 +291,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'paste_after',
       description: 'Paste from clipboard after current block',
       handler: async ({block, uiStateBlock, renderScopeId, scopeRootId}: BlockShortcutDependencies) => {
-        const pasted = await pasteFromClipboard(block, repo, {
-          position: 'after',
-          scopeRootId,
-        })
+        const {pasted} = await pasteOrMove(repo, block, 'after', {scopeRootId})
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
       defaultBinding: {
@@ -305,10 +302,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'paste_before',
       description: 'Paste from clipboard before current block',
       handler: async ({block, uiStateBlock, renderScopeId, scopeRootId}: BlockShortcutDependencies) => {
-        const pasted = await pasteFromClipboard(block, repo, {
-          position: 'before',
-          scopeRootId,
-        })
+        const {pasted} = await pasteOrMove(repo, block, 'before', {scopeRootId})
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
       defaultBinding: {
