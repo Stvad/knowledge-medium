@@ -76,6 +76,8 @@ import {
   type SameTxCtx,
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
+import { presetIdProp } from '@/data/properties'
+import { peekRowProperty } from '@/data/rowProperty'
 import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
@@ -203,15 +205,19 @@ interface DefinitionChange {
   readonly fieldId: string
   readonly oldName: string
   readonly newName: string
-  /** Schema built from the definition's AFTER row — the codec every value child
-   *  is read under and the cell is projected with. For a pure rename that is
-   *  the unchanged codec, which is exactly what reprojection needs. */
+  /** The codec every value child is read under and the cell is projected with.
+   *  The AFTER row's, except when that row builds none — a rename that also
+   *  switched to a missing, invalid or throwing preset still has to re-key, and
+   *  the values are still in the BEFORE row's encoding, which makes its codec
+   *  the right one to reproject them with. */
   readonly schema: AnyPropertySchema
-  /** The codec TYPE changed in this tx. Only then is value-child CONTENT
-   *  rewritten (a rename leaves the stored encoding alone), and only then is an
-   *  unparseable value REPORTED — under an unchanged codec it is pre-existing
-   *  staleness, not a consequence of this edit. */
-  readonly codecChanged: boolean
+  /** The stored ENCODING may now differ, so value-child content is rewritten
+   *  and anything that will not parse is REPORTED. False for a pure rename,
+   *  where the encoding is untouched and an unparseable value is pre-existing
+   *  staleness rather than a consequence of this edit — and false when the
+   *  after-row builds no codec, since nothing can be re-encoded into one that
+   *  does not exist; the transaction repairing the preset picks that up. */
+  readonly encodingChanged: boolean
 }
 
 /** Definition blocks in `changedRows` whose NAME or CODEC TYPE changed this tx.
@@ -251,32 +257,44 @@ const collectChanges = (
     // resolver "does this fieldId resolve" instead would conflate shadowing
     // with having no buildable codec, which is the repair case below and must
     // NOT be skipped.
-    const schema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
+    const afterSchema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
+    const beforeSchema = buildSchemaOrNull(before, ctx.valuePresets, beforeMeta)
+    const schema = afterSchema ?? beforeSchema
     if (schema === null) continue
+    // The PRESET is the discriminator, not `codec.type`. A codec's type string
+    // is not its identity: `optional-string` and `string` both report 'string'
+    // while the optional one stores an unset value as `null`, which the
+    // required one reads back as literal text — so switching between twins
+    // changes the stored encoding without changing the type, and the
+    // seed-identity rules freeze preset AND codec for exactly that reason.
+    // Preset CONFIG is deliberately not part of it: a config tweak keeps the
+    // encoding, and a codec that reads leniently across one (enum's removed
+    // option) means to PRESERVE such a value rather than have a pass rewrite it.
+    //
     // Read from the block's own rows, not from the registry: the tx-start
-    // snapshot is at-or-older than `before`, so a codec change an earlier tx
-    // already fanned out would read as this tx's and be re-encoded a second
-    // time (idempotent, but it would re-report to the user).
+    // snapshot is at-or-older than `before`, so a change an earlier tx already
+    // fanned out would read as this tx's and be re-encoded a second time
+    // (idempotent, but it would re-report to the user).
     //
     // An unbuildable BEFORE row counts as changed. The old codec is what
     // DETECTS a change, never what performs one — the conversion parses the
     // child's TEXT under the new codec either way — so a definition whose
     // preset or config was broken and has now been repaired re-encodes on the
-    // repairing tx, which is the only moment anything can. Re-parsing under an
-    // unchanged codec is idempotent, so counting it costs nothing when the
-    // repair restored the same type.
-    const beforeSchema = buildSchemaOrNull(before, ctx.valuePresets, beforeMeta)
-    const codecChanged = beforeSchema === null || beforeSchema.codec.type !== schema.codec.type
+    // repairing tx, which is the only moment anything can.
+    const encodingChanged = afterSchema !== null && (
+      beforeSchema === null
+      || peekRowProperty(before, presetIdProp) !== peekRowProperty(after, presetIdProp)
+    )
     // Every write to a definition block's bag reaches this processor —
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
     // would sweep every consumer of that definition inside the user's tx.
-    if (beforeMeta.name === afterMeta.name && !codecChanged) continue
+    if (beforeMeta.name === afterMeta.name && !encodingChanged) continue
     candidates.push({
       fieldId: after.id,
       oldName: beforeMeta.name,
       newName: afterMeta.name,
       schema,
-      codecChanged,
+      encodingChanged,
     })
   }
   // Pass 2: drop a rename onto a COLLIDING new name — see the refusal above.
@@ -389,7 +407,7 @@ const applyToParent = async (
           projected = encoded
           hasProjection = true
         }
-        if (!change.codecChanged) continue
+        if (!change.encodingChanged) continue
         // Canonicalize the stored text under the new codec so it reads back as
         // what `setProperty` would have written.
         const canonical = encodedPropertyValueToChildContent(change.schema, encoded)
@@ -427,7 +445,7 @@ const applyToParent = async (
     // gives every recognized key a field row, so a parent reached by the query
     // above normally has one for whichever change put it there.
     if (!sawFieldRow) continue
-    if (change.codecChanged && unconvertible > 0) {
+    if (change.encodingChanged && unconvertible > 0) {
       unconvertibleByField.set(
         change.fieldId,
         (unconvertibleByField.get(change.fieldId) ?? 0) + unconvertible,

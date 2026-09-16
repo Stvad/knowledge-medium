@@ -156,8 +156,14 @@ const seedProperty = async (
 }
 
 /** A workspace with one live `status` definition at `FIELD_ID`. */
+/** @param codecType what the preset's codec reports, which is NOT the preset id
+ *  — `optional-string` builds a codec of type `string`. Defaults to the preset
+ *  id because the two coincide for `string` / `number` / `ref`, and every
+ *  caller that needs a twin passes it. */
 const setupDefinition = async (
-  presetId = 'string', extensions?: readonly AnyValuePresetCore[],
+  presetId = 'string',
+  extensions?: readonly AnyValuePresetCore[],
+  codecType = presetId,
 ): Promise<Repo> => {
   const {repo} = createTestRepo({
     db: sharedDb.db,
@@ -168,7 +174,7 @@ const setupDefinition = async (
   })
   repo.setActiveWorkspaceId(WS)
   await createDefinition(repo, FIELD_ID, 'status', presetId)
-  await awaitDefinition(repo, 'status', presetId)
+  await awaitDefinition(repo, 'status', codecType)
   return repo
 }
 
@@ -589,6 +595,56 @@ describe('codec change', () => {
 
     expect(await cell('p')).toEqual({status: 42})
     expect(await rowContent(valueRowId)).toBe('42')
+  })
+
+  it('treats a switch between presets sharing a codec TYPE as an encoding change', async () => {
+    // An optional preset and its required twin report the SAME `codec.type`
+    // while storing an unset value differently — `optional-number` writes
+    // `null`, which the required `number` cannot parse at all. Keying the
+    // decision off the type string calls this switch a no-op, so the stranded
+    // value is never reported and the user is told nothing.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('optional-number', undefined, 'number')
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 7)
+    await setRawValueContent(valueRowId, 'null')
+    const errors = collectUserErrors(repo)
+
+    await retype(repo, FIELD_ID, 'number')
+    await repo.awaitProcessors()
+
+    expect(errors).toHaveLength(1)
+    expect(errors[0]!.meta).toMatchObject({name: 'status', count: 1})
+    // Never deleted — the unconvertible value stays exactly as it was.
+    expect(await rowContent(valueRowId)).toBe('null')
+  })
+
+  it('still re-keys when the SAME edit switches to a preset that cannot build', async () => {
+    // Rename plus a broken preset in one tx. Skipping wholesale would leave the
+    // old key on every consumer — and the later repair transaction cannot
+    // recover it, because by then both before and after carry the NEW name, so
+    // it would add the new key beside an orphaned old one.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('number')
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 42)
+    const {valueRowId: staleRowId} = await seedProperty(repo, 'q', 'status', 7)
+    await setRawValueContent(staleRowId, 'not a number')
+    const errors = collectUserErrors(repo)
+
+    await repo.tx(async tx => {
+      await tx.setProperty(FIELD_ID, propertyNameProp, 'state')
+      await tx.setProperty(FIELD_ID, presetIdProp, 'no-such-preset')
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+
+    // Re-keyed under the BEFORE row's codec — the values are still in that
+    // encoding — and content is untouched, since there is no new codec to
+    // re-encode into.
+    expect(await cell('p')).toEqual({state: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
+    // And nothing is REPORTED: "could not convert to the new type" would be a
+    // lie when the edit produced no new type, and the stale value predates it.
+    expect(errors).toEqual([])
+    expect(await rowContent(staleRowId)).toBe('not a number')
   })
 
   it('rename + re-type in ONE edit: value rows stay live, cell unsets per §9', async () => {
