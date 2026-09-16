@@ -355,8 +355,9 @@ export interface MaterializeOptions {
    *  before the flag existed: the arrived member came back `deleted = 1` while
    *  the scalar path kept the same arrival as a live divergent peer.
    *
-   *  Only the multi-value branch reads it — a scalar's surplus rows are
-   *  divergent peers it already keeps. The scalar branch still OVERWRITES the
+   *  Only the multi-value branch reads it, and only to skip the delete — a
+   *  retained row cannot collide with the member permutation, for the reason
+   *  stated where the slots are built. The scalar branch still OVERWRITES the
    *  primary row's content from the cell on the same path, which is the narrower
    *  half of the same staleness and is tracked separately. */
   mayNotRemove?: boolean
@@ -716,19 +717,15 @@ const reconcileMemberValueChildren = async (
   // list properties here hold a handful of members, and the alternative —
   // allocating between neighbours — is a second ordering rule to keep correct
   // for a cost nothing has measured.
-  // Only the slots of rows this call is free to move: a member it was not
-  // allowed to reap keeps its own key, or the permutation below would hand its
-  // slot to a different member and leave two rows on one key.
-  const retained = mayNotRemove
-    ? new Set(surplus.filter(row => !kept.some(k => k?.content === row.content))
-      .map(row => row.orderKey))
-    : new Set<string>()
   const freed = kept.filter(k => k !== undefined).map(k => k.orderKey)
   const created = contents.length - freed.length
+  // Strictly after every existing value row, the RETAINED ones included, so a
+  // row this call was not allowed to reap can never be handed a slot: its key
+  // is not among `freed` (it is not kept) and sorts below every fresh key.
   const fresh = created > 0
     ? keysBetween(values.map(v => v.orderKey).sort().at(-1) ?? null, null, created)
     : []
-  const slots = [...freed, ...fresh].filter(key => !retained.has(key)).sort()
+  const slots = [...freed, ...fresh].sort()
 
   for (let i = 0; i < contents.length; i++) {
     const orderKey = slots[i]!
