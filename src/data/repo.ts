@@ -3836,7 +3836,9 @@ export class Repo {
         return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
       const resolver = this.propertySchemaResolverFor(workspaceId)
-      let wrote = false
+      // Announced once, not per batch: the history is gone either way, and
+      // saying so repeatedly for a pass that runs for minutes is noise.
+      let announcedUndoClear = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         // One resolver for the whole run, through the canonical factory: the
@@ -3867,7 +3869,31 @@ export class Repo {
           // the run with no marker recorded, so the next open retries.
           const result = await this.tx(async t => {
             await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
-            return fn(t)
+            const value = await fn(t)
+            // While the lock is STILL HELD. A replay queued behind this
+            // transaction acquires the lock the moment it is released, which
+            // can be before the clear below runs — and the clear cannot reach
+            // that replay's entry anyway, since it is already off the stack. It
+            // would read an unchanged epoch and write the pre-pass row straight
+            // back over what this batch just committed.
+            //
+            // NOT PINNED, and no test fails without it: the window it closes is
+            // between the database handing the lock to a waiting replay and
+            // `this.tx` resolving, and the harness cannot schedule into it —
+            // the clear after the await wins every time under test. Kept
+            // because what it loses is a committed batch of a once-per-graph
+            // migration, and it costs one line.
+            //
+            // Not commit-coupled, and that is accepted: a processor or the
+            // commit itself can throw after this line, rolling the batch back
+            // with the epoch left advanced, which costs an already-queued
+            // replay its popped entry. One lost cmd-Z on an error path.
+            // Restoring the epoch on abort is the obvious repair and is the
+            // wrong trade — bumps happen under this same lock, so a restore can
+            // clobber a real one and let a replay that should have been refused
+            // revert committed rows. A lost undo beats a lost row.
+            this.undoManagerFor(workspaceId).invalidateReplays()
+            return value
           }, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
@@ -3879,14 +3905,15 @@ export class Repo {
           // that happened to write nothing counts — which errs toward
           // clearing, the safe side.
           //
-          // Cleared HERE rather than after the pass returns: a chunked pass
-          // runs for minutes, and every one of them is a minute in which a
-          // cmd-Z can replay a pre-pass row snapshot over a batch that has
-          // already committed. The window has to close with the FIRST batch,
-          // not with the last.
-          if (!wrote) {
-            wrote = true
-            this.undoManagerFor(workspaceId).clear()
+          // After EVERY batch, not just the first. A chunked pass runs for
+          // minutes, and an entry the USER records between two batches — on a
+          // row a later batch has not reached yet — holds that row's pre-pass
+          // state and reverts it when replayed, permanently once the pass has
+          // recorded itself complete. Clearing only on the first write leaves
+          // exactly that window open for as long as the pass runs.
+          this.undoManagerFor(workspaceId).clear()
+          if (!announcedUndoClear) {
+            announcedUndoClear = true
             undoHistoryCleared = true
             console.warn(
               `[workspaceBackfills] "${backfill.id}" is writing to workspace ` +

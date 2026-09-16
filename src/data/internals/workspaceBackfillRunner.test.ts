@@ -655,6 +655,105 @@ describe('workspace backfill runner — undo', () => {
     expect(depthAfterFirstBatch).toBe(0)
   })
 
+  it('clears after EVERY batch, so an edit made between two of them goes too', async () => {
+    // The window a first-batch-only clear leaves open, for as long as the pass
+    // runs: the user edits a row the pass has not reached yet, so their entry
+    // holds that row's PRE-pass state. The later batch rewrites the row, the
+    // pass records completion, and their next cmd-Z reverts it permanently.
+    let depthAfterMidPassEdit = -1
+    const repo = makeRepo({
+      id: 'probe-backfill-v1',
+      trigger: 'workspace-open' as const,
+      run: async ({tx}) => {
+        await tx(async t => { await t.update('target', {content: 'batch one'}) },
+          {description: 'batch one'})
+        // Between the batches, on a row batch two has still to rewrite.
+        await repo.tx(async t => { await t.update('later', {content: 'user edit mid-pass'}) },
+          {scope: ChangeScope.BlockDefault, description: 'user edit mid-pass'})
+        depthAfterMidPassEdit = repo.undoManager.depths(ChangeScope.BlockDefault).undo
+        await tx(async t => { await t.update('later', {content: 'batch two'}) },
+          {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.create({id: 'later', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'original'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed later'})
+
+    await drain(repo)
+
+    // The edit was recorded — it is a legitimate user edit made while the pass
+    // was between batches, and the assertion below is that the NEXT batch's
+    // clear took it, not that it was never there.
+    expect(depthAfterMidPassEdit).toBe(1)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
+    await repo.undo(ChangeScope.BlockDefault)
+    expect((await repo.load('later'))?.content).toBe('batch two')
+  })
+
+  it('says the history was cleared ONCE, however many batches it wrote', async () => {
+    // Clearing per batch must not become telling the user per batch.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        await tx(async t => { await t.update('target', {content: 'batch one'}) },
+          {description: 'batch one'})
+        await tx(async t => { await t.update('target', {content: 'batch two'}) },
+          {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+
+    expect(result.undoHistoryCleared).toBe(true)
+    expect(warn.mock.calls.filter(([msg]) =>
+      typeof msg === 'string' && msg.includes('undo history was cleared'))).toHaveLength(1)
+    warn.mockRestore()
+  })
+
+  it('refuses a replay queued behind a batch that commits before the clear runs', async () => {
+    // The replay is popped and waiting on the write lock the batch holds, so
+    // the after-commit clear cannot reach it — `clear()` only empties the
+    // manager, and the entry is already off it. Left unrefused, the replay
+    // takes the lock next and writes the pre-pass row back over the batch.
+    let releaseBatch: (() => void) | null = null
+    let announceBatch: (() => void) | null = null
+    const batchInFlight = new Promise<void>(resolve => { announceBatch = resolve })
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        await tx(async t => {
+          await t.update('target', {content: 'migrated'})
+          announceBatch!()
+          await new Promise<void>(resolve => { releaseBatch = () => resolve() })
+        }, {description: 'batch one'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const running = repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+    // Fenced on the batch's own progress: the probe runs INSIDE its
+    // transaction, so reaching here means the write lock is held right now.
+    await batchInFlight
+
+    // Pops synchronously, then queues its replay behind that held lock.
+    const undoing = repo.undo(ChangeScope.BlockDefault)
+    releaseBatch!()
+    await running
+    warn.mockRestore()
+
+    await expect(undoing).resolves.toBe(false)
+    expect((await repo.load('target'))?.content).toBe('migrated')
+  }, 20_000)
+
   it('leaves undo history alone when the pass writes nothing', async () => {
     // Clearing is a real cost to the user, so it is owed only when the pass
     // actually committed something that history could be replayed over.
