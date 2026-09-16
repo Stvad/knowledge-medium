@@ -653,12 +653,12 @@ describe('block-type typeify processor', () => {
     expect(row!.properties[aliasesProp.name]).toBeUndefined()
   })
 
-  // The kernel claims the new name itself, so the invariant survives the alias
-  // plugin being toggled off — but a name another block holds is left alone.
-  // This pins that the refusal happens in the alias plugin's PREFLIGHT, not at
-  // the uniqueness trigger a step later: only the preflight's rejection carries
-  // `dropSourceAliases` / `collisionOrigin`, so firing a step later would lose
-  // the metadata the merge offer is built from.
+  // The KERNEL's own preflight refuses this — it runs before the alias plugin
+  // gets a look — and that is the point: not at the uniqueness trigger a step
+  // later, because only a preflight rejection carries `dropSourceAliases` /
+  // `collisionOrigin`, the metadata the merge offer is built from. The plugin
+  // calls the same core helper for its own writes; neither depends on the
+  // other being installed.
   it('refuses a colliding rename in the preflight, so the merge offer survives', async () => {
     env = await setup()
     const id = await tagBlockType(env, 'Book')
@@ -925,6 +925,28 @@ describe('block-type typeify processor', () => {
     )
 
     const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
+  // A legacy row can carry its name in the BODY alone, with no label at all.
+  // Clearing that body would drop the type from the registry while its claim
+  // stayed put — the same un-naming the emptied-body rule exists to prevent.
+  it('keeps a label-less type named when its content is cleared', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await rawProperties(env, id, {
+      types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+      [aliasesProp.name]: ['Book'],
+    })
+
+    await env.repo.tx(
+      tx => tx.update(id, {content: ''}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const row = await env.repo.load(id)
+    expect(row!.content).toBe('Book')
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
   })

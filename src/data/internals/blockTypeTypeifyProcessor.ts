@@ -186,7 +186,16 @@ const followRenamedContent = async (
   // restored to it — un-naming a type is the type editor's gesture, which
   // releases the alias too. Whitespace counts as empty: aliasSync's blank
   // guard is `=== ''`, so `"   "` would otherwise be claimed as the name.
-  const name = after.content.trim() || currentLabel
+  // A label written in THIS tx is the naming gesture — the type editor writes
+  // both halves — and a label CLEARED in it is the un-naming one, which also
+  // releases the claim. Either way the label is the answer and nothing here
+  // second-guesses it.
+  const labelMoved = readLabel(before) !== currentLabel
+  // Otherwise the name to keep, in the order the row can hold one: the new
+  // body, the label, or — for a legacy row that never had a label at all — the
+  // body being cleared. A type named only by its content is still named, and
+  // emptying it would otherwise drop the type while its claim stayed put.
+  const name = after.content.trim() || currentLabel || (labelMoved ? '' : before.content.trim())
   if (name === '') return
   // A content rewrite is a rename only where the content WAS this type's name.
   // On a legacy or sync-applied row it may never have been one — a title that
@@ -200,8 +209,7 @@ const followRenamedContent = async (
   // type editor writes both halves, and that is a rename however drifted the
   // row was. Stepping aside there would leave the new name unclaimed.
   const previousName = before.content.trim()
-  const renamedByLabel = readLabel(before) !== currentLabel
-  if (!renamedByLabel && previousName !== '' && !isWritableLabel(previousName)
+  if (!labelMoved && previousName !== '' && !isWritableLabel(previousName)
     && isWritableLabel(currentLabel)) return
 
   // Otherwise the new name has to be a name: refuse a REGRESSION, where the one
