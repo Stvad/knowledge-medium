@@ -1,0 +1,1 @@
+import{US as e}from"../../../chunks/app-Mxowflif.js";export{e as BlockEmbed};

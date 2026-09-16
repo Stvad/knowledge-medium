@@ -1,0 +1,1 @@
+import{aT as e,oT as t}from"../../chunks/app-Mxowflif.js";export{e as ClientLocalSettings,t as clientLocalSettings};

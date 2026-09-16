@@ -1,0 +1,1 @@
+import{Ng as e}from"../../../chunks/app-Mxowflif.js";export{e as plainOutlinerPlugin};
