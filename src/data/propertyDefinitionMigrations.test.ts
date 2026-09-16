@@ -1076,13 +1076,13 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
 
     await changeWhileInactive(repo, statusNumber)
 
-    // Fenced on the LAST parent, which lives in the second chunk — so both
-    // chunks have committed by the time the counts are read.
-    await vi.waitFor(async () => {
-      expect(await cell('host-100')).toEqual({status: 42})
-    }, {timeout: 8000})
-
-    expect(cleared).toHaveBeenCalledTimes(2)
+    // Fenced on the CLEAR, not on a row the second chunk wrote: the clear runs
+    // after that chunk's transaction commits, so a wait on the row can return
+    // between the two and read a count of one.
+    await vi.waitFor(() => {
+      expect(cleared).toHaveBeenCalledTimes(2)
+    }, {timeout: 10_000})
+    expect(await cell('host-100')).toEqual({status: 42})
     // Told once, though. The history is gone either way and repeating it per
     // chunk is noise.
     expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
@@ -1165,12 +1165,14 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     settled = true
     openGate!()
 
+    // The baseline is the pass's LAST write; waiting on the cell instead can
+    // return between the chunk commit and the record.
     await vi.waitFor(async () => {
-      expect(await cell('p')).toEqual({status: 42})
-    }, {timeout: 8000})
+      expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
+    }, {timeout: 10_000})
+    expect(await cell('p')).toEqual({status: 42})
     expect(await rowContent(valueRowId)).toBe('42')
-    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
-  }, 20_000)
+  }, 30_000)
 
   it('keeps retrying while the gap stays transient, past the gate opening', async () => {
     // The gate answers connected-and-not-downloading; the materialization
@@ -1197,13 +1199,16 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
 
     await changeWhileInactive(repo, statusNumber)
 
+    // Waited on the BASELINE, which the pass records after its last chunk
+    // commits — so a wait on the cell can return between the two, and the
+    // baseline read that follows is then early. (CI caught exactly that.)
     await vi.waitFor(async () => {
-      expect(await cell('p')).toEqual({status: 42})
-    }, {timeout: 8000})
+      expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
+    }, {timeout: 10_000})
     warn.mockRestore()
+    expect(await cell('p')).toEqual({status: 42})
     expect(await rowContent(valueRowId)).toBe('42')
-    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'number'})
-  }, 20_000)
+  }, 30_000)
 
   it('does not retry a DURABLE gap, which nothing is working to clear', async () => {
     await seedWorkspace('children')
@@ -1324,11 +1329,17 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     repo.setActiveWorkspaceId(OTHER_WS)
     await awaitRegistry(repo, OTHER_WS)
 
+    // Fenced on the re-detect actually RUNNING. Draining and then asserting
+    // that nothing changed passes trivially if the deferred job has not fired
+    // yet, which is the whole failure mode a negative test has.
+    const redetected = vi.spyOn(
+      repo as unknown as {redetectPropertyDefinitionDrift: () => void},
+      'redetectPropertyDefinitionDrift',
+    )
     openGate!()
-    await vi.waitFor(async () => {
-      await repo.awaitPropertyDefinitionMigrations()
-      await repo.awaitPropertyDefinitionBaselines()
-    }, {timeout: 5000})
+    await vi.waitFor(() => { expect(redetected).toHaveBeenCalled() }, {timeout: 8000})
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
     warn.mockRestore()
 
     expect(await rowContent(valueRowId)).toBe(' 42 ')
