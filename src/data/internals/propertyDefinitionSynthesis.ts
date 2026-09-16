@@ -1006,23 +1006,10 @@ export const applyPropertyDefinitionSynthesis = async (
       created += 1
       registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
     }
-    // While this transaction still HOLDS the write lock, which is the only
-    // place it closes anything: a replay queued behind it acquires the lock the
-    // moment it is released, and the `clear()` below cannot reach an entry that
-    // `undo()` has already taken off the stack. Unrefused, that replay restores
-    // a pre-synthesis snapshot — a cell for a key that now has a definition
-    // block and, past the flip, children of its own.
-    //
-    // Conditional on having MINTED, the same question the clear asks: a run
-    // that only converged changed nothing, so refusing a replay would cost the
-    // user a cmd-Z for no hazard.
-    //
-    // NOT PINNED, and no test fails without it: the window is between the
-    // database handing the lock to a waiting replay and `repo.tx` resolving,
-    // and the harness cannot schedule into it — the clear after the await wins
-    // every time under test. Kept because what it loses is a mint the flip is
-    // about to depend on, and it costs one line. Same clause, same reasoning,
-    // as the workspace-backfill runner's.
+    // The in-lock half — see `UndoManager.invalidateReplays`. Conditional on
+    // having MINTED, the same question the clear below asks: a run that only
+    // converged changed nothing, so refusing a replay would cost a cmd-Z for no
+    // hazard. NOT PINNED, for the same reason the backfill runner's is not.
     if (created > 0) repo.undoManagerFor(workspaceId).invalidateReplays()
   }, {
     scope: ChangeScope.BlockDefault,
@@ -1033,13 +1020,13 @@ export const applyPropertyDefinitionSynthesis = async (
     // committed write with a live undo entry that cmd-Z would delete.
     skipUndo: true,
   })
-  // The other half, once the transaction has COMMITTED — an aborted one minted
-  // nothing and leaves nothing for an entry to be replayed over. About the
-  // entries ALREADY on the stack, not this pass's own writes, which are
-  // `skipUndo` above: a key with no definition was a key nothing materialized,
-  // so once one is MINTED a replayed pre-synthesis snapshot writes a cell for a
-  // key that now has children.
-  if (created > 0) repo.undoManagerFor(workspaceId).clear()
+  // The drop half, once the transaction has COMMITTED. About the entries
+  // ALREADY on the stack, not this pass's own writes, which are `skipUndo`
+  // above: a key with no definition was a key nothing materialized, so once one
+  // is MINTED a replayed pre-synthesis snapshot writes a cell for a key that
+  // now has children.
+  const undoHistoryCleared = created > 0
+  if (undoHistoryCleared) repo.undoManagerFor(workspaceId).clear()
 
   // Publish synchronously, same reason as `addSchema`: the caller's next step
   // is the backfill, which freezes ONE resolver for the whole multi-minute
@@ -1062,6 +1049,6 @@ export const applyPropertyDefinitionSynthesis = async (
     }
   }
 
-  return {created, converged, skipped, undoHistoryCleared: created > 0}
+  return {created, converged, skipped, undoHistoryCleared}
 }
 

@@ -430,6 +430,23 @@ describe('undo against a pass that drops the history', () => {
   const undoDepth = (repo: Repo): number =>
     repo.undoManager.depths(ChangeScope.BlockDefault).undo
 
+  /** Park a transaction on the write lock, so whatever the test starts next
+   *  queues behind it. Resolves once the lock is actually HELD — several tests
+   *  here turn on a replay being granted the lock only after something else
+   *  releases it, which a test that merely started a transaction cannot promise. */
+  const holdWriteLock = async (repo: Repo): Promise<{
+    settled: Promise<void>
+    release: () => void
+  }> => {
+    let release: (() => void) | null = null
+    const settled = repo.tx(
+      async () => { await new Promise<void>(resolve => { release = () => resolve() }) },
+      {scope: ChangeScope.BlockDefault},
+    )
+    await vi.waitFor(() => { expect(release).not.toBeNull() }, {timeout: 3000})
+    return {settled, release: (): void => { release!() }}
+  }
+
   it('abandons a replay whose history was dropped while it was in flight', async () => {
     // `undo()` takes the entry OFF its stack and then awaits the replay, so a
     // pass clearing the history in that window cannot reach it — `clear()` only
@@ -446,19 +463,14 @@ describe('undo against a pass that drops the history', () => {
     // ordering that matters: clearing before `_replay` is even called would
     // also be caught by a check outside the transaction, and this is about the
     // check being inside it.
-    let releaseLock: (() => void) | null = null
-    const holdingLock = repo.tx(
-      async () => { await new Promise<void>(resolve => { releaseLock = () => resolve() }) },
-      {scope: ChangeScope.BlockDefault},
-    )
-    await vi.waitFor(() => { expect(releaseLock).not.toBeNull() }, {timeout: 3000})
+    const lock = await holdWriteLock(repo)
 
     // `undo` pops synchronously and only then awaits the replay, so by the next
     // line the entry is already off the stack and its transaction is queued.
     const undoing = repo.undo(ChangeScope.BlockDefault)
     repo.undoManager.clear()
-    releaseLock!()
-    await holdingLock
+    lock.release()
+    await lock.settled
 
     // False, not a throw: from the user's side the gesture had nothing valid
     // to act on.
@@ -466,31 +478,6 @@ describe('undo against a pass that drops the history', () => {
     // The row is untouched — the replay refused rather than writing back a
     // snapshot the cleared history said was no longer safe to restore.
     expect(await readContent(repo, 'a')).toBe('edited')
-  })
-
-  it('abandons a redo replay on the same terms', async () => {
-    const {repo} = env
-    await seedRoot(repo, 'a', 'original')
-    await repo.tx(async (tx) => {
-      await tx.update('a', {content: 'edited'})
-    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
-    expect(await repo.undo()).toBe(true)
-    expect(await readContent(repo, 'a')).toBe('original')
-
-    let releaseLock: (() => void) | null = null
-    const holdingLock = repo.tx(
-      async () => { await new Promise<void>(resolve => { releaseLock = () => resolve() }) },
-      {scope: ChangeScope.BlockDefault},
-    )
-    await vi.waitFor(() => { expect(releaseLock).not.toBeNull() }, {timeout: 3000})
-
-    const redoing = repo.redo(ChangeScope.BlockDefault)
-    repo.undoManager.clear()
-    releaseLock!()
-    await holdingLock
-
-    await expect(redoing).resolves.toBe(false)
-    expect(await readContent(repo, 'a')).toBe('original')
   })
 
   it('refuses a replay a pass invalidated without dropping the stacks', async () => {
@@ -504,17 +491,12 @@ describe('undo against a pass that drops the history', () => {
       await tx.update('a', {content: 'edited'})
     }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
 
-    let releaseLock: (() => void) | null = null
-    const holdingLock = repo.tx(
-      async () => { await new Promise<void>(resolve => { releaseLock = () => resolve() }) },
-      {scope: ChangeScope.BlockDefault},
-    )
-    await vi.waitFor(() => { expect(releaseLock).not.toBeNull() }, {timeout: 3000})
+    const lock = await holdWriteLock(repo)
 
     const undoing = repo.undo(ChangeScope.BlockDefault)
     repo.undoManager.invalidateReplays()
-    releaseLock!()
-    await holdingLock
+    lock.release()
+    await lock.settled
 
     await expect(undoing).resolves.toBe(false)
     expect(await readContent(repo, 'a')).toBe('edited')

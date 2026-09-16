@@ -29,7 +29,15 @@ vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => remoteSyncActiv
 // what the plan says, and what the gesture does about it. What the plan means
 // is `propertyDefinitionSynthesis.test.ts`.
 const planSynthesis = vi.fn()
-const applySynthesis = vi.fn()
+/** Typed, so a field added to `SynthesisResult` fails HERE rather than arriving
+ *  as `undefined` in every test that stubs it. It already had drifted: one
+ *  literal was missing `converged`, and the untyped stub took it. */
+const applySynthesis = vi.fn<(...args: unknown[]) => Promise<SynthesisResult>>()
+
+/** A synthesis outcome at its no-op values; override only what the test is
+ *  about, so a stub says what it is testing and nothing else. */
+const synthesized = (over: Partial<SynthesisResult> = {}): SynthesisResult =>
+  ({created: 0, converged: 0, skipped: [], undoHistoryCleared: false, ...over})
 const flipBlocked = vi.fn<() => string | null>()
 vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
   planPropertyDefinitionSynthesis: () => planSynthesis(),
@@ -47,6 +55,7 @@ const plan = (candidates = 0) => ({
 })
 
 import type { OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
+import type { SynthesisResult } from '@/data/internals/propertyDefinitionSynthesis'
 import { claimStub, type ClaimStubLog } from './claimStub.ts'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
@@ -126,7 +135,6 @@ afterEach(() => {
   planSynthesis.mockReset()
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockReset()
-  applySynthesis.mockReset()
   flipBlocked.mockReset()
 })
 
@@ -141,8 +149,7 @@ beforeEach(() => {
   remoteSyncActive.mockReset()
   remoteSyncActive.mockReturnValue(true)
   planSynthesis.mockResolvedValue(plan())
-  applySynthesis.mockResolvedValue(
-    {created: 0, converged: 0, skipped: [], undoHistoryCleared: false})
+  applySynthesis.mockResolvedValue(synthesized())
   flipBlocked.mockReturnValue(null)
 })
 
@@ -483,7 +490,7 @@ describe('the graph-wide claim', () => {
     planSynthesis.mockResolvedValue(plan(1))
     applySynthesis.mockImplementation(async () => {
       log.events.push('synthesize')
-      return {created: 1, converged: 0, skipped: [], undoHistoryCleared: true}
+      return synthesized({created: 1, undoHistoryCleared: true})
     })
     flipWorkspace.mockImplementation(async () => {
       log.events.push('flip')
@@ -601,8 +608,7 @@ describe('the orphan-definition step', () => {
     // returned flag and not off `created`, which is the same question asked
     // twice and the place the two could drift.
     planSynthesis.mockResolvedValue(plan(1))
-    applySynthesis.mockResolvedValue(
-      {created: 1, converged: 0, skipped: [], undoHistoryCleared: true})
+    applySynthesis.mockResolvedValue(synthesized({created: 1, undoHistoryCleared: true}))
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still orphaned')
     // Already flipped, so nothing downstream would clear it.
     const {repo} = makeRepo(RAN, {flipped: true})
@@ -620,8 +626,7 @@ describe('the orphan-definition step', () => {
     // A run that only converged minted nothing and cost the user no history;
     // telling them it did is a false alarm about data they still have.
     planSynthesis.mockResolvedValue(plan(1))
-    applySynthesis.mockResolvedValue(
-      {created: 0, converged: 1, skipped: [], undoHistoryCleared: false})
+    applySynthesis.mockResolvedValue(synthesized({created: 1, undoHistoryCleared: false}))
     const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
@@ -635,8 +640,9 @@ describe('the orphan-definition step', () => {
     // history already gone; leaving that unsaid is the same lie the flip-failure
     // branch goes out of its way to avoid.
     planSynthesis.mockResolvedValue(plan(2))
-    applySynthesis.mockResolvedValue({created: 1, converged: 0, undoHistoryCleared: true,
-                                      skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
+    applySynthesis.mockResolvedValue(synthesized({
+      created: 1, undoHistoryCleared: true,
+      skipped: [{key: 'demo:orphan', reason: 'occupied'}]}))
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still orphaned')
     const {repo} = makeRepo()
 
@@ -651,8 +657,7 @@ describe('the orphan-definition step', () => {
     // everyone; clearing the stack follows from any write. Driving the flip
     // banner off the undo flag made an already-flipped run claim a flip.
     planSynthesis.mockResolvedValue(plan(1))
-    applySynthesis.mockResolvedValue(
-      {created: 1, converged: 0, skipped: [], undoHistoryCleared: true})
+    applySynthesis.mockResolvedValue(synthesized({created: 1, undoHistoryCleared: true}))
     const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
@@ -752,7 +757,7 @@ describe('the orphan-definition step', () => {
     // They are inert at 'cell' and a re-run reuses them, but they show up on
     // the Properties page, so "nothing was migrated" alone would be a small lie.
     planSynthesis.mockResolvedValue(plan(3))
-    applySynthesis.mockResolvedValue({created: 3, skipped: [], undoHistoryCleared: true})
+    applySynthesis.mockResolvedValue(synthesized({created: 3, undoHistoryCleared: true}))
     flipWorkspace.mockRejectedValue(new Error('server said no'))
     const {repo} = makeRepo()
 
@@ -825,8 +830,9 @@ describe('the orphan-definition step', () => {
     // backfill excludes unregistered keys from its work list, so without the
     // second ask the flip lands and the pass reports success over it.
     planSynthesis.mockResolvedValue(plan(2))
-    applySynthesis.mockResolvedValue({created: 1, converged: 0, undoHistoryCleared: true,
-                                      skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
+    applySynthesis.mockResolvedValue(synthesized({
+      created: 1, undoHistoryCleared: true,
+      skipped: [{key: 'demo:orphan', reason: 'occupied'}]}))
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still have no definition')
     const {repo, runPass} = makeRepo()
 
@@ -839,8 +845,9 @@ describe('the orphan-definition step', () => {
 
   it('backfills anyway on an already-flipped workspace, and says what was left out', async () => {
     planSynthesis.mockResolvedValue(plan(2))
-    applySynthesis.mockResolvedValue({created: 1, converged: 0, undoHistoryCleared: true,
-                                      skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
+    applySynthesis.mockResolvedValue(synthesized({
+      created: 1, undoHistoryCleared: true,
+      skipped: [{key: 'demo:orphan', reason: 'occupied'}]}))
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still have no definition')
     const {repo, runPass} = makeRepo(RAN, {flipped: true})
 

@@ -69,6 +69,9 @@ export class UndoManager {
   private readonly redoStacks: Map<ChangeScope, UndoEntry[]> = new Map()
   private readonly listenersByScope: Map<ChangeScope, CallbackSet<[]>> = new Map()
   private readonly maxDepth: number
+  /** Bumped only by {@link clear} and {@link invalidateReplays} — see
+   *  {@link clearEpoch}. */
+  private clears = 0
 
   constructor(opts: UndoManagerOptions = {}) {
     this.maxDepth = opts.maxDepth ?? 100
@@ -155,14 +158,33 @@ export class UndoManager {
     return this.listenersFor(scope).add(listener)
   }
 
-  /** Invalidate replays already in flight WITHOUT dropping the stacks.
+  /** Refuse replays already in flight, WITHOUT dropping the stacks.
    *
-   *  A pass must do this while it still holds the write lock: a queued replay
-   *  that acquires the lock first reads an unchanged epoch, passes, and writes
-   *  the pre-pass row back over what the pass just committed. Dropping the
-   *  stacks is the separate, after-commit half — an aborted transaction leaves
-   *  nothing to be reverted onto, and taking the user's history for it would be
-   *  a cost with no cause. */
+   *  The half of a history drop that {@link clear} cannot do: `undo()` takes
+   *  its entry off the stack before awaiting the replay, so by the time a pass
+   *  clears, the entry it most needs to reach is the one no longer there. This
+   *  moves the epoch instead, which that replay re-reads inside its own
+   *  transaction and abandons on.
+   *
+   *  CALL IT AT THE LAST MOMENT BEFORE THE PASS'S WRITES BECOME VISIBLE, never
+   *  with the `clear()` that follows them. A pass that writes in a transaction
+   *  calls it inside the lock, where a replay queued behind the chunk would
+   *  otherwise be granted the lock first and revert what that chunk committed.
+   *  A pass that holds NO lock — the props-as-blocks flip is a server round
+   *  trip and a raw `db.execute` — calls it before its first write: having no
+   *  transaction to queue behind does not make the window smaller, it removes
+   *  the only thing serialising it.
+   *
+   *  NOT COMMIT-COUPLED, deliberately. A throw after this leaves the epoch
+   *  advanced over writes that rolled back, costing an already-queued replay
+   *  its popped entry. Restoring it on abort is the obvious repair and is
+   *  wrong: bumps happen under the same lock, so a restore can clobber a real
+   *  one and let a replay that should have been refused revert committed rows.
+   *  A lost undo beats a lost row.
+   *
+   *  Dropping the stacks stays the separate, after-commit half — an aborted
+   *  transaction leaves nothing to be reverted onto, and taking the user's
+   *  history for it would be a cost with no cause. */
   invalidateReplays(): void {
     this.clears += 1
   }
@@ -175,8 +197,6 @@ export class UndoManager {
   get clearEpoch(): number {
     return this.clears
   }
-
-  private clears = 0
 
   /** Drop all stacks (for tests + an eventual "clear history" UX).
    *  Notifies subscribers on every scope that previously had state. */

@@ -1864,18 +1864,17 @@ export class Repo {
     // scopes are filtered inside `record`; zero-write txs have no pinned
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
-    const manager = this.undoManagerFor(result.workspaceId ?? NO_ACTIVE_WORKSPACE)
-    if (result.workspaceId !== null && !opts.skipUndo
+    if (result.workspaceId !== null && !opts.skipUndo) {
+      const manager = this.undoManagerFor(result.workspaceId)
       // Dropped rather than recorded: a pass cleared this workspace's history
       // while this transaction was in flight, so its `before` rows are the ones
       // that pass has since rewritten. Replaying them would revert its writes
       // with its completion already recorded, which is the same loss the clear
       // itself exists to prevent.
-      // A missing sample reads as a mismatch and drops the entry, which is the
-      // honest answer to having nothing comparable — though a tx that pinned a
-      // workspace was always sampled for it above.
-      && epochAtLock.get(manager) === manager.clearEpoch) {
-      manager.record({
+      //
+      // A missing sample reads as a mismatch and drops the entry: defence in
+      // depth, since a tx that pinned a workspace was always sampled for it.
+      if (epochAtLock.get(manager) === manager.clearEpoch) manager.record({
         scope: opts.scope,
         txId: result.txId,
         snapshots: result.snapshots,
@@ -1948,8 +1947,8 @@ export class Repo {
     // a chunk is refused before its stack is ever dropped. Neither can happen
     // across the pop itself, so this is the same value either side.
     const clearEpoch = manager.clearEpoch
-    const undoing = action === 'undo'
-    const entry = undoing ? manager.popUndo(scope) : manager.popRedo(scope)
+    const opposite = action === 'undo' ? 'redo' : 'undo'
+    const entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
     if (entry === null) return false
     /** Put `entry` on a stack — unless the history was DROPPED while this
      *  gesture was in flight.
@@ -1968,7 +1967,7 @@ export class Repo {
       else manager.pushRedo(scope, entry)
     }
     try {
-      await this._replay(entry, undoing ? 'before' : 'after', {manager, clearEpoch})
+      await this._replay(entry, action, {manager, clearEpoch})
     } catch (err) {
       if (err instanceof UndoHistoryDroppedError) return false
       // Replay failed — push the entry back so the user can retry
@@ -1982,12 +1981,12 @@ export class Repo {
       // legitimate retry path (RescheduleToast re-matches the restored
       // entry by groupId once read-only clears), which is a far more
       // common sequence than a mid-replay same-group commit.
-      push(undoing ? 'undo' : 'redo')
+      push(action)
       throw err
     }
     // True even when the push above was refused: the replay COMMITTED, so the
     // gesture did what the user asked. All that is withheld is the inverse.
-    push(undoing ? 'redo' : 'undo')
+    push(opposite)
     return true
   }
 
@@ -2330,7 +2329,7 @@ export class Repo {
    *  entry shuttles symmetrically between stacks. */
   private async _replay(
     entry: UndoEntry,
-    direction: 'before' | 'after',
+    action: 'undo' | 'redo',
     /** Checked INSIDE the replay transaction, once the write lock is held.
      *
      *  `undo`/`redo` take the entry OFF its stack and then await this, so a
@@ -2344,7 +2343,7 @@ export class Repo {
      *  the pass's chunk can commit behind. */
     invalidation: {manager: UndoManager; clearEpoch: number},
   ): Promise<void> {
-    const action = direction === 'before' ? 'undo' : 'redo'
+    const direction = action === 'undo' ? 'before' : 'after'
     const description = entry.description
       ? `${action}: ${entry.description}`
       : action
@@ -3950,28 +3949,12 @@ export class Repo {
           const result = await this.tx(async t => {
             await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
             const value = await fn(t)
-            // While the lock is STILL HELD. A replay queued behind this
-            // transaction acquires the lock the moment it is released, which
-            // can be before the clear below runs — and the clear cannot reach
-            // that replay's entry anyway, since it is already off the stack. It
-            // would read an unchanged epoch and write the pre-pass row straight
-            // back over what this batch just committed.
+            // This batch's in-lock half — see `UndoManager.invalidateReplays`.
             //
-            // NOT PINNED, and no test fails without it: the window it closes is
-            // between the database handing the lock to a waiting replay and
-            // `this.tx` resolving, and the harness cannot schedule into it —
-            // the clear after the await wins every time under test. Kept
-            // because what it loses is a committed batch of a once-per-graph
-            // migration, and it costs one line.
-            //
-            // Not commit-coupled, and that is accepted: a processor or the
-            // commit itself can throw after this line, rolling the batch back
-            // with the epoch left advanced, which costs an already-queued
-            // replay its popped entry. One lost cmd-Z on an error path.
-            // Restoring the epoch on abort is the obvious repair and is the
-            // wrong trade — bumps happen under this same lock, so a restore can
-            // clobber a real one and let a replay that should have been refused
-            // revert committed rows. A lost undo beats a lost row.
+            // NOT PINNED, and no test fails without it: the window is between
+            // the database handing the lock to a waiting replay and `this.tx`
+            // resolving, which the harness cannot schedule into. Kept because
+            // what it loses is a committed batch of a once-per-graph migration.
             this.undoManagerFor(workspaceId).invalidateReplays()
             return value
           }, {
@@ -3979,18 +3962,19 @@ export class Repo {
             description: opts.description,
             skipUndo: true,
           })
-          // Only once a batch COMMITTED. An aborted one rolled its writes
-          // back, so it leaves nothing on the undo stack to be reverted onto.
-          // Still an over-approximation in one direction — a committed batch
-          // that happened to write nothing counts — which errs toward
-          // clearing, the safe side.
+          // After EVERY committed batch, not just the first. A chunked pass
+          // runs for minutes, and an entry the USER records between two batches
+          // — on a row a later batch has not reached yet — holds that row's
+          // pre-pass state and reverts it when replayed, permanently once the
+          // pass has recorded itself complete.
           //
-          // After EVERY batch, not just the first. A chunked pass runs for
-          // minutes, and an entry the USER records between two batches — on a
-          // row a later batch has not reached yet — holds that row's pre-pass
-          // state and reverts it when replayed, permanently once the pass has
-          // recorded itself complete. Clearing only on the first write leaves
-          // exactly that window open for as long as the pass runs.
+          // An over-approximation in one direction: a committed batch that
+          // happened to write nothing clears too, which errs toward clearing.
+          // A mid-group `repo.undoGroup` composite is SPLIT rather than dropped
+          // whole — its earlier constituents go and the later ones record onto
+          // an empty stack — so one cmd-Z reverts only the tail. Accepted: the
+          // user's history is being discarded either way, and the alternative
+          // is teaching `record` about groups a pass cannot see.
           this.undoManagerFor(workspaceId).clear()
           if (!announcedUndoClear) {
             announcedUndoClear = true

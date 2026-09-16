@@ -278,7 +278,7 @@ const migrateUnderClaim = async (
       // minting transaction still holds the write lock, which is not reachable
       // from out here — so synthesis owns both halves and says whether it took
       // the history; this only has to tell the user.
-      if (result.undoHistoryCleared) undoCleared = true
+      undoCleared ||= result.undoHistoryCleared
       // Asked AGAIN, with the OUTCOME. The pre-mint answer was about what we
       // expected to be able to do; this is about what actually happened, and
       // a key that came back skipped still has no definition. The backfill
@@ -321,18 +321,11 @@ const migrateUnderClaim = async (
       return
     }
     banner.update('Switching this workspace to property blocks…')
-    // BEFORE the flip, not with the `clear()` after it. From the PATCH onward
-    // the workspace is child-backed for the whole graph, and the flip is a
-    // Supabase round trip, a local `db.execute` and a readback — so a replay
-    // already popped by `undo()` has ample room to take the write lock and
-    // commit a whole pre-flip row, `properties_json` included, with the same-tx
-    // processors skipped. The `clear()` below cannot reach it: the entry is off
-    // the stack by then, which is what `invalidateReplays` exists for and why
-    // it needs no transaction of its own.
-    //
-    // Costs an already-queued replay its popped entry if the flip then throws —
-    // the same trade taken in `Repo`'s uploading passes, and a lost cmd-Z there
-    // beats a pre-flip cell landing over live children here.
+    // BEFORE the flip, not with the `clear()` after it — see
+    // `UndoManager.invalidateReplays`. From the PATCH onward the workspace is
+    // child-backed for the whole graph, and the flip is a round trip plus two
+    // local db calls, so a replay `undo()` has already popped has room to
+    // commit a whole pre-flip row over what are now live children.
     repo.undoManagerFor(workspaceId).invalidateReplays()
     let localApplied: boolean
     try {
