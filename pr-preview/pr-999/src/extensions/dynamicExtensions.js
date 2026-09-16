@@ -1,1 +1,1 @@
-import{lT as e}from"../../chunks/app-DPNKZzIz.js";export{e as dynamicExtensionsExtension};
+import{lT as e}from"../../chunks/app-DpYN2EN-.js";export{e as dynamicExtensionsExtension};

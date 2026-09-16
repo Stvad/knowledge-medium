@@ -1,1 +1,1 @@
-import{Sg as e}from"../../../chunks/app-DPNKZzIz.js";export{e as mobileBottomNavItemsFacet};
+import{Sg as e}from"../../../chunks/app-DpYN2EN-.js";export{e as mobileBottomNavItemsFacet};
