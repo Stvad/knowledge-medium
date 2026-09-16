@@ -136,6 +136,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   ensureSystemPages: 'kernel-page ensure txs deliberately JOIN the group (round-3 review)',
 
   // ── TS-private internals — not part of the facade consumer surface ──
+  replayGesture: 'private (the shared body of undo/redo; reached only via delegated undo/redo)',
   _replay: 'private (undo/redo internals; reached only via delegated undo/redo)',
   _runAndDispatch: 'private (reached only via overridden tx/undo/redo, this = real repo)',
   _runAndDispatchInner: 'private (reached only via _runAndDispatch, this = real repo)',

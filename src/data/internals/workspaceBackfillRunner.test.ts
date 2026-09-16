@@ -823,7 +823,7 @@ describe('workspace backfill runner — undo', () => {
 
     await expect(undoing).resolves.toBe(false)
     expect((await repo.load('target'))?.content).toBe('migrated')
-  }, 20_000)
+  })
 
   it('leaves undo history alone when the pass writes nothing', async () => {
     // Clearing is a real cost to the user, so it is owed only when the pass

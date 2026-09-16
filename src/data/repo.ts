@@ -1831,20 +1831,32 @@ export class Repo {
     // perfectly safe to undo. Inside the lock, the sample is taken at the same
     // moment as the rows the entry describes, which is what makes the two
     // comparable at all.
-    // The manager itself and not just the number, so the check below compares a
-    // counter against ITS OWN earlier value. The tx pins its workspace from its
-    // first write (`TxImpl.pinWorkspace`) and a pass only ever clears the
-    // ACTIVE workspace, so this is the manager the entry is recorded into in
-    // every reachable case; where it is not, the entry is judged by the active
-    // workspace's epoch, which errs toward dropping.
-    let undoAtLock = {manager: this.undoManager, epoch: this.undoManager.clearEpoch}
+    /** Epoch per manager, EARLIEST sample kept — see the two calls below. */
+    const epochAtLock = new Map<UndoManager, number>()
+    const sampleEpoch = (manager: UndoManager): void => {
+      if (!epochAtLock.has(manager)) epochAtLock.set(manager, manager.clearEpoch)
+    }
     // Translation + listener notification happen inside `_runAndDispatch`
     // so all entry points (`tx`, `undo`, `redo`) get uniform error
     // shaping — `repo.tx` just re-throws here.
     const result: Awaited<ReturnType<typeof this._runAndDispatch<R>>> =
       await this._runAndDispatch(async (tx) => {
-        undoAtLock = {manager: this.undoManager, epoch: this.undoManager.clearEpoch}
-        return fn(tx)
+        // On lock ENTRY, for the workspace active then. The earliest sample is
+        // the one that counts, because a `clear()` from outside any transaction
+        // — the props-as-blocks flip makes one — can land while `fn` runs.
+        sampleEpoch(this.undoManager)
+        const value = await fn(tx)
+        // And again for the workspace the tx actually PINNED, which is the
+        // manager the entry is recorded into and is NOT always the active one:
+        // the SRS reschedule toast writes the rescheduled block's workspace
+        // while the user may have switched away (#186). Known only now — the
+        // pin comes from the first write. Still inside the lock, so no other
+        // WRITER's clear can have landed since entry; when the two are the same
+        // manager (the ordinary case) the entry sample above wins.
+        if (tx.meta.workspaceId !== null) {
+          sampleEpoch(this.undoManagerFor(tx.meta.workspaceId))
+        }
+        return value
       }, opts)
     // Step 7 of the §10 pipeline — record undo entry into the tx's pinned
     // workspace's manager, so a later cmd-Z only ever acts on entries from
@@ -1852,14 +1864,18 @@ export class Repo {
     // scopes are filtered inside `record`; zero-write txs have no pinned
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
+    const manager = this.undoManagerFor(result.workspaceId ?? NO_ACTIVE_WORKSPACE)
     if (result.workspaceId !== null && !opts.skipUndo
       // Dropped rather than recorded: a pass cleared this workspace's history
       // while this transaction was in flight, so its `before` rows are the ones
       // that pass has since rewritten. Replaying them would revert its writes
       // with its completion already recorded, which is the same loss the clear
       // itself exists to prevent.
-      && undoAtLock.manager.clearEpoch === undoAtLock.epoch) {
-      this.undoManagerFor(result.workspaceId).record({
+      // A missing sample reads as a mismatch and drops the entry, which is the
+      // honest answer to having nothing comparable — though a tx that pinned a
+      // workspace was always sampled for it above.
+      && epochAtLock.get(manager) === manager.clearEpoch) {
+      manager.record({
         scope: opts.scope,
         txId: result.txId,
         snapshots: result.snapshots,
@@ -1902,21 +1918,57 @@ export class Repo {
    *  is pushed back so a retry once the flag settles succeeds — see
    *  issue #226.) */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
+    return this.replayGesture('undo', scope)
+  }
+
+  /** Redo the most recently undone tx for `scope` in the active
+   *  workspace. Same defaults + same per-workspace + read-only
+   *  semantics as `undo`, mirrored. */
+  async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
+    return this.replayGesture('redo', scope)
+  }
+
+  /** The body of {@link undo} and {@link redo}, which are mirror images: pop
+   *  from one stack, replay it, push it onto the other — and on failure put it
+   *  back where it came from.
+   *
+   *  One owner because every rule here is symmetric, and the asymmetry that
+   *  used to exist between the two copies was an omission rather than a
+   *  decision: only `undo` documented why it pushes a failed entry back. */
+  private async replayGesture(
+    action: 'undo' | 'redo',
+    scope: ChangeScope,
+  ): Promise<boolean> {
     if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
-    // Sampled before the entry leaves the stack, so the whole gesture — pop
-    // included — sits inside the window the replay validates. Both `clear()`
-    // and `invalidateReplays()` move it, and a pass calls the latter while it
-    // still holds the write lock — which is how a replay queued behind a chunk
-    // is refused before its stack is ever dropped. Neither can happen across
-    // the pop itself, so this is the same value either side.
+    // Sampled before the entry leaves the stack, so the whole gesture — pop,
+    // replay and push alike — sits inside the window this validates. Both
+    // `clear()` and `invalidateReplays()` move it, and a pass calls the latter
+    // while it still holds the write lock, which is how a replay queued behind
+    // a chunk is refused before its stack is ever dropped. Neither can happen
+    // across the pop itself, so this is the same value either side.
     const clearEpoch = manager.clearEpoch
-    const entry = manager.popUndo(scope)
+    const undoing = action === 'undo'
+    const entry = undoing ? manager.popUndo(scope) : manager.popRedo(scope)
     if (entry === null) return false
+    /** Put `entry` on a stack — unless the history was DROPPED while this
+     *  gesture was in flight.
+     *
+     *  Both pushes go through here, the success one onto the opposite stack and
+     *  the failure one back onto the stack it came from, because the hazard is
+     *  the same for either: the database can hand the write lock to a pass's
+     *  chunk while `_replay` is still resolving, so a clear can land between the
+     *  replay and this line. Pushing then REPOPULATES history the clear had just
+     *  emptied, with an entry describing a pre-pass row — and the next gesture
+     *  samples the new epoch, passes, and replays it over the pass's committed
+     *  writes. Dropping that entry is the whole point of the clear. */
+    const push = (onto: 'undo' | 'redo'): void => {
+      if (manager.clearEpoch !== clearEpoch) return
+      if (onto === 'undo') manager.pushUndo(scope, entry)
+      else manager.pushRedo(scope, entry)
+    }
     try {
-      await this._replay(entry, 'before', {manager, clearEpoch})
-      manager.pushRedo(scope, entry)
-      return true
+      await this._replay(entry, undoing ? 'before' : 'after', {manager, clearEpoch})
     } catch (err) {
       if (err instanceof UndoHistoryDroppedError) return false
       // Replay failed — push the entry back so the user can retry
@@ -1930,29 +1982,13 @@ export class Repo {
       // legitimate retry path (RescheduleToast re-matches the restored
       // entry by groupId once read-only clears), which is a far more
       // common sequence than a mid-replay same-group commit.
-      manager.pushUndo(scope, entry)
+      push(undoing ? 'undo' : 'redo')
       throw err
     }
-  }
-
-  /** Redo the most recently undone tx for `scope` in the active
-   *  workspace. Same defaults + same per-workspace + read-only
-   *  semantics as `undo`, mirrored. */
-  async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    if (this.client.activeWorkspaceId === null) return false
-    const manager = this.undoManager
-    const clearEpoch = manager.clearEpoch
-    const entry = manager.popRedo(scope)
-    if (entry === null) return false
-    try {
-      await this._replay(entry, 'after', {manager, clearEpoch})
-      manager.pushUndo(scope, entry)
-      return true
-    } catch (err) {
-      if (err instanceof UndoHistoryDroppedError) return false
-      manager.pushRedo(scope, entry)
-      throw err
-    }
+    // True even when the push above was refused: the replay COMMITTED, so the
+    // gesture did what the user asked. All that is withheld is the inverse.
+    push(undoing ? 'redo' : 'undo')
+    return true
   }
 
   /** Run `fn` against a `Repo`-shaped facade whose every tx carries one

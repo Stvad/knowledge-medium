@@ -274,19 +274,11 @@ const migrateUnderClaim = async (
     try {
       const result = await applyPropertyDefinitionSynthesis(repo, plan)
       synthesized = result.created
-      // About the entries ALREADY on the stack, not synthesis's own writes
-      // (its transaction is `skipUndo`, and its Properties-page bootstrap is
-      // a no-op — `kernel:properties` is a `systemPagesFacet` entry, so the
-      // page exists before this gesture can be invoked). A key with no
-      // definition was a key nothing materialized, so once one is MINTED a
-      // replayed pre-synthesis snapshot writes a cell for a key that now has
-      // children. Hence `created`, not "did this run": a run that only
-      // converged changed nothing, and clearing then costs the user history
-      // for no hazard.
-      if (synthesized > 0) {
-        repo.undoManagerFor(workspaceId).clear()
-        undoCleared = true
-      }
+      // Reported, not decided. The drop has a half that must happen while the
+      // minting transaction still holds the write lock, which is not reachable
+      // from out here — so synthesis owns both halves and says whether it took
+      // the history; this only has to tell the user.
+      if (result.undoHistoryCleared) undoCleared = true
       // Asked AGAIN, with the OUTCOME. The pre-mint answer was about what we
       // expected to be able to do; this is about what actually happened, and
       // a key that came back skipped still has no definition. The backfill

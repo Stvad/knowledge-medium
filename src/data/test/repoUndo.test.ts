@@ -466,7 +466,7 @@ describe('undo against a pass that drops the history', () => {
     // The row is untouched — the replay refused rather than writing back a
     // snapshot the cleared history said was no longer safe to restore.
     expect(await readContent(repo, 'a')).toBe('edited')
-  }, 20_000)
+  })
 
   it('abandons a redo replay on the same terms', async () => {
     const {repo} = env
@@ -491,7 +491,7 @@ describe('undo against a pass that drops the history', () => {
 
     await expect(redoing).resolves.toBe(false)
     expect(await readContent(repo, 'a')).toBe('original')
-  }, 20_000)
+  })
 
   it('refuses a replay a pass invalidated without dropping the stacks', async () => {
     // `invalidateReplays` is the half a pass calls while it STILL HOLDS the
@@ -518,7 +518,43 @@ describe('undo against a pass that drops the history', () => {
 
     await expect(undoing).resolves.toBe(false)
     expect(await readContent(repo, 'a')).toBe('edited')
-  }, 20_000)
+  })
+
+  it('does not put the entry back when a pass drops the history mid-gesture', async () => {
+    // The gesture pops, replays, and only then pushes onto the opposite stack.
+    // The database can hand the write lock to a pass's chunk while `_replay` is
+    // still resolving, so a clear can land in between — and pushing then
+    // REPOPULATES the history that clear had just emptied, with an entry
+    // describing a pre-pass row. The next cmd-Z samples the new epoch, passes,
+    // and replays it over the pass's committed writes.
+    //
+    // That window is a handful of microtasks inside one continuation, which the
+    // harness has no other way into, so the clear is injected exactly there
+    // rather than raced for. What is asserted is ordinary observable behaviour.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    const internals = repo as unknown as {
+      _replay: (...args: unknown[]) => Promise<void>
+    }
+    const realReplay = internals._replay.bind(repo)
+    internals._replay = async (...args: unknown[]) => {
+      await realReplay(...args)
+      repo.undoManager.clear()
+    }
+
+    // The undo itself stands — the replay COMMITTED, so the gesture did what
+    // the user asked. All that is withheld is the inverse.
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('original')
+
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).redo).toBe(0)
+    expect(await repo.redo(ChangeScope.BlockDefault)).toBe(false)
+    expect(await readContent(repo, 'a')).toBe('original')
+  })
 
   it('drops an entry whose transaction was recorded after a pass cleared', async () => {
     // A user transaction can hold the write lock ahead of a pass's chunk,
@@ -541,7 +577,7 @@ describe('undo against a pass that drops the history', () => {
     // The write stands — only the history entry goes.
     expect(await readContent(repo, 'a')).toBe('edited while a pass was running')
     expect(undoDepth(repo)).toBe(0)
-  }, 20_000)
+  })
 
   it('keeps the entry of an edit that was merely INVOKED while a pass held the lock', async () => {
     // The reverse ordering of the test above, and the one a call-time sample
@@ -575,5 +611,5 @@ describe('undo against a pass that drops the history', () => {
     expect(undoDepth(repo)).toBe(1)
     expect(await repo.undo()).toBe(true)
     expect(await readContent(repo, 'a')).toBe('original')
-  }, 20_000)
+  })
 })
