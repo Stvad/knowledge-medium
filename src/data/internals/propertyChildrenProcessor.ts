@@ -826,7 +826,18 @@ export const collapseDuplicateValueChild = async (
 }
 
 /** §9 dedup, FIELD-row form: before deleting a duplicate field row, its
- *  values must not silently vanish. A field row holds a SET of value children,
+ *  values must not silently vanish.
+ *
+ *  For a MULTI-VALUED property, folding an equal member here merges two rows
+ *  that are arguably two occurrences — the survivor keeps the loser's
+ *  sub-children, so the annotations merge rather than vanish, and the
+ *  reconciler that runs next restores the requested multiplicity, so the array
+ *  is right either way. What is lost is which row carried which comment.
+ *  ACCEPTED: the two callers want OPPOSITE things here — a merge gesture's
+ *  settled policy is union-with-dedupe, so `mergeBlocksInTx` relies on this
+ *  fold — and separating them costs a second policy axis on a function that
+ *  already carries one, to buy row identity in a conflict that is already
+ *  ambiguous about whether the two rows were ever distinct. A field row holds a SET of value children,
  *  deduped by content — so a duplicate's value that MATCHES an existing
  *  survivor value folds into it (sub-children relocate), and a DIVERGENT value
  *  is kept as a peer SIBLING value under the survivor field row. Projection

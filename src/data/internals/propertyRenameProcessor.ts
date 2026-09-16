@@ -136,8 +136,14 @@ const consumingParentIds = async (
 /** Re-key one parent's cell for every rename that owns a field row under it.
  *  The shared `rekeyParentPropertyCell` owns the parent guard and the
  *  swap-safe drop-all-then-set-all apply; this supplies only the per-parent
- *  PLAN — project each renamed field's FIRST parseable value under the
- *  tx-start (rename-unchanged) codec, drop the old name, set the new. */
+ *  PLAN — project each renamed field under the tx-start (rename-unchanged)
+ *  codec, drop the old name, set the new.
+ *
+ *  Projection is `childContentsToEncodedPropertyValue`, the same function
+ *  `core.projectPropertyChildren` uses, so the two cannot disagree about what
+ *  a field row's value is: first parseable value for a SCALAR, every parseable
+ *  member for a LIST. A rename that projected first-wins for both would
+ *  silently shorten every renamed list property to one member. */
 const rekeyParent = (
   ctx: SameTxCtx,
   parentId: string,
