@@ -182,10 +182,6 @@ const followRenamedContent = async (
   if (before === null || before.content === after.content) return
 
   const currentLabel = readLabel(after)
-  // An emptied body names nothing, so the type keeps its name and the body is
-  // restored to it — un-naming a type is the type editor's gesture, which
-  // releases the alias too. Whitespace counts as empty: aliasSync's blank
-  // guard is `=== ''`, so `"   "` would otherwise be claimed as the name.
   // A label written in THIS tx is the naming gesture — the type editor writes
   // both halves — and a label CLEARED in it is the un-naming one, which also
   // releases the claim. Either way the label is the answer and nothing here
@@ -208,10 +204,14 @@ const followRenamedContent = async (
     )
   }
 
-  // Otherwise the name to keep, in the order the row can hold one: the new
-  // body, the label, or — for a legacy row that never had a label at all — the
-  // body being cleared. A type named only by its content is still named, and
-  // emptying it would otherwise drop the type while its claim stayed put.
+  // An emptied body names nothing, so the type keeps its name and the body is
+  // restored to it — un-naming a type is the type editor's gesture, which
+  // releases the alias too. Whitespace counts as empty: aliasSync's blank guard
+  // is `=== ''`, so `"   "` would otherwise be claimed as the name. Otherwise
+  // the name to keep, in the order the row can hold one: the new body, the
+  // label, or — for a legacy row that never had a label at all — the body being
+  // cleared. A type named only by its content is still named, and emptying it
+  // would otherwise drop the type while its claim stayed put.
   const name = newContent || currentLabel || (labelMoved ? '' : before.content.trim())
   if (name === '') return
 
@@ -275,13 +275,12 @@ const followRenamedContent = async (
   // `skipMetadata` on every write here: this reconciles a content change
   // somebody else made, and one that was itself derived would otherwise float
   // the type into recents with nobody having touched it.
-  // Against the STORED spelling, not the trimmed read: a legacy row can hold a
-  // padded `" Book "` label whose trimmed form already equals the name, and
-  // `parseTypeDefinitionMetadata` does not trim — so leaving it stored padded
-  // publishes the type under a name that nothing resolves to.
-  if (safeDecodeRowProperty(after, blockTypeLabelProp) !== name) {
-    await ctx.tx.setProperty(row.id, blockTypeLabelProp, name, {skipMetadata: true})
-  }
+  // Unconditional: `setProperty` elides a write that changes the stored value
+  // nothing, and it compares the STORED encoding. Guarding on the trimmed READ
+  // here instead left a legacy row's padded `" Book "` label stored padded once
+  // its trimmed form matched — and `parseTypeDefinitionMetadata` does not trim,
+  // so the registry published a name nothing resolved to.
+  await ctx.tx.setProperty(row.id, blockTypeLabelProp, name, {skipMetadata: true})
   if (after.content !== name) {
     await ctx.tx.update(row.id, {content: name}, {skipMetadata: true})
   }
