@@ -679,6 +679,37 @@ describe('codec-change migration', () => {
     expect(rejectionsWithCode(errors, UNDO_CLEARED)).toHaveLength(1)
   }, 20_000)
 
+  it('abandons an undo replay whose history was dropped while it was in flight', async () => {
+    // `undo()` takes the entry OFF its stack and then awaits the replay, so a
+    // pass clearing the history in that window cannot reach it — `clear()` only
+    // empties the manager. Left unchecked the replay lands after the
+    // migration's commit and restores the pre-migration encoding of a row the
+    // migration has already recorded as done.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+    expect(undoDepth(repo)).toBeGreaterThan(0)
+
+    // Stands in for the migration committing while the replay is queued behind
+    // the write lock: the history is dropped after the entry was popped.
+    const manager = repo.undoManagerFor(WS)
+    const original = manager.popUndo.bind(manager)
+    const popped = vi.spyOn(manager, 'popUndo').mockImplementation((scope) => {
+      const entry = original(scope)
+      if (entry !== null) manager.clear()
+      return entry
+    })
+
+    await expect(repo.undo(ChangeScope.BlockDefault)).resolves.toBe(false)
+    popped.mockRestore()
+
+    // The row is untouched: the replay refused rather than writing a snapshot
+    // the cleared history said was no longer safe to restore.
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+    expect(await cell('p')).toEqual({status: ' 42 '})
+  }, 20_000)
+
   it('leaves the undo history alone when the pass converges without writing', async () => {
     await seedWorkspace('children')
     const repo = setup()
@@ -1713,6 +1744,10 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     const {valueRowId} = await seedProperty(repo, 'p', ' 42 ')
     await repo.awaitPropertyDefinitionBaselines()
     const superseded = supersedeAfterFirstCheck(repo)
+    const redetected = vi.spyOn(
+      repo as unknown as {redetectPropertyDefinitionDrift: (workspaceId: string) => void},
+      'redetectPropertyDefinitionDrift',
+    ).mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await changeWhileInactive(repo, statusNumber)
@@ -1721,12 +1756,19 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     }, {timeout: 5000})
     warn.mockRestore()
     superseded.mockRestore()
+    // Captured BEFORE restoring: `mockRestore` clears the call history along
+    // with the implementation.
+    const redetects = redetected.mock.calls.length
+    redetected.mockRestore()
 
     // The chunk aborted before writing, and nothing was recorded — so the
     // superseding pass still has the drift to repair.
     expect(await rowContent(valueRowId)).toBe(' 42 ')
     expect(await cell('p')).toEqual({status: ' 42 '})
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+    // And it re-detected rather than waiting for a prime: the rebuild that
+    // superseded the batch need not have scheduled a pass of its own.
+    expect(redetects).toBeGreaterThan(0)
   }, 20_000)
 
   it('records nothing when the plans are superseded and there was no chunk to catch it', async () => {
@@ -1752,6 +1794,45 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
 
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
   }, 20_000)
+
+  it('reports unconvertible values counted by a chunk that COMMITTED, even when a later one aborts', async () => {
+    // A durable gap is never re-armed, so a session that loses this report goes
+    // on showing values the new codec cannot read with the promise unkept.
+    // 101 parents, so the counting happens in a chunk that COMMITS and the
+    // refusal lands on the next one — the report is skipped entirely if it is
+    // only made on the way out of a completed batch. Measured at ~3s.
+    await seedWorkspace('children')
+    const repo = setup()
+    const hostIds = Array.from({length: 101}, (_, i) => `host-${String(i).padStart(3, '0')}`)
+    await repo.tx(async tx => {
+      for (const id of hostIds) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: `k-${id}`, content: 'host'})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    for (const id of hostIds) {
+      await repo.tx(tx => tx.setProperty(id, statusString, 'not a number'),
+        {scope: ChangeScope.BlockDefault})
+    }
+    await repo.awaitPropertyDefinitionBaselines()
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+    let checks = 0
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () =>
+      (checks++ < 1 ? null : {
+        reason: '3 synced row(s) have not reached `blocks` on this device',
+        transient: false,
+      }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await changeWhileInactive(repo, statusNumber)
+    await vi.waitFor(() => {
+      expect(rejectionsWithCode(errors, UNCONVERTIBLE)).toHaveLength(1)
+    }, {timeout: 10_000})
+    warn.mockRestore()
+
+    expect(rejectionsWithCode(errors, UNCONVERTIBLE)[0]!.meta).toMatchObject({count: 100})
+    expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+  }, 30_000)
 
   it('watermarks the undo stack at SCHEDULING, not when the deferred job runs', async () => {
     // The deferral is deep idle — tens of seconds — and an edit inside it can

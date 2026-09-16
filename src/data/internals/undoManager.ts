@@ -155,9 +155,22 @@ export class UndoManager {
     return this.listenersFor(scope).add(listener)
   }
 
+  /** Bumped by {@link clear} alone.
+   *
+   *  `revision` cannot serve: it moves on every record and pop, so a caller
+   *  asking "was my entry invalidated" would read ordinary activity as
+   *  invalidation. This answers only "the history was DROPPED", which is the
+   *  event that makes an entry already taken off the stack unsafe to replay. */
+  get clearEpoch(): number {
+    return this.clears
+  }
+
+  private clears = 0
+
   /** Drop all stacks (for tests + an eventual "clear history" UX).
    *  Notifies subscribers on every scope that previously had state. */
   clear(): void {
+    this.clears += 1
     const touched = new Set<ChangeScope>([
       ...this.undoStacks.keys(),
       ...this.redoStacks.keys(),

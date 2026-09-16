@@ -45,7 +45,9 @@ import {
   refCodecKind,
   refTypedSchemaNames,
 } from './internals/refProjection'
-import { DeterministicIdCrossWorkspaceError, ReadOnlyError } from './api/errors'
+import {
+  DeterministicIdCrossWorkspaceError, ReadOnlyError, UndoHistoryDroppedError,
+} from './api/errors'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
@@ -1880,13 +1882,18 @@ export class Repo {
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
     if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
+    // Sampled before the entry leaves the stack, so the whole gesture — pop
+    // included — sits inside the window the replay validates. Only `clear()`
+    // moves it, so this is the same value either side of the pop.
+    const clearEpoch = manager.clearEpoch
     const entry = manager.popUndo(scope)
     if (entry === null) return false
     try {
-      await this._replay(entry, 'before')
+      await this._replay(entry, 'before', {manager, clearEpoch})
       manager.pushRedo(scope, entry)
       return true
     } catch (err) {
+      if (err instanceof UndoHistoryDroppedError) return false
       // Replay failed — push the entry back so the user can retry
       // (e.g. after toggling read-only off, fixing a missing parent).
       // Known narrow hazard (pre-existing, issue #226 window): if a new
@@ -1909,13 +1916,15 @@ export class Repo {
   async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
     if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
+    const clearEpoch = manager.clearEpoch
     const entry = manager.popRedo(scope)
     if (entry === null) return false
     try {
-      await this._replay(entry, 'after')
+      await this._replay(entry, 'after', {manager, clearEpoch})
       manager.pushUndo(scope, entry)
       return true
     } catch (err) {
+      if (err instanceof UndoHistoryDroppedError) return false
       manager.pushRedo(scope, entry)
       throw err
     }
@@ -2261,12 +2270,27 @@ export class Repo {
   private async _replay(
     entry: UndoEntry,
     direction: 'before' | 'after',
+    /** Checked INSIDE the replay transaction, once the write lock is held.
+     *
+     *  `undo`/`redo` take the entry OFF its stack and then await this, so a
+     *  pass that drops the workspace's history in that window cannot reach the
+     *  entry any more — `clear()` only empties the manager. Left unchecked, the
+     *  replay lands after the migration's commit and restores the pre-migration
+     *  encoding of a row the migration has already recorded as done.
+     *
+     *  Inside the transaction rather than before it: `repo.tx` serialises on
+     *  the write lock, so a check taken before acquiring it is exactly the one
+     *  the migration's chunk can commit behind. */
+    invalidation: {manager: UndoManager; clearEpoch: number},
   ): Promise<void> {
     const action = direction === 'before' ? 'undo' : 'redo'
     const description = entry.description
       ? `${action}: ${entry.description}`
       : action
     await this._runAndDispatch(async (tx) => {
+      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
+        throw new UndoHistoryDroppedError(action)
+      }
       const txImpl = tx as TxImpl
       // Start from replayApplicationOrder's topological order (see its
       // docblock in txSnapshots.ts for the parent-before-child
@@ -4746,6 +4770,16 @@ export class Repo {
           this.redetectPropertyDefinitionDriftWhenCaughtUp(workspaceId)
           return
         }
+        // Superseded MID-BATCH, which the pre-scan path answers by re-detecting
+        // and this one has to answer the same way. The rebuild that superseded
+        // the batch need not have scheduled a pass of its own — a name-only
+        // change schedules nothing — so leaving it here strands every parent
+        // the aborted chunk had not reached until a workspace prime.
+        if ((err as {batchSuperseded?: boolean}).batchSuperseded === true) {
+          console.warn(`${reason} Re-detecting against the live registry.`)
+          this.redetectPropertyDefinitionDrift(workspaceId)
+          return
+        }
         console.warn(`${reason} The next prime will re-detect it.`)
         return
       }
@@ -4820,6 +4854,34 @@ export class Repo {
 
     // Per changed definition, for the user-facing unparseable-values report.
     const unconvertibleByField = new Map<string, number>()
+    // §9: a codec change that strands values must be user-visible, never a
+    // silent unset. Emitted from a `finally` rather than after the loop,
+    // because the counts are of values in chunks that already COMMITTED and a
+    // later chunk can throw — a durable view gap is never re-armed, so the
+    // session would go on showing values the new codec cannot read with the
+    // promised report never made. The rows stay in the tree, fixable by hand.
+    // Reported per definition: one rebuild can change several.
+    const reportUnconvertibles = (): void => {
+      for (const {change, schema} of plans) {
+        const unconvertible = unconvertibleByField.get(change.fieldId) ?? 0
+        if (unconvertible === 0) continue
+        // Claim only what's true: this pass never deletes a value row, so the
+        // text is preserved verbatim. It does NOT promise a surface — value
+        // children sit under a field row, and the visible view prunes field
+        // rows (§9), so post-flip they are reachable through the property
+        // rows, not by scrolling the outline. Naming the outline here would
+        // send the user somewhere the values demonstrably aren't (#386 review).
+        const message =
+          `${unconvertible} value${unconvertible === 1 ? '' : 's'} for property `
+          + `"${schema.name}" could not convert to the new type; their original `
+          + `text is preserved unchanged`
+        console.warn(`[propertyDefinitionMigrations] ${message}`)
+        this.userErrorListeners.notify(new ProcessorRejection(
+          message, 'property.codec-change.unconvertible',
+          {fieldId: change.fieldId, name: schema.name, count: unconvertible},
+        ))
+      }
+    }
     // STICKY across chunks, not per chunk: once the pass has written anything,
     // every committed chunk after it must clear too. A user edit between two
     // chunks can CANONICALIZE the row it touches — `setProperty` writes under
@@ -4831,202 +4893,183 @@ export class Repo {
     // no history.
     let everWrote = false
     const CHUNK = 100
-    for (let i = 0; i < parentIds.length; i += CHUNK) {
-      const chunk = parentIds.slice(i, i + CHUNK)
-      // Per CHUNK, and read only once the chunk has COMMITTED: an aborted one
-      // rolled its writes back and leaves nothing for an undo entry to be
-      // replayed over.
-      let chunkWrote = false
-      await this.tx(async tx => {
-        // Inside the transaction, after acquisition — `repo.tx` awaits
-        // definition readiness and the write lock, so a check before it can go
-        // stale before `fn` reads a row. Throwing here aborts the tx and the
-        // pass with nothing recorded, so the next prime re-detects the drift.
-        await this.assertUploadingPassMayWrite(workspaceId, label, generation)
-        assertBatchCurrent()
-        // Flat §9 recognition: field-row selection below keys on the BIT +
-        // fieldId (the bit is what keeps a ref-typed value pointing at this
-        // very definition from being misread as a field row — no ancestry
-        // walk exists anymore, and every owner re-keys uniformly at any
-        // depth).
-        //
-        // `isFieldDefinition` closes over the batch's captured `resolver`
-        // (schedule-time snapshot, captured in
-        // `schedulePropertyDefinitionMigrations` and threaded through as a
-        // parameter — NOT re-derived here). It used to call
-        // `this.propertySchemaResolverFor(workspaceId)` fresh per
-        // chunk, but that has the exact same one-deep active/previous fail-
-        // closed behavior as the outer resolve this method used to do: once
-        // the deferred batch's own workspace fell out of retention (further
-        // switches while THIS batch's chunks are still running), every
-        // fieldId — including the ones `plans` already proved resolvable —
-        // would stop resolving, `isPropertyFieldInstance` below would reject
-        // every sibling, and the batch would silently re-key nothing despite
-        // having non-empty plans. Reusing the captured `resolver` fixes that:
-        // it's bound to a real snapshot for the life of the batch, not to
-        // whatever workspace happens to be live when a chunk executes. This
-        // also covers ancestor fieldIds unrelated to `plans` (arbitrary other
-        // definitions encountered walking up from `parentId`), which a
-        // plans-only lookup can't answer — the resolver is what actually knows
-        // "is this fieldId some (possibly shadowed) definition in this
-        // workspace's registry", not just "is it one of the migrating ones".
-        //
-        // Trade-off: this is a fixed snapshot for the whole batch, so a
-        // genuinely concurrent definition change landing between chunks (or
-        // between schedule time and the batch running) isn't picked up
-        // here — but that's an independent, separately-diffed registry
-        // rebuild, so it schedules its OWN follow-up migration; it doesn't
-        // need this pass to also notice it. For the `plans` fieldIds
-        // specifically, `isFieldDefinition(change.fieldId)` is now
-        // provably always true (same resolver instance that already proved
-        // `change.fieldId` resolves when `plans` was built) — the guard below
-        // stays for the root-half/shared-recognizer symmetry with the
-        // ancestor walk, not as a live re-check.
-        const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
-          const rowResolution = resolver.resolveField(fieldId)
-          return rowResolution.status === 'resolved'
-            || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
-        }
+    try {
+      for (let i = 0; i < parentIds.length; i += CHUNK) {
+        const chunk = parentIds.slice(i, i + CHUNK)
+        // Per CHUNK, and read only once the chunk has COMMITTED: an aborted one
+        // rolled its writes back and leaves nothing for an undo entry to be
+        // replayed over.
+        let chunkWrote = false
+        await this.tx(async tx => {
+          // Inside the transaction, after acquisition — `repo.tx` awaits
+          // definition readiness and the write lock, so a check before it can go
+          // stale before `fn` reads a row. Throwing here aborts the tx and the
+          // pass with nothing recorded, so the next prime re-detects the drift.
+          await this.assertUploadingPassMayWrite(workspaceId, label, generation)
+          assertBatchCurrent()
+          // Flat §9 recognition: field-row selection below keys on the BIT +
+          // fieldId (the bit is what keeps a ref-typed value pointing at this
+          // very definition from being misread as a field row — no ancestry
+          // walk exists anymore, and every owner re-keys uniformly at any
+          // depth).
+          //
+          // `isFieldDefinition` closes over the batch's captured `resolver`
+          // (schedule-time snapshot, captured in
+          // `schedulePropertyDefinitionMigrations` and threaded through as a
+          // parameter — NOT re-derived here). It used to call
+          // `this.propertySchemaResolverFor(workspaceId)` fresh per
+          // chunk, but that has the exact same one-deep active/previous fail-
+          // closed behavior as the outer resolve this method used to do: once
+          // the deferred batch's own workspace fell out of retention (further
+          // switches while THIS batch's chunks are still running), every
+          // fieldId — including the ones `plans` already proved resolvable —
+          // would stop resolving, `isPropertyFieldInstance` below would reject
+          // every sibling, and the batch would silently re-key nothing despite
+          // having non-empty plans. Reusing the captured `resolver` fixes that:
+          // it's bound to a real snapshot for the life of the batch, not to
+          // whatever workspace happens to be live when a chunk executes. This
+          // also covers ancestor fieldIds unrelated to `plans` (arbitrary other
+          // definitions encountered walking up from `parentId`), which a
+          // plans-only lookup can't answer — the resolver is what actually knows
+          // "is this fieldId some (possibly shadowed) definition in this
+          // workspace's registry", not just "is it one of the migrating ones".
+          //
+          // Trade-off: this is a fixed snapshot for the whole batch, so a
+          // genuinely concurrent definition change landing between chunks (or
+          // between schedule time and the batch running) isn't picked up
+          // here — but that's an independent, separately-diffed registry
+          // rebuild, so it schedules its OWN follow-up migration; it doesn't
+          // need this pass to also notice it. For the `plans` fieldIds
+          // specifically, `isFieldDefinition(change.fieldId)` is now
+          // provably always true (same resolver instance that already proved
+          // `change.fieldId` resolves when `plans` was built) — the guard below
+          // stays for the root-half/shared-recognizer symmetry with the
+          // ancestor walk, not as a live re-check.
+          const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
+            const rowResolution = resolver.resolveField(fieldId)
+            return rowResolution.status === 'resolved'
+              || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
+          }
 
-        for (const parentId of chunk) {
-          // Shared swap-safe re-key: the helper owns the parent guard and
-          // the drop-all-then-set-all apply (symmetric with the same-tx
-          // rename processor). This computePlan is the codec half — it
-          // re-encodes value children under the (possibly new) codec and
-          // reports unconvertibles.
-          // Assigned through a local, never `chunkWrote = ...` and never
-          // `chunkWrote ||= ...`: the first would let a later parent that
-          // converges on its stored bag erase an earlier parent's write, and
-          // the second SHORT-CIRCUITS — once one parent had written, every
-          // later parent in the chunk would be skipped without being visited.
-          const rewroteCell = await rekeyParentPropertyCell(
-            tx, parentId,
-            async (siblings) => {
-              const oldNames: string[] = []
-              const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
-              for (const {change, schema} of plans) {
-                let projected: unknown
-                let hasProjection = false
-                let parentUnconvertible = 0
-                let sawFieldRow = false
-                // Field-row content is `::((fieldId))` — id-addressed and
-                // rename-stable (§7), nothing to retitle. The fieldId
-                // equality picks THIS definition's field rows; the shared §9
-                // recognizer supplies the bit + root + resolvability
-                // conditions (`isFieldDefinition(change.fieldId)` is always
-                // true here — kept as the one composed predicate rather than
-                // a hand-rolled restatement).
-                for (const sibling of siblings) {
-                  if (
-                    (sibling.referenceTargetId ?? null) !== change.fieldId
-                    || !isPropertyFieldInstance(sibling, isFieldDefinition)
-                  ) continue
-                  sawFieldRow = true
-                  // §9 value set: bit-filtered — nested marked rows are
-                  // machinery, never value candidates.
-                  const values = (await tx.childrenOf(sibling.id, undefined))
-                    .filter(isFieldValueChild)
-                  for (const value of values) {
-                    try {
-                      const encoded = propertyChildContentToEncodedValue(schema, value.content)
-                      if (!hasProjection) {
-                        projected = encoded
-                        hasProjection = true
+          for (const parentId of chunk) {
+            // Shared swap-safe re-key: the helper owns the parent guard and
+            // the drop-all-then-set-all apply (symmetric with the same-tx
+            // rename processor). This computePlan is the codec half — it
+            // re-encodes value children under the (possibly new) codec and
+            // reports unconvertibles.
+            // Assigned through a local, never `chunkWrote = ...` and never
+            // `chunkWrote ||= ...`: the first would let a later parent that
+            // converges on its stored bag erase an earlier parent's write, and
+            // the second SHORT-CIRCUITS — once one parent had written, every
+            // later parent in the chunk would be skipped without being visited.
+            const rewroteCell = await rekeyParentPropertyCell(
+              tx, parentId,
+              async (siblings) => {
+                const oldNames: string[] = []
+                const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
+                for (const {change, schema} of plans) {
+                  let projected: unknown
+                  let hasProjection = false
+                  let parentUnconvertible = 0
+                  let sawFieldRow = false
+                  // Field-row content is `::((fieldId))` — id-addressed and
+                  // rename-stable (§7), nothing to retitle. The fieldId
+                  // equality picks THIS definition's field rows; the shared §9
+                  // recognizer supplies the bit + root + resolvability
+                  // conditions (`isFieldDefinition(change.fieldId)` is always
+                  // true here — kept as the one composed predicate rather than
+                  // a hand-rolled restatement).
+                  for (const sibling of siblings) {
+                    if (
+                      (sibling.referenceTargetId ?? null) !== change.fieldId
+                      || !isPropertyFieldInstance(sibling, isFieldDefinition)
+                    ) continue
+                    sawFieldRow = true
+                    // §9 value set: bit-filtered — nested marked rows are
+                    // machinery, never value candidates.
+                    const values = (await tx.childrenOf(sibling.id, undefined))
+                      .filter(isFieldValueChild)
+                    for (const value of values) {
+                      try {
+                        const encoded = propertyChildContentToEncodedValue(schema, value.content)
+                        if (!hasProjection) {
+                          projected = encoded
+                          hasProjection = true
+                        }
+                        // Canonicalize the child content under the new codec so
+                        // the stored text matches what setProperty would write.
+                        // Every change that reaches this batch is a codec change
+                        // (the bridge filters to one, the baseline emits only
+                        // those), so re-encoding is always what was asked for.
+                        const canonical = encodedPropertyValueToChildContent(schema, encoded)
+                        if (value.content !== canonical) {
+                          await tx.update(value.id, {content: canonical}, {skipMetadata: true})
+                          chunkWrote = true
+                        }
+                      } catch {
+                        parentUnconvertible += 1
                       }
-                      // Canonicalize the child content under the new codec so
-                      // the stored text matches what setProperty would write.
-                      // Every change that reaches this batch is a codec change
-                      // (the bridge filters to one, the baseline emits only
-                      // those), so re-encoding is always what was asked for.
-                      const canonical = encodedPropertyValueToChildContent(schema, encoded)
-                      if (value.content !== canonical) {
-                        await tx.update(value.id, {content: canonical}, {skipMetadata: true})
-                        chunkWrote = true
-                      }
-                    } catch {
-                      parentUnconvertible += 1
                     }
                   }
-                }
-                // This parent carries no field row for this definition — its
-                // cell keys for it are none of this change's business.
-                if (!sawFieldRow) continue
-                if (parentUnconvertible > 0) {
-                  unconvertibleByField.set(
-                    change.fieldId,
-                    (unconvertibleByField.get(change.fieldId) ?? 0) + parentUnconvertible,
-                  )
-                }
+                  // This parent carries no field row for this definition — its
+                  // cell keys for it are none of this change's business.
+                  if (!sawFieldRow) continue
+                  if (parentUnconvertible > 0) {
+                    unconvertibleByField.set(
+                      change.fieldId,
+                      (unconvertibleByField.get(change.fieldId) ?? 0) + parentUnconvertible,
+                    )
+                  }
 
-                if (change.oldName !== schema.name) oldNames.push(change.oldName)
-                if (hasProjection) {
-                  assignments.push({name: schema.name, value: projected, unset: false})
-                } else if (parentUnconvertible === 0) {
-                  assignments.push({name: schema.name, value: undefined, unset: true})
+                  if (change.oldName !== schema.name) oldNames.push(change.oldName)
+                  if (hasProjection) {
+                    assignments.push({name: schema.name, value: projected, unset: false})
+                  } else if (parentUnconvertible === 0) {
+                    assignments.push({name: schema.name, value: undefined, unset: true})
+                  }
+                  // else (all-unconvertible): leave the new key unset — no
+                  // assignment.
+                  //   - rename: the old key is dropped and the new key stays
+                  //     absent → the cell shows unset for the unparseable values,
+                  //     §9's contract. Re-keying the stale value under the new name
+                  //     would violate §9 (cell derives from children).
+                  //   - no rename: the existing key rides untouched (no old name to
+                  //     drop, no assignment) so a stale-but-fixable value stays
+                  //     visible; the next valid edit reprojects and heals it
+                  //     (§5 pending-reprojection).
+                  // This pass NEVER deletes value rows, so they stay live
+                  // unconditionally and the unconvertible COUNT is surfaced below.
                 }
-                // else (all-unconvertible): leave the new key unset — no
-                // assignment.
-                //   - rename: the old key is dropped and the new key stays
-                //     absent → the cell shows unset for the unparseable values,
-                //     §9's contract. Re-keying the stale value under the new name
-                //     would violate §9 (cell derives from children).
-                //   - no rename: the existing key rides untouched (no old name to
-                //     drop, no assignment) so a stale-but-fixable value stays
-                //     visible; the next valid edit reprojects and heals it
-                //     (§5 pending-reprojection).
-                // This pass NEVER deletes value rows, so they stay live
-                // unconditionally and the unconvertible COUNT is surfaced below.
-              }
-              return {oldNames, assignments}
-            },
-          )
-          if (rewroteCell) chunkWrote = true
-        }
-      }, {
-        // References, not BlockDefault (adversarial-review blocker): a
-        // BlockDefault tx lands on the user's cmd-Z stack — a rename backing
-        // thousands of field rows would flood/evict their history, clear
-        // redo, and a stray undo would revert a migration chunk with no
-        // re-run path (the pass is change-driven, no marker). References is
-        // the maintenance bucket the ref-reprojection pass already uses:
-        // uploads normally, never exposed to cmd-Z. Writes are
-        // skipMetadata — machinery, not "last edited".
-        scope: ChangeScope.References,
-        // This pass now handles codec-TYPE changes (renames are same-tx, see
-        // core.migratePropertyRename), so a single plan is usually a re-encode
-        // (oldName === newName) — only a COMBINED rename+codec edit still shows
-        // an arrow. Word it to match rather than print "Foo -> Foo".
-        description: plans.length === 1
-          ? (plans[0].change.oldName === plans[0].schema.name
-            ? `re-encode property definition ${plans[0].schema.name}`
-            : `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`)
-          : `migrate ${plans.length} property definitions`,
-      })
-      everWrote ||= chunkWrote
-      if (everWrote) clearUndo()
-    }
-
-    // §9: a codec change that strands values must be user-visible, never a
-    // silent unset. The rows stay in the tree, fixable by hand. Reported per
-    // definition — one rebuild can change several.
-    for (const {change, schema} of plans) {
-      const unconvertible = unconvertibleByField.get(change.fieldId) ?? 0
-      if (unconvertible === 0) continue
-      // Claim only what's true: this pass never deletes a value row, so the
-      // text is preserved verbatim. It does NOT promise a surface — value
-      // children sit under a field row, and the visible view prunes field
-      // rows (§9), so post-flip they are reachable through the property
-      // rows, not by scrolling the outline. Naming the outline here would
-      // send the user somewhere the values demonstrably aren't (#386 review).
-      const message =
-        `${unconvertible} value${unconvertible === 1 ? '' : 's'} for property `
-        + `"${schema.name}" could not convert to the new type; their original `
-        + `text is preserved unchanged`
-      console.warn(`[propertyDefinitionMigrations] ${message}`)
-      this.userErrorListeners.notify(new ProcessorRejection(
-        message, 'property.codec-change.unconvertible',
-        {fieldId: change.fieldId, name: schema.name, count: unconvertible},
-      ))
+                return {oldNames, assignments}
+              },
+            )
+            if (rewroteCell) chunkWrote = true
+          }
+        }, {
+          // References, not BlockDefault (adversarial-review blocker): a
+          // BlockDefault tx lands on the user's cmd-Z stack — a rename backing
+          // thousands of field rows would flood/evict their history, clear
+          // redo, and a stray undo would revert a migration chunk with no
+          // re-run path (the pass is change-driven, no marker). References is
+          // the maintenance bucket the ref-reprojection pass already uses:
+          // uploads normally, never exposed to cmd-Z. Writes are
+          // skipMetadata — machinery, not "last edited".
+          scope: ChangeScope.References,
+          // This pass now handles codec-TYPE changes (renames are same-tx, see
+          // core.migratePropertyRename), so a single plan is usually a re-encode
+          // (oldName === newName) — only a COMBINED rename+codec edit still shows
+          // an arrow. Word it to match rather than print "Foo -> Foo".
+          description: plans.length === 1
+            ? (plans[0].change.oldName === plans[0].schema.name
+              ? `re-encode property definition ${plans[0].schema.name}`
+              : `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`)
+            : `migrate ${plans.length} property definitions`,
+        })
+        everWrote ||= chunkWrote
+        if (everWrote) clearUndo()
+      }
+    } finally {
+      reportUnconvertibles()
     }
     return everWrote
   }
