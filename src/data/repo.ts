@@ -4607,29 +4607,53 @@ export class Repo {
     /** The user's undo revision as of SCHEDULING — see the scheduler. */
     undoWatermark: number,
   ): Promise<void> {
-    // SUPERSEDED plans do not run. A definition can change more than once
-    // inside one deferral window (`string -> number -> string`), and each
-    // rebuild enqueues its own captured plans under the same workspace
-    // generation, because a rebuild does not move it. Executing an older one
-    // re-encodes rows to a codec the workspace no longer uses and records it as
-    // the baseline — and if it then aborts partway on a transient gap, the rows
-    // it already rewrote are stranded: the final pass's re-detect compares the
-    // live codec against a baseline that still matches it and sees no drift.
+    // A SUPERSEDED batch does not run, and never runs in PART. A definition can
+    // change more than once inside one deferral window, and each rebuild
+    // enqueues its own captured plans under the same workspace generation,
+    // because a rebuild does not move it. Executing an older one re-encodes
+    // rows to a shape the workspace no longer uses and records it as the
+    // baseline — and if it then aborts partway on a transient gap, the rows it
+    // already rewrote are stranded: the final pass's re-detect compares the
+    // live definition against a baseline that now matches it and sees no drift.
     //
     // Validating instead of ordering is what makes that unreachable rather than
     // merely unlikely. Ordering the passes only decided who wrote LAST; the
-    // intermediate pass still wrote, which is the half that strands rows. Here
-    // the intermediate pass writes nothing at all.
+    // intermediate pass still wrote, which is the half that strands rows.
+    //
+    // NAME as well as codec. A rename-and-retype that is renamed BACK
+    // (`a -> b`, then `b -> a`) leaves the codec matching, and the plan still
+    // carries `oldName: a` against `schema.name: b` — so it would drop the cell
+    // key the workspace uses today and write the obsolete one, which the
+    // materializer reads as a user deletion and answers by tombstoning that
+    // definition's field rows.
+    //
+    // ALL OR NOTHING, because `withoutContestedRenames` cleared this batch
+    // COLLECTIVELY: a name swap is admitted only because each participant
+    // vacates the name the other is taking. Dropping one participant and
+    // keeping the other re-keys into a name that is no longer vacant, with the
+    // same tombstoning consequence. A per-plan filter cannot express a property
+    // that was never per-plan.
     //
     // Only when the live registry is this workspace's. When it is not, the
     // workspace is not active and the staleness check below is the answer;
-    // judging plans against another workspace's codecs is not.
+    // judging plans against another workspace's definitions is not.
     const live = this._propertyDefinitionRegistry
-    const currentPlans = live !== null && live.workspaceId === workspaceId
-      ? plans.filter(({change, schema}) =>
-        live.schemasByFieldId.get(change.fieldId)?.codec.type === schema.codec.type)
-      : plans
-    if (currentPlans.length === 0) return
+    if (live !== null && live.workspaceId === workspaceId) {
+      const superseded = plans.some(({change, schema}) =>
+        live.schemasByFieldId.get(change.fieldId)?.codec.type !== schema.codec.type
+        || live.definitionsByFieldId.get(change.fieldId)?.name !== schema.name)
+      if (superseded) {
+        // Nothing is recorded, so the baseline still holds every pre-change
+        // codec in this batch — including those of plans that were still
+        // current. Re-detecting hands them to a pass built from the live
+        // registry rather than leaving them to the next prime, which is a
+        // workspace switch or a reload. It cannot loop: those plans are
+        // derived FROM the registry this check compares against.
+        this.redetectPropertyDefinitionDrift(workspaceId)
+        return
+      }
+    }
+    const currentPlans = plans
     // Un-flipped: nothing re-keys here, so nothing is recorded either and the
     // drift stays visible to the prime that follows the flip.
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return

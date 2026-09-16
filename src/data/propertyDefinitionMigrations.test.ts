@@ -51,6 +51,10 @@ const statusString = schemaWith('status')
 const statusNumber = schemaWith('status', codecs.number)
 // Rename AND codec change in the SAME republish (status/string -> state2/number).
 const state2Number = schemaWith('state2', codecs.number)
+// A second definition, for batches that carry more than one plan.
+const OTHER_FIELD_ID = 'field-other-migrations'
+const otherString = schemaWith('other')
+const otherNumber = schemaWith('other', codecs.number)
 
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -168,6 +172,56 @@ const rebuildSnapshot = (repo: Repo) => ({
  *  can be silently reverted from. */
 const undoDepth = (repo: Repo): number =>
   repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo
+
+/** The deferred batch, typed with its plans argument — what "which plans got
+ *  through" assertions read. The workspace's OWN legitimate passes reach the
+ *  batch too, so those assertions ask which plans arrived, never whether any did. */
+const spyOnMigrationBatch = (repo: Repo) => vi.spyOn(
+  repo as unknown as {
+    runPropertyDefinitionMigrationBatch: (
+      workspaceId: string,
+      plans: ReadonlyArray<{
+        change: {fieldId: string; newName: string}
+        schema: {name: string; codec: {type: string}}
+      }>,
+    ) => Promise<boolean>
+  },
+  'runPropertyDefinitionMigrationBatch',
+)
+
+const planFieldIdsReaching = (
+  batch: ReturnType<typeof spyOnMigrationBatch>,
+): string[] => batch.mock.calls.flatMap(([, plans]) => plans.map(plan => plan.change.fieldId))
+
+const planNamesReaching = (
+  batch: ReturnType<typeof spyOnMigrationBatch>,
+): string[] => batch.mock.calls.flatMap(([, plans]) => plans.map(plan => plan.schema.name))
+
+/** Publish TWO definitions for WS in one contribution, so a captured batch can
+ *  carry a plan for each. */
+const publishPair = (
+  repo: Repo,
+  first: ReturnType<typeof schemaWith>,
+  second: ReturnType<typeof schemaWith>,
+): void => {
+  repo.setRuntimeContributions(
+    projectedPropertyDefinitionsFacet,
+    'test-status-definition',
+    [[FIELD_ID, first], [OTHER_FIELD_ID, second]].map(([fieldId, schema], index) => ({
+      metadata: {
+        fieldId: fieldId as string,
+        workspaceId: WS,
+        createdAt: index + 1,
+        name: (schema as ReturnType<typeof schemaWith>).name,
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        origin: 'user' as const,
+      },
+      schema: schema as ReturnType<typeof schemaWith>,
+    })),
+    {workspaceId: WS},
+  )
+}
 
 const rowContent = async (id: string): Promise<string> =>
   (await sharedDb.db.get<{content: string}>(
@@ -1449,16 +1503,7 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
       repo as unknown as {runPropertyDefinitionMigrations: () => Promise<void>},
       'runPropertyDefinitionMigrations',
     )
-    // Typed with its plans argument, which is the thing asserted on below.
-    const batch = vi.spyOn(
-      repo as unknown as {
-        runPropertyDefinitionMigrationBatch: (
-          workspaceId: string,
-          plans: ReadonlyArray<{schema: {codec: {type: string}}}>,
-        ) => Promise<boolean>
-      },
-      'runPropertyDefinitionMigrationBatch',
-    )
+    const batch = spyOnMigrationBatch(repo)
 
     vi.useFakeTimers()
     repo.schedulePropertyDefinitionMigrations(
@@ -1481,6 +1526,94 @@ describe('codec changes observed only across a workspace switch (#780)', () => {
     expect(await rowContent(valueRowId)).toBe(' 42 ')
     expect(await cell('p')).toEqual({status: ' 42 '})
     expect(await baselineCodecs()).toEqual({[FIELD_ID]: 'string'})
+  }, 20_000)
+
+  it('drops a plan whose definition was renamed BACK, though its codec still matches', async () => {
+    // `a -> b` and then `b -> a` leaves the codec matching, so a codec-only
+    // check keeps the plan. It still carries `oldName: a` against
+    // `schema.name: b`, so running it drops the cell key the workspace uses
+    // today and writes the obsolete one — which the materializer reads as a
+    // user deletion and answers by tombstoning that definition's field rows.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', ' 42 ')
+    await repo.awaitPropertyDefinitionBaselines()
+
+    // Captured as `status -> state2` with a codec change...
+    publishDefinition(repo, state2Number)
+    await awaitRegistry(repo, WS, 'state2')
+    const snapshot = rebuildSnapshot(repo)
+    // ...then renamed back, keeping the NEW codec. Only the name supersedes it.
+    publishDefinition(repo, statusNumber)
+    await awaitRegistry(repo, WS, 'status')
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({status: 42})
+    }, {timeout: 8000})
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
+
+    const batch = spyOnMigrationBatch(repo)
+    vi.useFakeTimers()
+    repo.schedulePropertyDefinitionMigrations(
+      WS, [{fieldId: FIELD_ID, oldName: 'status', newName: 'state2', codecChanged: true}], snapshot,
+    )
+    await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
+    vi.useRealTimers()
+
+    expect(planNamesReaching(batch)).not.toContain('state2')
+    batch.mockRestore()
+
+    // The workspace's own cell key is intact and nothing was tombstoned.
+    expect(await cell('p')).toEqual({status: 42})
+    for (const id of [fieldRowId, valueRowId]) {
+      const row = await sharedDb.db.get<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [id],
+      )
+      expect(row.deleted, `${id} deleted`).toBe(0)
+    }
+  }, 20_000)
+
+  it('drops the WHOLE batch when one plan is superseded, never just that plan', async () => {
+    // `withoutContestedRenames` clears a batch COLLECTIVELY — a name swap is
+    // admitted only because each participant vacates the name the other takes.
+    // Dropping one participant and keeping the other re-keys into a name that
+    // is no longer vacant, with the same tombstoning consequence, so the
+    // filtering has to be all-or-nothing rather than per plan.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedProperty(repo, 'p', ' 42 ')
+    publishPair(repo, statusNumber, otherString)
+    await awaitRegistry(repo, WS, 'status')
+    await vi.waitFor(async () => {
+      expect(await cell('p')).toEqual({status: 42})
+    }, {timeout: 8000})
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
+    const snapshot = rebuildSnapshot(repo)
+
+    // Only the SECOND definition is superseded; the first still matches.
+    publishPair(repo, statusNumber, otherNumber)
+    await awaitRegistry(repo, WS, 'status')
+    await repo.awaitPropertyDefinitionMigrations()
+    await repo.awaitPropertyDefinitionBaselines()
+
+    const batch = spyOnMigrationBatch(repo)
+    vi.useFakeTimers()
+    repo.schedulePropertyDefinitionMigrations(WS, [
+      {fieldId: FIELD_ID, oldName: 'status', newName: 'status', codecChanged: true},
+      {fieldId: OTHER_FIELD_ID, oldName: 'other', newName: 'other', codecChanged: true},
+    ], snapshot)
+    await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
+    vi.useRealTimers()
+
+    // The STILL-CURRENT plan is the one a per-plan filter would have let
+    // through on its own; the workspace's own pass for the superseded
+    // definition may legitimately reach the batch, so this asks about the
+    // survivor rather than counting calls.
+    expect(planFieldIdsReaching(batch)).not.toContain(FIELD_ID)
+    batch.mockRestore()
   }, 20_000)
 
   it('watermarks the undo stack at SCHEDULING, not when the deferred job runs', async () => {
