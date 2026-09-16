@@ -399,6 +399,49 @@ export const encodedPropertyValueToChildContent = (
   encoded: unknown,
 ): string => encodedValueToContent(schema, encoded)
 
+/** Why the materialize direction cannot carry `encoded` as a value of
+ *  `schema`, or null when it can.
+ *
+ *  ONE owner for the question `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR`
+ *  rejects a write over, so a producer that wants to refuse a value BEFORE
+ *  the write asks exactly what the processor will ask rather than a
+ *  hand-rolled decode that drifts from it. Content promotion is one such
+ *  producer.
+ *
+ *  TWO legs, because the processor takes two steps on a cell value that can
+ *  fail. The second is not redundant: `codecs.ref().decode` accepts any
+ *  string, while `referenceBlockContentForId` refuses one that cannot be read
+ *  back as `((id))` — so a ref-typed key meeting `Some Person` passes the
+ *  decode and throws at the render.
+ *
+ *  Note what that does NOT cover: `Mary` is refused by neither leg, so a
+ *  ref-typed key can still take a one-word value and store it as a block id
+ *  nothing resolves. This asks exactly what the processor asks, and the
+ *  processor accepts that — a stricter rule belongs in a producer's own
+ *  acceptance check, never here, or the two would disagree about what a write
+ *  may contain. */
+export interface PropertyCellValueRejection {
+  readonly reason: 'decode' | 'content'
+  readonly cause: unknown
+}
+
+export const propertyCellValueRejection = (
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): PropertyCellValueRejection | null => {
+  try {
+    schema.codec.decode(encoded)
+  } catch (cause) {
+    return {reason: 'decode', cause}
+  }
+  try {
+    encodedPropertyValueToChildContent(schema, encoded)
+  } catch (cause) {
+    return {reason: 'content', cause}
+  }
+  return null
+}
+
 /** Parse a property-value child back into the canonical encoded value
  *  stored on the parent cell. Throws when the child content cannot be
  *  interpreted for this field's current codec.

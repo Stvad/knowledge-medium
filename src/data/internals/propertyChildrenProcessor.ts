@@ -57,6 +57,7 @@ import {
   fieldValueChildren,
   isFieldValueChild,
   propertiesEqual,
+  propertyCellValueRejection,
   propertyFieldContent,
   propertyChildContentToEncodedValue,
 } from '@/data/propertyChildren'
@@ -314,8 +315,10 @@ const changedPropertyNames = (
   return changed
 }
 
-/** What to do with a cell value that does not decode under its schema's codec
- *  (see the rejection comment at the throw for why `'reject'` is the default).
+/** What to do with a cell value the materialize direction cannot carry —
+ *  `propertyCellValueRejection`'s question, which is wider than the codec
+ *  decode alone (see the rejection comment at the throw for why `'reject'` is
+ *  the default).
  *
  *  `'skip'` is for names whose value THIS TX DID NOT WRITE. Rejecting one of
  *  those refuses nothing the caller can be blamed for and instead makes the row
@@ -441,16 +444,15 @@ export const materializePropertyChildrenForExistingRow = async (
       continue
     }
 
-    try {
-      schema.codec.decode(encoded)
-    } catch (cause) {
-      // The cell holds a value that doesn't decode under its schema's codec —
-      // almost always a raw `tx.update({properties})` that bypassed
-      // `setProperty`'s encode step (setProperty can't produce an undecodable
-      // value). Silently skipping here left the cell and the value child
-      // PERMANENTLY divergent: the cell keeps the junk, the child keeps its
-      // stale value, and PROJECT never reconciles them (it watches content,
-      // not `properties`) — so in a flipped workspace the junk even syncs to
+    const rejection = propertyCellValueRejection(schema, encoded)
+    if (rejection) {
+      // The cell holds a value its schema's codec refuses — almost always a
+      // raw `tx.update({properties})` that bypassed `setProperty`'s encode
+      // step (setProperty can't produce an undecodable value). Silently
+      // skipping here left the cell and the value child PERMANENTLY
+      // divergent: the cell keeps the junk, the child keeps its stale value,
+      // and PROJECT never reconciles them (it watches content, not
+      // `properties`) — so in a flipped workspace the junk even syncs to
       // peers. Reject the write instead — a processor throw propagates out of
       // the writeTransaction and rolls the whole tx back atomically, so the
       // bad cell value never lands.
@@ -466,16 +468,19 @@ export const materializePropertyChildrenForExistingRow = async (
       // entire flip. That caller must catch per row and report the offending
       // block, not let one bad value throw the whole pass.
       if (undecodable === 'skip') continue
+      const failure = rejection.reason === 'decode'
+        ? `does not decode under the "${schema.codec.type}" codec`
+        : `decodes under the "${schema.codec.type}" codec but cannot be written ` +
+          'as a value child'
       throw new Error(
         `Cannot materialize property "${name}" on block ${row.id}: its cell ` +
-        `value does not decode under the "${schema.codec.type}" codec. Write ` +
-        `property values through tx.setProperty / block.set, not a raw ` +
-        `tx.update({properties}).`,
-        {cause},
+        `value ${failure}. Write property values through tx.setProperty / ` +
+        `block.set, not a raw tx.update({properties}).`,
+        {cause: rejection.cause},
       )
     }
 
-    // Revive AFTER the decode gate, never before it: a name the gate skipped
+    // Revive AFTER the rejection gate, never before it: a name the gate skipped
     // must be left exactly as the revival found it, and bringing its rows back
     // is not that — it would hand a stale child to a cell the skip declined to
     // touch, and post-flip the child is the side that wins.
