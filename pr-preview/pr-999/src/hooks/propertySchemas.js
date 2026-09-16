@@ -1,1 +1,1 @@
-import{QN as e}from"../../chunks/app-3J3_uIAO.js";export{e as usePropertySchemas};
+import{QN as e}from"../../chunks/app-BzZFJ1eC.js";export{e as usePropertySchemas};
