@@ -106,6 +106,11 @@ const rowContent = async (id: string): Promise<string> =>
     'SELECT content FROM blocks WHERE id = ?', [id],
   )).content
 
+const referenceTargetOf = async (id: string): Promise<string | null> =>
+  (await sharedDb.db.get<{reference_target_id: string | null}>(
+    'SELECT reference_target_id FROM blocks WHERE id = ?', [id],
+  )).reference_target_id
+
 const isLive = async (id: string): Promise<boolean> =>
   (await sharedDb.db.get<{deleted: number}>(
     'SELECT deleted FROM blocks WHERE id = ?', [id],
@@ -450,6 +455,24 @@ describe('codec change', () => {
     expect(await rowContent(valueRowId)).toBe('42')
   })
 
+  it('re-stamps the reference columns when a ref value becomes plain text', async () => {
+    // Retyping a ref property rewrites `((id))` into escaped text AFTER
+    // `core.deriveReferenceTarget` ran, and this processor's writes are
+    // settled, so the derive re-run never revisits the row. Without an inline
+    // re-stamp the column keeps naming a target the content no longer
+    // references.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('ref')
+    await createHost(repo, 'target')
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 'target')
+    expect(await referenceTargetOf(valueRowId)).toBe('target')
+
+    await retype(repo, FIELD_ID, 'string')
+
+    expect(await rowContent(valueRowId)).not.toBe('((target))')
+    expect(await referenceTargetOf(valueRowId)).toBeNull()
+  })
+
   it('rename + re-type in ONE edit: value rows stay live, cell unsets per §9', async () => {
     // Both triggers in one tx: `status` (string) becomes `state` (number), and
     // the existing value does not convert.
@@ -476,6 +499,23 @@ describe('codec change', () => {
     expect(await isLive(valueRowId), valueRowId).toBe(true)
     expect(errors).toHaveLength(1)
     expect(errors[0]!.meta).toMatchObject({name: 'state', count: 1})
+  })
+})
+
+describe('names a SEED claims', () => {
+  it('refuses a rename onto a seed name whose definition row has not materialized', async () => {
+    // `types` is a kernel seed. Until its row materializes it lives only in
+    // `seedsByName`, so a claimant lookup that read `definitionsByName` alone
+    // would report the name as FREE — and the fan-out would then write this
+    // definition's values under the type-membership key of every consumer.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    expect(repo.propertyDefinitions?.definitionsByName.get('types')).toBeUndefined()
+
+    await rename(repo, FIELD_ID, 'types')
+
+    expect(await cell('p')).toEqual({status: 'done'})
   })
 })
 

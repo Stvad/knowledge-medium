@@ -58,7 +58,10 @@ import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
 import type { BlockIdPolicy } from '@/data/blockId'
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  propertyDefinitionClaimantsForName,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
 
 /** Minimal subset of the full PowerSync DB our pipeline + Repo talks
  *  to. The test harness (`createTestDb`) returns a real
@@ -469,10 +472,10 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     resolverFor(workspaceId).resolveField(fieldId)
   const propertyDefinitionsClaimingName = (
     workspaceId: string, name: string,
-  ): readonly string[] =>
-    propertyDefinitionRegistryForWorkspace(workspaceId)
-      ?.definitionsByName.get(name)
-      ?.map(definition => definition.fieldId) ?? []
+  ): readonly string[] => {
+    const snapshot = propertyDefinitionRegistryForWorkspace(workspaceId)
+    return snapshot === null ? [] : propertyDefinitionClaimantsForName(snapshot, name)
+  }
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
   const value = await db.writeTransaction(async (txDb): Promise<R> => {

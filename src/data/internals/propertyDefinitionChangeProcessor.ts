@@ -45,6 +45,15 @@
  * content-driven reconcile that compares a cell against its field rows (#389
  * item 8), the only thing that can see such a row at all.
  *
+ * The same residual, reached a different way: a value preset whose `build`
+ * starts returning a DIFFERENT codec type under the same preset id changes
+ * every definition using it with no row edit at all, so nothing fires here.
+ * That is already a frozen-identity violation — a preset id and its codec type
+ * are keys user data is stored under (`seedIdentityLedger.ts`, #797) — and it
+ * leaves exactly the cell-versus-children divergence the reconcile above
+ * detects. Detecting it where it is DONE rather than sweeping for it
+ * afterwards is #1022.
+ *
  * Flip-gated: dormant in a 'cell' workspace.
  */
 
@@ -58,6 +67,10 @@ import {
   type SameTxCtx,
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
+import {
+  deriveReferenceColumns,
+  sameTxReferenceTargetLookups,
+} from './referenceTargetProcessor'
 import { tryBuildSchema } from '@/data/userSchemasService'
 import {
   encodedPropertyValueToChildContent,
@@ -263,6 +276,7 @@ const applyToParent = async (
   // found it does not settle this. `tx.update` on a tombstone throws, which
   // would take the user's whole definition edit down with it.
   if (parent === null || parent.deleted) return
+  const referenceLookups = sameTxReferenceTargetLookups(ctx.tx)
   const siblings = await ctx.tx.childrenOf(parentId, undefined)
   // Collected across EVERY change, then applied in two phases below — see the
   // swap note in this function's doc.
@@ -296,9 +310,33 @@ const applyToParent = async (
         // Canonicalize the stored text under the new codec so it reads back as
         // what `setProperty` would have written.
         const canonical = encodedPropertyValueToChildContent(change.schema, encoded)
-        if (value.content !== canonical) {
-          await ctx.tx.update(value.id, {content: canonical}, {skipMetadata: true})
+        if (value.content === canonical) continue
+        // Re-stamp the reference columns from the REWRITTEN content, the same
+        // duty every same-tx processor that rewrites `content` after
+        // `core.deriveReferenceTarget` already ran carries (merge retarget,
+        // deleted-block inlining). Retyping a ref property to a text one turns
+        // `((id))` into escaped plain text, and this processor's writes are
+        // `settledWrites`, so the derive re-run will never revisit the row —
+        // the column would keep naming a target the content no longer
+        // references. Always an update of an existing row, so an unresolvable
+        // alias clears the column rather than preserving a prior id.
+        const derived = await deriveReferenceColumns(
+          canonical, parent.workspaceId, referenceLookups,
+        )
+        const patch: Parameters<typeof ctx.tx.update>[1] = {content: canonical}
+        const nextTargetId = derived.targetId ?? null
+        if ((value.referenceTargetId ?? null) !== nextTargetId) {
+          patch.referenceTargetId = nextTargetId
         }
+        // Defence in depth, and kept so this stays the same two-column derive
+        // every other inline re-stamp does: a VALUE child is bit-filtered out
+        // of `isFieldValueChild` if it carries the field-form marker, so it
+        // cannot be field-form before the rewrite, and escaping cannot make it
+        // one afterwards.
+        if ((value.isFieldForm ?? false) !== derived.isFieldForm) {
+          patch.isFieldForm = derived.isFieldForm
+        }
+        await ctx.tx.update(value.id, patch, {skipMetadata: true})
       }
     }
     // This parent carries no field row for this definition, so its cell keys
