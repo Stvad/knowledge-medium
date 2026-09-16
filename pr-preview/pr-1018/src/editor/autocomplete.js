@@ -1,1 +1,1 @@
-import{ZC as e}from"../../chunks/app-mvlkLjhc.js";export{e as editorAutocompleteExtension};
+import{ZC as e}from"../../chunks/app-BPj3Kajt.js";export{e as editorAutocompleteExtension};

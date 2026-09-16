@@ -1,1 +1,1 @@
-import{is as e,rs as t}from"../../../chunks/app-mvlkLjhc.js";export{t as appendTagToBlocks,e as appendTagToContent};
+import{is as e,rs as t}from"../../../chunks/app-BPj3Kajt.js";export{t as appendTagToBlocks,e as appendTagToContent};
