@@ -1,0 +1,1 @@
+import{cq as e}from"../../chunks/app-UamttncI.js";export{e as mergeProperties};

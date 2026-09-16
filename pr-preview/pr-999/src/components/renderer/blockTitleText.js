@@ -1,0 +1,1 @@
+import{ck as e,sk as t}from"../../../chunks/app-UamttncI.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};
