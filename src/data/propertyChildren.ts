@@ -524,7 +524,23 @@ export const encodedPropertyValueToChildContents = (
   // fails on anything but an array — so this is a broken-codec assertion, not
   // a user-reachable path.
   if (!Array.isArray(encoded)) throw new CodecError('array', encoded)
-  return encoded.map(item => encodedValueToContent(member, item))
+  const contents = encoded.map(item => encodedValueToContent(member, item))
+  // Empty content is how a codec spells ABSENCE — `codecs.ref` renders a
+  // cleared ref that way, and that is a documented non-round-trip a SCALAR can
+  // afford, because a scalar may be cleared. A list member may not: the
+  // projection would read nothing there and the list would come back one
+  // member shorter, with no error anywhere. Refuse it, so the write is
+  // rejected with a reason (`propertyCellValueRejection` asks this same
+  // question) instead of silently losing the member.
+  for (const [i, content] of contents.entries()) {
+    if (content !== '') continue
+    try {
+      contentToEncodedValue(member, content)
+    } catch {
+      throw new CodecError('a list member that reads back from its content', encoded[i])
+    }
+  }
+  return contents
 }
 
 /**

@@ -37,6 +37,7 @@ import {
   ProcessorRejection,
   QueryNotRegisteredError,
   derivedRefKey,
+  memberCodecOf,
   reconcileDerived,
 } from '@/data/api'
 import {
@@ -4607,13 +4608,23 @@ export class Repo {
                 if (change.oldName !== schema.name) oldNames.push(change.oldName)
                 const projected = childContentsToEncodedPropertyValue(
                   schema, canonicalContents)
-                if (projected !== undefined) {
+                // A PARTIAL list must not be published. The cell write below is
+                // an ordinary `tx.update`, so MATERIALIZE runs on it in the same
+                // tx, reconciles the members it names, and TOMBSTONES the rows
+                // it does not — which for a list is precisely the unconvertible
+                // rows this pass promises to leave in the tree with their text
+                // intact. Measured: the unconvertible member came back
+                // `deleted = 1`. A SCALAR needs no such rule — its unconvertible
+                // sibling is a divergent peer that materialize keeps.
+                const wholeList = parentUnconvertible === 0
+                  || memberCodecOf(schema.codec) === undefined
+                if (projected !== undefined && wholeList) {
                   assignments.push({name: schema.name, value: projected, unset: false})
                 } else if (parentUnconvertible === 0) {
                   assignments.push({name: schema.name, value: undefined, unset: true})
                 }
-                // else (all-unconvertible): leave the new key unset — no
-                // assignment.
+                // else (all-unconvertible, or a list that lost members): leave
+                // the key as found — no assignment.
                 //   - rename: the old key is dropped and the new key stays
                 //     absent → the cell shows unset for the unparseable values,
                 //     §9's contract. Re-keying the stale value under the new name

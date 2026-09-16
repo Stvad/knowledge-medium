@@ -609,6 +609,27 @@ describe('codec-change migration across the multi-value boundary (km-h1hy)', () 
     expect(await rowContent(ids[1]!)).not.toMatch(/[[(]/)
   })
 
+  it('a PARTIAL list is never published, so unconvertible members survive', async () => {
+    // The cell write is an ordinary `tx.update`, so MATERIALIZE runs on it in
+    // the same tx and reaps the members the cell does not name — which for a
+    // list is exactly the rows this pass promises to leave in the tree with
+    // their text intact. Measured before the guard: the unconvertible member
+    // came back `deleted = 1`.
+    await seedWorkspace('children')
+    const repo = setup(statusRefList)
+    const ids = await seedListProperty(repo, 'p', statusRefList, ['a-id', 'b-id'])
+    // One member made unreadable under the NEW codec, one still fine.
+    await repo.tx(tx => tx.update(ids[1]!, {content: 'plain text'}),
+      {scope: ChangeScope.BlockDefault})
+
+    await republish(repo, statusStringList)
+
+    const live = await sharedDb.db.getAll<{id: string; deleted: number}>(
+      'SELECT id, deleted FROM blocks WHERE id IN (?, ?)', [ids[0]!, ids[1]!])
+    expect(live.map(r => r.deleted)).toEqual([0, 0])
+    expect(await rowContent(ids[1]!)).toBe('plain text')
+  })
+
   it('reports members that cannot convert and leaves the cell key stale', async () => {
     await seedWorkspace('children')
     const repo = setup(statusStringList)

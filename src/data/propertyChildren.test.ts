@@ -3286,6 +3286,71 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
     })
   })
 
+  describe('degenerate inputs the reconciler has to survive', () => {
+    it('collapses a duplicate field row BEFORE reconciling, so a removal sticks', async () => {
+      // A synced conflict can leave two field rows for one property. Collapsing
+      // after the reconcile relocates the duplicate's members under the
+      // survivor where nothing has reaped them, and the projection aggregates
+      // them straight back — the removal silently does not stick.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'b']),
+        {scope: ChangeScope.BlockDefault})
+      const dupKey = await appendKey('p')
+      const dupId = await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: 'p', orderKey: dupKey,
+        content: propertyFieldContent(TAGS_FIELD_ID),
+        referenceTargetId: TAGS_FIELD_ID, isFieldForm: true,
+      }), {scope: ChangeScope.BlockDefault})
+      const memberKey = keysBetween(null, null, 1)[0]!
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: dupId, orderKey: memberKey, content: 'c',
+      }), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual(['a', 'b', 'c'])
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['a'])
+      expect((await bagOf('p')).tags).toEqual(['a'])
+    })
+
+    it('gives members distinct slots when existing rows share an order key', async () => {
+      // Synced or imported rows can tie. A tie cannot express an order at all,
+      // so the reorder completes and then projects back the old way.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'b']),
+        {scope: ChangeScope.BlockDefault})
+      const rows = await memberRows('p', TAGS_FIELD_ID)
+      await sharedDb.db.execute('UPDATE blocks SET order_key = ? WHERE id = ?',
+        [rows[0]!.order_key, rows[1]!.id])
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['b', 'a']),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', TAGS_FIELD_ID)
+      expect(after.map(m => m.content)).toEqual(['b', 'a'])
+      expect(new Set(after.map(m => m.order_key)).size).toBe(2)
+      expect((await bagOf('p')).tags).toEqual(['b', 'a'])
+    })
+
+    it('refuses a list member whose content cannot be read back', async () => {
+      // `codecs.refList` accepts an empty id, and the ref encoder renders a
+      // cleared ref as empty content. A scalar may be cleared; a member may
+      // not — it would vanish on the way back and shorten the list silently.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+
+      await expect(
+        repo.tx(tx => tx.setProperty('p', peopleSchema, ['mary-id', '']),
+          {scope: ChangeScope.BlockDefault}),
+      ).rejects.toThrow(/reads back/)
+
+      expect((await bagOf('p')).people).toBeUndefined()
+    })
+  })
+
   describe('a caller that did not observe intent may not reap a member', () => {
     it('restoring the owner keeps a member that arrived while it was deleted', async () => {
       // Revival re-materializes names the tx never wrote, from a cell that can

@@ -326,7 +326,18 @@ export const isRefListCodec = (codec: unknown): codec is RefListCodec =>
  *  plugin picks, and two codecs already share `'list'` (the `list` and
  *  `string-list` presets) while differing in member type, so the type can
  *  neither answer "is this multi-valued" nor "what is a member". */
-export const memberCodecOf = (codec: AnyCodec): AnyCodec | undefined => codec.member
+export const memberCodecOf = (codec: AnyCodec): AnyCodec | undefined => {
+  if (codec.member !== undefined) return codec.member
+  // A `refList` authored against the pre-`member` interface still satisfies
+  // `isRefListCodec`, which narrows on the discriminator alone, so one can
+  // reach here from a DB-stored extension that this build never type-checked.
+  // Its member is DETERMINED by the type rather than guessed — a refList is a
+  // list of refs, which is the same assumption `decodeRefListIds` already
+  // makes — so deriving it keeps such a codec on the N-`((id))`-children shape
+  // instead of silently dropping it back to the one-JSON-child storage this
+  // slice exists to remove.
+  return isRefListCodec(codec) ? ref({targetTypes: codec.targetTypes}) : undefined
+}
 
 export const decodeRefId = (codec: RefLikeCodec, value: unknown): string | undefined => {
   try {

@@ -379,6 +379,19 @@ export interface MaterializeOptions {
  *  reach it again. Reviving the two rows above it restores the chain, which is
  *  the difference between "still deleted" and "gone".
  *
+ *  A MULTI-VALUED property reaches the value level with N tombstones as its
+ *  NORMAL shape, not as an ambiguity, so the rule below declines there for a
+ *  different reason than it was written for: `exactly one` never matches, no
+ *  member is restored, and the caller mints replacements. ACCEPTED, not
+ *  overlooked. What is lost is member row IDENTITY, never content — the
+ *  caller's reconcile rebuilds every member from the cell — and the original
+ *  rows keep their sub-children under a field row that is now LIVE, which is
+ *  the stranding this helper exists to prevent. Restoring them all instead
+ *  would resurrect every generation a re-set left behind, with no way to tell
+ *  the generations apart; matching them to the cell's contents first is a
+ *  bigger change than the identity it buys, for a path no test could
+ *  construct.
+ *
  *  ONE ambiguity rule, applied at both levels: revive only what is unambiguous.
  *  Several tombstones for one definition (an unset/re-set cycle before the
  *  owner was deleted), or several tombstoned values under one field row (a
@@ -520,6 +533,16 @@ export const materializePropertyChildrenForExistingRow = async (
       if (primary.content !== fieldContent) {
         await tx.update(primary.id, {content: fieldContent})
       }
+      // BEFORE reconciling, not after. Collapsing relocates a duplicate field
+      // row's values under the survivor, so a reconcile that ran first never
+      // sees them — and for a list that means the members hiding under the
+      // duplicate are not reaped, the projection aggregates them straight back
+      // into the cell, and the user's removal does not stick until they repeat
+      // it. The scalar direction was insensitive to the order, which is why it
+      // sat after.
+      for (const child of duplicates) {
+        await collapseDuplicateFieldRow(tx, primary.id, child)
+      }
       await reconcileFieldValueChildren(tx, primary, schema, encoded, opts.mayNotRemove)
     } else {
       const fieldRowId = await tx.create({
@@ -535,10 +558,8 @@ export const materializePropertyChildrenForExistingRow = async (
       await reconcileFieldValueChildren(
         tx, {id: fieldRowId, workspaceId: row.workspaceId}, schema, encoded,
       )
-    }
-
-    for (const child of duplicates) {
-      await collapseDuplicateFieldRow(tx, primary?.id ?? child.id, child)
+      // No duplicates to collapse on this branch: they are the tail of the
+      // same empty `fieldRows`.
     }
   }
 }
@@ -722,7 +743,12 @@ const reconcileMemberValueChildren = async (
   // list properties here hold a handful of members, and the alternative —
   // allocating between neighbours — is a second ordering rule to keep correct
   // for a cost nothing has measured.
-  const freed = kept.filter(k => k !== undefined).map(k => k.orderKey)
+  // DISTINCT slots: synced or imported rows can share an `order_key`, and a
+  // tied pair cannot express an order at all — SQLite falls back to the id, so
+  // a reorder completes and then projects back in the old order. Collapsing the
+  // tie to one slot and topping up with fresh keys gives every member a key of
+  // its own.
+  const freed = [...new Set(kept.filter(k => k !== undefined).map(k => k.orderKey))]
   const created = contents.length - freed.length
   // Strictly after every existing value row, the RETAINED ones included, so a
   // row this call was not allowed to reap can never be handed a slot: its key
