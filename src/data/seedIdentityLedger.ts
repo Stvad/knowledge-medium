@@ -12,7 +12,16 @@
  * `seedIdentityLedger.test.ts`: a RENAME reads as unset (the registry pins to
  * the declared name via `effectivePropertyDefinitionName`, so the old cell
  * survives invisibly and the next write lands beside it); a CODEC change throws
- * on the first read; a REMOVAL leaves cells nothing addresses.
+ * on the first read.
+ *
+ * A REMOVAL is the one that does NOT lose anything, and it is the reason the
+ * retired lists below exist. Once a seedKey stops being declared, its
+ * materialized definition row stops being a mirror and speaks for itself — a
+ * property row publishes its STORED name (`effectivePropertyDefinitionName`'s
+ * second case), a type row is republished read-only under its claimed id. So
+ * the cells and tags stay live and addressable. What that leaves behind is a
+ * key that looks free and is not: a later seed claiming it reads the previous
+ * seed's values as its own, measured in the test below.
  *
  * ENCODING takes two columns because neither subsumes the other. `presetId`
  * alone would miss a codec whose `type` string moved under a stable preset id.
@@ -258,12 +267,16 @@ const LEDGER_KINDS = {
   property: {
     fields: ['name', 'preset', 'codec'],
     retiredList: 'RETIRED_PROPERTY_NAMES',
-    cost: (key: string) => `cells under ${key} stop resolving and read as unset`,
+    renameCost: (key: string) => `cells under ${key} stop resolving and read as unset`,
+    removalNote: (key: string) =>
+      `the materialized definition row keeps publishing ${key} on its own, so its cells stay live`,
   },
   type: {
     fields: ['id'],
     retiredList: 'RETIRED_TYPE_IDS',
-    cost: (key: string) => `blocks tagged ${key} silently lose the type`,
+    renameCost: (key: string) => `blocks tagged ${key} silently lose the type`,
+    removalNote: (key: string) =>
+      `the materialized definition row is republished read-only under ${key}, so tagged blocks keep resolving`,
   },
 } as const
 
@@ -353,7 +366,7 @@ export const diffSeedLedger = (
   frozen: ReadonlyMap<string, readonly string[]>,
   retiredKeys: ReadonlySet<string>,
 ): string[] => {
-  const {fields, retiredList, cost} = LEDGER_KINDS[kind]
+  const {fields, retiredList, renameCost, removalNote} = LEDGER_KINDS[kind]
   const divergences: string[] = []
   const say = (seedKey: string, summary: string, remedy: string) =>
     divergences.push(`${seedKey}: ${summary} — ${remedy}`)
@@ -380,7 +393,7 @@ export const diffSeedLedger = (
       const summary = `${field} ${JSON.stringify(was)} -> ${JSON.stringify(now)}`
       if (index === 0) {
         say(seedKey, summary,
-          `${cost(JSON.stringify(was))}; revert, or accept the loss and add ` +
+          `${renameCost(JSON.stringify(was))}; revert, or accept the loss and add ` +
           `${JSON.stringify(was)} to ${retiredList}`)
         return
       }
@@ -396,8 +409,11 @@ export const diffSeedLedger = (
   for (const [seedKey, frozenFields] of frozen) {
     if (shipped.has(seedKey)) continue
     const storageKey = JSON.stringify(frozenFields[0])
+    // Removing a seed loses nothing — see the header. What it leaves is a key
+    // that looks free, which is precisely what the retired list is for.
     say(seedKey, 'the ledger freezes it but nothing ships it',
-      `${cost(storageKey)}; delete the row and add ${storageKey} to ${retiredList}`)
+      `${removalNote(storageKey)}; delete the row and add ${storageKey} to ` +
+      `${retiredList}, or a later seed claiming ${storageKey} reads those values as its own`)
   }
   return divergences.sort()
 }

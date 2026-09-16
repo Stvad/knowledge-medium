@@ -5,12 +5,17 @@
 // reason `staticAppExtensions.test.ts` runs there. The characterization tests
 // below are environment-agnostic and share the file so the rule and the
 // behaviour it exists for sit together.
-import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope, seedProperty, seedType} from '@/data/api'
 import type {AnyPropertySeedDeclaration} from '@/data/propertySeeds'
-import {materializePropertySeeds, propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import type {TypeSeedDeclaration} from '@/data/typeSeeds'
+import {
+  materializePropertySeeds,
+  materializeTypeSeeds,
+  propertyDefinitionBlockId,
+} from '@/data/definitionSeeds'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
-import {propertyNameProp} from '@/data/properties'
+import {propertyNameProp, typesProp} from '@/data/properties'
 import {
   diffSeedLedger,
   FROZEN_PROPERTY_SEEDS,
@@ -87,16 +92,17 @@ describe('seed identity ledger', () => {
   })
 
   // A self-consistency check on the ledger DATA, which the two tripwires above
-  // only catch while shipped and frozen agree: a key cannot be both live and
-  // retired, and listing it twice would make the refusal depend on iteration
-  // order.
-  it('retires no key that is still a live storage key, and retires none twice', () => {
-    const live = new Set([
-      ...FROZEN_PROPERTY_SEEDS.map(row => row[1]),
-      ...FROZEN_TYPE_SEEDS.map(row => row[1]),
-    ])
-    const retired = [...RETIRED_PROPERTY_NAMES, ...RETIRED_TYPE_IDS]
-    expect(retired.filter(key => live.has(key))).toEqual([])
+  // only catch while shipped and frozen agree. Per NAMESPACE, not merged: a
+  // property name and a type id are independent storage keys — one lives in
+  // `properties_json` keys, the other in `typesProp` values — so the same
+  // spelling may legitimately be a live property and a retired type at once.
+  // Driven off one table so a third kind cannot be added and forgotten.
+  it.each([
+    ['property', FROZEN_PROPERTY_SEEDS.map(row => row[1]), RETIRED_PROPERTY_NAMES],
+    ['type', FROZEN_TYPE_SEEDS.map(row => row[1]), RETIRED_TYPE_IDS],
+  ] as const)('retires no live %s key, and retires none twice', (_kind, live, retired) => {
+    const liveKeys = new Set<string>(live)
+    expect(retired.filter(key => liveKeys.has(key))).toEqual([])
     expect(retired).toHaveLength(new Set(retired).size)
   })
 })
@@ -155,18 +161,31 @@ describe('diffSeedLedger', () => {
   it('reports a seed the ledger has never frozen, with the line to add', () => {
     expect(diffSeedLedger(
       'property', new Map([['k/property/b', ['b:name', 'boolean', 'boolean']]]), frozen, none,
-    ).map(line => line.split(' — ')[1])).toEqual([
-      'cells under "a:name" stop resolving and read as unset; delete the row and ' +
-        'add "a:name" to RETIRED_PROPERTY_NAMES',
-      'add ["k/property/b", "b:name", "boolean", "boolean"]',
+    ).map(line => line.split(' — ')[0])).toEqual([
+      'k/property/a: the ledger freezes it but nothing ships it',
+      'k/property/b: ships but the ledger does not freeze it',
     ])
   })
 
-  it('reports a removed seed, whose stored values outlive its declaration', () => {
+  // A removal loses nothing (the materialized row publishes itself), so it must
+  // NOT borrow the rename cost — it leaves a key that only looks free.
+  it('describes a removed seed as leaving its data live, not as losing it', () => {
     expect(diffSeedLedger('property', new Map(), frozen, none)).toEqual([
-      'k/property/a: the ledger freezes it but nothing ships it — cells under "a:name" ' +
-        'stop resolving and read as unset; delete the row and add "a:name" to ' +
-        'RETIRED_PROPERTY_NAMES',
+      'k/property/a: the ledger freezes it but nothing ships it — the materialized ' +
+        'definition row keeps publishing "a:name" on its own, so its cells stay live; ' +
+        'delete the row and add "a:name" to RETIRED_PROPERTY_NAMES, or a later seed ' +
+        'claiming "a:name" reads those values as its own',
+    ])
+  })
+
+  it('describes a removed type seed by its own runtime behaviour', () => {
+    expect(diffSeedLedger(
+      'type', new Map(), new Map([['k/type/a', ['gone']]]), none,
+    )).toEqual([
+      'k/type/a: the ledger freezes it but nothing ships it — the materialized ' +
+        'definition row is republished read-only under "gone", so tagged blocks keep ' +
+        'resolving; delete the row and add "gone" to RETIRED_TYPE_IDS, or a later seed ' +
+        'claiming "gone" reads those values as its own',
     ])
   })
 
@@ -285,29 +304,63 @@ describe('what a seed change does to values already stored', () => {
   })
 
   let released: Repo[] = []
-  afterEach(async () => {
-    // A seed pass left queued would fire during a later test with the database
-    // reset under it; unpin, then drain (definitionSeeds.test.ts's `releaseRepo`).
+  /** A seed pass left queued would fire during a later test with the database
+   *  reset under it; unpin, THEN drain (definitionSeeds.test.ts's `releaseRepo`
+   *  — draining a still-pinned pass parks on a membership wait). */
+  const drain = async (): Promise<void> => {
     for (const repo of released) {
       repo.setActiveWorkspaceId(null)
       await repo.awaitSeedMaterialization()
     }
     released = []
-  })
+  }
+  afterEach(drain)
 
-  /** One release: a Repo whose runtime declares exactly `seed`, with its
-   *  definition block materialized the way bootstrap would. */
-  const release = async (seed: AnyPropertySeedDeclaration): Promise<Repo> => {
+  /** One release: a Repo whose runtime declares exactly these seeds, with their
+   *  definition blocks materialized the way bootstrap would.
+   *
+   *  Releases are SEQUENTIAL — the previous Repo is unpinned and drained before
+   *  the next opens. Two live Repos over one database is not just untidy here:
+   *  `createTestRepo` gives each its own `newId` / `newTxSeq` counters starting
+   *  from the same value, so concurrent ones mint colliding ids. The prefixed
+   *  `newId` makes that impossible rather than merely unlikely, and the drain
+   *  keeps a queued seed pass from firing into the next release. */
+  let releaseCount = 0
+  const release = async (
+    seeds: readonly AnyPropertySeedDeclaration[],
+    types: readonly TypeSeedDeclaration[] = [],
+  ): Promise<Repo> => {
+    await drain()
+    releaseCount += 1
+    const generation = releaseCount
+    let minted = 0
     const {repo} = createTestRepo({
       db: sharedDb.db,
-      extensions: [[definitionSeedsFacet.of(seed, {source: 'ledger-test'})]],
+      newId: () => `r${generation}-${++minted}`,
+      extensions: [[
+        ...seeds.map(seed => definitionSeedsFacet.of(seed, {source: 'ledger-test'})),
+        ...types.map(type => typeSeedsFacet.of(type, {source: 'ledger-test'})),
+      ]],
     })
     released.push(repo)
     repo.setActiveWorkspaceId(WS)
     await repo.ensureSystemPages(WS)
-    await materializePropertySeeds(repo, WS, [seed])
+    if (seeds.length > 0) await materializePropertySeeds(repo, WS, seeds)
+    if (types.length > 0) await materializeTypeSeeds(repo, WS, types)
     return repo
   }
+
+  /** Registry reads race the definition PROJECTORS, which deliver on a
+   *  subscription tick after materialization rather than inside `release`. Poll
+   *  the outcome instead of sleeping on it (AGENTS.md); a real regression still
+   *  fails, it just takes the budget to say so. Measured at ~15-35ms per test,
+   *  so 2s is ample and stays strictly under the 5s default test timeout — an
+   *  inner budget at or above the outer one could never report its own failure.
+   *
+   *  Caught the honest way: the type-removal assertion below failed ~2 runs in
+   *  6 before this, and five green runs in a row had said it was stable. */
+  const settle = (assertion: () => void): Promise<void> =>
+    vi.waitFor(assertion, {timeout: 2_000})
 
   const cellsOf = async (id: string): Promise<Record<string, unknown>> => {
     const row = await sharedDb.db.get<{properties_json: string}>(
@@ -319,7 +372,7 @@ describe('what a seed change does to values already stored', () => {
   const withValue = async (
     seed: AnyPropertySeedDeclaration, id: string, value: string,
   ): Promise<void> => {
-    const repo = await release(seed)
+    const repo = await release([seed])
     await repo.tx(
       async tx => { await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: ''}) },
       {scope: ChangeScope.BlockDefault, description: 'seed-identity fixture'},
@@ -331,7 +384,7 @@ describe('what a seed change does to values already stored', () => {
     await withValue(before, 'renamed-block', 'vlad')
     expect(await cellsOf('renamed-block')).toEqual({'ledgerTest:nickname': 'vlad'})
 
-    const upgraded = await release(afterRename)
+    const upgraded = await release([afterRename])
     const block = upgraded.block('renamed-block')
     await block.load()
 
@@ -339,9 +392,12 @@ describe('what a seed change does to values already stored', () => {
     expect(block.peekProperty(afterRename)).toBeUndefined()
     expect(block.get(afterRename)).toBe('')
     // The registry answers the DECLARED name, so the stored one resolves to
-    // nothing — which is what `audit-properties` reports as unregistered.
-    expect([...upgraded.propertyDefinitions!.schemas.keys()])
-      .toContain('ledgerTest:handle')
+    // nothing — which is what `audit-properties` reports as unregistered. The
+    // absence is asserted only once the presence has been seen, so it cannot
+    // pass on an empty registry that simply had not loaded.
+    await settle(() => {
+      expect([...upgraded.propertyDefinitions!.schemas.keys()]).toContain('ledgerTest:handle')
+    })
     expect([...upgraded.propertyDefinitions!.schemas.keys()])
       .not.toContain('ledgerTest:nickname')
     // And the backing definition block still stores the OLD name: seed
@@ -360,11 +416,75 @@ describe('what a seed change does to values already stored', () => {
     await withValue(beforeRetype, 'retyped-block', 'seventeen')
     expect(await cellsOf('retyped-block')).toEqual({'ledgerTest:score': 'seventeen'})
 
-    const upgraded = await release(afterRetype)
+    const upgraded = await release([afterRetype])
     const block = upgraded.block('retyped-block')
     await block.load()
 
     expect(() => block.get(afterRetype)).toThrow(/expected finite number/)
     expect(await cellsOf('retyped-block')).toEqual({'ledgerTest:score': 'seventeen'})
+  })
+
+  // Removal is the case that loses NOTHING, and the whole reason the retired
+  // lists exist. The surviving seed keeps the property registry primed, which is
+  // also the realistic shape: one plugin goes, the rest stay.
+  const survivor = seedProperty({
+    seedKey: 'system:ledger-test/property/survivor', revision: 1,
+    name: 'ledgerTest:survivor', preset: 'string', defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('a removed property seed keeps publishing its name, so its cells stay live', async () => {
+    await withValue(before, 'removed-block', 'vlad')
+
+    const upgraded = await release([survivor])
+    await settle(() => {
+      // The surviving seed is what keeps the property registry primed at all;
+      // assert that precondition rather than let a null registry read as a
+      // missing name.
+      expect(upgraded.propertyDefinitions, 'registry primed by the surviving seed').not.toBeNull()
+      expect([...upgraded.propertyDefinitions!.schemas.keys()]).toContain('ledgerTest:nickname')
+    })
+    expect(upgraded.propertySchemaResolverFor(WS).resolve('ledgerTest:nickname').status)
+      .toBe('resolved')
+    expect(await cellsOf('removed-block')).toEqual({'ledgerTest:nickname': 'vlad'})
+  })
+
+  it('a removed type seed is republished read-only, so tagged blocks keep resolving', async () => {
+    const owner = seedType({
+      seedKey: 'system:ledger-test/type/widget', revision: 1,
+      id: 'ledgerTest:widget', label: 'Ledger test widget',
+    })
+    const first = await release([], [owner])
+    await first.tx(
+      async tx => {
+        await tx.create({
+          id: 'tagged-block', workspaceId: WS, parentId: null, orderKey: 'a0', content: '',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed-identity fixture'},
+    )
+    await first.block('tagged-block').set(typesProp, [owner.id])
+
+    const upgraded = await release([])
+    await settle(() => { expect(upgraded.types.has(owner.id)).toBe(true) })
+    expect(upgraded.types.get(owner.id)?.label).toBe(owner.label)
+    expect(await cellsOf('tagged-block')).toEqual({types: [owner.id]})
+  })
+
+  // What the retired lists refuse, and why refusing is not pedantry: the
+  // reclaiming seed brings its OWN default and still reads the previous seed's
+  // stored value.
+  it('a later seed claiming a freed name reads the previous seed\'s values', async () => {
+    await withValue(before, 'reclaimed-block', 'vlad')
+    const reclaimer = seedProperty({
+      seedKey: 'system:ledger-test/property/nickname-v2', revision: 1,
+      name: before.name, preset: 'string', defaultValue: 'ITS-OWN-DEFAULT',
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const upgraded = await release([reclaimer])
+    const block = upgraded.block('reclaimed-block')
+    await block.load()
+    expect(block.get(reclaimer)).toBe('vlad')
   })
 })
