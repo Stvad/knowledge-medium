@@ -1,6 +1,14 @@
+import {fileURLToPath} from 'node:url'
 import {describe, expect, it} from 'vitest'
-import {rewriteImportMapScript} from '@/../vite-plugins/importMapHtml'
-import {appImportedSubpaths, cjsShimSource, moduleKind, packageNameOf, vendorImports} from '@/../vite-plugins/vendorImportMap'
+import {readImportMap, rewriteImportMapScript} from '@/../vite-plugins/importMapHtml'
+import {
+  appImportedSubpaths,
+  cjsShimSource,
+  facadeSource,
+  moduleKind,
+  packageNameOf,
+  vendorImports,
+} from '@/../vite-plugins/vendorImportMap'
 
 describe('packageNameOf', () => {
   it('takes the top-level package from a bare specifier, scoped or not', () => {
@@ -24,37 +32,21 @@ describe('appImportedSubpaths', () => {
     const sources = [
       `import {createRoot} from 'react-dom/client'\nimport 'zod/locales'`,
       `const mod = await import('react-dom/server')`,
-      `import type {Root} from "react-dom/client"`,
     ]
     expect(appImportedSubpaths(sources, packages)).toEqual(['react-dom/client', 'react-dom/server', 'zod/locales'])
   })
 
-  it('ignores bare package imports, unexposed packages, aliases, relatives and query suffixes', () => {
+  it('ignores what is not a runtime import: bare packages, unexposed packages, aliases, relatives, query suffixes, comments, type-only imports', () => {
     const sources = [
       `import React from 'react'`,
       `import {x} from 'lodash-es/debounce'`,
       `import {y} from '@/utils/y.js'`,
       `import z from './z?raw'`,
       `import w from 'zod/v4?url'`,
+      `// see the docs from 'zod/mini'\n/* import 'zod/v3' */`,
+      `import type {Root} from 'react-dom/client'`,
     ]
     expect(appImportedSubpaths(sources, packages)).toEqual(['zod/v4'])
-  })
-})
-
-describe('vendorImports', () => {
-  it('maps each specifier to its document-relative facade, sorted', () => {
-    expect(vendorImports(['zod', '@codemirror/view', 'react/jsx-runtime'])).toEqual({
-      '@codemirror/view': './vendor/@codemirror/view.js',
-      'react/jsx-runtime': './vendor/react/jsx-runtime.js',
-      zod: './vendor/zod.js',
-    })
-  })
-
-  it('merges into an existing importmap block without touching other entries', () => {
-    const html = `<script type="importmap">\n{"imports": {"@/": "./src/"}}\n</script>`
-    const out = rewriteImportMapScript(html, m => ({...m, imports: {...m.imports, ...vendorImports(['zod'])}}))
-    const parsed = JSON.parse(out.match(/<script type="importmap">([\s\S]*?)<\/script>/)![1])
-    expect(parsed).toEqual({imports: {'@/': './src/', zod: './vendor/zod.js'}})
   })
 })
 
@@ -66,17 +58,56 @@ describe('moduleKind', () => {
     expect(moduleKind('/x/a.js', () => 'module.exports = 1', () => 'module')).toBe('esm')
     expect(moduleKind('/x/a.js', () => "'use strict';\nmodule.exports = require('./cjs/react.production.js');", noType)).toBe('cjs')
     expect(moduleKind('/x/a.js', () => "import {x} from './y.js'\nexport {x}", noType)).toBe('esm')
-    expect(moduleKind('/x/a.js', () => "// comment mentioning export\nexports.a = 1", noType)).toBe('cjs')
+    expect(moduleKind('/x/a.js', () => 'import React from "react"', noType)).toBe('esm')
+  })
+  it('does not read an identifier that merely starts with import as ESM syntax', () => {
+    expect(moduleKind('/x/a.js', () => '!function(){}();\nimport_x = 1;\nimportScripts("w.js")', noType)).toBe('cjs')
+    expect(moduleKind('/x/a.js', () => '// comment mentioning export\nexports.a = 1', noType)).toBe('cjs')
   })
 })
 
 describe('cjsShimSource', () => {
-  it('re-exports the module.exports object as default and each name off it', () => {
-    expect(cjsShimSource('react', ['createContext', 'useState'])).toBe(
-      'import m from "react";\nexport default m;\nexport const {createContext, useState} = m;\n',
-    )
+  it('exports the module object as default and every given name off it, reserved words included', () => {
+    const src = cjsShimSource('x', ['createContext', 'catch'])
+    expect(src).toMatch(/^import m from "x";/)
+    expect(src).toContain('export default m;')
+    expect(src).toContain('const {createContext: _0, catch: _1} = m;')
+    expect(src).toContain('export {_0 as createContext, _1 as catch};')
   })
-  it('emits default alone when there are no names', () => {
-    expect(cjsShimSource('x', [])).toBe('import m from "x";\nexport default m;\n')
+})
+
+describe('facadeSource', () => {
+  // Against the real dependency files, resolved with import conditions the way
+  // the bundler does (Node's require conditions would pick zod's CommonJS
+  // entry). The CommonJS branch is what makes `import {useState} from 'react'`
+  // link at all.
+  const resolve = (specifier: string) => fileURLToPath(import.meta.resolve(specifier))
+  it('shims a CommonJS package with the names Node sees on it', () => {
+    const src = facadeSource('react', resolve('react'))
+    expect(src).toContain('export default m;')
+    expect(src).toMatch(/const \{[^}]*\buseState: _\d+\b[^}]*\} = m;/)
+    expect(src).not.toContain('export *')
+  })
+  it('re-exports an ESM package as a whole', () => {
+    const src = facadeSource('zod', resolve('zod'))
+    expect(src).toContain('export * from "zod";')
+    expect(src).toContain('export default m.default;')
+  })
+})
+
+describe('importmap helpers', () => {
+  it('maps each specifier to its document-relative facade, sorted', () => {
+    expect(vendorImports(['zod', '@codemirror/view', 'react/jsx-runtime'])).toEqual({
+      '@codemirror/view': './vendor/@codemirror/view.js',
+      'react/jsx-runtime': './vendor/react/jsx-runtime.js',
+      zod: './vendor/zod.js',
+    })
+  })
+
+  it('merges into an existing importmap block and reads back what it wrote', () => {
+    const html = `<script type="importmap">\n{"imports": {"@/": "./src/"}}\n</script>`
+    const out = rewriteImportMapScript(html, m => ({...m, imports: {...m.imports, ...vendorImports(['zod'])}}))
+    expect(readImportMap(out)).toEqual({imports: {'@/': './src/', zod: './vendor/zod.js'}})
+    expect(readImportMap('<p>no map</p>')).toBeUndefined()
   })
 })

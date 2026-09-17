@@ -613,7 +613,9 @@ const importMapModules = (document: Document): AuthoringModuleSummary[] => {
           category: key.startsWith('@/') || key === '@/' ? 'extension-import-prefix' : 'external',
           description: `${moduleDescriptionForPath('html-importmap')} Target: ${value}`,
           source: 'html-importmap',
-          safeForExtensions: key === '@/' || key.startsWith('react'),
+          // `./vendor/<pkg>.js` entries are facades over the app's own chunk
+          // (vite-plugins/vendorImportMap.ts) — the same instance the app runs.
+          safeForExtensions: key === '@/' || value.startsWith('./vendor/'),
         })
       }
     } catch {

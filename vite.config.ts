@@ -7,6 +7,7 @@ import wasm from "vite-plugin-wasm"
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
 import {vendorImportMapPlugin} from './vite-plugins/vendorImportMap'
+import {SRC_ENTRY_EXCLUDE, SRC_ENTRY_GLOB} from './vite-plugins/srcEntries'
 import {resolveAppVersion} from './scripts/app-version'
 import {globSync} from 'node:fs'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
@@ -26,23 +27,9 @@ import {globSync} from 'node:fs'
  *  rather than driven off `apiCatalog`: that catalog is a discovery surface,
  *  not a whitelist. */
 const allSrcEntries = (rootDir: string): Record<string, string> => {
-    const files = globSync('src/**/*.{ts,tsx,js}', {
+    const files = globSync(SRC_ENTRY_GLOB, {
         cwd: rootDir,
-        exclude: [
-            // `*.test.*` also covers the fuzz suites: docs/fuzzing.md fixes them
-            // as `*.fuzz.test.ts`, so a bare `*.fuzz.*` pattern matched nothing.
-            '**/test/**', '**/*.test.*', '**/*.d.ts',
-            // Example sources are imported as TEXT (`?raw`) and already emitted
-            // by that import. Adding them as entries compiles a second copy and
-            // Rollup dedups the name to `<name>2.js` — pure duplication.
-            '**/examples/**',
-            // The service worker's own graph, built by vite.sw.config.ts. Scoped
-            // to those four roots, NOT all of src/sw: previewDatabases.ts is
-            // client-graph code (src/data/localDbStorage.ts imports it) and
-            // excluding the directory wholesale left it emitting 3 of its 5
-            // exports — the very bug this input list exists to prevent.
-            'src/sw/{sw,worker,ledger,preview}.ts',
-        ],
+        exclude: SRC_ENTRY_EXCLUDE,
         // Accepted: this also makes src/minimal-editor.tsx an entry, the script
         // for a second page that is not itself a build input, so it emits with
         // nothing importing it. Kept rather than special-cased — it IS an
@@ -119,10 +106,9 @@ export default defineConfig(({command}) => {
             react(),
             babel({presets: [reactCompilerPreset()]}),
             wasm(),
-            // Bundled dependencies — React included — importable by bare name
-            // from dynamic extensions (facades over the app chunk + importmap
-            // entries). See vite-plugins/vendorImportMap.ts; tests in
-            // vite-plugins/test/.
+            // Bundled dependencies importable by bare name from dynamic
+            // extensions (facades over the app chunk + importmap entries). See
+            // vite-plugins/vendorImportMap.ts; tests in vite-plugins/test/.
             vendorImportMapPlugin({rootDir: __dirname}),
             // Substitutes the theme-boot placeholder tokens in index.html's
             // pre-paint script with the source-of-truth values from

@@ -12,6 +12,18 @@ const importMapScriptPattern =
 const formatImportMap = (importMap: ImportMap): string =>
   `\n${JSON.stringify(importMap, null, 8).replace(/^/gm, '      ')}\n    `
 
+/** The first importmap block in `html`, parsed; `undefined` when there is
+ *  none or it is not JSON. */
+export const readImportMap = (html: string): ImportMap | undefined => {
+  const match = new RegExp(importMapScriptPattern.source, 'i').exec(html)
+  if (!match) return undefined
+  try {
+    return JSON.parse(match[3].trim()) as ImportMap
+  } catch {
+    return undefined
+  }
+}
+
 /** Apply `rewrite` to every importmap script in `html`. A block that is not
  *  valid JSON, or that `rewrite` returns unchanged (same reference), is left
  *  byte-for-byte as it was. */
