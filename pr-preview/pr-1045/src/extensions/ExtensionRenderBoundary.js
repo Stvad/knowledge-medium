@@ -1,0 +1,1 @@
+import{CD as e}from"../../chunks/app-DASyXwoC.js";export{e as ExtensionRenderBoundary};

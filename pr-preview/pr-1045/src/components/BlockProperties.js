@@ -1,0 +1,1 @@
+import{Kk as e}from"../../chunks/app-DASyXwoC.js";export{e as BlockProperties};

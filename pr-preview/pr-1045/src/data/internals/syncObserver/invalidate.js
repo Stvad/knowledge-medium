@@ -1,0 +1,1 @@
+import{IW as e}from"../../../../chunks/app-DASyXwoC.js";export{e as applySyncInvalidation};

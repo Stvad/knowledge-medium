@@ -1,0 +1,1 @@
+import{_O as e}from"../../chunks/app-DASyXwoC.js";export{e as BlockEditor};

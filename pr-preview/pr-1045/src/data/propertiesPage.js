@@ -1,0 +1,1 @@
+import{C$ as e,w$ as t}from"../../chunks/app-DASyXwoC.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

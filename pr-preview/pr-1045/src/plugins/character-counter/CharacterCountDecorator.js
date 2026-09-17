@@ -1,0 +1,1 @@
+import{j as e}from"../../../chunks/app-DASyXwoC.js";export{e as characterCountDecoratorContribution};

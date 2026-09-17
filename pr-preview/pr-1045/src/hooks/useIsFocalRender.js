@@ -1,0 +1,1 @@
+import{Lk as e,Rk as t}from"../../chunks/app-DASyXwoC.js";export{e as isFocalRender,t as useIsFocalRender};

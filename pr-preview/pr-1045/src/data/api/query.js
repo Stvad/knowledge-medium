@@ -1,0 +1,1 @@
+import{p2 as e}from"../../../chunks/app-DASyXwoC.js";export{e as defineQuery};
