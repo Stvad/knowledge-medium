@@ -438,6 +438,91 @@ describe('agent runtime commands', () => {
       }
     })
 
+    it('does not execute an update to an APPROVED but disabled extension', async () => {
+      // `disable-extension` deliberately keeps the trust grant, so an approval
+      // record is not "this will run". A re-install of a disabled block makes
+      // nothing live, and must not evaluate its source to find that out.
+      await registerNumberRatingWithDefinition()
+      const id = await installApproved(valuePresetCoresFacet.of(numberRating))
+      await executeCommand({
+        commandId: 'disable-for-exec-gate', type: 'disable-extension', id,
+      }, env.context)
+      expect(await readApproval(id)).not.toBeNull()
+
+      let compiled = 0
+      const restore = __setCompileImplForTest(async () => {
+        compiled += 1
+        return {default: valuePresetCoresFacet.of(stringRating)}
+      })
+      try {
+        const result = await install('install-disabled')
+        expect(compiled).toBe(0)
+        expect(result.presetChanges).toBeUndefined()
+      } finally {
+        restore()
+      }
+    })
+
+    it('honours --allow-preset-change when the overrides cannot be read', async () => {
+      // The refusal advertises the escape hatch, so the escape hatch has to
+      // work — otherwise one malformed prefs row blocks every install with no
+      // way past it.
+      await registerNumberRatingWithDefinition()
+      await installApproved(valuePresetCoresFacet.of(numberRating))
+      const prefsBlock = await getPluginPrefsBlock(
+        env.repo, WS, env.repo.user, extensionsPrefsType)
+      await env.repo.tx(async tx => {
+        const current = await tx.get(prefsBlock.id)
+        await tx.update(prefsBlock.id, {
+          properties: {...current!.properties, [extensionsOverridesProp.name]: 'not-a-map'},
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'corrupt stored overrides'})
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        const result = await install('install-badprefs-allowed', {allowPresetChange: true})
+        expect(result.id).toBeTruthy()
+        // Nothing was checked, so nothing is reported — the override bought a
+        // skipped check, not a silent all-clear.
+        expect(result.presetChanges).toBeUndefined()
+      } finally {
+        restore()
+      }
+    })
+
+    it('folds the candidate into the live registry, so a rival contribution still wins', async () => {
+      // The candidate resolved in ISOLATION always names itself the winner for
+      // the ids it declares. Folded back into the app's own contribution list
+      // at this block's position, a later contribution of the same id keeps
+      // winning — and the effective codec does not change at all.
+      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
+      let id: string
+      try {
+        const installed = await install('install-rival-base')
+        await executeCommand({
+          commandId: 'enable-rival', type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
+      // Registered AFTER the block, so it outranks it in the fold — this is the
+      // core actually live under the id, before and after.
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, 'later-plugin', [numberRating])
+      expect(env.repo.valuePresetCores.get(RATING)).toBe(numberRating)
+      await getOrCreatePropertiesPage(env.repo, WS)
+      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        const result = await install('install-rival')
+        expect(result.presetChanges).toBeUndefined()
+      } finally {
+        restore()
+      }
+    })
+
     it('compares the core that would WIN, when one id is contributed twice', async () => {
       // `valuePresetCoresFacet` is a last-wins keyed map, here and app-wide, so
       // the second contribution is the one that would reach

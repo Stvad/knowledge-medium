@@ -172,12 +172,13 @@ export interface InstallExtensionResult {
   /** What to do about `running: false`. */
   hint?: string
   /** Value preset ids whose effective codec this install changes — one it
-   *  registers differently, or one it stops registering. Present when the install went ahead anyway: either
-   *  `allowPresetChange` let it through — so the override records what it
-   *  overrode — or the block is not approved on this device, so nothing it
-   *  registers runs and the conflict is a fact about a future enable rather
-   *  than a re-typing this command performs. Absent when no conflict was found
-   *  OR when the source was never executed to look (see `verify`). */
+   *  registers differently, or one it stops registering. Present when the
+   *  install went ahead anyway: either `allowPresetChange` let it through — so
+   *  the override records what it overrode — or the block does not pass both
+   *  loader gates here, so nothing it registers runs and the conflict is a fact
+   *  about a future enable rather than a re-typing this command performs.
+   *  Absent when no conflict was found OR when the source was never executed to
+   *  look (see `verify`). */
   presetChanges?: PresetIdentityConflict[]
   verification?: ExtensionVerificationResult
 }

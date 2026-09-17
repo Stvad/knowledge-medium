@@ -40,7 +40,7 @@ import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
-import { combineFacetContributions } from '@/facets/facet.js'
+import { combineFacetContributions, type FacetContribution } from '@/facets/facet.js'
 import { applyToggle, isEnabled, type Overrides } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
 import {
@@ -59,6 +59,7 @@ import {
   findPresetIdentityConflicts,
   presetIdentityRefusal,
   type PresetIdentityConflict,
+  type PresetIdentityScan,
   type PresetRegistryAfter,
 } from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
@@ -248,12 +249,13 @@ const isExtensionContribution = (source: unknown, blockId: string): boolean => {
  *  This EXECUTES the candidate's top-level module code and its extension
  *  factory, which is the only way to see what it registers — so it runs behind
  *  the two conditions install already licenses, and no others: the caller
- *  asked (`--verify`), or the block is already approved on this device and
- *  this install is about to re-pin it to this very source. A first install
- *  grants no trust and sets no intent (#67), so the source it stores is
- *  executed by nothing, and evaluating it to inspect it would be the one thing
- *  that gate exists to prevent. `installRuntimeExtension` owns that decision;
- *  everything here assumes it has been made.
+ *  asked (`--verify`), or this install makes the source live here, meaning the
+ *  block passes BOTH loader gates (approved on this device and enabled by
+ *  intent) and the install is about to re-pin it to this very source. A block
+ *  that fails either gate stores source that nothing executes (#67), and
+ *  evaluating it to inspect it would be the one thing those gates exist to
+ *  prevent. `installRuntimeExtension` owns that decision; everything here
+ *  assumes it has been made.
  *
  *  `liveOverrides` is the device's real enable-intent map, not an empty one:
  *  the block itself is forced on (it is what we came to resolve), but a
@@ -348,26 +350,41 @@ const presetRegistryAfter = (
   resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
   blockId: string,
 ): PresetRegistryAfter => {
-  const after = new Map<string, AnyValuePresetCore | undefined>(
-    resolution.runtime.read(valuePresetCoresFacet))
   const live = context.runtime.contributionsById(valuePresetCoresFacet.id)
-  const coreOf = (contribution: {value: unknown}): AnyValuePresetCore =>
-    contribution.value as AnyValuePresetCore
-  // What the registry would hold with this block's contributions gone, folded
-  // by the FACET rather than by a local last-wins: the fold sorts by
-  // `precedence` first, so re-deriving it here would read the wrong winner for
-  // any contribution that carries one. The empty context is the keyed-map
-  // combine's own — it takes values only.
-  const withoutBlock = combineFacetContributions(
-    valuePresetCoresFacet,
-    live.filter(contribution => !isExtensionContribution(contribution.source, blockId)),
-    {},
-  )
+  const candidate = resolution.runtime.contributionsById(valuePresetCoresFacet.id)
+
+  // The app's own contribution list with this block's entries REPLACED IN
+  // PLACE, then folded by the facet. Both halves matter and neither is
+  // re-derived here: the fold sorts by `precedence`, and ties break by
+  // position, so a candidate core read in isolation — or appended at the end —
+  // can name itself the winner over a live contribution that would actually
+  // outrank it. Splicing at the first of this block's entries is where a
+  // reload puts them back.
+  const merged: FacetContribution<unknown>[] = []
+  let spliced = false
+  for (const contribution of live) {
+    if (!isExtensionContribution(contribution.source, blockId)) {
+      merged.push(contribution)
+      continue
+    }
+    if (!spliced) {
+      merged.push(...candidate)
+      spliced = true
+    }
+  }
+  // A first install (or a block contributing none today) appends, which is
+  // where its contributions will land.
+  if (!spliced) merged.push(...candidate)
+
+  const after = new Map<string, AnyValuePresetCore | undefined>(
+    combineFacetContributions(valuePresetCoresFacet, merged, {}))
+  // An id this block claims today that the fold no longer holds at all stops
+  // resolving. An absent key cannot say that — it reads the same as an id
+  // nobody ever claimed — so it is recorded explicitly.
   for (const contribution of live) {
     if (!isExtensionContribution(contribution.source, blockId)) continue
-    const presetId = coreOf(contribution).id
-    if (after.has(presetId)) continue
-    after.set(presetId, withoutBlock.get(presetId))
+    const presetId = (contribution.value as AnyValuePresetCore).id
+    if (!after.has(presetId)) after.set(presetId, undefined)
   }
   return after
 }
@@ -1180,40 +1197,53 @@ const installRuntimeExtension = async (
     ? Boolean(await readApproval(existing.id).catch(() => null))
     : false
 
-  // `wasApproved` is therefore also "will this install make the source LIVE
-  // here", and that is what decides whether the candidate is EXECUTED. Anything
-  // else stores source that nothing runs — no preset of its can re-type a
-  // value, and evaluating it to find that out would defeat the approval gate
-  // it never passed. `--verify` is the caller asking for that evaluation
-  // explicitly, which is what it has always meant.
+  // Whether this install makes the source LIVE here is what decides whether the
+  // candidate is EXECUTED. Anything else stores source that nothing runs — no
+  // preset of its can re-type a value, and evaluating it to find that out would
+  // defeat the approval gate it never passed. `--verify` is the caller asking
+  // for that evaluation explicitly, which is what it has always meant.
+  //
+  // Live needs BOTH of the loader's gates, not just approval: `disable-extension`
+  // deliberately keeps the trust grant so a re-enable is frictionless, so an
+  // approved block can be sitting disabled, and re-installing it runs nothing.
   let resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>> | undefined
+  let presetScan: PresetIdentityScan = {conflicts: [], syncGap: null}
+  let goesLive = false
   if (wasApproved || input.verify) {
     const overrides = await readExtensionOverrides(repo, workspaceId)
-    if (overrides === null) {
+    // Unreadable overrides leave BOTH questions unanswerable — whether this
+    // install goes live, and which toggles the candidate resolves behind — and
+    // both default in the unsafe direction. Refuse unless the caller has
+    // already said the stored values are disposable.
+    if (wasApproved && overrides === null && !input.allowPresetChange) {
       throw new Error(
         'install-extension: cannot read this device\'s extension overrides, so the value-preset '
-        + 'check cannot tell which toggles are on and would resolve this source with fewer '
-        + 'contributions than the app will. Refusing rather than installing on a partial view; '
-        + 'retry, or pass --allow-preset-change to install without the check.',
+        + 'check can tell neither whether this install goes live nor which toggles the new '
+        + 'source resolves behind, and would judge it on a partial view. Refusing rather than '
+        + 'installing on one; retry, or pass --allow-preset-change to install without the check.',
       )
     }
-    resolution = await resolveExtensionInIsolation(repo, candidate, overrides)
+    const effectiveOverrides = overrides ?? new Map<string, boolean>()
+    goesLive = wasApproved && existing !== null
+      && isEnabled(userExtensionToggle(existing), effectiveOverrides)
+    if (goesLive || input.verify) {
+      resolution = await resolveExtensionInIsolation(repo, candidate, effectiveOverrides)
+      // BEFORE the write, and before the re-pin + reload below: a refusal must
+      // leave nothing behind. Writing the source and then refusing would change
+      // the block's hash, which un-pins the approved version on this device and
+      // stops a working extension dead — a silent side effect of saying no.
+      if (overrides !== null) {
+        presetScan = await findPresetIdentityConflicts(
+          repo, workspaceId, presetRegistryAfter(context, resolution, targetId))
+      }
+    }
   }
-
-  // BEFORE the write, and before the re-pin + reload below: a refusal must
-  // leave nothing behind. Writing the source and then refusing would change
-  // the block's hash, which un-pins the approved version on this device and
-  // stops a working extension dead — a silent side effect of saying no.
-  const presetScan = resolution
-    ? await findPresetIdentityConflicts(
-        repo, workspaceId, presetRegistryAfter(context, resolution, targetId))
-    : {conflicts: [], syncGap: null}
   const presetConflicts = presetScan.conflicts
   // Refuse only when the install is what makes the new codec live. A conflict
   // found under `--verify` on a block that will not run is a fact about a
   // future enable, not a re-typing this command performs — it is REPORTED
   // (below) and the enable path is #1046.
-  if (presetConflicts.length > 0 && wasApproved && !input.allowPresetChange) {
+  if (presetConflicts.length > 0 && goesLive && !input.allowPresetChange) {
     throw new Error(presetIdentityRefusal(
       presetScan,
       label ? JSON.stringify(label) : targetId,
