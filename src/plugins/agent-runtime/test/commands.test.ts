@@ -10,7 +10,11 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { __setCompileImplForTest, readApproval } from '@/extensions/compileExtensionModule'
+import {
+  __setCompileImplForTest,
+  __setTranspileImplForTest,
+  readApproval,
+} from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
 import { valuePresetCoresFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -527,21 +531,7 @@ describe('agent runtime commands', () => {
       // A module that throws in one function-valued sibling still transpiles,
       // still pins, and still registers the preset core beside it. Errors mean
       // absence proves nothing; presence still does.
-      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
-      let id: string
-      try {
-        const installed = await install('install-partial-base')
-        await executeCommand({
-          commandId: 'enable-partial', type: 'enable-extension', id: installed.id,
-        }, env.context)
-        id = installed.id
-      } finally {
-        restoreBase()
-      }
-      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
-      await getOrCreatePropertiesPage(env.repo, WS)
-      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
-
+      await liveRatingExtension('install-partial')
       const restore = compileTo([
         valuePresetCoresFacet.of(stringRating),
         () => { throw new Error('sibling blew up') },
@@ -554,17 +544,16 @@ describe('agent runtime commands', () => {
       }
     })
 
-    it('does not diff a candidate that failed to LOAD, and reports why', async () => {
-      // A source that will not transpile cannot be pinned either — the old
-      // pinned output keeps running, so the registry does not move. Diffing the
-      // empty runtime would read it as dropping every id the block registers
-      // and refuse over a preset change that is not happening.
+    /** An approved+enabled block already contributing `demo:rating`, with a
+     *  definition using it — the state every "what does this update change"
+     *  case starts from. */
+    const liveRatingExtension = async (commandId: string): Promise<string> => {
       const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
       let id: string
       try {
-        const installed = await install('install-broken-base')
+        const installed = await install(`${commandId}-base`)
         await executeCommand({
-          commandId: 'enable-broken', type: 'enable-extension', id: installed.id,
+          commandId: `${commandId}-enable`, type: 'enable-extension', id: installed.id,
         }, env.context)
         id = installed.id
       } finally {
@@ -573,16 +562,39 @@ describe('agent runtime commands', () => {
       env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
       await getOrCreatePropertiesPage(env.repo, WS)
       await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
+      return id
+    }
 
-      const restore = __setCompileImplForTest(async () => {
+    it('does not diff a source that cannot be PINNED, and reports why', async () => {
+      // A source that will not transpile leaves the previous pin — and the code
+      // it already runs — in place, so the registry does not move. Diffing the
+      // empty runtime would read it as dropping every id the block registers.
+      await liveRatingExtension('install-untranspilable')
+      const restore = __setTranspileImplForTest(async () => {
         throw new SyntaxError('Unexpected token')
       })
       try {
-        const result = await install('install-broken')
+        const result = await install('install-untranspilable')
         expect(result.presetChanges).toBeUndefined()
         // Reported without `--verify`, so a plain install does not look clean.
         expect(result.verification?.ok).toBe(false)
         expect(result.verification?.errors[0]?.message).toContain('Unexpected token')
+      } finally {
+        restore()
+      }
+    })
+
+    it('reports an id a PINNABLE candidate drops, even with a failing sibling', async () => {
+      // Transpiled is pinned, and pinned takes effect. The resolution ran the
+      // same code the reload will, so its absences are real absences — a
+      // dropped id must still refuse however the rest of the module fared.
+      await liveRatingExtension('install-drop-sibling')
+      const restore = compileTo([
+        () => { throw new Error('sibling blew up') },
+      ])
+      try {
+        await expect(install('install-drop-sibling'))
+          .rejects.toThrow(/no core registers this id/)
       } finally {
         restore()
       }

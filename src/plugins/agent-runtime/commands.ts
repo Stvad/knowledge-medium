@@ -46,6 +46,7 @@ import { userExtensionToggle } from '@/extensions/extensionToggles.js'
 import {
   approveExtension,
   createCompileCache,
+  ExtensionTranspileError,
   hashExtensionSource,
   readApproval,
   revokeExtensionApproval,
@@ -275,8 +276,15 @@ const resolveExtensionInIsolation = async (
 ): Promise<{
   runtime: Awaited<ReturnType<typeof resolveAppRuntime>>
   errors: ExtensionVerificationResult['errors']
+  /** Can this source be PINNED? False only when it did not transpile, in which
+   *  case `approveExtension` leaves the previous pin — and the code it already
+   *  runs — in place, so the install changes nothing about what is registered.
+   *  Anything that transpiled still pins and still takes effect at the next
+   *  reload, however it then failed. */
+  pinnable: boolean
 }> => {
   const errors: ExtensionVerificationResult['errors'] = []
+  let pinnable = true
   const overrides = new Map([...liveOverrides, [block.id, true]])
   const singleBlockRepo = {
     query: {
@@ -307,6 +315,7 @@ const resolveExtensionInIsolation = async (
       // never shares the process-wide cache with the user-facing loader.
       cache: createCompileCache(),
       errorReporter: (reportedBlockId, error) => {
+        if (error instanceof ExtensionTranspileError) pinnable = false
         errors.push(serializeVerificationError(reportedBlockId, error))
       },
     }),
@@ -326,7 +335,7 @@ const resolveExtensionInIsolation = async (
     },
   )
 
-  return {runtime: verificationRuntime, errors}
+  return {runtime: verificationRuntime, errors, pinnable}
 }
 
 /** The effective value-preset registry this install would produce, for the
@@ -350,6 +359,11 @@ const presetRegistryAfter = (
   resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
   blockId: string,
 ): PresetRegistryAfter => {
+  // An unpinnable source changes nothing: the previous pin keeps running, so
+  // there is no after to diff. Every OTHER failure still pins and still takes
+  // effect, and the resolution ran the same code the reload will — so what it
+  // produced is what will be registered, absences included.
+  if (!resolution.pinnable) return new Map()
   const live = context.runtime.contributionsById(valuePresetCoresFacet.id)
   const candidate = resolution.runtime.contributionsById(valuePresetCoresFacet.id)
 
@@ -385,22 +399,6 @@ const presetRegistryAfter = (
 
   const after = new Map<string, AnyValuePresetCore | undefined>(
     combineFacetContributions(valuePresetCoresFacet, merged, {}))
-
-  // A candidate that reported load errors may have failed to contribute
-  // something it declares, so ABSENCE proves nothing about it — but PRESENCE
-  // still does. Keep only what it positively registered and conclude nothing
-  // from the rest: a module that throws in one function-valued sibling still
-  // transpiles, still pins, and still registers the preset core beside it,
-  // while one that does not transpile at all cannot be pinned and leaves the
-  // old contributions running.
-  if (resolution.errors.length > 0) {
-    const registered = new Set(candidate.map(contribution =>
-      (contribution.value as AnyValuePresetCore).id))
-    for (const presetId of [...after.keys()]) {
-      if (!registered.has(presetId)) after.delete(presetId)
-    }
-    return after
-  }
 
   // An id this block claims today that the fold no longer holds at all stops
   // resolving. An absent key cannot say that — it reads the same as an id
@@ -1257,9 +1255,6 @@ const installRuntimeExtension = async (
       // the block's hash, which un-pins the approved version on this device and
       // stops a working extension dead — a silent side effect of saying no.
       //
-      // A candidate that reported load errors is still diffed — on what it
-      // registered, never on what is missing. `presetRegistryAfter` draws that
-      // line; see the note there.
       if (overrides !== null) {
         presetScan = await findPresetIdentityConflicts(
           repo, workspaceId, presetRegistryAfter(context, resolution, targetId))

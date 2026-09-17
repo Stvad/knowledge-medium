@@ -64,36 +64,19 @@
  * and it does not need to be, because nothing it stores runs. The gap that
  * leaves is the ENABLE that later does make it run, which is #1046.
  *
- * ACCEPTED, all three instances of one bound: this is a POINT-IN-TIME
- * comparison against what is live, and anything not yet live is outside it.
+ * ACCEPTED — this is a POINT-IN-TIME comparison against what is LIVE, so
+ * anything not yet live is outside it: definition rows inside a durable sync
+ * gap or landing after the scan (`syncGap` reports that basis rather than
+ * refusing on it), another install landing before the next reload, and a core
+ * registered imperatively by an effect (#1054). All of them can only MISS a
+ * refusal, never invent one.
  *
- *  - definition rows inside a durable sync gap are not probed (`syncGap`
- *    reports that basis rather than refusing on it), and neither is one landing
- *    between the scan and the commit. `Tx` exposes no raw read, so an
- *    in-transaction re-scan would have to ask a narrower question than the
- *    pre-check and answer all-clear over a subset, which is worse than not
- *    asking. Both bound only the per-stored-config probes, which need a preset
- *    whose built codec type varies with its config — no preset in the tree has
- *    one, and the default-config probe and `configCodec.type` comparison decide
- *    every case that exists today without reading the workspace at all.
- *  - a core registered IMPERATIVELY, by an `appEffect` calling
- *    `setRuntimeContributions`, is invisible on both sides: the live
- *    contribution carries the effect's own source id rather than `block:<id>`,
- *    so it is not recognized as the block's, and the isolated resolution
- *    collects declarations without ever starting an effect. Nothing here can
- *    see it; #1054 is whether such a bucket should be allowed at all.
- *  - two installs landing between reloads each scan the same live registry and
- *    are each right about it, while the pair is not: one may drop a preset id
- *    as the other changes the core it was shadowing. SERIALIZING them does not
- *    help, which is the part worth knowing — a stored source contributes
- *    nothing until a reload, so the second scan sees the same registry however
- *    the two are ordered. Seeing the other's effect would mean compiling every
- *    installed extension's stored source on every install, which the approval
- *    gate forbids and the cost rules out. It also takes two extensions
- *    contributing ONE preset id, the shadowing #692 exists to refuse outright;
- *    this residual leaves with it.
- *
- * Every one of them can only MISS a refusal, never invent one.
+ * Neither obvious repair works, which is why none is attempted. An
+ * in-transaction re-scan would have to ask a NARROWER question than the
+ * pre-check — `Tx` exposes no raw read, and definitions are found by type, not
+ * by parent — and would answer all-clear over a subset. Serializing installs
+ * changes when the scans happen, not what they see: a stored source
+ * contributes nothing until a reload.
  */
 
 import type { AnyValuePresetCore } from '@/data/api'
