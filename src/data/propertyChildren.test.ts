@@ -3614,6 +3614,18 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       await addSecondFieldRow(repo, 'p', TAGS_FIELD_ID, ['beta', 'beta'])
 
       expect((await bagOf('p')).tags).toEqual(['alpha', 'beta', 'beta'])
+
+      // And it SURVIVES the collapse. A write to the property runs MATERIALIZE,
+      // which folds the two field rows into one before reconciling — so if the
+      // collapse folded equal members the way the projection used to, the list
+      // would quietly shorten on the next touch and the cell above would have
+      // been a value nothing could reproduce.
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta', 'beta', 'gamma'])
+      expect(await memberContents('p', TAGS_FIELD_ID))
+        .toEqual(['alpha', 'beta', 'beta', 'gamma'])
     })
 
     it('refuses a null member a string member codec would read back as empty', async () => {

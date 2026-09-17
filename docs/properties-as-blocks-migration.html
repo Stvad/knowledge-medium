@@ -336,10 +336,12 @@
 
 <aside class="doc-status">
   <strong>Status: current (planning), with one §9 correction — and slice C is no
-  longer planning. The &ldquo;scalar-first&rdquo; narrowing in §5, the
-  &ldquo;refList stays JSON&rdquo; note in §9 and the scalar-only
-  &ldquo;Value decoding&rdquo; rule are REVERSED or qualified as of km-h1hy; all
-  three now describe the shipped shape.</strong>
+  longer planning. Five entries are REVERSED or qualified as of km-h1hy and now
+  describe the shipped shape: the &ldquo;scalar-first&rdquo; narrowing in §5, the
+  &ldquo;refList stays JSON&rdquo; note in §9, and the &ldquo;Value
+  decoding&rdquo;, &ldquo;Duplicates and divergence&rdquo; and
+  &ldquo;Default-value vs. unset&rdquo; entries, each of which stated a
+  SCALAR-only rule as the whole rule.</strong>
   <strong>Last verified against code: 2026-09-16 for the multi-value shape;
   2026-08-21 for the rest, branch
   <code>claude/e2ee-synthesis-namespace</code>.</strong>
@@ -2807,7 +2809,8 @@ supabase skill if it's kept.
     purely textually with no existence check, so the stamp survives the target's
     deletion and the property survives re-materialization.)</dd>
 
-  <dt><strong>Duplicates and divergence — union-with-dedupe (as shipped).</strong></dt>
+  <dt><strong>Duplicates and divergence — union-with-dedupe (as shipped;
+    SCALAR only as of km-h1hy).</strong></dt>
   <dd>PR #386 (divergence item 7) replaced both rev 1's "keep extras, pick lowest
     orderKey" and the spike's delete-all-duplicates: <strong>a field row holds a
     <em>set</em> of value children — its <code>is_field_form IS NOT 1</code> children
@@ -2832,12 +2835,30 @@ supabase skill if it's kept.
     collapse to a single row whose value set is the union, deduped by the same
     content rule. Divergent siblings are thus a real, expected shape — a surfaced
     conflict — but still not the user-facing multi-value affordance; that (and
-    refList-as-children) gets its own design pass.</dd>
+    refList-as-children) gets its own design pass.
+    <p><strong>Scalar only, as of km-h1hy.</strong> For a MULTI-VALUED property
+    the siblings <em>are</em> the value, so none of the above holds: content-equal
+    values are two MEMBERS and are never folded (<code>[2, 2, 3]</code> is three
+    value children), the projection aggregates every parseable member instead of
+    taking the first, and there is no set semantics — properties that genuinely
+    want it (<code>types</code>, <code>alias</code>) get it from their WRITERS.
+    What survives across the grain is the DUPLICATE-FIELD-ROW rule: two field rows
+    for one fieldId still collapse to one whose values are the union, folding a
+    member equal to one an earlier row already carries — so multiplicity is kept
+    WITHIN a field row and folded ACROSS them.
+    <code>unionValuesAcrossFieldRows</code> and
+    <code>childContentsToEncodedPropertyValue</code> own both halves; read them
+    rather than this paragraph.</p></dd>
 
   <dt><strong>Default-value vs. unset.</strong></dt>
   <dd>Unchanged from rev 1: zero value children <em>under a live field row</em> ⇒ key
     omitted from the cell ⇒ <code>block.get</code> falls back to
-    <code>defaultValue</code>. No reader change.</dd>
+    <code>defaultValue</code>. No reader change.
+    <strong>Scalar only, as of km-h1hy.</strong> A MULTI-VALUED property reads the
+    same shape as an EXPLICIT EMPTY LIST: a live field row with no parseable member
+    projects <code>[]</code>, not an omitted key, because removing the FIELD ROW is
+    what unsets a list. That is why the aggregate is documented as callable only
+    once a live field row has been observed.</dd>
 
   <dt><strong>Codec / preset changes are migrations, not edits.</strong></dt>
   <dd>§9's "only-invalid values reads as unset" is fine for one malformed child; it is
