@@ -253,8 +253,10 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
 /** Property names no shipped seed may claim. Each was a declaration once. */
 export const RETIRED_PROPERTY_NAMES: readonly string[] = [
   // Renamed to `backlinks:predicates` when the filter shape changed from
-  // {includeIds, removeIds} to predicate arrays; values were not convertible
-  // and were discarded deliberately.
+  // {includeIds, removeIds} to predicate arrays. Stored values were dropped
+  // rather than converted: a remove id does map onto the ancestor-scoped
+  // `referencedBy` predicate the defaults use, so this was a choice, not a
+  // limit.
   'backlinks:filter',
   // Same change, the daily-note defaults half: renamed to
   // `dailyNotes:backlinksPredicates`.
