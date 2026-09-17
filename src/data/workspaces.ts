@@ -8,6 +8,7 @@ import type {
   WorkspaceRole,
 } from '@/types'
 import type { Repo } from './repo'
+import type { ParkHandle } from '@/data/internals/idleMarkerJobs'
 import {
   parsePropertiesMigration,
   readIsChildBackedWorkspace,
@@ -526,6 +527,11 @@ export const getLocalMemberRole = async (
 
 export interface AwaitLocalMemberRoleOptions {
   readonly signal?: AbortSignal
+  /** Declares the caller parked for the duration of the SUBSCRIPTION wait — the
+   *  unbounded half, entered only once the row is known to be absent. A caller
+   *  running inside a `PendingIdleJobs` job passes its `ParkHandle` so a drain
+   *  does not mistake this wait for work it can wait out (issue #1015). */
+  readonly onPark?: ParkHandle
 }
 
 const memberRoleAbortError = (): DOMException =>
@@ -552,8 +558,14 @@ export const awaitLocalMemberRole = async (
     let settled = false
     let unsubscribe: (() => void) | null = null
     let disposeRequested = false
+    // Opened before the subscription and released on every settle path, since
+    // `dispose` is what both `succeed` and `fail` run — and run SYNCHRONOUSLY,
+    // before resolve/reject, so a drain racing an abort sees the job progressing
+    // again rather than still parked.
+    const releasePark = options.onPark?.()
 
     const dispose = (): unknown | null => {
+      releasePark?.()
       signal?.removeEventListener('abort', onAbort)
       if (unsubscribe) {
         const current = unsubscribe

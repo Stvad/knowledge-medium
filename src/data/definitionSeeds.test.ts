@@ -40,6 +40,7 @@ import {BLOCK_TYPE_TYPE, PAGE_TYPE} from '@/data/blockTypes'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
+import type {PendingIdleJobs} from '@/data/internals/idleMarkerJobs'
 
 const WS = 'ws-seeds'
 const OTHER_WS = 'ws-other'
@@ -939,6 +940,49 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
       expect(propRow?.deleted).toBe(0)
       expect(typeRow?.deleted).toBe(0)
     })
+  })
+
+  /** The pass's own `PendingIdleJobs` instance, for the two drain tests below —
+   *  they assert on WHY a drain returned, which the public helpers don't say. */
+  const seedJobs = (): PendingIdleJobs => (repo as unknown as {
+    seedMaterializationJobs: PendingIdleJobs
+  }).seedMaterializationJobs
+
+  /** Get a pass into the pending set with NO membership row, so it reaches the
+   *  subscription wait for a row only sync could deliver — which in a fixture is
+   *  never. `size > 0` rather than `parkedSize`: the drain under test must cover
+   *  the job whether it is already parked or still reading the membership table
+   *  on its way there. */
+  const startParkedPass = async (): Promise<void> => {
+    await repo.whenPropertyDefinitionsReady(WS)
+    repo.scheduleWorkspaceSeedMaterialization(WS, false)
+    await waitForMaterialization(async () => expect(seedJobs().size).toBeGreaterThan(0))
+  }
+
+  /** A drain resolves the test's flag; the poll is what fails when it doesn't.
+   *  Awaiting the drain directly would report the hang as this file's timeout,
+   *  which is the unreadable failure #1015 is about. */
+  const expectDrainReturns = async (drain: () => Promise<void>): Promise<void> => {
+    let done = false
+    const draining = drain().then(() => { done = true })
+    await waitForMaterialization(async () => expect(done).toBe(true))
+    await draining
+    // It returned because the pass is PARKED, not because the job had finished:
+    // delete the park accounting and the drain hangs again rather than passing.
+    expect(seedJobs().parkedSize).toBeGreaterThan(0)
+  }
+
+  // #1015. Before the park accounting, both of these hung until the workspace
+  // was unpinned at scope teardown — surfacing as a bare "Test timed out"
+  // pointing at whatever the caller asserted next.
+  it('drains while the pass is parked on a membership row that never arrives', async () => {
+    await startParkedPass()
+    await expectDrainReturns(() => repo.awaitSeedMaterialization())
+  })
+
+  it('drains deferred work as a whole while the pass is parked', async () => {
+    await startParkedPass()
+    await expectDrainReturns(() => repo.awaitDeferredWork())
   })
 })
 

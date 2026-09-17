@@ -1,0 +1,143 @@
+// @vitest-environment node
+import {describe, expect, it, vi} from 'vitest'
+import {PendingIdleJobs, type ParkHandle} from '@/data/internals/idleMarkerJobs'
+
+/** Run the deferred callback inline, so a test controls when a job enters the
+ *  pending set without leaning on a timer. */
+const immediate = (fn: () => void): void => { fn() }
+
+/** A promise plus the lever that settles it — a job body's stand-in for work
+ *  that finishes when the test says so. */
+const gate = () => {
+  let open!: () => void
+  const promise = new Promise<void>(resolve => { open = resolve })
+  return {promise, open}
+}
+
+/** Resolves once `drain()` has returned; the flag is what the assertions read,
+ *  so a drain that never settles fails the poll rather than the test's timeout. */
+const startDrain = (jobs: PendingIdleJobs) => {
+  const state = {done: false}
+  const settled = jobs.drain().then(() => { state.done = true })
+  return {state, settled}
+}
+
+const expectDrained = (state: {done: boolean}): Promise<void> =>
+  vi.waitFor(() => expect(state.done).toBe(true), {timeout: 5_000, interval: 10})
+
+describe('PendingIdleJobs.drain', () => {
+  it('awaits a job that is progressing', async () => {
+    const jobs = new PendingIdleJobs(immediate)
+    const work = gate()
+    jobs.schedule(() => work.promise)
+
+    const drain = startDrain(jobs)
+    await vi.waitFor(() => expect(jobs.size).toBe(1), {timeout: 5_000, interval: 10})
+    expect(drain.state.done).toBe(false)
+
+    work.open()
+    await expectDrained(drain.state)
+    await drain.settled
+  })
+
+  // #1015: the job parks AFTER the drain has started awaiting it, which is the
+  // shape the seed-materialization pass has — a `workspace_members` read, then a
+  // subscription wait for a row only sync can deliver. Without the park signal
+  // waking it, the drain sits on that job until the test times out.
+  it('returns when the only pending job parks mid-drain', async () => {
+    const jobs = new PendingIdleJobs(immediate)
+    const external = gate()
+    let release: (() => void) | undefined
+    jobs.schedule(async (park: ParkHandle) => {
+      await Promise.resolve()
+      release = park()
+      await external.promise
+      release()
+    })
+
+    const drain = startDrain(jobs)
+    await expectDrained(drain.state)
+    await drain.settled
+
+    // Returned BECAUSE of the park, not because the job had finished — the
+    // distinction a drain that simply stopped waiting would blur.
+    expect(jobs.parkedSize).toBe(1)
+    expect(jobs.size).toBe(1)
+
+    external.open()
+    await vi.waitFor(() => expect(jobs.size).toBe(0), {timeout: 5_000, interval: 10})
+  })
+
+  it('awaits the jobs that are still progressing while another is parked', async () => {
+    const jobs = new PendingIdleJobs(immediate)
+    const external = gate()
+    const work = gate()
+    jobs.schedule(async (park: ParkHandle) => {
+      const release = park()
+      await external.promise
+      release()
+    })
+    jobs.schedule(() => work.promise)
+
+    const drain = startDrain(jobs)
+    await vi.waitFor(() => expect(jobs.parkedSize).toBe(1), {timeout: 5_000, interval: 10})
+    expect(drain.state.done).toBe(false)
+
+    work.open()
+    await expectDrained(drain.state)
+    await drain.settled
+  })
+
+  it('awaits a job again once it releases its park', async () => {
+    const jobs = new PendingIdleJobs(immediate)
+    const external = gate()
+    const rest = gate()
+    jobs.schedule(async (park: ParkHandle) => {
+      const release = park()
+      await external.promise
+      release()
+      await rest.promise
+    })
+
+    const first = startDrain(jobs)
+    await expectDrained(first.state)
+    await first.settled
+
+    external.open()
+    await vi.waitFor(() => expect(jobs.parkedSize).toBe(0), {timeout: 5_000, interval: 10})
+
+    const second = startDrain(jobs)
+    await vi.waitFor(() => expect(jobs.size).toBe(1), {timeout: 5_000, interval: 10})
+    expect(second.state.done).toBe(false)
+
+    rest.open()
+    await expectDrained(second.state)
+    await second.settled
+  })
+
+  it('surfaces a failing job rather than swallowing it', async () => {
+    const jobs = new PendingIdleJobs(immediate)
+    jobs.schedule(async () => { throw new Error('job blew up') })
+
+    await expect(jobs.drain()).rejects.toThrow('job blew up')
+  })
+
+  it('releases a park at most once, however many times the job calls it', async () => {
+    const jobs = new PendingIdleJobs(immediate)
+    const external = gate()
+    jobs.schedule(async (park: ParkHandle) => {
+      const release = park()
+      release()
+      release()
+      await external.promise
+    })
+
+    await vi.waitFor(() => expect(jobs.parkedSize).toBe(0), {timeout: 5_000, interval: 10})
+    const drain = startDrain(jobs)
+    expect(drain.state.done).toBe(false)
+
+    external.open()
+    await expectDrained(drain.state)
+    await drain.settled
+  })
+})

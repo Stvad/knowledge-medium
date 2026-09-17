@@ -138,4 +138,73 @@ describe('awaitLocalMemberRole', () => {
     await expect(waiting).rejects.toMatchObject({name: 'AbortError'})
     expect(db.dispose).toHaveBeenCalledTimes(1)
   })
+
+  // A caller inside a `PendingIdleJobs` job passes its `ParkHandle` here so the
+  // drain barrier can tell "blocked on a row only sync delivers" from "working"
+  // (issue #1015). The region has to cover the SUBSCRIPTION wait and nothing
+  // else, or a drain stops waiting on a pass that was about to run.
+  describe('park accounting', () => {
+    const parkSpy = () => {
+      const release = vi.fn()
+      return {release, onPark: vi.fn(() => release)}
+    }
+
+    it('does not park when the role is already local', async () => {
+      const db = new MemberRoleDbFake()
+      db.role = 'owner'
+      const park = parkSpy()
+
+      await expect(awaitLocalMemberRole(db.repo(), 'ws', 'user', {onPark: park.onPark}))
+        .resolves.toBe('owner')
+      expect(park.onPark).not.toHaveBeenCalled()
+    })
+
+    it('parks for the subscription wait and releases when the row arrives', async () => {
+      const db = new MemberRoleDbFake()
+      const park = parkSpy()
+      const waiting = awaitLocalMemberRole(db.repo(), 'ws', 'user', {onPark: park.onPark})
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(park.onPark).toHaveBeenCalledTimes(1)
+      expect(park.release).not.toHaveBeenCalled()
+
+      db.role = 'editor'
+      await db.handler!.onChange()
+      await expect(waiting).resolves.toBe('editor')
+      expect(park.release).toHaveBeenCalledTimes(1)
+    })
+
+    // SYNCHRONOUSLY, with no await in between: `endTestRepoScope` unpins (which
+    // aborts this wait) and drains in the same turn, and a release deferred to
+    // the job's own unwinding would leave that drain skipping a job still on its
+    // way out — the cross-test write #813 exists to stop.
+    it('releases the park in the same turn as the abort', async () => {
+      const controller = new AbortController()
+      const db = new MemberRoleDbFake()
+      const park = parkSpy()
+      const waiting = awaitLocalMemberRole(db.repo(), 'ws', 'user', {
+        signal: controller.signal,
+        onPark: park.onPark,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(park.release).not.toHaveBeenCalled()
+
+      controller.abort()
+      expect(park.release).toHaveBeenCalledTimes(1)
+      await expect(waiting).rejects.toMatchObject({name: 'AbortError'})
+    })
+
+    it('releases the park when the wait fails', async () => {
+      const db = new MemberRoleDbFake()
+      const park = parkSpy()
+      const waiting = awaitLocalMemberRole(db.repo(), 'ws', 'user', {onPark: park.onPark})
+      await Promise.resolve()
+      await Promise.resolve()
+
+      db.handler!.onError?.(new Error('stream failed'))
+      expect(park.release).toHaveBeenCalledTimes(1)
+      await expect(waiting).rejects.toThrow('stream failed')
+    })
+  })
 })
