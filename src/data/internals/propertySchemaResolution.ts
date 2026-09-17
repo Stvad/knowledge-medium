@@ -406,12 +406,13 @@ export const createPropertySchemaResolver = (
  *
  *  The question is whether THIS schema may write that name, and the answer
  *  differs by kind. A handle resolves through its own seed identity, so it
- *  throws when its definition is absent from this workspace's snapshot. A plain
- *  schema only has to avoid a collision: an unclaimed name IS writable in the
- *  active workspace, which is both how ambient code-defined properties work and
- *  the way to clear a cell under a name the code has retired — so for a plain
- *  schema the throw means the name is claimed by a different definition or
- *  seed, is ambiguous between seeds, or the workspace is foreign. */
+ *  throws when that definition is absent from the workspace's snapshot. A plain
+ *  schema is admitted on an UNCLAIMED name, and only in the ACTIVE workspace:
+ *  that admission is how ambient code-defined properties work, and how a caller
+ *  clears a cell under a name the code has retired. So a plain schema throws
+ *  when another definition or seed claims the name, when seeds leave it
+ *  ambiguous, or when the workspace is foreign — there no unclaimed plain name
+ *  is admitted, since no faithful snapshot can confirm it a winner. */
 export const requireWritablePropertySchema = <T>(
   schema: PropertySchema<T>,
   resolver: PropertySchemaResolver,
