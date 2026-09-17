@@ -1,1 +1,1 @@
-import{PC as e}from"../../chunks/app-SYm0Q-Da.js";export{e as withRowSlide};
+import{FC as e}from"../../chunks/app-Dz20p7Ok.js";export{e as withRowSlide};
