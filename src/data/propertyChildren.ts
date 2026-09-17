@@ -54,7 +54,7 @@ import {
   parseExactReferenceBlockContent,
   referenceBlockContentForId,
 } from '@/data/referenceBlock'
-import { jsonValuesEqual, stableJsonValue } from '@/data/internals/jsonCanonical'
+import { jsonValuesEqual, persistedJsonKey } from '@/data/internals/jsonCanonical'
 import { hasLoneSurrogate } from '@/utils/string'
 
 export const getPropertyFieldTargetId = (
@@ -653,7 +653,7 @@ export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
   }
   const valueKey = (content: string): string | undefined => {
     try {
-      return `v${JSON.stringify(stableJsonValue(valueChildContentToEncoded(schema, content)))}`
+      return `v${persistedJsonKey(valueChildContentToEncoded(schema, content))}`
     } catch {
       return undefined
     }
