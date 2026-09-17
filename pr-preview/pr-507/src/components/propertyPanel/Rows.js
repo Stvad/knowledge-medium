@@ -1,1 +1,1 @@
-import{aA as e,oA as t}from"../../../chunks/app-Dz20p7Ok.js";export{e as MetadataRow,t as PropertySectionLabel};
+import{aA as e,oA as t}from"../../../chunks/app-CI5gmZF7.js";export{e as MetadataRow,t as PropertySectionLabel};

@@ -1,1 +1,1 @@
-import{Fu as e}from"../../../chunks/app-Dz20p7Ok.js";export{e as backlinksPlugin};
+import{Fu as e}from"../../../chunks/app-CI5gmZF7.js";export{e as backlinksPlugin};
