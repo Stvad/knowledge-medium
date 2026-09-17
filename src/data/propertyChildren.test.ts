@@ -3534,6 +3534,103 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
     })
   })
 
+  describe('round eleven', () => {
+    /** One extra member row under an EXISTING field row, raw — the shape a
+     *  synced arrival has, which never passes through `repo.tx` and so leaves
+     *  the owner's cell stale until PROJECT next runs. */
+    const addArrivedMember = async (
+      fieldRowId: string, id: string, content: string,
+    ): Promise<void> => {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES (?, ?, ?, ?, ?, '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [id, WS, fieldRowId, await appendKey(fieldRowId), content],
+      )
+    }
+
+    /** A SECOND field row for the same definition, carrying `members` — what two
+     *  offline devices materializing one value leave behind. Raw, then the
+     *  members' content is written through the tx layer so the projection
+     *  actually re-runs over them. */
+    const addSecondFieldRow = async (
+      repo: Repo, owner: string, fieldId: string, members: readonly string[],
+    ): Promise<void> => {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, reference_target_id, is_field_form, deleted,
+           created_at, updated_at, user_updated_at, created_by, updated_by)
+         VALUES ('r11-dupfield', ?, ?, ?, ?, '{}', ?, 1, 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, owner, await appendKey(owner), propertyFieldContent(fieldId), fieldId],
+      )
+      for (const i of members.keys()) {
+        await sharedDb.db.execute(
+          `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+             properties_json, deleted, created_at, updated_at, user_updated_at,
+             created_by, updated_by)
+           VALUES (?, ?, 'r11-dupfield', ?, 'placeholder', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+          [`r11-dupmember-${i}`, WS, `a${i}`],
+        )
+      }
+      await repo.tx(async tx => {
+        for (const [i, member] of members.entries()) {
+          await tx.update(`r11-dupmember-${i}`, {content: member})
+        }
+      }, {scope: ChangeScope.BlockDefault})
+    }
+
+    it('a merge keeps a synced member the source cell had not projected yet', async () => {
+      // A merge RELOCATES and never reaps — but it builds the target bag from
+      // the SOURCE CELL, and MATERIALIZE runs before PROJECT, so a member that
+      // arrived under the source and has not reprojected yet reads as surplus
+      // against that stale cell and is tombstoned. The merge never observed it.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'into')
+      await createBlock(repo, 'from')
+      await repo.tx(tx => tx.setProperty('from', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const fromField = await fieldRowFor('from', TAGS_FIELD_ID)
+      await addArrivedMember(fromField.id, 'arrived-beta', 'beta')
+
+      await repo.tx(async tx => {
+        const into = await tx.get('into')
+        const from = await tx.get('from')
+        await mergeBlocksInTx(tx, {into: into!, from: from!})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('into', TAGS_FIELD_ID)).toEqual(['alpha', 'beta'])
+      expect((await bagOf('into')).tags).toEqual(['alpha', 'beta'])
+    })
+
+    it('a duplicate field row keeps its OWN repeated member', async () => {
+      // Multiplicity is kept WITHIN a field row — including a field row that is
+      // not the first. Folding the second `beta` here is the cross-row rule
+      // reaching inside one row, where two equal rows are two members.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      await addSecondFieldRow(repo, 'p', TAGS_FIELD_ID, ['beta', 'beta'])
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta', 'beta'])
+    })
+
+    it('refuses a null member a string member codec would read back as empty', async () => {
+      // A hole normalizes to `null`, which the string member codec renders as
+      // EMPTY content and reads back as `''` — so the cell would say `[null]`
+      // while the child says `''`. Every member has to read back as itself.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+
+      await expect(repo.tx(
+        // eslint-disable-next-line no-sparse-arrays -- the case under test
+        tx => tx.setProperty('p', tagsSchema, [, 'x'] as unknown as string[]),
+        {scope: ChangeScope.BlockDefault},
+      )).rejects.toThrow()
+    })
+  })
+
   describe('a caller that did not observe intent may not reap a member', () => {
     it('restoring an EMPTY list does not resurrect the member that emptied it', async () => {
       // An explicitly empty list leaves exactly one tombstoned value under a

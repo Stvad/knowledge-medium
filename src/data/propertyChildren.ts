@@ -544,26 +544,34 @@ export const encodedPropertyValueToChildContents = (
   // same absence, and `map` skips a hole without calling its callback — so the
   // normalization right above would be bypassed for exactly the element that
   // needs it, and `[, 'x']` would store what `[null, 'x']` does not.
-  const contents = Array.from(encoded, item =>
-    encodedValueToContent(member, item === undefined ? null : item))
-  // Empty content is how a codec spells ABSENCE — `codecs.ref` renders a
-  // cleared ref that way, and that is a documented non-round-trip a SCALAR can
-  // afford, because a scalar may be cleared. A list member may not: the
-  // projection would read nothing there and the list would come back one
-  // member shorter, with no error anywhere. Refuse it, so the write is
-  // rejected with a reason (`propertyCellValueRejection` asks this same
-  // question) instead of silently losing the member.
+  const members = Array.from(encoded, item => (item === undefined ? null : item))
+  const contents = members.map(item => encodedValueToContent(member, item))
+  // EVERY member must read back as itself. A scalar can afford a content that
+  // does not round-trip — empty content is how `codecs.ref` spells a CLEARED
+  // ref, and a scalar may be cleared — but a list member may not: the
+  // projection reads the content, so a member that comes back as anything else
+  // is silently a different list, one member shorter or one member changed,
+  // with no error anywhere.
+  //
+  // Stated as the round trip rather than as its symptoms, because the symptoms
+  // arrive one per codec: a `null` member of a `string` list renders EMPTY and
+  // reads back as `''`, which the earlier "is the content empty and
+  // unparseable?" test let through — the cell kept `[null]` while the child
+  // said `''`, and the next projection published the `''` over it.
   //
   // HERE and not in `codecs.refList().encode`: a refList's member IS the scalar
-  // ref codec, so refusing `''` in the list while the member accepts it would
-  // break the `Codec.member` contract. Pre-flip, where no value child is
+  // ref codec, so refusing a value in the list that the member codec accepts
+  // would break the `Codec.member` contract. Pre-flip, where no value child is
   // written at all, the cell → children pass reports such a key instead.
   for (const [i, content] of contents.entries()) {
-    if (content !== '') continue
+    let readBack: unknown
     try {
-      contentToEncodedValue(member, content)
+      readBack = contentToEncodedValue(member, content)
     } catch {
-      throw new CodecError('a list member that reads back from its content', encoded[i])
+      throw new CodecError('a list member that reads back from its content', members[i])
+    }
+    if (!jsonValuesEqual(readBack, members[i])) {
+      throw new CodecError('a list member that reads back from its content', members[i])
     }
   }
   return contents
@@ -704,13 +712,19 @@ export const unionValuesAcrossFieldRows = <T extends Pick<BlockData, 'id' | 'con
   const keys = memberKeysFor(schema)
   const unioned: T[] = []
   const seen = new Set<string>()
-  for (const [index, values] of perFieldRow.entries()) {
+  for (const values of perFieldRow) {
+    // Each row is judged against the rows BEFORE it and never against itself,
+    // which is what keeps within-row multiplicity a property of every row
+    // rather than only the first: a later row's `[b, b]` is two members, and
+    // marking `b` seen as we went folded the second into the first.
+    const rowKeys: string[] = []
     for (const value of values) {
-      if (index > 0 && seen.has(keys.row(value).key)) continue
+      const {key} = keys.row(value)
+      rowKeys.push(key)
+      if (seen.has(key)) continue
       unioned.push(value)
-      if (index > 0) seen.add(keys.row(value).key)
     }
-    if (index === 0) for (const value of values) seen.add(keys.row(value).key)
+    for (const key of rowKeys) seen.add(key)
   }
   return unioned
 }
