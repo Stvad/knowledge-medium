@@ -1,1 +1,1 @@
-import{Gl as e,Wl as t}from"../../../chunks/app-DRT7OCLt.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};
+import{Gl as e,Wl as t}from"../../../chunks/app-B1g-djg3.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};

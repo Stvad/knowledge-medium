@@ -1,1 +1,1 @@
-import{aT as e,oT as t}from"../../chunks/app-DRT7OCLt.js";export{e as ClientLocalSettings,t as clientLocalSettings};
+import{aT as e,oT as t}from"../../chunks/app-B1g-djg3.js";export{e as ClientLocalSettings,t as clientLocalSettings};
