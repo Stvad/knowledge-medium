@@ -365,16 +365,18 @@ export interface MaterializeOptions {
    *  reaped — declined there. */
   reviveTombstoned?: boolean
   /** This call did not observe user intent for these names, so it may only ADD
-   *  members, never remove one — the cell→children twin of the projection's
-   *  `'additive'` mode, and for the same reason: an unobserved write must not
-   *  be allowed to reap.
+   *  rows: never remove one, never rewrite one's content. The cell→children
+   *  twin of the projection's `'additive'` mode, and for the same reason — an
+   *  unobserved write must not be allowed to destroy what it did not see.
    *
    *  The revival path's untouched half is the caller: a restore re-materializes
    *  names the tx never wrote, from a cell that can be STALE against children a
-   *  peer wrote while the owner was deleted. The scalar branch still OVERWRITES
-   *  its primary row's content on that path — the narrower half of the same
-   *  staleness, tracked separately. */
-  mayNotRemove?: boolean
+   *  peer wrote while the owner was deleted, because sync-apply skips the
+   *  parent-liveness trigger and lands an edit under a tombstoned row. Which
+   *  side of a divergence is newer is not knowable here, so the tie goes to the
+   *  children: post-flip they are the only property truth that crosses sync,
+   *  and PROJECT heals the cell from them in the same tx. */
+  additive?: boolean
 }
 
 /** Restore the tombstoned field row backing `fieldId`, together with its value
@@ -438,7 +440,7 @@ const reviveTombstonedFieldRow = async (
   // cannot match, and at ZERO members — an explicitly empty list, which is a
   // first-class value — the one tombstone left under the field row is the
   // member the user DELETED to empty it. Restoring that resurrects the
-  // deletion, and `mayNotRemove` then forbids the reconciler from undoing the
+  // deletion, and `additive` then forbids the reconciler from undoing the
   // resurrection. So the branch is, for a list, only ever a way to bring a
   // reaped member back.
   if (memberCodecOf(schema.codec) !== undefined) return true
@@ -538,9 +540,9 @@ export const materializePropertyChildrenForExistingRow = async (
     }
 
     const fieldRow = await upsertFieldRow(
-      tx, row, schema.fieldId, fieldRows, opts.mayNotRemove,
+      tx, row, schema.fieldId, fieldRows, opts.additive,
     )
-    await reconcileFieldValueChildren(tx, fieldRow, schema, encoded, opts.mayNotRemove)
+    await reconcileFieldValueChildren(tx, fieldRow, schema, encoded, opts.additive)
   }
 }
 
@@ -593,7 +595,7 @@ const materializePropertiesForChangedRow = async (
   )
   await materializePropertyChildrenForExistingRow(
     tx, row.after, lookups, untouched,
-    {undecodable: 'skip', reviveTombstoned: true, mayNotRemove: true},
+    {undecodable: 'skip', reviveTombstoned: true, additive: true},
   )
 }
 
@@ -615,15 +617,20 @@ export const upsertFieldRow = async (
   owner: Pick<BlockData, 'id' | 'workspaceId'>,
   fieldId: string,
   existingRows: readonly BlockData[],
-  /** See {@link MaterializeOptions.mayNotRemove}. */
-  mayNotRemove = false,
+  /** See {@link MaterializeOptions.additive}. */
+  additive = false,
 ): Promise<Pick<BlockData, 'id' | 'workspaceId'>> => {
   const content = propertyFieldContent(fieldId)
   const [primary, ...duplicates] = existingRows
   if (primary) {
-    if (primary.content !== content) await tx.update(primary.id, {content})
+    // An additive call leaves an existing row's content alone. A field row's
+    // content is machinery, but the canonical `::((fieldId))` is not its only
+    // legal spelling: `::[[Name]]` resolves to the same fieldId (measured), and
+    // it is what a rename's clean 1-for-1 leaves behind — so canonicalizing
+    // here reverts a respelling that arrived while the owner was deleted.
+    if (!additive && primary.content !== content) await tx.update(primary.id, {content})
     for (const duplicate of duplicates) {
-      await collapseDuplicateFieldRow(tx, primary.id, duplicate, mayNotRemove)
+      await collapseDuplicateFieldRow(tx, primary.id, duplicate, additive)
     }
     return primary
   }
@@ -673,8 +680,8 @@ export const reconcileFieldValueChildren = async (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   schema: AnyPropertySchema,
   encoded: unknown,
-  /** See {@link MaterializeOptions.mayNotRemove}. */
-  mayNotRemove = false,
+  /** See {@link MaterializeOptions.additive}. */
+  additive = false,
 ): Promise<void> => {
   // Takes the ENCODED VALUE, not the contents, so the grain cannot be decided
   // by a caller: a scalar has exactly one content here by construction, which
@@ -685,10 +692,10 @@ export const reconcileFieldValueChildren = async (
   // row under the field row is its own machinery, never a value candidate.
   const values = await fieldValueChildren(tx, fieldRow.id)
   if (memberCodecOf(schema.codec) === undefined) {
-    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!)
+    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!, additive)
     return
   }
-  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, mayNotRemove)
+  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, additive)
 }
 
 const createValueChild = (
@@ -708,12 +715,20 @@ const reconcileSingleValueChild = async (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   values: readonly BlockData[],
   content: string,
+  /** See {@link MaterializeOptions.additive}. */
+  additive: boolean,
 ): Promise<void> => {
   const [primary, ...duplicates] = values
   if (!primary) {
     await createValueChild(tx, fieldRow, content, keyAtStart(null))
     return
   }
+  // An additive call may not touch the one slot a scalar has. Giving the value
+  // set a row it lacks is the whole of what it is allowed to do, and the set is
+  // not empty — so nothing below applies, the fold included: every comparison
+  // there is against `content`, the cell value the primary was just permitted
+  // to disagree with, which would fold a row that is no duplicate of it (#1021).
+  if (additive) return
   if (primary.content !== content) await tx.update(primary.id, {content})
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
@@ -746,7 +761,7 @@ const reconcileMemberValueChildren = async (
   schema: AnyPropertySchema,
   values: readonly BlockData[],
   contents: readonly string[],
-  mayNotRemove: boolean,
+  additive: boolean,
 ): Promise<void> => {
   // By VALUE, not raw text: a member a person spelled ` 1 ` projects to exactly
   // what the canonical text projects to, and matching on text alone reaps that
@@ -771,10 +786,10 @@ const reconcileMemberValueChildren = async (
   const keptRows = new Set(kept)
   const surplus = values.filter(value => !keptRows.has(value))
 
-  // `mayNotRemove` governs EVERY removal, folding included: a fold takes a row
+  // `additive` governs EVERY removal, folding included: a fold takes a row
   // away, and multiplicity is part of a list's value, so a repeated member that
   // arrived unobserved has to survive one too.
-  if (!mayNotRemove) {
+  if (!additive) {
     for (const row of surplus) {
       // A surplus row equal to a member we are keeping is one copy too many —
       // the match above consumed one row per member the cell asked for — and it
@@ -898,13 +913,13 @@ export const collapseDuplicateFieldRow = async (
   tx: Tx,
   survivorFieldRowId: string,
   duplicate: BlockData,
-  /** See {@link MaterializeOptions.mayNotRemove}. A fold here takes a member
+  /** See {@link MaterializeOptions.additive}. A fold here takes a member
    *  row away exactly as the reconciler's does, and it happens BEFORE the
    *  reconciler is handed the policy — so a caller that may not reap has to
    *  say so here too, or an arrival that duplicated an existing member is
    *  collapsed on the way past and the reconciler never sees the occurrence
    *  it was meant to preserve. */
-  mayNotRemove = false,
+  additive = false,
 ): Promise<void> => {
   const duplicateChildren = await tx.childrenOf(
     duplicate.id, undefined,
@@ -934,14 +949,14 @@ export const collapseDuplicateFieldRow = async (
         && childFieldId !== undefined
         && getPropertyFieldTargetId(c) === childFieldId)
       if (survivorOwn) {
-        await collapseDuplicateFieldRow(tx, survivorOwn.id, child, mayNotRemove)
+        await collapseDuplicateFieldRow(tx, survivorOwn.id, child, additive)
       } else {
         await appendUnder(tx, child, survivorFieldRowId, survivorChildren)
       }
       continue
     }
     const survivorValues = survivorChildren.filter(isFieldValueChild)
-    const match = mayNotRemove
+    const match = additive
       ? undefined
       : survivorValues.find(v => keys.row(v).key === keys.row(child).key)
     if (match) {

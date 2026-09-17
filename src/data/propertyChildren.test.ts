@@ -1878,10 +1878,16 @@ describe('revival re-materializes property children (#778)', () => {
     expect(ancestors.map(a => a.deleted)).toEqual([0, 0, 0])
   })
 
-  it('converges a revived value to a cell that moved while the row was dead', async () => {
-    // Reviving must not be trusted over the cell. A raw bag write to a tombstoned
-    // row (or a sync arrival) moves the cell on while the children are down, so
-    // the revived value has to be brought to the cell, not left at its old text.
+  it('drops a cell that moved while the row was dead, and re-projects from the child', async () => {
+    // The mirror image of the test above, and the reason it is settled the same
+    // way: an unobserved cell write and an unobserved child arrival reach the
+    // revival in the SAME shape — a tombstoned value whose content disagrees
+    // with the bag — so no rule can honour both. Declined: LWW by `updated_at`,
+    // which would need a clock comparison between two rows to be right about
+    // which device wrote last. The tie goes to the child instead, because §5
+    // makes the children the only property truth that crosses sync and the cell
+    // a local read surface. Nothing diverges either way — PROJECT rebuilds the
+    // cell from the child in the same tx.
     await seedWorkspace('children')
     const repo = await seedMaterializedProperty()
     const [field] = await liveFieldRows('p')
@@ -1894,7 +1900,81 @@ describe('revival re-materializes property children (#778)', () => {
 
     const values = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
     expect(values).toHaveLength(1)
-    expect(values[0]!.content).toBe('moved-on')
+    expect(values[0]!.content).toBe('done')
+    expect(await cellValue('p')).toBe('done')
+  })
+
+  it('keeps a value that arrived under the tombstoned row over the cell it diverged from', async () => {
+    // The scalar twin of the list rule (#1010): revival re-materializes names
+    // the tx never wrote, and sync-apply skips the parent-liveness trigger — so
+    // a peer's edit lands on a value row while the owner is deleted. Post-flip
+    // the children are the only property truth that crosses sync, so the cell
+    // may not be allowed to overwrite one; doing so destroys text this device
+    // never showed anyone.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    // The arrival: raw, because sync-apply never passes through `repo.tx` — it
+    // moves the content and leaves the tombstone alone.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET content = ? WHERE id = ?', ['arrived', value!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    const live = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(live.map(v => v.content)).toEqual(['arrived'])
+    expect(await cellValue('p')).toBe('arrived')
+  })
+
+  it('keeps a field row respelled while the owner was deleted', async () => {
+    // The same staleness one level up. A field row's content is machinery, but
+    // `::[[Name]]` resolves to the same fieldId and is what a rename's clean
+    // 1-for-1 leaves behind — so an arrival can respell the row while the owner
+    // is down, and canonicalizing it on the way back reverts an edit the tx
+    // never observed. Canonicalizing is still right on an OBSERVED write; the
+    // test below the guard's twin pins that half.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await repo.tx(tx => tx.setProperty(STATUS_FIELD_ID, aliasesProp, ['Status']),
+      {scope: ChangeScope.BlockDefault})
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    await repo.mutate.delete({id: 'p'})
+    // Content only: the alias resolves to the same block, so an arrival's
+    // re-derive leaves `reference_target_id` exactly where it was.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET content = ? WHERE id = ?', ['::[[Status]]', field!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect((await liveFieldRows('p')).map(f => f.content)).toEqual(['::[[Status]]'])
+  })
+
+  it('canonicalizes a respelled field row on a write that DID observe intent', async () => {
+    // The other side of that guard: `setProperty` is the user writing the
+    // property, so the marked canonical form (§7) is restored under it.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await repo.tx(tx => tx.setProperty(STATUS_FIELD_ID, aliasesProp, ['Status']),
+      {scope: ChangeScope.BlockDefault})
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    await repo.tx(tx => tx.update(field!.id, {content: '::[[Status]]'}),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'next'),
+      {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(f => f.content))
+      .toEqual([propertyFieldContent(STATUS_FIELD_ID)])
   })
 
   it('does not revive a value the user deleted before the owner went down', async () => {
@@ -3648,7 +3728,7 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       // An explicitly empty list leaves exactly one tombstoned value under a
       // live field row — the member the user deleted. That is the one count at
       // which the scalar revival rule matches for a list, and taking it undoes
-      // the deletion; `mayNotRemove` then stops the reconciler undoing that.
+      // the deletion; `additive` then stops the reconciler undoing that.
       const repo = await setupWithLists()
       await createBlock(repo, 'p')
       await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
@@ -3665,7 +3745,7 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
     })
 
     it('keeps an arrived member that DUPLICATES one already there', async () => {
-      // `mayNotRemove` has to govern folding too, not just deletion: a fold
+      // `additive` has to govern folding too, not just deletion: a fold
       // takes the row away just the same, and multiplicity is part of a list's
       // value, so collapsing an unobserved arrival onto its twin shortens the
       // list exactly as reaping it would.
