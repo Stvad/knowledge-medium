@@ -95,6 +95,21 @@ import {
 
 export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR_NAME = 'core.migratePropertyDefinition'
 
+/** The definition a row described BEFORE this tx, tombstone included.
+ *
+ *  `parsePropertyDefinitionMetadata` refuses a deleted row, which is right
+ *  everywhere else — a tombstone publishes nothing, so it claims no name and
+ *  the registry does not list it. But a definition being REVIVED still has
+ *  consumers whose cells are keyed under the name in that bag and whose values
+ *  are encoded under its preset, and those are exactly what the fan-out needs
+ *  to re-key and re-encode from. Restoring and re-typing in one tx is otherwise
+ *  skipped entirely, leaving every consumer in the old encoding while the
+ *  rebuilt registry publishes the new codec. */
+const definitionAsOfBefore = (
+  row: BlockData,
+): ReturnType<typeof parsePropertyDefinitionMetadata> =>
+  parsePropertyDefinitionMetadata(row.deleted ? {...row, deleted: false} : row)
+
 /** Did anything the codec is BUILT FROM change?
  *
  *  `tryBuildSchema` derives a codec from exactly two properties of the row — the
@@ -205,7 +220,10 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  * committing a definition change it cannot fan out.
  *
  * A candidate dropped here belongs to the shadowing model's own reconcile
- * (#389 item 8), not to a one-shot re-key.
+ * (#389 item 8), not to a one-shot re-key. Its definition row still commits,
+ * so its consumers keep cells under a name it no longer holds until that
+ * reconcile reaches them — whether this should REFUSE the transaction instead,
+ * as an unbuildable rename with consumers already does, is #1028.
  */
 export interface NameClaim {
   /** Definitions that will STILL hold this name once the tx commits, winner
@@ -297,7 +315,7 @@ const collectChanges = (
     // stops at the no-change guard below.
     if (after === null || after.deleted || before === null) continue
     const afterMeta = parsePropertyDefinitionMetadata(after)
-    const beforeMeta = parsePropertyDefinitionMetadata(before)
+    const beforeMeta = definitionAsOfBefore(before)
     if (!afterMeta || !beforeMeta) continue
     // A SEED's name and preset are code-owned and frozen once shipped
     // (`seedIdentityLedger.ts`), so a change to either across a build is a

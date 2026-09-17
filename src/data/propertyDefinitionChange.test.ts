@@ -916,6 +916,25 @@ describe('claimants the batch itself adds or removes', () => {
     expect(await rowContent(valueRowId)).toBe(' 42 ')
   })
 
+  it('re-encodes a definition RESTORED and re-typed in the same tx', async () => {
+    // Deleting a definition does not tombstone its consumers' field rows, so a
+    // revival brings back a live registry entry over values still in the old
+    // encoding. The tombstoned bag is the only record of what that encoding
+    // was, and the metadata parse refuses a deleted row.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
+    await repo.tx(tx => tx.delete(FIELD_ID), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      await tx.restore(FIELD_ID)
+      await tx.setProperty(FIELD_ID, presetIdProp, 'number')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cell('p')).toEqual({status: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
+  })
+
   it('renames onto the name of a definition that STOPS being one in the same tx', async () => {
     // Stripping the `property-schema` type leaves a live row that the rebuilt
     // registry no longer publishes — so the name is free after commit, even
