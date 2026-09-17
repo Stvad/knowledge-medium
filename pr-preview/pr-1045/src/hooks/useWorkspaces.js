@@ -1,1 +1,1 @@
-import{CN as e,SN as t,bN as n,xN as r}from"../../chunks/app-C4m6MXMT.js";export{n as useActiveWorkspaceId,r as useMyWorkspaceRoles,t as useWorkspaceMembers,e as useWorkspaces};
+import{CN as e,SN as t,bN as n,xN as r}from"../../chunks/app-CV0rwlvM.js";export{n as useActiveWorkspaceId,r as useMyWorkspaceRoles,t as useWorkspaceMembers,e as useWorkspaces};
