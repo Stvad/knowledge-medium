@@ -31,6 +31,7 @@ import type {
   AnyPostCommitProcessor,
   AnyPropertySchema,
   AnySameTxProcessor,
+  AnyValuePresetCore,
   SameTxTypeOwnership,
   BlockData,
   ChangedRow,
@@ -57,7 +58,10 @@ import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
 import type { BlockIdPolicy } from '@/data/blockId'
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  propertyDefinitionClaimantsForName,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
 
 /** Minimal subset of the full PowerSync DB our pipeline + Repo talks
  *  to. The test harness (`createTestDb`) returns a real
@@ -319,6 +323,10 @@ export interface RunTxParams<R> {
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Registered value presets, captured at that same boundary. Lets a same-tx
+   *  processor build a codec the frozen `propertySchemas` cannot answer for —
+   *  see `SameTxCtx.valuePresets`. */
+  valuePresets: ReadonlyMap<string, AnyValuePresetCore>
   /** Tx-start-captured type-ownership factory, resolved once the tx's workspace
    *  is known — the same shape (and the same fail-closed rule) as
    *  `propertyDefinitionRegistryForWorkspace`. */
@@ -372,7 +380,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const {
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
-    mutators, processors, sameTxProcessors, propertySchemas,
+    mutators, processors, sameTxProcessors, propertySchemas, valuePresets,
     typeDefinitionsForWorkspace,
     propertyDefinitionRegistryForWorkspace,
     propertySchemaWorkspaceId,
@@ -462,6 +470,20 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     resolverFor(workspaceId).resolve(name)
   const resolvePropertySchemaField = (workspaceId: string, fieldId: string) =>
     resolverFor(workspaceId).resolveField(fieldId)
+  const propertyDefinitionsClaimingName = (
+    workspaceId: string, name: string,
+  ): readonly string[] | null => {
+    // ACTIVE workspace only, which is stricter than the resolvers beside it.
+    // They serve the immediately-previous workspace from a retained snapshot so
+    // a cross-workspace seed write still resolves; that snapshot is frozen —
+    // `ProjectorRuntime.pinWorkspace` disposes the outgoing subscription — so
+    // it cannot see a definition sync created, revived, renamed or deleted
+    // there afterwards, and can be arbitrarily stale. Good enough to decode a
+    // known handle, not to decide who OWNS a name.
+    if (propertySchemaWorkspaceId !== workspaceId) return null
+    const snapshot = propertyDefinitionRegistryForWorkspace(workspaceId)
+    return snapshot === null ? null : propertyDefinitionClaimantsForName(snapshot, name)
+  }
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
   const value = await db.writeTransaction(async (txDb): Promise<R> => {
@@ -571,12 +593,13 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               emittedEvents,
             },
             {
-              tx, db: txDb, propertySchemas,
+              tx, db: txDb, propertySchemas, valuePresets,
               // Resolved against the TX's pinned workspace, not the active one:
               // `TxImpl` pins from the first write, and the merge mutator does
               // not require the active workspace to match.
               typeDefinitions: typeDefinitionsForWorkspace(meta.workspaceId),
               resolvePropertySchemaName, resolvePropertySchemaField,
+              propertyDefinitionsClaimingName,
             },
           )
         } finally {

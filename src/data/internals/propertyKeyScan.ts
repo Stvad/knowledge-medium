@@ -158,8 +158,7 @@ export const scanPropertyKeys = async (
   // NOTHING MAY AWAIT between this line and the scans below: the resolver
   // holds its snapshot by value, so classification is fixed the instant it's
   // taken, and a suspension point here would let a workspace switch leave the
-  // scans reading rows this snapshot cannot classify. Same rule as
-  // `schedulePropertyDefinitionMigrations` in `repo.ts`.
+  // scans reading rows this snapshot cannot classify.
   const resolver = repo.propertySchemaResolverFor(workspaceId)
 
   const histogram = await repo.db.getAll<HistogramRow>(

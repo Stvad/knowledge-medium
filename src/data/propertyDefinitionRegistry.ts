@@ -24,6 +24,37 @@ export interface PropertyDefinitionRegistrySnapshot {
   readonly seedsByName: ReadonlyMap<string, readonly AnyPropertySeedDeclaration[]>
 }
 
+/**
+ * Every definition claiming `name`, by durable fieldId, in the order the
+ * resolver would prefer them: block-built definitions first, then seed
+ * DECLARATIONS whose row has not materialized yet.
+ *
+ * Must agree with `SnapshotPropertySchemaResolver.resolveName`, which falls
+ * back to `seedsByName` when no block owns the name — so reading
+ * `definitionsByName` alone reports a registered-but-unmaterialized seed's name
+ * as unclaimed. For a rename refusal that is the dangerous direction: the name
+ * reads as free and the re-key writes under a key the seed owns, which for a
+ * kernel seed like `types` is the type-membership cell of every consuming
+ * parent. Deduped by fieldId, since a materialized seed appears in both maps.
+ */
+export const propertyDefinitionClaimantsForName = (
+  snapshot: PropertyDefinitionRegistrySnapshot,
+  name: string,
+): readonly string[] => {
+  const claimants: string[] = []
+  const seen = new Set<string>()
+  const push = (fieldId: string): void => {
+    if (seen.has(fieldId)) return
+    seen.add(fieldId)
+    claimants.push(fieldId)
+  }
+  for (const definition of snapshot.definitionsByName.get(name) ?? []) push(definition.fieldId)
+  for (const seed of snapshot.seedsByName.get(name) ?? []) {
+    push(propertyDefinitionBlockId(snapshot.workspaceId, seed.seedKey))
+  }
+  return claimants
+}
+
 export interface BuildPropertyDefinitionRegistryArgs {
   readonly workspaceId: string
   readonly projectedDefinitions: ReadonlyMap<string, ProjectedPropertyDefinition>

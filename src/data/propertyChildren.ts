@@ -277,7 +277,7 @@ const isEscapedEnvelope = (trimmed: string): boolean =>
  *  in as a VALUE, an envelope escapes again (the quoted-form recursion, and
  *  correctly so — a value that happens to look like an envelope is still a
  *  value). Nothing double-escapes today because every re-encode path decodes
- *  first (`runPropertyDefinitionMigrationBatch`, the materialize processor).
+ *  first (`core.migratePropertyDefinition`, the materialize processor).
  *  A future one must too; content is not a value. */
 const needsEscape = (codec: AnyCodec, s: string): boolean => {
   const trimmed = s.trim()
@@ -782,54 +782,6 @@ export const propertiesEqual = (
   a: Record<string, unknown>,
   b: Record<string, unknown>,
 ): boolean => jsonValuesEqual(a, b)
-
-/** The names to drop and the assignments to set on ONE parent's cell — the
- *  divergent value-handling half of a definition re-key, computed by the
- *  caller from the parent's live children. */
-export interface CellRekeyPlan {
-  readonly oldNames: readonly string[]
-  readonly assignments: ReadonlyArray<{name: string; value: unknown; unset?: boolean}>
-}
-
-/** Apply a swap-safe property-cell re-key to one parent — shared by the same-tx
- *  rename processor (`core.migratePropertyRename`) and the deferred codec-change
- *  batch (`Repo.runPropertyDefinitionMigrationBatch`). Owns the parts that must
- *  stay IDENTICAL across both, so the load-bearing invariant lives in one place:
- *   - the parent guard (skip a missing/deleted parent);
- *   - the SWAP-SAFE apply — drop EVERY old name before assigning ANY new one, so
- *     a name swap (`a<->b` in one tx) never leaves an intermediate `{b:<a>}` that
- *     clobbers b (and `propertiesEqual` skips the write when nothing changed).
- *  No ancestry gate exists anymore (§9 flat recognition): ANY block owning
- *  recognized field rows — value rows and field rows included — re-keys like
- *  every other owner; its `::` children are its field rows at any depth.
- *  `computePlan` receives the parent's live children and returns the drops +
- *  assignments — the ONLY part the two callers differ in. Both project through
- *  the same pair, `unionValuesAcrossFieldRows` then
- *  `childContentsToEncodedPropertyValue`, which own what a definition's value
- *  is across its field rows and at either grain; neither caller restates those
- *  rules. They differ in the CODEC: the rename reads the values under the
- *  tx-start one, while the batch re-encodes each under the possibly-new one and
- *  counts unconvertibles. The write is `skipMetadata` machinery, not a "last
- *  edited" bump. */
-export const rekeyParentPropertyCell = async (
-  tx: Tx,
-  parentId: string,
-  computePlan: (children: readonly BlockData[]) => Promise<CellRekeyPlan>,
-): Promise<void> => {
-  const parent = await tx.get(parentId)
-  if (parent === null || parent.deleted) return
-  const {oldNames, assignments} = await computePlan(
-    await tx.childrenOf(parentId, undefined),
-  )
-  const next = {...parent.properties}
-  for (const name of oldNames) delete next[name]
-  for (const assignment of assignments) {
-    if (assignment.unset) delete next[assignment.name]
-    else next[assignment.name] = assignment.value
-  }
-  if (propertiesEqual(parent.properties, next)) return
-  await tx.update(parentId, {properties: next}, {skipMetadata: true})
-}
 
 /** Shared by `isPropertyValueRow` / `resolvePropertyValueFieldSchema`: the
  *  field row `source` is a value child of, or null when `source` isn't a

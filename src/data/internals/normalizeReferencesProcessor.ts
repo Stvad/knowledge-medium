@@ -20,7 +20,7 @@ import {
   MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
   PROJECT_PROPERTY_CHILDREN_PROCESSOR,
 } from './propertyChildrenProcessor'
-import { MIGRATE_PROPERTY_RENAME_PROCESSOR } from './propertyRenameProcessor'
+import { MIGRATE_PROPERTY_DEFINITION_PROCESSOR } from './propertyDefinitionChangeProcessor'
 
 const referencesEqual = (
   a: ReturnType<typeof normalizeReferences>,
@@ -91,9 +91,9 @@ export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
   DERIVE_REFERENCE_TARGET_PROCESSOR,
   PROJECT_PROPERTY_CHILDREN_PROCESSOR,
   NORMALIZE_REFERENCES_PROCESSOR,
-  // Runs LAST: it re-keys consuming-parent cells for a definition rename, and
-  // the stale in-tx registry would make MATERIALIZE read the dropped old name
-  // as a user delete and tombstone the field rows if it ran afterward. See
-  // propertyRenameProcessor.ts header.
-  MIGRATE_PROPERTY_RENAME_PROCESSOR,
+  // Runs LAST: it re-keys consuming-parent cells for a definition rename or
+  // re-type, and the stale in-tx registry would make MATERIALIZE read the
+  // dropped old name as a user delete and tombstone the field rows if it ran
+  // afterward. See propertyDefinitionChangeProcessor.ts header.
+  MIGRATE_PROPERTY_DEFINITION_PROCESSOR,
 ]

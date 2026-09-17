@@ -108,8 +108,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   awaitReconcileRescans: 'drains a shared job object',
   awaitReprojections: 'drains a shared job object',
   awaitSeedMaterialization: 'drains a shared job object',
-  awaitPropertyDefinitionMigrations: 'drains a shared job object',
-  awaitPropertyDefinitionBaselines: 'drains a shared promise chain',
   awaitReferenceTargetDerive: 'drains a shared job object',
   awaitWorkspaceBackfills: 'drains a shared job object',
   awaitDeferredWork: 'awaits the drainers above; assigns no Repo fields',
@@ -119,6 +117,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   workspaceUnappliedExactCount: 'read — one query; assigns no Repo fields',
   flushSyncObserver: 'reads this.syncObserver through the chain; never assigns it',
   onUserError: 'adds the caller listener to a shared CallbackSet; no this-capture',
+  reportUserError: 'notifies a shared CallbackSet; no this-capture',
   onReadOnlyChange: 'adds the caller listener to a shared CallbackSet; no this-capture',
   onMetricsReset: 'adds the caller listener to a shared CallbackSet; no this-capture',
   onPropertyEditorOverridesChange: 'delegates to constructor-bound facetBridge',
@@ -166,14 +165,10 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   propertyRegistryReadyFor: 'read — inspects the registry snapshots; assigns nothing',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
-  schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
-  syncPropertyDefinitionBaseline: 'invoked by constructor-bound facetBridge',
   scheduleReferenceTargetNameRederive: 'invoked by constructor-bound facetBridge',
   stampReferenceTargets: 'private; raw source-NULL writes via schedule-driven jobs',
   reprojectOwnersOfStampedFieldRows: 'private; reached only from stampReferenceTargets (schedule-driven jobs)',
   referenceTargetLookupsVia: 'private read — builds resolver closures, assigns no fields',
-  runPropertyDefinitionMigrations: 'private; jobs are enqueued via the facetBridge-bound schedule',
-  runPropertyDefinitionMigrationBatch: 'private; jobs are enqueued via the facetBridge-bound schedule',
   swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
 
   // ── test-only escape hatches (assign fields — never call on a facade) ──
@@ -264,8 +259,6 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   referenceTargetSweepDone: 'shared Set (session bookkeeping)',
   pendingNameRederives: 'shared Map (session bookkeeping)',
   nameRederiveDrainScheduled: 'shared Set (session bookkeeping)',
-  propertyDefinitionMigrationJobs: 'shared job queue (enqueued via constructor-bound facetBridge)',
-  propertyDefinitionBaselineWork: 'data field — a promise the chain replaces; captures no repo beyond the constructor-bound facetBridge path that appends to it',
 }
 
 let sharedDb: TestDb

@@ -108,7 +108,7 @@ export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
  *  (stable, so equal precedence keeps registration order), so any value
  *  above the default 0 puts this after every other same-tx processor
  *  registered today: the kernel trio, `core.normalizeReferences`,
- *  `core.migratePropertyRename`, the references plugin's own merge/inline
+ *  `core.migratePropertyDefinition`, the references plugin's own merge/inline
  *  processors, and — the one that matters — `alias.sync`.
  *
  *  Deliberately a precedence and not a registration position. Position
