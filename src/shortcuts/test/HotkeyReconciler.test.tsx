@@ -213,6 +213,32 @@ const LayoutKeydownWhenActive = ({
   return null
 }
 
+/**
+ * Calls `onReconciled` once `context` is active AND the reconciler has
+ * installed the bindings for that commit.
+ *
+ * Placement is load-bearing: this must render AFTER `<HotkeyReconciler/>`.
+ * Passive effects flush in tree order, so this effect running means the
+ * reconciler's own install effect — the one that fills `installedRef` —
+ * already ran for the same commit. Rendered before it, the probe would fire
+ * a commit too early and be a proxy again.
+ */
+const ReconciledContextProbe = ({
+  context,
+  onReconciled,
+}: {
+  context: ActionContextType
+  onReconciled: () => void
+}) => {
+  const active = useActiveContextsState()
+
+  useEffect(() => {
+    if (active.has(context)) onReconciled()
+  }, [active, context, onReconciled])
+
+  return null
+}
+
 const Harness = ({
   actions,
   transforms = [],
@@ -1836,6 +1862,7 @@ describe('HotkeyReconciler', () => {
         const baseHandler = vi.fn()
         const modalHandler = vi.fn()
         let holdFired = false
+        let modalReconciled = false
         const enterAction = buildAction({
           id: 'test.hold-real-enter',
           handler: (_deps, _trigger, dispatch) => {
@@ -1863,6 +1890,12 @@ describe('HotkeyReconciler', () => {
             contexts={[testContextConfig, modalContextConfig]}
           >
             <Activator context={TEST_CONTEXT}/>
+            <ReconciledContextProbe
+              context={MODAL_CONTEXT}
+              onReconciled={() => {
+                modalReconciled = true
+              }}
+            />
           </Harness>,
         )
 
@@ -1870,23 +1903,26 @@ describe('HotkeyReconciler', () => {
         // genuine 20ms hold timer, whose callback activates the modal context.
         dispatchKeydown('s')
 
-        // Both fences below are on observable work, never on wall clock,
-        // because the `h` keydown is a ONE-SHOT event: dispatched too early it
-        // isn't merely late, it's lost — the reconciler routes it against the
-        // pre-activation binding set and nothing re-delivers it, so no wait
-        // afterwards can recover the modal handler. A fixed sleep is exactly
-        // the bet that loses under full-suite CPU contention.
-        //
-        // Fence 1: the hold timer actually elapsed and its handler ran.
-        await vi.waitFor(() => expect(holdFired).toBe(true), {timeout: 2000, interval: 5})
-        // Fence 2: React committed that activation AND flushed the passive
-        // effect — the reconciler installs the modal binding from a useEffect
-        // (HotkeyReconciler.tsx:401), so an uncommitted activation means the
-        // binding isn't there yet. Only the keydown below stays outside act();
-        // that unwrapped keypress is what this test exists to pin, and it
-        // mirrors the browser path where the next press arrives on a commit
-        // React drove itself.
-        await act(async () => {})
+        // Fence on the POSTCONDITION — the modal binding installed — never on
+        // wall clock and never on a fixed number of React turns. The `h`
+        // keydown below is a ONE-SHOT event: dispatched before that binding
+        // exists it isn't late, it's lost (the reconciler routes it against
+        // the pre-activation binding set and nothing re-delivers it), so no
+        // wait afterwards can recover the modal handler. The two obvious
+        // proxies are both bets: a handler-side flag says only that the
+        // handler ran, and one `await act(async () => {})` says only that one
+        // macrotask elapsed — neither says the reconciler installed anything,
+        // and under full-suite CPU contention a bet on one turn is the bet
+        // that loses. `waitFor` retries across macrotask boundaries for
+        // however many turns React takes; `holdFired` is checked first only so
+        // a timeout names the earliest missing precondition. Only the keydown
+        // stays outside act(); that unwrapped keypress is what this test
+        // exists to pin, and it mirrors the browser path where the next press
+        // arrives on a commit React drove itself.
+        await vi.waitFor(() => {
+          expect(holdFired, 'hold timer never fired').toBe(true)
+          expect(modalReconciled, 'modal activation not reconciled').toBe(true)
+        }, {timeout: 2000, interval: 5})
 
         dispatchKeydown('h')
         // Synchronous: the coordinator dispatches the winning candidate inline
