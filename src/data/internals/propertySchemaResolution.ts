@@ -402,8 +402,10 @@ export const createPropertySchemaResolver = (
   snapshot: PropertyDefinitionRegistrySnapshot,
 ): PropertySchemaResolver => new SnapshotPropertySchemaResolver(snapshot, new Map(), false)
 
-/** The schema a write may use for `schema`'s name, or throw
- *  `PropertySchemaIdentityError`.
+/** The schema a write may use for the identity `schema` carries, or throw
+ *  `PropertySchemaIdentityError`. A resolved schema follows its durable field
+ *  id, so the returned name — the bag key a caller writes or deletes — can
+ *  differ from the one passed.
  *
  *  Admission is `resolveBoundary`'s call: it turns on schema kind, on whether a
  *  faithful snapshot exists, and on what else claims the name. That matrix is

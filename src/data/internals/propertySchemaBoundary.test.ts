@@ -902,10 +902,10 @@ describe('typed property identity boundary', () => {
 
 describe('writing a name the registry does not resolve', () => {
   it('clears a cell under an unclaimed name through a plain schema', async () => {
-    // The orphan-cell cleanup path. A key whose definition the code retired
-    // resolves to nothing BY NAME, yet a plain schema for it is still writable
-    // in the active workspace — so `unsetProperty` reaches the cell and no
-    // caller needs a whole-bag `tx.update` to drop it.
+    // The orphan-cell cleanup path: an UNREGISTERED key, resolving to nothing
+    // by name, is still writable through a plain schema in the active
+    // workspace — so `unsetProperty` reaches the cell and no caller needs a
+    // whole-bag `tx.update` to drop it.
     const repo = await setup()
     await repo.tx(
       tx => tx.create({
@@ -940,8 +940,8 @@ describe('writing a name the registry does not resolve', () => {
 
   it('still refuses a plain lookalike for a name another definition claims', async () => {
     // The other side of the same rule: "unclaimed is writable" must not become
-    // "any plain schema is writable", or a lookalike could clear the winner's
-    // cell under its own codec.
+    // "any plain schema is writable", or an unauthorized identity could delete
+    // the winner's cell.
     const repo = await setup()
     const lookalike = defineProperty(shadowed.name, {
       codec: codecs.string,
