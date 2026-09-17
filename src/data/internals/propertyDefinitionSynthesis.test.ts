@@ -696,7 +696,7 @@ describe('applyPropertyDefinitionSynthesis', () => {
     const second = await planFor()
     expect(second.candidates).toEqual([])
     expect(await applyPropertyDefinitionSynthesis(repo, second))
-      .toEqual({created: 0, converged: 0, skipped: []})
+      .toEqual({created: 0, converged: 0, skipped: [], undoHistoryCleared: false})
   })
 
   it('still mints the keys it can when another key is a hard blocker', async () => {
@@ -1208,20 +1208,25 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result.skipped[0]!.reason).toMatch(/another workspace/)
   })
 
-  it('does not leave the synthesis write on the undo stack', async () => {
-    // The gesture clears the stack at the flip and the backfill clears it on
-    // its first batch, but a run can end between the two — leaving these as the
-    // only committed write with a live undo entry, one cmd-Z from deleting
-    // definitions whose keys are already migrating.
+  it('drops the workspace\u2019s undo history once it MINTS, and says it did', async () => {
+    // Not about this pass's own write, which is `skipUndo`, but about the
+    // entries already on the stack. Undo replays a whole snapshot with the
+    // same-tx processors skipped, so one cmd-Z after this commits puts back a
+    // cell for a key that now has a definition block — and past the flip that
+    // definition's children are the truth, so the two just diverge.
     await rawCell('b1', {'demo:orphan': 'hello'})
     // Created up front so its own (undoable) transaction is not what this
     // measures — `getOrCreatePropertiesPage` is a separate commit.
     await getOrCreatePropertiesPage(repo, WS)
-    const before = repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)
+    await repo.tx(async tx => { await tx.update('b1', {content: 'user edit'}) },
+      {scope: ChangeScope.BlockDefault, description: 'user edit'})
+    expect(repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)).not.toBeNull()
 
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
 
-    expect(repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)).toEqual(before)
+    expect(result.created).toBeGreaterThan(0)
+    expect(result.undoHistoryCleared).toBe(true)
+    expect(repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)).toBeNull()
   })
 })
 

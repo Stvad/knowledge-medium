@@ -19,7 +19,11 @@ vi.mock('@/utils/toast.js', () => ({
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 const flipWorkspace = vi.fn<(repo: unknown, workspaceId: string) => Promise<{localApplied: boolean}>>()
-vi.mock('@/data/workspaces', () => ({
+vi.mock('@/data/workspaces', async (importOriginal) => ({
+  // The predicate is NOT stubbed: it reads the marker the real flip attaches,
+  // and a stub here would let this file agree with itself about which
+  // rejections prove nothing was written.
+  ...(await importOriginal<typeof import('@/data/workspaces')>()),
   flipWorkspaceToChildBackedProperties: (repo: unknown, workspaceId: string) =>
     flipWorkspace(repo, workspaceId),
 }))
@@ -29,7 +33,15 @@ vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => remoteSyncActiv
 // what the plan says, and what the gesture does about it. What the plan means
 // is `propertyDefinitionSynthesis.test.ts`.
 const planSynthesis = vi.fn()
-const applySynthesis = vi.fn()
+/** Typed, so a field added to `SynthesisResult` fails HERE rather than arriving
+ *  as `undefined` in every test that stubs it. It already had drifted: one
+ *  literal was missing `converged`, and the untyped stub took it. */
+const applySynthesis = vi.fn<(...args: unknown[]) => Promise<SynthesisResult>>()
+
+/** A synthesis outcome at its no-op values; override only what the test is
+ *  about, so a stub says what it is testing and nothing else. */
+const synthesized = (over: Partial<SynthesisResult> = {}): SynthesisResult =>
+  ({created: 0, converged: 0, skipped: [], undoHistoryCleared: false, ...over})
 const flipBlocked = vi.fn<() => string | null>()
 vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
   planPropertyDefinitionSynthesis: () => planSynthesis(),
@@ -47,10 +59,16 @@ const plan = (candidates = 0) => ({
 })
 
 import type { OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
+import type { SynthesisResult } from '@/data/internals/propertyDefinitionSynthesis'
+import type { HistoryDrop } from '@/data/internals/undoManager'
 import { claimStub, type ClaimStubLog } from './claimStub.ts'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
+const finishUndoDrop = vi.fn()
+const abandonUndoDrop = vi.fn()
+const beginHistoryDrop = vi.fn(
+  (): HistoryDrop => ({finish: finishUndoDrop, abandon: abandonUndoDrop}))
 const USER = 'user-1'
 
 const RAN = {outcome: 'ran', undoHistoryCleared: false} as OperatorBackfillResult
@@ -88,7 +106,7 @@ const makeRepo = (
     db: {getAll, getOptional},
     isReadOnly: false,
     workspaceViewGap,
-    undoManagerFor: () => ({clear: clearUndo}),
+    undoManagerFor: () => ({clear: clearUndo, beginHistoryDrop}),
     // The gesture reaches the pass THROUGH the claim, so the stub is the only
     // route to `runPass`. `repo.runPass` is deliberately
     // ABSENT: a fixture that also answered that call directly would keep
@@ -116,6 +134,9 @@ const invoke = (repo: Repo) =>
 
 afterEach(() => {
   clearUndo.mockReset()
+  finishUndoDrop.mockReset()
+  abandonUndoDrop.mockReset()
+  beginHistoryDrop.mockClear()
   showInfo.mockReset()
   dismissToast.mockReset()
   progressHandle.update.mockReset()
@@ -123,7 +144,6 @@ afterEach(() => {
   progressHandle.fail.mockReset()
   planSynthesis.mockReset()
   planSynthesis.mockResolvedValue(plan())
-  applySynthesis.mockReset()
   applySynthesis.mockReset()
   flipBlocked.mockReset()
 })
@@ -139,7 +159,7 @@ beforeEach(() => {
   remoteSyncActive.mockReset()
   remoteSyncActive.mockReturnValue(true)
   planSynthesis.mockResolvedValue(plan())
-  applySynthesis.mockResolvedValue({created: 0, converged: 0, skipped: []})
+  applySynthesis.mockResolvedValue(synthesized())
   flipBlocked.mockReturnValue(null)
 })
 
@@ -327,9 +347,92 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
-    expect(clearUndo).toHaveBeenCalled()
+    expect(finishUndoDrop).toHaveBeenCalled()
+    // Through the PAIRED api, never a bare `clear()` — that one cannot reach a
+    // replay `undo()` has already popped, which is the whole hazard here.
+    expect(clearUndo).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/undo history for this workspace was cleared/i))
+  })
+
+  it('refuses in-flight replays BEFORE the flip, not with the clear after it', async () => {
+    // From the PATCH onward the workspace is child-backed for the whole graph,
+    // and the flip is a network round trip plus two local db calls — room for a
+    // replay `undo()` has already popped to take the write lock and commit a
+    // whole pre-flip row. The `clear()` afterwards cannot reach that entry: it
+    // is off the stack by then. Only the epoch bump refuses it, and it has to
+    // land before the workspace changes underneath.
+    const order: string[] = []
+    beginHistoryDrop.mockImplementation(() => {
+      order.push('begin')
+      return {finish: finishUndoDrop, abandon: abandonUndoDrop}
+    })
+    finishUndoDrop.mockImplementation(() => { order.push('finish') })
+    flipWorkspace.mockImplementation(async () => { order.push('flip'); return {localApplied: true} })
+    const {repo} = makeRepo(RAN)
+
+    await invoke(repo)
+
+    expect(order.slice(0, 3)).toEqual(['begin', 'flip', 'finish'])
+    flipWorkspace.mockReset()
+    flipWorkspace.mockResolvedValue({localApplied: true})
+  })
+
+  it('drops the history when the flip FAILS ambiguously, not just when it lands', async () => {
+    // `flipWorkspaceToChildBackedProperties` throws only when the PATCH errored
+    // AND the confirming re-read could not be got either — so the server may be
+    // child-backed already. Keeping the history there leaves every pre-flip
+    // entry replayable over a flip that did land, and the epoch has already
+    // moved, so nothing else refuses them. Dropped on the side of the rows.
+    flipWorkspace.mockRejectedValue(new Error('response lost'))
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(finishUndoDrop).toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/undo history for this workspace was cleared/i))
+    flipWorkspace.mockReset()
+    flipWorkspace.mockResolvedValue({localApplied: true})
+  })
+
+  it('tells the operator an ambiguous flip is ambiguous, not that nothing happened', async () => {
+    // The branch that DROPPED their undo history because the flip may have
+    // landed must not then tell them it did not. The two halves of that message
+    // would contradict each other, and "nothing was migrated" sends them to
+    // re-run against a graph that may already have moved.
+    flipWorkspace.mockRejectedValue(new Error('response lost'))
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/could not tell whether/i))
+    expect(progressHandle.fail).not.toHaveBeenCalledWith(
+      expect.stringMatching(/nothing was migrated/i))
+    flipWorkspace.mockReset()
+    flipWorkspace.mockResolvedValue({localApplied: true})
+  })
+
+  it('keeps the history when the flip rejection PROVES nothing was written', async () => {
+    // The other half of the branch above. When the confirming re-read comes
+    // back and still says `cell`, the flip demonstrably did not land — an
+    // ordinary refusal, a trigger or a permission — and charging the user their
+    // undo history for it would be a cost with no hazard. The marker is what
+    // tells the two apart; both carry the same underlying PostgREST error.
+    flipWorkspace.mockRejectedValue(Object.assign(new Error('refused'), {flipLanded: false}))
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(finishUndoDrop).not.toHaveBeenCalled()
+    // ENDED all the same: a drop left open refuses every replay in this
+    // workspace until the page reloads.
+    expect(abandonUndoDrop).toHaveBeenCalled()
+    expect(progressHandle.fail).not.toHaveBeenCalledWith(
+      expect.stringMatching(/undo history for this workspace was cleared/i))
+    flipWorkspace.mockReset()
+    flipWorkspace.mockResolvedValue({localApplied: true})
   })
 
   it('does not touch undo history for a workspace that was already flipped', async () => {
@@ -339,6 +442,7 @@ describe('migrate_properties_to_blocks action', () => {
 
     await invoke(repo)
 
+    expect(beginHistoryDrop).not.toHaveBeenCalled()
     expect(clearUndo).not.toHaveBeenCalled()
   })
 
@@ -382,7 +486,9 @@ describe('migrate_properties_to_blocks action', () => {
     // The flip is the gesture's FIRST write, so a
     // refusal leaves the graph untouched — which is the part an operator needs
     // told, rather than being left to wonder what landed.
-    flipWorkspace.mockRejectedValue(new Error('workspaces.properties_migration is writable by the workspace owner'))
+    flipWorkspace.mockRejectedValue(Object.assign(
+      new Error('workspaces.properties_migration is writable by the workspace owner'),
+      {flipLanded: false}))
     const {repo, runPass} = makeRepo()
 
     await invoke(repo)
@@ -460,7 +566,7 @@ describe('the graph-wide claim', () => {
     planSynthesis.mockResolvedValue(plan(1))
     applySynthesis.mockImplementation(async () => {
       log.events.push('synthesize')
-      return {created: 1, converged: 0, skipped: []}
+      return synthesized({created: 1, undoHistoryCleared: true})
     })
     flipWorkspace.mockImplementation(async () => {
       log.events.push('flip')
@@ -514,7 +620,8 @@ describe('the graph-wide claim', () => {
     // flip that throws still ends the gesture through the release.
     const log: ClaimStubLog = {events: []}
     const {repo, runPass} = makeRepo(RAN, {log})
-    flipWorkspace.mockRejectedValue(new Error('the server refused'))
+    flipWorkspace.mockRejectedValue(
+      Object.assign(new Error('the server refused'), {flipLanded: false}))
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await invoke(repo)
@@ -572,24 +679,37 @@ describe('the orphan-definition step', () => {
     expect(runPass).toHaveBeenCalled()
   })
 
-  it('clears the undo stack as soon as synthesis writes, not only at the flip', async () => {
-    // `skipUndo` keeps the synthesis write off the stack; it does not remove
-    // what is already on it. Undo replays a whole snapshot with the same-tx
-    // processors skipped, so one cmd-Z after synthesis commits reverts a
-    // pre-migration edit without the materializer syncing its children — and
-    // past the flip the children are the truth, so the two just diverge.
+  it('carries synthesis\u2019s undo clear into what it tells the operator', async () => {
+    // The clear itself belongs to synthesis — its in-lock half is not reachable
+    // from out here — so this gesture's job is to REPORT it. Reported off the
+    // returned flag and not off `created`, which is the same question asked
+    // twice and the place the two could drift.
     planSynthesis.mockResolvedValue(plan(1))
-    applySynthesis.mockResolvedValue({created: 1, converged: 0, skipped: []})
+    applySynthesis.mockResolvedValue(synthesized({created: 1, undoHistoryCleared: true}))
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still orphaned')
     // Already flipped, so nothing downstream would clear it.
     const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
 
-    expect(clearUndo).toHaveBeenCalled()
+    expect(progressHandle.done).toHaveBeenCalledWith(
+      expect.stringMatching(/Undo history for this workspace was cleared/))
     // And the abort path says so, rather than leaving the operator to discover it.
     expect(showInfo).toHaveBeenCalledWith(
       expect.stringMatching(/still orphaned/), expect.anything())
+  })
+
+  it('says nothing about undo when synthesis reports it took nothing', async () => {
+    // A run that only converged minted nothing and cost the user no history;
+    // telling them it did is a false alarm about data they still have.
+    planSynthesis.mockResolvedValue(plan(1))
+    applySynthesis.mockResolvedValue(synthesized({created: 1, undoHistoryCleared: false}))
+    const {repo} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(progressHandle.done).not.toHaveBeenCalledWith(
+      expect.stringMatching(/Undo history for this workspace was cleared/))
   })
 
   it('says the stack was cleared when it refuses the flip after writing', async () => {
@@ -597,8 +717,9 @@ describe('the orphan-definition step', () => {
     // history already gone; leaving that unsaid is the same lie the flip-failure
     // branch goes out of its way to avoid.
     planSynthesis.mockResolvedValue(plan(2))
-    applySynthesis.mockResolvedValue({created: 1, converged: 0,
-                                      skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
+    applySynthesis.mockResolvedValue(synthesized({
+      created: 1, undoHistoryCleared: true,
+      skipped: [{key: 'demo:orphan', reason: 'occupied'}]}))
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still orphaned')
     const {repo} = makeRepo()
 
@@ -613,12 +734,11 @@ describe('the orphan-definition step', () => {
     // everyone; clearing the stack follows from any write. Driving the flip
     // banner off the undo flag made an already-flipped run claim a flip.
     planSynthesis.mockResolvedValue(plan(1))
-    applySynthesis.mockResolvedValue({created: 1, converged: 0, skipped: []})
+    applySynthesis.mockResolvedValue(synthesized({created: 1, undoHistoryCleared: true}))
     const {repo} = makeRepo(RAN, {flipped: true})
 
     await invoke(repo)
 
-    expect(clearUndo).toHaveBeenCalled()
     expect(progressHandle.done).toHaveBeenCalledWith(
       expect.stringMatching(/Undo history for this workspace was cleared/))
     expect(progressHandle.done).not.toHaveBeenCalledWith(
@@ -714,8 +834,9 @@ describe('the orphan-definition step', () => {
     // They are inert at 'cell' and a re-run reuses them, but they show up on
     // the Properties page, so "nothing was migrated" alone would be a small lie.
     planSynthesis.mockResolvedValue(plan(3))
-    applySynthesis.mockResolvedValue({created: 3, skipped: []})
-    flipWorkspace.mockRejectedValue(new Error('server said no'))
+    applySynthesis.mockResolvedValue(synthesized({created: 3, undoHistoryCleared: true}))
+    flipWorkspace.mockRejectedValue(
+      Object.assign(new Error('server said no'), {flipLanded: false}))
     const {repo} = makeRepo()
 
     await invoke(repo)
@@ -787,8 +908,9 @@ describe('the orphan-definition step', () => {
     // backfill excludes unregistered keys from its work list, so without the
     // second ask the flip lands and the pass reports success over it.
     planSynthesis.mockResolvedValue(plan(2))
-    applySynthesis.mockResolvedValue({created: 1, converged: 0,
-                                      skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
+    applySynthesis.mockResolvedValue(synthesized({
+      created: 1, undoHistoryCleared: true,
+      skipped: [{key: 'demo:orphan', reason: 'occupied'}]}))
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still have no definition')
     const {repo, runPass} = makeRepo()
 
@@ -801,8 +923,9 @@ describe('the orphan-definition step', () => {
 
   it('backfills anyway on an already-flipped workspace, and says what was left out', async () => {
     planSynthesis.mockResolvedValue(plan(2))
-    applySynthesis.mockResolvedValue({created: 1, converged: 0,
-                                      skipped: [{key: 'demo:orphan', reason: 'occupied'}]})
+    applySynthesis.mockResolvedValue(synthesized({
+      created: 1, undoHistoryCleared: true,
+      skipped: [{key: 'demo:orphan', reason: 'occupied'}]}))
     flipBlocked.mockReturnValueOnce(null).mockReturnValue('still have no definition')
     const {repo, runPass} = makeRepo(RAN, {flipped: true})
 

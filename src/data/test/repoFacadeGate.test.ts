@@ -91,6 +91,8 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
   assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
+  workspaceRunStaleReason: 'read — compares two Repo fields; assigns nothing',
+  assertBackfillSessionUnchanged: 'read — throws or returns; assigns no Repo fields',
   backfillSyncSettledNow: 'read — samples the injected gate; assigns no Repo fields',
   syncViewGap: 'read — one query, an observer sample and a gate sample; assigns no Repo fields',
   workspaceViewGap: 'read — syncViewGap plus one query; assigns no Repo fields',
@@ -135,6 +137,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   ensureSystemPages: 'kernel-page ensure txs deliberately JOIN the group (round-3 review)',
 
   // ── TS-private internals — not part of the facade consumer surface ──
+  replayGesture: 'private (the shared body of undo/redo; reached only via delegated undo/redo)',
   _replay: 'private (undo/redo internals; reached only via delegated undo/redo)',
   _runAndDispatch: 'private (reached only via overridden tx/undo/redo, this = real repo)',
   _runAndDispatchInner: 'private (reached only via _runAndDispatch, this = real repo)',

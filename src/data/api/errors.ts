@@ -218,6 +218,19 @@ export class SeededDefinitionWriteError extends DataLayerError {
 
 // ──── Mode / dispatch ────
 
+/** An undo/redo replay was abandoned because the workspace's history was
+ *  DROPPED while it was in flight — a one-way pass clearing the stack so its
+ *  own writes cannot be reverted onto. The entry is already off its stack by
+ *  then and is deliberately not pushed back: it describes a state the pass has
+ *  since rewritten. `undo()` / `redo()` answer false rather than throwing,
+ *  because from the user's side the gesture simply had nothing valid to act
+ *  on. */
+export class UndoHistoryDroppedError extends DataLayerError {
+  constructor(public readonly action: string) {
+    super(`${action} was abandoned: this workspace's history was cleared while it ran`)
+  }
+}
+
 export class ReadOnlyError extends DataLayerError {
   constructor(public readonly scope: string) {
     super(`tx scope ${scope} is rejected in read-only mode`)
@@ -288,6 +301,7 @@ const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
   ['PropertySchemaScopeMismatchError', PropertySchemaScopeMismatchError],
   ['SeededDefinitionWriteError', SeededDefinitionWriteError],
   ['ReadOnlyError', ReadOnlyError],
+  ['UndoHistoryDroppedError', UndoHistoryDroppedError],
   ['MutatorNotRegisteredError', MutatorNotRegisteredError],
   ['QueryNotRegisteredError', QueryNotRegisteredError],
   ['ProcessorNotRegisteredError', ProcessorNotRegisteredError],

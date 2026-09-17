@@ -45,7 +45,11 @@ import {
   refCodecKind,
   refTypedSchemaNames,
 } from './internals/refProjection'
-import { DeterministicIdCrossWorkspaceError, ReadOnlyError } from './api/errors'
+import {
+  DeterministicIdCrossWorkspaceError,
+  ReadOnlyError,
+  UndoHistoryDroppedError,
+} from './api/errors'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
@@ -142,7 +146,7 @@ import {
   parseParentDeletedError,
   type ParsedAliasCollision,
 } from './internals/raiseProtocol'
-import { UndoManager, type UndoEntry } from './internals/undoManager'
+import { UndoManager, type HistoryDrop, type UndoEntry } from './internals/undoManager'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
@@ -1812,11 +1816,58 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
+    // Sampled once this transaction HOLDS the write lock — not when it was
+    // called — and compared at record time below.
+    //
+    // What it protects against: a transaction can commit and release the lock
+    // ahead of a one-way pass's chunk and only reach its recording
+    // continuation after that chunk has written and cleared. The clear cannot
+    // reach an entry that does not exist yet, and neither can the epoch move
+    // that opened the drop, so the entry would land on the stack holding the
+    // whole PRE-pass row.
+    //
+    // Why inside the lock: the same two can be ordered the other way, with the
+    // edit merely INVOKED while a chunk holds the lock and executing after it
+    // commits. Sampled at call time, that edit reads the pre-clear epoch and is
+    // discarded although its `before` rows are the rewritten ones and it is
+    // perfectly safe to undo. Inside the lock, the sample is taken at the same
+    // moment as the rows the entry describes, which is what makes the two
+    // comparable at all.
+    /** Epoch per manager, EARLIEST sample kept — see the two calls below. */
+    const epochAtLock = new Map<UndoManager, number>()
+    const sampleEpoch = (manager: UndoManager): void => {
+      if (!epochAtLock.has(manager)) epochAtLock.set(manager, manager.clearEpoch)
+    }
     // Translation + listener notification happen inside `_runAndDispatch`
     // so all entry points (`tx`, `undo`, `redo`) get uniform error
     // shaping — `repo.tx` just re-throws here.
     const result: Awaited<ReturnType<typeof this._runAndDispatch<R>>> =
-      await this._runAndDispatch(fn, opts)
+      await this._runAndDispatch(async (tx) => {
+        // On lock ENTRY, for the workspace active then. The earliest sample is
+        // the one that counts, because a `clear()` from outside any transaction
+        // — the props-as-blocks flip makes one — can land while `fn` runs.
+        sampleEpoch(this.undoManager)
+        const value = await fn(tx)
+        // And again for the workspace the tx actually PINNED, which is the
+        // manager the entry is recorded into and is NOT always the active one:
+        // the SRS reschedule toast writes the rescheduled block's workspace
+        // while the user may have switched away (#186). Known only now — the
+        // pin comes from the first write. Still inside the lock, so no other
+        // WRITER's clear can have landed since entry; when the two are the same
+        // manager (the ordinary case) the entry sample above wins.
+        //
+        // ACCEPTED RESIDUAL: taken here rather than when `TxImpl.pinWorkspace`
+        // fires, so a LOCKLESS drop on the pinned workspace during `fn` is
+        // missed. Reaching it takes all of a foreign-workspace write, a switch
+        // to that workspace mid-transaction, and an ambiguous flip on it in the
+        // same window; the fix is a pin callback threaded through the tx engine.
+        // Recorded rather than built — see the exit check's residual, which is
+        // the same trade in the same pipeline.
+        if (tx.meta.workspaceId !== null) {
+          sampleEpoch(this.undoManagerFor(tx.meta.workspaceId))
+        }
+        return value
+      }, opts)
     // Step 7 of the §10 pipeline — record undo entry into the tx's pinned
     // workspace's manager, so a later cmd-Z only ever acts on entries from
     // the workspace the user is looking at (issue #186). Non-undoable
@@ -1824,7 +1875,16 @@ export class Repo {
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
     if (result.workspaceId !== null && !opts.skipUndo) {
-      this.undoManagerFor(result.workspaceId).record({
+      const manager = this.undoManagerFor(result.workspaceId)
+      // Dropped rather than recorded: a pass cleared this workspace's history
+      // while this transaction was in flight, so its `before` rows are the ones
+      // that pass has since rewritten. Replaying them would revert its writes
+      // with its completion already recorded, which is the same loss the clear
+      // itself exists to prevent.
+      //
+      // A missing sample reads as a mismatch and drops the entry: defence in
+      // depth, since a tx that pinned a workspace was always sampled for it.
+      if (epochAtLock.get(manager) === manager.clearEpoch) manager.record({
         scope: opts.scope,
         txId: result.txId,
         snapshots: result.snapshots,
@@ -1867,15 +1927,70 @@ export class Repo {
    *  is pushed back so a retry once the flag settles succeeds — see
    *  issue #226.) */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
+    return this.replayGesture('undo', scope)
+  }
+
+  /** Redo the most recently undone tx for `scope` in the active
+   *  workspace. Same defaults + same per-workspace + read-only
+   *  semantics as `undo`, mirrored. */
+  async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
+    return this.replayGesture('redo', scope)
+  }
+
+  /** The body of {@link undo} and {@link redo}, which are mirror images: pop
+   *  from one stack, replay it, push it onto the other — and on failure put it
+   *  back where it came from.
+   *
+   *  One owner because every rule here is symmetric, and the asymmetry that
+   *  used to exist between the two copies was an omission rather than a
+   *  decision: only `undo` documented why it pushes a failed entry back. */
+  private async replayGesture(
+    action: 'undo' | 'redo',
+    scope: ChangeScope,
+  ): Promise<boolean> {
     if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
-    const entry = manager.popUndo(scope)
+    // Sampled before the entry leaves the stack, so the whole gesture — pop,
+    // replay and push alike — sits inside the window this validates. A bare
+    // `clear()` moves it, and so does BEGINNING a `HistoryDrop`, which is how a
+    // replay queued behind a pass is refused before its stack is ever dropped.
+    // None of them can happen across the pop itself, so this is the same value
+    // either side.
+    // A drop is UNDER WAY: its pass's writes are landing right now and the
+    // stacks still hold entries from before them, so replaying one restores
+    // rows the pass is in the middle of replacing. The epoch cannot express
+    // this — it marks an instant, so a gesture STARTING mid-drop samples the
+    // already-moved value and passes every check. For the lockless flip that
+    // window is a server round trip wide.
+    //
+    // Refused rather than queued: the gesture is the user's, and answering
+    // "nothing happened" immediately is better than a cmd-Z that silently
+    // applies a minute later against rows it no longer describes.
+    if (manager.historyDropInProgress) return false
+    const clearEpoch = manager.clearEpoch
+    const opposite = action === 'undo' ? 'redo' : 'undo'
+    const entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
     if (entry === null) return false
+    /** Put `entry` on a stack — unless the history was DROPPED while this
+     *  gesture was in flight.
+     *
+     *  Both pushes go through here, the success one onto the opposite stack and
+     *  the failure one back onto the stack it came from, because the hazard is
+     *  the same for either: the database can hand the write lock to a pass's
+     *  chunk while `_replay` is still resolving, so a clear can land between the
+     *  replay and this line. Pushing then REPOPULATES history the clear had just
+     *  emptied, with an entry describing a pre-pass row — and the next gesture
+     *  samples the new epoch, passes, and replays it over the pass's committed
+     *  writes. Dropping that entry is the whole point of the clear. */
+    const push = (onto: 'undo' | 'redo'): void => {
+      if (manager.clearEpoch !== clearEpoch) return
+      if (onto === 'undo') manager.pushUndo(scope, entry)
+      else manager.pushRedo(scope, entry)
+    }
     try {
-      await this._replay(entry, 'before')
-      manager.pushRedo(scope, entry)
-      return true
+      await this._replay(entry, action, {manager, clearEpoch})
     } catch (err) {
+      if (err instanceof UndoHistoryDroppedError) return false
       // Replay failed — push the entry back so the user can retry
       // (e.g. after toggling read-only off, fixing a missing parent).
       // Known narrow hazard (pre-existing, issue #226 window): if a new
@@ -1887,27 +2002,13 @@ export class Repo {
       // legitimate retry path (RescheduleToast re-matches the restored
       // entry by groupId once read-only clears), which is a far more
       // common sequence than a mid-replay same-group commit.
-      manager.pushUndo(scope, entry)
+      push(action)
       throw err
     }
-  }
-
-  /** Redo the most recently undone tx for `scope` in the active
-   *  workspace. Same defaults + same per-workspace + read-only
-   *  semantics as `undo`, mirrored. */
-  async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    if (this.client.activeWorkspaceId === null) return false
-    const manager = this.undoManager
-    const entry = manager.popRedo(scope)
-    if (entry === null) return false
-    try {
-      await this._replay(entry, 'after')
-      manager.pushUndo(scope, entry)
-      return true
-    } catch (err) {
-      manager.pushRedo(scope, entry)
-      throw err
-    }
+    // True even when the push above was refused: the replay COMMITTED, so the
+    // gesture did what the user asked. All that is withheld is the inverse.
+    push(opposite)
+    return true
   }
 
   /** Run `fn` against a `Repo`-shaped facade whose every tx carries one
@@ -2249,13 +2350,28 @@ export class Repo {
    *  entry shuttles symmetrically between stacks. */
   private async _replay(
     entry: UndoEntry,
-    direction: 'before' | 'after',
+    action: 'undo' | 'redo',
+    /** Checked INSIDE the replay transaction, once the write lock is held.
+     *
+     *  `undo`/`redo` take the entry OFF its stack and then await this, so a
+     *  pass that drops the workspace's history in that window cannot reach the
+     *  entry any more — `clear()` only empties the manager. Left unchecked, the
+     *  replay lands after the pass's commit and restores the pre-pass state of
+     *  a row the pass has already recorded as done.
+     *
+     *  Inside the transaction rather than before it: `repo.tx` serialises on
+     *  the write lock, so a check taken before acquiring it is exactly the one
+     *  the pass's chunk can commit behind. */
+    invalidation: {manager: UndoManager; clearEpoch: number},
   ): Promise<void> {
-    const action = direction === 'before' ? 'undo' : 'redo'
+    const direction = action === 'undo' ? 'before' : 'after'
     const description = entry.description
       ? `${action}: ${entry.description}`
       : action
     await this._runAndDispatch(async (tx) => {
+      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
+        throw new UndoHistoryDroppedError(action)
+      }
       const txImpl = tx as TxImpl
       // Start from replayApplicationOrder's topological order (see its
       // docblock in txSnapshots.ts for the parent-before-child
@@ -2288,6 +2404,29 @@ export class Repo {
         }
         if (deferred.length === pending.length) throw lastError
         pending = deferred
+      }
+      // AGAIN, before this transaction commits. The check on entry cannot cover
+      // the loop above, which awaits once per row: a pass that begins its drop
+      // WITHOUT holding the write lock — the props-as-blocks flip is a server
+      // round trip — moves the epoch while this replay is mid-flight, and the
+      // entry check has already passed. Its `finish` can then only suppress the
+      // push; it cannot take back rows this transaction has written. Throwing
+      // here rolls them back instead, which is the only thing that actually
+      // abandons the replay.
+      //
+      // An IN-LOCK pass cannot move the epoch inside this window — it would
+      // need the lock this replay is holding — so this arm is reachable only
+      // from a lockless drop or a bare `clear()`, and abandoning is right for
+      // both.
+      //
+      // ACCEPTED RESIDUAL, same one the backfill's exit check records: this is
+      // the end of the replay's callback, not the commit boundary, and `runTx`
+      // awaits two more statements after it. A lockless drop landing in THOSE
+      // still commits the replay. Closing it needs a pre-commit hook in the
+      // pipeline rather than another check here — each one only moves the gap a
+      // few awaits along.
+      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
+        throw new UndoHistoryDroppedError(action)
       }
     }, {scope: entry.scope, description}, true)
   }
@@ -3354,24 +3493,32 @@ export class Repo {
     return behind
   }
 
+  /** Why a run's workspace is no longer the one it was scheduled against, or
+   *  null. Both arms, because they are different causes and each should say its
+   *  own: switched AWAY (the id differs) and switched away and BACK (the id is
+   *  restored and only the generation moved). Identity first, so a plain
+   *  departure is not reported as a re-open.
+   *
+   *  One owner for the two callers — `takeBackfillClaim`, which turns it into a
+   *  refusal, and `assertBackfillMayWrite`, which throws it. Each used to spell
+   *  the rule out for itself, which is how two copies drift. */
+  private workspaceRunStaleReason(workspaceId: string, generation: number): string | null {
+    if (this._client.activeWorkspaceId !== workspaceId) {
+      return `workspace ${workspaceId} is no longer active, so its writes would land `
+        + "under the current session's access state"
+    }
+    if (this.workspaceGeneration !== generation) {
+      return `workspace ${workspaceId} was re-opened since this pass was scheduled, so `
+        + "the earlier visit's job must not write into the new one"
+    }
+    return null
+  }
+
   private async assertBackfillMayWrite(
     workspaceId: string,
     backfillId: string,
     generation: number,
   ): Promise<void> {
-    if (this.workspaceGeneration !== generation) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} was ` +
-        `re-opened since this pass was scheduled. The earlier visit's job must not ` +
-        `write into the new one.`,
-      ), {kind: Repo.TRANSIENT})
-    }
-    if (this._client.activeWorkspaceId !== workspaceId) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
-        `longer active. Its writes would land under the current session's access state.`,
-      ), {kind: Repo.TRANSIENT})
-    }
     // Re-sampled per transaction while the write lock is held, so a drain
     // cannot commit between this check and the write. Reading through
     // `this.db` rather than the tx handle is deliberate: the drain is excluded
@@ -3381,7 +3528,71 @@ export class Repo {
       throw Object.assign(new Error(
         `[workspaceBackfills] "${backfillId}" aborted: ${gap.reason}. This pass would scan ` +
         `an incomplete view of the graph and upload a properties bag built from it.`,
+        // A DURABLE gap is rows nothing is draining, so telling the operator to
+        // run it again is the forever-retry the flag exists to prevent — the
+        // same answer `retryableAfter` gives this refusal on the claim path.
+      ), {kind: Repo.TRANSIENT, retryable: gap.transient})
+    }
+    // AFTER the probe, not before it: `setActiveWorkspaceId` and a role change
+    // are synchronous field writes that land cleanly in the probe's await
+    // window, so a copy ahead of the probe would be describing a session this
+    // one has since left. Asking after strictly dominates asking before — a
+    // workspace that left and returned across the probe has moved its
+    // generation — so a second copy there would decide nothing and only look
+    // load-bearing.
+    this.assertBackfillSessionUnchanged(workspaceId, backfillId, generation)
+  }
+
+  /**
+   * The SYNCHRONOUS half of {@link assertBackfillMayWrite}: everything that is
+   * a field read rather than an awaited probe.
+   *
+   * Its own method because it is asked at BOTH ENDS of a batch. The full
+   * precondition runs once on entry, before the batch spends its insert budget;
+   * this runs again after the batch body returns, because that body can span an
+   * entire budget's worth of awaited reads and writes, and both the commit
+   * pipeline's entry-time `isReadOnly` gate and the entry precondition have
+   * long since passed by then. Throwing here rolls the batch back rather than
+   * letting it commit source-of-truth rows under a session it no longer has.
+   *
+   * The GAP is deliberately not re-asked at the exit: it is the one arm that
+   * costs a query inside the write lock, and a view that went incomplete
+   * mid-batch is caught by the next batch's entry probe — whereas a workspace
+   * switch or a revocation cannot be caught later at all, because the rows are
+   * already uploaded by then.
+   *
+   * ACCEPTED RESIDUAL: the exit is the end of the batch's own callback, not the
+   * commit boundary. `runTx` still awaits the same-tx processors, the
+   * `command_events` insert and the `tx_context` clear after this returns, and a
+   * switch or revocation can land in any of them. Closing that needs a
+   * pre-commit hook on `RepoTxOptions` — the pipeline is the only thing that can
+   * be last — which is core tx-API surface and a change of its own. Not taken
+   * here: what remains is a sub-millisecond window inside a held write lock, the
+   * rows carry their own `workspace_id` so a switch cannot misfile them, and the
+   * server's RLS is the real authority on a revoked role, so the worst ending is
+   * an upload the server rejects rather than a row silently in the wrong state.
+   */
+  private assertBackfillSessionUnchanged(
+    workspaceId: string,
+    backfillId: string,
+    generation: number,
+  ): void {
+    const stale = this.workspaceRunStaleReason(workspaceId, generation)
+    if (stale !== null) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: ${stale}.`,
       ), {kind: Repo.TRANSIENT})
+    }
+    // The ROLE, after the staleness check and not before it, because
+    // `isReadOnly` is the ACTIVE workspace's role: asked first, a run whose
+    // workspace has been switched away reports "lost write access to <the
+    // workspace it left>", which is not what happened. Both abort either way —
+    // this is about the message naming the actual cause.
+    if (this.isReadOnly) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: this device lost write access to `
+        + `workspace ${workspaceId} while the pass was running.`,
+      ), {kind: Repo.TRANSIENT, retryable: false})
     }
   }
 
@@ -3410,23 +3621,24 @@ export class Repo {
     backfill: WorkspaceBackfill,
     generation: number,
   ): Promise<BackfillClaimAttempt> {
-    /** Both ways a run can outlive its workspace: switched away (id differs)
-     *  and switched away and back (id restored, generation moved). Identity
-     *  first, so each case reports its own cause. */
     const runStale = (): string | null =>
-      this.activeWorkspaceId !== workspaceId
-        ? `workspace ${workspaceId} is no longer active`
-        : this.workspaceGeneration !== generation
-          ? `workspace ${workspaceId} was re-opened since this run was scheduled`
-          : null
-    // A role flip to read-only during a deferral window must stop further
-    // writes — re-asked on every attempt, since a run spans several txs.
-    if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
+      this.workspaceRunStaleReason(workspaceId, generation)
     // Don't even START a pass whose workspace has been re-opened since it was
     // scheduled. `assertBackfillMayWrite` catches this per transaction, but
     // that is one tx too late to avoid the scan a backfill does first.
     const stale = runStale()
     if (stale !== null) return {status: 'refused', refusal: {kind: 'stale', reason: stale}}
+    // A role flip to read-only during a deferral window must stop further
+    // writes — re-asked on every attempt, since a run spans several txs.
+    //
+    // Below the staleness check, so this agrees with `assertBackfillMayWrite`:
+    // `isReadOnly` is the ACTIVE workspace's role, so asked first it answers a
+    // run whose workspace was switched away with "this workspace is read-only"
+    // about one that is writable. DEFENCE IN DEPTH here, unlike there, and no
+    // test pins the order: the operator gesture refuses a read-only workspace
+    // before it reaches this, and the workspace-open path discards which of the
+    // two refused. Kept so the two copies of the rule cannot read as disagreeing.
+    if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
     // An unprimed registry makes the whole graph look like it has zero
     // registered properties, so a pass would find no candidates, write
     // nothing, and then record a PERMANENT per-graph completion — the
@@ -3707,8 +3919,11 @@ export class Repo {
     undoHistoryCleared: boolean
     deferred: string | null
     /** Whether waiting clears `deferred` — see {@link OperatorBackfillResult.retryable}.
-     *  True for every deferral but a durable view gap, which is the only one
-     *  nothing is working on. */
+     *  True by default, because most deferrals are momentary; false for the two
+     *  that nothing is working on — a DURABLE view gap, which is rows no drain
+     *  will apply, and a REVOKED role, which needs the role back. Carried on the
+     *  thrown error by the site that knows, not re-derived here; `retryableAfter`
+     *  answers the same question for the refusal path. */
     deferredRetryable: boolean
     failed: string | null
   }> {
@@ -3776,7 +3991,9 @@ export class Repo {
         return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
       const resolver = this.propertySchemaResolverFor(workspaceId)
-      let wrote = false
+      // Announced once, not per batch: the history is gone either way, and
+      // saying so repeatedly for a pass that runs for minutes is noise.
+      let announcedUndoClear = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         // One resolver for the whole run, through the canonical factory: the
@@ -3805,28 +4022,54 @@ export class Repo {
           // definition readiness and the write lock, so a check before it can
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
-          const result = await this.tx(async t => {
+          // Held OUTSIDE the transaction, deliberately, though that costs the
+          // structural guarantee that a batch cannot reach `finish` without
+          // having begun a drop. A drop now refuses replays for its whole
+          // duration, so one left open by a commit that throws after the
+          // callback returned would disable undo until reload — and the
+          // callback's return value never arrives on that path. Release beats
+          // the guarantee; the `catch` below is the other half.
+          let drop: HistoryDrop | undefined
+          const value = await this.tx(async t => {
             await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
-            return fn(t)
+            const value = await fn(t)
+            // AGAIN, now the body has returned — see the method. `fn` can span a
+            // whole insert budget, so the entry check above is as stale by here
+            // as the pipeline's own entry-time gate.
+            this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
+            // Begun here, while the lock is still held. NOT PINNED, and no
+            // test fails without the position: the window is between the
+            // database handing the lock to a waiting replay and `this.tx`
+            // resolving, which the harness cannot schedule into. Kept because
+            // what it loses is a committed batch of a once-per-graph migration.
+            drop = this.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
+            return value
           }, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
             skipUndo: true,
+          }).catch((err: unknown) => {
+            // Rolled back, so there is nothing for an entry to be replayed onto
+            // and the history is not owed.
+            drop?.abandon()
+            throw err
           })
-          // Only once a batch COMMITTED. An aborted one rolled its writes
-          // back, so it leaves nothing on the undo stack to be reverted onto.
-          // Still an over-approximation in one direction — a committed batch
-          // that happened to write nothing counts — which errs toward
-          // clearing, the safe side.
+          // After EVERY committed batch, not just the first. A chunked pass
+          // runs for minutes, and an entry the USER records between two batches
+          // — on a row a later batch has not reached yet — holds that row's
+          // pre-pass state and reverts it when replayed, permanently once the
+          // pass has recorded itself complete.
           //
-          // Cleared HERE rather than after the pass returns: a chunked pass
-          // runs for minutes, and every one of them is a minute in which a
-          // cmd-Z can replay a pre-pass row snapshot over a batch that has
-          // already committed. The window has to close with the FIRST batch,
-          // not with the last.
-          if (!wrote) {
-            wrote = true
-            this.undoManagerFor(workspaceId).clear()
+          // An over-approximation in one direction: a committed batch that
+          // happened to write nothing clears too, which errs toward clearing.
+          // A mid-group `repo.undoGroup` composite is SPLIT rather than dropped
+          // whole — its earlier constituents go and the later ones record onto
+          // an empty stack — so one cmd-Z reverts only the tail. Accepted: the
+          // user's history is being discarded either way, and the alternative
+          // is teaching `record` about groups a pass cannot see.
+          drop?.finish()
+          if (!announcedUndoClear) {
+            announcedUndoClear = true
             undoHistoryCleared = true
             console.warn(
               `[workspaceBackfills] "${backfill.id}" is writing to workspace ` +
@@ -3834,7 +4077,7 @@ export class Repo {
               `from before the pass would revert it.`,
             )
           }
-          return result
+          return value
         },
       }
       try {
@@ -3872,12 +4115,28 @@ export class Repo {
           // filters operator ones out), and without a reason here the caller
           // reports "already done" for a pass that aborted partway through.
           deferred = reason
-          // These clear on their own — the download finishes, the queue drains.
-          // Logging and walking away would leave the pass undone for the whole
-          // session even though its blocker is momentary, so re-arm and let the
-          // gate + deep-idle deferral bound the retry.
-          console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
-          this.scheduleWorkspaceBackfills(workspaceId)
+          // TRANSIENT says the RUN was abandoned cleanly, not that WAITING will
+          // fix it — a role revocation and a durable view gap are both thrown
+          // this way and neither clears on its own. Carried on the error rather
+          // than defaulted here, so the throw sites answer the same question
+          // `retryableAfter` answers for refusals; a thrower that says nothing
+          // still means "worth retrying", which is right for the transient DB
+          // failures that make up the rest of this path.
+          deferredRetryable = (err as {retryable?: boolean} | null)?.retryable ?? true
+          if (deferredRetryable) {
+            // These clear on their own — the download finishes, the queue
+            // drains. Logging and walking away would leave the pass undone for
+            // the whole session even though its blocker is momentary, so re-arm
+            // and let the gate + deep-idle deferral bound the retry.
+            console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
+            this.scheduleWorkspaceBackfills(workspaceId)
+          } else {
+            // A durable gap is rows nothing is draining, and a revoked role
+            // needs the role back — neither is waiting for anything, so a
+            // re-arm buys a run that will refuse again and the message would be
+            // telling the operator to wait for something that is not coming.
+            console.warn(`[workspaceBackfills] ${reason} — not retrying on its own`)
+          }
           return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
         }
         failed = reason

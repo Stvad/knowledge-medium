@@ -64,11 +64,39 @@ export interface UndoManagerOptions {
   maxDepth?: number
 }
 
+/** The second half of a history drop: empties the stacks once the pass's writes
+ *  are durable.
+ *
+ *  Whether it also moves the epoch is THE VARIANT'S, not this interface's, and
+ *  it is the whole difference between the two — see
+ *  {@link UndoManager.beginHistoryDrop} and
+ *  {@link UndoManager.beginHistoryDropInWriteLock}. A caller holds whichever it
+ *  asked for; nothing reads a `HistoryDrop` without knowing which it began. */
+export interface HistoryDrop {
+  /** The pass's writes are durable: empty the stacks and end the drop. */
+  finish(): void
+  /** The pass did NOT write after all — a refusal it can prove, or a
+   *  transaction that rolled back. Ends the drop and leaves the history alone.
+   *
+   *  Every path out of a pass must reach exactly one of these two. A drop left
+   *  open refuses replays forever, which is the failure mode that made a plain
+   *  suspension the wrong shape for this in the first place; both are idempotent
+   *  so a `catch` may call `abandon` after a `finish` has already run. */
+  abandon(): void
+}
+
 export class UndoManager {
   private readonly undoStacks: Map<ChangeScope, UndoEntry[]> = new Map()
   private readonly redoStacks: Map<ChangeScope, UndoEntry[]> = new Map()
   private readonly listenersByScope: Map<ChangeScope, CallbackSet<[]>> = new Map()
   private readonly maxDepth: number
+  /** Moved only by {@link clear} and by beginning a {@link HistoryDrop} — and
+   *  by FINISHING one, for the variant that says so. See {@link clearEpoch}. */
+  private clears = 0
+  /** How many history drops are BETWEEN their begin and their end. Counted, not
+   *  a flag, so two passes over one workspace cannot have the first to finish
+   *  hand replays back while the second is still writing. */
+  private dropsInProgress = 0
 
   constructor(opts: UndoManagerOptions = {}) {
     this.maxDepth = opts.maxDepth ?? 100
@@ -155,9 +183,144 @@ export class UndoManager {
     return this.listenersFor(scope).add(listener)
   }
 
+  /** Start a one-way pass's history drop, and hand back its second half.
+   *
+   *  For a pass that holds NO write lock, so its writes land after the drop
+   *  begins — the props-as-blocks flip is a server round trip and a raw
+   *  `db.execute`. {@link beginHistoryDropInWriteLock} is the other case.
+   *
+   *  A drop is an event with a DURATION, and both ends matter:
+   *
+   *  - It must begin AT THE LAST MOMENT BEFORE THE PASS'S WRITES BECOME
+   *    VISIBLE. `undo()` takes its entry off the stack before awaiting the
+   *    replay, so by the time the stacks are emptied, the entry that most needs
+   *    reaching is the one no longer on them. Moving the epoch is what reaches
+   *    it: that replay re-reads the epoch inside its own transaction and
+   *    abandons on it. A pass that writes in a transaction begins the drop
+   *    inside the lock, where a replay queued behind the chunk would otherwise
+   *    be granted the lock first and revert what that chunk committed. A pass
+   *    that holds NO lock — the props-as-blocks flip is a server round trip and
+   *    a raw `db.execute` — begins it before its first write: having no
+   *    transaction to queue behind does not make the window smaller, it removes
+   *    the only thing serialising it.
+   *
+   *  - It must END by emptying the stacks once those writes are DURABLE, which
+   *    is why `finish` is separate: an aborted transaction leaves nothing to be
+   *    reverted onto, and taking the user's history for it would be a cost with
+   *    no cause.
+   *
+   *  `finish` ADVANCES THE EPOCH TOO, because this pass's writes had not landed
+   *  when the drop began: a transaction that took the write lock in between
+   *  read PRE-pass rows, so its entry has to go. {@link
+   *  beginHistoryDropInWriteLock} is the variant for a pass whose writes were
+   *  already durable at that point, and it is the one that must be asked for by
+   *  name — picking this one wrongly costs an undo entry, picking that one
+   *  wrongly keeps a replayable pre-pass row.
+   *
+   *  NOT COMMIT-COUPLED, deliberately. A throw after the drop begins leaves the
+   *  epoch advanced over writes that rolled back, costing an already-queued
+   *  replay its popped entry. Restoring it on abort is the obvious repair and
+   *  is wrong: bumps happen under the same lock, so a restore can clobber a
+   *  real one and let a replay that should have been refused revert committed
+   *  rows. A lost undo beats a lost row. */
+  beginHistoryDrop(): HistoryDrop {
+    return this.openDrop(true)
+  }
+
+  /** A history drop for a pass that is COMMITTING UNDER THE WRITE LOCK IT HOLDS
+   *  RIGHT NOW — the backfill runner's batch, synthesis's mint.
+   *
+   *  ONE epoch advance for the pair, unlike {@link beginHistoryDrop}, and the
+   *  difference is entirely about when the pass's writes become visible. Here
+   *  they are visible the moment the lock is released, so anything that takes
+   *  the lock next reads POST-pass rows and is perfectly safe to undo — and a
+   *  second advance at `finish` would drop a legitimate post-pass edit for
+   *  having sampled in the middle of one event. `finish` therefore empties the
+   *  stacks without moving the epoch again.
+   *
+   *  Everything else — when to begin, and the not-commit-coupled decline —
+   *  is {@link beginHistoryDrop}'s.
+   *
+   *  ACCEPTED RESIDUAL: `finish` empties the stacks WHOLESALE, so an entry
+   *  recorded between the pass's commit and the caller reaching `finish` is
+   *  erased even though it describes post-pass rows. Not the same window the
+   *  single advance fixed — that one is an entry recorded AFTER `finish`, which
+   *  is preserved — this is the continuation race just before it.
+   *
+   *  Left because of what it actually costs. A chunked pass drops per batch, so
+   *  an edit in ANY inter-batch window is taken by the next batch's drop
+   *  regardless; the only entry this loses is one recorded in the continuation
+   *  window of the LAST batch, and the user has just been told the history was
+   *  discarded. Closing it means either stamping each entry with the epoch it
+   *  was recorded at and filtering instead of clearing — a change to the undo
+   *  record itself — or coupling the clear to the commit, which is the pipeline
+   *  seam this cannot reach from here. */
+  beginHistoryDropInWriteLock(): HistoryDrop {
+    return this.openDrop(false)
+  }
+
+  /** True while any drop is between its begin and its end.
+   *
+   *  The epoch cannot answer this: it marks an INSTANT, so it tells a replay
+   *  whether the history was dropped since it sampled, and says nothing about a
+   *  drop still under way. A replay that STARTS mid-drop samples the
+   *  already-moved epoch and passes every check — then restores rows from
+   *  before writes that are landing as it runs. For a lockless drop that window
+   *  is a server round trip wide.
+   *
+   *  Read by `replayGesture`, which refuses for the duration. Recording is NOT
+   *  gated on it: a new edit during a pass is the user's own work on rows they
+   *  can see, and the drop's end takes its entry anyway. */
+  get historyDropInProgress(): boolean {
+    return this.dropsInProgress > 0
+  }
+
+  /** One owner for both variants: they differ only in whether ENDING the drop
+   *  moves the epoch a second time, which is the `advanceOnFinish` argument and
+   *  is documented at each public entry point. */
+  private openDrop(advanceOnFinish: boolean): HistoryDrop {
+    this.clears += 1
+    this.dropsInProgress += 1
+    let ended = false
+    const end = (emptyStacks: boolean): void => {
+      if (ended) return
+      ended = true
+      this.dropsInProgress -= 1
+      if (!emptyStacks) return
+      if (advanceOnFinish) this.clears += 1
+      this.emptyStacks()
+    }
+    return {finish: () => { end(true) }, abandon: () => { end(false) }}
+  }
+
+  /** Moved by {@link clear}, by BEGINNING a {@link HistoryDrop}, and by
+   *  finishing one of the variant whose `finish` says it does — and by nothing
+   *  else. Deliberately not by an ordinary record or pop, so a caller asking
+   *  "was my entry invalidated" cannot read normal activity as invalidation.
+   *  This answers only "the history was DROPPED", which is the event that makes
+   *  an entry already taken off the stack unsafe to replay. */
+  get clearEpoch(): number {
+    return this.clears
+  }
+
   /** Drop all stacks (for tests + an eventual "clear history" UX).
-   *  Notifies subscribers on every scope that previously had state. */
+   *  Notifies subscribers on every scope that previously had state.
+   *
+   *  Moves the epoch, which {@link beginHistoryDropInWriteLock}'s `finish` does
+   *  not, so it DOES reach a replay already in flight: `undo()` sampled the
+   *  epoch before popping, and the popped entry is refused when it re-checks.
+   *
+   *  What it cannot do is cover a DURATION. A pass's writes land over a window
+   *  — for the lockless flip, a server round trip — and a gesture STARTING
+   *  inside that window samples the already-moved epoch and passes. So a pass
+   *  uses a {@link HistoryDrop}, which is in progress until it ends; this is
+   *  for a drop with no pass behind it, where there is no window to cover. */
   clear(): void {
+    this.clears += 1
+    this.emptyStacks()
+  }
+
+  private emptyStacks(): void {
     const touched = new Set<ChangeScope>([
       ...this.undoStacks.keys(),
       ...this.redoStacks.keys(),

@@ -12,7 +12,10 @@ import {
   type PropertyDefinitionSynthesisPlan,
 } from '@/data/internals/propertyDefinitionSynthesis'
 import { readIsChildBackedWorkspace, readWorkspaceOwnerId } from '@/data/workspaceSchema'
-import { flipWorkspaceToChildBackedProperties } from '@/data/workspaces'
+import {
+  flipRejectionProvesNoWrite,
+  flipWorkspaceToChildBackedProperties,
+} from '@/data/workspaces'
 import { isRemoteSyncActive } from '@/data/repoProvider'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
@@ -274,19 +277,11 @@ const migrateUnderClaim = async (
     try {
       const result = await applyPropertyDefinitionSynthesis(repo, plan)
       synthesized = result.created
-      // About the entries ALREADY on the stack, not synthesis's own writes
-      // (its transaction is `skipUndo`, and its Properties-page bootstrap is
-      // a no-op — `kernel:properties` is a `systemPagesFacet` entry, so the
-      // page exists before this gesture can be invoked). A key with no
-      // definition was a key nothing materialized, so once one is MINTED a
-      // replayed pre-synthesis snapshot writes a cell for a key that now has
-      // children. Hence `created`, not "did this run": a run that only
-      // converged changed nothing, and clearing then costs the user history
-      // for no hazard.
-      if (synthesized > 0) {
-        repo.undoManagerFor(workspaceId).clear()
-        undoCleared = true
-      }
+      // Reported, not decided. The drop has a half that must happen while the
+      // minting transaction still holds the write lock, which is not reachable
+      // from out here — so synthesis owns both halves and says whether it took
+      // the history; this only has to tell the user.
+      undoCleared ||= result.undoHistoryCleared
       // Asked AGAIN, with the OUTCOME. The pre-mint answer was about what we
       // expected to be able to do; this is about what actually happened, and
       // a key that came back skipped still has no definition. The backfill
@@ -329,23 +324,56 @@ const migrateUnderClaim = async (
       return
     }
     banner.update('Switching this workspace to property blocks…')
+    // BEGUN before the flip, not after it — see `UndoManager.beginHistoryDrop`.
+    // From the PATCH onward the workspace is child-backed for the whole graph,
+    // and the flip is a round trip plus two local db calls, so a replay
+    // `undo()` has already popped has room to commit a whole pre-flip row over
+    // what are now live children.
+    const undoDrop = repo.undoManagerFor(workspaceId).beginHistoryDrop()
     let localApplied: boolean
     try {
       ;({localApplied} = await flipWorkspaceToChildBackedProperties(repo, workspaceId))
     } catch (err) {
       console.error('[properties-migration] flip failed:', err)
-      // "so nothing was migrated" is only true because this catch cannot see a
-      // committed flip: the server write is the only thing that throws here.
-      // The definitions minted a moment ago DID land, though — they are inert
-      // at 'cell' and a re-run reuses them, but saying "nothing" would be a
-      // small lie about a write that shows up on the Properties page.
-      banner.fail('Could not switch this workspace to property blocks, so nothing ' +
-        `was migrated: ${err instanceof Error ? err.message : String(err)}` +
-        (synthesized > 0
-          ? ` The ${synthesized.toLocaleString()} definition(s) added just before it ` +
-            'are still there, and do nothing until this runs again.'
-          : '') +
-        undoNote(undoCleared))
+      // Only when the rejection could NOT establish the outcome. The PATCH may
+      // have landed, so keeping the history would leave every pre-flip entry
+      // replayable over a flip that did — and the epoch has moved, so nothing
+      // else would refuse them. Dropped on the side of the rows.
+      //
+      // A rejection whose re-read came back still saying `cell` proves nothing
+      // was written, and charging the user their history for an ordinary
+      // refusal — a trigger, a permission — would be a cost with no hazard.
+      const provenNoWrite = flipRejectionProvesNoWrite(err)
+      if (provenNoWrite) {
+        // ABANDONED, not finished: nothing was written, so the history is not
+        // owed — but the drop still has to END, or it refuses every replay in
+        // this workspace until the page reloads.
+        undoDrop.abandon()
+      } else {
+        undoDrop.finish()
+        undoCleared = true
+      }
+      const cause = err instanceof Error ? err.message : String(err)
+      // The definitions minted a moment ago DID land either way, and saying
+      // "nothing" would be a small lie about a write that shows up on the
+      // Properties page.
+      const minted = synthesized > 0
+        ? ` The ${synthesized.toLocaleString()} definition(s) added just before it are still there.`
+        : ''
+      // TWO ENDINGS, because this catch now knows which one it is and they ask
+      // opposite things of the operator. "Nothing was migrated" is a claim, and
+      // on the ambiguous branch it is one this code has just decided it cannot
+      // make — it dropped the undo history precisely because the flip may have
+      // landed, so telling them it did not would contradict the cost they were
+      // charged and send them to re-run against a graph that already moved.
+      banner.fail(provenNoWrite
+        ? 'Could not switch this workspace to property blocks, so nothing was ' +
+          `migrated: ${cause}${minted} They do nothing until this runs again.` +
+          undoNote(undoCleared)
+        : 'Could not tell whether this workspace was switched to property ' +
+          `blocks: ${cause} It may have been — reload before running this again, ` +
+          `and check the Properties page rather than assuming either way.${minted}` +
+          undoNote(undoCleared))
       return
     }
     // Immediately, not by waiting for the pass's first committed batch. Undo
@@ -356,6 +384,9 @@ const migrateUnderClaim = async (
     // end after this point without writing a batch (a peer holds the claim, the
     // runner defers, there is nothing left to migrate) leaves that window open.
     //
+    // FINISHED here. A replay already in flight when the flip started was
+    // refused when the drop began; this takes the entries still on the stack.
+    //
     // THIS DEVICE ONLY, deliberately (#684): a peer that stayed open across the
     // flip keeps its pre-flip entries, and nothing watches the column's arrival
     // to clear them. Declined rather than built — the stack is in-memory and the
@@ -364,7 +395,7 @@ const migrateUnderClaim = async (
     // does is a stale cell over live children, which the next write to those
     // children projects away. The dialog tells the operator to reload other
     // devices, which is what actually clears them.
-    repo.undoManagerFor(workspaceId).clear()
+    undoDrop.finish()
     undoCleared = true
     flipLanded = true
     if (!localApplied) {

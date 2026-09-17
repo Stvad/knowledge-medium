@@ -267,6 +267,19 @@ export const renameWorkspace = async (workspaceId: string, name: string): Promis
   if (error) throw error
 }
 
+// The marker a `flipWorkspaceToChildBackedProperties` rejection carries when
+// the server's answer could not be got at all, so the PATCH may have landed.
+const UNKNOWN_FLIP = 'unknown' as const
+
+/** Did this rejection PROVE the flip did not land?
+ *
+ *  True only when the confirming re-read came back and still said `cell`. False
+ *  for a rejection that could not establish the outcome — which the caller must
+ *  treat as "it may have landed", because the undo history it would otherwise
+ *  keep is replayable over a flip that did. */
+export const flipRejectionProvesNoWrite = (err: unknown): boolean =>
+  (err as {flipLanded?: unknown} | null)?.flipLanded === false
+
 /**
  * Advance a workspace to child-backed properties, then stamp the local replica
  * so the caller can act on it without waiting for sync to bring it back.
@@ -317,7 +330,15 @@ export const flipWorkspaceToChildBackedProperties = async (
       .select('properties_migration, update_time')
       .eq('id', workspaceId)
       .maybeSingle()
-    if (reread === null || reread.properties_migration !== 'children') throw error
+    // The two rejections are NOT the same news, and the caller acts on the
+    // difference: one has to assume the flip may have landed and drop the undo
+    // history for it, the other knows it did not and must not charge the user
+    // that. Marked rather than described, because both carry the same
+    // underlying PostgREST error and nothing in its text distinguishes them.
+    if (reread === null) throw Object.assign(error, {flipLanded: UNKNOWN_FLIP})
+    if (reread.properties_migration !== 'children') {
+      throw Object.assign(error, {flipLanded: false})
+    }
     row = reread
   }
   if (row === null) throw new Error('flip: no workspace row came back')
