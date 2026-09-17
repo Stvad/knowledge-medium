@@ -40,6 +40,7 @@ import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
+import { combineFacetContributions } from '@/facets/facet.js'
 import { applyToggle, isEnabled, type Overrides } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
 import {
@@ -58,6 +59,7 @@ import {
   findPresetIdentityConflicts,
   presetIdentityRefusal,
   type PresetIdentityConflict,
+  type PresetRegistryAfter,
 } from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
@@ -266,7 +268,6 @@ const isExtensionContribution = (source: unknown, blockId: string): boolean => {
  *  Only `id`, `content` and `workspaceId` are read here. */
 const resolveExtensionInIsolation = async (
   repo: Repo,
-  context: AgentRuntimeContext,
   block: BlockData,
   liveOverrides: Overrides,
 ): Promise<{
@@ -312,7 +313,12 @@ const resolveExtensionInIsolation = async (
       context: {
         repo,
         workspaceId: repo.activeWorkspaceId,
-        safeMode: context.safeMode,
+        // NORMAL mode, even when the app is in safe mode. The dynamic loader
+        // above is already told `safeMode: false` so it compiles at all, and a
+        // function-valued extension reads `ctx.safeMode` itself: handing it the
+        // app's value lets it omit the very contribution this resolution exists
+        // to see, while leaving safe mode later registers it unrefused.
+        safeMode: false,
         generation: 'agent-runtime-install-verify',
       },
     },
@@ -321,19 +327,50 @@ const resolveExtensionInIsolation = async (
   return {runtime: verificationRuntime, errors}
 }
 
-/** The value preset cores this extension registers.
+/** The effective value-preset registry this install would produce, for the
+ *  preset ids it touches.
  *
- *  Read off the RESOLVED facet map, not the raw contributions: the map is
- *  last-wins by preset id, exactly as the app-wide one is, so it holds the core
- *  that would actually end up registered. An extension contributing two cores
- *  under one id has a loser that never reaches `repo.valuePresetCores` and must
- *  not raise a conflict that cannot happen. The runtime holds only this
- *  extension's tree (see `resolveExtensionInIsolation`), so no filter by source
- *  is needed to keep other extensions' cores out. */
-const extensionPresetCores = (
+ *  The candidate's own cores are read off the RESOLVED facet map rather than
+ *  its raw contributions: the map is last-wins by preset id, exactly as the
+ *  app-wide one is, so it holds the core that would actually end up registered.
+ *  An extension contributing two cores under one id has a loser that never
+ *  reaches `repo.valuePresetCores` and must not raise a conflict that cannot
+ *  happen. The isolated runtime holds only this extension's tree, so no filter
+ *  by source is needed there.
+ *
+ *  The second half is the direction a scan of the candidate cannot see: ids
+ *  this block contributes TODAY that the new source drops. Nothing is declared
+ *  for them, and the id still changes codec — to the last contribution from any
+ *  other source, or to nothing at all. That is the same re-typing from
+ *  underneath, so it is put into the map explicitly. */
+const presetRegistryAfter = (
+  context: AgentRuntimeContext,
   resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
-): AnyValuePresetCore[] =>
-  [...resolution.runtime.read(valuePresetCoresFacet).values()]
+  blockId: string,
+): PresetRegistryAfter => {
+  const after = new Map<string, AnyValuePresetCore | undefined>(
+    resolution.runtime.read(valuePresetCoresFacet))
+  const live = context.runtime.contributionsById(valuePresetCoresFacet.id)
+  const coreOf = (contribution: {value: unknown}): AnyValuePresetCore =>
+    contribution.value as AnyValuePresetCore
+  // What the registry would hold with this block's contributions gone, folded
+  // by the FACET rather than by a local last-wins: the fold sorts by
+  // `precedence` first, so re-deriving it here would read the wrong winner for
+  // any contribution that carries one. The empty context is the keyed-map
+  // combine's own — it takes values only.
+  const withoutBlock = combineFacetContributions(
+    valuePresetCoresFacet,
+    live.filter(contribution => !isExtensionContribution(contribution.source, blockId)),
+    {},
+  )
+  for (const contribution of live) {
+    if (!isExtensionContribution(contribution.source, blockId)) continue
+    const presetId = coreOf(contribution).id
+    if (after.has(presetId)) continue
+    after.set(presetId, withoutBlock.get(presetId))
+  }
+  return after
+}
 
 const describeVerification = (
   resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
@@ -381,17 +418,23 @@ const describeVerification = (
 }
 
 /** The device's synced enable-intent map — what the app resolves every
- *  extension toggle through. Empty when prefs are unavailable (fresh profile,
- *  read failure), which for a user-installed extension reads as disabled. */
+ *  extension toggle through. `null` when prefs could not be read at all.
+ *
+ *  Null rather than an empty map because the two callers must answer it
+ *  differently: "which toggles are on" has a sane default for a status REPORT
+ *  (absent intent reads as disabled, which is what a user-installed extension
+ *  is), and none for a data-safety CHECK — an empty map there prunes every
+ *  boundary that is off by default and on by override, hiding exactly the
+ *  contributions the check exists to see. */
 const readExtensionOverrides = async (
   repo: Repo,
   workspaceId: string,
-): Promise<Overrides> => {
+): Promise<Overrides | null> => {
   try {
     const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
     return prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
   } catch {
-    return new Map<string, boolean>()
+    return null
   }
 }
 
@@ -412,7 +455,10 @@ const readRunState = async (
   const approved = Boolean(approval) && (await hashExtensionSource(block.content ?? '')) === approval?.sourceHash
   const enabled = isEnabled(
     userExtensionToggle(block),
-    await readExtensionOverrides(repo, workspaceId),
+    // Prefs unavailable → intent reads as absent, which for a user-installed
+    // extension means disabled. A status report may default; see the note on
+    // `readExtensionOverrides` for why the preset check may not.
+    await readExtensionOverrides(repo, workspaceId) ?? new Map<string, boolean>(),
   )
   return {approved, enabled, running: approved && enabled}
 }
@@ -1140,25 +1186,36 @@ const installRuntimeExtension = async (
   // value, and evaluating it to find that out would defeat the approval gate
   // it never passed. `--verify` is the caller asking for that evaluation
   // explicitly, which is what it has always meant.
-  const resolution = wasApproved || input.verify
-    ? await resolveExtensionInIsolation(
-        repo, context, candidate, await readExtensionOverrides(repo, workspaceId))
-    : undefined
+  let resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>> | undefined
+  if (wasApproved || input.verify) {
+    const overrides = await readExtensionOverrides(repo, workspaceId)
+    if (overrides === null) {
+      throw new Error(
+        'install-extension: cannot read this device\'s extension overrides, so the value-preset '
+        + 'check cannot tell which toggles are on and would resolve this source with fewer '
+        + 'contributions than the app will. Refusing rather than installing on a partial view; '
+        + 'retry, or pass --allow-preset-change to install without the check.',
+      )
+    }
+    resolution = await resolveExtensionInIsolation(repo, candidate, overrides)
+  }
 
   // BEFORE the write, and before the re-pin + reload below: a refusal must
   // leave nothing behind. Writing the source and then refusing would change
   // the block's hash, which un-pins the approved version on this device and
   // stops a working extension dead — a silent side effect of saying no.
-  const presetConflicts = resolution
-    ? await findPresetIdentityConflicts(repo, workspaceId, extensionPresetCores(resolution))
-    : []
+  const presetScan = resolution
+    ? await findPresetIdentityConflicts(
+        repo, workspaceId, presetRegistryAfter(context, resolution, targetId))
+    : {conflicts: [], syncGap: null}
+  const presetConflicts = presetScan.conflicts
   // Refuse only when the install is what makes the new codec live. A conflict
   // found under `--verify` on a block that will not run is a fact about a
   // future enable, not a re-typing this command performs — it is REPORTED
   // (below) and the enable path is #1046.
   if (presetConflicts.length > 0 && wasApproved && !input.allowPresetChange) {
     throw new Error(presetIdentityRefusal(
-      presetConflicts,
+      presetScan,
       label ? JSON.stringify(label) : targetId,
       workspaceId,
     ))

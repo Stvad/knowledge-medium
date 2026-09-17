@@ -171,8 +171,8 @@ export interface InstallExtensionResult {
   running?: boolean
   /** What to do about `running: false`. */
   hint?: string
-  /** Value presets whose codec this source changes under an id already
-   *  registered here. Present when the install went ahead anyway: either
+  /** Value preset ids whose effective codec this install changes — one it
+   *  registers differently, or one it stops registering. Present when the install went ahead anyway: either
    *  `allowPresetChange` let it through — so the override records what it
    *  overrode — or the block is not approved on this device, so nothing it
    *  registers runs and the conflict is a fact about a future enable rather

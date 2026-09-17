@@ -63,6 +63,19 @@
  * approved is not checked at all unless `--verify` asks for the evaluation —
  * and it does not need to be, because nothing it stores runs. The gap that
  * leaves is the ENABLE that later does make it run, which is #1046.
+ *
+ * ACCEPTED: the per-stored-config probes are best-effort. They come from this
+ * device's live definition rows at scan time, so a row inside a durable sync
+ * gap is not probed (`syncGap` reports that basis rather than refusing on it),
+ * and one landing between the scan and the commit is not either — `Tx` exposes
+ * no raw read, so an in-transaction re-scan would have to ask a narrower
+ * question than the pre-check and answer all-clear over a subset, which is
+ * worse than not asking. Both can only MISS a refusal, never invent one, and
+ * both need a preset whose built codec type varies with its config: no preset
+ * in the tree has one, and the default-config probe and `configCodec.type`
+ * comparison — which decide every case that exists today — read nothing from
+ * the workspace at all. Refusing every install on a device with a durable gap
+ * would be a certain cost against that.
  */
 
 import type { AnyValuePresetCore } from '@/data/api'
@@ -140,7 +153,12 @@ const configsToProbe = (
 ): readonly unknown[] => {
   const seen = new Map<string, unknown>()
   for (const row of definitions) {
-    const key = JSON.stringify(row.config ?? null)
+    // A stored `null` and an ABSENT cell are different inputs, not one:
+    // `rawPresetConfig` passes `null` to the config codec and falls back to the
+    // preset default only for `undefined`. Keying both as `'null'` let either
+    // probe suppress the other, and the scan has no ordering guarantee over
+    // which one won.
+    const key = row.config === undefined ? 'absent' : `stored:${JSON.stringify(row.config)}`
     if (!seen.has(key)) seen.set(key, row.config)
   }
   return [undefined, ...seen.values()]
@@ -259,32 +277,57 @@ const countCells = async (
   return new Map(rows.map(row => [String(row.property ?? ''), row.cells]))
 }
 
-/**
- * Which of `candidates` re-type data already stored under their preset id.
+/** The effective core each AFFECTED preset id would resolve to once this
+ *  install takes effect — `undefined` for an id nothing would register any
+ *  more.
  *
- * `candidates` is what the extension being installed contributes to
- * `valuePresetCoresFacet`; the comparison is against `repo.valuePresetCores`,
- * the map every projector rebuild resolves definitions through.
+ *  Affected is both directions, which is why this is a REGISTRY DIFF and not a
+ *  scan of what the candidate declares. An extension that currently shadows a
+ *  kernel or plugin core and simply STOPS contributing that id declares
+ *  nothing, and the id still changes codec — to whatever was underneath. The
+ *  caller is what knows the two sides (`presetRegistryAfter` in
+ *  `commands.ts`); this compares them. */
+export type PresetRegistryAfter = ReadonlyMap<string, AnyValuePresetCore | undefined>
+
+export interface PresetIdentityScan {
+  conflicts: PresetIdentityConflict[]
+  /** This device's view of the workspace when the definitions were read, or
+   *  null when nothing is outstanding locally. Non-null means the definition
+   *  and cell counts are SHORT by an unknown amount. */
+  syncGap: string | null
+}
+
+/**
+ * Which affected preset ids would re-type data already stored under them.
+ *
+ * `after` is the effective registry this install would produce for the ids it
+ * touches; the comparison is against `repo.valuePresetCores`, the map every
+ * projector rebuild resolves definitions through.
  */
 export const findPresetIdentityConflicts = async (
   repo: Repo,
   workspaceId: string,
-  candidates: readonly AnyValuePresetCore[],
-): Promise<PresetIdentityConflict[]> => {
+  after: PresetRegistryAfter,
+): Promise<PresetIdentityScan> => {
   const registered = repo.valuePresetCores
-  // `current !== core` is a fast path, not a guard — comparing a core against
+  // `current !== next` is a fast path, not a guard — comparing a core against
   // itself finds no differences anyway. It is here because an extension that
   // re-exports the core it imported (from the kernel, or from a plugin through
   // the page importmap) contributes the SAME object, and that is the common
   // case: without it every such install pays the definition scan below to
   // reach the same answer.
-  const contested = candidates.filter(core => {
-    const current = registered.get(core.id)
-    return current !== undefined && current !== core
+  const contested = [...after].flatMap(([presetId, next]) => {
+    const current = registered.get(presetId)
+    // Nothing resolves this id today, so nothing is stored under a codec this
+    // install could change.
+    if (current === undefined) return []
+    if (current === next) return []
+    return [{presetId, current, next}]
   })
-  if (contested.length === 0) return []
+  if (contested.length === 0) return {conflicts: [], syncGap: null}
 
   const definitionRows = await readDefinitionRows(repo, workspaceId)
+  const syncGap = (await repo.workspaceViewGap(workspaceId))?.reason ?? null
   // The workspace test is defence in depth; no test pins it. Install resolves
   // the ACTIVE workspace, which is the one the registry is loaded for — but
   // reading another workspace's registry here would rewrite every name through
@@ -295,10 +338,12 @@ export const findPresetIdentityConflicts = async (
     : null
 
   const conflicts: PresetIdentityConflict[] = []
-  for (const candidate of contested) {
-    const current = registered.get(candidate.id)!
-    const rows = definitionRows.filter(row => row.presetId === candidate.id)
-    const differences = presetIdentityDifferences(current, candidate, rows)
+  for (const {presetId, current, next} of contested) {
+    const rows = definitionRows.filter(row => row.presetId === presetId)
+    const differences = next === undefined
+      ? [`${presetCodecOutcome(current, undefined)} -> no core registers this id `
+          + '(every definition using it publishes no schema, so its cells read as unset)']
+      : presetIdentityDifferences(current, next, rows)
     if (differences.length === 0) continue
 
     const names = rows.map(row =>
@@ -318,20 +363,20 @@ export const findPresetIdentityConflicts = async (
       .reduce((total, name) => total + (cellsByName.get(name) ?? 0), 0)
 
     const seedNames = [...(registry?.seedsByKey.values() ?? [])]
-      .filter(seed => seed.presetId === candidate.id)
+      .filter(seed => seed.presetId === presetId)
       .map(seed => seed.name)
       .sort()
 
     conflicts.push({
-      presetId: candidate.id,
+      presetId,
       differences,
       definitions,
       cells,
       seedNames,
-      replacesKernelCore: Object.hasOwn(kernelValuePresetCoresById, candidate.id),
+      replacesKernelCore: Object.hasOwn(kernelValuePresetCoresById, presetId),
     })
   }
-  return conflicts
+  return {conflicts, syncGap}
 }
 
 /** Definitions named in the refusal before it summarizes the rest. Enough to
@@ -354,10 +399,11 @@ const describeDefinitions = (conflict: PresetIdentityConflict): string => {
  *  under it here — then the ways out, because every one of them is a decision
  *  about data this cannot make. */
 export const presetIdentityRefusal = (
-  conflicts: readonly PresetIdentityConflict[],
+  scan: PresetIdentityScan,
   extensionName: string,
   workspaceId: string,
 ): string => {
+  const {conflicts, syncGap} = scan
   const blocks = conflicts.map(conflict => {
     const lines = [
       `preset ${JSON.stringify(conflict.presetId)}:`,
@@ -375,11 +421,12 @@ export const presetIdentityRefusal = (
   })
 
   return [
-    `install-extension: refusing to install ${extensionName} — it registers a value preset `
-      + 'whose codec differs from the one currently registered under the same id.',
+    `install-extension: refusing to install ${extensionName} — it changes which codec a `
+      + 'value preset id resolves to, and values are already stored under the current one.',
     ...blocks.map(block => `  ${block}`),
     `Counts are this device's live blocks in workspace ${workspaceId}; other workspaces, `
-      + 'tombstones, and rows this device has not synced are not counted.',
+      + 'tombstones, and rows this device has not synced are not counted.'
+      + (syncGap === null ? '' : ` This device's view is incomplete (${syncGap}), so they are short.`),
     'A definition block stores a preset id, never a codec, so no row changes and nothing '
       + 'migrates the values: the projector publishes the new codec on the next rebuild '
       + 'while the stored values stay in the old encoding, to be thrown on or silently '

@@ -327,6 +327,117 @@ describe('agent runtime commands', () => {
       expect(await readApproval(id)).not.toBeNull()
     })
 
+    it('refuses when the update DROPS an id it currently registers', async () => {
+      // The direction a scan of the candidate cannot see. The new source
+      // declares nothing, and the id still changes codec — here to nothing at
+      // all, so every definition using it publishes no schema.
+      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
+      let id: string
+      try {
+        const installed = await install('install-drop-base')
+        await executeCommand({
+          commandId: 'enable-drop', type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      // The running extension's live contribution, sourced at its block — what
+      // the registry diff reads to know which ids it would stop claiming.
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
+      await getOrCreatePropertiesPage(env.repo, WS)
+      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
+
+      const restore = compileTo([])
+      try {
+        await expect(install('install-drop')).rejects.toThrow(/no core registers this id/)
+      } finally {
+        restore()
+      }
+    })
+
+    it('refuses on the core a dropped id falls BACK to, not on its absence', async () => {
+      // Same drop, but the block was shadowing a kernel id: the id keeps
+      // resolving, to a different codec. Reading the fallback is what tells
+      // "cells stop resolving" apart from "cells get re-typed".
+      const shadowString = definePresetCore<number>({
+        id: 'string', build: () => codecs.number, defaultValue: 0,
+      })
+      const restoreBase = compileTo(valuePresetCoresFacet.of(shadowString))
+      let id: string
+      try {
+        const installed = await install('install-shadow-base')
+        await executeCommand({
+          commandId: 'enable-shadow', type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [shadowString])
+      expect(env.repo.valuePresetCores.get('string')).toBe(shadowString)
+      await getOrCreatePropertiesPage(env.repo, WS)
+      await env.repo.userSchemas.addSchema({name: 'demo-text', presetId: 'string'})
+
+      const restore = compileTo([])
+      try {
+        await expect(install('install-shadow-drop'))
+          .rejects.toThrow(/codec type "number" -> codec type "string"/)
+      } finally {
+        restore()
+      }
+    })
+
+    it('resolves the candidate in NORMAL mode even while the app is in safe mode', async () => {
+      // A function-valued extension reads `ctx.safeMode` itself. Handing it the
+      // app's value lets it omit the very core the check exists to see, while
+      // leaving safe mode registers that core unrefused.
+      await registerNumberRatingWithDefinition()
+      await installApproved(valuePresetCoresFacet.of(numberRating))
+      const safeModeContext = createAgentRuntimeContext({
+        repo: env.repo, runtime: env.context.runtime, safeMode: true,
+      })
+      const restore = __setCompileImplForTest(async () => ({
+        default: (ctx: {safeMode?: boolean}) =>
+          ctx.safeMode ? [] : valuePresetCoresFacet.of(stringRating),
+      }))
+      try {
+        await expect(executeCommand({
+          commandId: 'install-preset-safemode',
+          type: 'install-extension',
+          source: 'STUBBED safemode',
+          label: 'Ratings',
+          reload: false,
+        }, safeModeContext)).rejects.toThrow(/codec type "number" -> codec type "string"/)
+      } finally {
+        restore()
+      }
+    })
+
+    it('refuses rather than checking against overrides it could not read', async () => {
+      // An empty override map is not a safe default here: it prunes every
+      // boundary that is off by default and on by override, which is exactly
+      // where a core can hide.
+      await registerNumberRatingWithDefinition()
+      await installApproved(valuePresetCoresFacet.of(numberRating))
+      const prefsBlock = await getPluginPrefsBlock(
+        env.repo, WS, env.repo.user, extensionsPrefsType)
+      await env.repo.tx(async tx => {
+        const current = await tx.get(prefsBlock.id)
+        await tx.update(prefsBlock.id, {
+          properties: {...current!.properties, [extensionsOverridesProp.name]: 'not-a-map'},
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'corrupt stored overrides'})
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        await expect(install('install-preset-badprefs'))
+          .rejects.toThrow(/cannot read this device's extension overrides/)
+      } finally {
+        restore()
+      }
+    })
+
     it('compares the core that would WIN, when one id is contributed twice', async () => {
       // `valuePresetCoresFacet` is a last-wins keyed map, here and app-wide, so
       // the second contribution is the one that would reach

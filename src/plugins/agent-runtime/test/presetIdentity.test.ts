@@ -18,6 +18,7 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
+import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import { findPresetIdentityConflicts, presetIdentityRefusal } from '../presetIdentity'
 
 const WS = 'ws-preset-identity'
@@ -80,7 +81,7 @@ const addDefinitionWithCells = async (
 /** A definition row written directly, for the names `addSchema` refuses to
  *  mint twice. Written through `repo.tx` so the projector still sees it. */
 const createDefinitionBlock = async (
-  name: string, presetId: string, config: unknown = {},
+  name: string, presetId: string, config: unknown = {}, omitConfig = false,
 ): Promise<string> => {
   const id = await repo.mutate.createChild({parentId: repo.propertiesPageId!})
   await repo.tx(async tx => {
@@ -89,21 +90,26 @@ const createDefinitionBlock = async (
         types: ['property-schema'],
         'property-schema:name': name,
         'property-schema:preset': presetId,
-        'property-schema:config': config,
+        ...(omitConfig ? {} : {'property-schema:config': config}),
       },
     })
   }, {scope: ChangeScope.BlockDefault, description: 'seed competing definition'})
   return id
 }
 
+/** The effective-registry map the install path builds, for the ordinary case
+ *  where the candidate simply re-registers these ids. */
+const registryAfter = (...cores: AnyValuePresetCore[]) =>
+  new Map<string, AnyValuePresetCore | undefined>(cores.map(core => [core.id, core]))
+
 describe('findPresetIdentityConflicts', () => {
   it('reports nothing for a preset id nothing is registered under', async () => {
-    expect(await findPresetIdentityConflicts(repo, WS, [numberRating])).toEqual([])
+    expect((await findPresetIdentityConflicts(repo, WS, registryAfter(numberRating))).conflicts).toEqual([])
   })
 
   it('reports nothing when the extension re-contributes the very same core', async () => {
     register(numberRating)
-    expect(await findPresetIdentityConflicts(repo, WS, [numberRating])).toEqual([])
+    expect((await findPresetIdentityConflicts(repo, WS, registryAfter(numberRating))).conflicts).toEqual([])
   })
 
   it('reports nothing when a rebuilt core publishes the same codec', async () => {
@@ -115,7 +121,7 @@ describe('findPresetIdentityConflicts', () => {
       // encoded by it.
       defaultValue: 3,
     })
-    expect(await findPresetIdentityConflicts(repo, WS, [rebuilt])).toEqual([])
+    expect((await findPresetIdentityConflicts(repo, WS, registryAfter(rebuilt))).conflicts).toEqual([])
   })
 
   it('reports a changed codec type with the definitions and cells at stake', async () => {
@@ -125,7 +131,7 @@ describe('findPresetIdentityConflicts', () => {
     // A definition on a different preset must not be counted.
     await addDefinitionWithCells('unrelated', 'string', 5)
 
-    const [conflict, ...rest] = await findPresetIdentityConflicts(repo, WS, [stringRating])
+    const {conflicts: [conflict, ...rest]} = await findPresetIdentityConflicts(repo, WS, registryAfter(stringRating))
     expect(rest).toEqual([])
     expect(conflict!.presetId).toBe(PRESET)
     expect(conflict!.differences).toEqual([
@@ -145,23 +151,23 @@ describe('findPresetIdentityConflicts', () => {
       encode: value => ({n: value.n}),
       decode: json => ({n: Number((json as {n?: unknown}).n ?? 0)}),
     })
-    const before = definePresetCore<string, {n: number}>({
+    const beforeCore = definePresetCore<string, {n: number}>({
       id: PRESET,
       build: () => codecs.string,
       defaultValue: '',
       defaultConfig: {n: 1},
       configCodec: configCodec('demo:rating-config'),
     })
-    const after = definePresetCore<string, {n: number}>({
+    const afterCore = definePresetCore<string, {n: number}>({
       id: PRESET,
       build: () => codecs.string,
       defaultValue: '',
       defaultConfig: {n: 1},
       configCodec: configCodec('demo:rating-config-v2'),
     })
-    register(before)
+    register(beforeCore)
 
-    const [conflict] = await findPresetIdentityConflicts(repo, WS, [after])
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, registryAfter(afterCore))
     expect(conflict!.differences).toEqual([
       'config codec demo:rating-config -> demo:rating-config-v2',
     ])
@@ -197,7 +203,7 @@ describe('findPresetIdentityConflicts', () => {
     register(lenient)
     await addDefinitionWithCells('demo-rating', PRESET, 2, {mode: 'narrow'})
 
-    const [conflict] = await findPresetIdentityConflicts(repo, WS, [strict])
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, registryAfter(strict))
     // The default-config probe agrees; only the config a definition actually
     // stores separates the two, which is why the probe set includes it.
     expect(conflict!.differences).toHaveLength(1)
@@ -213,7 +219,7 @@ describe('findPresetIdentityConflicts', () => {
       build: () => { throw new Error('preset not configured') },
       defaultValue: '',
     })
-    const [conflict] = await findPresetIdentityConflicts(repo, WS, [broken])
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, registryAfter(broken))
     expect(conflict!.differences).toEqual([
       'codec type "number" -> build threw (preset not configured) (at the preset default config)',
     ])
@@ -227,7 +233,7 @@ describe('findPresetIdentityConflicts', () => {
     // double them.
     await createDefinitionBlock('demo-rating', PRESET)
 
-    const [conflict] = await findPresetIdentityConflicts(repo, WS, [stringRating])
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, registryAfter(stringRating))
     expect(conflict!.definitions).toHaveLength(2)
     expect(conflict!.definitions.map(d => d.cells)).toEqual([3, 3])
     expect(conflict!.cells).toBe(3)
@@ -256,9 +262,71 @@ describe('findPresetIdentityConflicts', () => {
     register(core(codecs.string))
     await createDefinitionBlock('demo-rating', PRESET, 'narrow')
 
-    const [conflict] = await findPresetIdentityConflicts(repo, WS, [core(codecs.number)])
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, registryAfter(core(codecs.number)))
     expect(conflict?.differences).toEqual([
       'codec type "string" -> codec type "number" (at stored config "narrow")',
+    ])
+  })
+
+  it('probes an ABSENT config and a stored null separately', async () => {
+    // `rawPresetConfig` passes a stored `null` to the config codec and falls
+    // back to the preset default only for an absent cell, so the two are
+    // different inputs. Collapsing them let one definition's probe suppress the
+    // other's, with no ordering guarantee over which.
+    const modeCodec: Codec<string | null> = {
+      type: 'demo:mode',
+      encode: value => value,
+      decode: json => (json === null ? null : String(json)),
+    }
+    const core = (whenNull: Codec<unknown>) => definePresetCore<unknown, string | null>({
+      id: PRESET,
+      build: mode => (mode === null ? whenNull : codecs.string),
+      defaultValue: '',
+      defaultConfig: 'wide',
+      configCodec: modeCodec,
+    })
+    register(core(codecs.string))
+    // Absent first, so a collapsed key would be claimed by it and the `null`
+    // row — the one that actually separates the cores — never probed.
+    await createDefinitionBlock('demo-absent', PRESET, undefined, true)
+    await createDefinitionBlock('demo-null', PRESET, null)
+
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(
+      repo, WS, registryAfter(core(codecs.number)))
+    expect(conflict?.differences).toEqual([
+      'codec type "string" -> codec type "number" (at stored config null)',
+    ])
+  })
+
+  it('reports an id whose core goes away entirely', async () => {
+    // The drop direction: the extension stops contributing an id nothing else
+    // claims, so every definition using it publishes no schema at all.
+    register(numberRating)
+    await addDefinitionWithCells('demo-rating', PRESET, 2)
+
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(
+      repo, WS, new Map([[PRESET, undefined]]))
+    expect(conflict!.differences).toEqual([
+      'codec type "number" -> no core registers this id '
+      + '(every definition using it publishes no schema, so its cells read as unset)',
+    ])
+    expect(conflict!.cells).toBe(2)
+  })
+
+  it('reports an id that falls back to the core underneath it', async () => {
+    // The same drop, where a kernel core was being shadowed: the id keeps
+    // resolving, to a different codec, and nothing about the candidate says so.
+    const shadowString = definePresetCore<number>({
+      id: 'string', build: () => codecs.number, defaultValue: 0,
+    })
+    register(shadowString)
+    await addDefinitionWithCells('demo-text', 'string', 1)
+
+    const kernelString = kernelValuePresetCoresById.string
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(
+      repo, WS, new Map([['string', kernelString]]))
+    expect(conflict!.differences).toEqual([
+      'codec type "number" -> codec type "string" (at the preset default config)',
     ])
   })
 
@@ -266,10 +334,11 @@ describe('findPresetIdentityConflicts', () => {
     const shadowString = definePresetCore<number>({
       id: 'string', build: () => codecs.number, defaultValue: 0,
     })
-    const [conflict] = await findPresetIdentityConflicts(repo, WS, [shadowString])
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, registryAfter(shadowString))
     expect(conflict!.presetId).toBe('string')
     expect(conflict!.replacesKernelCore).toBe(true)
-    expect(presetIdentityRefusal([conflict!], '"demo"', WS)).toContain('KERNEL preset')
+    expect(presetIdentityRefusal({conflicts: [conflict!], syncGap: null}, '"demo"', WS))
+      .toContain('KERNEL preset')
   })
 
   it("counts cells under a seeded definition's DECLARED name, not a drifted stored one", async () => {
@@ -318,7 +387,7 @@ describe('findPresetIdentityConflicts', () => {
       })
     }, {scope: ChangeScope.BlockDefault, description: 'seed drifted consumer'})
 
-    const [conflict] = await findPresetIdentityConflicts(drifted, WS, [stringRating])
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(drifted, WS, registryAfter(stringRating))
     expect(conflict!.definitions).toEqual([
       {fieldId, name: 'demo:declared-rating', cells: 1},
     ])
@@ -336,7 +405,7 @@ describe('findPresetIdentityConflicts', () => {
     })
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-preset-seed', [seed])
 
-    const [conflict] = await findPresetIdentityConflicts(repo, WS, [stringRating])
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, registryAfter(stringRating))
     expect(conflict!.seedNames).toEqual(['demo:seeded-rating'])
   })
 })
@@ -345,9 +414,9 @@ describe('presetIdentityRefusal', () => {
   it('states what moved, what it counts, and the ways out', async () => {
     register(numberRating)
     await addDefinitionWithCells('demo-rating', PRESET, 2)
-    const conflicts = await findPresetIdentityConflicts(repo, WS, [stringRating])
+    const scan = await findPresetIdentityConflicts(repo, WS, registryAfter(stringRating))
 
-    const message = presetIdentityRefusal(conflicts, '"Ratings"', WS)
+    const message = presetIdentityRefusal(scan, '"Ratings"', WS)
     expect(message).toContain('refusing to install "Ratings"')
     expect(message).toContain('codec type "number" -> codec type "string"')
     expect(message).toContain('demo-rating (2 cells)')

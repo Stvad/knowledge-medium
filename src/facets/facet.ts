@@ -236,7 +236,14 @@ const collectFilteredContributions = (
   return out
 }
 
-const combineFacetContributions = <Input, Output>(
+/** What a facet resolves to from exactly these contributions.
+ *
+ *  Exported because "what WOULD this facet hold" is a question callers ask
+ *  outside a runtime — the install-time value-preset check asks it of the
+ *  contributions that would survive dropping one extension's. Going through
+ *  this rather than re-deriving last-wins keeps the precedence sort, which a
+ *  hand-rolled fold silently omits. */
+export const combineFacetContributions = <Input, Output>(
   facet: Facet<Input, Output>,
   contributions: readonly FacetContribution<unknown>[],
   context: FacetResolveContext,
