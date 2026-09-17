@@ -130,8 +130,8 @@ interface CandidateSpec {
  *  fold started — order-dependence, the exact defect #450 is about — and
  *  `Infinity` wins unconditionally. An earlier revision of this generator
  *  emitted only integers and `undefined`, so it could not reach either;
- *  Codex review on PR #449 found the NaN branch by reading, not by
- *  running, which is what a domain this narrow costs you. */
+ *  the NaN branch was found by reading the code, not by running it —
+ *  which is what a domain this narrow costs you. */
 const timestampArb: fc.Arbitrary<number | undefined> = fc.oneof(
   {arbitrary: fc.integer({min: 0, max: 1000}), weight: 8},
   {arbitrary: fc.constant(undefined), weight: 3},

@@ -202,14 +202,63 @@ describe('repo.query.ancestors', () => {
     await create({id: 'r'})
     await create({id: 'c', parentId: 'r'})
     await create({id: 'gc', parentId: 'c'})
-    const out = asBlocks(await env.repo.query.ancestors({id: 'gc'}).load())
-    expect(out.map(b => b.id)).toEqual(['c', 'r'])
+    const out = await env.repo.query.ancestors({id: 'gc'}).load()
+    expect(asBlocks(out.ancestors).map(b => b.id)).toEqual(['c', 'r'])
+    expect(out.stoppedAtParentId).toBeNull()
   })
 
   it('returns [] when id has no parent', async () => {
     await create({id: 'r'})
-    const out = asBlocks(await env.repo.query.ancestors({id: 'r'}).load())
-    expect(out).toEqual([])
+    const out = await env.repo.query.ancestors({id: 'r'}).load()
+    expect(asBlocks(out.ancestors)).toEqual([])
+    // What tells this apart from a chain cut at the first hop, which is
+    // also `[]` — the two render differently (`crumbsFromAncestors`).
+    expect(out.stoppedAtParentId).toBeNull()
+  })
+
+  it('re-resolves when the parent that TRUNCATED the chain comes back', async () => {
+    // The walk filters `deleted = 0`, so a soft-deleted parent ends the
+    // chain and is absent from the result — and being absent it could not
+    // invalidate this handle, so the truncated chain would be permanent.
+    // `core.restore` restores one block, which is exactly how a live child
+    // ends up under a tombstoned parent.
+    await create({id: 'r'})
+    await create({id: 'mid', parentId: 'r'})
+    await create({id: 'leaf', parentId: 'mid'})
+    // Cut ABOVE the first hop, so the chain is non-empty and the topmost
+    // row it DID reach is what names the missing parent.
+    await env.repo.tx(tx => tx.delete('r'), {scope: ChangeScope.BlockDefault})
+
+    const handle = env.repo.query.ancestors({id: 'leaf'})
+    const seen: string[][] = []
+    handle.subscribe(walk => seen.push(walk.ancestors.map(a => a.id)))
+    await vi.waitFor(() => expect(handle.status()).toBe('ready'))
+    expect(handle.peek()!.ancestors.map(a => a.id)).toEqual(['mid'])
+    expect(handle.peek()!.stoppedAtParentId).toBe('r')
+
+    await env.repo.tx(tx => tx.restore('r'), {scope: ChangeScope.BlockDefault})
+
+    await vi.waitFor(() => expect(seen.at(-1)).toEqual(['mid', 'r']))
+  })
+
+  it('re-resolves when the first hop of an EMPTY chain comes back', async () => {
+    // Same rule at the boundary the chain cannot speak for: with no
+    // ancestor rows at all, only the seed's own parent edge says the walk
+    // stopped rather than reached a root.
+    await create({id: 'top'})
+    await create({id: 'child', parentId: 'top'})
+    await env.repo.tx(tx => tx.delete('top'), {scope: ChangeScope.BlockDefault})
+
+    const handle = env.repo.query.ancestors({id: 'child'})
+    const seen: string[][] = []
+    handle.subscribe(walk => seen.push(walk.ancestors.map(a => a.id)))
+    await vi.waitFor(() => expect(handle.status()).toBe('ready'))
+    expect(handle.peek()!.ancestors.map(a => a.id)).toEqual([])
+    expect(handle.peek()!.stoppedAtParentId).toBe('top')
+
+    await env.repo.tx(tx => tx.restore('top'), {scope: ChangeScope.BlockDefault})
+
+    await vi.waitFor(() => expect(seen.at(-1)).toEqual(['top']))
   })
 })
 
@@ -240,6 +289,26 @@ describe('repo.query.manyAncestors', () => {
 
   it('returns [] when the input list is empty', async () => {
     expect(await env.repo.query.manyAncestors({ids: []}).load()).toEqual([])
+  })
+
+  it('re-resolves when a parent that truncated ONE of the chains comes back', async () => {
+    // The batched path declares the unreachable-parent dep per entry, and
+    // only its own tests can pin that — the single-id query's tests reach
+    // a different call site.
+    await create({id: 'r'})
+    await create({id: 'cut', parentId: 'r'})
+    await create({id: 'intact'})
+    await env.repo.tx(tx => tx.delete('r'), {scope: ChangeScope.BlockDefault})
+
+    const handle = env.repo.query.manyAncestors({ids: ['cut', 'intact']})
+    const seen: string[][] = []
+    handle.subscribe(entries => seen.push(entries.map(e => e.ancestors.map(a => a.id).join('>'))))
+    await vi.waitFor(() => expect(handle.status()).toBe('ready'))
+    expect(handle.peek()!.find(e => e.startId === 'cut')!.ancestors).toEqual([])
+
+    await env.repo.tx(tx => tx.restore('r'), {scope: ChangeScope.BlockDefault})
+
+    await vi.waitFor(() => expect(seen.at(-1)).toEqual(['r', '']))
   })
 })
 
@@ -563,6 +632,74 @@ describe('repo.query.recentActivity', () => {
       await create({id: PREFS_ID, parentId: 'user-page', content: 'Preferences'})
       await create({id: 'plugin-prefs', parentId: PREFS_ID, content: 'Daily notes'})
     }
+
+    // The two queries share one resolver so "authored" cannot mean different
+    // things in the picker and the feed. Asserted against a seeded state
+    // subtree, so it is the real exclusion being compared and not two empty
+    // lists agreeing.
+    // A parent change is what moves a row across this exclusion, and it touches
+    // no content — so without a structural dep a LOADED handle keeps offering a
+    // row that has since become app-owned, in a picker, as something to link
+    // to. Asserted through a live handle rather than a fresh call, because a
+    // fresh call re-runs the SQL and would pass with no dep declared at all.
+    it('drops a row reparented into the state tree without reloading', async () => {
+      await create({id: 'note', content: 'a real note'})
+      await seedUserState()
+      const handle = env.repo.query.recentUserBlocks({workspaceId: WS, limit: 50})
+      expect((await handle.load()).map(b => b.id)).toContain('note')
+
+      await env.repo.tx(
+        tx => tx.move('note', {parentId: 'plugin-state', orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+
+      await vi.waitFor(async () => {
+        expect((await handle.load()).map(b => b.id)).not.toContain('note')
+      })
+    })
+
+    it('re-chains an entry whose page was restored, without reloading', async () => {
+      // Not pinning a row dep — this query declares none for ancestors.
+      // What covers it is `kernel.content`: restoring a block flips its
+      // liveness, which fires that workspace channel. Asserted through a
+      // live handle, because a fresh call re-runs the SQL and would pass
+      // whatever the deps said.
+      await create({id: 'page', content: 'Project Alpha'})
+      await create({id: 'note', parentId: 'page', content: 'a real note'})
+      await env.repo.tx(tx => tx.delete('page'), {scope: ChangeScope.BlockDefault})
+
+      const handle = env.repo.query.recentActivity({workspaceId: WS, limit: 50})
+      const entryFor = (entries: RecentActivityEntry[] | undefined) =>
+        (entries ?? []).find(entry => entry.block.id === 'note')
+      // Subscribed, because an invalidation on a handle with no listeners
+      // is deferred to the next `load()` rather than re-resolving.
+      handle.subscribe(() => {})
+      expect(entryFor(await handle.load())!.ancestors).toEqual([])
+
+      await env.repo.tx(tx => tx.restore('page'), {scope: ChangeScope.BlockDefault})
+
+      await vi.waitFor(() => {
+        expect(entryFor(handle.peek())!.ancestors.map(a => a.id)).toEqual(['page'])
+      })
+    })
+
+    it('agrees with the chainless query on which blocks are authored', async () => {
+      await create({id: 'note', content: 'a real note'})
+      await create({id: 'note-2', parentId: 'note', content: 'a nested note'})
+      await seedUserState()
+
+      const withChains = activityBlocks(await env.repo.query.recentActivity({
+        workspaceId: WS, limit: 50,
+      }).load())
+      const chainless = await env.repo.query.recentUserBlocks({
+        workspaceId: WS, limit: 50,
+      }).load()
+
+      expect(chainless.map(b => b.id)).toEqual(withChains.map(b => b.id))
+      // Precondition: the state subtree really was excluded, so this is not
+      // two unfiltered lists matching.
+      expect(chainless.map(b => b.id)).toEqual(['note-2', 'note'])
+    })
 
     it('drops every descendant of a state root, at any depth', async () => {
       await create({id: 'note', content: 'a real note'})
@@ -999,6 +1136,56 @@ describe('repo.query.blockTypesByIds', () => {
     } finally {
       unsub()
     }
+  })
+})
+
+describe('repo.query.aliasClaimants', () => {
+  // Same sync-applied seeding as `aliasClaimantCounts` below, for the same
+  // reason: `repo.tx` cannot produce a co-claim, the uniqueness trigger
+  // rejects it. What this query adds over the counts is the ROWS — a consumer
+  // asking "who else claims my name" needs to identify them, not tally them.
+  const claimRaw = async (id: string, alias: string, opts: {
+    workspaceId?: string; deleted?: number; createdAt?: number
+  } = {}) => {
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES (?, ?, NULL, ?, ?, ?, '[]', ?, 1, 1, 'u', 'u', ?)`,
+      [
+        id, opts.workspaceId ?? WS, `k-${id}`, id,
+        JSON.stringify({[aliasesProp.name]: [alias]}),
+        opts.createdAt ?? 1, opts.deleted ?? 0,
+      ],
+    )
+  }
+
+  it('returns every live claimant, oldest first', async () => {
+    await claimRaw('newer', 'Journal', {createdAt: 200})
+    await claimRaw('older', 'Journal', {createdAt: 100})
+    await claimRaw('gone', 'Journal', {createdAt: 50, deleted: 1})
+    await claimRaw('elsewhere', 'Journal', {createdAt: 10, workspaceId: OTHER_WS})
+    await claimRaw('unrelated', 'Other', {createdAt: 20})
+
+    const out = await env.repo.query.aliasClaimants({workspaceId: WS, alias: 'Journal'}).load()
+    expect(out.map(block => block.id)).toEqual(['older', 'newer'])
+  })
+
+  it('returns [] for an unclaimed alias and for blank arguments', async () => {
+    await claimRaw('page', 'Journal')
+    expect(await env.repo.query.aliasClaimants({workspaceId: WS, alias: 'Nobody'}).load()).toEqual([])
+    expect(await env.repo.query.aliasClaimants({workspaceId: WS, alias: ''}).load()).toEqual([])
+    expect(await env.repo.query.aliasClaimants({workspaceId: '', alias: 'Journal'}).load()).toEqual([])
+  })
+
+  it('invalidates when a claimant appears or leaves', async () => {
+    await create({id: 'canonical', aliases: ['Journal']})
+    const handle = env.repo.query.aliasClaimants({workspaceId: WS, alias: 'Journal'})
+    expect((await handle.load()).map(block => block.id)).toEqual(['canonical'])
+
+    await env.repo.tx(tx => tx.delete('canonical'), {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(async () => {
+      expect(await handle.load()).toEqual([])
+    })
   })
 })
 

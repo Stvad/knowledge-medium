@@ -14,9 +14,7 @@
  * (`json_each`-expanding every property bag) plus one for the unreadable
  * count and one over the definition rows. A cap would make the list
  * INCOMPLETE, which is the failure both callers exist to prevent — a partial
- * list reads as "all clear". Measured at ~356k cells / ~55k blocks this is a
- * few hundred ms of native SQLite and more under wa-sqlite/OPFS, on an
- * explicit operator-run command.
+ * list reads as "all clear" — on an explicit operator-run command.
  */
 
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
@@ -143,7 +141,13 @@ export const scanPropertyKeys = async (
   await repo.whenPropertyDefinitionsReady(workspaceId)
   // Sampled here, above the registry capture below, so every await in this
   // function is behind us before the resolver freezes.
-  const syncGap = await repo.syncViewGap()
+  //
+  // A key whose definition merely failed to reach `blocks` reads as UNRESOLVED
+  // here, with nothing in flight to explain it, so the survey's whole output is
+  // wrong in the direction its readers act on — hence
+  // {@link Repo.workspaceViewGap}, whose scan is proportionate next to the
+  // survey it qualifies.
+  const syncGap = (await repo.workspaceViewGap(workspaceId))?.reason ?? null
   // Defence in depth; no test pins it. A workspace switch across the awaits
   // above would leave `registry` belonging to another workspace, silently
   // degrading the effective-name rewrite below to stored names — or, past the
@@ -154,8 +158,7 @@ export const scanPropertyKeys = async (
   // NOTHING MAY AWAIT between this line and the scans below: the resolver
   // holds its snapshot by value, so classification is fixed the instant it's
   // taken, and a suspension point here would let a workspace switch leave the
-  // scans reading rows this snapshot cannot classify. Same rule as
-  // `schedulePropertyDefinitionMigrations` in `repo.ts`.
+  // scans reading rows this snapshot cannot classify.
   const resolver = repo.propertySchemaResolverFor(workspaceId)
 
   const histogram = await repo.db.getAll<HistogramRow>(

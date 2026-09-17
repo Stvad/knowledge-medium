@@ -1,68 +1,18 @@
 /**
  * In-memory fake of the Supabase sync server, for two-device convergence
- * tests (issue #372 Batch 3). Sits behind the REAL upload pipeline
- * (`runUploadLoop` → `compactBlockCrudEntries` →
- * `applyCompactedBlockOperations`, via the injectable `BlockUploadSink`
- * seam) and delivers rows back into a device's `blocks_synced` raw table
- * exactly the way PowerSync does (`BLOCKS_SYNCED_RAW_TABLE.put`, verbatim
- * server row — `powersync/sync-config.yaml` selects all 13
- * `BLOCK_STORAGE_COLUMNS` with no transformation).
+ * tests. Sits behind the REAL upload pipeline (`runUploadLoop` →
+ * `compactBlockCrudEntries` → `applyCompactedBlockOperations`, via the
+ * injectable `BlockUploadSink` seam) and delivers rows back into a
+ * device's `blocks_synced` raw table exactly the way PowerSync does
+ * (`BLOCKS_SYNCED_RAW_TABLE.put`, verbatim server row).
  *
- * Server-side write semantics faithfully modeled (each cites the
- * migration it mirrors):
- *
- *  - `apply_block_creates` insert-or-TOUCH
- *    (supabase/migrations/20260709000000, ~L82-130): a create for an
- *    existing id preserves the server row untouched — the ON-CONFLICT
- *    branch is a no-op self-assignment whose only effect is a WAL write,
- *    i.e. the authoritative row gets re-delivered (here: a version bump so
- *    the next `deliverTo` re-sends it). A fresh insert future-clamps its
- *    stamps but gets no floor/bump (the clamp trigger's INSERT path).
- *
- *  - `apply_block_patches` (20260612000000, ~L83-130): closed column list;
- *    absent keys keep the server value (`COALESCE(patch->>'col', col)` —
- *    which also means an explicit JSON null keeps the old value for every
- *    column EXCEPT `parent_id`, which uses `CASE WHEN patch ? 'parent_id'`
- *    so explicit null re-roots). A patch for a missing id raises (P0002,
- *    rolls back the whole RPC) — unreachable in the convergence universe
- *    (creates always precede patches, cross-device ids arrive via
- *    delivery), so this fake throws and the fuzzer treats it as a bug.
- *
- *  - `blocks_clamp_updated_at` (20260803000000 — the NET current behavior):
- *    on INSERT and UPDATE, future-clamp `updated_at` and `created_at` to
- *    server-now and set
- *    `user_updated_at := least(coalesce(user_updated_at, updated_at), now)`.
- *    On UPDATE, the patch's `base_updated_at` (issue #381) decides:
- *      · DRIFTED (base absent, 0, or != old.updated_at) —
- *        `updated_at := greatest(server_now, old, least(RAW proposed,
- *        server_now + MAX_TRUSTED_SKEW_MS)) + 1`, where RAW is the pre-clamp
- *        client value, plus one more if that lands exactly on RAW. The result
- *        therefore never equals the author's own local stamp, so the echo
- *        cannot be equal-stamp-skipped. Not content-gated: two devices writing
- *        the same value merge to a row identical to OLD while the author still
- *        lacks whatever else the other device changed.
- *      · UN-DRIFTED — the pre-#381 path verbatim: floor
- *        `updated_at := greatest(new, old)` then bump
- *        `updated_at := greatest(new, old + 1)` iff a CONTENT column changed
- *        (exactly {parent_id, order_key, content, properties_json,
- *        references_json, deleted}; metadata columns deliberately never bump).
- *    A non-patch UPDATE (the create-TOUCH below) takes the un-drifted path —
- *    server-side that is the "GUC unset" state, which keeps the TOUCH
- *    stamp-preserving (#244).
- *
- *  - `blocks_prevent_workspace_change` (consolidated initial, ~L187-200):
- *    an UPDATE changing `workspace_id` raises. The upload PATCH emits
- *    `workspace_id` unconditionally (clientSchema.ts
- *    `blockUploadPatchJsonSql` — the Phase-D AAD hook needs it), so the
- *    fake accepts an *equal* workspace_id and throws on a real change.
- *
- *  - hard DELETE (`sink.deleteRow`): unreachable on the v1 path (soft
- *    delete is a PATCH `deleted=1`; there is no DELETE upload trigger —
- *    clientSchema.ts:498-502). The fake throws so an unexpected hard
- *    delete surfaces as a bug instead of silently vanishing a row.
+ * Server-side write semantics modeled below, each at the site that
+ * implements it: `apply_block_creates`'s insert-or-TOUCH, `apply_block_patches`'
+ * closed column list, the `blocks_clamp_updated_at` drift/un-drift split,
+ * `blocks_prevent_workspace_change`, and the hard-DELETE refusal.
  *
  * Delivery: a per-row monotonically increasing `version` (bumped on every
- * server-side write INCLUDING the create-conflict touch) plus a
+ * server-side write, including the create-conflict touch) plus a
  * per-device cursor — `deliverTo(db, cursor)` writes every row with
  * `version > cursor` into that device's `blocks_synced` (INSERT OR
  * REPLACE, firing the real change-capture queue triggers) and returns the
@@ -99,8 +49,8 @@ export interface ServerBlockRow {
 }
 
 /** The 6 columns whose change triggers the +1 version bump
- *  (20260612000000 L64-65 lists the deliberate EXCLUSIONS; this is the
- *  complement). */
+ *  (20260612000000's `blocks_clamp_updated_at` lists the deliberate
+ *  EXCLUSIONS; this is the complement). */
 const CONTENT_COLUMNS = [
   'parent_id', 'order_key', 'content', 'properties_json', 'references_json', 'deleted',
 ] as const
@@ -139,15 +89,15 @@ export interface FakeSyncServer {
 
 const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
 
-/** `apply_block_creates` (20260709000000, ~L99-117) INSERTs every column
+/** `apply_block_creates` (20260709000000) INSERTs every column
  *  explicitly, so an absent JSON key becomes an explicit SQL NULL. That
  *  23502-violates every one of these columns even though some declare a SQL
- *  DEFAULT (consolidated initial, ~L509-521, e.g. `content ... DEFAULT ''
- *  NOT NULL`) — a DEFAULT only fires when the column is OMITTED from the
+ *  DEFAULT (the `blocks` table's column defaults, e.g. `content ... DEFAULT
+ *  '' NOT NULL`) — a DEFAULT only fires when the column is OMITTED from the
  *  INSERT's column list, not when NULL is explicitly supplied, and this RPC
  *  always supplies a value. Excluded on purpose: `parent_id` (nullable,
  *  no NOT NULL), `user_updated_at` (nullable — the clamp trigger backfills
- *  it from `updated_at` when NULL, 20260612000000 L48-50), and `deleted`
+ *  it from `updated_at` when NULL), and `deleted`
  *  (the RPC itself does `COALESCE((c->>'deleted')::boolean, false)` rather
  *  than relying on the column DEFAULT). */
 const REQUIRED_CREATE_FIELDS = [
@@ -229,20 +179,20 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
     },
 
     async applyPatches(patches) {
-      // Mirror the RPC's whole-call atomicity: scan for missing ids AND
-      // illegal workspace_id changes FIRST — the real loop collects missing
-      // ids and raises P0002, and `blocks_prevent_workspace_change` raises a
-      // BEFORE UPDATE trigger error the moment such a row is touched; either
-      // way Postgres rolls back the whole RPC transaction. Doing both checks
-      // before any row in `rows`/`versions` is mutated keeps the fake
-      // atomic too — the real bug this fixes: the checks used to run inside
-      // the per-patch loop, so a mid-batch workspace_id-change rejection
-      // left earlier patches in the same batch already applied (non-atomic,
-      // unlike Postgres).
+      // Both rejection checks run before ANY mutation — the real RPC rolls
+      // the whole call back (missing id raises P0002, a workspace_id change
+      // trips `blocks_prevent_workspace_change`), so a per-patch check would
+      // leave the fake non-atomic where Postgres is not.
+      // Unreachable in this fuzz universe (creates precede patches; ids
+      // arrive via delivery) — a real hit here is a bug to surface, not a
+      // case to handle gracefully.
       const missing = patches.filter(p => !rows.has(p.id)).map(p => p.id)
       if (missing.length > 0) {
         throw new Error(`fakeSyncServer: apply_block_patches P0002 — missing ids ${JSON.stringify(missing)}`)
       }
+      // The upload PATCH always includes workspace_id (clientSchema.ts's
+      // `blockUploadPatchJsonSql`, for the Phase-D AAD hook), so presence
+      // alone isn't a signal — only a value change is rejected.
       const workspaceChange = patches.find(({ id, payload }) => {
         const old = rows.get(id)!
         return payload.workspace_id != null && payload.workspace_id !== old.workspace_id
@@ -257,7 +207,8 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
 
         // Closed column list with COALESCE(patch->>'col', col): absent OR
         // JSON-null keeps the server value — except parent_id, which is
-        // key-presence-gated so explicit null re-roots (20260612000000 ~L96).
+        // key-presence-gated so explicit null re-roots (20260612000000's
+        // `apply_block_patches`).
         if ('parent_id' in payload) next.parent_id = (payload.parent_id ?? null) as string | null
         const coalesce = <K extends keyof ServerBlockRow>(key: K, v: unknown): void => {
           if (v !== undefined && v !== null) next[key] = v as ServerBlockRow[K]
@@ -275,7 +226,8 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
           next.deleted = asBool(payload.deleted)
         }
 
-        // UPDATE-path clamp (20260803000000, replacing 20260612000000 L48-63).
+        // UPDATE-path clamp (20260803000000's `blocks_clamp_updated_at`,
+        // replacing the pre-drift version in 20260612000000).
         const serverNow = opts.now()
         // The proposed stamp BEFORE the future-clamp — the drift bump must
         // clear the AUTHOR'S local stamp, which is this raw value.
@@ -286,7 +238,10 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
         // the version the client edited against; absent (old client) or the
         // 0 pristine sentinel carry no information, so both read as drifted.
         // Deliberately NOT content-gated — see the migration header for why
-        // comparing the merged row to OLD answers the wrong question.
+        // comparing the merged row to OLD answers the wrong question. One
+        // consequence: two devices writing the same value can merge to a
+        // row identical to OLD while the author still lacks whatever else
+        // the other device changed.
         // `apply_block_patches` reads the base with `patch->>'base_updated_at'`,
         // which yields the same TEXT for a JSON number and a JSON string of
         // digits — so the real server compares both, and both are then filtered

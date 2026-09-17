@@ -18,7 +18,7 @@
  */
 
 import { ChangeScope } from '@/data/api'
-import { ANCESTORS_SQL, IS_DESCENDANT_OF_SQL, SUBTREE_SQL } from '@/data/internals/treeQueries'
+import { IS_DESCENDANT_OF_SQL, manyAncestorsSql, SUBTREE_SQL } from '@/data/internals/treeQueries'
 import { bench, time, type BenchResult } from './harness'
 import { setupBenchEnv } from './setup'
 import {
@@ -88,9 +88,9 @@ export const runScaleBenches = async (opts: {full?: boolean} = {}): Promise<Benc
       metadata: {rowsPerSec: (depth / (tPop.ms / 1000)).toFixed(0)},
     })
 
-    // ANCESTORS_SQL on the leaf — depth deep climbs.
-    const r1 = await bench(`ANCESTORS_SQL leaf (depth=${depth})`, async () => {
-      await env.db.getAll(ANCESTORS_SQL, [tPop.value.leafId, tPop.value.leafId])
+    // The ancestor walk on the leaf — depth deep climbs.
+    const r1 = await bench(`ancestor walk leaf (depth=${depth})`, async () => {
+      await env.db.getAll(manyAncestorsSql(1), [tPop.value.leafId])
     }, {warmup: 1, iters: 5})
     r1.metadata = {depth}
     out.push(r1)

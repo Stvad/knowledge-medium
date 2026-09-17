@@ -4,8 +4,8 @@
  * fence (§11 group 4).
  *
  * These exist because nothing pinned its semantics, and its docblock had
- * claimed an ordering guarantee it doesn't provide (Codex on PR #444's
- * successor, PR #484). The fence's END-TO-END behaviour is covered in
+ * claimed an ordering guarantee it doesn't provide. The fence's END-TO-END
+ * behaviour is covered in
  * `renameProcessor.test.ts`; what's pinned here is the contract a future
  * maintainer would otherwise have to re-derive: union not intersection,
  * first-occurrence wins, order preserved within a group but NOT across

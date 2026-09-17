@@ -232,6 +232,15 @@ describe('backlinksDataExtension query', () => {
         [FLIP_WS],
       )
     }
+    /** Straight into the `block_types` side index rather than through
+     *  `properties.types`: that index is what the recognition predicate reads,
+     *  and these fixtures need nothing else to be definition-shaped. */
+    const typeAsDefinition = (id: string, workspaceId: string) =>
+      sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
+         VALUES (?, ?, 'property-schema')`,
+        [id, workspaceId],
+      )
     const createIn = (args: {
       id: string; parentId?: string | null; content?: string
       referenceTargetId?: string | null; references?: BlockReference[]
@@ -248,10 +257,7 @@ describe('backlinksDataExtension query', () => {
       // it; `V` is F's value child carrying a `[[Foo]]` reference (the hidden
       // machinery source); `Q` is an ordinary block referencing Foo.
       await createIn({id: 'D', content: 'status'})
-      await sharedDb.db.execute(
-        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
-        [FLIP_WS],
-      )
+      await typeAsDefinition('D', FLIP_WS)
       await createIn({id: 'Foo'})
       await createIn({id: 'O'})
       await createIn({id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D'})
@@ -292,10 +298,7 @@ describe('backlinksDataExtension query', () => {
       }), {scope: ChangeScope.BlockDefault})
 
       await mk({id: 'UD', content: 'status'})
-      await sharedDb.db.execute(
-        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('UD', ?, 'property-schema')`,
-        [UNFLIPPED],
-      )
+      await typeAsDefinition('UD', UNFLIPPED)
       await mk({id: 'UFoo'})
       await mk({id: 'UO'})
       await mk({id: 'UF', parentId: 'UO', content: '::((UD))', referenceTargetId: 'UD'})
@@ -330,10 +333,7 @@ describe('backlinksDataExtension query', () => {
       }), {scope: ChangeScope.BlockDefault})
 
       await mk({id: 'TD', content: 'status'})
-      await sharedDb.db.execute(
-        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('TD', ?, 'property-schema')`,
-        [TOMB_WS],
-      )
+      await typeAsDefinition('TD', TOMB_WS)
       await mk({id: 'TFoo'})
       await mk({id: 'TO'})
       await mk({id: 'TF', parentId: 'TO', content: '::((TD))', referenceTargetId: 'TD'})
@@ -357,10 +357,7 @@ describe('backlinksDataExtension query', () => {
       // C's `[[Foo]]` is a real backlink nothing else projects.
       await seedFlipped()
       await createIn({id: 'D', content: 'status'})
-      await sharedDb.db.execute(
-        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
-        [FLIP_WS],
-      )
+      await typeAsDefinition('D', FLIP_WS)
       await createIn({id: 'Foo'})
       await createIn({id: 'P'})
       // NOT a root: root ancestors are already exempt, so an interior one is
@@ -376,10 +373,7 @@ describe('backlinksDataExtension query', () => {
     it('keeps a field row as a source for its OWN definition (the "used by" edge)', async () => {
       await seedFlipped()
       await createIn({id: 'D', content: 'status'})
-      await sharedDb.db.execute(
-        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
-        [FLIP_WS],
-      )
+      await typeAsDefinition('D', FLIP_WS)
       await createIn({id: 'O'})
       // The field row references its own definition — post-suppression-removal
       // this is the edge that answers "which blocks use property `status`?".
@@ -400,10 +394,7 @@ describe('backlinksDataExtension query', () => {
     it('unions machinery across chunk boundaries (SQLite variable-cap safety)', async () => {
       await seedFlipped()
       await createIn({id: 'D', content: 'status'})
-      await sharedDb.db.execute(
-        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
-        [FLIP_WS],
-      )
+      await typeAsDefinition('D', FLIP_WS)
       await createIn({id: 'O'})
       await createIn({id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D'})
       // Two value children (machinery) and one ordinary block; with chunkSize 1
@@ -437,6 +428,29 @@ describe('backlinksDataExtension query', () => {
       expect([...await propertyMachinerySourceIds(
         env.h.db, ['V'], [JSON.stringify([SEED]), FLIP_WS],
       )]).toEqual(['V'])
+    })
+
+    it('leaves a source alone under a ROOT marked row, and classifies the same shape one level down', async () => {
+      // The root half of §9 recognition: a workspace-root block is user
+      // content whatever its content says, so `::((D))` typed at root is an
+      // ordinary reference and its children are ordinary children.
+      await seedFlipped()
+      await createIn({id: 'D', content: 'status'})
+      await typeAsDefinition('D', FLIP_WS)
+      await createIn({id: 'Target'})
+      await createIn({id: 'R', content: '::((D))', referenceTargetId: 'D'})
+      await createIn({
+        id: 'under-root', parentId: 'R', references: [{id: 'Target', alias: 'T'}],
+      })
+      await createIn({id: 'O'})
+      await createIn({id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D'})
+      await createIn({
+        id: 'under-owner', parentId: 'F', references: [{id: 'Target', alias: 'T'}],
+      })
+
+      expect([...await propertyMachinerySourceIds(
+        env.h.db, ['under-root', 'under-owner'], ['[]', ''],
+      )]).toEqual(['under-owner'])
     })
 
     it('converges (does not hang or error) when a source sits under a cyclic, non-matching ancestor chain (issue #404 item 8b)', async () => {

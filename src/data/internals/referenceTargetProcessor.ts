@@ -1,7 +1,7 @@
 /**
  * `core.deriveReferenceTarget` — same-tx derivation of the LOCAL
  * `reference_target_id` column (properties-as-blocks migration, slice A;
- * PR #288 §5/§7).
+ * docs/properties-as-blocks-migration.html §5/§7).
  *
  * Watches `content`. When a row's whole content trims to exactly one
  * reference span — `((id))`, `[[alias]]`, or `[label](((uuid)))`, each

@@ -109,7 +109,7 @@ export interface StartObserverOpts {
   onError?: (err: unknown) => void
   getInvalidationRules?: () => readonly InvalidationRule[]
   throttleMs?: number
-  /** Derive-at-arrival lookups (PR #288 slice A). Omitted by default so
+  /** Derive-at-arrival lookups. Omitted by default so
    *  storage-focused tests skip derivation, mirroring the prod-optional dep. */
   referenceTargetLookups?: MaterializeDeps['referenceTargetLookups']
   /** §9 alias-repair hook passthrough (deferred executor lives on Repo). */

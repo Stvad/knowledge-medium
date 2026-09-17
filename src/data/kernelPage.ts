@@ -81,40 +81,24 @@ export interface KernelPageSpec {
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   derivedBlockId({namespace, key: workspaceId})
 
-/** Get-or-create a per-workspace kernel page. Repairs a live page that's
- *  missing the expected types or alias; restores a soft-deleted row;
- *  otherwise creates fresh.
+/** Get-or-create a per-workspace kernel page: repairs a live page missing its
+ *  types or alias, restores a tombstone, else creates.
  *
- *  On a READ-ONLY workspace it only GETS: the create/repair transactions are
- *  skipped and the handle is returned as-is.
+ *  On a read-only workspace it only GETS — ergonomics, not safety: the kernel
+ *  already rejects the write (`BlockDefault` is `readOnly: 'reject'` in
+ *  `CHANGE_SCOPE_POLICIES`), so this only turns an unhandled rejection out of
+ *  an action handler into an empty page.
  *
- *  This is an ERGONOMIC guard, not a safety one — a distinction I originally
- *  got backwards here. The kernel already refuses the write: `BlockDefault` is
- *  `readOnly: 'reject'` in `CHANGE_SCOPE_POLICIES`, and the commit pipeline
- *  throws `ReadOnlyError` before anything is written. So without this, a viewer
- *  merely opening a kernel-page surface got an unhandled rejection out of an
- *  action handler; nothing was ever written, and nothing was left to be
- *  RLS-rejected on sync. What this buys is that the viewer sees an empty page
- *  instead of an error.
- *
- *  The ordinary read-only case is unaffected: the id is deterministic, so a
- *  page the owner already created has synced and resolves normally.
- *
- *  It belongs here rather than in each surface because every one of them —
- *  daily notes, SRS review, locations, media capture, the Readwise backlog —
- *  reaches the same throw through this one function.
- *
- *  UNDOABLE, deliberately. Every caller bootstraps inside a `repo.undoGroup`
- *  alongside the action that needed the page (`getOrCreateDailyNote`,
- *  `createOrFindPlace`, media capture), so the create merges into that
- *  operation's entry and is reverted only by reverting the operation — which is
- *  what undo should do. A caller that writes with `skipUndo` and does NOT group
- *  leaves this create alone on the stack; that is the caller's to account for,
- *  not a reason to make the bootstrap invisible to undo for everyone. */
+ *  UNDOABLE by default (issue #306), so a create inside a caller's
+ *  `repo.undoGroup` merges into the operation that needed it. Pass `skipUndo`
+ *  only when there is no user operation to merge into: an unattended create
+ *  lands alone on the stack, and `UndoManager.record` clears the redo branch
+ *  on every push, so it silently discards a redo the user still wanted. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
   spec: KernelPageSpec,
+  {skipUndo = false}: {skipUndo?: boolean} = {},
 ): Promise<Block> => {
   const id = kernelPageBlockId(workspaceId, spec.namespace)
   const aliases: readonly string[] = [spec.alias]
@@ -208,7 +192,7 @@ export const getOrCreateKernelPage = async (
         await tx.setProperty(id, aliasesProp, merged)
       }
       await tagTypes(tx, typeSnapshot, claimable)
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, skipUndo})
     return repo.block(id)
   }
 
@@ -239,7 +223,7 @@ export const getOrCreateKernelPage = async (
     }, {systemMint: true})
     const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
     await tagTypes(tx, typeSnapshot, claimable)
-  }, {scope: ChangeScope.BlockDefault})
+  }, {scope: ChangeScope.BlockDefault, skipUndo})
 
   return repo.block(id)
 }

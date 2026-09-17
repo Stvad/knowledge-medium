@@ -1,0 +1,766 @@
+/**
+ * Same-tx property-definition CHANGE — rename and codec-TYPE
+ * (docs/properties-as-blocks-migration.html §7/§9).
+ *
+ * Editing a definition re-keys and re-encodes every consuming parent's cell
+ * ATOMICALLY in the tx that edits the definition block, so the edit and its
+ * fan-out land as ONE undoable step on the client that made it. Every other
+ * client receives the finished rows by sync and does nothing. Nothing here is a
+ * data migration: it writes only what the user's own edit implies, in the
+ * user's own transaction, and is therefore not a one-shot pass — no claim, no
+ * per-device baseline, no undo clearing (#1013).
+ *
+ * ── Three facts make this subtle ──
+ *
+ * 1. The registry snapshot the processor resolves against is frozen at TX START
+ *    (`SameTxCtx`), so it still maps the OLD name to this definition and still
+ *    carries the OLD codec. Both sides come from the definition block's own
+ *    before/after instead: the name via `parsePropertyDefinitionMetadata`, the
+ *    codec via `tryBuildSchema` over the staged row and `ctx.valuePresets` —
+ *    which builds from the row plus the preset map and consults no registry.
+ *    The registry is still what RECOGNIZES a field row (`reference_target_id`
+ *    -> definition) and what says which definition owns a name, and both of
+ *    those are answers about tx-start state, which is what they should be.
+ *
+ * 2. Because the registry is stale in-tx, `MATERIALIZE_PROPERTY_CHILDREN` would
+ *    still resolve the DROPPED old name to this definition and take its
+ *    `encoded === undefined` DELETE branch — tombstoning the very field rows
+ *    this pass must keep. We dodge it by ORDERING: this processor runs LAST in
+ *    `KERNEL_SAME_TX_PROCESSORS`, after MATERIALIZE/PROJECT, so the writes it
+ *    makes are never re-seen by MATERIALIZE in the same single pass. (A later
+ *    tx sees a rebuilt registry where the old name resolves to nothing, so no
+ *    delete.) A test asserts field rows SURVIVE.
+ *
+ * 3. Value children are re-encoded when the codec's INPUTS changed — the
+ *    definition row's preset id and preset config, NOT the built codec's type
+ *    string, which cannot tell `optional-string` from `string`
+ *    (`codecInputsChanged`). Their content is read under the NEW codec: the
+ *    conversion IS "what does this text mean to the new type". What will not
+ *    parse is counted and REPORTED
+ *    (§9: "N values can't convert" must be user-visible, never a silent unset)
+ *    and never deleted; the rows stay in the tree, fixable by hand.
+ *
+ * ── The accepted residuals ──
+ *
+ * Three ways a consumer is left in the old encoding, all of them the same shape
+ * — a change this processor is not present for — and all repaired by the
+ * content-driven reconcile that compares a cell against its field rows (#389
+ * item 8), the only thing that can see such a row:
+ *
+ *  - a device offline across the change, holding a block it created under the
+ *    old codec. This runs on the initiating client only, which is already the
+ *    answer for renames.
+ *  - a value preset whose `build` starts returning a different codec under the
+ *    same preset id: no row edit at all, so nothing fires. Already a
+ *    frozen-identity violation (`seedIdentityLedger.ts`, #797); catching it
+ *    where it is DONE is #1022.
+ *  - a re-type in a workspace with no field rows yet, which fans nothing out
+ *    and is remembered by nothing for after the flip. The flip skips any key
+ *    whose cell will not decode under the current codec and reports the block,
+ *    so its own per-key report is the surface for this one.
+ *
+ * Dormant until a definition has field rows — see `consumingParentIds`, which
+ * is the gate.
+ */
+
+import { z } from 'zod'
+import {
+  definePostCommitProcessor,
+  defineSameTxProcessor,
+  ProcessorRejection,
+  type AnyPropertySchema,
+  type BlockData,
+  type SameTxCtx,
+} from '@/data/api'
+import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
+import { isResolvableFieldDefinition } from './propertySchemaResolution'
+import { presetConfigProp, presetIdProp } from '@/data/properties'
+import { peekRowProperty } from '@/data/rowProperty'
+import { jsonValuesEqual } from './jsonCanonical'
+import {
+  deriveReferenceColumns,
+  sameTxReferenceTargetLookups,
+} from './referenceTargetProcessor'
+import { tryBuildSchema } from '@/data/userSchemasService'
+import {
+  childContentsToEncodedPropertyValue,
+  encodedToValueChildContent,
+  fieldRowValues,
+  propertiesEqual,
+  unionValuesAcrossFieldRows,
+  valueChildContentToEncoded,
+  type IsPropertyFieldDefinition,
+} from '@/data/propertyChildren'
+
+export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR_NAME = 'core.migratePropertyDefinition'
+
+/** The definition a row described BEFORE this tx, tombstone included.
+ *
+ *  `parsePropertyDefinitionMetadata` refuses a deleted row, which is right
+ *  everywhere else — a tombstone publishes nothing, so it claims no name and
+ *  the registry does not list it. But a definition being REVIVED still has
+ *  consumers whose cells are keyed under the name in that bag and whose values
+ *  are encoded under its preset, and those are exactly what the fan-out needs
+ *  to re-key and re-encode from. Restoring and re-typing in one tx is otherwise
+ *  skipped entirely, leaving every consumer in the old encoding while the
+ *  rebuilt registry publishes the new codec. */
+const definitionAsOfBefore = (
+  row: BlockData,
+): ReturnType<typeof parsePropertyDefinitionMetadata> =>
+  parsePropertyDefinitionMetadata(row.deleted ? {...row, deleted: false} : row)
+
+/** Did anything the codec is BUILT FROM change?
+ *
+ *  `tryBuildSchema` derives a codec from exactly two properties of the row — the
+ *  preset id and the preset config — so comparing those answers the question
+ *  exactly. Every observable derived from the codec only approximates it, and
+ *  each approximation has a blind spot: `codec.type` cannot tell
+ *  `optional-string` from `string`, a preset id alone cannot see a configurable
+ *  preset whose `build(config)` returns a different codec, and the two together
+ *  still miss a config edit that moves between codecs SHARING a type.
+ *
+ *  Deliberately wider than it needs to be: a config edit that did not move the
+ *  encoding re-parses the value children, which writes nothing
+ *  (`value.content !== canonical` guards it) and reports nothing (a codec that
+ *  reads leniently across the edit decodes successfully and is never counted). */
+const codecInputsChanged = (before: BlockData, after: BlockData): boolean =>
+  peekRowProperty(before, presetIdProp) !== peekRowProperty(after, presetIdProp)
+  || !jsonValuesEqual(
+    peekRowProperty(before, presetConfigProp),
+    peekRowProperty(after, presetConfigProp),
+  )
+
+/** `tryBuildSchema` answers `null` for a preset it cannot find or configure, but
+ *  `preset.build` is extension code and can THROW. The projector already treats
+ *  that as "no behaviour" and publishes metadata only; here an escape would
+ *  abort the USER'S transaction — and for a definition whose preset throws, the
+ *  transaction it would abort is the one repairing it. Same answer as null. Not
+ *  logged: the projector warns for the same row on its own rebuild. */
+const buildSchemaOrNull = (
+  row: BlockData,
+  presets: SameTxCtx['valuePresets'],
+  metadata: NonNullable<ReturnType<typeof parsePropertyDefinitionMetadata>>,
+): AnyPropertySchema | null => {
+  try {
+    return tryBuildSchema(row, presets, metadata)
+  } catch {
+    return null
+  }
+}
+
+export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUnconvertible'
+
+/**
+ * Drop a rename or re-type whose destination, or whose vacated name, is not
+ * this definition's to write.
+ *
+ * `claimOf` answers who holds a name once THIS TX COMMITS, derived from the
+ * ROWS rather than accumulated source by source: definitions the tx deletes,
+ * revives, creates, renames or strips of their metadata all move a name, and
+ * none of them appears in the tx-start registry under the name it ends up with.
+ *
+ * Nothing here may be derived from which candidates SURVIVE, because dropping a
+ * candidate suppresses its FAN-OUT and never its definition row — the rename
+ * commits either way. So both halves read a post-commit claim that does not
+ * depend on this function's own outcome:
+ *
+ *  - The DESTINATION is contested when anyone ELSE holds it after commit, or
+ *    when anyone else ARRIVES at it. Two definitions landing on one key means
+ *    the later write wins a race the rebuilt registry may decide the other way,
+ *    and that is true whether the peer's own fan-out was kept or dropped.
+ *  - The name being VACATED is contested when anyone else will hold it whose
+ *    cells this pass does NOT fix. Whoever inherits the key this rename drops
+ *    is stranded by it — unless they are a kept candidate, whose own fan-out
+ *    projects them under that name in this same tx. That exemption is the one
+ *    thing here that depends on the outcome, which is why this still iterates
+ *    to a fixpoint: dropping a candidate can strand whoever was relying on it.
+ *
+ * `null` is not "nobody claims it" — it is a workspace with no registry, where
+ * nothing can be judged. The caller refuses the transaction rather than
+ * committing a definition change it cannot fan out.
+ *
+ * A candidate dropped here belongs to the shadowing model's own reconcile
+ * (#389 item 8), not to a one-shot re-key.
+ *
+ * WHAT NONE OF THIS REACHES: a name's cells outlive the definition that owned
+ * it. Every way of leaving a name that still COMMITS — a refused rename, a
+ * deletion, losing the definition metadata — leaves that definition's consumers
+ * keyed under it, and whoever takes the name next reads those values through
+ * its own schema. Contesting the name does not repair them and strands the
+ * arriving definition's consumers too; the choices that do are a reconcile, a
+ * refusal, or retiring the departing cells, and picking between them is #1028.
+ */
+export interface NameClaim {
+  /** Definitions that will STILL hold this name once the tx commits, winner
+   *  first — the tx-start claimants minus any the tx moves off it. The head is
+   *  the one that projects, so an owner that leaves hands that role on. */
+  readonly holding: readonly string[]
+  /** Definitions that will NEWLY hold it: created, revived, or renamed onto it.
+   *  Renames whose fan-out this refusal drops are included — suppressing a
+   *  re-key does not cancel the row's name change. */
+  readonly arriving: readonly string[]
+}
+
+export const withoutContestedRenames = <T extends {
+  readonly fieldId: string
+  readonly oldName: string
+  readonly newName: string
+}>(
+  candidates: readonly T[],
+  claimOf: (name: string) => NameClaim | null,
+): T[] => {
+  let kept: T[] = [...candidates]
+  for (;;) {
+    const keptIds = new Set(kept.map(candidate => candidate.fieldId))
+    const next = kept.filter(candidate => {
+      const destination = claimOf(candidate.newName)
+      if (destination === null) return false
+      const owner = destination.holding[0]
+      if (owner !== undefined && owner !== candidate.fieldId) return false
+      // A codec-only change is never judged here — its caller refuses it
+      // outright when anyone arrives at the name it keeps.
+      if (candidate.oldName === candidate.newName) return true
+      if (destination.arriving.some(peer => peer !== candidate.fieldId)) return false
+      const vacated = claimOf(candidate.oldName)
+      if (vacated === null) return false
+      // A kept candidate inheriting this name re-keys its own consumers under
+      // it in this same tx, so it is not stranded by the drop. Anyone else is.
+      return [...vacated.holding, ...vacated.arriving]
+        .every(peer => peer === candidate.fieldId || keptIds.has(peer))
+    })
+    if (next.length === kept.length) return next
+    kept = next
+  }
+}
+
+/** Why a change's fan-out could not run. Both end in the same refusal, and
+ *  differ only in what the user is told to do about it. */
+type RefusalReason = 'unbuildable' | 'contested'
+
+const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
+  unbuildable: {
+    code: 'property.definition-change.unbuildable',
+    message:
+      'cannot change a property definition whose value type does not load: the '
+      + 'blocks using it could not be updated to match. Fix the property type '
+      + 'first, then rename or re-type it.',
+  },
+  contested: {
+    code: 'property.definition-change.contested',
+    message:
+      'cannot change a property definition\'s value type while another '
+      + 'definition is taking the same name in the same edit: which of the two '
+      + 'the property answers to afterwards is not decided yet, so the blocks '
+      + 'using it could not be updated. Make the two changes separately.',
+  },
+}
+
+type CollectedChanges =
+  | 'unjudgeable'
+  | {
+      readonly changes: DefinitionChange[]
+      /** Changes whose ROW commits but whose fan-out cannot run, with the
+       *  reason that decides what the user is told. Held rather than dropped:
+       *  each leaves consumers holding values in an encoding the registry will
+       *  not be reading them with, so the caller refuses the transaction once
+       *  any of them has a consumer. */
+      readonly unfanoutable: ReadonlyArray<{fieldId: string; reason: RefusalReason}>
+    }
+
+interface DefinitionChange {
+  readonly fieldId: string
+  readonly oldName: string
+  readonly newName: string
+  /** The codec every value child is read under and the cell is projected with:
+   *  the AFTER row's, which is the one the rebuilt registry will publish. A
+   *  change whose after-row builds no codec never becomes a candidate — the
+   *  caller refuses it instead. */
+  readonly schema: AnyPropertySchema
+  /** The stored ENCODING may now differ, so value-child content is rewritten
+   *  and anything that will not parse is REPORTED. False for a pure rename,
+   *  where the encoding is untouched and an unparseable value is pre-existing
+   *  staleness rather than a consequence of this edit. */
+  readonly encodingChanged: boolean
+}
+
+/** Definition blocks in `changedRows` whose NAME or CODEC INPUTS changed this
+ *  tx. A brand-new definition (no `before`) has no existing consumer cells and
+ *  is skipped; one whose after-row builds no codec cannot be reprojected at all
+ *  and is held for the caller's refusal; a rename onto a name a DIFFERENT
+ *  non-renaming definition already owns is dropped. */
+const collectChanges = (
+  ctx: SameTxCtx,
+  workspaceId: string,
+  changedRows: ReadonlyArray<{before: BlockData | null; after: BlockData | null}>,
+): CollectedChanges => {
+  // Pass 1: candidate changes (name or codec inputs differ, after row builds).
+  const candidates: DefinitionChange[] = []
+  const unfanoutable: Array<{fieldId: string; reason: RefusalReason}> = []
+  /** Any name this tx touches — enough to ask whether the WORKSPACE can be
+   *  judged at all, which is not a question about the name. */
+  let probeName: string | null = null
+  for (const {before, after} of changedRows) {
+    // `after.deleted` is defence in depth — deleting a definition is its own
+    // operation, and a tx that deletes without also editing the name or preset
+    // stops at the no-change guard below.
+    if (after === null || after.deleted || before === null) continue
+    const afterMeta = parsePropertyDefinitionMetadata(after)
+    const beforeMeta = definitionAsOfBefore(before)
+    // A row that was not a definition BEFORE re-enters with no before-state to
+    // diff, so a bag edited while it was unpublished is invisible here — the
+    // metadata arm of #1031, same accepted case as the tombstone one below.
+    if (!afterMeta || !beforeMeta) continue
+    // A SEED's name and preset are code-owned and frozen once shipped
+    // (`seedIdentityLedger.ts`), so a change to either across a build is a
+    // deliberate migration (#797) rather than a user edit for this pass to fan
+    // out. The materializer writes those rows under Automation scope, which
+    // would otherwise reach this processor. Unpinned: reaching it needs a
+    // shipped seed to change a frozen field, which the ledger test refuses
+    // first.
+    if (afterMeta.seedKey !== undefined) continue
+    // There is deliberately no eligibility check for SHADOWING here. The
+    // contested-name refusal below already covers both of its shapes from the
+    // other side — a shadowed definition renaming away is refused because a
+    // peer claims the name it vacates, and one re-typing in place is refused
+    // because it is not the head claimant of the name it keeps — and asking the
+    // resolver "does this fieldId resolve" instead would conflate shadowing
+    // with having no buildable codec, which is the repair case below and must
+    // NOT be skipped.
+    // Off the block's own rows, never the registry, whose tx-start snapshot is
+    // at-or-older than `before` — a change an earlier tx already fanned out
+    // would read as this one's and be re-encoded (and re-reported) again.
+    //
+    // Nothing asks whether the BEFORE row built a codec, because that is itself
+    // a function of the two properties compared here: a definition whose broken
+    // preset has just been fixed already reports its inputs as changed. The old
+    // codec DETECTS a change and never performs one — the conversion parses the
+    // child's TEXT under the new codec either way.
+    //
+    // ACCEPTED: a bag edited while the row was UNPUBLISHED (a tombstone, or a
+    // row stripped of its metadata) is judged against the MOVED bag, and
+    // nothing remembers the encoding its consumers are in. Re-encoding on every
+    // revival instead is worse — re-parsing is not the identity for editable
+    // representations, so it rewrites every plain restore. #1031.
+    const renamed = beforeMeta.name !== afterMeta.name
+    const encodingChanged = codecInputsChanged(before, after)
+    // Every write to a definition block's bag reaches this processor —
+    // MATERIALIZE's own field-row bookkeeping included. Without this, each one
+    // would sweep every consumer of that definition inside the user's tx.
+    if (!renamed && !encodingChanged) continue
+    const afterSchema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
+    if (afterSchema === null) {
+      // This tx leaves the row naming a codec that does not build, so nothing
+      // here can reproject a single cell — and the row is the ONLY durable
+      // record of what encoding its consumers are in. Whether the OLD preset
+      // built is beside the point: the edit overwrites that record either way,
+      // and the destination preset can arrive later with no definition-row
+      // transaction at all — an extension registering, a code fix — at which
+      // point the registry publishes its codec straight over values nothing
+      // re-encoded. Held for the caller, which refuses if it has consumers.
+      //
+      // Repairing a broken definition is unaffected: a preset that BUILDS is
+      // not this branch, and re-encoding reads the child's text, not the old
+      // codec. What is refused is trading one unavailable preset for another.
+      unfanoutable.push({fieldId: after.id, reason: 'unbuildable'})
+      probeName ??= afterMeta.name
+      continue
+    }
+    probeName ??= afterMeta.name
+    candidates.push({
+      fieldId: after.id,
+      oldName: beforeMeta.name,
+      newName: afterMeta.name,
+      schema: afterSchema,
+      encodingChanged,
+    })
+  }
+  if (candidates.length === 0 && unfanoutable.length === 0) {
+    return {changes: [], unfanoutable}
+  }
+  // ONE derivation of what this tx does to names, read off the ROWS: every
+  // definition it touches either keeps the name the tx-start registry files it
+  // under, or LEAVES it — by being deleted, renamed, or stripped of the
+  // metadata that made it a definition — and may land on a new one. The
+  // registry lists no arrival (a created row has no entry, a revived one lost
+  // its entry, a renamed one is still filed under its old name), and a revived
+  // or created claimant never becomes a candidate either, so this is the only
+  // place either can be seen. Neither list depends on which fan-outs the
+  // refusal keeps, because a dropped fan-out still commits its row.
+  const released = new Set<string>()
+  const arrivingByName = new Map<string, string[]>()
+  for (const {before, after} of changedRows) {
+    const beforeMeta = before !== null && !before.deleted
+      ? parsePropertyDefinitionMetadata(before)
+      : null
+    const afterMeta = after !== null && !after.deleted
+      ? parsePropertyDefinitionMetadata(after)
+      : null
+    if (beforeMeta === null && afterMeta === null) continue
+    const keepsItsName = beforeMeta !== null && afterMeta !== null
+      && beforeMeta.name === afterMeta.name
+    if (keepsItsName) continue
+    if (beforeMeta !== null) released.add(before!.id)
+    if (afterMeta !== null) {
+      const arriving = arrivingByName.get(afterMeta.name) ?? []
+      arriving.push(after!.id)
+      arrivingByName.set(afterMeta.name, arriving)
+    }
+  }
+  if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName!) === null) {
+    return 'unjudgeable'
+  }
+  // Pass 2: drop a rename whose destination or vacated name is contested — see
+  // the refusal above for how the two halves differ.
+  // A codec-only change whose KEPT name a peer arrives at cannot be decided
+  // here, in either direction. Dropping its fan-out commits the re-type over
+  // consumers left in the old encoding; running it re-keys them under a name
+  // the rebuilt registry may hand to the arriver instead. Which happens turns
+  // on a `createdAt` ordering this tx cannot see — so neither answer is safe
+  // and the caller refuses. A RENAME is a different question: it is contested
+  // rather than undecidable, and that one is #1028's, below.
+  const undecidable = new Set<string>()
+  for (const candidate of candidates) {
+    if (candidate.oldName !== candidate.newName) continue
+    const arriving = arrivingByName.get(candidate.newName) ?? []
+    if (!arriving.some(peer => peer !== candidate.fieldId)) continue
+    unfanoutable.push({fieldId: candidate.fieldId, reason: 'contested'})
+    undecidable.add(candidate.fieldId)
+  }
+  return {
+    changes: withoutContestedRenames(
+      candidates.filter(candidate => !undecidable.has(candidate.fieldId)), (name) => {
+      const atTxStart = ctx.propertyDefinitionsClaimingName(workspaceId, name)
+      return atTxStart === null
+        ? null
+        : {
+          holding: atTxStart.filter(fieldId => !released.has(fieldId)),
+          arriving: arrivingByName.get(name) ?? [],
+        }
+    }),
+    unfanoutable,
+  }
+}
+
+/** One bound variable per changed definition would blow
+ *  SQLITE_MAX_VARIABLE_NUMBER on a scripted transaction that edits a whole
+ *  registry's worth of them, and this probe runs INSIDE the user's tx — so the
+ *  throw would take their entire edit down. */
+export const FIELD_PROBE_CHUNK = 500
+
+/** Parents holding a live field row for any of `fieldIds` — and the only gate
+ *  this pass has.
+ *
+ *  Deliberately NOT `isPropertyChildBackedWorkspace`. That flag lives on the
+ *  workspace ROW, which syncs like any other, so a device lagging on it reads
+ *  `cell` for a graph another device already flipped and materialized — and
+ *  would skip a fan-out whose field rows it is holding, uploading a re-typed
+ *  definition that its child-backed peers then read old encodings through. The
+ *  flag was only ever a cheap proxy for this query, which asks the rows
+ *  themselves and cannot be stale about rows this device has.
+ *
+ *  Field rows only, which means a parent the cell-to-children backfill has not
+ *  reached yet is NOT a consumer here. The runbook flips before backfilling, so
+ *  that window is real and a definition edit inside it strands those cells
+ *  permanently — #1029.
+ *
+ *  The Set is load-bearing across chunks, not tidiness:
+ *  `SELECT DISTINCT` dedupes only WITHIN one statement, so a parent consuming
+ *  two changed definitions that land in different chunks would otherwise be
+ *  visited — and re-keyed — twice. */
+export const consumingParentIds = async (
+  db: Pick<SameTxCtx['db'], 'getAll'>,
+  workspaceId: string,
+  fieldIds: readonly string[],
+  chunkSize = FIELD_PROBE_CHUNK,
+): Promise<string[]> => {
+  const set = new Set<string>()
+  for (let i = 0; i < fieldIds.length; i += chunkSize) {
+    const chunk = fieldIds.slice(i, i + chunkSize)
+    // §9 selection discipline: field-row discovery keys on the BIT plus the
+    // target (an unmarked `((fieldId))` link row is not a consumer), and
+    // `parent_id IS NOT NULL` — a marked workspace-root row is user content,
+    // not a field row (§9 root half) — never re-key it.
+    const rows = await db.getAll<{parent_id: string | null}>(
+      `SELECT DISTINCT parent_id FROM blocks
+        WHERE workspace_id = ? AND reference_target_id IN (${chunk.map(() => '?').join(', ')})
+          AND is_field_form = 1
+          AND deleted = 0 AND parent_id IS NOT NULL`,
+      [workspaceId, ...chunk],
+    )
+    for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
+  }
+  return [...set]
+}
+
+/** Apply every change that owns a field row under ONE parent, in one cell write.
+ *
+ *  SWAP-SAFE, and that is why the drops and the assignments are collected for
+ *  EVERY change first and applied in two phases: with `a->b` and `b->a` in one
+ *  tx, dropping and assigning per change in turn makes b's drop delete the key
+ *  a just assigned, and one of the two values is gone. Two phases have no
+ *  intermediate state at all — the swap lands as one write.
+ *
+ *  No ancestry gate (§9 flat recognition): ANY block owning recognized field
+ *  rows — value rows and field rows included — re-keys like every other owner;
+ *  its `::` children are its field rows at any depth. The write is
+ *  `skipMetadata` machinery, not a "last edited" bump. */
+const applyToParent = async (
+  ctx: SameTxCtx,
+  parentId: string,
+  changes: readonly DefinitionChange[],
+  isFieldDefinition: IsPropertyFieldDefinition,
+  unconvertibleByField: Map<string, number>,
+): Promise<void> => {
+  const parent = await ctx.tx.get(parentId)
+  // A soft-deleted parent can still own live field rows, so the query that
+  // found it does return one. Skipped by choice, not by necessity — `tx.update`
+  // accepts a tombstone: a deleted block's bag is history, and the live set is
+  // bounded by current usage while the tombstoned set is bounded by ALL-TIME
+  // usage, so re-keying it would put an unbounded write in the user's own
+  // transaction. The cost is that restoring such a block revives it under the
+  // old key; #1023 fixes that where it belongs, at restore.
+  if (parent === null || parent.deleted) return
+  const referenceLookups = sameTxReferenceTargetLookups(ctx.tx)
+  const siblings = await ctx.tx.childrenOf(parentId, undefined)
+  // Collected across EVERY change, then applied in two phases below — see the
+  // swap note in this function's doc.
+  const oldNames: string[] = []
+  const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
+  for (const change of changes) {
+    // `null` = this parent carries no field row for this definition, so its
+    // cell keys for it are none of this change's business. It is also the gate
+    // `childContentsToEncodedPropertyValue` is called under.
+    const perFieldRow = await fieldRowValues(
+      ctx.tx, siblings, change.fieldId, isFieldDefinition,
+    )
+    if (perFieldRow === null) continue
+    let unconvertible = 0
+    const canonicalized: Array<Array<Pick<BlockData, 'id' | 'content'>>> = []
+    for (const values of perFieldRow) {
+      const group: Array<Pick<BlockData, 'id' | 'content'>> = []
+      for (const value of values) {
+        let encoded: unknown
+        try {
+          // At value-child GRAIN, both ways: under a list codec this row holds
+          // ONE member, and reading it against the whole-array grammar would
+          // make every member unconvertible.
+          encoded = valueChildContentToEncoded(change.schema, value.content)
+        } catch {
+          unconvertible += 1
+          continue
+        }
+        // Canonicalize the stored text under the new codec so it reads back as
+        // what `setProperty` would have written. Re-parsing the TEXT is what
+        // makes a cross-type conversion possible at all, and it costs one
+        // ambiguity: a bare `null` is a literal to a codec that rejects null
+        // and the unset sentinel to one that accepts it (#1030).
+        const canonical = change.encodingChanged
+          ? encodedToValueChildContent(change.schema, encoded)
+          : value.content
+        group.push({id: value.id, content: canonical})
+        if (value.content === canonical) continue
+        // Re-stamp the reference columns from the REWRITTEN content, the same
+        // duty every same-tx processor that rewrites `content` after
+        // `core.deriveReferenceTarget` already ran carries (merge retarget,
+        // deleted-block inlining). Retyping a ref property to a text one turns
+        // `((id))` into escaped plain text, and this processor's writes are
+        // `settledWrites`, so the derive re-run will never revisit the row —
+        // the column would keep naming a target the content no longer
+        // references. Always an update of an existing row, so an unresolvable
+        // alias clears the column rather than preserving a prior id.
+        const derived = await deriveReferenceColumns(
+          canonical, parent.workspaceId, referenceLookups,
+        )
+        const patch: Parameters<typeof ctx.tx.update>[1] = {content: canonical}
+        const nextTargetId = derived.targetId ?? null
+        if ((value.referenceTargetId ?? null) !== nextTargetId) {
+          patch.referenceTargetId = nextTargetId
+        }
+        // Defence in depth, and kept so this stays the same two-column derive
+        // every other inline re-stamp does: a VALUE child is bit-filtered out
+        // of `isFieldValueChild` if it carries the field-form marker, so it
+        // cannot be field-form before the rewrite, and escaping cannot make it
+        // one afterwards.
+        if ((value.isFieldForm ?? false) !== derived.isFieldForm) {
+          patch.isFieldForm = derived.isFieldForm
+        }
+        await ctx.tx.update(value.id, patch, {skipMetadata: true})
+      }
+      canonicalized.push(group)
+    }
+    // Union ACROSS field rows, the same rule the projection runs, over the
+    // CANONICAL text because that is what gets published. Both this and
+    // `childContentsToEncodedPropertyValue` own what a definition's value is at
+    // either grain — a list property is N sibling value children, and a
+    // first-parseable-wins read here would publish one member and let
+    // MATERIALIZE reap the rest.
+    const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
+      .map(value => value.content)
+    if (change.encodingChanged && unconvertible > 0) {
+      unconvertibleByField.set(
+        change.fieldId,
+        (unconvertibleByField.get(change.fieldId) ?? 0) + unconvertible,
+      )
+    }
+    if (change.oldName !== change.newName) oldNames.push(change.oldName)
+    // PUBLISH NOTHING WHEN ANYTHING FAILED TO CONVERT. The cell write below is
+    // `skipMetadata` but not settled against MATERIALIZE's own reconcile in a
+    // later tx, which compares the children against what was published — over
+    // the very rows this pass reports as preserved unchanged. One rule for both
+    // grains, because the promise is the same for both: a partial LIST would
+    // have its unconvertible member tombstoned, and a list migrated to a SCALAR
+    // would have the unconvertible row overwritten and the converted one folded
+    // away.
+    //
+    // The cell is then either unchanged (nothing was canonicalized, so no child
+    // write and no reprojection) or the PARTIAL projection under the
+    // definition's current name — §9's contract, since the cell derives from
+    // the children. What the guard buys is the ROWS, not the cell: this pass
+    // never writes a value over children it promised to preserve and never
+    // deletes a value row. The unconvertible COUNT is reported after commit.
+    if (unconvertible > 0) continue
+    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
+    assignments.push({
+      name: change.newName, value: projected, unset: projected === undefined,
+    })
+  }
+  const next = {...parent.properties}
+  for (const name of oldNames) delete next[name]
+  for (const assignment of assignments) {
+    if (assignment.unset) delete next[assignment.name]
+    else next[assignment.name] = assignment.value
+  }
+  if (propertiesEqual(parent.properties, next)) return
+  await ctx.tx.update(parentId, {properties: next}, {skipMetadata: true})
+}
+
+export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
+  name: MIGRATE_PROPERTY_DEFINITION_PROCESSOR_NAME,
+  // `deleted` as well as `properties`, because the claim model in
+  // `collectChanges` has to see definitions this tx REMOVES or REVIVES, and
+  // neither touches the bag. The field watch compares by VALUE, so a
+  // `tx.restore` that rewrites an identical properties_json does not register
+  // as a properties change at all. Ordinary block deletes now reach this
+  // processor and stop at the first metadata parse, before any query.
+  watches: {kind: 'field', table: 'blocks', fields: ['properties', 'deleted']},
+  // settledWrites (issue #402): the consuming-cell re-keys and value-child
+  // re-encodes this processor writes must NOT mark rows dirty for the
+  // derivation re-run pass. The re-run's MATERIALIZE resolves names against the
+  // same stale tx-start registry described in fact 2 above — it would read the
+  // dropped OLD name as a user's key deletion and tombstone the field rows this
+  // pass must keep. Both writes are already convergent with the children by
+  // construction (the cell is projected FROM them, the content is canonicalized
+  // under the codec the cell was projected with), so suppressing re-derivation
+  // loses nothing. Deliberately NOT rerunOnDirtyRows: a plugin editing a
+  // definition mid-pass has no reachable flow today, and a re-run against the
+  // stale registry would only widen fact 2's blast radius.
+  settledWrites: true,
+  apply: async (event, ctx) => {
+    const collected = collectChanges(ctx, event.workspaceId, event.changedRows)
+    if (collected === 'unjudgeable') {
+      // Refuse the whole tx rather than commit half of it. `repo.tx` surfaces a
+      // ProcessorRejection to the toast layer and rolls back, so the definition
+      // row does not land either — which is the point: a re-typed definition
+      // whose consumers were never re-encoded has no repair path left, and a
+      // client with no registry for this workspace cannot recognize its field
+      // rows or judge its names well enough to provide one.
+      throw new ProcessorRejection(
+        'cannot edit a property definition in a workspace this client has no '
+        + 'definition registry for: its consuming blocks could not be updated '
+        + 'to match. Open that workspace and try again.',
+        'property.definition-change.unjudgeable',
+        {workspaceId: event.workspaceId},
+      )
+    }
+    const {changes, unfanoutable} = collected
+    if (unfanoutable.length > 0) {
+      // Only a change with CONSUMERS strands anything; one on an unused
+      // definition is the user's to make, and telling them to fix something
+      // first would be friction for nothing.
+      const stranded = await consumingParentIds(
+        ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
+      )
+      if (stranded.length > 0) {
+        // One refusal per transaction, named for the first reason held. The
+        // user fixes one cause at a time either way, and a combined message
+        // would describe a state that no longer exists after the first fix.
+        const {code, message} = REFUSALS[unfanoutable[0]!.reason]
+        throw new ProcessorRejection(
+          message, code, {fieldIds: unfanoutable.map(held => held.fieldId)},
+        )
+      }
+    }
+    if (changes.length === 0) return
+    const parentIds = await consumingParentIds(
+      ctx.db, event.workspaceId, changes.map(c => c.fieldId),
+    )
+    if (parentIds.length === 0) return
+    // This tx PARSED each changing definition's row, so its field rows are
+    // recognized without asking the resolver — which would answer
+    // `definition-unavailable` for exactly the one being repaired, and its
+    // consumers are the ones the repair exists to reach. Every OTHER fieldId
+    // encountered walking a parent's children is the resolver's to classify.
+    const changing = new Set(changes.map(change => change.fieldId))
+    const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) =>
+      changing.has(fieldId)
+      || isResolvableFieldDefinition(
+        ctx.resolvePropertySchemaField(event.workspaceId, fieldId),
+      )
+    const unconvertibleByField = new Map<string, number>()
+    for (const parentId of parentIds) {
+      await applyToParent(ctx, parentId, changes, isFieldDefinition, unconvertibleByField)
+    }
+    // Reported per definition, after commit: one edit can re-type several, and a
+    // tx that rolls back stranded nothing. `afterCommit` is the only channel a
+    // same-tx processor has to say something non-fatal — a throw would revert
+    // the user's own edit.
+    for (const change of changes) {
+      const count = unconvertibleByField.get(change.fieldId) ?? 0
+      if (count === 0) continue
+      ctx.tx.afterCommit(REPORT_UNCONVERTIBLE_VALUES_PROCESSOR, {
+        fieldId: change.fieldId, name: change.newName, count,
+      })
+    }
+  },
+})
+
+interface UnconvertibleArgs {
+  fieldId: string
+  name: string
+  count: number
+}
+
+const unconvertibleArgsSchema = z.object({
+  fieldId: z.string(),
+  name: z.string(),
+  count: z.number(),
+})
+
+declare module '@/data/api' {
+  interface PostCommitProcessorRegistry {
+    [REPORT_UNCONVERTIBLE_VALUES_PROCESSOR]: UnconvertibleArgs
+  }
+}
+
+export const REPORT_UNCONVERTIBLE_VALUES = definePostCommitProcessor<UnconvertibleArgs>({
+  name: REPORT_UNCONVERTIBLE_VALUES_PROCESSOR,
+  watches: {kind: 'explicit'},
+  scheduledArgsSchema: unconvertibleArgsSchema,
+  apply: async (event, ctx) => {
+    const args = event.scheduledArgs
+    if (!args || args.count <= 0) return
+    // Claim only what's true: this pass never deletes a value row, so the text
+    // is preserved verbatim. It does NOT promise a surface — value children sit
+    // under a field row, and the visible view prunes field rows (§9), so they
+    // are reachable through the property rows, not by scrolling the outline.
+    const message =
+      `${args.count} value${args.count === 1 ? '' : 's'} for property `
+      + `"${args.name}" could not convert to the new type; their original `
+      + `text is preserved unchanged`
+    console.warn(`[propertyDefinitionChange] ${message}`)
+    ctx.repo.reportUserError(new ProcessorRejection(
+      message, 'property.codec-change.unconvertible',
+      {fieldId: args.fieldId, name: args.name, count: args.count},
+    ))
+  },
+})

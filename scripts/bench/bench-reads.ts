@@ -4,7 +4,7 @@
  *
  *   - repo.load(id) cold → single SQL.
  *   - repo.load(id, {children/ancestors/descendants}) at varying scale.
- *   - Raw SUBTREE_SQL / ANCESTORS_SQL / IS_DESCENDANT_OF_SQL / CHILDREN_SQL.
+ *   - Raw SUBTREE_SQL / the ancestor walk / IS_DESCENDANT_OF_SQL / CHILDREN_SQL.
  *   - repo.query.subtree({id}) cold (Handle) — verifies the §2 #7
  *     single-query promise: subtree of 1000 blocks 5 levels deep should
  *     be 1 SQL call.
@@ -18,9 +18,9 @@
  */
 
 import {
-  ANCESTORS_SQL,
   CHILDREN_SQL,
   IS_DESCENDANT_OF_SQL,
+  manyAncestorsSql,
   SUBTREE_SQL,
 } from '@/data/internals/treeQueries'
 import { bench, type BenchResult } from './harness'
@@ -109,12 +109,12 @@ export const runReadBenches = async (): Promise<BenchResult[]> => {
     await env.cleanup()
   }
 
-  // ──── Raw ANCESTORS_SQL at varying chain depth ────
+  // ──── Raw ancestor walk at varying chain depth ────
   for (const depth of [10, 100, 1000, 5000]) {
     const env = await setupBenchEnv()
     const chain = await populateLinearChain(env.db, depth)
-    const r = await bench(`ANCESTORS_SQL raw (depth=${depth})`, async () => {
-      await env.db.getAll(ANCESTORS_SQL, [chain.leafId, chain.leafId])
+    const r = await bench(`ancestor walk raw (depth=${depth})`, async () => {
+      await env.db.getAll(manyAncestorsSql(1), [chain.leafId])
     }, {warmup: 2, maxIters: 100})
     r.metadata = {depth}
     out.push(r)

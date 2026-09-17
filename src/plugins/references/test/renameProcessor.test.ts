@@ -25,7 +25,8 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, blockTypeLabelProp } from '@/data/properties'
+import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
@@ -138,9 +139,7 @@ const derivedColumns = async (id: string) =>
  *  bit, a non-null parent, a flipped workspace, and a target that resolves
  *  to a definition. Seeding only the marker (the shape `seedSource`
  *  produces, at `parentId: null`, in an unflipped workspace) builds a row
- *  that is NOT a field row — which is what the first version of these
- *  tests did, so they asserted the marked tier on rows that should never
- *  have reached it (Codex on PR #484). */
+ *  that is NOT a field row. */
 const flipWorkspaceWithDefinition = async (fieldId: string): Promise<void> => {
   await env.h.db.execute(
     `UPDATE workspaces SET properties_migration = 'children' WHERE id = ?`, [WS])
@@ -710,8 +709,8 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
   })
 
   it('falls back to a scan when the alias holds a NUL byte, instead of throwing', async () => {
-    // Codex on PR #484, and reachable end-to-end: nothing rejects a NUL in an
-    // alias — `parseReferences` accepts it, `setProperty` stores it,
+    // Reachable end-to-end: nothing rejects a NUL in an alias —
+    // `parseReferences` accepts it, `setProperty` stores it,
     // `block_aliases` indexes it. FTS5 reads its query as a C string, so
     // `MATCH '"[[a<NUL>b]]"'` raises `unterminated string`. This runs INSIDE
     // the user's transaction, so the throw would roll their whole rename back
@@ -735,8 +734,8 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
   })
 
   it("never rewrites an installed extension's source code", async () => {
-    // Codex on PR #484, P1. `references.parseReferences` deliberately does not
-    // run the wikilink grammar over extension source (code hands it `[[`
+    // `references.parseReferences` deliberately does not run the wikilink
+    // grammar over extension source (code hands it `[[`
     // openers for free — one real extension minted three phantom pages before
     // that gate). So extension blocks have NO edge, which is exactly why the
     // edge-keyed leg never reached them and the content leg would. Rewriting a
@@ -920,8 +919,8 @@ describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)
   })
 
   it('a PADDED alias cannot reach the marked tier at all — the derive trims first', async () => {
-    // Codex on PR #484 flagged that `isMarkedNameRowFor` compared against the
-    // whole-block parser's TRIMMED alias while the edge carries the raw one.
+    // `isMarkedNameRowFor` used to compare against the whole-block parser's
+    // TRIMMED alias while the edge carries the raw one.
     // That inconsistency was real and is fixed (the comparison now uses the
     // raw span), but it turns out to change no behaviour, and saying so is
     // worth more than a test implying otherwise.
@@ -1054,8 +1053,7 @@ describe('rename — post-tx claimant (§11 group 2)', () => {
     // A machine seat used to get an EXEMPTION here: post-commit, a
     // re-derive could mint an α-seat in the read→write gap and claim the
     // released name, so the pass had to recognize "a seat my own window
-    // produced" and rewrite past it. That recognition was a timestamp
-    // heuristic, and every review round found another way to fool it.
+    // produced" and rewrite past it.
     //
     // Same-tx removes the case rather than the guard. Seats are minted by
     // the post-commit `parseReferences`, which runs strictly AFTER this
@@ -1370,5 +1368,45 @@ describe('rename — claimants of the released alias (§11 group 2)', () => {
     expect((await env.read('s'))!.content).toBe('see [[Win]] please')
     expect(await refsOf('s')).toEqual([{id: seatId, alias: 'Win'}])
     expect((await env.read(seatId))!.deleted).toBe(0)
+  })
+})
+
+describe('rename — a legacy type whose own name is not writable', () => {
+  // The ordering this path actually has, which a direct `tx.update` cannot
+  // reproduce: `renameBacklinks` runs in pass ONE and rewrites this type's
+  // content, `alias.sync` has already had its only slot and does not rerun,
+  // and the kernel typeify processor reruns on the row it dirtied. Driving the
+  // rewrite with `tx.update` instead lets `alias.sync` run afterwards and
+  // repair the bag, which hides whether typeify moved the claim itself.
+  it('retires the old claim when the rewritten name cannot be claimed', async () => {
+    await seedTarget('t', 'Foo', ['Foo'])
+    await seedSource('ty', 'See [[Foo]]')
+    // Now a legacy type: its name lives in content, label and claim, and none
+    // of those spellings can be written as `[[name]]`.
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [
+        JSON.stringify({
+          types: [BLOCK_TYPE_TYPE, PAGE_TYPE],
+          [blockTypeLabelProp.name]: 'See [[Foo]]',
+          [aliasesProp.name]: ['See [[Foo]]'],
+        }),
+        'ty',
+      ])
+    })
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['Bar']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const row = (await env.read('ty'))!
+    const props = JSON.parse(row.properties_json) as Record<string, unknown>
+    expect(row.content).toBe('See [[Bar]]')
+    expect(props[blockTypeLabelProp.name]).toBe('See [[Bar]]')
+    // The claim on the name this type no longer has is RELEASED. Neither
+    // spelling resolves — `[[See [[Bar]]]]` does not parse — but leaving the
+    // old one claimed holds that spelling against any other block taking it.
+    expect(props[aliasesProp.name] ?? []).toEqual([])
   })
 })

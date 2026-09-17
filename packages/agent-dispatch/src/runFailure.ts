@@ -187,9 +187,6 @@ export const classifyThrown = (error: unknown, message: string): RunFailureClass
   statedRunFailure(error)
   ?? classifyRunFailure({stderr: message, failureText: '', exitCode: null, timedOut: false})
 
-/** The cause of a failed channel POST, from the transport rather than from
- *  its rendered message. A status the listener CHOSE is authoritative; a
- *  rejected fetch never got one, and an abort is our own 10s timeout. */
 /** Could this failure have left work running at the receiver?
  *
  *  The channel listener starts the ambient session before it acknowledges,
@@ -206,6 +203,9 @@ export const channelDispatched = (status: number | null, error: unknown): Dispat
   return reason === 'ECONNREFUSED' || reason === 'ENOTFOUND' || reason === 'EHOSTUNREACH' ? 'no' : 'unknown'
 }
 
+/** The cause of a failed channel POST, from the transport rather than from
+ *  its rendered message. A status the listener CHOSE is authoritative; a
+ *  rejected fetch never got one, and an abort is our own 10s timeout. */
 export const channelFailureFor = (status: number | null, error: unknown): RunFailureClass => {
   if (status !== null) {
     if (status === 429 || status === 529) return {kind: 'rate-limit', retryable: true, label: RUN_FAILURE_LABELS['rate-limit']}

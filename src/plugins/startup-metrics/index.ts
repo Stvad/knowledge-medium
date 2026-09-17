@@ -6,6 +6,7 @@ import {
   collectStartupMetricsEffect,
   startupMetricsUIStateType,
   startupRecordProp,
+  startupRecordType,
 } from './record.ts'
 
 /** Records a durable per-session cold-start timeline (TTI + settled + the phase
@@ -19,4 +20,5 @@ export const startupMetricsPlugin: AppExtension = systemToggle({
   appEffectsFacet.of(collectStartupMetricsEffect, { source: 'startup-metrics' }),
   definitionSeedsFacet.of(startupRecordProp, { source: 'startup-metrics' }),
   typeSeedsFacet.of(startupMetricsUIStateType, { source: 'startup-metrics' }),
+  typeSeedsFacet.of(startupRecordType, { source: 'startup-metrics' }),
 ])

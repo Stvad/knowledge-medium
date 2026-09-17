@@ -52,20 +52,11 @@ export interface StructuralEditPolicyInput {
  * — placing, reparenting, or merging a block somewhere the surface
  * cannot render. That's what makes them scope-relative.
  *
- * Deletion is deliberately NOT in this set. Removing a subtree doesn't
- * relocate anything across the boundary, so a block's position in the
- * scope says nothing about whether it may be deleted — deleting a page
- * from its own panel, a backlink entry, or an embed are all ordinary,
- * wanted gestures. What the surface does once its root is gone is the
- * surface's concern, not the policy's (a panel is retargeted by
- * `PanelContentRecovery`, a nested surface just re-queries). A
- * `canDelete: !isScopeRoot` rule lived here briefly and made page
- * deletion unreachable from every UI; don't reintroduce it.
- *
- * The main outline reaches the same answers it always did, because
- * there the scope root simply *is* `topLevelBlockId`. Nested surfaces
- * (backlinks, embeds) now get correct behaviour for free by declaring
- * their own scope root.
+ * Deletion is deliberately not in this set — removing a subtree relocates
+ * nothing across the boundary, and the inclusion criterion above is
+ * exactly "moves structure across the boundary". A `canDelete:
+ * !isScopeRoot` rule here once made page deletion unreachable from every
+ * UI; don't reintroduce it.
  */
 export interface StructuralEditPolicy {
   /** Is this block the root of its render scope? */

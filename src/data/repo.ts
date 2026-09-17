@@ -1,17 +1,7 @@
 /**
- * New `Repo` class for the data-layer redesign (spec §3, §8).
- *
- * Stage 1.4 scope: holds `db` + `cache` + `user` + the mutator registry
- * (kernel mutators registered at construction time). Exposes:
- *   - `repo.tx(fn, opts)` — primitive transactional session
- *   - `repo.mutate.X(args)` — typed-dispatch sugar (1-mutator tx wrapping)
- *   - `repo.run(name, args)` — runtime-validated dispatch (dynamic plugins)
- *   - `repo.setFacetRuntime(runtime)` — refresh mutator registry from a
- *     FacetRuntime. Minimal impl reads `mutatorsFacet` contributions.
- *
- * Stage 2 of Phase 1 (post-1.6) adds:
- *   - HandleStore + `repo.block(id)` / `repo.children(id)` / etc.
- *   - Layout B sync observer for sync-applied invalidation (design doc §9.2)
+ * `Repo`: the data-layer entry point. Owns `db` + `cache` + client context
+ * + the mutator/query/processor registries. Surface: `tx` / `mutate.X` /
+ * `run` / `query` / `block`, plus registry accessors and sync/undo control.
  */
 
 import { v4 as uuidv4 } from 'uuid'
@@ -55,12 +45,19 @@ import {
   refCodecKind,
   refTypedSchemaNames,
 } from './internals/refProjection'
+import {
+  DeterministicIdCrossWorkspaceError,
+  ReadOnlyError,
+  UndoHistoryDroppedError,
+} from './api/errors'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
 import {
   BLOCKS_TABLE_COLUMN_NAMES,
+  REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL,
+  REFERENCE_TARGET_SWEEP_CANDIDATES_SQL,
   buildQualifiedBlockColumnsSql,
   parseBlockRow,
   type BlockRow,
@@ -83,18 +80,23 @@ import {
 } from './internals/handleStore'
 import { jsonPathForProperty, normalizeTypedBlockQuery } from './internals/typedBlockQuery'
 import {
+  attachDbMetrics,
   DbMetrics,
   QueryMetrics,
-  wrapDbWithMetrics,
 } from './internals/timingMetrics'
 import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
+  type RematerializeReport,
+  type RematerializeScope,
 } from '@/data/internals/syncObserver/observer'
 import {
   STAGED_SCAN_LIMIT,
   STAGED_VIEW_GAP_SQL,
+  WORKSPACE_UNAPPLIED_COUNT_CAP,
+  WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,
+  WORKSPACE_UNAPPLIED_SQL,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -113,18 +115,6 @@ import {
 } from './internals/referenceTargetProcessor'
 import { parseExactReferenceBlockContent } from './referenceBlock'
 import type { BlockIdPolicy } from './blockId'
-import type {
-  PropertyDefinitionChange,
-  PropertyDefinitionMigrationPlan,
-} from './internals/propertyDefinitionMigrations'
-import {
-  encodedPropertyValueToChildContent,
-  isFieldValueChild,
-  isPropertyFieldInstance,
-  propertyChildContentToEncodedValue,
-  rekeyParentPropertyCell,
-  type IsPropertyFieldDefinition,
-} from './propertyChildren'
 import {
   reprojectOwnersForRowStates,
   type ProjectableRow,
@@ -137,13 +127,14 @@ import {
   parseParentDeletedError,
   type ParsedAliasCollision,
 } from './internals/raiseProtocol'
-import { UndoManager, type UndoEntry } from './internals/undoManager'
+import { UndoManager, type HistoryDrop, type UndoEntry } from './internals/undoManager'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
 import { ClientContext, type ClientContextReader, type LayoutSessionRouter } from './clientContext'
 import type { TxImpl } from './internals/txEngine'
-import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
+import { CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
+import { ancestorWalk } from './internals/ancestorBatch'
 import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
@@ -156,7 +147,7 @@ import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { ProjectorRuntime } from './projectorRuntime'
 import {USER_SCHEMAS_PROJECTOR_ID, UserSchemasService} from './userSchemasService'
-import { UserTypesService } from './userTypesService'
+import { UserTypesService, USER_TYPES_PROJECTOR_ID} from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
 import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
@@ -273,10 +264,6 @@ const MAX_QUERY_COMPOSITION_DEPTH = 32
  *  colons (e.g. `roam:isa`). */
 const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
   `${workspaceId}:${name}`
-
-/** Suffix (after the `workspace_backfill:` prefix) of a per-workspace
- *  workspace-backfill completion marker — `<workspaceId>:<backfillId>`. Same
- *  shape/rationale as `reprojectionMarkerKey`. */
 
 /** Equal iff `a` and `b` have the same key set AND `eq` holds for every shared
  *  key's values. An absent map is the empty map; the default `eq` compares keys
@@ -459,11 +446,43 @@ interface ReferenceTargetStamp {
  *  `propertySchemaResolverFor` serves only the active or immediately-previous
  *  workspace: a run-time re-resolve after two switches fails closed, every
  *  fieldId stops resolving, and the repair silently becomes a no-op that no
- *  later scan can find again (the rows are no longer NULL-targeted). Same
- *  hazard, same fix, as `runPropertyDefinitionMigrationBatch`. */
+ *  later scan can find again (the rows are no longer NULL-targeted). */
 interface ReferenceTargetStampContext {
   readonly workspaceId: string
   readonly resolver: PropertySchemaResolver
+}
+
+/** Why this device's view of a workspace is incomplete — see
+ *  {@link Repo.workspaceViewGap}. */
+export interface ViewGap {
+  /** The CAUSE only; callers state their own consequence. */
+  readonly reason: string
+  /** Will waiting clear it? True for work in flight or a download still
+   *  running. False for rows this device downloaded and never caught up with,
+   *  which nothing is going to retry on its own — so a caller that re-arms
+   *  itself on a deferral must not re-arm on this one, and a caller with a
+   *  human to tell must not tell them to try again. */
+  readonly transient: boolean
+}
+
+/** What {@link Repo.rematerializeWorkspace} did, for the operator who ran it.
+ *
+ *  `unappliedBefore` / `unappliedAfter` are the size of the durable gap on
+ *  either side of the pass — the one thing that answers "did that help?", which
+ *  is why they are EXACT counts and not the capped one the refusal reports.
+ *
+ *  Not closed arithmetic with `resolved`, deliberately: the pair excludes rows
+ *  with a live queue entry (that half is the in-flight predicate's) while `all`
+ *  re-judges every staged row, so a pass CAN resolve a row that neither end
+ *  counted. `resolved > unappliedBefore` is therefore reachable and is not a
+ *  bug — it is the two predicates owning disjoint populations. */
+export interface WorkspaceRematerialization extends RematerializeReport {
+  readonly workspaceId: string
+  readonly unappliedBefore: number
+  readonly unappliedAfter: number
+  /** What {@link Repo.workspaceViewGap} says now — null when the workspace's
+   *  one-way passes are unblocked. */
+  readonly remainingGap: ViewGap | null
 }
 
 /** What an operator-triggered backfill did, for a caller that has a human to
@@ -486,7 +505,94 @@ export interface OperatorBackfillResult {
    *  pass that aborted partway is what most needs the distinction, since some
    *  of its batches committed. */
   reason?: string
+  /** Would WAITING clear the reason? False when nothing is in flight to change
+   *  it — a `transient: false` view gap — so the operator is told what to do
+   *  instead of to retry a gesture that will keep refusing. Absent for outcomes
+   *  that carry no reason. */
+  retryable?: boolean
 }
+
+/** Why a backfill cannot run at all when the composition root wired no claim
+ *  seam. */
+const NO_COMPLETION_CLAIM =
+  'no BackfillCompletionClaim is configured, so completion cannot be recorded'
+
+/** What a device may do about a backfill claim it does not yet hold.
+ *
+ *  `tryClaim` WRITES — it ensures the Migrations page and creates the claim
+ *  row — so a device that fails one of these has to be turned away BEFORE that
+ *  write: a stale device leaves the create and its release both queued, and
+ *  they land later, out of order, against a completion it never saw, freeing
+ *  later operators to repeat the migration.
+ *
+ *  The kinds are separate because the callers answer them differently: the
+ *  automatic loop tries the next pass past a not-primed registry, re-arms on a
+ *  transient view gap, and stops on the rest. */
+type BackfillClaimRefusal =
+  | {readonly kind: 'read-only'}
+  | {readonly kind: 'stale'; readonly reason: string}
+  | {readonly kind: 'not-primed'; readonly reason: string}
+  | {readonly kind: 'view-gap'; readonly reason: string; readonly transient: boolean}
+
+/** What came of trying to take a claim. `not-ours` folds "a peer holds it"
+ *  and "it is already complete and this caller may not reclaim" together —
+ *  neither is this device's to run, and the claim seam does not tell them
+ *  apart. */
+type BackfillClaimAttempt =
+  /** `minted` is false when a live claim already named this claimant — which,
+   *  claimant ids being per browser PROFILE, may be a sibling TAB's. Run on
+   *  it; never release it. */
+  | {readonly status: 'claimed'; readonly minted: boolean}
+  | {readonly status: 'not-ours'}
+  | {readonly status: 'refused'; readonly refusal: BackfillClaimRefusal}
+
+/** Would waiting clear a claim write that THREW? Not for these two: a foreign
+ *  block parked at the deterministic claim id needs someone to move it, and a
+ *  workspace that turned read-only needs the role back. Everything else —
+ *  a transient DB failure above all — is worth retrying, so the default is
+ *  yes. Named errors rather than a taxonomy: these are the only two the claim
+ *  path throws that a person cannot fix by trying again. */
+const isPermanentClaimError = (err: unknown): boolean =>
+  err instanceof DeterministicIdCrossWorkspaceError || err instanceof ReadOnlyError
+
+/** Would WAITING clear this refusal? Only a durable view gap and a role flip
+ *  say no — and the two callers disagree about which of them can see a role
+ *  flip, so the rule lives here rather than in each. */
+const retryableAfter = (refusal: BackfillClaimRefusal): boolean =>
+  refusal.kind === 'view-gap' ? refusal.transient : refusal.kind !== 'read-only'
+
+/** How an operator hears a pre-claim refusal. Everything is `deferred` — a
+ *  refusal happens before the body runs, so nothing is half-done — with
+ *  `retryable` carrying the only part the human can act on.
+ *
+ *  The `read-only` arm is DEFENCE IN DEPTH, not load-bearing: the gesture
+ *  short-circuits on `isReadOnly` before it calls `takeBackfillClaim`, and
+ *  every statement between the two checks is synchronous, so they cannot
+ *  disagree. It exists so the mapping stays total if that changes. */
+const refusedBackfillResult = (refusal: BackfillClaimRefusal): OperatorBackfillResult =>
+  refusal.kind === 'read-only'
+    ? {outcome: 'read-only', undoHistoryCleared: false}
+    : {
+      outcome: 'deferred',
+      undoHistoryCleared: false,
+      reason: refusal.reason,
+      retryable: retryableAfter(refusal),
+    }
+
+/** The backfill itself, runnable from inside a gesture that already holds the
+ *  claim for it. See {@link Repo.withOperatorBackfillClaim}. */
+export interface OperatorBackfillPass {
+  /** A pass that did not return `ran` has ALREADY handed the claim back to
+   *  the gesture's `finally` — it does not release on its own. */
+  run(): Promise<OperatorBackfillResult>
+}
+
+/** What {@link Repo.withOperatorBackfillClaim} did. `claimed: false` carries
+ *  the outcome to report and means the body never ran, so nothing this gesture
+ *  would have written exists. */
+export type OperatorBackfillClaimOutcome<T = void> =
+  | {readonly claimed: true; readonly value: T}
+  | {readonly claimed: false; readonly result: OperatorBackfillResult}
 
 export class Repo {
   readonly db: PowerSyncDb
@@ -561,6 +667,8 @@ export class Repo {
    *  processors. Subscribers are responsible for the UI side
    *  (toast routing); the data layer stays UI-agnostic. */
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
+  private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
+  private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -617,16 +725,49 @@ export class Repo {
   private readonly blockFacades = new Map<string, Block>()
   /** Handle registry for query-backed collection factories: `children`,
    *  `subtree`, `ancestors`, plugin queries, etc. Identity rule:
-   *  same key → same LoaderHandle instance. GC after `gcTimeMs` of
-   *  zero subscribers + zero in-flight loads. The store also walks
+   *  same key → same LoaderHandle instance. GC `gcTimeMs` after a handle's
+   *  last reference drops (`LoaderHandle.refCount`). The store also walks
    *  invalidation: TxEngine fast path + the Layout B sync observer
    *  call `handleStore.invalidate({…})` to fan out to dep-matching
    *  handles. */
   readonly handleStore: HandleStore = new HandleStore()
   /** Per-PowerSyncDb-call timings (getAll / getOptional / get /
    *  execute / writeTransaction). Populated by the metrics-wrapping
-   *  proxy installed around `this.db` at construction. */
-  readonly dbMetrics = new DbMetrics()
+   *  proxy installed around `this.db` at construction.
+   *
+   *  Assigned in the constructor, not here: its contention tracker belongs to
+   *  the DATABASE (the adapter feeds it, and that was opened before this Repo),
+   *  so it can only be resolved once `opts.db` is in hand. */
+  readonly dbMetrics: DbMetrics
+  /** Committed transactions NOT flagged `telemetry`, and the handle fan-out
+   *  they caused. Counted HERE rather than reconstructed by a consumer from
+   *  before/after snapshots: a consumer's window spans its own awaits, so it
+   *  cannot tell its own work from anyone else's, while this pair is written in
+   *  the same synchronous block as the events it counts.
+   *
+   *  A transaction that CHANGED NO ROW is counted on neither side — rolled
+   *  back, or committed empty as an idempotent ensure does. It invalidates
+   *  nothing, so counting the write alone would deflate the ratio a reader
+   *  builds from the pair. */
+  private nonTelemetryWrites = 0
+  private readonly nonTelemetryFanout: Record<string, number> = {}
+  /** Bumped by `resetMetrics()`. A consumer holding figures from before a reset
+   *  can compare epochs instead of inferring the reset from a counter going
+   *  backwards, which is undetectable once other writes have carried it back up. */
+  private metricsEpoch = 0
+  /** Workspace active when the current counter span began — at construction, or
+   *  at the last `resetMetrics()`. The counters are page-global while the
+   *  features reading them attribute a span to ONE workspace, and a reset can
+   *  land in any of them: work done between the reset and the reader noticing it
+   *  belongs to whatever was active then, not to whatever is active by the time
+   *  it looks. Without this the reader can only start the new span empty, which
+   *  reads as "attributable to the first workspace observed after the reset". */
+  private metricsEpochWorkspaceId: string | null = null
+  /** Wall clock when the current counter span began. Starts at the page's time
+   *  origin, so before any reset it is page-load time. A consumer reporting a
+   *  duration alongside these counters needs the span's start, not the page's:
+   *  after a reset the two differ by everything that happened before it. */
+  private metricsEpochStartedAt = Date.now() - performance.now()
   /** Per-query-name resolve timings. The dispatcher records each
    *  `loader(ctx)` invocation here keyed by the query's full name. */
   readonly queryMetrics = new QueryMetrics()
@@ -675,11 +816,11 @@ export class Repo {
   /** Arms a callback for when this device is no longer behind the server
    *  (`RepoOptions.backfillSyncGate`). */
   private readonly backfillSyncGate: (cb: () => void) => () => void
-  /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
   /** `workspaceId:backfillId` of operator passes running right now. Two
    *  invocations in one Repo share a claimant, so the CLAIM cannot separate
    *  them — this can. */
   private readonly inFlightOperatorBackfills = new Set<string>()
+  /** See `RepoOptions.backfillCompletionClaim`. Absent ⇒ backfills refuse. */
   private readonly backfillCompletionClaim: BackfillCompletionClaim | undefined
   /** Disposer for a gate armed but not yet opened, so a workspace switch or
    *  repo teardown doesn't leave a status listener attached. */
@@ -693,8 +834,8 @@ export class Repo {
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
-   *  (adversarial-review round 2: a durable once-ever marker permanently
-   *  missed definitions/aliases that arrived while the app was closed or
+   *  (a durable once-ever marker permanently missed definitions/aliases
+   *  that arrived while the app was closed or
    *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
    *  the first run, but the LIKE prefilter itself is an O(table) scan on
    *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
@@ -711,10 +852,6 @@ export class Repo {
   /** In-flight reference-target derive passes — drained by
    *  `awaitReferenceTargetDerive()`, same pattern. */
   private readonly referenceTargetDeriveJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
-  /** In-flight rename-reproject / codec re-encode migration passes
-   *  (PR #288 §7/§9, slice B2) — drained by
-   *  `awaitPropertyDefinitionMigrations()`, same pattern. */
-  private readonly propertyDefinitionMigrationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** In-flight property-seed materialization passes (§4.3 of the schema-
    *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
    *  siblings the pass is create/restore-only + idempotent rather than
@@ -929,7 +1066,12 @@ export class Repo {
     // want timings (or use `repo.runQuery` / `repo.tx` which already
     // route through it). The wrapper has the same shape, so existing
     // type contracts hold.
-    this.db = wrapDbWithMetrics(opts.db, this.dbMetrics) as PowerSyncDb
+    // One call: the contention tracker the wrapped db publishes and the one
+    // reported by `metrics()` must be the same object, and `attachDbMetrics` is
+    // where that is decided.
+    const metered = attachDbMetrics(opts.db)
+    this.dbMetrics = metered.metrics
+    this.db = metered.db as PowerSyncDb
     // Marker stores need the wrapped `this.db`, so they're built here
     // rather than as field initializers (which run before the body).
     this.reprojectionMarkers = new MarkerStore(
@@ -1054,10 +1196,6 @@ export class Repo {
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
-      getPropertyDefinitions: () => this._propertyDefinitionRegistry,
-      schedulePropertyDefinitionMigrations: (workspaceId, changes) => {
-        this.schedulePropertyDefinitionMigrations(workspaceId, changes)
-      },
     })
     this.mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name))
     // Identity stability for query handles is provided by the
@@ -1102,7 +1240,7 @@ export class Repo {
       handleStore: this.handleStore,
       deps: {
         ...policyDeps,
-        // Derive-at-arrival seam (PR #288 slice A): always attached — the
+        // Derive-at-arrival seam: always attached — the
         // LOCAL `reference_target_id` column must track content for
         // sync-applied rows on every device, e2ee included (derivation runs
         // over decrypted content). Resolution mirrors
@@ -1142,9 +1280,15 @@ export class Repo {
 
   /** Re-materialize a workspace's staged `blocks_synced` rows after it becomes
    *  materializable (WK pasted / plaintext confirmed via the §8.2 gate). No-op
-   *  if the observer isn't running. */
+   *  if the observer isn't running.
+   *
+   *  `'all'`, not `'unapplied'`: this and the reconcile rescan are the paths for
+   *  a workspace whose FLAGS may be wrong — the deterministic-id shadow this
+   *  predates the flag entirely — so trusting the flag to name the work is the
+   *  one thing they must not do. Unpinned by any test (the two scopes agree on
+   *  every shape a test can build), which is why it is written here. */
   async drainSyncWorkspace(workspaceId: string): Promise<void> {
-    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId)
+    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId, 'all')
   }
 
   /** Frozen snapshot of internal data-layer counters + timings
@@ -1192,6 +1336,31 @@ export class Repo {
    *      without needing a Playwright + profiler harness. */
   metrics(): Readonly<{
     handleStore: Readonly<Record<string, number>>
+    /** The same counters, restricted to committed transactions this Repo ran
+     *  that CHANGED a row and were NOT flagged `telemetry` — the user's work,
+     *  with the app's self-measurement left out. `writes` is those
+     *  transactions; `handleStore` is the fan-out they caused, measured around
+     *  each one's own invalidation walk. A feature reporting performance
+     *  figures should read THIS rather than subtracting its own activity from
+     *  the totals above.
+     *
+     *  `handleStore` here holds only the counters that walk can ATTRIBUTE —
+     *  those bumped inside the synchronous invalidation pass. Counters bumped
+     *  later, from a loader's settle path, are absent rather than zero; see the
+     *  delta loop in `_runAndDispatch`. */
+    excludingTelemetry: Readonly<{
+      writes: number
+      handleStore: Readonly<Record<string, number>>
+    }>
+    /** Increments on every `resetMetrics()`. Compare it rather than watching a
+     *  counter for a backwards step. */
+    epoch: number
+    /** Workspace active when this span of the counters began. `null` before any
+     *  workspace has been activated. */
+    epochWorkspaceId: string | null
+    /** Wall clock when this span began — the page's time origin until the first
+     *  `resetMetrics()`. */
+    epochStartedAt: number
     /** Live-state aggregates over the registered handle set: handle
      *  count, dep-count percentiles, and the top-3 keys by dep count.
      *  Pairs with `handleStore` counters — counters describe events
@@ -1202,6 +1371,16 @@ export class Repo {
     blockCache: Readonly<Record<string, number>>
     queries: Readonly<Record<string, ReturnType<QueryMetrics['snapshot']>[string]>>
     db: ReturnType<DbMetrics['snapshot']>
+    /** How busy the connection pool was, and the read timings taken while it
+     *  was free. SIBLING of `db` rather than a key inside it: `db` is a uniform
+     *  map of per-method `TimingSnapshot` that its consumers iterate.
+     *
+     *  `dbContention.uncontendedRead` and each `queries[name].uncontended` are
+     *  the only timings here that can survive a change in fan-out (as far as the
+     *  pool is observable — see `DbContention`) — everything else
+     *  in `db` and `queries` is wall-clock, which on a busy pool is dominated
+     *  by the queue ahead of the caller rather than by the work. */
+    dbContention: ReturnType<DbMetrics['contention']['snapshot']>
     /** High-water mark across all `repo.tx` calls since the last reset.
      *  Pairs with `db.writeTransaction.maxMs` to attribute outliers to a
      *  concrete description (e.g. 'reproject ref-typed properties after
@@ -1226,21 +1405,61 @@ export class Repo {
   }> {
     return Object.freeze({
       handleStore: this.handleStore.metrics.snapshot(),
+      excludingTelemetry: Object.freeze({
+        writes: this.nonTelemetryWrites,
+        handleStore: Object.freeze({...this.nonTelemetryFanout}),
+      }),
+      epoch: this.metricsEpoch,
+      epochWorkspaceId: this.metricsEpochWorkspaceId,
+      epochStartedAt: this.metricsEpochStartedAt,
       handleStoreInventory: this.handleStore.snapshotInventory(),
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
       db: this.dbMetrics.snapshot(),
+      dbContention: this.dbMetrics.contention.snapshot(),
       slowestTx: Object.freeze({...this.slowestTx}),
       txLog: Object.freeze(this.txLog.map(entry => Object.freeze({...entry}))),
       reprojection: Object.freeze({...this.reprojectionMetrics}),
     })
   }
 
+  /** The current counter span's identity, WITHOUT building a metrics snapshot.
+   *
+   *  `metrics()` walks and sorts every registered handle, copies and sorts each
+   *  timing reservoir and clones the transaction log — affordable for a
+   *  measurement, not for a consumer that only wants to know whether the span
+   *  it is holding is still the current one. That check runs from
+   *  `useSyncExternalStore` getters, so it happens on ordinary renders; on a
+   *  large session the snapshot cost lands on the interactive path, and a
+   *  performance monitor doing that would inflate what it reports.
+   *
+   *  The two fields are exactly what identifies a span. Keep this in step with
+   *  the same-named fields in `metrics()`; they read the same state, and
+   *  neither is derived from the other. */
+  metricsSpan(): { epoch: number; epochWorkspaceId: string | null } {
+    return { epoch: this.metricsEpoch, epochWorkspaceId: this.metricsEpochWorkspaceId }
+  }
+
   /** Zero every counter and reservoir in `repo.metrics()`. Use to
    *  mark a baseline before measuring a discrete operation (e.g. a
    *  benchmark iteration, a UI interaction in a soak test, or a
-   *  cold-start "open page → metrics" investigation). */
+   *  cold-start "open page → metrics" investigation).
+   *
+   *  Operations ALREADY IN FLIGHT settle into the new span: a query, DB call or
+   *  transaction that began before this returns records its full pre-reset
+   *  duration into the reservoir this just cleared. ACCEPTED rather than
+   *  guarded. Discarding them means capturing the epoch at the start of every
+   *  asynchronous metric and comparing it at each recording site — five sites
+   *  in this file alone, each one a thing every future metric has to remember —
+   *  to serve one caller, the devtools console hook, in a session where someone
+   *  is deliberately measuring. Take a baseline when the page is quiet, and
+   *  read `epochStartedAt` to know how far back the span reaches. */
   resetMetrics(): void {
+    this.metricsEpoch++
+    this.metricsEpochWorkspaceId = this.client.activeWorkspaceId
+    this.metricsEpochStartedAt = Date.now()
+    this.nonTelemetryWrites = 0
+    for (const k of Object.keys(this.nonTelemetryFanout)) delete this.nonTelemetryFanout[k]
     this.handleStore.metrics.reset()
     this.cache.metrics.reset()
     this.queryMetrics.reset()
@@ -1254,6 +1473,15 @@ export class Repo {
     this.reprojectionMetrics.skippedByAbsence = 0
     this.slowestTx = {description: null, ms: 0}
     this.txLog.length = 0
+    this.metricsResetListeners.notify()
+  }
+
+  /** Fires when `resetMetrics()` starts a new counter span. A consumer holding
+   *  figures from the old one has no other way to notice: the Repo, the
+   *  workspace and everything else it might compare are unchanged. Returns an
+   *  unsubscribe. */
+  onMetricsReset(listener: () => void): () => void {
+    return this.metricsResetListeners.add(listener)
   }
 
   /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
@@ -1312,9 +1540,8 @@ export class Repo {
     if (opts?.children) await this.hydrateChildren(id)
 
     if (opts?.ancestors) {
-      // Pass id twice — ANCESTORS_SQL uses it as both start and skip.
-      const ancestorRows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
-      for (const r of ancestorRows) this.cache.applyIfNewer(parseBlockRow(r), 'hydrate')
+      const {chain} = await ancestorWalk(this.db, id)
+      for (const r of chain) this.cache.applyIfNewer(parseBlockRow(r), 'hydrate')
     }
 
     if (opts?.descendants) {
@@ -1484,6 +1711,19 @@ export class Repo {
     return this.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)
   }
 
+  /** Wait until persisted TYPE definitions have produced their first complete
+   * workspace snapshot. Separate from `whenPropertyDefinitionsReady`: the type
+   * projector is its own lifecycle, and the registry deliberately publishes
+   * declared seed types before it primes — so a snapshot taken in between is
+   * non-null but missing every block-backed type, which reads as "nobody owns
+   * this token" to an ownership check. */
+  private async whenTypeDefinitionsReady(workspaceId: string): Promise<void> {
+    if (!this.facetRuntime) return
+    const handle = this.projectors.handle(USER_TYPES_PROJECTOR_ID)
+    if (!handle) return
+    await handle.whenPrimed(workspaceId)
+  }
+
   /** The active workspace's undo / redo manager — what cmd-Z and the
    *  Undo UI act on (issue #186). Because each workspace has its own
    *  manager, callers can use the plain `peekUndo` / `popUndo` API and it
@@ -1520,7 +1760,17 @@ export class Repo {
    *  and upload regardless of this flag; only `BlockDefault` /
    *  `References` writes are rejected. */
   setReadOnly(value: boolean): void {
+    if (this.isReadOnly === value) return
     this.isReadOnly = value
+    this.readOnlyListeners.notify()
+  }
+
+  /** Fires when `isReadOnly` changes. A role change arrives from the server and
+   *  moves nothing else — not the Repo, not the workspace, not the metrics span
+   *  — so a reader with no other reason to re-read would keep reporting the
+   *  permissions the page started with. Returns an unsubscribe. */
+  onReadOnlyChange(listener: () => void): () => void {
+    return this.readOnlyListeners.add(listener)
   }
 
   /** Run a transactional session. Spec §3, §10. */
@@ -1528,11 +1778,58 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
+    // Sampled once this transaction HOLDS the write lock — not when it was
+    // called — and compared at record time below.
+    //
+    // What it protects against: a transaction can commit and release the lock
+    // ahead of a one-way pass's chunk and only reach its recording
+    // continuation after that chunk has written and cleared. The clear cannot
+    // reach an entry that does not exist yet, and neither can the epoch move
+    // that opened the drop, so the entry would land on the stack holding the
+    // whole PRE-pass row.
+    //
+    // Why inside the lock: the same two can be ordered the other way, with the
+    // edit merely INVOKED while a chunk holds the lock and executing after it
+    // commits. Sampled at call time, that edit reads the pre-clear epoch and is
+    // discarded although its `before` rows are the rewritten ones and it is
+    // perfectly safe to undo. Inside the lock, the sample is taken at the same
+    // moment as the rows the entry describes, which is what makes the two
+    // comparable at all.
+    /** Epoch per manager, EARLIEST sample kept — see the two calls below. */
+    const epochAtLock = new Map<UndoManager, number>()
+    const sampleEpoch = (manager: UndoManager): void => {
+      if (!epochAtLock.has(manager)) epochAtLock.set(manager, manager.clearEpoch)
+    }
     // Translation + listener notification happen inside `_runAndDispatch`
     // so all entry points (`tx`, `undo`, `redo`) get uniform error
     // shaping — `repo.tx` just re-throws here.
     const result: Awaited<ReturnType<typeof this._runAndDispatch<R>>> =
-      await this._runAndDispatch(fn, opts)
+      await this._runAndDispatch(async (tx) => {
+        // On lock ENTRY, for the workspace active then. The earliest sample is
+        // the one that counts, because a `clear()` from outside any transaction
+        // — the props-as-blocks flip makes one — can land while `fn` runs.
+        sampleEpoch(this.undoManager)
+        const value = await fn(tx)
+        // And again for the workspace the tx actually PINNED, which is the
+        // manager the entry is recorded into and is NOT always the active one:
+        // the SRS reschedule toast writes the rescheduled block's workspace
+        // while the user may have switched away (#186). Known only now — the
+        // pin comes from the first write. Still inside the lock, so no other
+        // WRITER's clear can have landed since entry; when the two are the same
+        // manager (the ordinary case) the entry sample above wins.
+        //
+        // ACCEPTED RESIDUAL: taken here rather than when `TxImpl.pinWorkspace`
+        // fires, so a LOCKLESS drop on the pinned workspace during `fn` is
+        // missed. Reaching it takes all of a foreign-workspace write, a switch
+        // to that workspace mid-transaction, and an ambiguous flip on it in the
+        // same window; the fix is a pin callback threaded through the tx engine.
+        // Recorded rather than built — see the exit check's residual, which is
+        // the same trade in the same pipeline.
+        if (tx.meta.workspaceId !== null) {
+          sampleEpoch(this.undoManagerFor(tx.meta.workspaceId))
+        }
+        return value
+      }, opts)
     // Step 7 of the §10 pipeline — record undo entry into the tx's pinned
     // workspace's manager, so a later cmd-Z only ever acts on entries from
     // the workspace the user is looking at (issue #186). Non-undoable
@@ -1540,7 +1837,16 @@ export class Repo {
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
     if (result.workspaceId !== null && !opts.skipUndo) {
-      this.undoManagerFor(result.workspaceId).record({
+      const manager = this.undoManagerFor(result.workspaceId)
+      // Dropped rather than recorded: a pass cleared this workspace's history
+      // while this transaction was in flight, so its `before` rows are the ones
+      // that pass has since rewritten. Replaying them would revert its writes
+      // with its completion already recorded, which is the same loss the clear
+      // itself exists to prevent.
+      //
+      // A missing sample reads as a mismatch and drops the entry: defence in
+      // depth, since a tx that pinned a workspace was always sampled for it.
+      if (epochAtLock.get(manager) === manager.clearEpoch) manager.record({
         scope: opts.scope,
         txId: result.txId,
         snapshots: result.snapshots,
@@ -1583,15 +1889,70 @@ export class Repo {
    *  is pushed back so a retry once the flag settles succeeds — see
    *  issue #226.) */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
+    return this.replayGesture('undo', scope)
+  }
+
+  /** Redo the most recently undone tx for `scope` in the active
+   *  workspace. Same defaults + same per-workspace + read-only
+   *  semantics as `undo`, mirrored. */
+  async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
+    return this.replayGesture('redo', scope)
+  }
+
+  /** The body of {@link undo} and {@link redo}, which are mirror images: pop
+   *  from one stack, replay it, push it onto the other — and on failure put it
+   *  back where it came from.
+   *
+   *  One owner because every rule here is symmetric, and the asymmetry that
+   *  used to exist between the two copies was an omission rather than a
+   *  decision: only `undo` documented why it pushes a failed entry back. */
+  private async replayGesture(
+    action: 'undo' | 'redo',
+    scope: ChangeScope,
+  ): Promise<boolean> {
     if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
-    const entry = manager.popUndo(scope)
+    // Sampled before the entry leaves the stack, so the whole gesture — pop,
+    // replay and push alike — sits inside the window this validates. A bare
+    // `clear()` moves it, and so does BEGINNING a `HistoryDrop`, which is how a
+    // replay queued behind a pass is refused before its stack is ever dropped.
+    // None of them can happen across the pop itself, so this is the same value
+    // either side.
+    // A drop is UNDER WAY: its pass's writes are landing right now and the
+    // stacks still hold entries from before them, so replaying one restores
+    // rows the pass is in the middle of replacing. The epoch cannot express
+    // this — it marks an instant, so a gesture STARTING mid-drop samples the
+    // already-moved value and passes every check. For the lockless flip that
+    // window is a server round trip wide.
+    //
+    // Refused rather than queued: the gesture is the user's, and answering
+    // "nothing happened" immediately is better than a cmd-Z that silently
+    // applies a minute later against rows it no longer describes.
+    if (manager.historyDropInProgress) return false
+    const clearEpoch = manager.clearEpoch
+    const opposite = action === 'undo' ? 'redo' : 'undo'
+    const entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
     if (entry === null) return false
+    /** Put `entry` on a stack — unless the history was DROPPED while this
+     *  gesture was in flight.
+     *
+     *  Both pushes go through here, the success one onto the opposite stack and
+     *  the failure one back onto the stack it came from, because the hazard is
+     *  the same for either: the database can hand the write lock to a pass's
+     *  chunk while `_replay` is still resolving, so a clear can land between the
+     *  replay and this line. Pushing then REPOPULATES history the clear had just
+     *  emptied, with an entry describing a pre-pass row — and the next gesture
+     *  samples the new epoch, passes, and replays it over the pass's committed
+     *  writes. Dropping that entry is the whole point of the clear. */
+    const push = (onto: 'undo' | 'redo'): void => {
+      if (manager.clearEpoch !== clearEpoch) return
+      if (onto === 'undo') manager.pushUndo(scope, entry)
+      else manager.pushRedo(scope, entry)
+    }
     try {
-      await this._replay(entry, 'before')
-      manager.pushRedo(scope, entry)
-      return true
+      await this._replay(entry, action, {manager, clearEpoch})
     } catch (err) {
+      if (err instanceof UndoHistoryDroppedError) return false
       // Replay failed — push the entry back so the user can retry
       // (e.g. after toggling read-only off, fixing a missing parent).
       // Known narrow hazard (pre-existing, issue #226 window): if a new
@@ -1603,27 +1964,13 @@ export class Repo {
       // legitimate retry path (RescheduleToast re-matches the restored
       // entry by groupId once read-only clears), which is a far more
       // common sequence than a mid-replay same-group commit.
-      manager.pushUndo(scope, entry)
+      push(action)
       throw err
     }
-  }
-
-  /** Redo the most recently undone tx for `scope` in the active
-   *  workspace. Same defaults + same per-workspace + read-only
-   *  semantics as `undo`, mirrored. */
-  async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    if (this.client.activeWorkspaceId === null) return false
-    const manager = this.undoManager
-    const entry = manager.popRedo(scope)
-    if (entry === null) return false
-    try {
-      await this._replay(entry, 'after')
-      manager.pushUndo(scope, entry)
-      return true
-    } catch (err) {
-      manager.pushRedo(scope, entry)
-      throw err
-    }
+    // True even when the push above was refused: the replay COMMITTED, so the
+    // gesture did what the user asked. All that is withheld is the inverse.
+    push(opposite)
+    return true
   }
 
   /** Run `fn` against a `Repo`-shaped facade whose every tx carries one
@@ -1631,46 +1978,18 @@ export class Repo {
    *  Consecutive txs opened through the facade — directly via
    *  `grouped.tx`, or indirectly via `grouped.mutate.X` / `grouped.run`
    *  — MERGE into a single undo entry at record time, so the whole
-   *  composite reverts with one cmd-Z. Helpers that take a `Repo`
-   *  parameter join the group simply by being handed the facade.
+   *  composite reverts with one cmd-Z.
    *
-   *  Wrap-site convention: name the callback parameter `repo`,
-   *  shadowing the raw repo — that way an out-of-habit `repo.tx(...)`
-   *  inside the group cannot silently open a foreign tx and split it.
+   *  Wrap-site convention: name the callback parameter `repo`, shadowing
+   *  the raw repo — that way an out-of-habit `repo.tx(...)` inside the
+   *  group cannot silently open a foreign tx and split it.
    *
-   *  Semantics to be aware of:
-   *   - Merging is top-of-stack only: a foreign tx (one opened on the
-   *     plain repo, e.g. a background write) landing mid-group SPLITS
-   *     the group into two entries rather than folding across it.
-   *   - No atomicity: each tx still commits independently. If a later
-   *     tx throws, the committed prefix stays applied and remains
-   *     covered by the (single) group entry; the error propagates.
-   *   - Nested `undoGroup` on the facade joins the OUTER group — one
-   *     user-perceived action, one entry.
-   *   - The facade must not escape the callback: its token never
-   *     expires, so a leaked reference would stamp far-future txs into
-   *     a long-dead group (see the `block` override below for the one
-   *     leak path that existed).
-   *   - Grouping covers `tx` / `mutate` / `run` and the TypeTagger
-   *     convenience writes. Two write styles deliberately do NOT join:
-   *     Block-facade sugar (`grouped.block(id).setContent(...)` routes
-   *     through `block.repo` = the real repo — a group-bound Block
-   *     would be exactly the leak the `block` override closes) and
-   *     stateful service writes (`userSchemas` / `userTypes` /
-   *     `projectors` — constructed against the real repo; a
-   *     facade-hosted twin would clobber their shared contribution
-   *     buckets). Both land as foreign txs and split the group; use
-   *     `grouped.tx` / `grouped.mutate` inside a group instead.
-   *   - Everything not overridden delegates to the real repo via the
-   *     prototype chain and therefore runs with the facade as `this` —
-   *     safe for reads and shared-object mutation, NOT safe for three
-   *     hazard classes (shared-state minting, instance-field
-   *     assignment, construction-captured collaborators), which the
-   *     overrides in {@link groupedFacade} cover — each carries its
-   *     rationale at the override. The classification rubric and the
-   *     structural enforcement live in `repoFacadeGate.test.ts`, which
-   *     fails on any Repo member that is neither overridden nor
-   *     consciously allowlisted. */
+   *  Merging is top-of-stack only: a foreign tx landing mid-group SPLITS
+   *  the group. No atomicity: each tx still commits independently. The
+   *  facade must not escape the callback — its token never expires.
+   *
+   *  Why each facade override exists: at the override, and
+   *  docs/undo-grouping.md. */
   async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
     return fn(this.groupedFacade(this.newId()))
   }
@@ -1767,6 +2086,18 @@ export class Repo {
     })
   }
 
+  private requestedWrites = 0
+
+  /** A write on this repo's database has been requested and has not settled:
+   *  a repo transaction from the moment it is asked for (it waits for
+   *  definition readiness before it reaches the database), or any write
+   *  transaction on the shared handle (sync materialization, a backfill). A
+   *  reader deciding from the query cache that nothing needs writing must
+   *  not while this is true: the cache shows the state before that write. */
+  get hasWriteInFlight(): boolean {
+    return this.requestedWrites > 0 || this.dbMetrics.writesInFlight > 0
+  }
+
   /** Shared `runTx` + processor-dispatch path. Used by both `tx`
    *  (records on undo stack) and `_replay` (does not).
    *
@@ -1787,6 +2118,19 @@ export class Repo {
     opts: RepoTxOptions,
     isReplay = false,
   ) {
+    this.requestedWrites++
+    try {
+      return await this._runAndDispatchInner(fn, opts, isReplay)
+    } finally {
+      this.requestedWrites--
+    }
+  }
+
+  private async _runAndDispatchInner<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+    isReplay = false,
+  ) {
     const txT0 = performance.now()
     let result
     // A workspace pin starts the definition projector asynchronously. Delay
@@ -1797,16 +2141,33 @@ export class Repo {
     const readinessWorkspaceId = this.client.activeWorkspaceId
     const readinessGenerationToken = this.projectors.generationToken
     if (readinessWorkspaceId) {
-      await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
-      if (
-        this.client.activeWorkspaceId !== readinessWorkspaceId
-        || this.projectors.generationToken !== readinessGenerationToken
-      ) {
-        throw new Error(
-          `[Repo.tx] active workspace generation changed while waiting for ${readinessWorkspaceId}`,
-        )
+      // Checked after EACH wait, not once at the end: a switch during the first
+      // wait leaves the second asking a projector about a workspace that is no
+      // longer pinned, which throws its own unavailability error and masks this
+      // one. This catches a switch that happened while a wait was RESOLVING; a
+      // switch that disposes a genuinely pending projector surfaces as that
+      // projector's own cancellation instead, and is not translated here.
+      const assertSameGeneration = (): void => {
+        if (
+          this.client.activeWorkspaceId !== readinessWorkspaceId
+          || this.projectors.generationToken !== readinessGenerationToken
+        ) {
+          throw new Error(
+            `[Repo.tx] active workspace generation changed while waiting for ${readinessWorkspaceId}`,
+          )
+        }
       }
+      await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
+      assertSameGeneration()
+      // Types too: their projector primes independently, and an ownership check
+      // reading a half-published registry cannot tell "nobody owns this" from
+      // "not projected yet".
+      await this.whenTypeDefinitionsReady(readinessWorkspaceId)
+      assertSameGeneration()
     }
+    // Captured at tx start, like the property registries beside it, so a facet
+    // rebuild landing mid-tx cannot change the answer under a processor.
+    const capturedTypeDefinitions = this._typeDefinitionRegistry
     const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
     const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
     try {
@@ -1817,7 +2178,11 @@ export class Repo {
         opts,
         user: this.user,
         isReadOnly: this.isReadOnly,
-        newTxId: this.newId,
+        // uuid, never `this.newId`: `command_events.tx_id` is a PRIMARY KEY on
+        // a database that outlives any single Repo, while `newId` is injectable
+        // and the test harness injects per-Repo counters that restart. Deriving
+        // one from the other let two Repos over one db mint the same id (#866).
+        newTxId: uuidv4,
         newTxSeq: this.newTxSeq,
         newId: this.newId,
         blockIdPolicy: this.blockIdPolicy,
@@ -1826,6 +2191,17 @@ export class Repo {
         processors: this.processors,
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
+        valuePresets: this._valuePresetCores,
+        // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
+        // whether the source/destination actually OWN the tokens they look like
+        // they own, which their rows alone cannot answer. Keyed by the TX's
+        // workspace (which `TxImpl` pins from the first write) rather than the
+        // active one — answering from another workspace's registry would report
+        // every local token as unknown and silently disable the ownership gate.
+        typeDefinitionsForWorkspace: workspaceId =>
+          capturedTypeDefinitions?.workspaceId === workspaceId
+            ? capturedTypeDefinitions
+            : null,
         // Serve the tx's active-at-start workspace, or the retained previous one,
         // from their frozen snapshots; any other workspace resolves null (fail
         // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
@@ -1881,9 +2257,36 @@ export class Repo {
     // pendingReinvalidate / kicks off a microtask, so the caller's tx
     // resolve isn't blocked on handle re-resolution.
     if (result.snapshots.size > 0) {
+      // Counted on both sides or neither. A transaction that changed no row
+      // invalidates nothing, so counting the write alone would deflate the
+      // ratio a reader builds from the pair — and idempotent ensures commit
+      // empty routinely.
+      if (!opts.telemetry) this.nonTelemetryWrites++
+      // The fan-out delta is taken across THIS call and nothing else. The walk
+      // is synchronous, so no other transaction and no sync drain can land
+      // inside it — which is the whole reason the count lives here.
+      const before = opts.telemetry ? null : this.handleStore.metrics.snapshot()
       this.handleStore.invalidate(
         snapshotsToChangeNotification(result.snapshots, this.invalidationRules),
       )
+      if (before !== null) {
+        const after = this.handleStore.metrics.snapshot()
+        for (const [k, v] of Object.entries(after)) {
+          const delta = v - (before[k] ?? 0)
+          // A zero delta does NOT create the key. Only counters bumped inside
+          // the synchronous walk can ever move here; the settle-path ones
+          // (`notifiesFired`, `notifiesSkippedByDiff`, `reloadsAfterSettle`,
+          // and the `loaderRuns` of post-settle reloads) are bumped from a
+          // `.then` / microtask after this window closes, and no per-tx token
+          // reaches them. Writing them as 0 would report "no reloads" for a
+          // counter that is simply never measured — and this map is persisted
+          // and compared against later sessions, where a 0-vs-0 comparison
+          // reads as a clean verdict rather than as missing data. Absent says
+          // what is true.
+          if (delta === 0 && !(k in this.nonTelemetryFanout)) continue
+          this.nonTelemetryFanout[k] = (this.nonTelemetryFanout[k] ?? 0) + delta
+        }
+      }
     }
     // Step 9 of the §10 pipeline — start field-watch + explicit
     // post-commit processors. Failures are caught + logged inside the
@@ -1910,13 +2313,28 @@ export class Repo {
    *  entry shuttles symmetrically between stacks. */
   private async _replay(
     entry: UndoEntry,
-    direction: 'before' | 'after',
+    action: 'undo' | 'redo',
+    /** Checked INSIDE the replay transaction, once the write lock is held.
+     *
+     *  `undo`/`redo` take the entry OFF its stack and then await this, so a
+     *  pass that drops the workspace's history in that window cannot reach the
+     *  entry any more — `clear()` only empties the manager. Left unchecked, the
+     *  replay lands after the pass's commit and restores the pre-pass state of
+     *  a row the pass has already recorded as done.
+     *
+     *  Inside the transaction rather than before it: `repo.tx` serialises on
+     *  the write lock, so a check taken before acquiring it is exactly the one
+     *  the pass's chunk can commit behind. */
+    invalidation: {manager: UndoManager; clearEpoch: number},
   ): Promise<void> {
-    const action = direction === 'before' ? 'undo' : 'redo'
+    const direction = action === 'undo' ? 'before' : 'after'
     const description = entry.description
       ? `${action}: ${entry.description}`
       : action
     await this._runAndDispatch(async (tx) => {
+      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
+        throw new UndoHistoryDroppedError(action)
+      }
       const txImpl = tx as TxImpl
       // Start from replayApplicationOrder's topological order (see its
       // docblock in txSnapshots.ts for the parent-before-child
@@ -1949,6 +2367,29 @@ export class Repo {
         }
         if (deferred.length === pending.length) throw lastError
         pending = deferred
+      }
+      // AGAIN, before this transaction commits. The check on entry cannot cover
+      // the loop above, which awaits once per row: a pass that begins its drop
+      // WITHOUT holding the write lock — the props-as-blocks flip is a server
+      // round trip — moves the epoch while this replay is mid-flight, and the
+      // entry check has already passed. Its `finish` can then only suppress the
+      // push; it cannot take back rows this transaction has written. Throwing
+      // here rolls them back instead, which is the only thing that actually
+      // abandons the replay.
+      //
+      // An IN-LOCK pass cannot move the epoch inside this window — it would
+      // need the lock this replay is holding — so this arm is reachable only
+      // from a lockless drop or a bare `clear()`, and abandoning is right for
+      // both.
+      //
+      // ACCEPTED RESIDUAL, same one the backfill's exit check records: this is
+      // the end of the replay's callback, not the commit boundary, and `runTx`
+      // awaits two more statements after it. A lockless drop landing in THOSE
+      // still commits the replay. Closing it needs a pre-commit hook in the
+      // pipeline rather than another check here — each one only moves the gap a
+      // few awaits along.
+      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
+        throw new UndoHistoryDroppedError(action)
       }
     }, {scope: entry.scope, description}, true)
   }
@@ -1984,7 +2425,7 @@ export class Repo {
    *  that want the user's currently-active workspace use
    *  `queryActiveWorkspace` instead — making the workspace explicit at
    *  the call site prevents background flows / import runs from silently
-   *  mis-scoping on a workspace switch (PR #47 review). */
+   *  mis-scoping on a workspace switch. */
   async queryBlocks(query: TypedBlockQuery): Promise<BlockData[]> {
     return this.query.typedBlocks(this.resolveTypedBlockQuery(query)).load()
   }
@@ -2049,6 +2490,14 @@ export class Repo {
     const workspaceId = this.activeWorkspaceId
     if (!workspaceId) return []
     return this.queryBlocks({...query, workspaceId})
+  }
+
+  /** Tell a `subscribeBlocks` query that its subscriber now holds state the
+   *  subscription never delivered, so the next settle must reach it even when
+   *  the rows are unchanged. For `ProjectorLifecycle.upsert`, its only caller;
+   *  `LoaderHandle.forgetNotifiedValue` carries the reasoning. */
+  requireNextBlockDelivery(query: TypedBlockQuery): void {
+    this.query.typedBlocks(this.resolveTypedBlockQuery(query)).forgetNotifiedValue()
   }
 
   /** Active-workspace shorthand for `subscribeBlocks`. Same caveat as
@@ -2200,6 +2649,15 @@ export class Repo {
     return this.userErrorListeners.add(listener)
   }
 
+  /** Surface a user-visible finding that must NOT roll the tx back. Every other
+   *  `ProcessorRejection` reaches `onUserError` by being THROWN, which is right
+   *  when the finding is a refusal; a codec change that stranded some values
+   *  still did what the user asked, so its report rides a post-commit processor
+   *  and lands here instead. */
+  reportUserError(error: ProcessorRejection): void {
+    this.userErrorListeners.notify(error)
+  }
+
   /** Translate a parsed alias-collision RAISE into a fully-populated
    *  `ProcessorRejection`. Runs after the user tx has already rolled
    *  back, so `block_aliases` is back to the pre-tx state — the
@@ -2293,11 +2751,7 @@ export class Repo {
       //    when a non-essential plugin is toggled off, and when ?safeMode forces
       //    every non-essential off at once. Stripping on absence is what
       //    silently deleted ~10k `next-review-date` backlinks fleet-wide when
-      //    SRS was toggled off. (bd7c363a re-enabled that strip believing that,
-      //    after workspace-scoping, absence ⟺ a genuine redefine/delete — but it
-      //    reasoned only about grow-only cold-start materialization and
-      //    cross-workspace switches, never the toggle/safeMode re-resolve that
-      //    removes a plugin's schema without deleting anything.)
+      //    SRS was toggled off.
       //  - PRESENT but non-ref ⇒ scanned, but reprojection is ADD-ONLY (see the
       //    per-block loop), so this is a no-op: there is nothing new to project.
       //    A real ref→non-ref redefine's now-stale derived refs are swept lazily
@@ -2411,7 +2865,7 @@ export class Repo {
             if (devAssertionsEnabled()) {
               // L2 dev/test-only assertion (off in prod): reprojection
               // must be ADD-ONLY — prior ⊆ reconciled. A dropped ref here is the
-              // mass-strip regression 21494fdb fixed; fail it in CI, never on a
+              // mass-strip regression; fail it in CI, never on a
               // user's write. (The length-equality skip below also assumes this
               // superset, so this guards that optimization too.)
               const nextKeys = new Set(reconciled.map(derivedRefKey))
@@ -2517,19 +2971,45 @@ export class Repo {
    * `workspaceId`. Called at workspace bootstrap BEFORE the landing resolver
    * seeds, so a `[[reserved alias]]` wiki-link (Journal/Properties/Types/
    * Locations) resolves to the canonical page instead of auto-creating a rival
-   * that trips `alias.collision`. Each `ensure` get-or-creates at a
-   * deterministic id (idempotent), so repeated bootstraps and offline-
-   * converging clients all land on the same rows.
+   * that takes the name. Each `ensure` get-or-creates at a deterministic id
+   * (idempotent), so repeated bootstraps and offline-converging clients all
+   * land on the same rows.
    *
    * Reads off this Repo's own `facetRuntime` — which carries the data-layer
    * contributions installed at construction (`staticDataExtensions`) — so no
    * separate runtime resolution is needed. Awaited (not deferred): the pages
    * must exist before the seed's references parse.
+   *
+   * A cross-workspace occupant is skipped like any other failure, not re-raised:
+   * a page whose derived id is held by a row from another of the user's own
+   * workspaces renders confusingly, which does not outrank the app not opening.
+   *
+   * A failing `ensure` is logged and skipped, and this resolves regardless:
+   * `bootstrapWorkspace` awaits it on the critical path with no catch, so a
+   * throw here does not degrade one page's feature, it stops the app coming up.
+   * No page is worth that. Console rather than `onUserError` because what
+   * reaches here is a contributor's bug or a foreign row at the derived id —
+   * neither has a user action behind it, and a contested alias no longer
+   * arrives at all (`getOrCreateKernelPage` yields the name and stays
+   * reachable).
    */
   async ensureSystemPages(workspaceId: string): Promise<void> {
     if (!workspaceId) return
     const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
-    await Promise.all(pages.map(page => page.ensure(this, workspaceId)))
+    // `await` inside the try, not `return page.ensure(…)`: the catch has to
+    // cover a rejected promise as well as a synchronous throw, and a returned
+    // promise rejects after the try has already exited.
+    await Promise.all(pages.map(async page => {
+      try {
+        await page.ensure(this, workspaceId)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        console.error(
+          `[ensureSystemPages] ${page.id} unavailable in workspace ${workspaceId} `
+          + `(will retry on the next workspace open): ${reason}`,
+        )
+      }
+    }))
   }
 
   /**
@@ -2585,30 +3065,6 @@ export class Repo {
     }
   }
 
-  /**
-   * Materialize the code-declared property seeds visible to the installed
-   * runtime into real `property-schema` blocks under the workspace's Properties
-   * page (§4.3 of the schema-unification design). This is what makes seeded
-   * definitions visible/editable in the UI and available to clients that don't
-   * have the contributing plugin loaded; the in-memory registry itself works
-   * with zero rows, so this pass never blocks correctness.
-   *
-   * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
-   * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
-   * on every seed-set change — create/restore-only + idempotent, so steady state
-   * is a single probe SELECT that short-circuits on `seed:revision`. Passes
-   * COALESCE per workspace (one pending pass at a time); the pass reads the
-   * workspace's current seed set at run time, and only if that workspace is still
-   * the active/projected one, so a coalesced set-grow is picked up and a
-   * switched-away workspace is skipped.
-   *
-   * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
-   * (for a non-freshly-created workspace) waits for the membership row before
-   * writing — a fresh device defaults a not-yet-synced role to writable, so a
-   * bare `isReadOnly` check would let a viewer enqueue ~100 RLS-rejected creates.
-   * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
-   * read-only session; the gate is the authoritative check.
-   */
   /** The current property + type seed declarations for `workspaceId`, or empty
    *  arrays when a registry is absent or pinned to a different workspace. Read
    *  live (not snapshotted) so a coalesced pass materializes the latest set. */
@@ -2633,6 +3089,30 @@ export class Repo {
     }
   }
 
+  /**
+   * Materialize the code-declared property seeds visible to the installed
+   * runtime into real `property-schema` blocks under the workspace's Properties
+   * page (§4.3 of the schema-unification design). This is what makes seeded
+   * definitions visible/editable in the UI and available to clients that don't
+   * have the contributing plugin loaded; the in-memory registry itself works
+   * with zero rows, so this pass never blocks correctness.
+   *
+   * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
+   * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
+   * on every seed-set change — create/restore-only + idempotent, so steady state
+   * is a single probe SELECT that short-circuits on `seed:revision`. Passes
+   * COALESCE per workspace (one pending pass at a time); the pass reads the
+   * workspace's current seed set at run time, and only if that workspace is still
+   * the active/projected one, so a coalesced set-grow is picked up and a
+   * switched-away workspace is skipped.
+   *
+   * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
+   * (for a non-freshly-created workspace) waits for the membership row before
+   * writing — a fresh device defaults a not-yet-synced role to writable, so a
+   * bare `isReadOnly` check would let a viewer enqueue ~100 RLS-rejected creates.
+   * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
+   * read-only session; the gate is the authoritative check.
+   */
   scheduleWorkspaceSeedMaterialization(workspaceId: string, freshlyCreated: boolean): void {
     if (this.isReadOnly || !workspaceId) return
     // Gate on EITHER registry: a type-seed-only change must still schedule a pass.
@@ -2742,9 +3222,10 @@ export class Repo {
    *  the runner can re-arm instead of writing the pass off for the session. */
   private static readonly TRANSIENT = 'backfill-precondition'
 
-  /** Preconditions every backfill transaction must still satisfy. Separate
-   *  from the scheduling gate because scheduling proves a fact at one instant
-   *  and a chunked pass writes over many. */
+  // Preconditions every backfill transaction must still satisfy. Separate
+  // from the scheduling gate because scheduling proves a fact at one instant
+  // and a chunked pass writes over many.
+
   /** Is this workspace's property registry primed?
    *
    *  `propertySchemaResolverForWorkspace` falls back to a resolver that
@@ -2809,10 +3290,14 @@ export class Repo {
    * `audit-properties` (which reports it) — one predicate, because a rule
    * added to one of two copies is how these diverge.
    *
-   * NOT complete, and the staged-rows half is the incomplete part: it reads
-   * the QUEUE, so it is blind to `observer.materializeWorkspace`, which
-   * rewrites `blocks` straight from `blocks_synced` and stages nothing. Null
-   * means "no QUEUED work", not "`blocks` is at rest" (km-fsxp).
+   * Cheap enough to re-ask per transaction, and every arm is about work that
+   * is OUTSTANDING — so null means "nothing is in flight", not "`blocks` holds
+   * every row this device has downloaded". Two things it cannot answer, both
+   * because it is DEVICE-wide while they are per workspace: whether a
+   * queue-blind `observer.materializeWorkspace` is rewriting `blocks` right
+   * now, and whether rows were left unmaterialized with nothing running at
+   * all. {@link workspaceViewGap} answers both, and every caller that has a
+   * workspace in hand takes that instead (km-fsxp).
    */
   async syncViewGap(): Promise<string | null> {
     const staged = await this.db.getOptional<{why: string}>(
@@ -2830,35 +3315,352 @@ export class Repo {
     return null
   }
 
+  /**
+   * Why this device's view of ONE workspace is incomplete, or null.
+   *
+   * {@link syncViewGap} plus the durable question it cannot afford to ask:
+   * does `blocks` actually hold every `blocks_synced` row this device has
+   * downloaded for the workspace? Rows that could not be materialized when
+   * they arrived — workspace not yet unlocked, mode unresolved, a key-store
+   * read that failed, ciphertext that would not decode — stay staged while the
+   * drain consumes their queue entries, leaving a stable gap that no in-flight
+   * signal reports and no waiting clears.
+   *
+   * Supersedes rather than complements `syncViewGap`: it asks that first, so a
+   * caller with a workspace in hand needs exactly one of the two. Every arm is
+   * cheap — the durable one reads a flag the drain set, off a partial index
+   * holding only unapplied rows — so this is the predicate for BOTH the top of
+   * a one-way pass and its per-transaction re-checks. There is deliberately no
+   * cheaper approximation to reach for in the hot path; that split is what let
+   * the two answers disagree.
+   *
+   * The arms differ in whether WAITING is a remedy, which is why the answer
+   * carries {@link ViewGap.transient} rather than just its text: a caller that
+   * re-arms itself must not re-arm on the durable one.
+   */
+  async workspaceViewGap(workspaceId: string): Promise<ViewGap | null> {
+    const inFlight = await this.syncViewGap()
+    if (inFlight !== null) return {reason: inFlight, transient: true}
+    // The queue cannot see this one: `observer.materializeWorkspace` rewrites
+    // `blocks` straight from `blocks_synced` and stages nothing, so the arms
+    // above read clear for its whole run — and it is the BIG path (a fresh
+    // device's re-pass over the entire workspace). Asking the observer for its
+    // own in-flight state is what `clientSchema.ts` prescribes in place of
+    // proxying one of its inputs. Before the scan, being free and an answer
+    // the scan would give too.
+    if (this.syncObserver?.isRematerializingWorkspace(workspaceId)) {
+      return {
+        reason: 'a full re-materialization of this workspace is in progress, '
+          + 'so `blocks` is still being rewritten',
+        transient: true,
+      }
+    }
+    const behind = await this.workspaceUnappliedCount(workspaceId)
+    if (behind === 0) return null
+    const count = behind >= WORKSPACE_UNAPPLIED_COUNT_CAP
+      ? `at least ${WORKSPACE_UNAPPLIED_COUNT_CAP.toLocaleString()}`
+      : `${behind.toLocaleString()}`
+    // The remedy rides with the CAUSE on this arm alone: nothing clears it on
+    // its own, and every caller's answer is the same one, so stating it here
+    // beats each of them remembering to.
+    return {
+      reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
+        + 'this device — never materialized, or still showing an older version — '
+        + 'and nothing is in flight to change that; the `rematerialize-workspace` '
+        + 'agent verb re-runs the drain over exactly these rows',
+      transient: false,
+    }
+  }
+
+  /**
+   * Re-run the drain over a workspace's staged rows, because an operator asked.
+   *
+   * The remedy for {@link workspaceViewGap}'s durable arm: rows that reached
+   * the drain, were not applied, and had their queue entry consumed, so nothing
+   * re-delivers them and every one-way pass on the workspace refuses for as
+   * long as they sit there.
+   *
+   * A DERIVATION pass, not a data migration: it rebuilds this device's `blocks`
+   * from rows this device already downloaded, writes with `tx_context.source`
+   * NULL (so the upload triggers skip it), and touches no synced state. It
+   * therefore needs no per-graph claim and does not clear the undo stack.
+   *
+   * Nothing here clears a flag on its own reasoning: every flag this drops is
+   * dropped by the drain, on the drain's rules, in the transaction that decides
+   * it.
+   *
+   * The default `unapplied` scope re-delivers exactly the rows the refusal
+   * counts. `all` re-judges every staged row instead, which is what to reach for
+   * when the FLAG is suspect rather than the rows it names — at the cost of a
+   * full pass, and reporting its repairs in `applied` rather than `resolved`
+   * (a row the flag is wrong about is already clear, so no flag moves).
+   *
+   * What it is not:
+   *
+   * - not free of a transient revert. A rescan can write an older staged row
+   *   over a newer LOCAL edit that is acked but not yet echoed back; the echo
+   *   re-asserts it, so the window is short and self-healing, but a tab closed
+   *   inside it reloads the reverted content. Prefer running this with sync
+   *   settled. NOT guarded, and the reason is not that the window is invisible
+   *   (it is — `syncViewGap` reads the download side only): the guard that
+   *   would close it is the strictly-newer-local skip `decideStagingRow` dropped
+   *   on purpose, because a device whose clock leads the server sees its own
+   *   creates echo back with a LOWER stamp, and that guard would strand them
+   *   flagged forever — manufacturing the durable gap this verb exists to clear.
+   * - not all-or-nothing. Windows commit independently, so a pass that REJECTS
+   *   still leaves its committed windows in place — but it rejects out of here,
+   *   so the caller gets the error and none of the counts. A re-run at
+   *   `unapplied` resumes; at `all` it starts over.
+   */
+  async rematerializeWorkspace(
+    workspaceId: string,
+    options: {scope?: RematerializeScope} = {},
+  ): Promise<WorkspaceRematerialization> {
+    if (!workspaceId) throw new Error('rematerializeWorkspace requires a workspace id')
+    if (!this.syncObserver) {
+      throw new Error(
+        '[rematerializeWorkspace] this client has no sync observer running, so there is '
+        + 'nothing to re-materialize with. Reload the app and try again.',
+      )
+    }
+    const scope = options.scope ?? 'unapplied'
+    const unappliedBefore = await this.workspaceUnappliedExactCount(workspaceId)
+    const pass = await this.syncObserver.drainWorkspace(workspaceId, scope)
+    return {
+      ...pass,
+      workspaceId,
+      unappliedBefore,
+      unappliedAfter: await this.workspaceUnappliedExactCount(workspaceId),
+      // The predicate the refusal takes, re-asked. Null is the operator's
+      // answer that the pass is now unblocked; anything else is what they would
+      // have been told on the next attempt anyway, one round earlier.
+      remainingGap: await this.workspaceViewGap(workspaceId),
+    }
+  }
+
+  /** How many of `workspaceId`'s downloaded rows the drain has not applied —
+   *  the number {@link workspaceViewGap}'s durable arm reports, capped the same
+   *  way (so `>= WORKSPACE_UNAPPLIED_COUNT_CAP` reads as a floor, not a total). */
+  private async workspaceUnappliedCount(workspaceId: string): Promise<number> {
+    const {behind} = await this.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    return behind
+  }
+
+  /** The same population, counted to the end.
+   *
+   *  The capped sibling is right for the refusal, which spends the number on one
+   *  sentence — "some" and "all of them" are different diagnoses and nothing
+   *  past that pays. It is WRONG for a before/after pair, which is a subtraction:
+   *  clamped, two ends that both sit past the cap read as a delta of zero, and
+   *  the one question the pair exists to answer gets the opposite answer.
+   *
+   *  Affordable because this runs twice per deliberate operator action, never in
+   *  the per-transaction gate. */
+  private async workspaceUnappliedExactCount(workspaceId: string): Promise<number> {
+    const {behind} = await this.db.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL, [workspaceId],
+    )
+    return behind
+  }
+
+  /** Why a run's workspace is no longer the one it was scheduled against, or
+   *  null. Both arms, because they are different causes and each should say its
+   *  own: switched AWAY (the id differs) and switched away and BACK (the id is
+   *  restored and only the generation moved). Identity first, so a plain
+   *  departure is not reported as a re-open.
+   *
+   *  One owner for the two callers — `takeBackfillClaim`, which turns it into a
+   *  refusal, and `assertBackfillMayWrite`, which throws it. Each used to spell
+   *  the rule out for itself, which is how two copies drift. */
+  private workspaceRunStaleReason(workspaceId: string, generation: number): string | null {
+    if (this._client.activeWorkspaceId !== workspaceId) {
+      return `workspace ${workspaceId} is no longer active, so its writes would land `
+        + "under the current session's access state"
+    }
+    if (this.workspaceGeneration !== generation) {
+      return `workspace ${workspaceId} was re-opened since this pass was scheduled, so `
+        + "the earlier visit's job must not write into the new one"
+    }
+    return null
+  }
+
   private async assertBackfillMayWrite(
     workspaceId: string,
     backfillId: string,
     generation: number,
   ): Promise<void> {
-    if (this.workspaceGeneration !== generation) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} was ` +
-        `re-opened since this pass was scheduled. The earlier visit's job must not ` +
-        `write into the new one.`,
-      ), {kind: Repo.TRANSIENT})
-    }
-    if (this._client.activeWorkspaceId !== workspaceId) {
-      throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: workspace ${workspaceId} is no ` +
-        `longer active. Its writes would land under the current session's access state.`,
-      ), {kind: Repo.TRANSIENT})
-    }
     // Re-sampled per transaction while the write lock is held, so a drain
     // cannot commit between this check and the write. Reading through
     // `this.db` rather than the tx handle is deliberate: the drain is excluded
     // by the lock, not by read isolation.
-    const gap = await this.syncViewGap()
+    const gap = await this.workspaceViewGap(workspaceId)
     if (gap !== null) {
       throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: ${gap}. This pass would scan an ` +
-        `incomplete view of the graph and upload a properties bag built from it.`,
+        `[workspaceBackfills] "${backfillId}" aborted: ${gap.reason}. This pass would scan ` +
+        `an incomplete view of the graph and upload a properties bag built from it.`,
+        // A DURABLE gap is rows nothing is draining, so telling the operator to
+        // run it again is the forever-retry the flag exists to prevent — the
+        // same answer `retryableAfter` gives this refusal on the claim path.
+      ), {kind: Repo.TRANSIENT, retryable: gap.transient})
+    }
+    // AFTER the probe, not before it: `setActiveWorkspaceId` and a role change
+    // are synchronous field writes that land cleanly in the probe's await
+    // window, so a copy ahead of the probe would be describing a session this
+    // one has since left. Asking after strictly dominates asking before — a
+    // workspace that left and returned across the probe has moved its
+    // generation — so a second copy there would decide nothing and only look
+    // load-bearing.
+    this.assertBackfillSessionUnchanged(workspaceId, backfillId, generation)
+  }
+
+  /**
+   * The SYNCHRONOUS half of {@link assertBackfillMayWrite}: everything that is
+   * a field read rather than an awaited probe.
+   *
+   * Its own method because it is asked at BOTH ENDS of a batch. The full
+   * precondition runs once on entry, before the batch spends its insert budget;
+   * this runs again after the batch body returns, because that body can span an
+   * entire budget's worth of awaited reads and writes, and both the commit
+   * pipeline's entry-time `isReadOnly` gate and the entry precondition have
+   * long since passed by then. Throwing here rolls the batch back rather than
+   * letting it commit source-of-truth rows under a session it no longer has.
+   *
+   * The GAP is deliberately not re-asked at the exit: it is the one arm that
+   * costs a query inside the write lock, and a view that went incomplete
+   * mid-batch is caught by the next batch's entry probe — whereas a workspace
+   * switch or a revocation cannot be caught later at all, because the rows are
+   * already uploaded by then.
+   *
+   * ACCEPTED RESIDUAL: the exit is the end of the batch's own callback, not the
+   * commit boundary. `runTx` still awaits the same-tx processors, the
+   * `command_events` insert and the `tx_context` clear after this returns, and a
+   * switch or revocation can land in any of them. Closing that needs a
+   * pre-commit hook on `RepoTxOptions` — the pipeline is the only thing that can
+   * be last — which is core tx-API surface and a change of its own. Not taken
+   * here: what remains is a sub-millisecond window inside a held write lock, the
+   * rows carry their own `workspace_id` so a switch cannot misfile them, and the
+   * server's RLS is the real authority on a revoked role, so the worst ending is
+   * an upload the server rejects rather than a row silently in the wrong state.
+   */
+  private assertBackfillSessionUnchanged(
+    workspaceId: string,
+    backfillId: string,
+    generation: number,
+  ): void {
+    const stale = this.workspaceRunStaleReason(workspaceId, generation)
+    if (stale !== null) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: ${stale}.`,
       ), {kind: Repo.TRANSIENT})
     }
+    // The ROLE, after the staleness check and not before it, because
+    // `isReadOnly` is the ACTIVE workspace's role: asked first, a run whose
+    // workspace has been switched away reports "lost write access to <the
+    // workspace it left>", which is not what happened. Both abort either way —
+    // this is about the message naming the actual cause.
+    if (this.isReadOnly) {
+      throw Object.assign(new Error(
+        `[workspaceBackfills] "${backfillId}" aborted: this device lost write access to `
+        + `workspace ${workspaceId} while the pass was running.`,
+      ), {kind: Repo.TRANSIENT, retryable: false})
+    }
+  }
+
+  /**
+   * Take the claim for one backfill, or say why this device may not.
+   *
+   * The preconditions and the claim write live in ONE method because their
+   * ORDER is the whole point. `tryClaim` writes — the Migrations page, then
+   * the claim row — so a device that fails a precondition must be turned away
+   * BEFORE that write, or its claim and the release that follows both sit in
+   * the upload queue and land later, out of order, against a completion it
+   * never saw. And the last staleness check must have NOTHING awaited between
+   * it and `tryClaim`, which a caller doing the checks itself cannot promise.
+   *
+   * What this closes is the STALE-DEVICE case. It does NOT make the claim
+   * atomic: rows can stage in the window between the gap check and the claim
+   * transaction, and a peer's claim that is staged-but-undrained is invisible
+   * to the in-tx re-read there. That residual is accepted, not overlooked —
+   * closing it means arbitration, which `graphBackfillClaim`'s header forbids
+   * by name and for a recorded reason (an earlier revision tried; the regress
+   * had no fixed point). Exactly-once here is a person running it in one place.
+   */
+  private async takeBackfillClaim(
+    claim: BackfillCompletionClaim,
+    workspaceId: string,
+    backfill: WorkspaceBackfill,
+    generation: number,
+  ): Promise<BackfillClaimAttempt> {
+    const runStale = (): string | null =>
+      this.workspaceRunStaleReason(workspaceId, generation)
+    // Don't even START a pass whose workspace has been re-opened since it was
+    // scheduled. `assertBackfillMayWrite` catches this per transaction, but
+    // that is one tx too late to avoid the scan a backfill does first.
+    const stale = runStale()
+    if (stale !== null) return {status: 'refused', refusal: {kind: 'stale', reason: stale}}
+    // A role flip to read-only during a deferral window must stop further
+    // writes — re-asked on every attempt, since a run spans several txs.
+    //
+    // Below the staleness check, so this agrees with `assertBackfillMayWrite`:
+    // `isReadOnly` is the ACTIVE workspace's role, so asked first it answers a
+    // run whose workspace was switched away with "this workspace is read-only"
+    // about one that is writable. DEFENCE IN DEPTH here, unlike there, and no
+    // test pins the order: the operator gesture refuses a read-only workspace
+    // before it reaches this, and the workspace-open path discards which of the
+    // two refused. Kept so the two copies of the rule cannot read as disagreeing.
+    if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
+    // An unprimed registry makes the whole graph look like it has zero
+    // registered properties, so a pass would find no candidates, write
+    // nothing, and then record a PERMANENT per-graph completion — the
+    // migration marked done without migrating anything, on every device
+    // forever. Checked here rather than only inside the writes because a run
+    // that finds no candidates never opens a transaction at all.
+    if (!this.propertyRegistryReadyFor(workspaceId)) {
+      console.warn(
+        `[workspaceBackfills] "${backfill.id}" deferred: workspace ${workspaceId}'s ` +
+        `property registry is not primed, so a scan would see no registered ` +
+        `properties and complete vacuously. Retrying on the next open.`,
+      )
+      return {
+        status: 'refused',
+        refusal: {
+          kind: 'not-primed',
+          reason: `workspace ${workspaceId}'s property registry is not primed yet`,
+        },
+      }
+    }
+    // A pass that claims and uploads from a graph half of which is still
+    // ciphertext on disk is the same stale-view write as one that claims
+    // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
+    // transaction — there is deliberately no cheaper approximation for the hot
+    // path, because that split is what let the two answers disagree.
+    const gap = await this.workspaceViewGap(workspaceId)
+    if (gap !== null) {
+      console.warn(
+        `[workspaceBackfills] "${backfill.id}" deferred: ${gap.reason}, so claiming ` +
+        `would write from a stale view.`,
+      )
+      return {
+        status: 'refused',
+        refusal: {kind: 'view-gap', reason: gap.reason, transient: gap.transient},
+      }
+    }
+    // Re-evaluated: the gap check above AWAITS, and a switch across that await
+    // leaves the earlier evaluation stale — including a switch away and back,
+    // which restores the id and moves only the generation. Last statement
+    // before the claim write, nothing awaited in between.
+    const staleNow = runStale()
+    if (staleNow !== null) {
+      return {status: 'refused', refusal: {kind: 'stale', reason: staleNow}}
+    }
+    const won = await claim.tryClaim(workspaceId, backfill.id, {
+      reclaimCompleted: backfill.trigger === 'operator',
+    })
+    return won === 'declined'
+      ? {status: 'not-ours'}
+      : {status: 'claimed', minted: won === 'minted'}
   }
 
   /**
@@ -2875,50 +3677,202 @@ export class Repo {
    * preconditions, `BlockDefault` scope, `skipUndo`, and the claim. Returns
    * what happened so a caller can tell the operator, rather than logging into
    * the void.
+   *
+   * The pass-only shape of {@link withOperatorBackfillClaim} — right when the
+   * gesture IS the pass. A gesture that writes before the pass has to hold the
+   * claim across those writes too, and takes that method directly.
    */
   async runWorkspaceBackfillNow(
     workspaceId: string,
     backfillId: string,
   ): Promise<OperatorBackfillResult> {
-    if (this.isReadOnly) return {outcome: 'read-only', undoHistoryCleared: false}
+    const gesture = await this.withOperatorBackfillClaim(
+      workspaceId, backfillId, pass => pass.run(),
+    )
+    return gesture.claimed ? gesture.value : gesture.result
+  }
+
+  /**
+   * Hold this workspace's graph-wide claim for `backfillId` across a whole
+   * operator GESTURE, rather than only across the pass.
+   *
+   * The claim decides which device writes a once-per-graph repair, so a
+   * gesture whose earlier steps ALSO write source-of-truth rows has to hold it
+   * from its first write — otherwise two devices each write, and only then
+   * discover which of them owns the pass. (What that costs concretely is a
+   * property of the gesture, not of this seam: see the properties migration's
+   * call site.)
+   *
+   * It does NOT make the claim exclusive, and cannot. Two devices claiming
+   * inside one sync round-trip each read their own DB, find nothing, and both
+   * proceed. What moves is the window's SIZE — from the whole gesture down to
+   * sync latency — and closing the rest needs arbitration, which
+   * `graphBackfillClaim`'s header forbids by name and for a recorded reason.
+   *
+   * `body` runs with the claim held and does its own reporting; `pass.run()`
+   * runs the backfill under that same claim. The claim is handed back on every
+   * exit this process controls — return, throw, an early return inside the
+   * body — except a pass that recorded completion, which `releaseClaim` leaves
+   * alone so the graph keeps its record that the migration is done. A process
+   * that DIES mid-body controls no exit and strands the claim; when the body
+   * makes an irreversible change, that strands it over a half-applied one.
+   *
+   * `claimed: false` means the body never ran and this gesture wrote nothing;
+   * its `result` is the outcome to report, in the same vocabulary
+   * {@link runWorkspaceBackfillNow} returns so one reporter covers both.
+   */
+  async withOperatorBackfillClaim<T>(
+    workspaceId: string,
+    backfillId: string,
+    body: (pass: OperatorBackfillPass) => Promise<T>,
+  ): Promise<OperatorBackfillClaimOutcome<T>> {
+    const refuse = (result: OperatorBackfillResult): OperatorBackfillClaimOutcome<T> =>
+      ({claimed: false, result})
+    if (this.isReadOnly) return refuse({outcome: 'read-only', undoHistoryCleared: false})
     const backfill = this._workspaceBackfills.find(
       b => b.id === backfillId && b.trigger === 'operator',
     )
-    if (!backfill) return {outcome: 'not-found', undoHistoryCleared: false}
+    if (!backfill) return refuse({outcome: 'not-found', undoHistoryCleared: false})
+    const claim = this.backfillCompletionClaim
+    if (!claim) {
+      // Refused here rather than left to the runner: without a claim seam
+      // there is nothing to hold, so a body that writes before the pass would
+      // do it unguarded — which is the hazard this gesture exists to close.
+      console.error(
+        `[workspaceBackfills] refusing operator gesture for "${backfillId}" in workspace ` +
+        `${workspaceId}: no BackfillCompletionClaim is configured, so completion cannot ` +
+        `be recorded once per graph.`,
+      )
+      // `deferred`, not `failed`: nothing started, so "stopped partway" would
+      // send an operator looking for half-migrated data. `retryable: false`
+      // carries the part they can act on — this is wiring, and waiting will
+      // not fix it.
+      return refuse({
+        outcome: 'deferred', undoHistoryCleared: false,
+        reason: NO_COMPLETION_CLAIM, retryable: false,
+      })
+    }
     // Single-flight per (workspace, backfill). Two invocations in ONE Repo —
     // an operator double-clicking, or clicking again during a long pass —
-    // share a claimant, so the second would read the first's claim as its own
-    // and proceed. Then either one aborting releases the claim they SHARE
-    // while the other is still writing, and the survivor's `markComplete`
-    // stamps a tombstone: the completion becomes invisible and the next
-    // operator repeats the whole migration. The claim cannot see this, since
-    // both invocations are legitimately the same claimant.
+    // share a claimant, so the second reads the first's claim as its own and
+    // proceeds. Then either one aborting releases the claim they SHARE while
+    // the other is still writing, and the survivor's `markComplete` stamps a
+    // tombstone: the completion becomes invisible and the next operator
+    // repeats the whole migration. The claim cannot see this, since both
+    // invocations are legitimately the same claimant.
+    //
+    // Around the WHOLE gesture, not just the pass: the steps before the pass
+    // write too, and a second invocation stopped only at the pass would have
+    // synthesized and flipped first.
     const flightKey = `${workspaceId}:${backfillId}`
     if (this.inFlightOperatorBackfills.has(flightKey)) {
-      return {outcome: 'already-running', undoHistoryCleared: false}
+      return refuse({outcome: 'already-running', undoHistoryCleared: false})
     }
     this.inFlightOperatorBackfills.add(flightKey)
     try {
-      const {completed, undoHistoryCleared, deferred, failed} = await this.runWorkspaceBackfills(
-        workspaceId, [backfill], this.workspaceGeneration,
-      )
-      // `completed` is LOCAL to this invocation. Keying on this id as well is
-      // defence in depth, not load-bearing: the call above passes a
-      // single-element array, so the set can only contain this backfill, and
-      // deleting the key fails no test. Written this way so a future caller
-      // passing more than one is correct by construction.
-      if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
-      if (failed !== null) return {outcome: 'failed', undoHistoryCleared, reason: failed}
-      if (deferred !== null) return {outcome: 'deferred', undoHistoryCleared, reason: deferred}
-      // Nothing else is left. An operator run RECLAIMS a completed claim, so
-      // "already migrated" cannot land here — only a claim another device is
-      // holding, which includes one it took and never released.
-      return {outcome: 'held-by-peer', undoHistoryCleared}
+      let attempt: BackfillClaimAttempt
+      try {
+        attempt = await this.takeBackfillClaim(
+          claim, workspaceId, backfill, this.workspaceGeneration,
+        )
+      } catch (err) {
+        // `tryClaim` writes, so it can reject. Reported rather than thrown on:
+        // the caller has a human to tell, and the body never ran.
+        //
+        // NOT released, though a throw does not prove nothing committed —
+        // `Repo.tx` invalidates handles synchronously after its transaction
+        // resolves, so a failure there can reject over a claim row that is
+        // already written. `releaseClaim` cannot tell that row from a SIBLING
+        // TAB's live one: `claimantId` is per browser profile, so both name
+        // this claimant and it would delete either. Trading a claim this
+        // device may have stranded — recoverable by deleting the block, which
+        // `held-by-peer` says — for freeing a second device to start an
+        // uploading pass while the first tab is still writing is the wrong
+        // way round.
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(
+          `[workspaceBackfills] could not claim "${backfillId}" for workspace ` +
+          `${workspaceId}: ${reason}`,
+        )
+        return refuse({
+          outcome: 'deferred', undoHistoryCleared: false, reason,
+          retryable: !isPermanentClaimError(err),
+        })
+      }
+      if (attempt.status === 'not-ours') {
+        return refuse({outcome: 'held-by-peer', undoHistoryCleared: false})
+      }
+      if (attempt.status === 'refused') {
+        return refuse(refusedBackfillResult(attempt.refusal))
+      }
+      try {
+        return {
+          claimed: true,
+          value: await body({run: () => this.runClaimedOperatorBackfill(workspaceId, backfill)}),
+        }
+      } finally {
+        // `finally`, because the body reports its own outcomes and returns
+        // early from several of them. A claim left behind by a device that is
+        // no longer running anything blocks the pass for the whole graph until
+        // a human deletes the block.
+        //
+        // Only one this call MINTED, though. An inherited claim already named
+        // this claimant, and claimant ids are per browser PROFILE — so it may
+        // be a sibling TAB's, running right now. `releaseClaim` decides
+        // ownership by claimant and would delete it, freeing a third device to
+        // start the same source-of-truth pass while the sibling writes. The
+        // claim we then fail to hand back is the milder outcome: it strands,
+        // and deleting the block is the documented recovery.
+        //
+        // Swallowed: the body has already told the operator what happened, and
+        // a release that failed is a stranded claim with that same recovery —
+        // not a reason to replace that report with an exception.
+        // A conditional, never an early `return` — a `return` in a `finally`
+        // REPLACES the value the `try` produced, which here would hand every
+        // caller `undefined` in place of its outcome.
+        if (attempt.minted) {
+          await claim.releaseClaim(workspaceId, backfill.id).catch((err: unknown) => {
+            console.error(
+              `[workspaceBackfills] could not release the claim on "${backfill.id}" for ` +
+              `workspace ${workspaceId} — delete the claim block on the Migrations page to ` +
+              `let this pass run again:`, err,
+            )
+          })
+        }
+      }
     } finally {
       this.inFlightOperatorBackfills.delete(flightKey)
     }
   }
 
+  /** The operator pass itself, with the single-flight key already held by the
+   *  caller — {@link withOperatorBackfillClaim}, which owns the claim around
+   *  it. */
+  private async runClaimedOperatorBackfill(
+    workspaceId: string,
+    backfill: WorkspaceBackfill,
+  ): Promise<OperatorBackfillResult> {
+    const {completed, undoHistoryCleared, deferred, deferredRetryable, failed} =
+      await this.runWorkspaceBackfills(
+        workspaceId, [backfill], this.workspaceGeneration, true,
+      )
+    // `completed` is LOCAL to this invocation. Keying on this id as well is
+    // defence in depth, not load-bearing: the call above passes a
+    // single-element array, so the set can only contain this backfill, and
+    // deleting the key fails no test. Written this way so a future caller
+    // passing more than one is correct by construction.
+    if (completed.has(backfill.id)) return {outcome: 'ran', undoHistoryCleared}
+    if (failed !== null) return {outcome: 'failed', undoHistoryCleared, reason: failed}
+    if (deferred !== null) {
+      return {outcome: 'deferred', undoHistoryCleared, reason: deferred, retryable: deferredRetryable}
+    }
+    // Nothing else is left, and every other way out of the run sets one of the
+    // three above — so this is a claim that stopped being ours: a peer's
+    // claim can arrive between the gesture taking one and the pass re-reading
+    // it. An operator run RECLAIMS a completed claim, so "already migrated"
+    // cannot land here.
+    return {outcome: 'held-by-peer', undoHistoryCleared}
+  }
   /** `completed` is the ids that RAN TO COMPLETION — not merely those
    *  attempted, so a caller can report an outcome tied to its own request
    *  rather than to whatever else happened to finish. */
@@ -2926,10 +3880,23 @@ export class Repo {
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
     generation: number,
+    /** Set when the CALLER holds the claim for the whole gesture
+     *  ({@link withOperatorBackfillClaim}). The pass still re-takes it — that
+     *  read is what yields to a peer's claim that arrived since — but it must
+     *  not hand back what it did not take: the caller writes after this
+     *  returns, and a release here would drop the claim mid-gesture. */
+    claimHeldByCaller = false,
   ): Promise<{
     completed: ReadonlySet<string>
     undoHistoryCleared: boolean
     deferred: string | null
+    /** Whether waiting clears `deferred` — see {@link OperatorBackfillResult.retryable}.
+     *  True by default, because most deferrals are momentary; false for the two
+     *  that nothing is working on — a DURABLE view gap, which is rows no drain
+     *  will apply, and a REVOKED role, which needs the role back. Carried on the
+     *  thrown error by the site that knows, not re-derived here; `retryableAfter`
+     *  answers the same question for the refusal path. */
+    deferredRetryable: boolean
     failed: string | null
   }> {
     const completed = new Set<string>()
@@ -2938,6 +3905,8 @@ export class Repo {
     // refused it, so an operator hears "not yet, retry" rather than "already
     // done" — the same string an unattended run only logs.
     let deferred: string | null = null
+    let deferredRetryable = true
+
     /** Why a pass THREW. Distinct from `deferred`: waiting will not clear it,
      *  so an operator told "already done" would never learn the migration is
      *  incomplete — with some of its batches already committed. */
@@ -2953,117 +3922,50 @@ export class Repo {
         `${workspaceId}: no BackfillCompletionClaim is configured, so completion ` +
         `cannot be recorded once per graph.`,
       )
-      // Reported as a FAILURE, not left to the fallthrough — which now means
-      // "a peer holds the claim" and tells the operator to go delete a claim
-      // block that in this configuration does not exist.
-      failed = 'no BackfillCompletionClaim is configured, so completion cannot be recorded'
-      return {completed, undoHistoryCleared, deferred, failed}
+      // Reported as a FAILURE, not left to the fallthrough — which means "a
+      // peer holds the claim" and would tell an operator to go delete a claim
+      // block that in this configuration does not exist. Reached only by the
+      // automatic path, which discards it; `withOperatorBackfillClaim` refuses
+      // on the same condition before a body can write.
+      failed = NO_COMPLETION_CLAIM
+      return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
     }
-    // Stale covers BOTH ways a run can outlive its workspace: switched away (id
-    // differs) and switched away and back (id restored, generation moved).
-    // Identity first, so each case reports its own cause.
-    const runStale = (): string | null =>
-      this.activeWorkspaceId !== workspaceId
-        ? `workspace ${workspaceId} is no longer active`
-        : this.workspaceGeneration !== generation
-          ? `workspace ${workspaceId} was re-opened since this run was scheduled`
-          : null
     for (const backfill of backfills) {
-      // A role flip to read-only during the deferral window must stop further
-      // writes — re-check per backfill (the loop can span several txs).
-      if (this.isReadOnly) return {completed, undoHistoryCleared, deferred, failed}
-      // Don't even START a pass whose workspace has been re-opened since it was
-      // scheduled. `assertBackfillMayWrite` catches this per transaction, but
-      // that is one tx too late to avoid the scan a backfill does first.
-      if (this.workspaceGeneration !== generation) return {completed, undoHistoryCleared, deferred, failed}
-      // The generation check above cannot see an id mismatch on a MATCHING
-      // generation, which is what an operator naming a non-active workspace
-      // produces. `deferred` must be set: an empty result reads as
-      // `held-by-peer`, telling them "already done" about a run that never
-      // started.
-      const stale = runStale()
-      if (stale !== null) {
-        deferred = stale
-        return {completed, undoHistoryCleared, deferred, failed}
+      const attempt = await this.takeBackfillClaim(claim, workspaceId, backfill, generation)
+      if (attempt.status === 'not-ours') continue
+      if (attempt.status === 'refused') {
+        const {refusal} = attempt
+        deferred = refusal.kind === 'read-only'
+          ? `workspace ${workspaceId} became read-only`
+          : refusal.reason
+        // `not-primed` is the one refusal about THIS pass rather than about
+        // the device, so the next backfill still gets its turn. Every other
+        // ends the run — and each sets a reason above, because an empty result
+        // reads as `held-by-peer` at the operator entry point, telling a human
+        // "already done" about a pass that never started.
+        if (refusal.kind === 'not-primed') continue
+        deferredRetryable = retryableAfter(refusal)
+        // Re-arm ONLY when waiting is a remedy, and RETURN either way. The
+        // caught-up half of the gap gate self-re-arms through `arm()`'s parked
+        // callback; the staged-rows half has nothing to park on, so an
+        // automatic pass would be written off for the whole session by a
+        // blocker that clears in milliseconds. Returning is what keeps that to
+        // ONE re-arm: the gap is a property of the device, so every remaining
+        // pass would defer identically, and `arm()` de-dupes only a PARKED
+        // gate — N re-arms would each schedule a job that re-runs all N. A
+        // DURABLE gap gets none: `arm()` fires synchronously once caught up,
+        // so it would spin until the next open on a condition nothing is
+        // working on. Either way this reaches `workspace-open` passes only;
+        // an `operator` pass defers to a person who can be told to retry.
+        if (refusal.kind === 'view-gap' && refusal.transient) {
+          this.scheduleWorkspaceBackfills(workspaceId)
+        }
+        return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
-      // BEFORE claiming: an unprimed registry makes the whole graph look like
-      // it has zero registered properties, so a pass would find no candidates,
-      // write nothing, and then record a PERMANENT per-graph completion — the
-      // migration marked done without migrating anything, on every device
-      // forever. Checked here rather than only inside the writes because a run
-      // that finds no candidates never opens a transaction at all.
-      if (!this.propertyRegistryReadyFor(workspaceId)) {
-        deferred = `workspace ${workspaceId}'s property registry is not primed yet`
-        console.warn(
-          `[workspaceBackfills] "${backfill.id}" deferred: workspace ${workspaceId}'s ` +
-          `property registry is not primed, so a scan would see no registered ` +
-          `properties and complete vacuously. Retrying on the next open.`,
-        )
-        continue
-      }
-      // BEFORE claiming, not only before writing. `tryClaim` itself WRITES —
-      // it ensures the Migrations page and creates the claim row — so on a
-      // disconnected or stale device the old order wrote a claim, hit the
-      // in-transaction sync assertion, and released it. Both writes then sat
-      // in the upload queue, and on reconnect the create could conflict with
-      // an unseen server completion while the following `deleted=1` patch
-      // tombstoned it, freeing later operators to repeat the migration.
-      // The SAME predicate the writes assert on, not just its caught-up half:
-      // a device can also be behind with rows staged and undrained, and that
-      // half reached `tryClaim` unchecked.
-      //
-      // What this closes is the STALE-DEVICE case — a device disconnected or
-      // catching up, whose claim create and release tombstone both sit in the
-      // upload queue and land later, out of order, against a completion it
-      // never saw. It does NOT make the claim atomic: rows can stage in the
-      // window between this check and `tryClaim`'s transaction, and a peer's
-      // claim that is staged-but-undrained is invisible to the in-tx re-read
-      // there. That residual is accepted, not overlooked — closing it means
-      // arbitration, which `graphBackfillClaim`'s header forbids by name and
-      // for a recorded reason (an earlier revision tried; the regress had no
-      // fixed point). Exactly-once here is a person running it in one place.
-      //
-      // Note the create+tombstone pair is ROUTINE, not exceptional: every
-      // mid-run abort releases the claim. Its being queued while stale is the
-      // problem, not its existence.
-      const gap = await this.syncViewGap()
-      if (gap !== null) {
-        deferred = gap
-        console.warn(
-          `[workspaceBackfills] "${backfill.id}" deferred: ${gap}, so claiming would ` +
-          `write from a stale view.`,
-        )
-        // Re-arm and RETURN, exactly as the TRANSIENT catch below does. The
-        // caught-up half of this gate would self-re-arm through `arm()`'s
-        // parked callback, but the staged-rows half has no gate to park on —
-        // nothing fires when the queue drains, so without this an automatic
-        // pass is written off for the whole session by a blocker that clears
-        // in milliseconds. Returning is what keeps that to ONE re-arm: the gap
-        // is a property of the device, not of a backfill, so every remaining
-        // one would defer identically — and `arm()` only de-dupes a PARKED
-        // gate, so N re-arms here would each schedule their own job and each
-        // job would re-run all N passes.
-        //
-        // Re-arming reaches `workspace-open` passes only, which is all
-        // `scheduleWorkspaceBackfills` schedules. An `operator` pass defers to
-        // its caller, who is a person that can be told to retry.
-        this.scheduleWorkspaceBackfills(workspaceId)
-        return {completed, undoHistoryCleared, deferred, failed}
-      }
-      // Re-evaluated: the gap check above AWAITS, and a switch across that await
-      // leaves the earlier evaluation stale — including a switch away and back,
-      // which restores the id and moves only the generation. Last statement
-      // before the claim write, nothing awaited in between.
-      const staleNow = runStale()
-      if (staleNow !== null) {
-        deferred = staleNow
-        return {completed, undoHistoryCleared, deferred, failed}
-      }
-      if (!(await claim.tryClaim(workspaceId, backfill.id, {
-        reclaimCompleted: backfill.trigger === 'operator',
-      }))) continue
       const resolver = this.propertySchemaResolverFor(workspaceId)
-      let wrote = false
+      // Announced once, not per batch: the history is gone either way, and
+      // saying so repeatedly for a pass that runs for minutes is noise.
+      let announcedUndoClear = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         // One resolver for the whole run, through the canonical factory: the
@@ -3072,10 +3974,6 @@ export class Repo {
         // previous-registry fallback every other site gets.
         resolveNameSchema: (name) => {
           const resolution = resolver.resolve(name)
-          return resolution.status === 'resolved' ? resolution.schema : undefined
-        },
-        resolveFieldSchema: (fieldId) => {
-          const resolution = resolver.resolveField(fieldId)
           return resolution.status === 'resolved' ? resolution.schema : undefined
         },
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
@@ -3096,28 +3994,54 @@ export class Repo {
           // definition readiness and the write lock, so a check before it can
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
-          const result = await this.tx(async t => {
+          // Held OUTSIDE the transaction, deliberately, though that costs the
+          // structural guarantee that a batch cannot reach `finish` without
+          // having begun a drop. A drop now refuses replays for its whole
+          // duration, so one left open by a commit that throws after the
+          // callback returned would disable undo until reload — and the
+          // callback's return value never arrives on that path. Release beats
+          // the guarantee; the `catch` below is the other half.
+          let drop: HistoryDrop | undefined
+          const value = await this.tx(async t => {
             await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
-            return fn(t)
+            const value = await fn(t)
+            // AGAIN, now the body has returned — see the method. `fn` can span a
+            // whole insert budget, so the entry check above is as stale by here
+            // as the pipeline's own entry-time gate.
+            this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
+            // Begun here, while the lock is still held. NOT PINNED, and no
+            // test fails without the position: the window is between the
+            // database handing the lock to a waiting replay and `this.tx`
+            // resolving, which the harness cannot schedule into. Kept because
+            // what it loses is a committed batch of a once-per-graph migration.
+            drop = this.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
+            return value
           }, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
             skipUndo: true,
+          }).catch((err: unknown) => {
+            // Rolled back, so there is nothing for an entry to be replayed onto
+            // and the history is not owed.
+            drop?.abandon()
+            throw err
           })
-          // Only once a batch COMMITTED. An aborted one rolled its writes
-          // back, so it leaves nothing on the undo stack to be reverted onto.
-          // Still an over-approximation in one direction — a committed batch
-          // that happened to write nothing counts — which errs toward
-          // clearing, the safe side.
+          // After EVERY committed batch, not just the first. A chunked pass
+          // runs for minutes, and an entry the USER records between two batches
+          // — on a row a later batch has not reached yet — holds that row's
+          // pre-pass state and reverts it when replayed, permanently once the
+          // pass has recorded itself complete.
           //
-          // Cleared HERE rather than after the pass returns: a chunked pass
-          // runs for minutes, and every one of them is a minute in which a
-          // cmd-Z can replay a pre-pass row snapshot over a batch that has
-          // already committed. The window has to close with the FIRST batch,
-          // not with the last.
-          if (!wrote) {
-            wrote = true
-            this.undoManagerFor(workspaceId).clear()
+          // An over-approximation in one direction: a committed batch that
+          // happened to write nothing clears too, which errs toward clearing.
+          // A mid-group `repo.undoGroup` composite is SPLIT rather than dropped
+          // whole — its earlier constituents go and the later ones record onto
+          // an empty stack — so one cmd-Z reverts only the tail. Accepted: the
+          // user's history is being discarded either way, and the alternative
+          // is teaching `record` about groups a pass cannot see.
+          drop?.finish()
+          if (!announcedUndoClear) {
+            announcedUndoClear = true
             undoHistoryCleared = true
             console.warn(
               `[workspaceBackfills] "${backfill.id}" is writing to workspace ` +
@@ -3125,7 +4049,7 @@ export class Repo {
               `from before the pass would revert it.`,
             )
           }
-          return result
+          return value
         },
       }
       try {
@@ -3148,22 +4072,44 @@ export class Repo {
         completed.add(backfill.id)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
-        // Claimed but didn't finish — hand it back either way, or this pass is
-        // blocked for the whole graph by one device's bad moment.
-        await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
+        // Claimed but didn't finish — hand it back, or this pass is blocked
+        // for the whole graph by one device's bad moment. Two exceptions, and
+        // both are about not releasing what is not ours to release: a claim
+        // the CALLER holds (its `finally` is the single release, and this one
+        // would free it mid-gesture), and one this run only INHERITED, which
+        // may be a sibling tab's live claim.
+        if (!claimHeldByCaller && attempt.minted) {
+          await claim.releaseClaim(workspaceId, backfill.id).catch(() => {})
+        }
         if ((err as {kind?: string} | null)?.kind === Repo.TRANSIENT) {
           // The operator path has no other way to learn this: the re-arm below
           // only helps `workspace-open` passes (`scheduleWorkspaceBackfills`
           // filters operator ones out), and without a reason here the caller
           // reports "already done" for a pass that aborted partway through.
           deferred = reason
-          // These clear on their own — the download finishes, the queue drains.
-          // Logging and walking away would leave the pass undone for the whole
-          // session even though its blocker is momentary, so re-arm and let the
-          // gate + deep-idle deferral bound the retry.
-          console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
-          this.scheduleWorkspaceBackfills(workspaceId)
-          return {completed, undoHistoryCleared, deferred, failed}
+          // TRANSIENT says the RUN was abandoned cleanly, not that WAITING will
+          // fix it — a role revocation and a durable view gap are both thrown
+          // this way and neither clears on its own. Carried on the error rather
+          // than defaulted here, so the throw sites answer the same question
+          // `retryableAfter` answers for refusals; a thrower that says nothing
+          // still means "worth retrying", which is right for the transient DB
+          // failures that make up the rest of this path.
+          deferredRetryable = (err as {retryable?: boolean} | null)?.retryable ?? true
+          if (deferredRetryable) {
+            // These clear on their own — the download finishes, the queue
+            // drains. Logging and walking away would leave the pass undone for
+            // the whole session even though its blocker is momentary, so re-arm
+            // and let the gate + deep-idle deferral bound the retry.
+            console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
+            this.scheduleWorkspaceBackfills(workspaceId)
+          } else {
+            // A durable gap is rows nothing is draining, and a revoked role
+            // needs the role back — neither is waiting for anything, so a
+            // re-arm buys a run that will refuse again and the message would be
+            // telling the operator to wait for something that is not coming.
+            console.warn(`[workspaceBackfills] ${reason} — not retrying on its own`)
+          }
+          return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
         }
         failed = reason
         console.error(
@@ -3171,12 +4117,12 @@ export class Repo {
         )
       }
     }
-    return {completed, undoHistoryCleared, deferred, failed}
+    return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
   }
 
   /**
    * One-time-per-workspace catch-up derive of the LOCAL `reference_target_id`
-   * column (PR #288 slice A). The column is derived per device and never
+   * column. The column is derived per device and never
    * synced, so rows that predate it — an upgrading device's whole DB, or a
    * fresh device's rows synced before the schema registry primed — sit at
    * NULL until this pass sweeps them; from then on the same-tx processor
@@ -3229,27 +4175,12 @@ export class Repo {
       workspaceId, resolver: this.propertySchemaResolverFor(workspaceId),
     }
 
-    // Candidate prefilter in SQL (cheap LIKEs over one workspace, one-time);
-    // the real grammar check is `parseExactReferenceBlockContent` inside
-    // `deriveReferenceTargetId`. Deleted rows are included deliberately: a
-    // tombstone restored later arrives content-unchanged, so nothing would
-    // re-derive it. `reference_target_id IS NULL` keeps the pass strictly
-    // additive — it never second-guesses a processor- or arrival-derived
-    // value. Lean scan (id + content): the write phase re-reads fresh rows
-    // in-tx, so full rows here would only feed stale snapshots.
-    // The `'::%'` probe is the marked-form twin (§7 grammar box): every
-    // content-shape prefilter carries it, or a pasted `::[[future-field]]`
-    // (bit-worthy, target unresolvable) would never be revisited by repair.
+    // Prefilter only (`REFERENCE_TARGET_SWEEP_CANDIDATES_SQL`); the grammar
+    // check is `deriveReferenceTargetId`. `reference_target_id IS NULL` keeps
+    // the pass strictly additive — it never second-guesses a processor- or
+    // arrival-derived value.
     const candidates = await this.db.getAll<{id: string; content: string}>(
-      `SELECT id, content FROM blocks
-        WHERE workspace_id = ?
-          AND reference_target_id IS NULL
-          AND (
-            (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
-            OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
-            OR TRIM(content) LIKE '[%](((%)))'
-            OR TRIM(content) LIKE '::%'
-          )`,
+      REFERENCE_TARGET_SWEEP_CANDIDATES_SQL,
       [workspaceId],
     )
 
@@ -3282,7 +4213,7 @@ export class Repo {
   }
 
   /** The one construction site for reference-target resolution outside a
-   *  repo.tx (PR #288 slice A): the `block_aliases` index read on `reader` —
+   *  repo.tx: the `block_aliases` index read on `reader` —
    *  the open sync-arrival write tx, or the auto-commit connection for the
    *  idle passes. Mirrors `core.deriveReferenceTarget` (a `((id))` block-ref
    *  resolves textually, `[[alias]]` through this lookup); the two must
@@ -3375,7 +4306,7 @@ export class Repo {
         }
       })
       if (snapshots.size === 0) continue
-      // Explicit fan-out (PR #288 §11 implementation note): `updated_at` is
+      // Explicit fan-out (docs/properties-as-blocks-migration.html §11 implementation note): `updated_at` is
       // deliberately unchanged, so the cache's `applyIfNewer` LWW gate would
       // reject the repair and row-version-driven invalidation sees nothing.
       // Refresh already-cached snapshots directly (never populate cold rows)
@@ -3411,8 +4342,8 @@ export class Repo {
   }
 
   /** Owner-cell re-projection for rows a raw stamp just turned into
-   *  recognized field rows (PR #288 §9 / issue #402's derivation-liveness
-   *  group). The stamp itself deliberately bypasses `repo.tx` to preserve
+   *  recognized field rows (docs/properties-as-blocks-migration.html §9 /
+   *  issue #402's derivation-liveness group). The stamp itself deliberately bypasses `repo.tx` to preserve
    *  `updated_at`, so no processor sees it — but resolving a `::[[Foo]]`
    *  row's target IS the transition that makes it a field row, and the
    *  owner's cell must gain the key at that moment rather than waiting for
@@ -3461,8 +4392,9 @@ export class Repo {
     )
   }
 
-  /** Targeted re-derive for NEWLY-ADDED property definitions (PR #288 §9's
-   *  arrival-order repair, adversarial-review fix): `[[name]]` rows written
+  /** Targeted re-derive for NEWLY-ADDED property definitions
+   *  (docs/properties-as-blocks-migration.html §9's arrival-order repair):
+   *  `[[name]]` rows written
    *  or synced BEFORE their definition existed derived to NULL, and nothing
    *  content-driven ever revisits them — the definition's later
    *  arrival/creation must enqueue this pass. Scheduled by the facet bridge
@@ -3517,20 +4449,10 @@ export class Repo {
       // change nothing any reader observes. That reclaim (with the cell
       // reprojection a raw stamp currently skips) belongs to the auto-claim
       // work that makes definitions name-resolvable.
-      // `'::[[%'` twin: marked alias rows late-bind exactly like unmarked
-      // ones (§7 — the bit is already stamped by derive; this repairs the
-      // target), and a prefilter without the twin would leave a pasted
-      // `::[[future-field]]` bit=1/target-NULL forever once its name mints.
-      // Alias forms ONLY, unlike the sweep's all-forms prefilter: this drain
-      // discards anything that isn't `kind === 'alias'` two lines below, and
-      // an id form can't be one. Fetching `((%…%))` rows here would scan a
-      // whole workspace's exact refs to throw every one of them away.
+      // Alias forms only (`REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL`): this
+      // drain discards anything that isn't `kind === 'alias'` two lines below.
       const candidates = await this.db.getAll<{id: string; content: string}>(
-        `SELECT id, content FROM blocks
-          WHERE workspace_id = ?
-            AND reference_target_id IS NULL
-            AND TRIM(content) LIKE '%]]'
-            AND (TRIM(content) LIKE '[[%' OR TRIM(content) LIKE '::[[%')`,
+        REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL,
         [workspaceId],
       )
       const lookups = this.referenceTargetLookupsVia()
@@ -3562,321 +4484,6 @@ export class Repo {
         this.nameRederiveDrainScheduled.add(workspaceId)
         this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(workspaceId))
       }
-    }
-  }
-
-  /**
-   * Rename-reproject + codec re-encode migration pass (PR #288 §7/§9, slice
-   * B2). Scheduled by the facet bridge when a registry rebuild shows a
-   * definition's NAME or codec TYPE changed under its durable fieldId —
-   * renames break silently without it: children survive untouched (the
-   * column, not the label, is authoritative) but the cell stays keyed by the
-   * dead name and every schema-aware reader falls back to `defaultValue`.
-   *
-   * Per change, one child-indexed sweep (the `reference_target_id` partial
-   * index): retitle stale field-row content (`[[old]]` → `[[new]]` — markdown
-   * export and cross-workspace re-derive-by-content bind the name), re-encode
-   * value children to the new codec's canonical content where they convert,
-   * and re-key each consuming parent's cell (drop the old key; project the
-   * new one from the first parseable value). Writes ride ordinary repo.tx —
-   * field-row content and cells are synced state, and the flip-gated
-   * processors' idempotence makes the overlap free.
-   *
-   * Values that can't convert under a codec change are REPORTED (§9: "N
-   * values can't convert" must be user-visible, not a silent unset) via the
-   * user-error toast channel; the rows stay visible/fixable in the tree.
-   *
-   * Flip-gated: an un-flipped workspace has no recognized field rows and its
-   * renames keep today's semantics; skipped entirely (no marker — this pass
-   * is change-driven, not once-per-workspace).
-   */
-  schedulePropertyDefinitionMigrations(
-    workspaceId: string,
-    changes: readonly PropertyDefinitionChange[],
-  ): void {
-    if (this.isReadOnly || !workspaceId || changes.length === 0) return
-    // Resolve NOW, not when the deferred job runs. `changes` comes from this
-    // workspace's OWN registry rebuild (the facet bridge calls
-    // `applyTypesAndSchemas` then this method synchronously, in the same
-    // tick), so `propertySchemaResolverFor(workspaceId)` is guaranteed to
-    // serve it faithfully here. The batch itself is deferred to a deep-idle
-    // job, and `propertySchemaResolverFor` only retains the active workspace
-    // or the immediately-previous one (one-deep) — by the time the job runs
-    // the user may have switched workspaces twice more, which would evict
-    // `workspaceId` from both slots and make a run-time re-resolve fail
-    // closed (empty plans, migration silently dropped with no retry, #386
-    // review). Capturing the resolved plan here instead means it describes
-    // THIS change and can never go stale from a LATER, unrelated workspace
-    // switch. A fieldId that doesn't resolve (shadowed / unavailable, §6) is
-    // dropped from the plan — the same skip the run-time check used to do,
-    // just performed here instead.
-    const resolver = this.propertySchemaResolverFor(workspaceId)
-    const plans: PropertyDefinitionMigrationPlan[] = changes.flatMap(change => {
-      const resolution = resolver.resolveField(change.fieldId)
-      return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
-    })
-    if (plans.length === 0) return
-    this.propertyDefinitionMigrationJobs.schedule(() =>
-      this.runPropertyDefinitionMigrations(workspaceId, plans, resolver),
-    )
-  }
-
-  /** Test helper — drains migration passes whose deferral timer has fired. */
-  async awaitPropertyDefinitionMigrations(): Promise<void> {
-    await this.propertyDefinitionMigrationJobs.drain()
-  }
-
-  private async runPropertyDefinitionMigrations(
-    workspaceId: string,
-    plans: readonly PropertyDefinitionMigrationPlan[],
-    resolver: PropertySchemaResolver,
-  ): Promise<void> {
-    if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
-    try {
-      await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver)
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err)
-      const names = plans.map(({change}) => `"${change.newName}" (${change.fieldId})`).join(', ')
-      console.error(`[propertyDefinitionMigrations] ${names} failed: ${reason}`)
-    }
-  }
-
-  /** Re-key + re-encode every parent touched by THIS rebuild's definition
-   *  changes, applying each parent's whole change set in ONE cell write.
-   *
-   *  Per-change passes are unsafe when two definitions SWAP names (`a→b` and
-   *  `b→a` in one rebuild). Migrating `a→b` first writes the intermediate cell
-   *  `{b: <a's value>}`, which (1) clobbers b's value outright and (2) removes
-   *  key `a` — and because `a` now resolves through the FINAL name map to the
-   *  OTHER definition, the same-tx materializer (which watches `properties`)
-   *  reads that removal as a user delete and tombstones that definition's field
-   *  row before its own pass runs. No ordering avoids it: a swap is a cycle.
-   *
-   *  Applying a parent's whole set at once has no intermediate state: every
-   *  old name is dropped BEFORE any new name is assigned, so a swap lands as
-   *  `{a: <b's value>, b: <a's value>}` in a single write and the materializer
-   *  never sees a key go missing. */
-  private async runPropertyDefinitionMigrationBatch(
-    workspaceId: string,
-    plans: readonly PropertyDefinitionMigrationPlan[],
-    resolver: PropertySchemaResolver,
-  ): Promise<void> {
-    // `plans` arrives pre-resolved (schedule-time capture, see
-    // `schedulePropertyDefinitionMigrations`) and `resolver` is the SAME
-    // instance that resolved it — both frozen against the registry snapshot
-    // as of that moment, immune to any workspace switch that happens while
-    // this deferred batch sits queued or runs. Shadowed/unavailable
-    // definitions were already excluded from `plans` there (§6) — nothing to
-    // re-key for them.
-
-    // `parent_id IS NOT NULL`: §9 root half — a stamped workspace-root row
-    // is user content (never a field row); retitling it would rewrite the
-    // user's text.
-    // Chunked like the parent pass below: one bound variable per changed field
-    // would otherwise blow SQLITE_MAX_VARIABLE_NUMBER on a big registry rebuild
-    // (a large sync or scripted schema change), and the caller only LOGS the
-    // throw — so every affected cell would silently stay unmigrated.
-    // The Set is load-bearing, not tidiness: `SELECT DISTINCT` only dedupes
-    // WITHIN one statement, so a parent holding field rows for two changed
-    // definitions that land in different chunks would otherwise be migrated
-    // twice.
-    const fieldIds = plans.map(plan => plan.change.fieldId)
-    const FIELD_PROBE_CHUNK = 500
-    const parentIdSet = new Set<string>()
-    for (let i = 0; i < fieldIds.length; i += FIELD_PROBE_CHUNK) {
-      const fieldChunk = fieldIds.slice(i, i + FIELD_PROBE_CHUNK)
-      const candidates = await this.db.getAll<{parent_id: string | null}>(
-        `SELECT DISTINCT parent_id FROM blocks
-          WHERE workspace_id = ? AND reference_target_id IN (${fieldChunk.map(() => '?').join(', ')})
-            AND is_field_form = 1
-            AND deleted = 0 AND parent_id IS NOT NULL`,
-        [workspaceId, ...fieldChunk],
-      )
-      for (const row of candidates) {
-        if (row.parent_id !== null) parentIdSet.add(row.parent_id)
-      }
-    }
-    const parentIds = [...parentIdSet]
-    if (parentIds.length === 0) return
-
-    // Per changed definition, for the user-facing unparseable-values report.
-    const unconvertibleByField = new Map<string, number>()
-    const CHUNK = 100
-    for (let i = 0; i < parentIds.length; i += CHUNK) {
-      const chunk = parentIds.slice(i, i + CHUNK)
-      await this.tx(async tx => {
-        // Flat §9 recognition: field-row selection below keys on the BIT +
-        // fieldId (the bit is what keeps a ref-typed value pointing at this
-        // very definition from being misread as a field row — no ancestry
-        // walk exists anymore, and every owner re-keys uniformly at any
-        // depth).
-        //
-        // `isFieldDefinition` closes over the batch's captured `resolver`
-        // (schedule-time snapshot, captured in
-        // `schedulePropertyDefinitionMigrations` and threaded through as a
-        // parameter — NOT re-derived here). It used to call
-        // `this.propertySchemaResolverFor(workspaceId)` fresh per
-        // chunk, but that has the exact same one-deep active/previous fail-
-        // closed behavior as the outer resolve this method used to do: once
-        // the deferred batch's own workspace fell out of retention (further
-        // switches while THIS batch's chunks are still running), every
-        // fieldId — including the ones `plans` already proved resolvable —
-        // would stop resolving, `isPropertyFieldInstance` below would reject
-        // every sibling, and the batch would silently re-key nothing despite
-        // having non-empty plans. Reusing the captured `resolver` fixes that:
-        // it's bound to a real snapshot for the life of the batch, not to
-        // whatever workspace happens to be live when a chunk executes. This
-        // also covers ancestor fieldIds unrelated to `plans` (arbitrary other
-        // definitions encountered walking up from `parentId`), which a
-        // plans-only lookup can't answer — the resolver is what actually knows
-        // "is this fieldId some (possibly shadowed) definition in this
-        // workspace's registry", not just "is it one of the migrating ones".
-        //
-        // Trade-off: this is a fixed snapshot for the whole batch, so a
-        // genuinely concurrent definition change landing between chunks (or
-        // between schedule time and the batch running) isn't picked up
-        // here — but that's an independent, separately-diffed registry
-        // rebuild, so it schedules its OWN follow-up migration; it doesn't
-        // need this pass to also notice it. For the `plans` fieldIds
-        // specifically, `isFieldDefinition(change.fieldId)` is now
-        // provably always true (same resolver instance that already proved
-        // `change.fieldId` resolves when `plans` was built) — the guard below
-        // stays for the root-half/shared-recognizer symmetry with the
-        // ancestor walk, not as a live re-check.
-        const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
-          const rowResolution = resolver.resolveField(fieldId)
-          return rowResolution.status === 'resolved'
-            || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
-        }
-
-        for (const parentId of chunk) {
-          // Shared swap-safe re-key: the helper owns the parent guard and
-          // the drop-all-then-set-all apply (symmetric with the same-tx
-          // rename processor). This computePlan is the codec half — it
-          // re-encodes value children under the (possibly new) codec and
-          // reports unconvertibles.
-          await rekeyParentPropertyCell(
-            tx, parentId,
-            async (siblings) => {
-              const oldNames: string[] = []
-              const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
-              for (const {change, schema} of plans) {
-                let projected: unknown
-                let hasProjection = false
-                let parentUnconvertible = 0
-                let sawFieldRow = false
-                // Field-row content is `::((fieldId))` — id-addressed and
-                // rename-stable (§7), nothing to retitle. The fieldId
-                // equality picks THIS definition's field rows; the shared §9
-                // recognizer supplies the bit + root + resolvability
-                // conditions (`isFieldDefinition(change.fieldId)` is always
-                // true here — kept as the one composed predicate rather than
-                // a hand-rolled restatement).
-                for (const sibling of siblings) {
-                  if (
-                    (sibling.referenceTargetId ?? null) !== change.fieldId
-                    || !isPropertyFieldInstance(sibling, isFieldDefinition)
-                  ) continue
-                  sawFieldRow = true
-                  // §9 value set: bit-filtered — nested marked rows are
-                  // machinery, never value candidates.
-                  const values = (await tx.childrenOf(sibling.id, undefined))
-                    .filter(isFieldValueChild)
-                  for (const value of values) {
-                    try {
-                      const encoded = propertyChildContentToEncodedValue(schema, value.content)
-                      if (!hasProjection) {
-                        projected = encoded
-                        hasProjection = true
-                      }
-                      // Canonicalize the child content under the (possibly new)
-                      // codec so the stored text matches what setProperty would
-                      // write.
-                      const canonical = encodedPropertyValueToChildContent(schema, encoded)
-                      if (value.content !== canonical) {
-                        await tx.update(value.id, {content: canonical}, {skipMetadata: true})
-                      }
-                    } catch {
-                      parentUnconvertible += 1
-                    }
-                  }
-                }
-                // This parent carries no field row for this definition — its
-                // cell keys for it are none of this change's business.
-                if (!sawFieldRow) continue
-                if (parentUnconvertible > 0) {
-                  unconvertibleByField.set(
-                    change.fieldId,
-                    (unconvertibleByField.get(change.fieldId) ?? 0) + parentUnconvertible,
-                  )
-                }
-
-                if (change.oldName !== schema.name) oldNames.push(change.oldName)
-                if (hasProjection) {
-                  assignments.push({name: schema.name, value: projected, unset: false})
-                } else if (parentUnconvertible === 0) {
-                  assignments.push({name: schema.name, value: undefined, unset: true})
-                }
-                // else (all-unconvertible): leave the new key unset — no
-                // assignment.
-                //   - rename: the old key is dropped and the new key stays
-                //     absent → the cell shows unset for the unparseable values,
-                //     §9's contract. Re-keying the stale value under the new name
-                //     would violate §9 (cell derives from children).
-                //   - no rename: the existing key rides untouched (no old name to
-                //     drop, no assignment) so a stale-but-fixable value stays
-                //     visible; the next valid edit reprojects and heals it
-                //     (§5 pending-reprojection).
-                // This pass NEVER deletes value rows, so they stay live
-                // unconditionally and the unconvertible COUNT is surfaced below.
-              }
-              return {oldNames, assignments}
-            },
-          )
-        }
-      }, {
-        // References, not BlockDefault (adversarial-review blocker): a
-        // BlockDefault tx lands on the user's cmd-Z stack — a rename backing
-        // thousands of field rows would flood/evict their history, clear
-        // redo, and a stray undo would revert a migration chunk with no
-        // re-run path (the pass is change-driven, no marker). References is
-        // the maintenance bucket the ref-reprojection pass already uses:
-        // uploads normally, never exposed to cmd-Z. Writes are
-        // skipMetadata — machinery, not "last edited".
-        scope: ChangeScope.References,
-        // This pass now handles codec-TYPE changes (renames are same-tx, see
-        // core.migratePropertyRename), so a single plan is usually a re-encode
-        // (oldName === newName) — only a COMBINED rename+codec edit still shows
-        // an arrow. Word it to match rather than print "Foo -> Foo".
-        description: plans.length === 1
-          ? (plans[0].change.oldName === plans[0].schema.name
-            ? `re-encode property definition ${plans[0].schema.name}`
-            : `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`)
-          : `migrate ${plans.length} property definitions`,
-      })
-    }
-
-    // §9: a codec change that strands values must be user-visible, never a
-    // silent unset. The rows stay in the tree, fixable by hand. Reported per
-    // definition — one rebuild can change several.
-    for (const {change, schema} of plans) {
-      const unconvertible = unconvertibleByField.get(change.fieldId) ?? 0
-      if (unconvertible === 0) continue
-      // Claim only what's true: this pass never deletes a value row, so the
-      // text is preserved verbatim. It does NOT promise a surface — value
-      // children sit under a field row, and the visible view prunes field
-      // rows (§9), so post-flip they are reachable through the property
-      // rows, not by scrolling the outline. Naming the outline here would
-      // send the user somewhere the values demonstrably aren't (#386 review).
-      const message =
-        `${unconvertible} value${unconvertible === 1 ? '' : 's'} for property `
-        + `"${schema.name}" could not convert to the new type; their original `
-        + `text is preserved unchanged`
-      console.warn(`[propertyDefinitionMigrations] ${message}`)
-      this.userErrorListeners.notify(new ProcessorRejection(
-        message, 'property.codec-change.unconvertible',
-        {fieldId: change.fieldId, name: schema.name, count: unconvertible},
-      ))
     }
   }
 
@@ -3965,7 +4572,7 @@ export class Repo {
    *  that may legitimately observe a concurrent delete between
    *  pre-tx state and tx-start. New orchestration code should prefer
    *  `addTypeInTx` (strict) so a footgun like the Roam-isa adoption
-   *  bug (PR #47) can't be expressed. */
+   *  bug can't be expressed. */
   async addTypeInTxLenient(
     tx: Tx,
     blockId: string,
@@ -4080,6 +4687,39 @@ export class Repo {
    *  timers; fake-timer callers must advance the clock first. */
   async awaitWorkspaceBackfills(): Promise<void> {
     await this.workspaceBackfillJobs.drain()
+  }
+
+  /** Every deferred-work family at once — what a harness tearing a Repo down
+   *  needs, rather than the specific one a given test is waiting on.
+   *
+   *  A NEW family belongs in this list. Each of these schedules work that
+   *  writes to the db after the call that scheduled it returned, so one left
+   *  out can still be running when its owner is gone — which in tests means
+   *  writing into the next test's database (`testRepoScope.ts`, issue #813).
+   *  The list is deliberately complete rather than demand-driven: a family
+   *  earns its place by being ABLE to outlive its owner, so do not expect
+   *  removing one to fail a test.
+   *
+   *  Producers first, then processors. Every family above can commit a
+   *  `repo.tx`, and a tx dispatches post-commit processors — so draining them
+   *  all together lets `awaitProcessors` observe an empty set and return
+   *  before a maintenance job's tx has queued anything. `awaitIdle` is itself a
+   *  fixed point over processors that schedule processors, which is what makes
+   *  one pass at the end enough.
+   *
+   *  NOT a fixed point across families, and NOT a cancel. Like its members it
+   *  does not advance timers: work whose deferral timer has not fired is not
+   *  pending yet, so an armed `delayMs` processor or idle callback survives
+   *  this (#892 — cancelling one needs a handle neither framework keeps). */
+  async awaitDeferredWork(): Promise<void> {
+    await Promise.all([
+      this.awaitSeedMaterialization(),
+      this.awaitReferenceTargetDerive(),
+      this.awaitReconcileRescans(),
+      this.awaitReprojections(),
+      this.awaitWorkspaceBackfills(),
+    ])
+    await this.awaitProcessors()
   }
 
   /** Test-only escape hatch retained for stage-level tests that wire
@@ -4234,6 +4874,13 @@ export class Repo {
           // about. argsSchema.parse and resultSchema.parse run inside
           // the timed window because they're part of the dispatch
           // path's wall-clock cost.
+          //
+          // The wall-clock alone is not comparable between sessions: on a
+          // connection pool shallower than the fan-out, it is mostly the queue
+          // ahead of this resolve, so it moves with render order. This window
+          // decides whether anything observable competed with this resolve;
+          // only those samples mean the same thing twice.
+          const poolWindow = this.dbMetrics.contention.openWindow()
           const t0 = performance.now()
           try {
             const raw = await q.resolve(validated, this.makeQueryCtx(ctx, registry, 0))
@@ -4245,7 +4892,11 @@ export class Repo {
             // handle's subscribers + Suspense throwers.
             return q.resultSchema.parse(raw)
           } finally {
-            this.queryMetrics.record(fullName, performance.now() - t0)
+            this.queryMetrics.record(
+              fullName,
+              performance.now() - t0,
+              this.dbMetrics.contention.closeWindow(poolWindow),
+            )
           }
         },
       }))

@@ -66,10 +66,6 @@ import {
   type WorkspaceBackfill,
 } from './facets'
 import { changedRefSchemaNames } from './internals/refProjection'
-import {
-  changedPropertyDefinitions,
-  type PropertyDefinitionChange,
-} from './internals/propertyDefinitionMigrations'
 import {readValuePresetRegistry} from './valuePresetRegistry'
 
 /** A named rebuild step. Declares which facets it reads via `inputs` so
@@ -118,15 +114,6 @@ export interface FacetBridgeTarget {
   scheduleReprojection(
     names: readonly string[],
     schemas: ReadonlyMap<string, AnyPropertySchema>,
-  ): void
-  /** Current property-definition registry snapshot — the "before" side of
-   *  the per-fieldId rename/codec diff (PR #288 §7, slice B2). */
-  getPropertyDefinitions(): PropertyDefinitionRegistrySnapshot | null
-  /** Defer the rename-reproject / codec re-encode migration pass for
-   *  definitions whose identity-stable metadata changed in this swap. */
-  schedulePropertyDefinitionMigrations(
-    workspaceId: string,
-    changes: readonly PropertyDefinitionChange[],
   ): void
 }
 
@@ -352,7 +339,6 @@ export class FacetBridge {
         workspaceScoped: true,
         run: (rt) => {
           const previousPropertySchemas = target.getPropertySchemas()
-          const previousPropertyDefinitions = target.getPropertyDefinitions()
           const seedTypes = rt.read(typeSeedsFacet)
           // The type-definition registry needs a workspace to scope its rows;
           // before a pin it stays null (identity resolution / `getTypeBlockId` is
@@ -424,26 +410,6 @@ export class FacetBridge {
           const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, propertySchemas)
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
-          }
-          // Codec-TYPE-change migrations (PR #288 §7/§9, slice B2): diff the
-          // registry snapshots by durable fieldId. RENAMES are no longer
-          // scheduled here — they are re-keyed atomically in the editing tx by
-          // the `core.migratePropertyRename` same-tx processor (one undoable
-          // step, no deferred plan-capture staleness, no half-migrated window).
-          // A codec-TYPE change still needs this deferred pass because it must
-          // build the NEW codec to re-encode values, which the same-tx registry
-          // snapshot can't. A combined rename+codec edit rides both: the
-          // processor re-keys the cell, this pass re-encodes values under the
-          // new codec — both converge on the new cell key. Same workspace only
-          // (the helper refuses cross-workspace diffs); synced-in changes are
-          // reconciled on the flipped-workspace open path (#389 item 2).
-          const codecChanges = changedPropertyDefinitions(
-            previousPropertyDefinitions, propertyDefinitions,
-          ).filter(change => change.codecChanged)
-          if (codecChanges.length > 0 && propertyDefinitions) {
-            target.schedulePropertyDefinitionMigrations(
-              propertyDefinitions.workspaceId, codecChanges,
-            )
           }
           // No property-SPECIFIC reference-target rederive here. Recognition
           // is form-agnostic (a whole-block reference that resolves to a

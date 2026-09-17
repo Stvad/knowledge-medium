@@ -86,6 +86,7 @@ import {
   importRawSqliteDb,
   rawSqliteDbExportFilename,
 } from '@/utils/exportSqliteDb.js'
+import { DB_FILE_SIBLING_SUFFIXES } from '@/data/dbFileSiblings.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { WipeLocalDataDialog } from '@/shortcuts/WipeLocalDataDialog.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
@@ -539,20 +540,30 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
     {
       id: 'import_sqlite_db',
-      description: 'Replace database with uploaded SQLite file (.db)',
+      description: 'Replace database with an uploaded SQLite file or recovery archive',
       context: ActionContextTypes.GLOBAL,
       handler: () => {
         const input = document.createElement('input')
         input.type = 'file'
-        input.accept = '.db,application/vnd.sqlite3,application/octet-stream'
+        // Multiple, because a recovery backup is a fileset: a `.db` plus the
+        // write-ahead sidecars holding transactions that never reached it. The
+        // archive restores whole, but Safari expands zips on download, so the
+        // user may only have the loose files.
+        input.multiple = true
+        input.accept = [
+          '.db', ...DB_FILE_SIBLING_SUFFIXES.map(s => `.db${s}`), '.zip',
+          'application/vnd.sqlite3', 'application/octet-stream',
+        ].join(',')
 
         input.onchange = async (e) => {
-          const file = (e.target as HTMLInputElement).files?.[0]
-          if (!file) return
+          const files = [...((e.target as HTMLInputElement).files ?? [])]
+          if (files.length === 0) return
 
-          const sizeMiB = (file.size / 1024 / 1024).toFixed(1)
+          const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
+          const sizeMiB = (totalBytes / 1024 / 1024).toFixed(1)
           const ok = window.confirm(
-            `Replace this device's database with "${file.name}" (${sizeMiB} MiB)?\n\n` +
+            `Replace this device's database with ${files.map(f => `"${f.name}"`).join(', ')} ` +
+            `(${sizeMiB} MiB)?\n\n` +
             `Any local data not already synced to the server will be lost. ` +
             `The page will reload after the import.`,
           )
@@ -560,7 +571,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
           const banner = showProgress(`Importing SQLite database (${sizeMiB} MiB)…`)
           try {
-            await importRawSqliteDb(repo, file)
+            await importRawSqliteDb(repo, files)
             banner.update('Import complete — reloading…')
             window.location.reload()
           } catch (err) {
@@ -965,22 +976,31 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         if (liveContent === '') {
           if (!canMergeUp) return
           trigger.preventDefault()
-          // Ask the deletion guards BEFORE moving focus — a refused delete that
-          // had already moved the cursor would look like the block vanished.
           // This path deletes the block's whole subtree, so it needs the same
           // veto as `delete_block`; emptying a daily note's title and pressing
           // Backspace used to destroy it straight past the guard.
-          if (!await ensureDeletableThroughUi([block])) return
-          const prevVisible = await previousVisibleBlock(block, scopeRootId)
-          if (prevVisible) {
-            const prevData = await prevVisible.load()
+          //
+          // `beforeWrite` READS the landing spot — it has to, while the tree is
+          // still there to walk — and the cursor only moves once the delete has
+          // actually happened. A refusal must not leave the cursor somewhere
+          // else on a block that survived, which is what "it looks like the
+          // block vanished" means here.
+          const landing: {at: {id: string; start: number} | null} = {at: null}
+          const deleted = await deleteBlockThroughUi(block, {
+            beforeWrite: async () => {
+              const prevVisible = await previousVisibleBlock(block, scopeRootId)
+              if (!prevVisible) return
+              const prevData = await prevVisible.load()
+              landing.at = {id: prevVisible.id, start: prevData?.content.length ?? 0}
+            },
+          })
+          if (deleted && landing.at) {
             await uiStateBlock.set(editorSelection, {
-              blockId: prevVisible.id,
-              start: prevData?.content.length ?? 0,
+              blockId: landing.at.id,
+              start: landing.at.start,
             })
-            await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
+            await focusBlock(uiStateBlock, landing.at.id, {edit: true, renderScopeId: deps.renderScopeId})
           }
-          await deleteBlockThroughUi(block)
           return
         }
 
@@ -1212,8 +1232,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * cleanly.
    *
    * Order is load-bearing:
-   *  - guards BEFORE the clipboard write, so a refused cut can't leave the user
-   *    believing the content was copied;
+   *  - guards and the bulk-delete confirmation BEFORE the clipboard write, so
+   *    neither a refused nor a cancelled cut leaves the user believing the
+   *    content was copied — or with their clipboard silently replaced by a cut
+   *    they called off;
    *  - the copy while the blocks still exist, in SELECTION order (the delete
    *    runs leaf-first so each removal can't disturb the next, which is not the
    *    order the markdown should come out in);
@@ -1238,28 +1260,32 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     const {uiStateBlock, selectedBlocks, scopeRootId} = deps
     if (!selectedBlocks.length) return
 
-    const blocks = selectedBlocks.toReversed()
-    if (!await ensureDeletableThroughUi(blocks)) return
+    const focus: {target: Block | null} = {target: null}
+    const deleted = await deleteBlocksThroughUi(selectedBlocks, {
+      animate: true,
+      beforeWrite: async () => {
+        // Copy exactly the set we're about to delete rather than re-reading the
+        // ui-state selection: with supplied deps the two can differ, and the copy
+        // would quietly no-op while the delete went ahead.
+        //
+        // Stays BEFORE the write, unlike the focus move in the Backspace path,
+        // even though a late guard refusal can then leave the clipboard holding
+        // blocks that survived. Deferring it until after would mean a failed
+        // clipboard write costs the blocks as well: a cut degrading to a copy
+        // is benign, a cut degrading to a delete is not.
+        if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
 
-    // Copy exactly the set we're about to delete rather than re-reading the
-    // ui-state selection: with supplied deps the two can differ, and the copy
-    // would quietly no-op while the delete went ahead.
-    if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
-
-    const selectedIds = new Set(selectedBlocks.map(block => block.id))
-    const after = scopeRootId
-      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
-      : null
-    const focusTarget = after && !selectedIds.has(after.id) ? after : null
-
-    let deleted = false
-    await withMoveTransition(async () => {
-      deleted = await deleteBlocksThroughUi(blocks)
+        const selectedIds = new Set(selectedBlocks.map(block => block.id))
+        const after = scopeRootId
+          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+          : null
+        focus.target = after && !selectedIds.has(after.id) ? after : null
+      },
     })
     if (!deleted) return
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-    if (focusTarget) {
-      void focusBlock(uiStateBlock, focusTarget.id)
+    if (focus.target) {
+      void focusBlock(uiStateBlock, focus.target.id)
     }
   }
 

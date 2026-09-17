@@ -46,6 +46,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 // ──── Test fixtures ────
 
@@ -1221,7 +1222,7 @@ describe('commit pipeline bookkeeping', () => {
 // `tx.createOrGet` — see `@/data/blockId` for why there. What needs pinning
 // beyond the predicate itself (blockId.test.ts) is the WIRING, and its
 // polarity in particular: these tests build a Repo the way production does,
-// with `new Repo({db, cache, user})` and no id options at all, so they fail
+// with `trackTestRepo(new Repo({db, cache, user}))` and no id options at all, so they fail
 // if `blockIdPolicy` stops defaulting to `'canonical'` or stops being passed
 // down through `runTx`. Using `createTestRepo` here would prove neither — it
 // injects `blockIdPolicy: 'any'` for its mnemonic ids.
@@ -1231,13 +1232,13 @@ describe('block id contract (issue #456)', () => {
 
   /** A Repo with production's id configuration: none. */
   const strictRepo = (overrides?: {newId?: () => string}): Repo =>
-    new Repo({
+    trackTestRepo(new Repo({
       db: sharedDb.db,
       cache: new BlockCache(),
       user: {id: 'user-1', name: 'Test'},
       startSyncObserver: false,
       ...overrides,
-    })
+    }))
 
   const liveIds = async (): Promise<string[]> => {
     const rows = await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks ORDER BY id')
@@ -1309,14 +1310,14 @@ describe('block id contract (issue #456)', () => {
   // guard off stays a deliberate, visible act rather than something a future
   // default flip could do silently to the whole suite.
   it("lets a repo opt out with blockIdPolicy: 'any' — the test-harness shape", async () => {
-    const repo = new Repo({
+    const repo = trackTestRepo(new Repo({
       db: sharedDb.db,
       cache: new BlockCache(),
       user: {id: 'user-1', name: 'Test'},
       startSyncObserver: false,
       blockIdPolicy: 'any',
       newId: () => 'gen-1',
-    })
+    }))
     await repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
       await tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})

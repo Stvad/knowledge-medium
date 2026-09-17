@@ -7,98 +7,69 @@
  * house style and `docs/fuzzing.md` for tier mechanics.
  *
  * Note on the agent-cli "protocol resolves to dist" test gotcha: it doesn't
- * apply here — `subtreeOutline.ts` has ZERO imports (module docblock
- * :1-12 says so explicitly, "unit-testable... importing cli.ts would run
- * the CLI entrypoint"), so there's no `protocol.ts`/dist dependency to
- * compile first. Confirmed by running the existing (non-fuzz)
+ * apply here — `subtreeOutline.ts` has ZERO imports (its module doc says
+ * so explicitly, "unit-testable... importing cli.ts would run the CLI
+ * entrypoint"), so there's no `protocol.ts`/dist dependency to compile
+ * first. Confirmed by running the existing (non-fuzz)
  * `subtreeOutline.test.ts` straight from source with no build step.
  *
- * ──── Why this invariant matters (grounded in subtreeOutline.ts:1-11,150-173) ────
+ * ──── Why this invariant matters ────
  *
  * This renders a flat `get-subtree` payload — which can carry arbitrary,
  * attacker/LLM-influenced block IDS, CONTENT, and PROPERTIES — as an
  * outline an agent (or a human at a terminal) reads back as ground truth
- * about block ids and structure. The anti-spoofing invariant (module doc
- * :162-172: "the id comes first... EVERY field is neutralized before
- * interpolation, so a block can't spill into id-less lines... line count
- * == block count") has now been defended against NINE missed hazard
- * classes:
+ * about block ids and structure. The anti-spoofing invariant (module doc:
+ * "the id comes first... EVERY field is neutralized before interpolation,
+ * so a block can't spill into id-less lines... line count == block count")
+ * defends against every character that can either forge an extra line or
+ * visually REORDER the `[id]` token, its delimiter, or adjacent text:
  *
- *  - Unicode line separators (34a586e92, U+2028/U+2029 inside
- *    JSON.stringify'd properties)
- *  - the C0 information separators (8fcfafe42, U+001C-U+001F in raw
- *    content)
- *  - the row's OWN `id` never being passed through any neutralization at
- *    all (PR #447 review comment 3672555158 — a caller-supplied id
- *    containing a raw LF forged an extra outline line; ids are
- *    attacker-reachable via `createBlock`'s `data.id`,
- *    src/plugins/agent-runtime/commands.ts, which forwards an explicit id
- *    with no shape validation)
- *  - ESC (U+001B) and the C1 control range (U+0080-U+009F) surviving
- *    (PR #447 review comment 3672555166 — an ESC-introduced CSI "cursor
- *    next line" sequence renders a forged bullet on a new visual line even
- *    though a plain line-split still counts one line, since the CLI writes
- *    the outline straight to `process.stdout`, packages/agent-cli/src/cli.ts:727)
- *  - backspace (U+0008) surviving (PR #447 review comment 3676752551 —
- *    enough backspaces walk the terminal cursor BACK over the real
- *    `- [id] ` prefix and overwrite it on screen; this is what finally
- *    ended the enumerate-one-character-at-a-time pattern — the source now
- *    matches the FULL control-character space by construction
- *    (`CONTROL_CHAR_RUN_REGEX`/`ID_ENCODE_REGEX`, subtreeOutline.ts:92-111)
- *    rather than a growing deny-list)
- *  - lossily collapsing a caller-supplied `id` the SAME way as content
- *    (PR #447 review comment 3676752546 — an id containing a raw LF
- *    rendered with the LF replaced by the marker, which is neither
- *    reversible NOR injective: distinct ids could collapse to the same
- *    displayed token, and a consumer could no longer recover the id to
- *    address the block via `get-block`/`update-block`/`delete-block`.
- *    Fixed by giving `id` its OWN treatment — `encodeOutlineId`, a
- *    reversible, injective percent-encoding — instead of sharing
- *    `content`/`properties`'s lossy `neutralizeOutlineField` collapse)
- *  - `]` inside a hostile id colliding with the outline GRAMMAR's own
- *    closing delimiter (PR #447 review comment 3677029933 — injectivity
- *    of `encodeOutlineId` ALONE wasn't enough: `id: "a] b", content: "c"`
- *    and `id: "a", content: "b] c"` both rendered `- [a] b] c`, so a
- *    consumer had no way to tell where the id token ended. Fixed by also
- *    percent-encoding `]` in `ID_ENCODE_REGEX`, which makes the
+ *  - Unicode line separators (U+2028/U+2029) inside raw content or
+ *    JSON.stringify'd properties, which read as a line break to many
+ *    parsers even though `JSON.stringify` leaves them un-escaped.
+ *  - the C0 control range (all of U+0000-U+001F except TAB), DEL
+ *    (U+007F), and the C1 range (U+0080-U+009F) — including ESC-introduced
+ *    CSI sequences (a forged bullet on a new visual line even though a
+ *    plain line-split still counts one line) and backspace (enough of
+ *    them walk the terminal cursor BACK over the real `- [id] ` prefix
+ *    and overwrite it on screen).
+ *  - the row's OWN `id`: it is just as attacker-reachable as content (an
+ *    explicit id forwarded through `createBlock`'s `data.id`, with no
+ *    shape validation) and gets its OWN encoding — `encodeOutlineId`, a
+ *    reversible, injective percent-encoding — rather than sharing
+ *    content's lossy `neutralizeOutlineField` collapse. A lossy collapse
+ *    is wrong for an id specifically: it is neither reversible (a
+ *    consumer can no longer recover the id to address the block via
+ *    `get-block`/`update-block`/`delete-block`) nor injective (distinct
+ *    ids could collapse to the same displayed token).
+ *  - `]` inside a hostile id, which collides with the outline GRAMMAR's
+ *    own closing delimiter: `id: "a] b", content: "c"` and
+ *    `id: "a", content: "b] c"` would otherwise both render
+ *    `- [a] b] c`, leaving a consumer no way to tell where the id token
+ *    ends. `ID_ENCODE_REGEX` percent-encodes `]` too, which makes the
  *    documented parse rule — id is everything between the leading `- [`
  *    and the FIRST `]` — unambiguous. `[` is deliberately left alone:
- *    under a first-`]` scan it's inert, not an opening delimiter to
- *    match.)
+ *    under a first-`]` scan it's inert, not an opening delimiter to match.
  *  - Unicode BIDI FORMATTING CONTROLS (LRM/RLM, the embedding/override
- *    formers LRE/RLE/PDF/LRO/RLO, the isolate formers LRI/RLI/FSI/PDI)
- *    surviving — PR #447 review comment 3677343389, the "Trojan
- *    Source" class (CVE-2021-42574): these reorder DISPLAYED text in a
- *    bidi-aware terminal without changing a single byte, so the `[id]`
- *    token, its closing delimiter, and adjacent content could be made
- *    to visually swap. This is why `id`'s fix stopped being an
- *    enumerated range: bidi controls are Unicode category Cf (format),
- *    a category the C0/C1 enumeration never covered — the FOURTH time
- *    this exact surface needed widening. `id` switched to percent-
- *    encoding the full `\p{C}` Unicode category (Cc/Cf/Cs/Co/Cn) instead
- *    of an enumerated list; content, at the time, kept an enumerated
- *    list — a categorical `\p{C}` cut would also have stripped ZWJ/ZWNJ
- *    (U+200D/U+200C) — Cf, but harmless (they don't reorder anything)
- *    and semantically necessary (ZWJ builds compound emoji; ZWNJ is
- *    required orthography in Persian/Hindi/etc.) — corrupting real
- *    content to defend against a risk those two don't create. Content's
- *    bidi range was hand-TRANSCRIBED from the Unicode `Bidi_Control`
- *    property's membership rather than matching the property itself.)
- *  - THAT hand transcription itself was incomplete — PR #447 review
- *    comment 3677564794: it (and this test file's mirrored
- *    `BIDI_CODEPOINTS` list, independently transcribed the SAME way)
- *    both omitted U+061C ARABIC LETTER MARK, a `Bidi_Control` member
- *    exactly as reordering-capable as the eleven that WERE listed. The
- *    fix stops copying the property's membership on EITHER side:
- *    `CONTROL_CHAR_RUN_REGEX` now matches `\p{Bidi_Control}` directly
- *    (which — being narrower than `\p{C}`/`\p{Cf}` — does NOT include
- *    ZWJ/ZWNJ, so the previous bullet's carve-out now falls out of the
- *    property for free instead of needing to be maintained by hand), and
- *    this suite's `BIDI_CODEPOINTS` is now DERIVED from that same
- *    property via `codepointsMatching` rather than re-typed — the NINTH
- *    time this exact surface needed widening, and the first time the fix
- *    was "stop transcribing, match the standard" rather than
- *    "transcribe one more character.")
+ *    formers LRE/RLE/PDF/LRO/RLO, the isolate formers LRI/RLI/FSI/PDI,
+ *    ARABIC LETTER MARK, …) — the "Trojan Source" class (CVE-2021-42574):
+ *    these reorder DISPLAYED text in a bidi-aware terminal without
+ *    changing a single byte. Matched via the Unicode `Bidi_Control`
+ *    PROPERTY itself (`\p{Bidi_Control}`), not a hand-transcribed range —
+ *    a transcription can silently omit a member exactly as
+ *    reordering-capable as the rest; the property cannot.
+ *
+ * `id`'s hazard boundary is fully CATEGORICAL rather than enumerated:
+ * percent-encode the whole `\p{C}` Unicode category (Cc/Cf/Cs/Co/Cn) plus
+ * the grammar characters `%`/`]` plus U+2028/U+2029 (category Zl/Zp — a
+ * SIBLING of "Other", not covered by `\p{C}`, so these need listing
+ * explicitly). A categorical `\p{C}` cut is NOT applied to content: it
+ * would also strip ZWJ/ZWNJ (U+200D/U+200C, category Cf) — harmless (they
+ * don't reorder anything) and semantically necessary (ZWJ builds compound
+ * emoji; ZWNJ is required orthography in Persian/Hindi/etc.) — corrupting
+ * real content to defend against a risk those two don't create.
+ * `\p{Bidi_Control}` itself excludes ZWJ/ZWNJ, so content's
+ * bidi-reordering match doesn't need a manual carve-out for them either.
  *
  * `neutralizeOutlineField`/`encodeOutlineId`/`ID_ENCODE_REGEX`/
  * `CONTROL_CHAR_RUN_REGEX` aren't exported (internal helpers), so they're
@@ -106,74 +77,67 @@
  * `decodeOutlineId` — the one exported helper among them — is imported
  * directly, since it's the documented inverse a real consumer would call.
  *
- * ──── What the code actually does (grounded in subtreeOutline.ts) ────
+ * ──── What the code actually does ────
  *
  * Every row becomes exactly one line:
- * `<indent>- [<id>] <content><props?>` (:201) — `content` and the
- * JSON.stringify'd `properties` (:194-199) both go through
- * `neutralizeOutlineField`, which collapses every RUN of hostile control
- * characters to a single marker (lossy — acceptable for prose). `id`
- * (:196) instead goes through `encodeOutlineId`, which percent-encodes
- * each hostile character (and `%` itself, so the mapping stays injective)
- * INDIVIDUALLY rather than collapsing runs — a lossy collapse is wrong for
- * an identifier a consumer needs to recover exactly
- * (subtreeOutline.ts:113-141's doc comment). `content`/`properties` and
- * `id` draw from DIFFERENT hazard definitions: content's
- * `CONTROL_CHAR_RUN_REGEX` is a HYBRID as of PR #447 review comment
- * 3677564794 — an ENUMERATED range for the plain control-character span
- * (all of C0 (U+0000-U+001F) EXCEPT TAB (U+0009, deliberately excluded —
- * a terminal only ever advances the cursor on TAB, never moves it
- * backward over the prefix), DEL (U+007F), all of C1 (U+0080-U+009F),
- * the two Unicode line/paragraph separators (U+2028/U+2029)) UNIONED
- * with the CATEGORICAL `\p{Bidi_Control}` property for the
- * bidi-reordering hazard (PR #447 review comment 3677343389) — with
- * ZWJ/ZWNJ (U+200D/U+200C) surviving not because of a manual carve-out
- * but because `\p{Bidi_Control}` itself excludes them (they're harmless
- * — don't reorder anything — and semantically required in real text).
- * `id`'s `ID_ENCODE_REGEX` is instead fully CATEGORICAL: the full Unicode
- * `\p{C}` General_Category "Other" (Cc/Cf/Cs/Co/Cn) plus U+2028/
- * U+2029 (category Zl/Zp, sibling to "Other", not covered by `\p{C}`)
- * plus the grammar characters `%`/`]`. `renderSubtreeOutline` joins
- * one line per (filtered-valid) row with a single LF (:203) and never
- * re-sorts (module doc :7-11) or otherwise introduces a line.
+ * `<indent>- [<id>] <content><props?>` — `content` and the
+ * JSON.stringify'd `properties` both go through `neutralizeOutlineField`,
+ * which collapses every RUN of hostile control characters to a single
+ * marker (lossy — acceptable for prose). `id` instead goes through
+ * `encodeOutlineId`, which percent-encodes each hostile character (and
+ * `%` itself, so the mapping stays injective) INDIVIDUALLY rather than
+ * collapsing runs — a lossy collapse is wrong for an identifier a
+ * consumer needs to recover exactly. `content`/`properties` and `id`
+ * draw from DIFFERENT hazard definitions: content's
+ * `CONTROL_CHAR_RUN_REGEX` is a HYBRID — an ENUMERATED range for the
+ * plain control-character span (all of C0 (U+0000-U+001F) EXCEPT TAB
+ * (U+0009, deliberately excluded — a terminal only ever advances the
+ * cursor on TAB, never moves it backward over the prefix), DEL (U+007F),
+ * all of C1 (U+0080-U+009F), the two Unicode line/paragraph separators
+ * (U+2028/U+2029)) UNIONED with the CATEGORICAL `\p{Bidi_Control}`
+ * property for the bidi-reordering hazard — with ZWJ/ZWNJ (U+200D/
+ * U+200C) surviving not because of a manual carve-out but because
+ * `\p{Bidi_Control}` itself excludes them (they're harmless — don't
+ * reorder anything — and semantically required in real text). `id`'s
+ * `ID_ENCODE_REGEX` is instead fully CATEGORICAL: the full Unicode
+ * `\p{C}` General_Category "Other" (Cc/Cf/Cs/Co/Cn) plus U+2028/U+2029
+ * (category Zl/Zp, sibling to "Other", not covered by `\p{C}`) plus the
+ * grammar characters `%`/`]`. `renderSubtreeOutline` joins one line per
+ * (filtered-valid) row with a single LF and never re-sorts (see the
+ * module doc) or otherwise introduces a line.
  *
  * ──── Generator design ────
  *
  * Ground truth is BY CONSTRUCTION: every generated row already satisfies
- * `isSubtreeOutlineRow` (a string `id`, :35-38), so `renderSubtreeOutline`'s
- * `.filter` (:180) never drops one — line count is checked against the
- * INPUT row count directly, never re-derived from what the renderer
- * produces. `CONTROL_CODEPOINTS` below is a FULL enumeration (not a
- * sample) of content's hostile-character space named in subtreeOutline.ts's
- * doc comment above `CONTROL_CHAR_RUN_REGEX` — used both to build the
+ * `isSubtreeOutlineRow` (a string `id`), so `renderSubtreeOutline`'s
+ * `.filter` never drops one — line count is checked against the INPUT
+ * row count directly, never re-derived from what the renderer produces.
+ * `CONTROL_CODEPOINTS` below is a FULL enumeration (not a sample) of
+ * content's hostile-character space named in subtreeOutline.ts's doc
+ * comment above `CONTROL_CHAR_RUN_REGEX` — used both to build the
  * hostile-char soup generators AND to assert the invariant directly
  * (every one of those codepoints, individually, must never survive into
- * the output) rather than checking a handful of samples, per PR #447
- * review comment 3676752551's explicit ask. Its bidi-reordering portion,
- * `BIDI_CODEPOINTS`, is DERIVED from the `\p{Bidi_Control}` property via
- * `codepointsMatching` rather than hand-copied, so it can't independently
- * drift from the same property `CONTROL_CHAR_RUN_REGEX` now matches
- * directly — the exact failure mode PR #447 review comment 3677564794
- * found: the implementation's hand-enumerated bidi range and this
- * suite's PREVIOUS hand-enumerated `BIDI_CODEPOINTS` both omitted U+061C
- * ARABIC LETTER MARK, since both were independently transcribed from the
- * same source and made the same mistake. `id`'s hazard space is
- * DIFFERENT — categorical (`\p{C}`) rather than enumerated — so it gets
- * its own generators (`idCategoryHazardArb` and friends, below) and its
- * own semantic assertion (`/\p{C}/u`, matching the invariant `id`'s doc
- * comment states, not a copy of `ID_ENCODE_REGEX`). `idSuffixArb`
- * generates arbitrary strings — including the same hostile-char soup as
- * content, literal `%`, and fully arbitrary Unicode — per review comment
- * 3672555158's earlier ask to stop restricting ids to `[a-zA-Z0-9_-]` (a
- * shape that could never have exposed the missing-id-neutralization bug
- * in the first place). The anti-forge property's id assertion (and every
- * injectivity/round-trip property below it) checks the id SEMANTICALLY —
- * parse the rendered line by the documented delimiter rule, decode, and
- * compare to the INPUT id (`parseIdFromLine`, defined below) — never by
- * re-predicting the encoder's output with a copy of its character class
- * (PR #447 review comment 3677190046, P1: a copied oracle can't catch a
- * bug or omission shared by both copies — the same lesson PR #447 review
- * comment 3677564794 applied to the bidi hazard space itself).
+ * the output) rather than checking a handful of samples. Its
+ * bidi-reordering portion, `BIDI_CODEPOINTS`, is DERIVED from the
+ * `\p{Bidi_Control}` property via `codepointsMatching` rather than
+ * hand-copied, so it can't independently drift from the same property
+ * `CONTROL_CHAR_RUN_REGEX` now matches directly — two independent
+ * transcriptions of the same property can agree with each other and
+ * still both be wrong. `id`'s hazard space is DIFFERENT — categorical
+ * (`\p{C}`) rather than enumerated — so it gets its own generators
+ * (`idCategoryHazardArb` and friends, below) and its own semantic
+ * assertion (`/\p{C}/u`, matching the invariant `id`'s doc comment
+ * states, not a copy of `ID_ENCODE_REGEX`). `idSuffixArb` generates
+ * arbitrary strings — including the same hostile-char soup as content,
+ * literal `%`, and fully arbitrary Unicode — rather than restricting ids
+ * to `[a-zA-Z0-9_-]` (a shape that could never expose a missing-id-
+ * neutralization bug in the first place). The anti-forge property's id
+ * assertion (and every injectivity/round-trip property below it) checks
+ * the id SEMANTICALLY — parse the rendered line by the documented
+ * delimiter rule, decode, and compare to the INPUT id (`parseIdFromLine`,
+ * defined below) — never by re-predicting the encoder's output with a
+ * copy of its character class: a copied oracle can't catch a bug or
+ * omission shared by both copies.
  */
 import {describe, expect, it} from 'vitest'
 import fc from 'fast-check'
@@ -191,18 +155,16 @@ const range = (startInclusive: number, endInclusive: number): number[] => {
 /** Enumerates every codepoint for which a `u`-flagged single-codepoint
  *  regex matches — used below to DERIVE `BIDI_CODEPOINTS` from the
  *  Unicode `Bidi_Control` property itself, rather than hand-copying its
- *  membership into a list. PR #447 review comment 3677564794: the
- *  PREVIOUS version of both this test file and subtreeOutline.ts's
- *  `CONTROL_CHAR_RUN_REGEX` hand-enumerated the same bidi range, and BOTH
- *  independently omitted U+061C ARABIC LETTER MARK — two copies of the
- *  same transcription agreeing with each other proves nothing about
- *  correctness. Generating this test's expected-codepoint list from the
- *  same `\p{Bidi_Control}` property the implementation now matches
- *  directly means a future gap in either can only be a gap shared with
- *  the Unicode data itself, never a copy-paste omission the other side
- *  could have caught. Scans the full codepoint space excluding lone
- *  (unpaired) surrogates U+D800-U+DFFF, which aren't standalone
- *  codepoints `String.fromCodePoint` can represent one at a time. */
+ *  membership into a list: two independently hand-copied transcriptions
+ *  of the same property can agree with each other and still both be
+ *  wrong, so agreement between copies proves nothing about correctness.
+ *  Generating this test's expected-codepoint list from the same
+ *  `\p{Bidi_Control}` property the implementation now matches directly
+ *  means a future gap in either can only be a gap shared with the
+ *  Unicode data itself, never a copy-paste omission the other side could
+ *  have caught. Scans the full codepoint space excluding lone (unpaired)
+ *  surrogates U+D800-U+DFFF, which aren't standalone codepoints
+ *  `String.fromCodePoint` can represent one at a time. */
 const codepointsMatching = (re: RegExp): number[] => {
   const out: number[] = []
   for (let cp = 0x0000; cp <= 0x10ffff; cp++) {
@@ -215,14 +177,11 @@ const codepointsMatching = (re: RegExp): number[] => {
 /** Every codepoint the Unicode `Bidi_Control` property covers — the SAME
  *  property `subtreeOutline.ts`'s `CONTROL_CHAR_RUN_REGEX` now matches
  *  directly, derived here via `codepointsMatching` instead of hand-copied
- *  (see its doc comment for why: PR #447 review comment 3677564794 found
- *  that the previous hand-enumerated pair on both sides — LRM, RLM,
- *  LRE, RLE, PDF, LRO, RLO, LRI, RLI, FSI, PDI — both omitted U+061C
- *  ARABIC LETTER MARK). Used to build the hostile-char soup below AND, in
- *  the anti-forge/bidi properties further down, to assert against the
- *  full, CURRENT membership of the property, so a future Unicode revision
- *  that adds or removes a `Bidi_Control` member is picked up automatically
- *  rather than needing a manual list edit. */
+ *  (see its doc comment for why). Used to build the hostile-char soup
+ *  below AND, in the anti-forge/bidi properties further down, to assert
+ *  against the full, CURRENT membership of the property, so a future
+ *  Unicode revision that adds or removes a `Bidi_Control` member is
+ *  picked up automatically rather than needing a manual list edit. */
 const BIDI_CODEPOINTS: readonly number[] = codepointsMatching(/\p{Bidi_Control}/u)
 
 /** A FULL enumeration (not a sample) of every codepoint CONTENT's
@@ -230,16 +189,15 @@ const BIDI_CODEPOINTS: readonly number[] = codepointsMatching(/\p{Bidi_Control}/
  *  comment above `CONTROL_CHAR_RUN_REGEX`: all of C0 (U+0000-U+001F)
  *  EXCEPT TAB (U+0009), DEL (U+007F), all of C1 (U+0080-U+009F), the two
  *  Unicode line/paragraph separators (U+2028/U+2029), and every codepoint
- *  `BIDI_CODEPOINTS` above covers (the `Bidi_Control` hazard class added
- *  by PR #447 review comment 3677343389; expressed as the semantic
- *  property rather than a hand-enumerated list as of PR #447 review
- *  comment 3677564794). ZWJ/ZWNJ (U+200D/U+200C) are DELIBERATELY
+ *  `BIDI_CODEPOINTS` above covers (the `Bidi_Control` hazard class,
+ *  expressed as the semantic property rather than a hand-enumerated
+ *  list). ZWJ/ZWNJ (U+200D/U+200C) are DELIBERATELY
  *  excluded — `\p{Bidi_Control}` itself excludes them, see `zwjZwnjArb`
  *  below for why that matters. Used both to build the hostile-char soup
  *  below AND, in the anti-forge property, to assert directly that every
  *  one of these codepoints — individually — never survives into the
- *  output, rather than checking a handful of samples (PR #447 review
- *  comment 3676752551). This is CONTENT's hazard space only — `id`'s is
+ *  output, rather than checking a handful of samples. This is CONTENT's
+ *  hazard space only — `id`'s is
  *  the categorical `\p{C}` boundary, a fundamentally different shape (see
  *  `idCategoryHazardArb` and the module docblock above). */
 const CONTROL_CODEPOINTS: readonly number[] = [
@@ -265,14 +223,11 @@ const NEUTRALIZED_CHARS: readonly string[] = CONTROL_CODEPOINTS.map(cp => String
  *  the encoder SHOULD produce with a second copy of `ID_ENCODE_REGEX`'s
  *  character class and transformation.
  *
- *  PR #447 review comment 3677190046 (P1): this replaces an earlier
- *  version of this oracle that WAS exactly that copy — an
- *  `ID_ENCODE_REGEX` literal + `encodeURIComponent` call duplicated from
- *  the source, used only to predict the id token in the anti-forge
- *  property below. A bug or a future omission mirrored in both copies
- *  (the real encoder and this one) would have stayed green; AGENTS.md's
- *  "don't add tests that just restate the code" applies directly.
- *  `encodeOutlineId`/`ID_ENCODE_REGEX` aren't exported, so there's no
+ *  A duplicated `ID_ENCODE_REGEX` literal + `encodeURIComponent` call,
+ *  used only to predict the id token, would let a bug or omission
+ *  mirrored in both copies (the real encoder and the copy) stay green;
+ *  AGENTS.md's "don't add tests that just restate the code" applies
+ *  directly. `encodeOutlineId`/`ID_ENCODE_REGEX` aren't exported, so there's no
  *  encode-side helper to import either — this implements only the
  *  DECODE-side parse rule, which is what any real consumer parsing the
  *  outline back into ids would also have to implement by hand. */
@@ -290,9 +245,8 @@ const neutralizedCharRunArb: fc.Arbitrary<string> =
   fc.array(fc.constantFrom(...NEUTRALIZED_CHARS), {minLength: 1, maxLength: 3}).map(a => a.join(''))
 
 /** A realistic ANSI/VT escape sequence: ESC introducing a CSI command
- *  (`ESC [ <params> <final-byte>`) — the exact shape PR #447 review
- *  comment 3672555166 flagged, an ESC-`[1E` "cursor next line" sequence.
- *  Removing the ESC introducer (which `neutralizeOutlineField` does) is
+ *  (`ESC [ <params> <final-byte>`) — e.g. an ESC-`[1E` "cursor next line"
+ *  sequence. Removing the ESC introducer (which `neutralizeOutlineField` does) is
  *  what defuses it: a terminal never recognizes bare params/final-byte
  *  text as a control sequence without it, so `[1E` survives as inert text
  *  while ESC itself must not. */
@@ -303,7 +257,7 @@ const ansiEscapeSequenceArb: fc.Arbitrary<string> = fc.tuple(
 
 const benignTokenArb: fc.Arbitrary<string> = fc.stringMatching(/^[a-zA-Z0-9 ]{0,6}$/)
 
-/** `[`/`]` specifically — PR #447 review comment 3677029933's hazard class
+/** `[`/`]` specifically — this hazard class
  *  is NOT a control character at all, so nothing above guarantees it shows
  *  up often; `idSuffixArb`/`contentSoupArb`'s fully-arbitrary-Unicode
  *  branch could produce it, but only by chance. Mixed into the soup below
@@ -311,9 +265,8 @@ const benignTokenArb: fc.Arbitrary<string> = fc.stringMatching(/^[a-zA-Z0-9 ]{0,
 const bracketArb: fc.Arbitrary<string> = fc.constantFrom('[', ']', '][', '[]', ']]', '[[', '] ')
 
 /** Draws from `BIDI_CODEPOINTS` (defined above, derived from
- *  `\p{Bidi_Control}` — PR #447 review comment 3677564794) — the bidi
- *  formatting controls that REORDER displayed text, PR #447 review
- *  comment 3677343389's "Trojan Source" class (CVE-2021-42574). Kept as
+ *  `\p{Bidi_Control}`) — the bidi formatting controls that REORDER
+ *  displayed text, the "Trojan Source" class (CVE-2021-42574). Kept as
  *  its own arbitrary (rather than drawing from `CONTROL_CODEPOINTS`,
  *  which also includes these) so the dedicated bidi-specific properties
  *  further down can name exactly what they're testing, independent of
@@ -326,9 +279,9 @@ const bidiControlArb: fc.Arbitrary<string> = fc.constantFrom(...BIDI_CODEPOINTS)
  *  the DELIBERATE OPPOSITE case: subtreeOutline.ts's
  *  `CONTROL_CHAR_RUN_REGEX` doc comment explains why content must NOT
  *  neutralize these (they don't reorder anything; ZWJ builds compound
- *  emoji, ZWNJ is required orthography in Persian/Hindi/etc. — PR #447
- *  review comment 3677343389). Used both as the must-survive case for
- *  content (below) and, mixed into `idSuffixArb`, as the CONTRAST case
+ *  emoji, ZWNJ is required orthography in Persian/Hindi/etc.). Used both
+ *  as the must-survive case for content (below) and, mixed into
+ *  `idSuffixArb`, as the CONTRAST case
  *  for `id` — unlike content, `id` has no such exception and encodes
  *  these like any other `\p{C}` character. */
 const zwjZwnjArb: fc.Arbitrary<string> = fc.constantFrom(
@@ -361,9 +314,8 @@ const unassignedArb: fc.Arbitrary<string> = fc.constantFrom(0x0378, 0x0379).map(
 
 /** The `\p{C}` hazard surface `id` must encode away that the existing
  *  control-character soup doesn't reach: bidi controls, lone surrogates,
- *  private-use, and unassigned codepoints (PR #447 review comment
- *  3677343389). ZWJ/ZWNJ are deliberately a SEPARATE arbitrary
- *  (`zwjZwnjArb`) rather than folded in here — for `id` they'd be fine
+ *  private-use, and unassigned codepoints. ZWJ/ZWNJ are deliberately a
+ *  SEPARATE arbitrary (`zwjZwnjArb`) rather than folded in here — for `id` they'd be fine
  *  either way (no content-style exception applies), but keeping them
  *  separate is what lets the id-side "ZWJ/ZWNJ gets encoded, unlike in
  *  content" contrast property (below) name exactly what it draws from. */
@@ -405,15 +357,15 @@ const jsonSafePropertiesArb: fc.Arbitrary<Record<string, unknown>> = fc.dictiona
 
 /** Arbitrary id suffix — including the SAME hostile-char soup as content
  *  (vertical-motion chars, ESC/C1, ANSI sequences, backspace, DEL) and
- *  fully arbitrary Unicode (which can include literal `%`), per PR #447
- *  review comment 3672555158: caller-supplied ids (`createBlock`'s
- *  `data.id`) reach the renderer with no shape validation, so restricting
+ *  fully arbitrary Unicode (which can include literal `%`): caller-supplied
+ *  ids (`createBlock`'s `data.id`) reach the renderer with no shape
+ *  validation, so restricting
  *  the generator to `[a-zA-Z0-9_-]` could never have exposed the
  *  missing-id-neutralization bug. The benign shape stays in the mix so
  *  "ordinary" ids are still exercised too.
  *
- *  The `fc.string()` branch explicitly sets `unit: 'binary'` — PR #447
- *  review comment 3677190053: fast-check 4.9's `fc.string()` DEFAULTS to
+ *  The `fc.string()` branch explicitly sets `unit: 'binary'`: fast-check
+ *  4.9's `fc.string()` DEFAULTS to
  *  `unit: 'grapheme-ascii'` (printable ASCII only), so an unqualified
  *  call here would have silently contradicted this comment's own "fully
  *  arbitrary Unicode" claim — the branch would only ever have emitted
@@ -429,7 +381,7 @@ const jsonSafePropertiesArb: fc.Arbitrary<Record<string, unknown>> = fc.dictiona
  *  produce. It still excludes LONE surrogates by construction (fast-check's
  *  own `'binary'` doc: "except half surrogate pairs"), which is exactly
  *  why `idCategoryHazardArb` (below) generates them deliberately — `id`'s
- *  `\p{C}` boundary must cover Cs too (PR #447 review comment 3677343389).
+ *  `\p{C}` boundary must cover Cs too.
  *
  *  `idCategoryHazardArb` and `zwjZwnjArb` are mixed in explicitly (rather
  *  than left to chance from the `'binary'` branch above) so bidi
@@ -498,10 +450,9 @@ describe('renderSubtreeOutline — anti-forge invariant (subtreeOutline.ts:162-1
         expect(lines.length, outline).toBe(rows.length)
 
         // The invariant, asserted DIRECTLY against the FULL space rather
-        // than via samples (PR #447 review comment 3676752551): every one
-        // of the codepoints in `CONTROL_CODEPOINTS` — C0 minus TAB, DEL,
-        // C1, LS/PS, and every `\p{Bidi_Control}` codepoint (PR #447
-        // review comment 3677564794) — must be absent from EVERY line,
+        // than via samples: every one of the codepoints in
+        // `CONTROL_CODEPOINTS` — C0 minus TAB, DEL, C1, LS/PS, and every
+        // `\p{Bidi_Control}` codepoint — must be absent from EVERY line,
         // individually, not just checked as a handful of boundary/
         // interior samples. This is what would have caught backspace
         // (U+0008), and would have caught the U+061C bidi-property
@@ -534,9 +485,8 @@ describe('renderSubtreeOutline — anti-forge invariant (subtreeOutline.ts:162-1
         // delimiter rule, then decode, then compare to the INPUT id) —
         // not by re-predicting the encoder's output with a copy of its
         // character class, which couldn't catch a bug shared by both
-        // copies (PR #447 review comment 3677190046). This is a
-        // SEPARATE assertion from the forbidden-character check above,
-        // not a replacement for it.
+        // copies. This is a SEPARATE assertion from the forbidden-character
+        // check above, not a replacement for it.
         lines.forEach((line, i) => {
           const afterIndent = line.replace(/^ */, '')
           expect(afterIndent.startsWith('- ['), line).toBe(true)
@@ -572,7 +522,7 @@ describe('neutralizeOutlineField is idempotent (subtreeOutline.ts:95-104)', () =
   }, fuzzTestTimeout())
 })
 
-// ──── id encoding: injective + reversible (PR #447 review comment 3676752546) ────
+// ──── id encoding: injective + reversible ────
 
 /** Render a single depth-0 row with EMPTY content and no properties, then
  *  extract the `[id]` token by FIXED-offset slicing rather than searching
@@ -608,8 +558,8 @@ describe('encodeOutlineId is injective — distinct ids never render the same [i
    *  contains the LITERAL percent-escape text that byte encodes to (e.g.
    *  an id with an actual LF vs. an id with the literal 3 characters
    *  `%0A`). These would render to the SAME token if `%` itself weren't
-   *  ALSO percent-encoded — precisely PR #447 review comment 3676752546's
-   *  "Percent-encode % itself too, or the encoding isn't injective." */
+   *  ALSO percent-encoded — the reason `%` gets encoded too: without it,
+   *  the encoding isn't injective. */
   it('does not collapse a real hostile byte with the LITERAL percent-escape text for that same byte', () => {
     fc.assert(
       fc.property(
@@ -642,9 +592,8 @@ describe('decodeOutlineId is the exact inverse of encodeOutlineId (PR #447 revie
   }, fuzzTestTimeout())
 })
 
-// ──── whole-grammar round-trip + injectivity (PR #447 review comment
-//      3677029933): id-alone injectivity (above) is NOT the same claim as
-//      the outline GRAMMAR being unambiguous — a raw `]` inside the id
+// ──── whole-grammar round-trip + injectivity: id-alone injectivity
+//      (above) is NOT the same claim as the outline GRAMMAR being unambiguous — a raw `]` inside the id
 //      collides with the grammar's OWN closing delimiter regardless of
 //      whether `encodeOutlineId` is injective in isolation. These
 //      properties exercise the full `- [<id>] <content>` shape, not just
@@ -677,7 +626,7 @@ describe('whole-grammar round-trip: the documented first-] parse rule recovers t
  *  `neutralizeOutlineField` is the IDENTITY on it and no lossy
  *  content-side collapse can create an independent collision. Used ONLY
  *  for the whole-LINE injectivity property below, to isolate the id/
- *  grammar fix (PR #447 review comment 3677029933) from content's
+ *  grammar handling from content's
  *  separately-accepted, INTENTIONAL lossiness: two different raw content
  *  strings CAN legitimately collapse to the same neutralized text (e.g.
  *  `"x\ny"` and `"x\r\ny"` both -> `"x ⏎ y"`) — that's by design (content
@@ -733,8 +682,7 @@ describe('TAB survives content untouched — the one deliberate exclusion from t
   }, fuzzTestTimeout())
 })
 
-// ──── Trojan-Source hardening (PR #447 review comment 3677343389, refined
-//      by PR #447 review comment 3677564794): id's \p{C} categorical
+// ──── Trojan-Source hardening: id's \p{C} categorical
 //      boundary, content's bidi neutralization, and the ZWJ/ZWNJ
 //      preservation exception — asserted SEMANTICALLY against the
 //      Unicode-standard `\p{C}`/`\p{Bidi_Control}` properties themselves,
@@ -787,8 +735,8 @@ describe('no bidi formatting control survives anywhere in the rendered outline, 
         // depend on `BIDI_CODEPOINTS`/`codepointsMatching` being correct
         // at all — it re-derives nothing and re-states nothing, it just
         // asks Node's own Unicode data whether a `Bidi_Control` character
-        // is present (PR #447 review comment 3677564794's explicit ask:
-        // "test that property rather than copying another enumeration").
+        // is present — testing the property directly rather than copying
+        // another enumeration.
         for (const cp of BIDI_CODEPOINTS) {
           const ch = String.fromCodePoint(cp)
           expect(outline.includes(ch), `outline unexpectedly contains bidi control U+${cp.toString(16).padStart(4, '0')}: ${JSON.stringify(outline)}`).toBe(false)
@@ -816,9 +764,9 @@ describe('no bidi formatting control survives anywhere in the rendered outline, 
   it('the omitted member itself: U+061C ARABIC LETTER MARK in content is neutralized, not just the eleven originally-listed controls (PR #447 review comment 3677564794)', () => {
     // The concrete regression this fix closes: U+061C is a Unicode
     // `Bidi_Control` codepoint exactly like LRM/RLM/the embedding and
-    // isolate formers, but the FIRST bidi fix (PR #447 review comment
-    // 3677343389) hand-enumerated the class and happened to name only
-    // those eleven, never this one — so this exact character used to
+    // isolate formers, but the original bidi fix hand-enumerated the
+    // class and happened to name only those eleven, never this one — so
+    // this exact character used to
     // survive into rendered content unchanged. Pinned as its own
     // example (in addition to the property-driven fuzz property above)
     // so this specific omission can never silently regress even if

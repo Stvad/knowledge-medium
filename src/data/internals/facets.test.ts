@@ -56,6 +56,7 @@ import {
   TYPES_PAGE_TYPE,
 } from '@/data/blockTypes'
 import { Repo } from '../repo'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 let sharedDb: TestDb
 let h: TestDb
@@ -70,7 +71,7 @@ beforeEach(async () => {
   cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
-  repo = new Repo({
+  repo = trackTestRepo(new Repo({
     db: h.db,
     cache,
     user: {id: 'user-1'},
@@ -80,7 +81,7 @@ beforeEach(async () => {
     blockIdPolicy: 'any',
     // Start empty so setFacetRuntime is the only registration path.
     installKernelRuntime: false,
-  })
+  }))
 })
 afterEach(() => { repo.stopSyncObserver() })
 
@@ -260,7 +261,7 @@ describe('valuePresetCoresFacet', () => {
 })
 
 describe('facet variance — typed plugin contributions register without widening', () => {
-  // Reviewer P2: prior to AnyQuery / AnyPropertyEditorOverride / AnyPropertySchema,
+  // Prior to AnyQuery / AnyPropertyEditorOverride / AnyPropertySchema,
   // typed plugin contributions failed to register because the facet's
   // contribution type (`Query<unknown, unknown>` / `PropertyEditorOverride<unknown>`
   // / `PropertySchema<unknown>`) is contravariant in the parameter and so a typed

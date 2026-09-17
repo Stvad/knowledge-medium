@@ -180,31 +180,16 @@ export const propertySeedKeyOf = (prop: unknown): string | undefined => {
  * type-id` is the membership token `id`, the type analog of `propertyNameProp`)
  * plus `seed:key`/`seed:revision` provenance.
  *
- * Deliberately NOT PAGE_TYPE and NOT aliased — unlike a user-authored type (the
- * `#type` gesture / `createTypeBlock`, completed into a navigable `[[Label]]`
- * page by the typeify same-tx processor), a code type was never a page. Forcing
- * PAGE_TYPE + an alias here would be a visible behavior change at the C4 cutover
- * and risk `alias.collision` on the real type labels; the typeify carve-out for
- * seed rows keeps this bare row bare.
+ * Deliberately NOT PAGE_TYPE and NOT aliased — a code type was never a page,
+ * and forcing an alias here risks `alias.collision` on real type labels; the
+ * typeify processor's `/type/`-seed carve-out keeps the row bare.
  *
- * `block-type:properties` (the on-block property refs) IS written from
- * `seed.properties` (C4a). A declared seed's `TypeContribution.properties` is
- * synthesized straight from the code declaration (`seedContribution` in
- * `typeDefinitionRegistry.ts`), never from the block's refList, so `repo.types`
- * is already correct without it — but the durable row must still match the
- * declaration: the materializer is create/restore-only and never repairs
- * payloads, so an empty list here would strand every kernel type's definition
- * block property-less forever (it feeds the definition block's own
- * property-panel display, and eventually the block-as-source-of-truth endgame).
- * Each ref is the target property's DETERMINISTIC backing-block id
- * (`propertyDefinitionBlockId(workspaceId, prop.seedKey)`); the property pass
- * runs before the type pass (`runWorkspaceSeedMaterialization`), so those blocks
- * exist — but the ref is by id anyway, so it resolves whenever the target
- * materializes (a withheld/contested property just dangles until it does, which
- * the refList `decodeValid` tolerates). A property without a `/property/` seed
- * key has no backing block to reference and is skipped with a warning; that
- * never happens for the kernel types (every referenced prop is a `seedProperty`),
- * and the synthesized `repo.types` contribution still carries it regardless. */
+ * `block-type:properties` must match the declaration even though `repo.types`
+ * is synthesized from code: the materializer is create/restore-only and never
+ * repairs payloads, so an empty list here strands the definition block
+ * property-less forever. Each ref is the target's deterministic backing-block
+ * id, so it resolves whenever that block materializes; a property with no
+ * `/property/` seed key is skipped with a warning. */
 export const canonicalTypeSeedProperties = (
   seed: TypeSeedDeclaration,
   workspaceId: string,
@@ -298,19 +283,13 @@ const throwIfPropertySeedAccessAborted = (signal?: AbortSignal): void => {
  * The captured workspace is rechecked after the wait so a parked task cannot
  * write after the user switches away. Abort is owned by the trigger generation.
  *
- * DELIBERATELY NOT gated on §6 e2ee materializability (decision on PR #397, Codex
- * "defer seed scheduling until workspace access is known"). A `setActiveWorkspaceId`
- * reschedule can fire this pass before App's `resolveWorkspaceEntry` marks a locked
- * e2ee workspace read-only, so an owner could briefly write seed rows into a locked
- * workspace. We accept it: (1) it's not a leak — the local DB is plaintext regardless,
- * and an e2ee workspace's UPLOAD seals content via `requireCek`, which THROWS without
- * the key (`sync/transform.ts`), so a seed row is never uploaded plaintext; (2) the
- * rows are deterministic + idempotent, so they normalize once the workspace unlocks
- * and its real blocks materialize; (3) the PROPERTY seed path has the identical gate
- * (this same function) — it's a shared, pre-existing behavior, not type-specific — and
- * once App sets read-only, both the gate and the pass's final `isReadOnly` recheck stop
- * further writes. If this ever needs closing, add the materializability check HERE (the
- * shared gate) so both kinds benefit, not a type-only patch. */
+ * Deliberately NOT gated on §6 e2ee materializability (#397): a reschedule can
+ * fire before a locked e2ee workspace is marked read-only, so an owner may
+ * briefly write seed rows into it. Accepted — nothing leaks (the local DB is
+ * plaintext regardless, and upload seals via `requireCek`, which THROWS
+ * without the key), and the rows are deterministic and idempotent. If it ever
+ * needs closing, add the check to THIS shared gate so both seed kinds get it,
+ * not a type-only patch. */
 export const awaitPropertySeedMaterializationAccess = async (
   repo: Repo,
   workspaceId: string,

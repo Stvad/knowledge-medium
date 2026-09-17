@@ -39,8 +39,8 @@ export default defineConfig({
     // start zero test files. Forks is vitest 4's default and what we run.
     execArgv: ['--no-experimental-webstorage', '--expose-gc'],
     // node_modules + dist are vitest defaults; .claude/worktrees and
-    // .codex/worktrees hold full repo copies from agent runs (Claude Code and
-    // Codex respectively) whose tests we don't want to re-execute here.
+    // .codex/worktrees hold full repo copies from agent runs whose tests
+    // we don't want to re-execute here.
     // The agent-extensions SUBDIRECTORIES are standalone packages with their own
     // dependency installs and Vitest configs (they alias `@` to the generated
     // kernel-types stubs, which are .d.ts only — no runtime), so root collection

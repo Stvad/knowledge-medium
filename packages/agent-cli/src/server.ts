@@ -18,6 +18,7 @@ import {
   type KnownCommandMeta,
   registerClientMetadataSchema,
   registerTokenSpecSchema,
+  unknownTokenMessage,
   type TokenAudience,
   type TokenScope,
   type RegisterClientMetadata,
@@ -38,17 +39,12 @@ const envDurationMsOverride = (name: string, fallback: number): number => {
 
 const commandTtlMs = envDurationMsOverride('AGENT_RUNTIME_COMMAND_TTL_MS', 10 * 60 * 1000)
 /** A `delivered` command is IN FLIGHT, not garbage — the app is still working
- *  on it. Reaping it on the same clock as a finished one deleted the record
- *  out from under a long operator pass (the properties migration runs for
- *  minutes), so the CLI's next poll got `Unknown command` while the app kept
- *  going. Still bounded, so a tab that dies mid-command cannot leak forever. */
+ *  on it, and a long operator pass runs for minutes. Reaping it on the same
+ *  clock as a finished one deletes the record out from under that pass, so the
+ *  CLI's next poll gets `Unknown command` while the app keeps going. Still
+ *  bounded, so a tab that dies mid-command cannot leak forever. */
 const inFlightCommandTtlMs = envDurationMsOverride('AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS', 60 * 60 * 1000)
 const clientTtlMs = 60_000
-const unknownTokenMessage = [
-  'Agent token is not registered with the local bridge.',
-  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token.',
-  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
-].join(' ')
 const configuredMaxBodyBytes = Number(process.env.AGENT_RUNTIME_MAX_BODY_BYTES ?? 10 * 1024 * 1024)
 const maxBodyBytes = Number.isFinite(configuredMaxBodyBytes) && configuredMaxBodyBytes > 0
   ? configuredMaxBodyBytes
@@ -324,12 +320,10 @@ const isReadOnlyCommand = (command: CommandPayload): boolean => {
       && typeof command.sql === 'string'
       && isReadOnlySql(command.sql)
   }
-  // Every other verb's read-only-ness is a static, per-verb fact declared
-  // once in `knownCommandRegistry` — TypeScript-exhaustiveness-checked, so
-  // a verb can't be added to the wire protocol without classifying it, and
-  // this allowlist can't drift. Unknown types (legacy aliases `action` /
-  // `set-extension-enabled`, or arbitrary `kmagent raw` bodies) have no
-  // entry and default to write (deny).
+  // Every other verb's read-only-ness is the static per-verb fact declared in
+  // `knownCommandRegistry`. Unknown types (legacy aliases `action` /
+  // `set-extension-enabled`, or arbitrary `kmagent raw` bodies) have no entry
+  // and default to write (deny).
   const meta: KnownCommandMeta | undefined =
     (knownCommandRegistry as Record<string, KnownCommandMeta>)[command.type]
   return meta?.readOnly === true

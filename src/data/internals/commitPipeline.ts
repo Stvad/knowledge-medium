@@ -12,11 +12,11 @@
  *   3. On COMMIT (post-fn-resolve, before promise resolves):
  *      a. Walk snapshots map: update cache to `after` per id (or evict
  *         on hard-delete).
- *      b. (Future) record undo entry.
+ *      b. Undo entry recorded by the caller (`Repo`, via `UndoManager`)
+ *         from the returned snapshots — not here.
  *      c. Resolve repo.tx promise with user fn's return.
  *   4. Post-resolve: dispatch afterCommit jobs (their own
- *      writeTransactions). (Stage 1.3: jobs collected only; the
- *      processor framework that actually fires them lands in 1.5.)
+ *      writeTransactions).
  *
  * Failure modes:
  *   - User fn throws → SQLite rolls back the writeTransaction. Snapshots
@@ -31,6 +31,8 @@ import type {
   AnyPostCommitProcessor,
   AnyPropertySchema,
   AnySameTxProcessor,
+  AnyValuePresetCore,
+  SameTxTypeOwnership,
   BlockData,
   ChangedRow,
   RepoTxOptions,
@@ -56,7 +58,10 @@ import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
 import type { BlockIdPolicy } from '@/data/blockId'
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  propertyDefinitionClaimantsForName,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
 
 /** Minimal subset of the full PowerSync DB our pipeline + Repo talks
  *  to. The test harness (`createTestDb`) returns a real
@@ -184,7 +189,7 @@ const jsonEq = (a: unknown, b: unknown): boolean =>
  *  against the net `after` iff it changed since TX START **or** since
  *  the processor's WATERMARK — and never when its last writer was a
  *  `settledWrites` processor. Two baselines because each alone hides a
- *  real case (both found on PR #428):
+ *  real case:
  *   - tx-start alone: a later processor restoring a field to its
  *     tx-start value after the derivation ran on the intermediate value
  *     nets to zero — invisible to an apply that diffs field content
@@ -255,7 +260,7 @@ const rerunBefore = (
   return merged
 }
 
-/** Per-same-tx-processor timing sample for one tx (PR #288 §12: the
+/** Per-same-tx-processor timing sample for one tx (docs/properties-as-blocks-migration.html §12: the
  *  property-children processors add write amplification at parents —
  *  this is the counter that watches it). Collected only for processors
  *  that matched rows (or whose collect scan itself cost ≥1ms). */
@@ -318,6 +323,14 @@ export interface RunTxParams<R> {
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Registered value presets, captured at that same boundary. Lets a same-tx
+   *  processor build a codec the frozen `propertySchemas` cannot answer for —
+   *  see `SameTxCtx.valuePresets`. */
+  valuePresets: ReadonlyMap<string, AnyValuePresetCore>
+  /** Tx-start-captured type-ownership factory, resolved once the tx's workspace
+   *  is known — the same shape (and the same fail-closed rule) as
+   *  `propertyDefinitionRegistryForWorkspace`. */
+  typeDefinitionsForWorkspace: (workspaceId: string) => SameTxTypeOwnership | null
   /** Tx-start-captured workspace registry factory. It reads no live runtime
    * state when the target row's workspace becomes known inside the tx. */
   propertyDefinitionRegistryForWorkspace: (
@@ -358,7 +371,7 @@ export interface TxResult<R> {
   /** Merged property-schema registry snapshot paired with `processors`. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
   /** Same-tx step timings for diagnostics (write-amplification watch —
-   *  PR #288 §12). Internal callers attribute slow writeTransactions
+   *  docs/properties-as-blocks-migration.html §12). Internal callers attribute slow writeTransactions
    *  without changing tx semantics. */
   timing: Readonly<TxTimingDiagnostics>
 }
@@ -367,7 +380,8 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const {
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
-    mutators, processors, sameTxProcessors, propertySchemas,
+    mutators, processors, sameTxProcessors, propertySchemas, valuePresets,
+    typeDefinitionsForWorkspace,
     propertyDefinitionRegistryForWorkspace,
     propertySchemaWorkspaceId,
     propertySeedNameCounts,
@@ -421,9 +435,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // processor can restore a field to its tx-start value after the
   // derivation ran on the intermediate value, and a tx-start baseline
   // makes that restore invisible to an apply that diffs field content
-  // internally (MATERIALIZE's changedPropertyNames — Codex review on PR
-  // #428: pass two fired on the dirty row but computed no changed names,
-  // leaving value children synced to the intermediate bag). Entries hold
+  // internally (MATERIALIZE's changedPropertyNames: pass two fired on
+  // the dirty row but computed no changed names, leaving value children
+  // synced to the intermediate bag). Entries hold
   // references to the same `after` objects the primitives built — no
   // copying.
   const rowWriteLog = new Map<string, Array<{gen: number, after: BlockData | null}>>()
@@ -456,6 +470,20 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     resolverFor(workspaceId).resolve(name)
   const resolvePropertySchemaField = (workspaceId: string, fieldId: string) =>
     resolverFor(workspaceId).resolveField(fieldId)
+  const propertyDefinitionsClaimingName = (
+    workspaceId: string, name: string,
+  ): readonly string[] | null => {
+    // ACTIVE workspace only, which is stricter than the resolvers beside it.
+    // They serve the immediately-previous workspace from a retained snapshot so
+    // a cross-workspace seed write still resolves; that snapshot is frozen —
+    // `ProjectorRuntime.pinWorkspace` disposes the outgoing subscription — so
+    // it cannot see a definition sync created, revived, renamed or deleted
+    // there afterwards, and can be arbitrarily stale. Good enough to decode a
+    // known handle, not to decide who OWNS a name.
+    if (propertySchemaWorkspaceId !== workspaceId) return null
+    const snapshot = propertyDefinitionRegistryForWorkspace(workspaceId)
+    return snapshot === null ? null : propertyDefinitionClaimantsForName(snapshot, name)
+  }
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
   const value = await db.writeTransaction(async (txDb): Promise<R> => {
@@ -565,8 +593,13 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               emittedEvents,
             },
             {
-              tx, db: txDb, propertySchemas,
+              tx, db: txDb, propertySchemas, valuePresets,
+              // Resolved against the TX's pinned workspace, not the active one:
+              // `TxImpl` pins from the first write, and the merge mutator does
+              // not require the active workspace to match.
+              typeDefinitions: typeDefinitionsForWorkspace(meta.workspaceId),
               resolvePropertySchemaName, resolvePropertySchemaField,
+              propertyDefinitionsClaimingName,
             },
           )
         } finally {
@@ -610,35 +643,23 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       // derivation that ran early in the pass can have its INPUT
       // rewritten by a later processor in the same tx (a plugin content
       // rewrite after PROJECT, a raw properties write after MATERIALIZE,
-      // a kernel stamp after MATERIALIZE's ancestry read) — leaving the
-      // derived state describing pre-rewrite content. Rather than
-      // hand-patching each such cell (three ad-hoc idioms existed, and
-      // three consecutive reviews each found a matrix cell the audits
-      // missed), re-run the opted-in derivation processors over just the
-      // rows written after their first run.
+      // a kernel stamp after MATERIALIZE's ancestry read), leaving the
+      // derived state describing pre-rewrite content — so we re-run the
+      // opted-in derivation processors over just the rows written after
+      // their first run.
       //
-      // Bounded at ONE re-run — no fixpoint, per the single-pass
-      // contract. Convergence rests on the opted-in processors'
-      // idempotence (§5 invariant 1): a residual write left by a
-      // pass-two processor for an EARLIER pass-two processor is by
-      // construction already convergent (MATERIALIZE/PROJECT are mutual
-      // inverses whose round-trip no-ops; DERIVE/NORMALIZE re-derive to
-      // the same value), so a third pass would no-op. Writes from
-      // `settledWrites` processors (the rename re-key, PROJECT's cell
-      // writes) never mark rows dirty, AND their field paths are masked
-      // out of the re-run diff below (`maskSettledPaths`) — dirtiness
-      // suppression alone leaks the moment an unsettled co-writer
-      // dirties the same row (see the `settledFieldPaths` declaration
-      // for the laundering failure this closes).
-      // Dispatch on DIRTINESS, not on the net tx field diff: a later
-      // writer can revert a watched field to its tx-start value after a
-      // derivation ran on the intermediate value (net diff empty, derived
-      // state stale — Codex review on PR #428), so any post-watermark
-      // write makes the row eligible. `before` is the tx-start state
-      // (same event shape as pass one) except for settled-last field
-      // paths, which read as their net-after values; rows whose watched
-      // fields are truly untouched no-op inside the idempotent
-      // processors.
+      // Bounded at ONE re-run — no fixpoint; convergence rests on the
+      // opted-in processors' idempotence (§5 invariant 1), so a third
+      // pass would no-op. `settledWrites` processor writes never mark
+      // rows dirty and are masked out of the re-run diff (see
+      // `settledFieldPaths` and `rerunBefore`) — dirtiness suppression
+      // alone would leak the moment an unsettled co-writer dirties the
+      // same row.
+      //
+      // Dispatch on DIRTINESS, not the net tx field diff: a later writer
+      // can revert a watched field to its tx-start value after a
+      // derivation ran on the intermediate one, so any post-watermark
+      // write makes the row eligible even though the net diff is empty.
       for (const processor of sameTxProcessors.values()) {
         if (processor.rerunOnDirtyRows !== true) continue
         // Field-watch on the blocks table only. defineSameTxProcessor

@@ -1149,7 +1149,7 @@ describe('groupedBacklinksDataExtension query', () => {
     })
   })
 
-  // PR #386 review: grouped backlinks resolve their own source ids instead of
+  // Grouped backlinks resolve their own source ids instead of
   // routing through `backlinks.forBlock`, so the flip-gated machinery
   // exclusion has to be applied here too — otherwise a hidden property value
   // row is filtered out of Linked References and the inline count but still

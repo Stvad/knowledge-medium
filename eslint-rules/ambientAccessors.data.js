@@ -1,7 +1,7 @@
 // Table of ambient-accessor restrictions consumed by
 // eslint-rules/ambient-accessors.js. Each entry bans one import / member
 // read / literal outside an explicit allowlist. This is the generic
-// mechanism the DI-lens audit (PR #357 / PR #424) promised as a follow-up:
+// mechanism the DI-lens audit promised as a follow-up:
 // replace one-off eslint.config.js entries (a new no-restricted-imports
 // path or no-restricted-syntax selector per ambient global) with a single
 // rule driven by this table, so adding a restriction is a table edit — or,
@@ -15,8 +15,8 @@
 //     scripts/gen-ambient-accessors.ts for the tag grammar. Example: tag
 //     `getActiveUserId` in src/data/repoProvider.ts and the generator
 //     regenerates its entry here — no eslint.config.js edit, no new rule
-//     instance. (The un-merged getLayoutSessionId follow-up from PR #425
-//     is exactly this: tag the export, regenerate, done — see
+//     instance. (The un-merged getLayoutSessionId follow-up is exactly
+//     this: tag the export, regenerate, done — see
 //     src/data/repoProvider.ts's comment on getActiveUserId for the
 //     pattern to copy.)
 //
@@ -71,7 +71,11 @@ export const manualEntries = [
       'navigator.platform is read directly outside the shared platform module. Use isMacPlatform() from @/utils/platform.js (or add a new accessor there) so every Mac/platform check agrees — see the DI-lens audit (PR #357).',
     allowIn: [
       'src/utils/platform.ts',
-      'src/plugins/startup-metrics/record.ts',
+      // The telemetry device LABEL is a deliberate second reader: it is a
+      // coarse grouping key for comparing a metrics series against itself, not
+      // a capability check, so routing it through isMacPlatform() would answer
+      // a different question.
+      'src/utils/clientId.ts',
     ],
   },
   {

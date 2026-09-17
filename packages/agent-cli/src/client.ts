@@ -1,11 +1,10 @@
 /**
- * Programmatic bridge client — the token store + authed command runner
- * that used to live inline in cli.ts, extracted so other Node processes
- * (the agent-dispatch daemon, the km MCP server, scripts) can drive the
- * bridge without shelling out to `kmagent`.
+ * Programmatic bridge client — the token store + authed command runner, so
+ * other Node processes (the agent-dispatch daemon, the km MCP server,
+ * scripts) can drive the bridge without shelling out to `kmagent`.
  *
- * cli.ts remains the interactive surface (pairing, printing, bridge
- * auto-start); everything here is side-effect-free library code.
+ * cli.ts is the interactive surface (pairing, printing, bridge auto-start);
+ * everything here is side-effect-free library code.
  */
 import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
@@ -23,8 +22,11 @@ import {
   type CommandStatusResponse,
   type EventsNextResponse,
   type KnownCommand,
+  UNKNOWN_TOKEN_MARKER,
   type WhoamiInfo,
 } from './protocol.js'
+
+export { UNKNOWN_TOKEN_MARKER } from './protocol.js'
 
 export const defaultProfileName = 'default'
 
@@ -42,6 +44,128 @@ export const isCommandRejection = (error: unknown): boolean =>
 
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
+
+/**
+ * The local token facts the bridge's own error cannot supply: which profiles
+ * are paired on this machine, which one is selected, and whether an env token
+ * is overriding the selection. Printed underneath that error.
+ *
+ * FACTS ONLY — no cause, no recommended remedy. A diagnosis composed from this
+ * state would have to hold across every combination of it, and the
+ * combinations outnumber the branches you would write ("most recently paired"
+ * ranks nothing when entries are undated; a bare `kmagent connect` re-pairs
+ * `default` rather than the profile that failed). A printed fact has no such
+ * failure mode.
+ *
+ * `profiles: null` means the store could not be read. A value rather than a
+ * throw, because the override and the selection are true regardless — letting
+ * an unreadable store suppress them would drop the advice that needs no store.
+ */
+export const formatTokenContext = (
+  {profiles, tokenStorePath, selected, envTokenOverride}: {
+    profiles: readonly {name: string; savedAt?: number | null}[] | null
+    tokenStorePath: string
+    selected: string
+    envTokenOverride: boolean
+  },
+): string => {
+  const lines: string[] = []
+  if (profiles === null) {
+    lines.push(`Token store: ${tokenStorePath} (could not be read)`)
+  } else if (profiles.length === 0) {
+    lines.push(`Token store: ${tokenStorePath} (no profiles saved)`)
+  } else {
+    lines.push(`Token store: ${tokenStorePath}`)
+    const width = Math.max(...profiles.map(profile => profile.name.length))
+    // Alphabetical, not by recency: the instants are printed, so ordering by
+    // them would be the tool ranking candidates it has no business ranking —
+    // and a name is what a reader half-remembers.
+    for (const profile of [...profiles].sort((a, b) => a.name.localeCompare(b.name))) {
+      lines.push(
+        `  ${profile.name.padEnd(width)}  ${pairedAt(profile.savedAt)}`
+        + (profile.name === selected ? '  ← selected' : ''),
+      )
+    }
+  }
+  lines.push(`selected profile: ${selected}`)
+  if (envTokenOverride) {
+    lines.push('AGENT_RUNTIME_TOKEN is set — it overrides --profile.')
+  }
+  return lines.join('\n')
+}
+
+/** UTC instant, not a locale rendering: this goes in error output that gets
+ *  pasted into issues, and it must mean the same thing wherever it is read.
+ *
+ *  A number out of Date's range (the store only checks `typeof === 'number'`)
+ *  makes `toISOString` THROW, taking the whole listing down with it — the same
+ *  "one bad input suppresses every fact" failure the nullable `profiles`
+ *  prevents. Reported as its own state rather than folded into "no timestamp",
+ *  since a garbage value and an absent one are different facts. */
+const pairedAt = (savedAt: number | null | undefined): string => {
+  if (typeof savedAt !== 'number') return '(no pairing timestamp)'
+  const instant = new Date(savedAt)
+  if (Number.isNaN(instant.getTime())) return '(unreadable timestamp)'
+  return `${instant.toISOString().slice(0, 16).replace('T', ' ')}Z`
+}
+
+/** A non-2xx from the bridge, carrying the STATUS so callers can classify on
+ *  the protocol instead of on message text. */
+export class BridgeHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'BridgeHttpError'
+  }
+}
+
+/** No token is configured for the selected profile — refused LOCALLY, before
+ *  any request. Typed so the profile listing can attach to it as well: this is
+ *  the commonest shape of the failure and it never reaches the bridge. `code`
+ *  rather than `instanceof`, which does not survive a realm boundary. */
+export class MissingTokenError extends Error {
+  readonly code = 'missing-token'
+  constructor(readonly profileName: string) {
+    super(
+      `No agent token configured for profile "${profileName}". `
+      + `Run \`kmagent --profile ${profileName} connect\` to pair the CLI with the app.`,
+    )
+    this.name = 'MissingTokenError'
+  }
+}
+
+/** Is this the bridge refusing an unregistered token?
+ *
+ *  Status AND text, because neither alone is sound: `kmagent eval` runs
+ *  arbitrary code in the app and can throw a message containing the marker
+ *  while auth succeeded, and 401 alone covers other refusals with their own
+ *  remedies. Read `status` structurally rather than by `instanceof`, which does
+ *  not survive a realm boundary (see the MCP server's worker paths). */
+const isUnknownTokenError = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null
+  && (error as {status?: unknown}).status === 401
+  && errorMessage(error).includes(UNKNOWN_TOKEN_MARKER)
+
+const isMissingTokenError = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null
+  && (error as {code?: unknown}).code === 'missing-token'
+
+/** Appends {@link formatTokenContext} to the two failures the token context can
+ *  explain — the bridge's unknown-token 401 and the local missing-token refusal
+ *  — and returns any other error's message untouched.
+ *
+ *  Fires on `kmagent connect`'s verification of a freshly pasted token too,
+ *  where the store is beside the point. ACCEPTED rather than plumbed around:
+ *  under facts-only that output is irrelevant rather than misleading, and a
+ *  token-source flag threaded through the error would re-add a branch. */
+export const withProfileHelp = (
+  error: unknown,
+  help: () => Promise<string>,
+): Promise<string> => {
+  const message = errorMessage(error)
+  return isUnknownTokenError(error) || isMissingTokenError(error)
+    ? help().then(extra => `${message}\n${extra}`, () => message)
+    : Promise.resolve(message)
+}
 
 export const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms))
@@ -197,17 +321,20 @@ export const requestJson = async <T = unknown>(
   const body = text ? JSON.parse(text) : null
 
   if (!response.ok) {
-    throw new Error(body?.error ?? `Request failed with status ${response.status}`)
+    throw new BridgeHttpError(
+      body?.error ?? `Request failed with status ${response.status}`,
+      response.status,
+    )
   }
 
   return body as T
 }
 
-// Errors the server returns when the client has temporarily lost its
-// token registration (typical after a `kmagent reload` or after
-// `install-extension` triggers refreshAppRuntime). Retrying on these
-// for ~10–15s smooths over the reconnect gap without papering over
-// real auth failures (scope mismatch, missing token, etc.).
+// Errors the server returns when the client has temporarily lost its token
+// registration (typical after a `kmagent reload`, or after
+// `install-extension` triggers refreshAppRuntime). Retrying on just these
+// smooths over the reconnect gap without papering over real auth failures
+// (scope mismatch, missing token, etc.).
 export const isTransientTokenError = (error: unknown): boolean => {
   const message = errorMessage(error)
   return message.includes('Unknown or expired token')
@@ -290,9 +417,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   const requireToken = async (): Promise<string> => {
     const token = await clientResolveToken()
     if (!token) {
-      throw new Error(
-        `No agent token configured for profile "${profileName}". Run \`kmagent --profile ${profileName} connect\` to pair the CLI with the app.`,
-      )
+      throw new MissingTokenError(profileName)
     }
     return token
   }

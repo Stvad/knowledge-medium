@@ -12,8 +12,9 @@ import {
   kernelContentKey,
 } from '@/data/invalidation'
 import {
-  propertyChildContentToEncodedValue,
+  valueChildContentToEncoded,
   resolvePropertyValueFieldSchema,
+  contentLosesPropertyValue,
 } from '@/data/propertyChildren'
 import {
   DEFAULT_FIND_REPLACE_OPTIONS,
@@ -205,7 +206,8 @@ export const applyContentReplaceMutator = defineMutator<
       // VALUE rows get the codec skip — see below — because a broken value
       // fails SILENTLY: the key drops from the owner's cell with no error.)
       //
-      // #404 item 5: under properties-as-blocks (PR #288 §9), a property
+      // #404 item 5: under properties-as-blocks
+      // (docs/properties-as-blocks-migration.html §9), a property
       // VALUE child's `content` IS its typed value — writing straight
       // through here can leave it unparseable under its codec (a
       // `number`/`date`/`boolean` value in particular), and PROJECT's
@@ -214,7 +216,7 @@ export const applyContentReplaceMutator = defineMutator<
       // surfaced to the user who ran the replace.
       //
       // Default: SKIP the write rather than write-then-report, matching the
-      // §9 migration precedent (`runPropertyDefinitionMigrationBatch`) — it
+      // §9 precedent (`core.migratePropertyDefinition`) — it
       // never writes a value it can't convert, preserving the original
       // (still-valid) text. Writing the broken text would be "replace
       // succeeded, property silently detached". The skip is returned in
@@ -228,7 +230,7 @@ export const applyContentReplaceMutator = defineMutator<
       const schema = await resolvePropertyValueFieldSchema(tx, current)
       if (schema !== null && !force) {
         // The check is on the PROPOSED content, and asking it takes nothing
-        // but that string: `propertyChildContentToEncodedValue` decodes a ref
+        // but that string: `valueChildContentToEncoded` decodes a ref
         // value by parsing the id out of its id-carrying span, so there is no
         // derived column to project first (#443 group 3). It used to resolve
         // `deriveReferenceColumns` here — an async alias lookup per candidate
@@ -237,15 +239,23 @@ export const applyContentReplaceMutator = defineMutator<
         // turning `((id))` into `[[SomeName]]` resolved to a non-null target,
         // passed the guard, and PROJECT then wrote the WRONG id into the
         // owner's cell. Now it reads as unparseable and is reported as a skip.
-        const breaksCodec = (() => {
+        //
+        // Decoding is NOT the whole question, and asking only it let #688
+        // through here: `codecs.string` / `codecs.url` accept any string, so a
+        // replace that turned a value into `::((id))` decoded fine, was
+        // written, and then had the row classified as a field row out from
+        // under it — the owner's key dropped with no error. `setProperty`
+        // ESCAPES such a value; this path writes content the user chose, so it
+        // refuses instead and offers "replace anyway" like every other skip.
+        const unsafeToWrite = (() => {
           try {
-            propertyChildContentToEncodedValue(schema, replaced.content)
-            return false
+            valueChildContentToEncoded(schema, replaced.content)
           } catch {
             return true
           }
+          return contentLosesPropertyValue(schema, replaced.content)
         })()
-        if (breaksCodec) {
+        if (unsafeToWrite) {
           result.skippedUnparseableProperty += 1
           unparseableProperties.add(schema.name)
           result.retryableSkips.push({

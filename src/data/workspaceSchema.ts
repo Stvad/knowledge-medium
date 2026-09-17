@@ -49,7 +49,7 @@ export interface WorkspaceRow {
   // Synced down read-only; consumed by the paste flow (§8.2) in a later phase.
   encryption_mode: string
   wk_canary: string | null
-  // Properties-as-blocks rollout lever (PR #288 §6). NULLABLE on the wire
+  // Properties-as-blocks rollout lever (docs/properties-as-blocks-migration.html §6). NULLABLE on the wire
   // and locally: deployed sync rules predating the column deliver rows
   // without it (the raw-table put binds an explicit NULL, so a NOT NULL
   // DEFAULT would fail the insert — same trap as user_updated_at);
@@ -101,7 +101,7 @@ export const ensureWorkspaceE2eeColumns = async (db: {
 }
 
 /** Idempotent local-schema migration for the properties-as-blocks rollout
- *  lever (PR #288 §6) — same pattern as the E2EE columns above. Nullable;
+ *  lever (docs/properties-as-blocks-migration.html §6) — same pattern as the E2EE columns above. Nullable;
  *  absence reads as 'cell' via `parseWorkspaceRow`. */
 export const ensureWorkspacePropertiesMigrationColumn = async (db: {
   execute: (sql: string) => Promise<unknown>
@@ -137,7 +137,7 @@ export const parsePropertiesMigration = (
     ? value as PropertiesMigrationState
     : 'cell'
 
-/** Shared flip-check (PR #288 §6): reads `properties_migration` for
+/** Shared flip-check (docs/properties-as-blocks-migration.html §6): reads `properties_migration` for
  *  `workspaceId` and reports whether the workspace is at or past the
  *  children-backed state. `db` is the minimal read surface both the tx
  *  engine (`TxDb`) and `Repo` (`PowerSyncDb`) already satisfy — callers own

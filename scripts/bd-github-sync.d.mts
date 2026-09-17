@@ -49,12 +49,45 @@ export interface BeadRow {
   close_reason?: string
   issue_type?: string
   labels?: string[]
+  closed_at?: string | null
+  comment_count?: number
 }
+export interface BeadComment {
+  id: string
+  text: string
+  created_at: string
+}
+export declare const mirroredCommentIds: (bodies: string[]) => Set<string>
+export declare const rewriteBeadIds: (
+  text: string,
+  numberByBeadId: Map<string, number>,
+  holdIds: Set<string>,
+) => { text: string; unmapped: string[]; leftover: string[] }
+export declare const mirrorCommentBody: (
+  comment: BeadComment,
+  numberByBeadId: Map<string, number>,
+  holdIds: Set<string>,
+) => { body: string; unmapped: string[]; leftover: string[] }
+export declare const planCommentMirror: (comments: BeadComment[], mirrored: Set<string>) => BeadComment[]
 export interface IssueInfo {
   state: 'OPEN' | 'CLOSED'
   labels: string[]
   updatedAt?: string
+  title?: string
+  body?: string
+  assignee?: string
 }
+export declare const pullWouldWrite: (bead: BeadRow, issue: IssueInfo) => boolean
+export declare const bdVersion: (out: string | null | undefined) => string | null
+export declare const planLossyReapplies: (
+  beads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+) => { id: string; number: number; losses: string[]; overwrites: string[] }[]
+export declare const planPullSet: (
+  beads: BeadRow[],
+  issueByNumber: Map<number, IssueInfo>,
+  lossyIds: Set<string>,
+) => number[]
 export declare const planCloseReconciliation: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
@@ -89,5 +122,6 @@ export declare const planLocalWins: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
 ) => { id: string; number: number }[]
+export declare const planPrePullPush: (beads: BeadRow[], issueByNumber: Map<number, IssueInfo>) => string[]
 export declare const detectReverts: (snapshotRows: BeadRow[], postById: Map<string, BeadRow>) => BeadRow[]
 export declare const planRestoreArgs: (row: BeadRow, post?: BeadRow) => string[][]

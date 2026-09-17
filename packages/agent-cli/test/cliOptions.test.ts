@@ -1,16 +1,17 @@
 import { cac } from 'cac'
 import { describe, expect, it } from 'vitest'
-import { limitOption, workspaceAssertion } from '../src/cliOptions.js'
+import { limitOption, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
 
 /** Parse argv the way the real CLI does and hand back what the option
  *  actually became — so this pins CAC's behaviour too, not just our handling
  *  of a value we assumed it produces. */
-const parseOption = (name: 'workspace' | 'limit', argv: string[]): unknown => {
+const parseOption = (name: 'workspace' | 'limit' | 'scope', argv: string[]): unknown => {
   const cli = cac('t')
   let seen: unknown
   cli.command('page <name>', 'x')
     .option('--workspace <id>', 'w')
     .option('--limit <n>', 'l')
+    .option('--scope <scope>', 's')
     .action((_name, options) => {
       seen = (options as Record<string, unknown>)[name]
     })
@@ -69,5 +70,29 @@ describe('limitOption', () => {
   it('passes a real limit through as a number', () => {
     expect(limitOption(parseOption('limit', ['page', 'x', '--limit', '25']) as number))
       .toEqual({limit: 25})
+  })
+})
+
+describe('scopeAssertion', () => {
+  // Driven through CAC, like its neighbours: the values this normalizes are
+  // CAC artifacts, so a test that hand-feeds them pins only our half.
+  it('keeps an EMPTY --scope as a value the kernel can name back', () => {
+    // Left as CAC's 0 it stringifies to '0' and the refusal quotes a value the
+    // operator never typed.
+    const parsed = parseOption('scope', ['page', 'x', '--scope', ''])
+    expect(parsed).toBe(0)
+
+    expect(scopeAssertion(parsed)).toEqual({scope: ''})
+  })
+
+  it('omits the field when absent, so the kernel default is the only default', () => {
+    expect(scopeAssertion(parseOption('scope', ['page', 'x']))).toEqual({})
+  })
+
+  it('refuses a repeated flag rather than coercing the array', () => {
+    const parsed = parseOption('scope', ['page', 'x', '--scope', 'all', '--scope', 'unapplied'])
+    expect(parsed).toEqual(['all', 'unapplied'])
+
+    expect(() => scopeAssertion(parsed)).toThrow(/single value/)
   })
 })

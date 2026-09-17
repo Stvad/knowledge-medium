@@ -41,7 +41,7 @@ import {readFileSync, writeFileSync, existsSync, readdirSync} from 'node:fs'
 import {execSync} from 'node:child_process'
 import {dirname, resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
-import {collectRestAssets} from './precache-assets'
+import {bootWorkerAssets, collectRestAssets} from './precache-assets'
 import {stampSwSource} from './stamp-sw-source'
 import {productionReactIntegrity} from '../vite-plugins/reactImportMapMode'
 
@@ -134,9 +134,15 @@ const buildId = resolveBuildId()
 // — a conditional revalidate that can't copy a stale prior-deploy entry into
 // this generation. `collectRestAssets` drops any URL already in first-paint (no
 // double fetch) and everything the SW wouldn't serve cache-first (maps, sw.js, …).
-const firstPaintAssets = collectPrecacheAssets()
+// First-paint = what the HTML names + the local-database worker graph, which
+// the SW's boot store serves before Cache Storage is touched (sw/bootStore.ts).
+const distFiles = walkDistFiles()
+const firstPaintAssets = [...new Set([
+  ...collectPrecacheAssets(),
+  ...bootWorkerAssets(distFiles).map(toBaseUrl),
+])].sort()
 const restAssets = collectRestAssets({
-  allFiles: walkDistFiles(),
+  allFiles: distFiles,
   firstPaint: firstPaintAssets,
   toBaseUrl,
 })

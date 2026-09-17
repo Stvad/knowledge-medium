@@ -17,6 +17,21 @@ import {z} from 'zod'
 
 // ---------- Token / audience ----------
 
+/** The distinctive first sentence of {@link unknownTokenMessage}. The CLI
+ *  matches on THIS rather than the whole string so it can enrich a 401 the
+ *  bridge produced, without the two copies having to stay byte-identical
+ *  across versions (an older bridge may still be running). */
+export const UNKNOWN_TOKEN_MARKER = 'Agent token is not registered with the local bridge.'
+
+/** What the bridge returns for a token it has no client for. Lives here, not
+ *  in the server, because the CLI appends the half only IT can know — which
+ *  profiles are actually paired on this machine. */
+export const unknownTokenMessage = [
+  UNKNOWN_TOKEN_MARKER,
+  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token.',
+  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
+].join(' ')
+
 export const tokenScopeSchema = z.enum(['read-write', 'read-only'])
 export type TokenScope = z.infer<typeof tokenScopeSchema>
 
@@ -34,14 +49,11 @@ export type TokenAudience = z.infer<typeof tokenAudienceSchema>
 // ---------- Command envelopes ----------
 
 /**
- * Wire envelope for every command body POSTed to /runtime/commands.
- * Only the `type` discriminator is mandatory; the rest of the keys
- * are command-specific and pass through to the kernel handler.
- *
- * This is the *bridge-side* schema — intentionally loose so the bridge
- * forwards anything with a string `type` to the kernel. The strict,
- * per-verb shapes live in `knownCommandSchema` below and are what CLI
- * construction sites + the kernel dispatch switch type-check against.
+ * Wire envelope for every command body POSTed to /runtime/commands: only
+ * the `type` discriminator is mandatory, and the other keys pass through to
+ * the kernel handler. Deliberately loose so an unknown command still
+ * reaches the kernel, which produces a clearer error than a wire-level
+ * rejection would; the strict per-verb shapes are `knownCommandSchema`.
  */
 export const commandPayloadSchema = z.looseObject({
   type: z.string(),
@@ -50,15 +62,12 @@ export type CommandPayload = z.infer<typeof commandPayloadSchema>
 
 // ---------- Known command discriminated union ----------
 //
-// Each branch below pins the body shape for a specific kernel handler.
-// The bridge keeps using `commandPayloadSchema` for wire-level
-// validation (so an extension can `kmagent raw '{"type":...}'` an
-// unknown command and have it forwarded to the kernel for a clearer
-// error). The strict per-verb schemas are for:
-//   - The CLI: `runCommand(cmd: KnownCommand)` checks construction
-//     sites against the right shape at compile time.
-//   - The kernel: `executeCommand(cmd: KnownAgentCommand)` narrows
-//     inside the switch so each case sees only the fields it should.
+// Each branch below pins the body shape for a specific kernel handler, so
+// `runCommand(cmd: KnownCommand)` type-checks CLI construction sites and
+// `executeCommand(cmd: KnownAgentCommand)` narrows inside the kernel's
+// dispatch switch. The bridge still validates the wire with the loose
+// `commandPayloadSchema` above, so an unknown `kmagent raw` command is
+// forwarded rather than rejected.
 //
 // `commandId` is appended by the bridge when forwarding, so it's
 // optional on every variant — CLI callers don't set it; the kernel
@@ -66,12 +75,9 @@ export type CommandPayload = z.infer<typeof commandPayloadSchema>
 
 const commandIdField = {commandId: z.string().optional()}
 
-// All variant schemas use `looseObject` so the kernel's existing
-// field-access fallbacks (e.g. `command.id ?? command.actionId`,
-// `command.blockId` for get-block, `command.properties` on
-// create/update-block) keep working when the dispatch switch
-// narrows. Declared fields are still type-checked; extras flow
-// through as `unknown` via the inferred index signature.
+// Variants are `looseObject` so the kernel's field-access fallbacks (e.g.
+// `command.id ?? command.actionId`) keep working through the narrowing:
+// declared fields are still type-checked, extras flow through as `unknown`.
 
 export const pingCommandSchema = z.looseObject({
   type: z.literal('ping'),
@@ -153,10 +159,9 @@ export const createBlockCommandSchema = z.looseObject({
  *  safe to retry. `shape: 'block'` keeps the whole markdown as ONE block
  *  (no outline split); `'outline'` (default) splits along the markdown
  *  outline. `properties` (looseObject passthrough) is applied to every
- *  block — the dispatch daemon uses it to tag `claude:reply`. Streaming a
+ *  block — the dispatch daemon uses it to tag `agent:reply`. Streaming a
  *  reply calls this repeatedly with the growing text (same key); the last
- *  call passes `final: true`. Replaces the old one-shot
- *  `create-blocks-from-markdown`. */
+ *  call passes `final: true`. */
 export const reconcileMarkdownSubtreeCommandSchema = z.looseObject({
   type: z.literal('reconcile-markdown-subtree'),
   parentId: z.string(),
@@ -272,6 +277,15 @@ export const runBackfillCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const rematerializeWorkspaceCommandSchema = z.looseObject({
+  type: z.literal('rematerialize-workspace'),
+  workspaceId: z.string().optional(),
+  /** `'unapplied' | 'all'`; validated kernel-side so an unknown value comes
+   *  back as a named refusal rather than a schema rejection with no advice. */
+  scope: z.string().optional(),
+  ...commandIdField,
+})
+
 export const runActionCommandSchema = z.looseObject({
   type: z.literal('run-action'),
   id: z.string(),
@@ -372,8 +386,8 @@ export const searchCommandSchema = z.looseObject({
  *  name and its paren makes a valid call that a `\s*\(` guard would miss
  *  — but the function name itself must appear as one contiguous
  *  identifier to be callable (a comment can't split it), so the bare
- *  token match is comment-proof. The app registers no other writable
- *  UDFs (verified), so this family is the whole vector. */
+ *  token match is comment-proof. The app registers no other writable UDFs,
+ *  so this family is the whole vector. */
 const SIDE_EFFECTING_FN = /\bpowersync_/i
 
 /** Textual read-only enforcement, shared by every surface that accepts
@@ -496,6 +510,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   auditExtensionCommandSchema,
   auditPropertiesCommandSchema,
   runBackfillCommandSchema,
+  rematerializeWorkspaceCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
   backlinksCommandSchema,
@@ -540,6 +555,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   auditExtensionCommandSchema,
   auditPropertiesCommandSchema,
   runBackfillCommandSchema,
+  rematerializeWorkspaceCommandSchema,
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
@@ -555,11 +571,10 @@ export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 
 // ---------- Command catalog (schema-derived) ----------
 //
-// Single source of truth for "what wire commands exist" — co-located
-// with the schemas they describe. The kernel's `describe-runtime`
-// output, the CLI's --help, and any future surface (in-app palette,
-// AI agent prompt, README cheatsheet, etc.) all read from this
-// registry so the documented shape and the wire shape never drift.
+// Single source of truth for "what wire commands exist", co-located with
+// the schemas it describes. `describe-runtime`, the CLI's --help and any
+// other surface read from this registry, so the documented shape and the
+// wire shape never drift.
 
 export interface KnownCommandMeta {
   /** CLI usage example, including positional + flag hints. Phrased as
@@ -568,13 +583,12 @@ export interface KnownCommandMeta {
   usage: string
   /** Short one-line description for help / summary surfaces. */
   description: string
-  /** Whether a `read-only`-scoped token may run this verb — i.e. the
-   *  verb performs no writes through the kernel. The bridge derives its
-   *  read-only allowlist from this single field (see `isReadOnlyCommand`
-   *  in `server.ts`), so the registry is the one source of truth: a verb
-   *  added to `knownCommandSchema` without a registry entry is already a
-   *  TypeScript error, and that entry must now classify `readOnly` too —
-   *  the allowlist can't silently drift when a verb is added.
+  /** Whether a `read-only`-scoped token may run this verb — i.e. the verb
+   *  performs no writes through the kernel. The bridge derives its
+   *  read-only allowlist from this one field (`isReadOnlyCommand` in
+   *  `server.ts`), so the allowlist cannot drift when a verb is added: the
+   *  missing registry entry is already a TypeScript error, and the entry
+   *  has to classify `readOnly`.
    *
    *  `sql` is the one verb whose read-only-ness depends on the call (mode
    *  + statement), not just the verb; it's `false` here and refined
@@ -584,13 +598,9 @@ export interface KnownCommandMeta {
 
 /** Schema-derived registry of every known wire command. Typed as
  *  `Record<KnownCommandType, …>` so adding a variant to
- *  `knownCommandSchema` without a registry entry is a TypeScript
- *  error — the two sources of truth stay structurally in sync.
- *
- *  Consumers should reach for `getCommandMeta(type)` when they want a
- *  specific entry, or iterate over the registry's entries (e.g. to
- *  build a CLI help list, a runtime-summary hint set, or a README
- *  cheatsheet). */
+ *  `knownCommandSchema` without a registry entry is a TypeScript error —
+ *  the two sources of truth stay structurally in sync. Read a single entry
+ *  with `getCommandMeta(type)`. */
 export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = {
   'ping': {
     usage: 'kmagent ping',
@@ -700,6 +710,12 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Run one operator-triggered workspace backfill (currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched). Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
     readOnly: false,
   },
+  'rematerialize-workspace': {
+    usage: 'kmagent rematerialize-workspace [--workspace <id>] [--scope unapplied|all] [--wait <seconds>]',
+    description: 'Re-run the sync drain over rows this device downloaded but never applied — the remedy for the durable materialization gap every one-way pass refuses on ("N synced row(s) of this workspace have not reached `blocks` on this device"). Those rows reached the drain, were not applied (workspace not unlocked, mode unresolved, a key-store read that failed, ciphertext that would not decode, or a speculative stamp-0 mint the seed could not vouch for), and had their queue entry consumed — so nothing re-delivers them and waiting never clears them. A DERIVATION pass over LOCAL state: it rebuilds this device\'s `blocks` from rows this device already downloaded, uploads nothing, needs no per-graph claim, does not clear the undo stack, and is safe to run on any device any number of times. `--scope unapplied` (default) re-delivers exactly the rows the refusal counts; `--scope all` re-judges every staged row of the workspace, which is what to use when the flag itself is suspect, at the cost of a full pass. Returns the exact `unappliedBefore`/`unappliedAfter` gap sizes plus the pass\'s own counts and `remainingGap` — the predicate re-asked. A pass that leaves rows unapplied has not failed: its `deferred` / `quarantined` counts say why. Neither is fixed by re-running ALONE — `deferred` needs the workspace materializable first (unlock it, or a key store that reads: a transient key-store failure defers too, and that one a re-run does fix), `quarantined` needs bytes that decode. `reflagged` is the count going the other way — at `--scope all`, a workspace that answers `defer` re-flags rows an earlier drain had cleared, so that scope CAN leave the gap larger (at `--scope unapplied` it is always 0, since every row in that set is flagged already). Two more things to know before running it: prefer a settled sync, because a re-pass can briefly write an older staged row over a local edit that is acked but not yet echoed back (the echo re-asserts it, so it self-heals unless the tab closes inside that window); and the pass occupies this device\'s materialization queue for its whole run, so no synced row reaches `blocks` until it finishes — seconds at `unapplied`, minutes at `all` on a large graph.',
+    // Writes the local `blocks` table (never `blocks_synced`, never an upload).
+    readOnly: false,
+  },
   'run-action': {
     usage: 'kmagent run-action <id> [depsJson]',
     description: 'Run a registered action by id.',
@@ -713,13 +729,10 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: false,
   },
   // backlinks / grouped-backlinks resolve the user's backlinks prefs
-  // sub-block (`--filter effective`, and grouped-backlinks' default
-  // `--grouping user`). That sub-block is eagerly bootstrapped at idle on
-  // every client via `pluginPrefsExtension` (src/data/pluginStateExtensions.ts),
-  // so on the warm/live client the bridge talks to it already exists and
-  // the resolve path is a pure read. (The only write either could ever do
-  // is the same one-time, benign prefs-block creation the app itself does
-  // at idle, were it somehow invoked before that bootstrap ran.)
+  // sub-block, which `pluginPrefsExtension` (src/data/pluginStateExtensions.ts)
+  // bootstraps at idle on every client — so on the live client the bridge
+  // talks to, the resolve path is a pure read. The only write either could
+  // make is that same one-time prefs-block creation, before the bootstrap.
   'backlinks': {
     usage: "kmagent backlinks <blockId> [--filter none|stored|effective|<json>] [--workspace <id>]",
     description: 'Hydrated backlinks of a block (blocks whose references point at it). --filter defaults to none. See `kmagent data-model`.',

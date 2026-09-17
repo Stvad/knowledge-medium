@@ -1,25 +1,11 @@
 /**
- * Same-tx processor: canonicalize `blocks.references_json` on every
- * write. Replaces the inline `normalizeReferences(...)` calls that
- * previously lived in `txEngine.ts` (`update`, `restore`,
- * `insertBlockData`). Equivalent end-state — the row commits with
- * normalized references — but pluggable, so other plugins can
- * compose value-level normalizers onto the same pipeline stage
- * without modifying the engine.
- *
- * Why the canonical form matters (excerpted from
- * `blockData.ts:normalizeReferences` doc): on-disk shape is
- * independent of writer-side iteration order, so equality reduces
- * to JSON text compare; consumers (`json_each` backlinks index,
- * BACKLINKS_FOR_BLOCK_QUERY, Map-keyed invalidation) treat
- * references as a set.
- *
- * Same-tx placement notes (per docs/alias-rename-cases.html):
- *   - Cheap (pure compute, no I/O), correctness-critical (commit
- *     invariant), single-row (each tx may write several blocks but
- *     each row's normalization is independent).
- *   - Latency added is paid by the user-commit path; matches the
- *     pre-existing inline cost.
+ * Same-tx processor: canonicalize `blocks.references_json` on every write,
+ * so the on-disk shape is independent of writer-side iteration order and
+ * equality reduces to a JSON text compare — the `json_each` backlinks
+ * index, BACKLINKS_FOR_BLOCK_QUERY and Map-keyed invalidation all treat
+ * references as a set. Pluggable, so other plugins can compose
+ * value-level normalizers onto the same pipeline stage. See
+ * `blockData.ts:normalizeReferences` for the canonical-form rules.
  */
 
 import {
@@ -28,12 +14,13 @@ import {
   type AnySameTxProcessor,
 } from '@/data/api'
 import { BLOCK_TYPE_KERNEL_PROCESSORS } from './blockTypeTypeifyProcessor'
+import { MERGE_TYPE_MEMBERSHIP_KERNEL_PROCESSORS } from './mergeTypeMembershipProcessor'
 import { DERIVE_REFERENCE_TARGET_PROCESSOR } from './referenceTargetProcessor'
 import {
   MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
   PROJECT_PROPERTY_CHILDREN_PROCESSOR,
 } from './propertyChildrenProcessor'
-import { MIGRATE_PROPERTY_RENAME_PROCESSOR } from './propertyRenameProcessor'
+import { MIGRATE_PROPERTY_DEFINITION_PROCESSOR } from './propertyDefinitionChangeProcessor'
 
 const referencesEqual = (
   a: ReturnType<typeof normalizeReferences>,
@@ -80,7 +67,7 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
 // both passes. Block-type typeify runs FIRST: its bag
 // amendments (page type, label, aliases) are raw/setProperty cell writes,
 // and in a child-backed workspace those must still be ahead of materialize
-// or the value children go stale until an unrelated edit (PR #386 review).
+// or the value children go stale until an unrelated edit.
 // The residual trade: a transition-into-block-type written by PROJECT
 // itself (hand-editing a hidden `types` VALUE row) no longer re-fires
 // typeify this tx — machinery-row surgery, self-heals on the next bag
@@ -94,13 +81,19 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
 // reconciliation.
 export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
   ...BLOCK_TYPE_KERNEL_PROCESSORS,
+  // Merge membership-retarget is a raw `types` cell write, so it must precede
+  // MATERIALIZE for the same reason typeify does: on a child-backed workspace
+  // the retargeted cell has to reach the value children in THIS tx, not on some
+  // later unrelated edit. It reads the pre-merge membership index rather than
+  // the rows it writes, so it is order-independent among its neighbours here.
+  ...MERGE_TYPE_MEMBERSHIP_KERNEL_PROCESSORS,
   MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
   DERIVE_REFERENCE_TARGET_PROCESSOR,
   PROJECT_PROPERTY_CHILDREN_PROCESSOR,
   NORMALIZE_REFERENCES_PROCESSOR,
-  // Runs LAST: it re-keys consuming-parent cells for a definition rename, and
-  // the stale in-tx registry would make MATERIALIZE read the dropped old name
-  // as a user delete and tombstone the field rows if it ran afterward. See
-  // propertyRenameProcessor.ts header.
-  MIGRATE_PROPERTY_RENAME_PROCESSOR,
+  // Runs LAST: it re-keys consuming-parent cells for a definition rename or
+  // re-type, and the stale in-tx registry would make MATERIALIZE read the
+  // dropped old name as a user delete and tombstone the field rows if it ran
+  // afterward. See propertyDefinitionChangeProcessor.ts header.
+  MIGRATE_PROPERTY_DEFINITION_PROCESSOR,
 ]

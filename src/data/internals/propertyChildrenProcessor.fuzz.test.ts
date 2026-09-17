@@ -44,6 +44,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/data/api'
+import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
@@ -69,12 +70,22 @@ const relatedSchema = defineProperty<string>('related', {
   codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-type Kind = 'status' | 'count' | 'flag' | 'related'
+/** MULTI-VALUED, so the generated cases reach `reconcileMemberValueChildren`
+ *  and its slot permutation. Without one every case takes the single-value
+ *  branch, and this suite's claim to pin the pair's idempotence and
+ *  non-ping-pong covers only half the reconciler. */
+const tagsSchema = defineProperty<readonly string[]>('tags', {
+  codec: kernelValuePresetCoresById['string-list'].build(),
+  defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
+
+type Kind = 'status' | 'count' | 'flag' | 'related' | 'tags'
 const SCHEMAS: Record<Kind, {schema: AnyPropertySchema; fieldId: string}> = {
   status: {schema: statusSchema, fieldId: 'field-status'},
   count: {schema: countSchema, fieldId: 'field-count'},
   flag: {schema: flagSchema, fieldId: 'field-flag'},
   related: {schema: relatedSchema, fieldId: 'field-related'},
+  tags: {schema: tagsSchema, fieldId: 'field-tags'},
 }
 
 /** Hand-built to match the shape `materializePropertyChildrenForExistingRow`
@@ -106,10 +117,13 @@ const valueArbFor = (kind: Kind): fc.Arbitrary<unknown> => {
     case 'count': return finiteArb
     case 'flag': return fc.boolean()
     case 'related': return idArb
+    // Repeats and empties on purpose: multiplicity is part of a list's value,
+    // and an empty list is a value rather than an absent key.
+    case 'tags': return fc.array(fc.constantFrom('a', 'b', 'c'), {maxLength: 4})
   }
 }
 
-const KIND_ARB: fc.Arbitrary<Kind> = fc.constantFrom('status', 'count', 'flag', 'related')
+const KIND_ARB: fc.Arbitrary<Kind> = fc.constantFrom('status', 'count', 'flag', 'related', 'tags')
 const caseArb = KIND_ARB.chain(kind => fc.record({
   kind: fc.constant(kind),
   // 1-3 sequential writes to the SAME key: length 1 exercises MATERIALIZE's
@@ -203,8 +217,16 @@ const runCase = async ({kind, values}: {kind: Kind; values: unknown[]}): Promise
   expect(fieldRows).toHaveLength(1)
   const fieldRowId = fieldRows[0]!.id
   const converged = await childrenRows(fieldRowId)
-  expect(converged, 'exactly one live primary value child in a converged row').toHaveLength(1)
-  const valueRowId = converged[0]!.id
+  // LIVE rows only, and one per MEMBER. `childrenRows` returns tombstones too,
+  // which a scalar never produces here (it rewrites its one row's content in
+  // place) but a list does every time a member is removed — so the old
+  // unfiltered `toHaveLength(1)` was reading a scalar-only accident.
+  const liveValues = converged.filter(r => r.deleted === 0)
+  expect(liveValues, 'one live value row per member in a converged row')
+    .toHaveLength(Array.isArray(lastValue) ? lastValue.length : 1)
+  // The event-count assertions below need a row to watch; an empty list has no
+  // value row, and its field row alone carries the same no-write contract.
+  const valueRowId = liveValues[0]?.id ?? fieldRowId
 
   // ── MATERIALIZE re-run: an already-converged row is untouched ──
   // The docblock's contract above (:22-27) is LITERAL — "writes NOTHING",
@@ -224,7 +246,7 @@ const runCase = async ({kind, values}: {kind: Kind; values: unknown[]}): Promise
   // gated by it. The event baselines further down are no substitute
   // either way: they're captured AFTER this call, so a leak here is
   // invisible to them. Snapshot both rows' update-event counts BEFORE the
-  // call instead (Codex review, comment 3676658264).
+  // call instead.
   const beforeMaterialize = {
     field: await updateEventCount(fieldRowId),
     value: await updateEventCount(valueRowId),

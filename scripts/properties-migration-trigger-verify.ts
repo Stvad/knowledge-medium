@@ -11,7 +11,7 @@
  *
  *   SUPABASE_URL=... ANON_KEY=... SUPABASE_SECRET_KEY=... pnpm rls:verify-properties-flip
  *
- * The contract (PR #386's migration, narrowed by the owner-flip successor and
+ * The contract (narrowed by the owner-flip successor and
  * relaxed for e2ee by the namespace-derivation successor):
  *   - the workspace OWNER may advance 'cell' -> 'children', and only that step,
  *     where "owner" is a claim an editor cannot manufacture — see the

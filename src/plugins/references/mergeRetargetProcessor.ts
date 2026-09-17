@@ -241,12 +241,12 @@ const retargetSource = async (
   // does unconditionally. Gating the cell here but not the child made the
   // two disagree (the child's `((from))` retargeted, PROJECT then rebuilt
   // the cell the guard had "protected"); dropping the gate makes cell and
-  // child converge (PR #386 review, F7). The value lands via the raw
-  // `properties` patch below in THIS tx's scope (BlockDefault), which makes
-  // the retarget undoable-with-the-merge — the correct semantics: undoing
-  // the merge restores the pointer. A plain `set` picks the field's default
+  // child converge. The value lands via the raw `properties` patch below in
+  // THIS tx's scope (BlockDefault), which makes the retarget
+  // undoable-with-the-merge — the correct semantics: undoing the merge
+  // restores the pointer. A plain `set` picks the field's default
   // undo/routing bucket; a merge is exactly a case where overriding that is
-  // right (Vlad, PR #386). Safe because BlockDefault is the STRICTEST
+  // right. Safe because BlockDefault is the STRICTEST
   // read-only policy, so touching a permissive-scope field can't bypass a
   // read-only gate, and every scope uploads to the server regardless.
   const isEligibleField = (field: string): boolean => {
@@ -260,7 +260,7 @@ const retargetSource = async (
   //    from `from` onto this very row with a value naming fromId and NO
   //    stored entry yet — entry-driven collection can't see it, and the
   //    follow-up parse would project a backlink to the tombstoned merge
-  //    source (Codex review on PR #371).
+  //    source.
   // Eligible fields ALWAYS retarget their entries, whether or not the
   // value needed rewriting (a stale entry can coexist with an
   // already-correct value on sync-applied rows); the value write stays
@@ -303,7 +303,7 @@ const retargetSource = async (
   // retaining it alongside the retargeted one (which this used to do)
   // announces both, one of them onto the tombstoned merge source. Drop it
   // and let the re-parse own the rebind — dropping the entry is itself
-  // what schedules that re-parse (PR #444 round 7, P2).
+  // what schedules that re-parse.
   const remaining = new Set(parseReferences(nextContent).map(mark => mark.alias))
   const strandedAliases = new Set(
     [...aliasReplacements.keys()].filter(alias => remaining.has(alias)),
@@ -362,9 +362,8 @@ const retargetMergedBlockReferences = async (
   // onto `into` (target lacked the key) whose value names `fromId` —
   // `into` has no stored reference entry yet, so the block_references
   // lookup above can't see it, and without a rewrite the follow-up
-  // parse would project a backlink to the tombstoned merge source
-  // (Codex review on PR #371). retargetSource no-ops when nothing
-  // matches.
+  // parse would project a backlink to the tombstoned merge source.
+  // retargetSource no-ops when nothing matches.
   const sourceIds = new Set(sourceRows.map(row => row.id))
   sourceIds.add(event.intoId)
 

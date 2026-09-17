@@ -202,25 +202,19 @@ const backlinksWatcherSchema = z.strictObject({
    *  it only once at the end. Orthogonal to `splitReply`: streaming just
    *  reconciles the reply subtree with the growing text on each tick (a
    *  block reply grows in place; a split reply threads out as it's written).
-   *  Reconciles are throttled to ~1.5s apart — each is a synced graph
-   *  mutation writing only the diff, so leave this off where that churn
-   *  matters. */
+   *  Reconciles are throttled, but each is a synced graph mutation writing
+   *  the diff, so leave this off where that churn matters. */
   streamReply: z.boolean().default(false),
   /** Shape the reply as a block HIERARCHY split along its markdown outline
    *  (nested bullets → child blocks, headings → nesting, code fences kept
    *  whole) instead of one big block. ON by default — a threaded reply reads
    *  far better in an outliner. Parsing + insertion happen APP-SIDE via the
-   *  `reconcile-markdown-subtree` bridge command (the app's own paste
-   *  parser), so the split matches "paste as markdown" and the whole subtree
-   *  lands in one transaction — a failure never leaves a partial reply. The
-   *  write is idempotent (keyed per run), so a transient bridge blip is
-   *  RETRIED in place rather than surfacing as `status=error`. Set `false`
-   *  to keep the reply as a single block. A structureless reply (one
-   *  paragraph) lands as a single block either way. The spawned run is
-   *  nudged (see prompt.ts) to write a nested outline so the split threads
-   *  naturally. Ignored for `delivery: 'channel'` (the ambient session posts
-   *  its own reply). Requires an app build new enough to handle the bridge
-   *  command. */
+   *  `reconcile-markdown-subtree` bridge command, so the split matches "paste
+   *  as markdown" and the whole subtree lands in one transaction. Set `false`
+   *  to keep the reply as a single block; a structureless reply lands as one
+   *  block either way. The spawned run is nudged (see prompt.ts) to write a
+   *  nested outline so the split threads naturally. Ignored for
+   *  `delivery: 'channel'` (the ambient session posts its own reply). */
   splitReply: z.boolean().default(true),
 })
 

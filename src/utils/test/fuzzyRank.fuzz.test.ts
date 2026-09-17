@@ -48,6 +48,7 @@
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { utf16UnitArb } from '@/test/arbitraries/utf16'
 import {
   buildFilterPrefixes,
   rankCandidates,
@@ -61,9 +62,11 @@ const NOW = 1_700_000_000_000
 
 // ──── P1: totality ────
 
-/** Arbitrary UTF-16 content incl. unpaired surrogates, mirrors the soup
- *  style in routing.fuzz.test.ts. */
-const wildStringArb = (maxLength: number) => fc.string({unit: 'binary', maxLength})
+/** Arbitrary UTF-16 content, mirroring the soup style in
+ *  routing.fuzz.test.ts: whole code points (astral included) from `'binary'`,
+ *  and ill-formed sequences carrying lone surrogates from `utf16UnitArb`. */
+const wildStringArb = (maxLength: number) =>
+  fc.oneof(fc.string({unit: 'binary', maxLength}), fc.string({unit: utf16UnitArb, maxLength}))
 
 describe('totality: tokenize / buildFilterPrefixes / scoreCandidate / rankCandidates never throw', () => {
   it('on arbitrary unicode/empty/long labels and queries', () => {

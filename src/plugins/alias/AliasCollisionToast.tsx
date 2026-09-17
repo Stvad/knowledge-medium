@@ -70,7 +70,7 @@ export const AliasCollisionToast = ({
     try {
       await repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
         intoId: conflictingBlockId,
-        fromId: attemptedOn,
+        fromIds: [attemptedOn],
         collisionAlias: alias,
         dropSourceAliases,
       })

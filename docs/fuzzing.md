@@ -1,6 +1,6 @@
 # Fuzzing
 
-> **Status:** current — last verified against code 2026-07-16
+> **Status:** current — last verified against code 2026-09-01
 
 Randomized testing for the parsing and data layers, in the Dan Luu
 spirit: cheap random inputs + invariant oracles find bugs that
@@ -185,6 +185,17 @@ one.
   view, multi-select wrappers, undo/redo) through `invokeAction` with
   UI-shaped deps; oracles = structural invariants + scope-root
   boundary protection.
+- `src/shortcuts/test/activeContextsOwnership.fuzz.test.tsx` — shortcut
+  context ownership across the React lifecycle (happy-dom, real
+  commits): random mount / unmount / suspend / unsuspend / retarget /
+  deps-churn batches over several surfaces claiming overlapping context
+  types, including the same-commit "one lane goes dark as a sibling
+  comes live" swap and StrictMode double-invoke. Oracles = the
+  settled-state invariant (every type a LIVE surface claims has an
+  entry, owned by a live claimant; no entry for an unclaimed type),
+  key order = activation recency, and an exact differential against a
+  reference model of the pre-existing semantics for the non-overlapping
+  case.
 - `src/data/propertyDefinitionRegistry.fuzz.test.ts` — the
   schema-unification registry + resolver (PR #364): random universes of
   seed declarations and projected definition rows; oracles =
@@ -274,6 +285,23 @@ The interaction fuzzer found one more:
   rendered surface out from under the panel. The boundary rule now
   lives in `StructuralEditPolicy.canDelete` (scope-less callers like
   the agent bridge remain free to delete).
+
+The shortcut-context ownership fuzzer went red on its FIRST fixed smoke
+seed, which was its whole point: the hazard had been read out of the code
+(`docs/activeContexts-ownership-bug.md`) and a first fix attempt had been
+reverted, but four hand-run observations of the swap had all behaved, so
+nobody knew it was reachable.
+
+- Two surfaces legitimately claiming one context type, then either one
+  going away, left the type owned by NOBODY — `deactivate(type)` deleted
+  the whole entry and the survivor's effect deps never moved, so nothing
+  re-registered it. Keyboard dead, silently. Notably the counterexample
+  needs NO violation of React's destroy-before-create ordering — the
+  ordering hazard the suite was written to hunt turned out not to be the
+  reachable one. Fixed by claim/release with a per-type stack keyed on
+  activation-token identity, with the visible map re-sorted by a
+  monotonic activation counter so key order (which `resolve.ts` reads for
+  modal recency) stays what it was.
 
 The seed-materialization fuzzer (schema-unification surface, PR #364)
 found two more within its first minutes, both in the tx-layer
@@ -459,6 +487,12 @@ a test that could not fail.
   exactly where normalization and surrogate edges bite (issue #458).
   Before trusting a green property, confirm its generator actually
   reaches the domain its docblock names.
+- The same defect, one layer in (issue #760): `fc.string({unit:
+  'binary'})` — the fix for the above — emits whole code POINTS, so its
+  surrogates are always correctly PAIRED. Three suites claimed "incl.
+  unpaired surrogates" over it and generated none (measured: 0 lone
+  surrogates in 20,000 samples). Fixing the obvious version of a
+  coverage claim is not the same as checking it.
 - A flake filed as a product ordering bug (#455) was neither: the
   prescribed fix was already implemented months earlier, and the real
   mechanism was `awaitSeedMaterialization()` not meaning "done" —
@@ -469,6 +503,24 @@ a test that could not fail.
   to exist. Both were settled by MUTATION — reintroduce the bug, run
   only the pre-existing suites — not by reading. Do that before writing
   a test whose value rests on a coverage gap being real.
+
+The stable-wrong-binding sweep's nightly deep run then found the
+restore half of the release-reclaim residual (issue #706, seed
+`1264869285`):
+
+- The rename ladder skips tombstones (`row.after.deleted`), deliberately
+  — a deleted page claims nothing, its inbound `[[α]]` edges are the
+  residual the add-only contract retains ON PURPOSE so restoring it
+  rebinds cleanly, and rewriting live referrers' text off a deleted
+  page's rename is the call §11 group 2 / #383 defers. But restore the
+  target under a DIFFERENT alias set and that premise is false: the
+  referrer's `[[Inbox]]` is now bound to a LIVE block claiming only
+  "ax", while a fresh seat owns "Inbox". Two live blocks disagreeing,
+  and stable — the referrer only re-parses on its own row, and the
+  audit's `content_link_recompute` diffs alias SETS, never the bound id.
+  `collectRestorePlans` invalidates those edges at the restore (never
+  rewriting content, so the deferred decision stays deferred); the drop
+  is itself the write that schedules the referrer's rebind.
 
 ## Adding a suite
 
@@ -501,3 +553,23 @@ a test that could not fail.
    add `afterAll(guard.barrier)`. Symptom if you skip this:
    deep-tier-only, order-dependent flakes in whatever runs after the
    property (phantom rows, duplicate-id errors).
+7. Choose the string `unit` deliberately — the default and the usual
+   correction are both narrower than "any string". `fc.string()` is
+   `unit: 'grapheme-ascii'` (printable ASCII); `{unit: 'binary'}` is the
+   full code-point range but never a LONE surrogate. For ill-formed
+   UTF-16, draw from `utf16UnitArb` in `@/test/arbitraries/utf16`
+   (single code units), alongside `'binary'` when astral coverage
+   matters too. A suite may legitimately want well-formed input only —
+   `aead`/`cryptoCodecs` exclude lone surrogates because `TextEncoder`
+   folds them to U+FFFD, which would fail their oracles for a reason
+   unrelated to the property — but say so, rather than leaving a claim
+   the generator doesn't meet.
+8. A generated "mode" flag that turns out to toggle nothing costs you
+   half your cases and looks fully covered — add a **non-vacuity canary**
+   asserting the flag actually changes observable behaviour. Concretely
+   for React suites: `<StrictMode>` only double-invokes effects when it
+   is at the RENDER ROOT (React 19 gates it on the root's strict flag),
+   so returning it from inside a component renders the subtree normally
+   — measured here as nested 1 effect run vs root 2. Wrap the element
+   you hand to `render`/`rerender`, not the tree inside your harness
+   component, and pin it (`activeContextsOwnership.fuzz.test.tsx`).

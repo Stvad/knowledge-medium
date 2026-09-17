@@ -29,6 +29,7 @@ import {
 } from './mediaBlock.js'
 import { captureMedia, mediaBlockId } from './mediaCapture.js'
 import { InMemoryByteUploadStore } from './uploadStore.js'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 const WS = 'ws-1'
 const USER = 'user-1'
@@ -51,7 +52,7 @@ let env: Harness
 
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
-  const repo = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: { id: USER } })
+  const repo = trackTestRepo(new Repo({ db: sharedDb.db, cache: new BlockCache(), user: { id: USER } }))
   repo.setFacetRuntime(
     resolveFacetRuntimeSync([
       kernelDataExtension,

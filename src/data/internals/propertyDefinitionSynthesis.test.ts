@@ -8,6 +8,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import {
   presetIdProp, propertyChangeScopeProp, propertyDefaultProp, propertyNameProp,
 } from '@/data/properties'
@@ -16,6 +17,7 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { confirmPlaintextForSession } from '@/sync/keys/modePin'
@@ -428,6 +430,55 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
   })
 
+  it('refuses the flip when the survey ran over rows this device never materialized', async () => {
+    // The same partial graph as above, arrived at without a mock — and the
+    // shape that makes the survey's output wrong rather than merely late: an
+    // unmaterialized definition makes its key read as UNRESOLVED, which is the
+    // reading the whole plan is built on.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    repo.stopSyncObserver()
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id: 'never-materialized', workspaceId: WS, parentId: null, orderKey: 'z0',
+      content: 'the definition this device has not got', properties: {}, references: [],
+      createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+      deleted: false,
+    }))
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+
+    const plan = await planFor()
+
+    expect(plan.scanSyncGap).toMatch(/have not reached/)
+    expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
+  })
+
+  it('refuses when a delivery is left unapplied AFTER the pre-flight check', async () => {
+    // The pre-flight and the write are separated by the Properties-page
+    // bootstrap and by the wait for the write lock. A key whose real definition
+    // is the row left unapplied in that window still reads as ORPHANED to the
+    // plan we are about to mint from — which is the outcome the deterministic
+    // id exists to prevent, since the real definition wins the registry's
+    // ascending sort when it lands and every field row bound to the loser
+    // strands.
+    await rawCell('b1', {'demo:orphan': 'x'})
+    const plan = await planFor()
+    repo.stopSyncObserver()
+    const realTx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
+      await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+        id: 'the-real-definition', workspaceId: WS, parentId: null, orderKey: 'z0',
+        content: 'arrived, could not be applied', properties: {}, references: [],
+        createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+        deleted: false,
+      }))
+      await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+      return realTx(fn, opts)
+    })
+
+    await expect(applyPropertyDefinitionSynthesis(repo, plan))
+      .rejects.toThrow(/have not reached/)
+    expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
+  })
+
   it('refuses when the workspace turns out encrypted AFTER the pre-flight check', async () => {
     // The pre-flight check and the write are separated by the Properties-page
     // bootstrap and by the wait for the write lock, and the workspace's real
@@ -500,6 +551,35 @@ describe('planPropertyDefinitionSynthesis', () => {
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
       .rejects.toThrow(/not caught up/)
+    expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
+  })
+
+  it('refuses to WRITE over a row this device downloaded and never materialized', async () => {
+    // The shape the in-flight predicate cannot see, and the one that matters
+    // most here: a key whose real definition merely failed to materialize on
+    // arrival reads as ORPHANED to the scan, and an orphan is answered by
+    // MINTING. Nothing is running in this state and no waiting clears it, so
+    // "is a drain outstanding" answers yes-go-ahead — and the mint that
+    // follows loses the registry's ascending-createdAt sort to the real
+    // definition when it finally lands, stranding every field row bound to it.
+    await rawCell('b1', {'demo:orphan': 'x'})
+    const plan = await planFor()
+
+    // Stopped first so the row STAYS staged: this is a row the drain already
+    // passed over (locked workspace, unresolved mode, undecodable ciphertext)
+    // and whose queue entry it consumed on the way.
+    repo.stopSyncObserver()
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id: 'never-materialized', workspaceId: WS, parentId: null, orderKey: 'z0',
+      content: 'the definition this device has not got', properties: {}, references: [],
+      createdAt: 1, updatedAt: 5, userUpdatedAt: 5, createdBy: 'u', updatedBy: 'u',
+      deleted: false,
+    }))
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+    expect(await repo.syncViewGap()).toBeNull()
+
+    await expect(applyPropertyDefinitionSynthesis(repo, plan))
+      .rejects.toThrow(/have not reached/)
     expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
   })
 
@@ -616,7 +696,7 @@ describe('applyPropertyDefinitionSynthesis', () => {
     const second = await planFor()
     expect(second.candidates).toEqual([])
     expect(await applyPropertyDefinitionSynthesis(repo, second))
-      .toEqual({created: 0, converged: 0, skipped: []})
+      .toEqual({created: 0, converged: 0, skipped: [], undoHistoryCleared: false})
   })
 
   it('still mints the keys it can when another key is a hard blocker', async () => {
@@ -781,14 +861,18 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     // the next projection publishes nothing and the backfill would run against
     // behaviour that is about to disappear.
     const {plan, id} = await mintedOrphan()
-    // RAW, so the projector never learns: the resolver stays pointed at it,
-    // which is the whole state under test.
-    await sharedDb.db.execute(
-      `UPDATE blocks SET properties_json = json_set(properties_json,
-         '$."property-schema:change-scope"', 'not-a-real-scope') WHERE id = ?`, [id])
+    // Capture the projection and FREEZE it, the way the staleness tests beside
+    // this one do. Raw SQL sends no notification of its own, but a reload an
+    // earlier tx started reads whatever is in the database when it finally
+    // runs — so leaving the real projection in place races the corruption
+    // below into it and the precondition evaporates.
     const stale = repo.propertySchemaResolverFor(WS).resolve('demo:orphan')
     expect(stale.status).toBe('resolved')
     expect(stale.status === 'resolved' && stale.schema.fieldId).toBe(id)
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json,
+         '$."property-schema:change-scope"', 'not-a-real-scope') WHERE id = ?`, [id])
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue(mockResolver(() => stale))
 
     const result = await applyPropertyDefinitionSynthesis(repo, plan)
 
@@ -886,6 +970,43 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result).toMatchObject({created: 0, converged: 0})
     expect(result.skipped[0]!.reason).toMatch(/was deleted/)
     expect(flipBlockedBySynthesis(plan, result)).toMatch(/still have no definition/)
+  }, 30_000)
+
+  it('forgets a deleted definition even when the mint and delete share one reload', async () => {
+    // The fence above is only trustworthy because of this. Synthesis publishes
+    // the definition imperatively, ahead of any subscription delivery, and only
+    // a delivery takes it back — but when the delete lands inside the mint's own
+    // reload, that reload reads back exactly the row set last delivered and the
+    // subscription has nothing to say. The contribution then outlives its row
+    // and the resolver keeps answering for a block the database has tombstoned.
+    await repo.whenPropertyDefinitionsReady(WS)
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+
+    // Hold the definition-block reload open across BOTH writes — it READS
+    // first and settles late, which is the shape CI contention produces. A
+    // gate rather than a timer, so there is no race to lose.
+    let releaseReload = () => {}
+    const held = new Promise<void>(resolve => { releaseReload = resolve })
+    const realGetAll = sharedDb.db.getAll.bind(sharedDb.db)
+    let holding = false
+    vi.spyOn(sharedDb.db, 'getAll').mockImplementation(
+      async (sql: string, params?: unknown[]) => {
+        const rows = await realGetAll(sql, params as never)
+        if (holding && Array.isArray(params) && params[1] === PROPERTY_SCHEMA_TYPE) await held
+        return rows
+      })
+    holding = true
+
+    await applyPropertyDefinitionSynthesis(repo, plan)
+    const id = await definitionIdFor('demo:orphan')
+    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+    await repo.tx(async tx => { await tx.delete(id) },
+                  {scope: ChangeScope.BlockDefault, description: 'delete'})
+    holding = false
+    releaseReload()
+
+    await untilKeyUnresolved('demo:orphan')
   }, 30_000)
 
   it('skips a key whose deterministic id stopped being its definition', async () => {
@@ -1087,20 +1208,25 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     expect(result.skipped[0]!.reason).toMatch(/another workspace/)
   })
 
-  it('does not leave the synthesis write on the undo stack', async () => {
-    // The gesture clears the stack at the flip and the backfill clears it on
-    // its first batch, but a run can end between the two — leaving these as the
-    // only committed write with a live undo entry, one cmd-Z from deleting
-    // definitions whose keys are already migrating.
+  it('drops the workspace\u2019s undo history once it MINTS, and says it did', async () => {
+    // Not about this pass's own write, which is `skipUndo`, but about the
+    // entries already on the stack. Undo replays a whole snapshot with the
+    // same-tx processors skipped, so one cmd-Z after this commits puts back a
+    // cell for a key that now has a definition block — and past the flip that
+    // definition's children are the truth, so the two just diverge.
     await rawCell('b1', {'demo:orphan': 'hello'})
     // Created up front so its own (undoable) transaction is not what this
     // measures — `getOrCreatePropertiesPage` is a separate commit.
     await getOrCreatePropertiesPage(repo, WS)
-    const before = repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)
+    await repo.tx(async tx => { await tx.update('b1', {content: 'user edit'}) },
+      {scope: ChangeScope.BlockDefault, description: 'user edit'})
+    expect(repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)).not.toBeNull()
 
-    await applyPropertyDefinitionSynthesis(repo, await planFor())
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
 
-    expect(repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)).toEqual(before)
+    expect(result.created).toBeGreaterThan(0)
+    expect(result.undoHistoryCleared).toBe(true)
+    expect(repo.undoManagerFor(WS).peekUndo(ChangeScope.BlockDefault)).toBeNull()
   })
 })
 

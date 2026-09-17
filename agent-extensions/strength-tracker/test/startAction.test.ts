@@ -52,7 +52,7 @@ vi.mock('../src/km/store', () => ({
   writeAltChoice: (...args: unknown[]) => choiceWritten(...args),
 }))
 
-const {runStartSession} = await import('../src/ui/startAction')
+const {runStartSession, startSessionAction} = await import('../src/ui/startAction')
 
 /** Records what ran inside `repo.undoGroup`, since the point of the group is
  *  that the outline writes are ONE undo entry — invisible from their return
@@ -172,6 +172,62 @@ it('creates the session and clears the line as ONE undo entry', async () => {
   expect(grouped).toEqual(['open'])
   expect(started).toHaveBeenCalledWith(groupedRepo, 'ws-1', 'page', expect.anything(), placement.position)
   expect(placed).toHaveBeenCalledWith(groupedRepo, 'workout-1', placement, true)
+})
+
+describe('which pane the session opens in', () => {
+  it('swaps the pane the gesture was made in', async () => {
+    // The bug this pins: `navigateFromGlobalCommand` lands a navigator command
+    // in the MAIN pane, so pressing Start in a side pane created the workout
+    // and then showed it somewhere else, leaving the pane you were working in
+    // on the page you started from.
+    await runStartSession(repo, placement, 'pane-2')
+
+    expect(navigatedTo()).toEqual([
+      {via: 'navigate', target: 'panel', panelId: 'pane-2', blockId: 'workout-1', workspaceId: 'ws-1'},
+    ])
+  })
+
+  it('and the pane a standing session is found from', async () => {
+    standing.mockResolvedValue('peer-workout')
+
+    await runStartSession(repo, placement, 'pane-2')
+
+    expect(navigatedTo()).toEqual([
+      {via: 'navigate', target: 'panel', panelId: 'pane-2', blockId: 'peer-workout', workspaceId: 'ws-1'},
+    ])
+  })
+
+  it('is the pane the SHORTCUT ran in', async () => {
+    // The wiring, not the rule: the rule above is reachable only if the action
+    // handler actually hands its pane over, and `uiStateBlock` being the pane
+    // block in this context is a convention of the app's, not a type.
+    const focus = {
+      id: 'line-1', parentId: 'parent-1', content: '', orderKey: 'a0', properties: {},
+    }
+    await startSessionAction.handler({
+      block: {
+        id: focus.id,
+        repo: {...(repo as object), block: () => ({children: {load: async () => []}})},
+        peek: () => focus,
+      },
+      uiStateBlock: {id: 'pane-7'},
+    } as never, new CustomEvent('test'))
+
+    expect(navigatedTo()).toEqual([
+      {via: 'navigate', target: 'panel', panelId: 'pane-7', blockId: 'workout-1', workspaceId: 'ws-1'},
+    ])
+  })
+
+  it('falls back to the app-wide command target when there is no pane', async () => {
+    // Not every caller has one — and a global command SHOULD land where the
+    // app sends commands. `panelId: undefined` is the fallback, recorded here
+    // so "forgot to pass it" and "deliberately has none" stay distinguishable.
+    await runStartSession(repo, placement)
+
+    expect(navigatedTo()).toEqual([
+      {via: 'global-command', blockId: 'workout-1', workspaceId: 'ws-1'},
+    ])
+  })
 })
 
 it('writes nothing at all in a read-only workspace', async () => {

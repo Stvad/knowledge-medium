@@ -23,7 +23,7 @@ describe('createTestDb harness', () => {
   })
 
   it('opens a writable PowerSyncDatabase with the v2 blocks shape (storage + local columns)', async () => {
-    // PR #288 slice A: `blocks` = storage columns + LOCAL-only columns
+    // `blocks` = storage columns + LOCAL-only columns
     // (`reference_target_id`), appended last.
     const cols = (await h.db.getAll<{name: string}>(
       "SELECT name FROM pragma_table_info('blocks') ORDER BY cid",

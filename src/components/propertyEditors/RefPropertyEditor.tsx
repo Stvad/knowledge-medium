@@ -101,13 +101,19 @@ const searchReferenceCandidates = async (
       excludeIds: excluded,
     })
   } else {
-    const [aliasRows, recentBlocks] = await Promise.all([
+    const [aliasRows, recentRows] = await Promise.all([
       repo.query.aliasMatches({
         workspaceId,
         filter: '',
         limit: SEARCH_LIMIT,
       }).load(),
-      repo.query.recentBlocks({
+      // USER-AUTHORED recents, not `recentBlocks`: the latter is every live
+      // non-empty row, and where properties are blocks that includes each
+      // property's generated field and VALUE rows — a value row's content is
+      // the serialized property, so telemetry payloads and the like would be
+      // offered as things to link to, and crowd out real candidates within the
+      // bounded limit. Same query the `((` picker uses.
+      repo.query.recentUserBlocks({
         workspaceId,
         limit: SEARCH_LIMIT,
       }).load(),
@@ -123,7 +129,7 @@ const searchReferenceCandidates = async (
         detail: row.content,
       })
     }
-    for (const block of recentBlocks ?? []) {
+    for (const block of recentRows ?? []) {
       if (seen.has(block.id)) continue
       seen.add(block.id)
       candidates.push({

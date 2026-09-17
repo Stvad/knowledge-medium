@@ -179,11 +179,11 @@ describe('applyPropertyDefinitionSynthesis on an e2ee workspace', () => {
     // block there, which is what `converged: 1` means.
     const plan = await planPropertyDefinitionSynthesis(repo, WS)
     expect(await applyPropertyDefinitionSynthesis(repo, plan))
-      .toEqual({created: 1, converged: 0, skipped: []})
+      .toEqual({created: 1, converged: 0, skipped: [], undoHistoryCleared: true})
 
     const again = await applyPropertyDefinitionSynthesis(repo, plan)
 
-    expect(again).toEqual({created: 0, converged: 1, skipped: []})
+    expect(again).toEqual({created: 0, converged: 1, skipped: [], undoHistoryCleared: false})
     const definitions = await repo.db.getAll<{n: number}>(
       `SELECT COUNT(*) AS n FROM blocks b JOIN block_types t ON t.block_id = b.id
         WHERE t.type = 'property-schema' AND b.workspace_id = ? AND b.deleted = 0

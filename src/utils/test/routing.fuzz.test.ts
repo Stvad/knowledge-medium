@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
+import { utf16UnitArb } from '@/test/arbitraries/utf16'
 import {
   parseLayout,
   parseAppHash,
@@ -74,7 +75,8 @@ const soupFragmentArb = fc.oneof(
   fc.constantFrom('#', '/', ',', '(', ')', ';', '=', '%', '?', '&'),
   fc.constantFrom(...BLOCK_ID_CHARS),
   fc.integer({min: 0, max: 0x1f}).map(n => String.fromCharCode(n)), // control chars
-  fc.string({unit: 'binary', maxLength: 4}), // arbitrary UTF-16 incl. unpaired surrogates
+  fc.string({unit: 'binary', maxLength: 4}), // whole code points, astral included
+  fc.string({unit: utf16UnitArb, maxLength: 4}), // ill-formed UTF-16: lone surrogates
 )
 const soupArb: fc.Arbitrary<string> = fc
   .array(soupFragmentArb, {maxLength: 20})

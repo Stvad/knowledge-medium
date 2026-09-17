@@ -27,6 +27,9 @@ import {
 } from '@/extensions/extensionApprovalStatus.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import { toastExtensionLoadError } from '@/extensions/extensionLoadErrorToast.js'
+import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.js'
+
+const SAFELIST_WAIT_MS = 1500
 
 export function AppRuntimeProvider({
   children,
@@ -167,6 +170,19 @@ export function AppRuntimeProvider({
             },
           }),
         ], {overrides, safeMode, context: runtimeContext})
+
+        // Dynamic extensions render with the deferred Tailwind safelist
+        // (`extension-utilities.css`), which their compile kicked off; wait
+        // for it so their first paint is styled. Bounded: a stalled
+        // stylesheet must not hold the runtime hostage. A workspace with no
+        // dynamic extensions starts the load here instead and waits once;
+        // the apply changes nothing visible there.
+        let waitTimer: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([
+          ensureExtensionUtilitiesCss(),
+          new Promise(resolve => { waitTimer = setTimeout(resolve, SAFELIST_WAIT_MS) }),
+        ])
+        clearTimeout(waitTimer)
 
         if (!cancelled) {
           // Publish both maps atomically now that the resolve is complete.

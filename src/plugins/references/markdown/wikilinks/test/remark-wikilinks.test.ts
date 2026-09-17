@@ -397,9 +397,9 @@ describe('remarkWikilinks', () => {
 
 describe('rewriting a [display]([[alias]]) wikilink, end to end', () => {
   // The claim the rename/merge rewrite rests on, asserted on NODE VALUES
-  // through the real pipeline rather than on node counts (Codex on PR #444
-  // found the bug this pins; counting nodes would have missed it, since
-  // both the broken and the fixed form yield exactly one node).
+  // through the real pipeline rather than on node counts — counting nodes
+  // would have missed it, since both the broken and the fixed form yield
+  // exactly one node.
   const UUID = '11111111-2222-4333-8444-555555555555'
   const pipeline = (md: string) => {
     const processor = unified()
@@ -457,7 +457,7 @@ describe('rewriting a [display]([[alias]]) wikilink, end to end', () => {
 // bare scan. Passes 1 and 2 match the `[display]([[alias]])` wrapper with
 // their own regexes and never call `parseOutermostReferences`, so without
 // an explicit re-check they would render a live link for a span the
-// reference index treats as literal text (Codex on PR #540).
+// reference index treats as literal text.
 const inlineValue = (node: unknown): string => {
   const n = node as {value?: string; children?: unknown[]}
   if (typeof n.value === 'string') return n.value
@@ -495,7 +495,7 @@ describe('MAX_ALIAS_LENGTH holds across all four passes', () => {
   // urlTransform passes a colon-less string through, so a click is a
   // relative navigation away from the page. Assert on the surviving NODE,
   // not just on the absence of a wikilink: "no wikilink" was true of the
-  // clickable-anchor bug too (Codex on PR #540).
+  // clickable-anchor bug too.
   it('pass 1 leaves no navigable link node behind for a rejected alias', () => {
     const tree = transform(`[display]([[${over}]])`)
     const links: string[] = []
@@ -546,7 +546,7 @@ describe('MAX_ALIAS_LENGTH holds across all four passes', () => {
   // Degrading must not eat the display content. Flattening children to a
   // string dropped any leaf carrying neither `value` nor `children` — an
   // `image` is exactly that — so `[![alt](pic.png)]([[…]])` came out as
-  // `[]([[…]])`, losing the picture (Codex on PR #540).
+  // `[]([[…]])`, losing the picture.
   it('keeps an image in the display of a rejected link', () => {
     const tree = transform(`[![alt text](pic.png)]([[${over}]])`)
     expect(collectWikilinks(tree)).toEqual([])

@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * Structural gate for the `repo.undoGroup` facade contract (PR #308
- * follow-up; docs/undo-grouping.md).
+ * Structural gate for the `repo.undoGroup` facade contract
+ * (docs/undo-grouping.md).
  *
  * The facade built by `groupedFacade` delegates everything it does not
  * explicitly override to the real Repo via the prototype chain — which
@@ -81,16 +81,21 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   undoManager: 'getter; delegates to undoManagerFor (see its entry for the mint)',
   valuePresetCores: 'getter read',
   metrics: 'read-only snapshot of counters',
+  metricsSpan: 'read-only span identity (same fields as metrics(), no snapshot cost)',
   exists: 'read',
   countBlocksUsingProperty: 'read',
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
   propertySchemaResolverFor: 'read — returns a resolver bound to an existing immutable snapshot',
   whenPropertyDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
+  whenTypeDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
   assertBackfillMayWrite: 'read — throws or returns; assigns no Repo fields',
+  workspaceRunStaleReason: 'read — compares two Repo fields; assigns nothing',
+  assertBackfillSessionUnchanged: 'read — throws or returns; assigns no Repo fields',
   backfillSyncSettledNow: 'read — samples the injected gate; assigns no Repo fields',
-  syncViewGap: 'read — one query plus a gate sample; assigns no Repo fields',
+  syncViewGap: 'read — one query, an observer sample and a gate sample; assigns no Repo fields',
+  workspaceViewGap: 'read — syncViewGap plus one query; assigns no Repo fields',
   lastSyncedAt: 'getter read (delegates to the PowerSync status)',
 
   // ── writes into a caller-provided tx (grouping follows the caller) ──
@@ -103,18 +108,25 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   awaitReconcileRescans: 'drains a shared job object',
   awaitReprojections: 'drains a shared job object',
   awaitSeedMaterialization: 'drains a shared job object',
-  awaitPropertyDefinitionMigrations: 'drains a shared job object',
   awaitReferenceTargetDerive: 'drains a shared job object',
   awaitWorkspaceBackfills: 'drains a shared job object',
+  awaitDeferredWork: 'awaits the drainers above; assigns no Repo fields',
   drainSyncWorkspace: 'reads this.syncObserver through the chain; never assigns it',
+  rematerializeWorkspace: 'reads this.syncObserver + two queries; assigns no Repo fields',
+  workspaceUnappliedCount: 'read — one query; assigns no Repo fields',
+  workspaceUnappliedExactCount: 'read — one query; assigns no Repo fields',
   flushSyncObserver: 'reads this.syncObserver through the chain; never assigns it',
   onUserError: 'adds the caller listener to a shared CallbackSet; no this-capture',
+  reportUserError: 'notifies a shared CallbackSet; no this-capture',
+  onReadOnlyChange: 'adds the caller listener to a shared CallbackSet; no this-capture',
+  onMetricsReset: 'adds the caller listener to a shared CallbackSet; no this-capture',
   onPropertyEditorOverridesChange: 'delegates to constructor-bound facetBridge',
   onPropertySchemasChange: 'delegates to constructor-bound facetBridge',
   onTypesChange: 'delegates to constructor-bound facetBridge',
   onValuePresetsChange: 'delegates to constructor-bound facetBridge',
   queryActiveWorkspace: 'routes through the constructor-bound query proxy',
   queryBlocks: 'routes through the constructor-bound query proxy',
+  requireNextBlockDelivery: 'routes through the constructor-bound query proxy',
   subscribeActiveWorkspace: 'routes through the constructor-bound query proxy',
   subscribeBlocks: 'routes through the constructor-bound query proxy',
   setFacetRuntime: 'facetBridge write-back closures were constructor-bound to the real repo',
@@ -124,8 +136,11 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   ensureSystemPages: 'kernel-page ensure txs deliberately JOIN the group (round-3 review)',
 
   // ── TS-private internals — not part of the facade consumer surface ──
+  replayGesture: 'private (the shared body of undo/redo; reached only via delegated undo/redo)',
   _replay: 'private (undo/redo internals; reached only via delegated undo/redo)',
   _runAndDispatch: 'private (reached only via overridden tx/undo/redo, this = real repo)',
+  _runAndDispatchInner: 'private (reached only via _runAndDispatch, this = real repo)',
+  hasWriteInFlight: 'getter read (two counters, both written on the real repo)',
   buildAliasCollisionRejection: 'private',
   dispatchMutator: 'private (overridden run/mutate pass groupId explicitly)',
   dispatchQuery: 'private',
@@ -144,16 +159,16 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   drainNameRederives: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   runWorkspaceBackfillNow: 'operator entry point; runs through the same private runner, writes only via the DELEGATED tx',
+  withOperatorBackfillClaim: 'operator entry point; the claim and the body write only via the DELEGATED tx',
+  runClaimedOperatorBackfill: 'private; the claimed half of the operator entry point',
+  takeBackfillClaim: 'private; the pre-claim gate plus the same claim seam runWorkspaceBackfills already reaches',
   propertyRegistryReadyFor: 'read — inspects the registry snapshots; assigns nothing',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
-  schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
   scheduleReferenceTargetNameRederive: 'invoked by constructor-bound facetBridge',
   stampReferenceTargets: 'private; raw source-NULL writes via schedule-driven jobs',
   reprojectOwnersOfStampedFieldRows: 'private; reached only from stampReferenceTargets (schedule-driven jobs)',
   referenceTargetLookupsVia: 'private read — builds resolver closures, assigns no fields',
-  runPropertyDefinitionMigrations: 'private; jobs are enqueued via the facetBridge-bound schedule',
-  runPropertyDefinitionMigrationBatch: 'private; jobs are enqueued via the facetBridge-bound schedule',
   swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
 
   // ── test-only escape hatches (assign fields — never call on a facade) ──
@@ -178,6 +193,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   inFlightOperatorBackfills: 'data field — a Set of in-flight keys; holds no reference to the Repo',
+  requestedWrites: 'data field — a counter written only by _runAndDispatch on the real repo',
   _propertyDefinitionRegistry: 'data field',
   _previousPropertyDefinitionRegistry: 'data field',
   _typeDefinitionRegistry: 'data field',
@@ -218,6 +234,11 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   reprojectionMarkers: 'shared object',
   reprojectionMetrics: 'shared object',
   sameTxProcessors: 'data field',
+  nonTelemetryWrites: 'metrics counter (writers run with real-repo this via overrides)',
+  nonTelemetryFanout: 'shared object (mutated in place, never reassigned outside the constructor)',
+  metricsEpoch: 'metrics counter (bumped only by resetMetrics)',
+  metricsEpochWorkspaceId: 'metrics field (stamped only by resetMetrics, which the facade delegates)',
+  metricsEpochStartedAt: 'metrics field (stamped only by resetMetrics, which the facade delegates)',
   slowestTx: 'metrics field (writers run with real-repo this via overrides)',
   syncObserver: 'data field (writes go through the delegated observer pair)',
   syncObserverDeps: 'data field',
@@ -225,6 +246,8 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   typeTagger: 'collaborator constructor-bound to the real repo — facade hosts its own for addType & co.',
   undoManagers: 'shared map (values capture no repo)',
   userErrorListeners: 'shared CallbackSet',
+  readOnlyListeners: 'shared CallbackSet',
+  metricsResetListeners: 'shared CallbackSet',
   userSchemas: 'stateful service constructor-bound to the real repo — documented group-escaping',
   userTypes: 'stateful service constructor-bound to the real repo — documented group-escaping',
   workspaceBackfillJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
@@ -236,7 +259,6 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   referenceTargetSweepDone: 'shared Set (session bookkeeping)',
   pendingNameRederives: 'shared Map (session bookkeeping)',
   nameRederiveDrainScheduled: 'shared Set (session bookkeeping)',
-  propertyDefinitionMigrationJobs: 'shared job queue (enqueued via constructor-bound facetBridge)',
 }
 
 let sharedDb: TestDb

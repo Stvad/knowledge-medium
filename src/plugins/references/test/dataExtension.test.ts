@@ -33,9 +33,9 @@ describe('referencesDataExtension', () => {
   // DIFFERENT extension. It gets there by precedence, so it stays inside
   // this extension — and therefore inside the references plugin's
   // `systemToggle` boundary, which is what makes disabling References
-  // actually stop it (Codex on PR #444: a bare contribution placed by hand
-  // in the composition roots kept rewriting spans and invalidating edges
-  // with `parseReferences` gone).
+  // actually stop it: a bare contribution placed by hand in the
+  // composition roots kept rewriting spans and invalidating edges with
+  // `parseReferences` gone.
   it('keeps the rename rewriter inside the plugin extension', () => {
     const runtime = resolveFacetRuntimeSync(referencesDataExtension)
     expect([...runtime.read(sameTxProcessorsFacet).keys()])
