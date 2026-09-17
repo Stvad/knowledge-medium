@@ -89,13 +89,11 @@ import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { IS_OBJECT_BAG } from '@/data/internals/propertyKeyScan'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertyNameProp } from '@/data/properties'
-import { keyAtStart } from '@/data/orderKey'
 import {
   isPropertyFieldInstance,
-  propertyFieldContent,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
-import { reconcileFieldValueChildren } from './propertyChildrenProcessor'
+import { reconcileFieldValueChildren, upsertFieldRow } from './propertyChildrenProcessor'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
@@ -784,7 +782,7 @@ export class TxImpl implements Tx {
     // truth that crosses sync. Requires resolved identity (the fieldId names
     // the field row); a boot-window plain schema stays cell-only.
     if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
-      await this.writePropertyValueChild(before, resolvedSchema, value)
+      await this.writePropertyValueChild(before, resolvedSchema, encoded)
     }
     const properties = {...before.properties, [resolvedSchema.name]: encoded}
     await this.writePropertiesBag(id, before, properties, opts)
@@ -913,9 +911,11 @@ export class TxImpl implements Tx {
       for (const schema of unsets) {
         if (isResolvedPropertySchema(schema)) await this.deletePropertyValueChildren(before, schema)
       }
-      for (const {schema, value} of sets) {
+      for (const {schema} of sets) {
         if (!unsetNames.has(schema.name) && isResolvedPropertySchema(schema)) {
-          await this.writePropertyValueChild(before, schema, value)
+          // The bag above already holds this key's ENCODED value — encoding it
+          // a second time here is both waste and a chance to disagree.
+          await this.writePropertyValueChild(before, schema, properties[schema.name])
         }
       }
     }
@@ -1414,42 +1414,19 @@ export class TxImpl implements Tx {
    *  metadata, never the parent write's {skipMetadata}, so the eager
    *  dual-write and the deferred materialize processor stamp them
    *  identically. */
-  private async writePropertyValueChild<T>(
+  private async writePropertyValueChild(
     parent: BlockData,
-    schema: PropertySchema<T> & {readonly fieldId: string},
-    value: T,
+    schema: AnyPropertySchema & {readonly fieldId: string},
+    encoded: unknown,
   ): Promise<void> {
     const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
       SELECT_PROPERTY_FIELD_CHILD_SQL,
       [parent.workspaceId, parent.id, schema.fieldId],
     )
-    const existing = fieldRows.length > 0 ? parseBlockRow(fieldRows[0]!) : undefined
-
-    if (existing) {
-      if (existing.content !== propertyFieldContent(schema.fieldId)) {
-        await this.update(existing.id, {content: propertyFieldContent(schema.fieldId)})
-      }
-      await reconcileFieldValueChildren(this, existing, schema, schema.codec.encode(value))
-      return
-    }
-
-    // Machinery inserts field rows FIRST among children (§9 ordering
-    // decision): fields cluster above content as an emergent default;
-    // orderKey stays user-owned afterwards.
-    const fieldRowId = await this.create({
-      workspaceId: parent.workspaceId,
-      parentId: parent.id,
-      // Born classified (§9): both derived columns pre-stamped in the create
-      // so the row classifies and projects within the same single pass.
-      referenceTargetId: schema.fieldId,
-      isFieldForm: true,
-      orderKey: keyAtStart(null),
-      content: propertyFieldContent(schema.fieldId),
-    })
-    await reconcileFieldValueChildren(
-      this, {id: fieldRowId, workspaceId: parent.workspaceId}, schema,
-      schema.codec.encode(value),
+    const fieldRow = await upsertFieldRow(
+      this, parent, schema.fieldId, fieldRows.map(parseBlockRow),
     )
+    await reconcileFieldValueChildren(this, fieldRow, schema, encoded)
   }
 
   private async requireParentInWorkspace(

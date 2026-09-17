@@ -537,37 +537,10 @@ export const materializePropertyChildrenForExistingRow = async (
       }
     }
 
-    const [primary, ...duplicates] = fieldRows
-    if (primary) {
-      const fieldContent = propertyFieldContent(schema.fieldId)
-      if (primary.content !== fieldContent) {
-        await tx.update(primary.id, {content: fieldContent})
-      }
-      // BEFORE reconciling: collapsing relocates a duplicate field row's
-      // values under the survivor, and a reconcile that ran first would not see
-      // them — so for a list the members hiding under the duplicate survive a
-      // removal and the projection puts them straight back.
-      for (const child of duplicates) {
-        await collapseDuplicateFieldRow(tx, primary.id, child, opts.mayNotRemove)
-      }
-      await reconcileFieldValueChildren(tx, primary, schema, encoded, opts.mayNotRemove)
-    } else {
-      const fieldRowId = await tx.create({
-        workspaceId: row.workspaceId,
-        parentId: row.id,
-        // Born classified (§9): both derived columns pre-stamped so the row
-        // classifies and projects within the same single pass.
-        referenceTargetId: schema.fieldId,
-        isFieldForm: true,
-        orderKey: keyAtStart(null),
-        content: propertyFieldContent(schema.fieldId),
-      })
-      await reconcileFieldValueChildren(
-        tx, {id: fieldRowId, workspaceId: row.workspaceId}, schema, encoded,
-      )
-      // No duplicates to collapse on this branch: they are the tail of the
-      // same empty `fieldRows`.
-    }
+    const fieldRow = await upsertFieldRow(
+      tx, row, schema.fieldId, fieldRows, opts.mayNotRemove,
+    )
+    await reconcileFieldValueChildren(tx, fieldRow, schema, encoded, opts.mayNotRemove)
   }
 }
 
@@ -622,6 +595,52 @@ const materializePropertiesForChangedRow = async (
     tx, row.after, lookups, untouched,
     {undecodable: 'skip', reviveTombstoned: true, mayNotRemove: true},
   )
+}
+
+/** Find-or-create the field row for `fieldId` under `owner`, keeping its
+ *  content canonical and folding any duplicate field rows into the survivor.
+ *  Returns the row whose value children the caller then reconciles.
+ *
+ *  Shared by `tx.setProperty`'s eager dual-write and the deferred materialize
+ *  processor for the same reason `reconcileFieldValueChildren` is: the row the
+ *  two writers find-or-create has to be the same row, born with the same
+ *  derived columns.
+ *
+ *  Collapse happens HERE, before the caller reconciles: collapsing relocates a
+ *  duplicate's value children under the survivor, and a reconcile that ran
+ *  first would not see them — so for a list the members hiding under the
+ *  duplicate survive a removal and the projection puts them straight back. */
+export const upsertFieldRow = async (
+  tx: Tx,
+  owner: Pick<BlockData, 'id' | 'workspaceId'>,
+  fieldId: string,
+  existingRows: readonly BlockData[],
+  /** See {@link MaterializeOptions.mayNotRemove}. */
+  mayNotRemove = false,
+): Promise<Pick<BlockData, 'id' | 'workspaceId'>> => {
+  const content = propertyFieldContent(fieldId)
+  const [primary, ...duplicates] = existingRows
+  if (primary) {
+    if (primary.content !== content) await tx.update(primary.id, {content})
+    for (const duplicate of duplicates) {
+      await collapseDuplicateFieldRow(tx, primary.id, duplicate, mayNotRemove)
+    }
+    return primary
+  }
+  // Machinery inserts field rows FIRST among children (§9 ordering
+  // decision): fields cluster above content as an emergent default;
+  // orderKey stays user-owned afterwards.
+  const id = await tx.create({
+    workspaceId: owner.workspaceId,
+    parentId: owner.id,
+    // Born classified (§9): both derived columns pre-stamped in the create so
+    // the row classifies and projects within the same single pass.
+    referenceTargetId: fieldId,
+    isFieldForm: true,
+    orderKey: keyAtStart(null),
+    content,
+  })
+  return {id, workspaceId: owner.workspaceId}
 }
 
 /**
