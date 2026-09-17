@@ -220,10 +220,17 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  * committing a definition change it cannot fan out.
  *
  * A candidate dropped here belongs to the shadowing model's own reconcile
- * (#389 item 8), not to a one-shot re-key. Its definition row still commits,
- * so its consumers keep cells under a name it no longer holds until that
- * reconcile reaches them — whether this should REFUSE the transaction instead,
- * as an unbuildable rename with consumers already does, is #1028.
+ * (#389 item 8), not to a one-shot re-key.
+ *
+ * WHAT NONE OF THIS REACHES: a name's cells outlive the definition that owned
+ * it. Every way of leaving a name — a refused rename, an unbuildable one, a
+ * deletion, losing the definition metadata — leaves that definition's consumers
+ * keyed under it, because the fan-out only visits consumers of definitions
+ * whose own fan-out was kept. Whoever takes the name next then reads those
+ * values through its own schema. Contesting the name does not repair them and
+ * strands the arriving definition's consumers as well; the choices that do are
+ * a reconcile, a refusal, or retiring the departing definition's cells, and
+ * picking between them is #1028.
  */
 export interface NameClaim {
   /** Definitions that will STILL hold this name once the tx commits, winner

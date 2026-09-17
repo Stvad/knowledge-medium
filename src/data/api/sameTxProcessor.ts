@@ -233,8 +233,10 @@ export interface SameTxCtx {
    *  claimant, and asking who owns that name while the winner still holds it
    *  names the renamer itself; renaming a SHADOWED definition is a different
    *  refusal that "does it resolve" conflates with "does it have a codec".
-   *  `null` — never an empty list — when this workspace has NO registry
-   *  snapshot (a genuinely foreign workspace, or before its projection primes).
+   *  `null` — never an empty list — whenever this workspace's registry is not
+   *  LIVE: a foreign workspace, one whose projection has not primed, or the
+   *  retained previous workspace, whose snapshot stops updating when the
+   *  projector disposes its subscription on a pin.
    *  Empty would read as "nobody claims this name", which is the permissive
    *  answer to every question a caller asks here; the resolvers fail closed in
    *  that situation and so must anything built on this. */

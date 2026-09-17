@@ -806,32 +806,24 @@ describe('codec change', () => {
 
 describe('a workspace this client cannot judge', () => {
   it('refuses the edit rather than committing it without its fan-out', async () => {
-    // `propertySchemaResolverFor` retains only the active workspace and the
-    // immediately previous one, so two further switches evict this one. The
-    // registry then answers nothing for it — which is not a verdict that its
-    // names are free, it means the fan-out cannot run at all. Committing the
-    // definition row alone would leave every consumer in the old encoding with
-    // nothing left to repair them, so the whole tx is refused.
+    // Editing a definition in a workspace that is no longer active: the claim
+    // lookup answers nothing, which is not a verdict that its names are free —
+    // it means the fan-out cannot run at all. Committing the definition row
+    // alone would leave every consumer in the old encoding with nothing left to
+    // repair them, so the whole tx is refused.
     await seedWorkspace('children')
     await seedWorkspace('children', 'ws-elsewhere')
-    await seedWorkspace('children', 'ws-further')
     const repo = await setupDefinition()
     await seedProperty(repo, 'p', 'status', 'done')
     const errors = collectUserErrors(repo)
 
-    // Retention keeps the last workspace that actually BUILT a registry, so the
-    // intermediate one needs a definition of its own to displace this one.
+    // ONE switch is enough: name ownership is only judged against the ACTIVE
+    // workspace's registry, because the retained previous snapshot is frozen
+    // the moment the projector disposes its subscription.
     repo.setActiveWorkspaceId('ws-elsewhere')
-    await createDefinition(repo, 'field-elsewhere', 'other', 'string', 'ws-elsewhere')
     await vi.waitFor(() => {
-      if (repo.propertyDefinitions?.workspaceId !== 'ws-elsewhere') {
-        throw new Error('[test] ws-elsewhere has not primed')
-      }
-    }, {timeout: 3000})
-    repo.setActiveWorkspaceId('ws-further')
-    await vi.waitFor(() => {
-      if (repo.propertySchemaResolverFor(WS).resolve('status').status === 'resolved') {
-        throw new Error('[test] the definition\'s workspace is still retained')
+      if (repo.propertyDefinitions?.workspaceId === WS) {
+        throw new Error('[test] the registry has not moved off the definition\'s workspace')
       }
     }, {timeout: 3000})
     await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({

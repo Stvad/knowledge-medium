@@ -473,6 +473,14 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const propertyDefinitionsClaimingName = (
     workspaceId: string, name: string,
   ): readonly string[] | null => {
+    // ACTIVE workspace only, which is stricter than the resolvers beside it.
+    // They serve the immediately-previous workspace from a retained snapshot so
+    // a cross-workspace seed write still resolves; that snapshot is frozen —
+    // `ProjectorRuntime.pinWorkspace` disposes the outgoing subscription — so
+    // it cannot see a definition sync created, revived, renamed or deleted
+    // there afterwards, and can be arbitrarily stale. Good enough to decode a
+    // known handle, not to decide who OWNS a name.
+    if (propertySchemaWorkspaceId !== workspaceId) return null
     const snapshot = propertyDefinitionRegistryForWorkspace(workspaceId)
     return snapshot === null ? null : propertyDefinitionClaimantsForName(snapshot, name)
   }
