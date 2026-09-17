@@ -1,1 +1,0 @@
-import{cF as e}from"../../chunks/app-tPYNoP34.js";export{e as staticDataExtensions};

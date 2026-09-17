@@ -1,1 +1,0 @@
-import{e_ as e,n_ as t,t_ as n}from"../../../chunks/app-tPYNoP34.js";export{e as getOrCreateShortcutsBlock,n as journalShortcutBlockId,t as shortcutsBlockId};

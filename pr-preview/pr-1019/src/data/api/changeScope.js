@@ -1,1 +1,0 @@
-import{c4 as e,d4 as t,f4 as n,l4 as r,m4 as i,o4 as a,p4 as o,s4 as s,u4 as c}from"../../../chunks/app-tPYNoP34.js";export{a as CHANGE_SCOPE_POLICIES,s as ChangeScope,e as isChangeScope,r as policyForScope,c as scopeAllowedInReadOnly,t as scopeIsUndoable,n as scopePoliciesEquivalent,o as scopeUploadsToServer,i as sourceForScope};

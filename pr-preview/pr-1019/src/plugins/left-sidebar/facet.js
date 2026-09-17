@@ -1,1 +1,0 @@
-import{i_ as e,r_ as t}from"../../../chunks/app-tPYNoP34.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

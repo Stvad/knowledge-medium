@@ -1,1 +1,0 @@
-import{D$ as e,E$ as t}from"../../chunks/app-tPYNoP34.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

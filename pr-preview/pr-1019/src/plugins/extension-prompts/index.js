@@ -1,1 +1,0 @@
-import{ew as e,tw as t}from"../../../chunks/app-tPYNoP34.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

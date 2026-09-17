@@ -1,1 +1,0 @@
-import{XN as e,ZN as t}from"../../../chunks/app-tPYNoP34.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

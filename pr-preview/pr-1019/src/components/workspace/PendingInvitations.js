@@ -1,1 +1,0 @@
-import{P_ as e}from"../../../chunks/app-tPYNoP34.js";export{e as PendingInvitations};
