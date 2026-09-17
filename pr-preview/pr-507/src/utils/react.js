@@ -1,2 +1,1 @@
-import e from"../../node_modules/.pnpm/react-use@17.6.0_react-dom@19.2.6_react@19.2.6__react@19.2.6/node_modules/react-use/esm/useMedia.js";import{MOBILE_BREAKPOINT_QUERY as t}from"./viewport.js";var n=()=>e(t,!1),r=()=>e(`(pointer: coarse)`,!1);export{n as useIsMobile,r as usePointerCoarse};
-//# sourceMappingURL=react.js.map
+import{DD as e,ED as t}from"../../chunks/app-dHLzNFYH.js";export{t as useIsMobile,e as usePointerCoarse};

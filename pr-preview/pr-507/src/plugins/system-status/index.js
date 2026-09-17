@@ -1,2 +1,1 @@
-import{systemToggle as e}from"../../facets/togglable.js";import{headerItemsFacet as t}from"../../extensions/core.js";import{SystemStatusHeaderItem as n}from"./SystemStatusHeaderItem.js";var r={id:`system-status.header`,region:`end`,component:n},i=e({id:`system:sync-status`,name:`System status`,description:`Header status indicator — sync state plus health signals (data integrity, storage, app updates).`}).of([t.of(r,{source:`system-status`,precedence:40})]);export{r as systemStatusHeaderItem,i as systemStatusPlugin};
-//# sourceMappingURL=index.js.map
+import{ia as e,ra as t}from"../../../chunks/app-dHLzNFYH.js";export{t as systemStatusHeaderItem,e as systemStatusPlugin};

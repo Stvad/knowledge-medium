@@ -1,1 +1,1 @@
-import{runAnalyzeIfStale as e,runAnalyzeNow as t}from"./internals/clientSchema.js";export{e as runAnalyzeIfStale,t as runAnalyzeNow};
+import{IW as e,LW as t}from"../../chunks/app-dHLzNFYH.js";export{e as runAnalyzeIfStale,t as runAnalyzeNow};

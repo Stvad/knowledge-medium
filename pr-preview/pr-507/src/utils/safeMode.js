@@ -1,2 +1,1 @@
-var e=e=>e!==null,t=e=>new URLSearchParams(e).has(`safeMode`),n=e=>{let t=new URL(e);return t.searchParams.set(`safeMode`,``),t.toString()},r=(e=window.location)=>{let t=n(e.href);if(t===e.href){e.reload();return}e.assign(t)};export{n as buildSafeModeUrl,e as hasSafeModeSearchParam,r as reloadInSafeMode,t as searchHasSafeModeFlag};
-//# sourceMappingURL=safeMode.js.map
+import{CC as e,SC as t,TC as n,wC as r}from"../../chunks/app-dHLzNFYH.js";export{t as buildSafeModeUrl,e as hasSafeModeSearchParam,r as reloadInSafeMode,n as searchHasSafeModeFlag};

@@ -1,2 +1,1 @@
-import{completionKeymap as e}from"../../node_modules/.pnpm/@codemirror_autocomplete@6.20.2/node_modules/@codemirror/autocomplete/dist/index.js";var t=({state:e,pos:t})=>{let n=e.selection.main;return t===n.from?n.to:t},n=e=>e.key===`Escape`||e.mac===`Escape`||e.linux===`Escape`||e.win===`Escape`,r=e.filter(e=>!n(e)).map(e=>({...e,stopPropagation:!0}));export{r as completionKeymapWithEscapeFallthrough,t as completionQueryEnd};
-//# sourceMappingURL=codemirrorCompletion.js.map
+import{lw as e,uw as t}from"../../chunks/app-dHLzNFYH.js";export{e as completionKeymapWithEscapeFallthrough,t as completionQueryEnd};

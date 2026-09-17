@@ -1,2 +1,1 @@
-var e=0,t=0,n=n=>{n===`refocus`?e++:t++;let r=!1;return()=>{r||(r=!0,n===`refocus`?e--:t--)}},r=()=>t>0?`yield`:e>0?`refocus`:`exit`,i=400,a=async(e,t)=>{let r=n(e);try{return await t()}finally{setTimeout(r,i)}};export{n as acquireEditModeKeepalive,r as resolveEditModeKeepalive,a as withEditModeKeepalive};
-//# sourceMappingURL=editModeKeepalive.js.map
+import{FO as e,NO as t,PO as n}from"../../chunks/app-dHLzNFYH.js";export{t as acquireEditModeKeepalive,n as resolveEditModeKeepalive,e as withEditModeKeepalive};

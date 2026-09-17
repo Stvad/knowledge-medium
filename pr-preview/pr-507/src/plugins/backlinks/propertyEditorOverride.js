@@ -1,2 +1,1 @@
-import{definePropertyEditorOverride as e}from"../../data/api/propertySchema.js";import"../../data/api/index.js";import{dailyNoteBacklinksDefaultsProp as t}from"./dailyNoteDefaults.js";import{BacklinksFilterPropertyEditor as n}from"./BacklinksFilterPropertyEditor.js";var r=e(t,{label:`Daily note backlinks defaults`,Editor:n});export{r as dailyNoteBacklinksDefaultsUi};
-//# sourceMappingURL=propertyEditorOverride.js.map
+import{Zu as e}from"../../../chunks/app-dHLzNFYH.js";export{e as dailyNoteBacklinksDefaultsUi};

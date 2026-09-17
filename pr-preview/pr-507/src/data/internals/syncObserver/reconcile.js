@@ -1,15 +1,1 @@
-var e=(e,t,n)=>e===`defer`?{kind:`defer`}:n.hasPendingUpload||n.localUpdatedAt!==null&&n.localUpdatedAt===t&&n.localUpdatedAt!==0?{kind:`skip-stale`}:{kind:`apply`,decrypt:e===`decrypt`},t=`
-  SELECT why FROM (
-    SELECT 'deep' AS why FROM (SELECT 1 FROM blocks_synced_changes LIMIT 1 OFFSET ?)
-    UNION ALL
-    SELECT 'draining' AS why
-      FROM (SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?) c
-      LEFT JOIN blocks_synced s ON s.id = c.id
-      LEFT JOIN blocks b ON b.id = c.id
-     WHERE c.op = 'delete'
-        OR s.id IS NULL
-        OR b.id IS NULL
-        OR b.updated_at = 0
-        OR b.updated_at <> s.updated_at
-  ) LIMIT 1`,n=1e4;export{n as STAGED_SCAN_LIMIT,t as STAGED_VIEW_GAP_SQL,e as decideStagingRow};
-//# sourceMappingURL=reconcile.js.map
+import{CG as e,DG as t,EG as n,SG as r,TG as i,bG as a,vG as o,wG as s,xG as c,yG as l}from"../../../../chunks/app-dHLzNFYH.js";export{o as SEED_STAGING_NEEDS_APPLY_SQL,l as STAGED_SCAN_LIMIT,a as STAGED_VIEW_GAP_SQL,c as WORKSPACE_UNAPPLIED_COUNT_CAP,r as WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,e as WORKSPACE_UNAPPLIED_IDS_SQL,s as WORKSPACE_UNAPPLIED_SQL,i as blocksAlreadyReflects,n as decideStagingRow,t as localHoldsStagedVersion};

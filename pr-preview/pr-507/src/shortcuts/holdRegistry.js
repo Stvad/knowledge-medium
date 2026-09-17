@@ -1,2 +1,1 @@
-import{CallbackSet as e}from"../utils/callbackSet.js";var t=new e(`armed-holds`),n=e=>t.add(e),r=()=>{t.notify()};export{r as cancelArmedHolds,n as registerArmedHold};
-//# sourceMappingURL=holdRegistry.js.map
+import{Jw as e,qw as t}from"../../chunks/app-dHLzNFYH.js";export{t as cancelArmedHolds,e as registerArmedHold};

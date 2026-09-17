@@ -1,2 +1,1 @@
-var e=e=>e,t=(e,t)=>t.decode(t.encode(e.defaultValue));export{e as definePresetCore,t as normalizePresetDefault};
-//# sourceMappingURL=valuePresetCore.js.map
+import{_2 as e,v2 as t}from"../../../chunks/app-dHLzNFYH.js";export{e as definePresetCore,t as normalizePresetDefault};
