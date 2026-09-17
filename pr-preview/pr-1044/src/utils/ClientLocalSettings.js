@@ -1,1 +1,1 @@
-import{aT as e,oT as t}from"../../chunks/app-C3DVkJLH.js";export{e as ClientLocalSettings,t as clientLocalSettings};
+import{aT as e,oT as t}from"../../chunks/app-CVVHPtFp.js";export{e as ClientLocalSettings,t as clientLocalSettings};

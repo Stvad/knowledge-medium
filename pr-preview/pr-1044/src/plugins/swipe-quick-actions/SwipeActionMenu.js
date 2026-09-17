@@ -1,1 +1,1 @@
-import{cS as e}from"../../../chunks/app-C3DVkJLH.js";export{e as SwipeActionMenu};
+import{cS as e}from"../../../chunks/app-CVVHPtFp.js";export{e as SwipeActionMenu};
