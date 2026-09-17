@@ -76,8 +76,9 @@ import {
   type SameTxCtx,
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
-import { presetIdProp } from '@/data/properties'
+import { presetConfigProp, presetIdProp } from '@/data/properties'
 import { peekRowProperty } from '@/data/rowProperty'
+import { jsonValuesEqual } from './jsonCanonical'
 import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
@@ -93,6 +94,30 @@ import {
 } from '@/data/propertyChildren'
 
 export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR_NAME = 'core.migratePropertyDefinition'
+
+/** Did anything the codec is BUILT FROM change?
+ *
+ *  `tryBuildSchema` derives a codec from exactly two properties of the row — the
+ *  preset id and the preset config — so comparing those answers the question
+ *  exactly, where every observable derived from the codec only approximates it.
+ *  Three review rounds went to that approximation: `codec.type` cannot tell
+ *  `optional-string` from `string` (they report the same one), a preset id alone
+ *  cannot see a configurable preset whose `build(config)` returns a different
+ *  codec, and the two together still miss a config edit that moves between
+ *  codecs SHARING a type. The inputs have no such blind spot.
+ *
+ *  Wider than the registry diff this replaced, which treated a config edit as no
+ *  change. The extra cost is re-parsing a property's value children on a config
+ *  edit that did not move the encoding — which writes nothing, since
+ *  `value.content !== canonical` guards it, and reports nothing, because a codec
+ *  that reads leniently across such an edit (enum keeping a value whose option
+ *  was removed) decodes it successfully and is never counted. */
+const codecInputsChanged = (before: BlockData, after: BlockData): boolean =>
+  peekRowProperty(before, presetIdProp) !== peekRowProperty(after, presetIdProp)
+  || !jsonValuesEqual(
+    peekRowProperty(before, presetConfigProp),
+    peekRowProperty(after, presetConfigProp),
+  )
 
 /** `tryBuildSchema` answers `null` for a preset it cannot find or configure, but
  *  `preset.build` is extension code and can THROW. The projector already treats
@@ -176,9 +201,10 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  * that kept ANOTHER, so this iterates to a fixpoint.
  */
 export interface NameClaim {
-  /** Claimants at TX START that this tx does not REMOVE, winner first. The head
-   *  is the one that projects — and a deleted owner hands that role to the next
-   *  claimant, which is why removals are filtered out rather than noted. */
+  /** Claimants at TX START that will still hold the name once this tx commits,
+   *  winner first. The head is the one that projects — and an owner that leaves
+   *  hands that role to the next claimant, which is why departures are filtered
+   *  out rather than noted. */
   readonly atTxStart: readonly string[]
   /** Definitions this tx leaves live under the name that did NOT hold it at tx
    *  start AND are not among the candidates — a created row, or a revived
@@ -329,19 +355,8 @@ const collectChanges = (
     // required one reads back as literal text — so switching between twins
     // changes the stored encoding without changing the type, and the
     // seed-identity rules freeze preset AND codec for exactly that reason.
-    // Neither test subsumes the other, so both run. A preset id catches twins
-    // that share a type; the BUILT type catches a configurable preset whose
-    // `build(config)` returns a different codec under the same id, which only
-    // extension presets do — and only the built codec can report it, since the
-    // id did not move. (An earlier round dropped the type comparison as
-    // redundant; it is redundant only for kernel presets, whose build ignores
-    // config for this purpose.)
-    //
-    // A config edit that changes neither is deliberately NOT a change, keeping
-    // the choice the registry diff made: the encoding is the same, and a codec
-    // that reads leniently across such an edit — enum keeping a value whose
-    // option was removed — means to PRESERVE it rather than have a pass sweep
-    // every consumer to rewrite it identically.
+    // Compared by the codec's INPUTS rather than by anything derived from the
+    // codec it built — see `codecInputsChanged`.
     //
     // Read from the block's own rows, not from the registry: the tx-start
     // snapshot is at-or-older than `before`, so a change an earlier tx already
@@ -354,9 +369,7 @@ const collectChanges = (
     // preset or config was broken and has now been repaired re-encodes on the
     // repairing tx, which is the only moment anything can.
     const encodingChanged = afterSchema !== null && (
-      beforeSchema === null
-      || peekRowProperty(before, presetIdProp) !== peekRowProperty(after, presetIdProp)
-      || beforeSchema.codec.type !== afterSchema.codec.type
+      beforeSchema === null || codecInputsChanged(before, after)
     )
     // Every write to a definition block's bag reaches this processor —
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
@@ -380,16 +393,24 @@ const collectChanges = (
   // still filed under its old name. A revived or created claimant never becomes
   // a candidate either — nothing about its own name changed — so this is the
   // only place it can be seen.
-  // Claimants this tx REMOVES. They sit in the tx-start list and can never
-  // reach `vacating`, which holds only kept rename candidates — so without
-  // this, renaming onto the name of a definition deleted in the same tx is
-  // refused as contested by a claimant that will not exist, while the
-  // definition row still takes the new name and its consumers keep the old key.
-  const departed = new Set<string>()
+  // Definitions that will NOT hold, once this tx commits, the name the tx-start
+  // registry files them under — deleted, or renamed away without being
+  // candidates. They can never reach `vacating`, which holds only kept
+  // candidates, so without this they contest a name they are about to leave:
+  // the fan-out is dropped while the definition rows take their new names
+  // anyway, and the consumers keep keys nothing answers to.
+  //
+  // Static, unlike `vacating`, and that is the difference between the two: a
+  // candidate might be dropped by the refusal and keep its name, whereas
+  // nothing here can be — a deletion is not this pass's to refuse, and an
+  // unbuildable rename is either refused outright (which aborts the tx) or
+  // committed. Each appears in `atTxStart` only under the name it is leaving,
+  // so filtering by fieldId is precise.
+  const released = new Set<string>(unbuildableRenames)
   for (const {before, after} of changedRows) {
     if (before === null || before.deleted) continue
     if ((after === null || after.deleted) && parsePropertyDefinitionMetadata(before)) {
-      departed.add(before.id)
+      released.add(before.id)
     }
   }
   const candidateIds = new Set(candidates.map(candidate => candidate.fieldId))
@@ -427,7 +448,7 @@ const collectChanges = (
       return atTxStart === null
         ? null
         : {
-          atTxStart: atTxStart.filter(fieldId => !departed.has(fieldId)),
+          atTxStart: atTxStart.filter(fieldId => !released.has(fieldId)),
           arriving: arrivingByName.get(name) ?? [],
         }
     }),

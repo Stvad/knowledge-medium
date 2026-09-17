@@ -726,6 +726,38 @@ describe('codec change', () => {
     expect(await rowContent(valueRowId)).toBe('42')
   })
 
+  it('re-encodes a config change between codecs that SHARE a type', async () => {
+    // `optional-string` and `string` report the same `codec.type`, and the
+    // preset id does not move either — so only the codec's INPUTS can see this.
+    const configurable = {
+      id: 'test-optionality-preset',
+      configCodec: {
+        type: 'test-config',
+        encode: (c: unknown) => c,
+        decode: (j: unknown) => j ?? {},
+      },
+      build: (config: {required?: boolean} | undefined) =>
+        config?.required === true ? codecs.string : codecs.optionalString,
+      defaultValue: '',
+    } as unknown as AnyValuePresetCore
+
+    await seedWorkspace('children')
+    const repo = await setupDefinition(configurable.id, [configurable], 'string')
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 'done')
+    // `null` is what the optional codec writes for unset; the required one reads
+    // the same text as the literal string. The cell still says `done` until
+    // something reprojects it from the child.
+    await setRawValueContent(valueRowId, 'null')
+    expect(await cell('p')).toEqual({status: 'done'})
+
+    await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, {required: true}),
+      {scope: ChangeScope.BlockDefault})
+
+    // Reprojected under the new config, which only happens if the switch was
+    // recognized at all — neither the preset id nor `codec.type` moved.
+    expect(await cell('p')).toEqual({status: 'null'})
+  })
+
   it('refuses a rename when NEITHER row builds a codec and consumers exist', async () => {
     // Nothing can reproject the cell, and the transaction that eventually
     // repairs the preset cannot drop the old key either — by then both sides
@@ -856,6 +888,31 @@ describe('claimants the batch itself adds or removes', () => {
     // Refused: the consumer keeps its old key rather than writing a value under
     // a name the restored definition is about to own.
     expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('lets a rename through onto a name an UNBUILDABLE rename vacates', async () => {
+    // The unused definition's rename is allowed (no consumers to strand) but it
+    // is not a candidate, so it cannot reach `vacating` — and it would contest
+    // the name it is about to leave, dropping the other fan-out while both
+    // definition rows committed anyway.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await createDefinition(repo, FIELD_PEER, 'archived', 'string')
+    await awaitDefinition(repo, 'archived', 'string')
+    await retype(repo, FIELD_PEER, 'no-such-preset')
+    await vi.waitFor(() => {
+      if (repo.propertySchemas.get('archived') !== undefined) {
+        throw new Error('[test] the peer still has behaviour in the registry')
+      }
+    }, {timeout: 3000})
+
+    await repo.tx(async tx => {
+      await tx.setProperty(FIELD_PEER, propertyNameProp, 'retired')
+      await tx.setProperty(FIELD_ID, propertyNameProp, 'archived')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cell('p')).toEqual({archived: 'done'})
   })
 
   it('refuses an in-place RE-TYPE when a definition is restored under its name', async () => {
