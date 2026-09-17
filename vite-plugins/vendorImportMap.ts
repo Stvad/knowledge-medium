@@ -55,11 +55,6 @@ const CJS_INPUT_PREFIX = 'virtual:km-vendor-cjs/'
  *  would parse a `.cjs` id as CommonJS and reject the facade's `import`. */
 const FACADE_ID_PREFIX = '\0km-vendor:'
 const DEV_FACADE_ID_SUFFIX = '.cjs'
-const facadeSpecifier = (id: string): string | undefined => {
-  if (!id.startsWith(FACADE_ID_PREFIX)) return undefined
-  const rest = id.slice(FACADE_ID_PREFIX.length)
-  return rest.endsWith(DEV_FACADE_ID_SUFFIX) ? rest.slice(0, -DEV_FACADE_ID_SUFFIX.length) : rest
-}
 
 /** The automatic JSX runtime `@vitejs/plugin-react` emits into every
  *  transformed module; no source file names it. Applies when `react` is a
@@ -186,8 +181,10 @@ const ENUMERATE_EXPORTS =
  *  module-level side effects must not share the build's event loop —
  *  react-dom's browser server build opens a MessageChannel that would keep
  *  `vite build` alive after it finishes. The child inherits NODE_ENV, so the
- *  names match the build the bundler picks. Loud on failure: a shim with no
- *  names is the link error this exists to prevent, one step later. */
+ *  names match the build the bundler picks. Memoized per file for the life of
+ *  the process: a dependency changed under a running dev server needs a
+ *  restart. Loud on failure: a shim with no names is the link error this
+ *  exists to prevent, one step later. */
 const cjsExportNamesByFile = new Map<string, string[]>()
 const cjsExportNames = (file: string): string[] => {
   const memo = cjsExportNamesByFile.get(file)
@@ -228,25 +225,33 @@ export const cjsShimSource = (specifier: string, names: readonly string[]): stri
 }
 
 /** The dev facade for an ESM package. `export *` never forwards `default`,
- *  hence the namespace read. Accepted divergence: a package with no default
- *  export links `default` as undefined here, where the production facade has
- *  no such binding and importing it is a link error. The build is the
- *  contract, and this is more permissive for that one name only. */
+ *  hence the namespace read. Accepted divergences, the build being the
+ *  contract: a package with no default export links `default` as undefined
+ *  here, where the production facade has no such binding and importing it is
+ *  a link error; and a package whose ESM entry only wraps CommonJS would get
+ *  `export *` here while Vite's optimizer flattens it to a default — none in
+ *  the dependency set today. */
 const esmFacadeSource = (specifier: string): string => {
   const from = JSON.stringify(specifier)
   return `import * as m from ${from};\nexport * from ${from};\nexport default m.default;\n`
 }
 
-/** Facade source for `specifier` given the file the bundler resolves it to. */
-export const facadeSource = (specifier: string, file: string, kind: ModuleKind = moduleKind(file)): string =>
+/** Facade source for `specifier` given the file the bundler resolves it to
+ *  and what it sees in it. */
+export const facadeSource = (specifier: string, file: string, kind: ModuleKind): string =>
   kind === 'cjs' ? cjsShimSource(specifier, cjsExportNames(file)) : esmFacadeSource(specifier)
 
 export const vendorImportMapPlugin = ({rootDir}: {rootDir: string}): Plugin => {
   const exposed = exposedVendorSpecifiers(rootDir)
   const exposedSet = new Set(exposed)
   let isBuild = false
-  const facadeId = (specifier: string): string =>
-    `${FACADE_ID_PREFIX}${specifier}${isBuild ? '' : DEV_FACADE_ID_SUFFIX}`
+  const facadeIdSuffix = (): string => (isBuild ? '' : DEV_FACADE_ID_SUFFIX)
+  const facadeId = (specifier: string): string => `${FACADE_ID_PREFIX}${specifier}${facadeIdSuffix()}`
+  const facadeSpecifier = (id: string): string | undefined => {
+    const suffix = facadeIdSuffix()
+    if (!id.startsWith(FACADE_ID_PREFIX) || !id.endsWith(suffix)) return undefined
+    return id.slice(FACADE_ID_PREFIX.length, id.length - suffix.length)
+  }
   let resolveFile: ((specifier: string) => Promise<string>) | undefined
   type Resolved = {file: string; kind: ModuleKind}
   const resolved = new Map<string, Resolved>()
@@ -281,9 +286,9 @@ export const vendorImportMapPlugin = ({rootDir}: {rootDir: string}): Plugin => {
       isBuild = config.command === 'build'
       // Vite's resolver, not Node's: the browser conditions decide which entry
       // the bundler sees, and the kind and the export names must follow it.
-      const resolve = config.createResolver()
+      const viteResolve = config.createResolver()
       resolveFile = async specifier => {
-        const file = await resolve(specifier, undefined, false, false)
+        const file = await viteResolve(specifier, undefined, false, false)
         if (!file) throw new Error(`vendor-import-map: cannot resolve ${specifier}`)
         return file.split('?')[0]
       }

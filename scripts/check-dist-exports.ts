@@ -1,7 +1,8 @@
 /**
- * Post-build gate, two contracts: every export the extension API catalog names
- * must survive into the emitted module, and the boot graph must have bundled
- * into one chunk (the shape gate at the end).
+ * Post-build gate, three contracts: every export the extension API catalog
+ * names must survive into the emitted module; the boot graph must have bundled
+ * into one chunk; and every vendor facade the importmap names must be a pure
+ * re-export over chunks the app ships.
  *
  * The failure is SILENT: every module is a build entry written to its own
  * path whether or not its exports survived, so a dropped export leaves the
@@ -20,6 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { extensionApiCatalog } from '../src/extensions/apiCatalog'
+import { facadeImportTargets, facadeResidue } from '../vite-plugins/facadeShape'
 import { readImportMap } from '../vite-plugins/importMapHtml'
 import { VENDOR_DIR } from '../vite-plugins/vendorImportMap'
 
@@ -127,32 +129,18 @@ const importMap = readImportMap(fs.readFileSync(path.join(distDir, 'index.html')
 const vendorEntries = Object.entries(importMap.imports ?? {}).filter(([, target]) => target.startsWith(`./${VENDOR_DIR}/`))
 if (vendorEntries.length === 0) fail('index.html importmap has no vendor entries; vendorImportMapPlugin did not run')
 if (Object.values(importMap.imports ?? {}).some(target => /^https?:/.test(target))) fail('index.html importmap maps a specifier to a remote URL')
-// Everything a facade may contain. Anything left after stripping these is the
-// package's own code, i.e. a second copy.
-const FACADE_NOISE = new RegExp(
-  [
-    /import\s*\{[^}]*\}\s*from\s*["'][^"']+["'];?/, // the re-export imports
-    /export\s*\{[^}]*\};?/, // the export clause (default included, as `x as default`)
-    /["']use client["'];?/, // a directive some packages carry
-    // The CommonJS shim's one statement: the interop call, optionally the
-    // `default` read, and the names destructured off the namespace.
-    /var\s+\w+\s*=\s*\w+\(\w+\(\)\)(?:\s*,\s*\w+\s*=\s*\w+\.default)?(?:\s*,\s*\{[^}]*\}\s*=\s*\w+)?;/,
-    /\/\/#\s*sourceMappingURL=.*$/,
-  ].map(re => re.source).join('|'),
-  'gm',
-)
-const facadeFile = (target: string): string => path.join(distDir, target.slice('./'.length))
+const facadeRel = (target: string): string => target.slice('./'.length)
 for (const [specifier, target] of vendorEntries) {
-  const rel = target.slice('./'.length)
-  const file = facadeFile(target)
+  const rel = facadeRel(target)
+  const file = path.join(distDir, rel)
   if (!fs.existsSync(file)) fail(`importmap maps ${specifier} to ${target}, which was not emitted`)
   const text = fs.readFileSync(file, 'utf8')
-  for (const [, from] of text.matchAll(/\b(?:from|import)\s*["']([^"']+)["']/g)) {
+  for (const from of facadeImportTargets(text)) {
     const resolved = path.resolve(path.dirname(file), from)
     if (!resolved.startsWith(path.join(distDir, 'chunks') + path.sep)) fail(`${rel} imports ${from}, not a chunk`)
     if (!fs.existsSync(resolved)) fail(`${rel} imports ${from}, which was not emitted`)
   }
-  const residue = text.replace(FACADE_NOISE, '').trim()
+  const residue = facadeResidue(text)
   if (residue) fail(`${rel} carries code of its own, not just re-exports:\n` + residue.slice(0, 300))
 }
 const vendorSamples: Array<[specifier: string, exportName: string]> = [
@@ -162,7 +150,7 @@ const vendorSamples: Array<[specifier: string, exportName: string]> = [
 ]
 for (const [specifier, exportName] of vendorSamples) {
   const target = importMap.imports?.[specifier] ?? fail(`index.html importmap does not map ${specifier}`)
-  const text = fs.readFileSync(facadeFile(target), 'utf8')
+  const text = fs.readFileSync(path.join(distDir, facadeRel(target)), 'utf8')
   if (!emittedExportNames(text).has(exportName)) fail(`${target} lacks the ${exportName} export`)
 }
 

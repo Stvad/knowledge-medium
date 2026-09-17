@@ -1,5 +1,6 @@
 import {fileURLToPath} from 'node:url'
 import {describe, expect, it} from 'vitest'
+import {facadeImportTargets, facadeResidue} from '@/../vite-plugins/facadeShape'
 import {readImportMap, rewriteImportMapScript} from '@/../vite-plugins/importMapHtml'
 import {
   appImportedSubpaths,
@@ -84,18 +85,22 @@ describe('facadeSource', () => {
   // entry). The CommonJS branch is what makes `import {useState} from 'react'`
   // link at all.
   const resolve = (specifier: string) => fileURLToPath(import.meta.resolve(specifier))
+  const facade = (specifier: string) => {
+    const file = resolve(specifier)
+    return facadeSource(specifier, file, moduleKind(file))
+  }
   it('shims a CommonJS package with the names Node sees on it', () => {
-    const src = facadeSource('react', resolve('react'))
+    const src = facade('react')
     expect(src).toContain('export default m.default;')
     expect(src).toMatch(/const \{[^}]*\buseState: _\d+\b[^}]*\} = m;/)
     expect(src).not.toContain('export *')
   })
   it('shims a CommonJS package flagged __esModule the same way (its default is undefined)', () => {
-    const src = facadeSource('@babel/standalone', resolve('@babel/standalone'))
+    const src = facade('@babel/standalone')
     expect(src).toMatch(/const \{[^}]*\btransform: _\d+\b[^}]*\} = m;/)
   })
   it('re-exports an ESM package as a whole', () => {
-    const src = facadeSource('zod', resolve('zod'))
+    const src = facade('zod')
     expect(src).toContain('export * from "zod";')
     expect(src).toContain('export default m.default;')
   })
@@ -124,8 +129,7 @@ describe('vendorImportMapPlugin.resolveId', () => {
   const plugin = vendorImportMapPlugin({rootDir: fileURLToPath(new URL('../..', import.meta.url))})
   const resolveId = (plugin.resolveId as {handler: (source: string) => string | null}).handler
   it('maps an exposed specifier, from the dev URL or the build input', () => {
-    // The `.cjs` suffix keeps Vite's default-import interop in CommonJS mode,
-    // matching rolldown's `default` semantics (see facadeId).
+    // Dev ids carry `.cjs` (see facadeId).
     expect(resolveId('/vendor/react.js')).toBe('\0km-vendor:react.cjs')
     expect(resolveId('/vendor/react/jsx-runtime.js')).toBe('\0km-vendor:react/jsx-runtime.cjs')
     expect(resolveId('virtual:km-vendor-cjs/react')).toBe('\0km-vendor:react.cjs')
@@ -135,5 +139,21 @@ describe('vendorImportMapPlugin.resolveId', () => {
     expect(resolveId('/vendor/../src/main.js')).toBeNull()
     expect(resolveId('/vendor/lucide-react.js')).toBeNull()
     expect(resolveId('virtual:km-vendor-cjs//tmp/x')).toBeNull()
+  })
+})
+
+describe('facade shape (the post-build gate)', () => {
+  const shim = 'import{a as e}from"../chunks/rolldown-runtime-X.js";import{Wvt as t}from"../chunks/app-X.js";var n=e(t()),r=n.default,{Activity:i,useState:a}=n;export{i as Activity,r as default,a as useState};'
+  it('accepts an ESM facade and the CommonJS shim as emitted', () => {
+    expect(facadeResidue('import{a as b}from"../chunks/app-x.js";export{b as a};')).toBe('')
+    expect(facadeResidue(shim)).toBe('')
+    expect(facadeResidue('"use client";import{a as b}from"../chunks/app-x.js";export{b as a};\n//# sourceMappingURL=x.js.map')).toBe('')
+  })
+  it('flags code of its own, however small', () => {
+    expect(facadeResidue('import{a as b}from"../chunks/app-x.js";function evil(){}export{b as a};')).toBe('function evil(){}')
+    expect(facadeResidue('var a=1,b=2;export{a,b};')).toBe('var a=1,b=2;')
+  })
+  it('lists side-effect imports as targets too, so none can name a non-chunk', () => {
+    expect(facadeImportTargets('import"../src/main.js";import{a as b}from"../chunks/app-x.js";export{b as a};')).toEqual(['../src/main.js', '../chunks/app-x.js'])
   })
 })
