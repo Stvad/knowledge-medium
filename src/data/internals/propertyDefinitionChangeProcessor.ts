@@ -181,8 +181,11 @@ export interface NameClaim {
    *  claimant, which is why removals are filtered out rather than noted. */
   readonly atTxStart: readonly string[]
   /** Definitions this tx leaves live under the name that did NOT hold it at tx
-   *  start — created, revived, or renamed onto it. Their rank against each
-   *  other is decided by the rebuilt registry, not knowable here. */
+   *  start AND are not among the candidates — a created row, or a revived
+   *  tombstone. Their rank against the incumbent is decided by the rebuilt
+   *  registry, not knowable here. Candidates renaming onto the name are NOT
+   *  listed: the refusal derives those from its own batch, because whether one
+   *  arrives depends on whether it survives. */
   readonly arriving: readonly string[]
 }
 
@@ -196,9 +199,12 @@ export const withoutContestedRenames = <T extends {
 ): T[] => {
   let kept: T[] = [...candidates]
   for (;;) {
-    const vacating = new Set(kept
-      .filter(candidate => candidate.oldName !== candidate.newName)
-      .map(candidate => candidate.fieldId))
+    const movers = kept.filter(candidate => candidate.oldName !== candidate.newName)
+    const vacating = new Set(movers.map(candidate => candidate.fieldId))
+    // Derived from the SURVIVING batch each round, not from the caller: a
+    // candidate dropped this round keeps its old name and arrives nowhere.
+    const movingOnto = (name: string): readonly string[] =>
+      movers.filter(candidate => candidate.newName === name).map(c => c.fieldId)
     const free = (claimant: string | undefined, self: string): boolean =>
       claimant === undefined || claimant === self || vacating.has(claimant)
     const next = kept.filter(candidate => {
@@ -206,15 +212,26 @@ export const withoutContestedRenames = <T extends {
       const destination = claimOf(candidate.newName)
       if (destination === null) return false
       if (!free(destination.atTxStart[0], candidate.fieldId)) return false
-      // Only a candidate that is itself ARRIVING races the others. An incumbent
-      // re-typing in place is not moving onto anything; the peer trying to take
-      // its name is the one refused, by the owner test above.
-      if (moves && destination.arriving.some(claimant => claimant !== candidate.fieldId)) {
+      // A row this tx CREATES or REVIVES at the name contests every candidate
+      // there, moving or not. Nothing refuses it — it is not a candidate, since
+      // nothing about its own name changed — and it may outrank the incumbent
+      // in the rebuilt registry, which would read the value the incumbent just
+      // re-encoded as its own, under a different codec.
+      if (destination.arriving.length > 0) return false
+      // Two candidates MOVING onto one name race each other instead: the later
+      // write wins, and the rebuilt registry may hand the key to the other. An
+      // incumbent staying put races none of them — a candidate moving onto ITS
+      // name is refused by the owner test above.
+      if (moves && movingOnto(candidate.newName)
+        .some(claimant => claimant !== candidate.fieldId)) {
         return false
       }
       if (!moves) return true
       const vacated = claimOf(candidate.oldName)
       return vacated !== null
+        // Candidates moving ONTO the vacated name are deliberately not consulted:
+        // a candidate that moves is vacating by construction, so it is always
+        // free and could never contest anything here.
         && [...vacated.atTxStart, ...vacated.arriving]
           .every(claimant => free(claimant, candidate.fieldId))
     })
@@ -375,9 +392,13 @@ const collectChanges = (
       departed.add(before.id)
     }
   }
+  const candidateIds = new Set(candidates.map(candidate => candidate.fieldId))
   const arrivingByName = new Map<string, string[]>()
   for (const {before, after} of changedRows) {
     if (after === null || after.deleted) continue
+    // Candidates are excluded: whether one arrives depends on whether the
+    // refusal keeps it, so the refusal derives those from its own batch.
+    if (candidateIds.has(after.id)) continue
     const afterMeta = parsePropertyDefinitionMetadata(after)
     if (!afterMeta || afterMeta.seedKey !== undefined) continue
     const heldBefore = before !== null && !before.deleted
