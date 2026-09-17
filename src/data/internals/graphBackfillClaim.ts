@@ -28,7 +28,7 @@ import { keyAtStart } from '@/data/orderKey'
 import { MIGRATION_CLAIM_TYPE } from '@/data/blockTypes'
 import { classifyOccupant, stateChildBlockId } from '@/data/derivedIds'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
-import { migrationsPageBlockId } from '@/data/migrationsPage'
+import { MIGRATIONS_PAGE_ALIAS, migrationsPageBlockId } from '@/data/migrationsPage'
 import {
   addBlockTypeToProperties,
   migrationClaimantProp,
@@ -130,6 +130,45 @@ export const readGraphBackfillClaim = async (
     return null
   }
 }
+
+/** Is a run of `backfillId` in flight for this workspace, as the caller's own
+ *  view of `blocks` has it?
+ *
+ *  Asked by anything that must not write while a once-per-graph pass is midway
+ *  through the same data — today the definition-change refusal
+ *  (`propertyDefinitionChangeProcessor`), which asks it INSIDE the user's
+ *  transaction so the answer is that transaction's own. The claim lives in
+ *  SYNCED data, so a peer device that has received the claim row refuses too;
+ *  one that has not yet is the same staleness every other reader of this row
+ *  has. */
+export const isGraphBackfillClaimActive = async (
+  db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+  workspaceId: string,
+  backfillId: string,
+): Promise<boolean> => {
+  const claim = await readGraphBackfillClaim(
+    db, graphBackfillClaimBlockId(workspaceId, backfillId), workspaceId,
+  )
+  // A COMPLETED claim is deliberately not active: it records a finished run and
+  // is never released, so reading it as active would refuse definition edits in
+  // this graph for the rest of its life. `null` is not active either — absent,
+  // tombstoned and undecodable all land there, which is the same permissive
+  // direction {@link readGraphBackfillClaim} takes and for the same reason:
+  // deleting the block is the documented recovery for a dead claimant, and a
+  // half-written bag must never wedge editing shut for good.
+  return claim !== null && claim.completedAt === undefined
+}
+
+/** Where a claim nobody will release is found and cleared, in the one wording
+ *  every message that needs it uses.
+ *
+ *  Both messages that mention a held claim — the pass reporting one held by
+ *  another client, and the refusal of a definition edit while one is in flight —
+ *  describe the SAME recovery, and an operator who reads them as two different
+ *  situations goes looking for a second thing to do. */
+export const STRANDED_CLAIM_RECOVERY =
+  'if nothing is running, check the claim block on the '
+  + `"${MIGRATIONS_PAGE_ALIAS}" page and delete it to release the pass`
 
 // ---------------------------------------------------------------------------
 // The seam implementation

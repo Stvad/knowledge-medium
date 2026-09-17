@@ -689,6 +689,26 @@ describe('applyPropertyDefinitionSynthesis', () => {
     expect(JSON.parse(cell.properties_json)).toEqual({'demo:orphan': 'hello'})
   })
 
+  it('mints while the gesture holds its OWN cell-to-children claim', async () => {
+    // The production ordering, not a reconstruction of it: the migration
+    // gesture takes this claim before its first write and synthesizes under it
+    // (`Repo.withOperatorBackfillClaim`, `migrateUnderClaim`). A definition
+    // rename or re-type in that window is refused (#1029), so minting has to
+    // stay clear of that refusal — which it does because a created row has no
+    // `before` and collects no change.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+
+    const gesture = await repo.withOperatorBackfillClaim(
+      WS, PROPERTY_CELL_BACKFILL_ID,
+      () => applyPropertyDefinitionSynthesis(repo, plan),
+    )
+
+    expect(gesture.claimed).toBe(true)
+    expect(gesture.claimed && gesture.value.created).toBe(1)
+    expect(await countDefinitionsNamed('demo:orphan')).toBe(1)
+  })
+
   it('is a no-op on a second run', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())

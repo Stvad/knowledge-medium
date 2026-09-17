@@ -61,6 +61,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   const isSeedBacked = data ? isValidSeededDefinition(data) : false
   const readOnly = block.repo.isReadOnly || isSeedBacked
 
+
   const presetId = useMemo<string>(() => {
     if (!data) return ''
     const raw = data.properties[presetIdProp.name]
@@ -262,15 +263,20 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       {preset?.ConfigEditor && (
         <div className="grid grid-cols-[6rem,minmax(0,1fr)] gap-3">
           <label className="pt-1 text-xs font-semibold text-muted-foreground">Config</label>
-          {/* The config editors don't take a readOnly prop; block interaction
-              at the wrapper so a read-only schema (seed-backed or viewer)
-              still shows its options without letting them be edited. */}
-          <div
-            className={readOnly ? 'pointer-events-none opacity-60' : undefined}
-            aria-disabled={readOnly || undefined}
+          {/* A real `fieldset[disabled]`, which is what makes the descendant
+              form controls inert. The config editors take no readOnly prop and
+              render ordinary inputs and buttons, and those stay focusable and
+              operable from the KEYBOARD behind a pointer-only block — so a
+              locked editor could still dispatch `writeConfig`, whose refusal
+              then arrives as an unhandled rejection. `pointer-events-none`
+              stays for whatever in an editor is not a form control. */}
+          <fieldset
+            disabled={readOnly}
+            className={`m-0 min-w-0 border-0 p-0${
+              readOnly ? ' pointer-events-none opacity-60' : ''}`}
           >
             {renderConfigEditor(preset, decodedConfig, writeConfig)}
-          </div>
+          </fieldset>
         </div>
       )}
 

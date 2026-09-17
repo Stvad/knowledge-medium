@@ -11,6 +11,7 @@ import {
   planPropertyDefinitionSynthesis,
   type PropertyDefinitionSynthesisPlan,
 } from '@/data/internals/propertyDefinitionSynthesis'
+import { STRANDED_CLAIM_RECOVERY } from '@/data/internals/graphBackfillClaim'
 import { readIsChildBackedWorkspace, readWorkspaceOwnerId } from '@/data/workspaceSchema'
 import {
   flipRejectionProvesNoWrite,
@@ -204,9 +205,7 @@ const describePassOutcome = (
         // seam does not separate and never reports. Naming tabs here sent
         // operators to close one, which changes nothing.
         message: 'Another client holds this migration — another device, or this browser ' +
-          'signed in elsewhere. Wait for it to finish; if nothing is running, check the ' +
-          'claim block on the "System Migrations (km)" page and delete it to release the ' +
-          'pass.',
+          `signed in elsewhere. Wait for it to finish; ${STRANDED_CLAIM_RECOVERY}.`,
         failed: true,
       }
     case 'already-running':
