@@ -44,6 +44,7 @@
 
 import {
   defineSameTxProcessor,
+  memberCodecOf,
   type AnyPropertySchema,
   type BlockData,
   type ResolvedPropertySchema,
@@ -52,14 +53,16 @@ import {
 } from '@/data/api'
 import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
-  encodedPropertyValueToChildContent,
+  childContentsToEncodedPropertyValue,
+  encodedPropertyValueToChildContents,
   getPropertyFieldTargetId,
   fieldValueChildren,
   isFieldValueChild,
+  memberKeysFor,
   propertiesEqual,
   propertyCellValueRejection,
   propertyFieldContent,
-  propertyChildContentToEncodedValue,
+  unionValuesAcrossFieldRows,
 } from '@/data/propertyChildren'
 import { jsonValuesEqual } from './jsonCanonical'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
@@ -128,28 +131,33 @@ const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookup
 
 // ─── children → cell (project) ───────────────────────────────────────────
 
-const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
-
-interface AffectedProjection {
-  readonly parentId: string
-  readonly fieldId: string
-}
-
-const affectedKey = (affected: AffectedProjection): string =>
-  `${affected.parentId}\u0000${affected.fieldId}`
+/** Owner id → the fields on that owner this pass must re-project, each carrying
+ *  the schema resolution that admitted it. Grouped by OWNER because every read
+ *  and the write below are per-owner: an owner with *k* touched properties
+ *  costs one `get` + one `childrenOf` + one `update`, not *k* of each. The
+ *  `setProperties` fan-out and the one-time cell→children pass both hit this
+ *  with several fields on one row. */
+type AffectedOwners = Map<string, Map<string, AnyPropertySchema>>
 
 const addAffectedProjection = (
-  out: Map<string, AffectedProjection>,
+  out: AffectedOwners,
   parentId: string | null,
   fieldId: string | undefined,
   lookups: ProjectionLookups,
 ): void => {
   if (parentId === null) return
   if (fieldId === undefined) return
-  if (!lookups.resolveFieldSchema(fieldId)) return
-  const affected = {parentId, fieldId}
-  out.set(affectedKey(affected), affected)
+  // Resolved ONCE, here, and carried: this is the gate that admits a field at
+  // all, so a re-resolve downstream is both a second lookup and a branch
+  // nothing can reach.
+  const schema = lookups.resolveFieldSchema(fieldId)
+  if (!schema) return
+  let fields = out.get(parentId)
+  if (fields === undefined) {
+    fields = new Map()
+    out.set(parentId, fields)
+  }
+  fields.set(fieldId, schema)
 }
 
 /** Walk up at most two levels from a changed row to the (parent, fieldId)
@@ -158,7 +166,7 @@ const addAffectedProjection = (
  *  before and after sides of a move are collected by the caller. */
 const collectAffectedProjection = async (
   tx: Tx,
-  out: Map<string, AffectedProjection>,
+  out: AffectedOwners,
   row: ProjectableRow | null,
   lookups: ProjectionLookups,
 ): Promise<void> => {
@@ -181,34 +189,39 @@ const collectAffectedProjection = async (
   }
 }
 
-/** First parseable value across the field rows for a schema, in
- *  deterministic `(order_key, id)` order — the projection's value rule
- *  (§9): unparseable children are skipped; if nothing parses the key reads
- *  as unset while the rows stay visible/fixable in the tree.
+/** The value a schema's field rows project onto their owner's cell, in
+ *  deterministic `(order_key, id)` order — `undefined` when nothing parses,
+ *  which §9 reads as "key unset" while the rows stay visible and fixable in
+ *  the tree. Single-valued takes the first parseable value; multi-valued
+ *  AGGREGATES the members (`childContentsToEncodedPropertyValue` owns both
+ *  rules, and the dedupe that makes divergence and multiplicity one shape).
+ *
+ *  Across ALL of a schema's field rows, not just the first: duplicate field
+ *  rows are a transient conflict that `collapseDuplicateFieldRow` resolves by
+ *  making one row's values PEERS of the other's, so reading only one would
+ *  drop members that are about to become siblings anyway.
  *
  *  Denoted-value rule (§5): only DIRECT value children are read — a
  *  comment deep under a value child never re-projects the parent. */
-const firstProjectedFieldValue = async (
+const projectedFieldValue = async (
   tx: Tx,
   schema: AnyPropertySchema,
   fieldRows: readonly BlockData[],
 ): Promise<unknown | undefined> => {
+  // NO field row at all: the key is unset. That is the only thing that unsets a
+  // multi-valued property, and it is the precondition
+  // `childContentsToEncodedPropertyValue` is documented to be called under —
+  // it answers `[]` for a live field row with nothing parseable under it.
+  if (fieldRows.length === 0) return undefined
+  // §9 value set: `is_field_form IS NOT 1` children only — a nested marked row
+  // materialized under the field row is its own machinery, never a value
+  // candidate. `unionValuesAcrossFieldRows` owns what happens across the rows.
+  const perFieldRow: BlockData[][] = []
   for (const fieldRow of fieldRows) {
-    // §9 value set: `is_field_form IS NOT 1` children only — a nested marked
-    // row materialized under the field row is its own machinery, never a
-    // value candidate.
-    const values = await fieldValueChildren(tx, fieldRow.id)
-    for (const value of values) {
-      try {
-        return propertyChildContentToEncodedValue(schema, value.content)
-      } catch {
-        // Invalid child text should not preserve a stale parent cell
-        // projection. Skip it; if no child under this field parses, the
-        // parent property is removed below.
-      }
-    }
+    perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
   }
-  return undefined
+  return childContentsToEncodedPropertyValue(
+    schema, unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content))
 }
 
 // §9 selection: the bit + target pair (the JS twin of
@@ -220,48 +233,57 @@ const fieldRowsForSchema = (
 ): BlockData[] => children.filter(child =>
   child.isFieldForm === true && getPropertyFieldTargetId(child) === fieldId)
 
-const reprojectParentField = async (
+/** Re-project ONE owner's cell for every field of it this pass touched.
+ *
+ *  The `childrenOf` read is hoisted out of the field loop because it is
+ *  invariant across it: the only write here is the owner's OWN cell, which
+ *  changes no child, and post-commit processors cannot run mid-tx. */
+const reprojectOwner = async (
   tx: Tx,
-  affected: AffectedProjection,
-  lookups: ProjectionLookups,
+  parentId: string,
+  fields: ReadonlyMap<string, AnyPropertySchema>,
   mode: ProjectionMode,
 ): Promise<void> => {
-  const schema = lookups.resolveFieldSchema(affected.fieldId)
-  if (!schema) return
-
-  const parent = await tx.get(affected.parentId)
+  const parent = await tx.get(parentId)
   if (parent === null || parent.deleted) return
-  // Additive mode stops at a key the owner already holds — BEFORE the value
-  // scan, since the answer can't change the outcome. Both directions are
-  // unsafe from an unsettled caller: an unset cascades into materialize
-  // tombstoning the rows, and an overwrite silently replaces a cell value
-  // the user still owns (reconciling a populated cell against children is
-  // the backfill's job, not a background repair's).
-  if (mode === 'additive' && hasOwn(parent.properties, schema.name)) return
   // No interior gate (§9 flat recognition): ANY block — value rows and
   // field rows included — hosts field rows via its `::` children, and its
   // cell projects from them like every other owner's. The old hazard (a
   // ref-typed value misread as a field row of its parent) is structurally
   // gone: unmarked rows never classify.
-  const children = await tx.childrenOf(affected.parentId, undefined)
-  const fieldRows = fieldRowsForSchema(children, affected.fieldId)
-  // Additive mode also declines to break a TIE: adding the key is unsettled,
-  // so materialize follows and `collapseDuplicateFieldRow` reaps the loser —
-  // a background repair must not reap a user's row. Accepted cost: post-flip
-  // both rows are recognized and hidden, and the key stays unset, until a
-  // write to that property name or a rename migration converges them.
-  // Editing the OWNER does not help — `collectAffectedProjection` maps a
-  // CHANGED row through its own bit or its parent's.
-  if (mode === 'additive' && fieldRows.length > 1) return
-  const projected = await firstProjectedFieldValue(tx, schema, fieldRows)
+  const children = await tx.childrenOf(parentId, undefined)
   const nextProperties = {...parent.properties}
-  if (projected === undefined) {
-    // LIVE field rows with no parseable value ⇒ key unset (default-value
-    // rule, §9). A key with NO field rows AT ALL is only reachable here via
-    // a child change that just deleted the last one — the deletion won.
-    delete nextProperties[schema.name]
-  } else {
-    nextProperties[schema.name] = projected
+  // Both additive checks are PER FIELD, never hoisted to the owner: they ask
+  // about one property name and one property's field rows.
+  for (const [fieldId, schema] of fields) {
+    // Additive mode stops at a key the owner already holds — BEFORE the value
+    // scan, since the answer can't change the outcome. Both directions are
+    // unsafe from an unsettled caller: an unset cascades into materialize
+    // tombstoning the rows, and an overwrite silently replaces a cell value
+    // the user still owns (reconciling a populated cell against children is
+    // the backfill's job, not a background repair's). Asked of the value being
+    // BUILT, not of the snapshot, so a key an earlier field of this same owner
+    // just added is one this field may not overwrite either — two fieldIds
+    // resolve to one name whenever a definition is shadowed (§6).
+    if (mode === 'additive' && Object.hasOwn(nextProperties, schema.name)) continue
+    const fieldRows = fieldRowsForSchema(children, fieldId)
+    // Additive mode also declines to break a TIE: adding the key is unsettled,
+    // so materialize follows and `collapseDuplicateFieldRow` reaps the loser —
+    // a background repair must not reap a user's row. Accepted cost: post-flip
+    // both rows are recognized and hidden, and the key stays unset, until a
+    // write to that property name or a rename migration converges them.
+    // Editing the OWNER does not help — `collectAffectedProjection` maps a
+    // CHANGED row through its own bit or its parent's.
+    if (mode === 'additive' && fieldRows.length > 1) continue
+    const projected = await projectedFieldValue(tx, schema, fieldRows)
+    if (projected === undefined) {
+      // LIVE field rows with no parseable value ⇒ key unset (default-value
+      // rule, §9). A key with NO field rows AT ALL is only reachable here via
+      // a child change that just deleted the last one — the deletion won.
+      delete nextProperties[schema.name]
+    } else {
+      nextProperties[schema.name] = projected
+    }
   }
   // Idempotence short-circuit (§5 invariant 1).
   if (propertiesEqual(parent.properties, nextProperties)) return
@@ -290,12 +312,12 @@ export const reprojectOwnersForRowStates = async (
   lookups: ProjectionLookups,
   mode: ProjectionMode,
 ): Promise<void> => {
-  const affected = new Map<string, AffectedProjection>()
+  const affected: AffectedOwners = new Map()
   for (const row of rowStates) {
     await collectAffectedProjection(tx, affected, row, lookups)
   }
-  for (const projection of affected.values()) {
-    await reprojectParentField(tx, projection, lookups, mode)
+  for (const [parentId, fields] of affected) {
+    await reprojectOwner(tx, parentId, fields, mode)
   }
 }
 
@@ -308,8 +330,8 @@ const changedPropertyNames = (
   const names = new Set([...Object.keys(before), ...Object.keys(after)])
   const changed: string[] = []
   for (const name of names) {
-    const beforeValue = hasOwn(before, name) ? before[name] : undefined
-    const afterValue = hasOwn(after, name) ? after[name] : undefined
+    const beforeValue = Object.hasOwn(before, name) ? before[name] : undefined
+    const afterValue = Object.hasOwn(after, name) ? after[name] : undefined
     if (!jsonValuesEqual(beforeValue, afterValue)) changed.push(name)
   }
   return changed
@@ -336,13 +358,23 @@ export interface MaterializeOptions {
   /** Bring a name's TOMBSTONED field row back instead of minting a
    *  replacement, when the owner has exactly one and no live one (#787).
    *
-   *  Opt-in, and only the revival path opts in. Owner liveness does NOT tell
-   *  a tombstone's cause apart, so what makes this safe is narrower: the
-   *  revival re-materializes the whole restored bag and would mint a
-   *  replacement field row anyway, so reviving changes which row id carries
-   *  the property, not whether it comes back. The cell backfill has no such
-   *  contract and would resurrect what the user reaped — declined there. */
+   *  Opt-in, and only the revival path opts in: it re-materializes the whole
+   *  restored bag and would mint a replacement field row anyway, so reviving
+   *  changes which row id carries the property, not whether it comes back. The
+   *  cell backfill has no such contract and would resurrect what the user
+   *  reaped — declined there. */
   reviveTombstoned?: boolean
+  /** This call did not observe user intent for these names, so it may only ADD
+   *  members, never remove one — the cell→children twin of the projection's
+   *  `'additive'` mode, and for the same reason: an unobserved write must not
+   *  be allowed to reap.
+   *
+   *  The revival path's untouched half is the caller: a restore re-materializes
+   *  names the tx never wrote, from a cell that can be STALE against children a
+   *  peer wrote while the owner was deleted. The scalar branch still OVERWRITES
+   *  its primary row's content on that path — the narrower half of the same
+   *  staleness, tracked separately. */
+  mayNotRemove?: boolean
 }
 
 /** Restore the tombstoned field row backing `fieldId`, together with its value
@@ -358,6 +390,13 @@ export interface MaterializeOptions {
  *  reach it again. Reviving the two rows above it restores the chain, which is
  *  the difference between "still deleted" and "gone".
  *
+ *  A MULTI-VALUED property restores NO member row, by an explicit gate rather
+ *  than by the count failing to match — see the gate for the case where it
+ *  matches and must still not fire. What is lost is member row IDENTITY, never
+ *  content: the caller's reconcile rebuilds every member from the cell, and the
+ *  original rows keep their sub-children under a field row that is now LIVE,
+ *  which is the stranding this helper exists to prevent.
+ *
  *  ONE ambiguity rule, applied at both levels: revive only what is unambiguous.
  *  Several tombstones for one definition (an unset/re-set cycle before the
  *  owner was deleted), or several tombstoned values under one field row (a
@@ -371,9 +410,10 @@ export interface MaterializeOptions {
  *  tombstones stay reachable under a live parent instead of resurrected. */
 const reviveTombstonedFieldRow = async (
   tx: Tx,
-  fieldId: string,
+  schema: AnyPropertySchema & {readonly fieldId: string},
   tombstones: readonly BlockData[],
 ): Promise<boolean> => {
+  const fieldId = schema.fieldId
   const matching = tombstones.filter(t => getPropertyFieldTargetId(t) === fieldId)
   if (matching.length !== 1) return false
   const fieldRow = matching[0]!
@@ -383,21 +423,25 @@ const reviveTombstonedFieldRow = async (
 
   // Refuse BEFORE restoring anything, not after. Sync-apply skips the
   // parent-liveness trigger, so a LIVE value can sit under a tombstoned field
-  // row — an arrival that crossed sync while this row was dead, which is the
-  // authoritative side post-flip. Restoring the field row hands that value to
-  // the caller's cell→child convergence, which overwrites its content with the
-  // local cell's: measured, the arrived text is destroyed. Declining to revive
-  // leaves it untouched under its tombstone and the caller mints, which is
-  // exactly what happened before revival existed.
-  //
+  // row, and restoring the field row would hand that value to the caller's
+  // cell→child convergence, which overwrites its content with the local cell's.
   // This is also the ambiguity rule's live half — nothing live may hold the
-  // slot — but placement is what makes it a refusal rather than a repair.
+  // slot — but the POSITION is what makes it a refusal rather than a repair.
   const liveValues = (await tx.childrenOf(fieldRow.id, undefined)).filter(isValue)
   if (liveValues.length > 0) return false
 
   await tx.restore(fieldRow.id)
-  // The tombstone half: exactly one offers to fill the slot. Several are
-  // indistinguishable — see the one ambiguity rule above.
+  // The tombstone half, SINGLE-VALUED ONLY: exactly one offers to fill the
+  // slot, and several are indistinguishable — see the one ambiguity rule above.
+  //
+  // A multi-valued property never takes it. At two or more members the count
+  // cannot match, and at ZERO members — an explicitly empty list, which is a
+  // first-class value — the one tombstone left under the field row is the
+  // member the user DELETED to empty it. Restoring that resurrects the
+  // deletion, and `mayNotRemove` then forbids the reconciler from undoing the
+  // resurrection. So the branch is, for a list, only ever a way to bring a
+  // reaped member back.
+  if (memberCodecOf(schema.codec) !== undefined) return true
   const values = (await tx.deletedChildrenOf(fieldRow.id)).filter(isValue)
   if (values.length === 1) await tx.restore(values[0]!.id)
   return true
@@ -431,7 +475,7 @@ export const materializePropertyChildrenForExistingRow = async (
       continue
     }
     const matchingChildren = fieldRowsForSchema(children, schema.fieldId)
-    const encoded = hasOwn(row.properties, name) ? row.properties[name] : undefined
+    const encoded = Object.hasOwn(row.properties, name) ? row.properties[name] : undefined
 
     if (encoded === undefined) {
       // Key removed from the cell by a LOCAL write: the delete is the
@@ -487,65 +531,16 @@ export const materializePropertyChildrenForExistingRow = async (
     let fieldRows = matchingChildren
     if (opts.reviveTombstoned && fieldRows.length === 0) {
       tombstones ??= await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id)
-      if (await reviveTombstonedFieldRow(tx, schema.fieldId, tombstones)) {
+      if (await reviveTombstonedFieldRow(tx, schema, tombstones)) {
         children = await tx.childrenOf(row.id, undefined)
         fieldRows = fieldRowsForSchema(children, schema.fieldId)
       }
     }
 
-    const content = encodedPropertyValueToChildContent(schema, encoded)
-    const [primary, ...duplicates] = fieldRows
-    if (primary) {
-      const fieldContent = propertyFieldContent(schema.fieldId)
-      if (primary.content !== fieldContent) {
-        await tx.update(primary.id, {content: fieldContent})
-      }
-      // §9 value set: bit-filtered — nested marked rows are machinery.
-      const values = await fieldValueChildren(tx, primary.id)
-      const [primaryValue, ...duplicateValues] = values
-      if (primaryValue) {
-        if (primaryValue.content !== content) {
-          await tx.update(primaryValue.id, {content})
-        }
-        // Fold only EXACT duplicates of the projected cell value (concurrent
-        // dual-writes of the same value); DIVERGENT siblings are a surfaced
-        // conflict — from a merge or divergent concurrent write — and are
-        // kept as peer values, not silently collapsed onto the winner.
-        for (const duplicate of duplicateValues) {
-          if (duplicate.content === content) {
-            await collapseDuplicateValueChild(tx, primaryValue.id, duplicate)
-          }
-        }
-      } else {
-        await tx.create({
-          workspaceId: row.workspaceId,
-          parentId: primary.id,
-          orderKey: keyAtStart(null),
-          content,
-        })
-      }
-    } else {
-      const fieldRowId = await tx.create({
-        workspaceId: row.workspaceId,
-        parentId: row.id,
-        // Born classified (§9): both derived columns pre-stamped so the row
-        // classifies and projects within the same single pass.
-        referenceTargetId: schema.fieldId,
-        isFieldForm: true,
-        orderKey: keyAtStart(null),
-        content: propertyFieldContent(schema.fieldId),
-      })
-      await tx.create({
-        workspaceId: row.workspaceId,
-        parentId: fieldRowId,
-        orderKey: keyAtStart(null),
-        content,
-      })
-    }
-
-    for (const child of duplicates) {
-      await collapseDuplicateFieldRow(tx, primary?.id ?? child.id, child)
-    }
+    const fieldRow = await upsertFieldRow(
+      tx, row, schema.fieldId, fieldRows, opts.mayNotRemove,
+    )
+    await reconcileFieldValueChildren(tx, fieldRow, schema, encoded, opts.mayNotRemove)
   }
 }
 
@@ -597,8 +592,258 @@ const materializePropertiesForChangedRow = async (
     tx, row.after, lookups, changed, {reviveTombstoned: true},
   )
   await materializePropertyChildrenForExistingRow(
-    tx, row.after, lookups, untouched, {undecodable: 'skip', reviveTombstoned: true},
+    tx, row.after, lookups, untouched,
+    {undecodable: 'skip', reviveTombstoned: true, mayNotRemove: true},
   )
+}
+
+/** Find-or-create the field row for `fieldId` under `owner`, keeping its
+ *  content canonical and folding any duplicate field rows into the survivor.
+ *  Returns the row whose value children the caller then reconciles.
+ *
+ *  Shared by `tx.setProperty`'s eager dual-write and the deferred materialize
+ *  processor for the same reason `reconcileFieldValueChildren` is: the row the
+ *  two writers find-or-create has to be the same row, born with the same
+ *  derived columns.
+ *
+ *  Collapse happens HERE, before the caller reconciles: collapsing relocates a
+ *  duplicate's value children under the survivor, and a reconcile that ran
+ *  first would not see them — so for a list the members hiding under the
+ *  duplicate survive a removal and the projection puts them straight back. */
+export const upsertFieldRow = async (
+  tx: Tx,
+  owner: Pick<BlockData, 'id' | 'workspaceId'>,
+  fieldId: string,
+  existingRows: readonly BlockData[],
+  /** See {@link MaterializeOptions.mayNotRemove}. */
+  mayNotRemove = false,
+): Promise<Pick<BlockData, 'id' | 'workspaceId'>> => {
+  const content = propertyFieldContent(fieldId)
+  const [primary, ...duplicates] = existingRows
+  if (primary) {
+    if (primary.content !== content) await tx.update(primary.id, {content})
+    for (const duplicate of duplicates) {
+      await collapseDuplicateFieldRow(tx, primary.id, duplicate, mayNotRemove)
+    }
+    return primary
+  }
+  // Machinery inserts field rows FIRST among children (§9 ordering
+  // decision): fields cluster above content as an emergent default;
+  // orderKey stays user-owned afterwards.
+  const id = await tx.create({
+    workspaceId: owner.workspaceId,
+    parentId: owner.id,
+    // Born classified (§9): both derived columns pre-stamped in the create so
+    // the row classifies and projects within the same single pass.
+    referenceTargetId: fieldId,
+    isFieldForm: true,
+    orderKey: keyAtStart(null),
+    content,
+  })
+  return {id, workspaceId: owner.workspaceId}
+}
+
+/**
+ * Reconcile ONE field row's value children to `contents` — the content of each
+ * value child, in sibling order, as {@link encodedPropertyValueToChildContents}
+ * computed it from the owner's cell.
+ *
+ * THE cell → children writer. `tx.setProperty`'s eager dual-write and the
+ * deferred materialize processor both come through here, because the two must
+ * not be able to disagree about what a cell value's children are; the pass over
+ * a whole workspace and the deferred re-encode inherit it via the materializer.
+ *
+ * The two cases differ in what an EXTRA child means, which is why they are
+ * named branches rather than one loop:
+ *
+ *   SINGLE-VALUED — the sibling set is a CONFLICT surface. One primary value
+ *   child carries the value; a divergent peer is a merge's or a concurrent
+ *   write's surfaced conflict and is KEPT (§9), with only exact duplicates of
+ *   what we just wrote folded in.
+ *
+ *   MULTI-VALUED — the siblings ARE the value, multiplicity included. An extra
+ *   child is a member, so "the list is now [a]" has to be able to remove one:
+ *   members not named by the cell are deleted, and a cell asking for `[2, 2]`
+ *   keeps two rows. Divergence is not lost by that — concurrent writes diverge
+ *   as ARRIVALS, which never pass through here, and stay as visible sibling
+ *   rows. What passes through here is a local write, which is intent.
+ */
+export const reconcileFieldValueChildren = async (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
+  encoded: unknown,
+  /** See {@link MaterializeOptions.mayNotRemove}. */
+  mayNotRemove = false,
+): Promise<void> => {
+  // Takes the ENCODED VALUE, not the contents, so the grain cannot be decided
+  // by a caller: a scalar has exactly one content here by construction, which
+  // is what lets the single-value branch below take a `string` rather than a
+  // list it has to defend against being empty.
+  const contents = encodedPropertyValueToChildContents(schema, encoded)
+  // §9 value set: bit-filtered, in `(order_key, id)` order — a nested marked
+  // row under the field row is its own machinery, never a value candidate.
+  const values = await fieldValueChildren(tx, fieldRow.id)
+  if (memberCodecOf(schema.codec) === undefined) {
+    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!)
+    return
+  }
+  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, mayNotRemove)
+}
+
+const createValueChild = (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  content: string,
+  orderKey: string,
+): Promise<string> => tx.create({
+  workspaceId: fieldRow.workspaceId,
+  parentId: fieldRow.id,
+  orderKey,
+  content,
+})
+
+const reconcileSingleValueChild = async (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  values: readonly BlockData[],
+  content: string,
+): Promise<void> => {
+  const [primary, ...duplicates] = values
+  if (!primary) {
+    await createValueChild(tx, fieldRow, content, keyAtStart(null))
+    return
+  }
+  if (primary.content !== content) await tx.update(primary.id, {content})
+  // Fold only EXACT duplicates of the projected cell value (concurrent
+  // dual-writes of the same value); DIVERGENT siblings are a surfaced
+  // conflict — from a merge or divergent concurrent write — and are kept as
+  // peer values, not silently collapsed onto the winner.
+  for (const duplicate of duplicates) {
+    if (duplicate.content === content) {
+      await collapseDuplicateValueChild(tx, primary.id, duplicate)
+    }
+  }
+}
+
+const freshSlots = (
+  values: readonly BlockData[],
+  count: number,
+): string[] => {
+  // `fieldValueChildren` returns `(order_key, id)` order, so the last row
+  // carries the largest key.
+  const anchor = values.at(-1)?.orderKey ?? null
+  try {
+    return keysBetween(anchor, null, count)
+  } catch {
+    return keysBetween(null, null, count)
+  }
+}
+
+const reconcileMemberValueChildren = async (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
+  values: readonly BlockData[],
+  contents: readonly string[],
+  mayNotRemove: boolean,
+): Promise<void> => {
+  // By VALUE, not raw text: a member a person spelled ` 1 ` projects to exactly
+  // what the canonical text projects to, and matching on text alone reaps that
+  // row — with its comments, its own properties and its history — to mint a
+  // replacement for a value that never changed.
+  const keys = memberKeysFor(schema)
+  const keyByRow = new Map(values.map(value => [value.id, keys.row(value)]))
+
+  // Occurrence by occurrence, so a list holding one member twice consumes two
+  // rows and a shortened list drops the surplus one rather than the wrong one.
+  const unused = new Map<string, BlockData[]>()
+  for (const value of values) {
+    const key = keyByRow.get(value.id)!.key
+    const bucket = unused.get(key)
+    if (bucket) bucket.push(value)
+    else unused.set(key, [value])
+  }
+  const kept = contents.map(content => unused.get(keys.content(content))?.shift())
+
+  // Everything unmatched, in the order the value set was read, so replicas
+  // agree on which of several equal rows survives.
+  const keptRows = new Set(kept)
+  const surplus = values.filter(value => !keptRows.has(value))
+
+  // `mayNotRemove` governs EVERY removal, folding included: a fold takes a row
+  // away, and multiplicity is part of a list's value, so a repeated member that
+  // arrived unobserved has to survive one too.
+  if (!mayNotRemove) {
+    for (const row of surplus) {
+      // A surplus row equal to a member we are keeping is one copy too many —
+      // the match above consumed one row per member the cell asked for — and it
+      // folds, relocating its user-authored sub-children under the survivor
+      // instead of being tombstoned with it. A surplus row matching no member
+      // is a member the cell removed.
+      const survivor = kept.find(k =>
+        k !== undefined && keyByRow.get(k.id)!.key === keyByRow.get(row.id)!.key)
+      if (survivor) await collapseDuplicateValueChild(tx, survivor.id, row)
+      // An UNPARSEABLE surplus row is not a member the cell removed — it is a
+      // member the cell never held, because the projection could not read it.
+      // Reaping it here would delete a row the user still has to repair, and
+      // its sub-children with it, on an unrelated write to the same property.
+      // Kept, exactly as the scalar branch keeps a divergent peer; removing it
+      // is a delete in the tree, which is how any value row goes.
+      else if (keyByRow.get(row.id)!.denotesValue) await deleteSubtreeInTx(tx, row.id)
+    }
+  }
+
+  // Members permute among the order-key SLOTS the value children already
+  // occupy, so an unchanged list writes nothing (§5 invariant 1: idempotence). A
+  // member added anywhere but the end therefore re-keys the members after it;
+  // list properties here hold a handful of members, and the alternative —
+  // allocating between neighbours — is a second ordering rule to keep correct
+  // for a cost nothing has measured.
+  //
+  // DISTINCT slots: synced or imported rows can share an `order_key`, and a
+  // tied pair cannot express an order at all — SQLite falls back to the id, so
+  // a reorder completes and then projects back in the old order. Collapsing the
+  // tie to one slot and topping up with fresh keys gives every member a key of
+  // its own.
+  const freed = [...new Set(kept.filter(k => k !== undefined).map(k => k.orderKey))]
+  const created = contents.length - freed.length
+  // After every existing value row, so a fresh slot never lands on one already
+  // taken. The generator REFUSES an anchor it cannot parse, and `tx.create`
+  // validates no order key — so one hand-written or imported sibling under this
+  // field row ('zzz', 'k-1', '') would otherwise throw out of the processor and
+  // roll back the user's whole transaction, on every growth write to that
+  // property, for as long as the row exists. Falling back to a fresh band keeps
+  // the write working; `slots` is sorted, so the members stay in list order
+  // either way, and only their position relative to the unparseable row moves.
+  const fresh = created > 0 ? freshSlots(values, created) : []
+  const slots = [...freed, ...fresh].sort()
+
+  for (let i = 0; i < contents.length; i++) {
+    const orderKey = slots[i]!
+    const existing = kept[i]
+    if (!existing) {
+      await createValueChild(tx, fieldRow, contents[i]!, orderKey)
+      continue
+    }
+    // Content is deliberately NOT rewritten to the canonical spelling: the row
+    // matched BY VALUE, so its text already projects to what the cell asks for,
+    // and rewriting it would edit text a person chose for no gain.
+    if (existing.orderKey !== orderKey) {
+      await tx.move(existing.id, {parentId: fieldRow.id, orderKey})
+    }
+  }
+}
+
+/** Move one row to the end of `parentId`'s children. */
+const appendUnder = async (
+  tx: Tx,
+  child: BlockData,
+  parentId: string,
+  siblings: readonly BlockData[],
+): Promise<void> => {
+  const anchor = siblings.at(-1)?.orderKey ?? null
+  await tx.move(child.id, {parentId, orderKey: keysBetween(anchor, null, 1)[0]!})
 }
 
 /** Move every child of `fromId` under `toId`, appended at the end. */
@@ -613,14 +858,15 @@ const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<v
   }
 }
 
-/** §9 dedup, VALUE-child form (shared by the same-tx materializer and
- *  `tx.setProperty`'s dual-write): the survivor is picked deterministically
- *  by `(order_key, id)` — arbitrary relative to content — so the loser may
- *  carry user-authored sub-children (a comment thread under the losing
- *  value). Relocate those under the survivor BEFORE deleting; a bare
- *  subtree-delete would silently tombstone them, and a shallow delete would
- *  orphan them live under a tombstone (the two divergent semantics the
- *  spike's call sites had — unified here). */
+/** §9 dedup, VALUE-child form: the survivor is picked deterministically by
+ *  `(order_key, id)` — arbitrary relative to content — so the loser may carry
+ *  user-authored sub-children. Relocate those under the survivor BEFORE
+ *  deleting; a bare subtree-delete would silently tombstone them, and a shallow
+ *  delete would orphan them live under a tombstone.
+ *
+ *  WHETHER to fold is the caller's call, and it differs by grain: an
+ *  equal-valued sibling is a redundant copy of ONE value to a scalar, and an
+ *  occurrence to a list. */
 export const collapseDuplicateValueChild = async (
   tx: Tx,
   survivorValueId: string,
@@ -631,21 +877,45 @@ export const collapseDuplicateValueChild = async (
 }
 
 /** §9 dedup, FIELD-row form: before deleting a duplicate field row, its
- *  values must not silently vanish. A field row holds a SET of value children,
- *  deduped by content — so a duplicate's value that MATCHES an existing
- *  survivor value folds into it (sub-children relocate), and a DIVERGENT value
- *  is kept as a peer SIBLING value under the survivor field row. Projection
- *  reads the first value, so the cell keeps the survivor's winner while the
- *  conflicting value stays visible and reconcilable — never nested under the
- *  winner as if it were an annotation, never dropped. */
+ *  values must not silently vanish.
+ *
+ *  ACCEPTED for a MULTI-VALUED property, where folding an equal member merges
+ *  two rows that are arguably two occurrences: the rejected alternative, a
+ *  per-caller fold policy, buys row identity at the cost of a second policy
+ *  axis, and `mergeBlocksInTx` needs the fold either way (union-with-dedupe is
+ *  a merge gesture's settled policy). Content converges; the loser's
+ *  sub-children move to the survivor rather than vanishing.
+ *
+ *  A duplicate's value that MATCHES an existing survivor value folds into it
+ *  (sub-children relocate), and one that does not is kept as a peer SIBLING
+ *  value under the survivor field row — never nested under the winner as if it
+ *  were an annotation, never dropped. What the CELL then reads is not this
+ *  helper's to say and differs by grain: a scalar keeps the first parseable
+ *  value, so a conflicting peer stays visible beside it, while a multi-valued
+ *  one aggregates every parseable member, duplicates included
+ *  (`childContentsToEncodedPropertyValue`). */
 export const collapseDuplicateFieldRow = async (
   tx: Tx,
   survivorFieldRowId: string,
   duplicate: BlockData,
+  /** See {@link MaterializeOptions.mayNotRemove}. A fold here takes a member
+   *  row away exactly as the reconciler's does, and it happens BEFORE the
+   *  reconciler is handed the policy — so a caller that may not reap has to
+   *  say so here too, or an arrival that duplicated an existing member is
+   *  collapsed on the way past and the reconciler never sees the occurrence
+   *  it was meant to preserve. */
+  mayNotRemove = false,
 ): Promise<void> => {
   const duplicateChildren = await tx.childrenOf(
     duplicate.id, undefined,
   )
+  // The SAME comparison the member reconciler uses — see `MemberKeys` for what
+  // a disagreement between the two costs. Resolves to raw-text matching for a
+  // scalar, and for a field row whose definition does not resolve.
+  const fieldId = getPropertyFieldTargetId(duplicate)
+  const keys = memberKeysFor(fieldId === undefined
+    ? null
+    : tx.resolvePropertyFieldSchema(duplicate.workspaceId, fieldId))
   for (const child of duplicateChildren) {
     const survivorChildren = await tx.childrenOf(
       survivorFieldRowId, undefined,
@@ -664,20 +934,20 @@ export const collapseDuplicateFieldRow = async (
         && childFieldId !== undefined
         && getPropertyFieldTargetId(c) === childFieldId)
       if (survivorOwn) {
-        await collapseDuplicateFieldRow(tx, survivorOwn.id, child)
+        await collapseDuplicateFieldRow(tx, survivorOwn.id, child, mayNotRemove)
       } else {
-        const anchor = survivorChildren.at(-1)?.orderKey ?? null
-        await tx.move(child.id, {parentId: survivorFieldRowId, orderKey: keysBetween(anchor, null, 1)[0]!})
+        await appendUnder(tx, child, survivorFieldRowId, survivorChildren)
       }
       continue
     }
     const survivorValues = survivorChildren.filter(isFieldValueChild)
-    const match = survivorValues.find(v => v.content === child.content)
+    const match = mayNotRemove
+      ? undefined
+      : survivorValues.find(v => keys.row(v).key === keys.row(child).key)
     if (match) {
       await collapseDuplicateValueChild(tx, match.id, child)
     } else {
-      const anchor = survivorChildren.at(-1)?.orderKey ?? null
-      await tx.move(child.id, {parentId: survivorFieldRowId, orderKey: keysBetween(anchor, null, 1)[0]!})
+      await appendUnder(tx, child, survivorFieldRowId, survivorChildren)
     }
   }
   await deleteSubtreeInTx(tx, duplicate.id)

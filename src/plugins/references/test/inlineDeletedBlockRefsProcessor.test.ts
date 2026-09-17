@@ -376,6 +376,32 @@ describe('property value children keep a dangling ref instead of inlining (#404)
     expect(env.read('field')!.referenceTargetId).toBe(DEF)
   })
 
+  // A refList's members are N sibling value rows (km-h1hy), so the exemption
+  // has to hold at EVERY position rather than for a first primary value.
+  // Nothing in it is positional — it asks whether the row's parent is a field
+  // row — and this is what proves that rather than assuming it: the target
+  // deleted here belongs to the SECOND member.
+  it('leaves a LATER refList member dangling too', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+    const second = '55555555-5555-4555-8555-555555555555'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: second, workspaceId: WS, parentId: null, orderKey: 'a3',
+        content: 'second target body',
+      })
+      await tx.create({
+        id: 'member2', workspaceId: WS, parentId: 'field', orderKey: 'a2',
+        content: `((${second}))`, references: [{id: second, alias: second}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: second})
+
+    expect(env.read('member2')!.content).toBe(`((${second}))`)
+    expect(env.read('member2')!.referenceTargetId).toBe(second)
+  })
+
   // The exemption is for VALUES, not for everything under a property: a
   // comment beneath a value row is ordinary prose and still inlines, exactly
   // as it would anywhere else in the outline.

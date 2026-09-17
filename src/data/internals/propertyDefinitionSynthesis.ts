@@ -55,9 +55,8 @@ import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { getModePin, type ModePin } from '@/sync/keys/modePin'
 import { readContentKeyHmac } from '@/sync/keys/resolver'
-import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 import {
-  encodedPropertyValueToChildContent, propertyChildContentToEncodedValue,
+  valueSurvivesChildRoundTrip,
 } from '@/data/propertyChildren'
 import {
   OBJECT_BAG, keyOf, requirePropertyRegistryFor, scanPropertyKeys,
@@ -209,16 +208,12 @@ const containsNonFinite = (value: unknown): boolean => {
 }
 
 /** Does one stored value come back byte-identical through the child machinery
- *  this preset would use? */
-const survivesChildRoundTrip = (schema: AnyPropertySchema, encoded: unknown): boolean => {
-  if (containsNonFinite(encoded)) return false
-  try {
-    const content = encodedPropertyValueToChildContent(schema, encoded)
-    return jsonValuesEqual(propertyChildContentToEncodedValue(schema, content), encoded)
-  } catch {
-    return false
-  }
-}
+ *  this preset would use? The round trip itself is
+ *  {@link valueSurvivesChildRoundTrip} — the machinery's own question, asked
+ *  at whole-property grain so it stays right for a preset whose values are
+ *  lists; the non-finite pre-check is this pass's own blind spot. */
+const survivesChildRoundTrip = (schema: AnyPropertySchema, encoded: unknown): boolean =>
+  !containsNonFinite(encoded) && valueSurvivesChildRoundTrip(schema, encoded)
 
 /** A key synthesis will mint a definition for. */
 export interface SynthesisCandidate {

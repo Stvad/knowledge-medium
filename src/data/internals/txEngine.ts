@@ -81,6 +81,7 @@ import {
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
 import {
+  isResolvableFieldDefinition,
   isResolvedPropertySchema,
   requireWritablePropertySchema,
   type PropertySchemaResolver,
@@ -89,15 +90,11 @@ import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { IS_OBJECT_BAG } from '@/data/internals/propertyKeyScan'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertyNameProp } from '@/data/properties'
-import { keyAtStart } from '@/data/orderKey'
 import {
-  fieldValueChildren,
   isPropertyFieldInstance,
-  propertyFieldContent,
-  propertyValueToChildContent,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
-import { collapseDuplicateValueChild } from './propertyChildrenProcessor'
+import { reconcileFieldValueChildren, upsertFieldRow } from './propertyChildrenProcessor'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
@@ -473,16 +470,10 @@ export class TxImpl implements Tx {
     return found
   }
 
-  /** §9 recognition, fieldId half: does this id name a definition the
-   *  workspace's registry can resolve? Shadowed losers COUNT — their field
-   *  rows keep classifying (excluded only from the name map / projection). */
+  /** §9 recognition, fieldId half, bound to this workspace's LIVE resolver. */
   private isFieldDefinitionCheckerFor(workspaceId: string): IsPropertyFieldDefinition {
     const resolver = this.propertySchemaResolverFor(workspaceId)
-    return (fieldId) => {
-      const resolution = resolver.resolveField(fieldId)
-      return resolution.status === 'resolved'
-        || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
-    }
+    return (fieldId) => isResolvableFieldDefinition(resolver.resolveField(fieldId))
   }
 
   /** See the `Tx.isPropertyFieldDefinition` contract — the same checker
@@ -786,7 +777,7 @@ export class TxImpl implements Tx {
     // truth that crosses sync. Requires resolved identity (the fieldId names
     // the field row); a boot-window plain schema stays cell-only.
     if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
-      await this.writePropertyValueChild(before, resolvedSchema, value)
+      await this.writePropertyValueChild(before, resolvedSchema, encoded)
     }
     const properties = {...before.properties, [resolvedSchema.name]: encoded}
     await this.writePropertiesBag(id, before, properties, opts)
@@ -915,9 +906,11 @@ export class TxImpl implements Tx {
       for (const schema of unsets) {
         if (isResolvedPropertySchema(schema)) await this.deletePropertyValueChildren(before, schema)
       }
-      for (const {schema, value} of sets) {
+      for (const {schema} of sets) {
         if (!unsetNames.has(schema.name) && isResolvedPropertySchema(schema)) {
-          await this.writePropertyValueChild(before, schema, value)
+          // The bag above already holds this key's ENCODED value — encoding it
+          // a second time here is both waste and a chance to disagree.
+          await this.writePropertyValueChild(before, schema, properties[schema.name])
         }
       }
     }
@@ -1401,83 +1394,34 @@ export class TxImpl implements Tx {
   }
 
   /** Child half of the §5 dual-write: find-or-create the field row
-   *  (`::((fieldId))` + fieldId in the local column) and its ONE primary
-   *  value child (scalar-first), updating stale content and soft-deleting
-   *  duplicates deterministically (`ORDER BY order_key, id` picks the same
-   *  survivor on every replica — load-bearing for the processor pair's
-   *  convergence, see propertyChildrenProcessor.ts). Identity comes from
-   *  the resolved schema (never a synthetic name-derived id).
+   *  (`::((fieldId))` + fieldId in the local column) and reconcile its value
+   *  children to the value — one child for a scalar, one per MEMBER for a
+   *  multi-valued property. Identity comes from the resolved schema (never a
+   *  synthetic name-derived id).
+   *
+   *  The value-children half is `reconcileFieldValueChildren`, shared with the
+   *  deferred materialize processor: the eager and deferred writers must not
+   *  be able to disagree about what a cell value's children are, and the
+   *  divergence rules they have to get right (which extra rows are a surfaced
+   *  conflict, which are removed members) live there rather than twice here.
    *
    *  Field/value rows are synced data — created and updated with REAL
    *  metadata, never the parent write's {skipMetadata}, so the eager
    *  dual-write and the deferred materialize processor stamp them
    *  identically. */
-  private async writePropertyValueChild<T>(
+  private async writePropertyValueChild(
     parent: BlockData,
-    schema: PropertySchema<T> & {readonly fieldId: string},
-    value: T,
+    schema: AnyPropertySchema & {readonly fieldId: string},
+    encoded: unknown,
   ): Promise<void> {
-    const content = propertyValueToChildContent(schema, value)
     const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
       SELECT_PROPERTY_FIELD_CHILD_SQL,
       [parent.workspaceId, parent.id, schema.fieldId],
     )
-    const existing = fieldRows.length > 0 ? parseBlockRow(fieldRows[0]!) : undefined
-
-    if (existing) {
-      if (existing.content !== propertyFieldContent(schema.fieldId)) {
-        await this.update(existing.id, {content: propertyFieldContent(schema.fieldId)})
-      }
-      // §9 value set: `is_field_form IS NOT 1` children only — a nested
-      // marked row under the field row is its own machinery, never a value
-      // candidate for overwrite/dedup.
-      const values = await fieldValueChildren(this, existing.id)
-      const [primary, ...duplicates] = values
-      if (primary) {
-        if (primary.content !== content) await this.update(primary.id, {content})
-        // §9 dedup — fold ONLY exact duplicates of the value we just wrote
-        // (concurrent dual-writes of the same value), matching the deferred
-        // materialize processor (propertyChildrenProcessor.ts). A DIVERGENT
-        // peer value — e.g. a merge's surfaced conflict — is kept, not silently
-        // collapsed onto the winner: a raw `tx.update({properties})` preserves
-        // it via materialize, so this eager path must too. The shared
-        // relocate-then-subtree-delete helper keeps the loser's user-authored
-        // sub-children under the primary when a fold does happen.
-        for (const duplicate of duplicates) {
-          if (duplicate.content === content) {
-            await collapseDuplicateValueChild(this, primary.id, duplicate)
-          }
-        }
-      } else {
-        await this.create({
-          workspaceId: parent.workspaceId,
-          parentId: existing.id,
-          orderKey: keyAtStart(null),
-          content,
-        })
-      }
-      return
-    }
-
-    // Machinery inserts field rows FIRST among children (§9 ordering
-    // decision): fields cluster above content as an emergent default;
-    // orderKey stays user-owned afterwards.
-    const fieldRowId = await this.create({
-      workspaceId: parent.workspaceId,
-      parentId: parent.id,
-      // Born classified (§9): both derived columns pre-stamped in the create
-      // so the row classifies and projects within the same single pass.
-      referenceTargetId: schema.fieldId,
-      isFieldForm: true,
-      orderKey: keyAtStart(null),
-      content: propertyFieldContent(schema.fieldId),
-    })
-    await this.create({
-      workspaceId: parent.workspaceId,
-      parentId: fieldRowId,
-      orderKey: keyAtStart(null),
-      content,
-    })
+    const fieldRow = await upsertFieldRow(
+      this, parent, schema.fieldId, fieldRows.map(parseBlockRow),
+    )
+    await reconcileFieldValueChildren(this, fieldRow, schema, encoded)
   }
 
   private async requireParentInWorkspace(

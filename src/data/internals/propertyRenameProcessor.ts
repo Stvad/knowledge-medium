@@ -47,11 +47,12 @@ import {
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import { withoutContestedRenames } from './propertyDefinitionMigrations'
+import { isResolvableFieldDefinition } from './propertySchemaResolution'
 import {
-  isFieldValueChild,
-  isPropertyFieldInstance,
-  propertyChildContentToEncodedValue,
+  childContentsToEncodedPropertyValue,
+  fieldRowValues,
   rekeyParentPropertyCell,
+  unionValuesAcrossFieldRows,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 
@@ -136,8 +137,16 @@ const consumingParentIds = async (
 /** Re-key one parent's cell for every rename that owns a field row under it.
  *  The shared `rekeyParentPropertyCell` owns the parent guard and the
  *  swap-safe drop-all-then-set-all apply; this supplies only the per-parent
- *  PLAN — project each renamed field's FIRST parseable value under the
- *  tx-start (rename-unchanged) codec, drop the old name, set the new. */
+ *  PLAN — project each renamed field under the tx-start (rename-unchanged)
+ *  codec, drop the old name, set the new.
+ *
+ *  Projection goes through the same two functions
+ *  `core.projectPropertyChildren` uses — `unionValuesAcrossFieldRows` then
+ *  `childContentsToEncodedPropertyValue` — which OWN the cross-field-row fold
+ *  and the per-grain aggregate. Restating either rule here is how the two
+ *  drift, and both drifts were shipped: a rename projecting first-wins at both
+ *  grains shortened every renamed list to one member, and one that concatenated
+ *  doubled it — with `settledWrites` meaning nothing follows to correct it. */
 const rekeyParent = (
   ctx: SameTxCtx,
   parentId: string,
@@ -148,33 +157,22 @@ const rekeyParent = (
     const oldNames: string[] = []
     const assignments: Array<{name: string; value: unknown}> = []
     for (const rename of renames) {
-      let projected: unknown
-      let hasProjection = false
-      let sawFieldRow = false
-      for (const sibling of siblings) {
-        if ((sibling.referenceTargetId ?? null) !== rename.fieldId) continue
-        if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
-        sawFieldRow = true
-        if (hasProjection) continue
-        // §9 value set: bit-filtered — nested marked rows are machinery.
-        const values = (await ctx.tx.childrenOf(sibling.id, undefined))
-          .filter(isFieldValueChild)
-        for (const value of values) {
-          try {
-            projected = propertyChildContentToEncodedValue(rename.schema, value.content)
-            hasProjection = true
-            break
-          } catch {
-            // Unparseable value — a rename doesn't change the codec, so this is a
-            // pre-existing stale value; try the next, and if none parse the new
-            // key stays unset (the old key is still dropped — §9: cell derives
-            // from children, so a stale value shows unset until re-set).
-          }
-        }
-      }
-      if (!sawFieldRow) continue
+      // `null` = this parent carries no field row for the definition, which is
+      // also the gate `childContentsToEncodedPropertyValue` is called under.
+      const perFieldRow = await fieldRowValues(
+        ctx.tx, siblings, rename.fieldId, isFieldDefinition)
+      if (perFieldRow === null) continue
+      const contents = unionValuesAcrossFieldRows(rename.schema, perFieldRow)
+        .map(value => value.content)
       oldNames.push(rename.oldName)
-      if (hasProjection) assignments.push({name: rename.newName, value: projected})
+      // Unparseable values are skipped — a rename doesn't change the codec, so
+      // those are pre-existing and stale — and if none parse, the new key stays
+      // unset while the old one is still dropped (§9: the cell derives from the
+      // children, so a stale value shows unset until re-set).
+      const projected = childContentsToEncodedPropertyValue(rename.schema, contents)
+      if (projected !== undefined) {
+        assignments.push({name: rename.newName, value: projected})
+      }
     }
     return {oldNames, assignments}
   })
@@ -202,11 +200,10 @@ export const MIGRATE_PROPERTY_RENAME_PROCESSOR = defineSameTxProcessor({
       ctx, event.workspaceId, renames.map(r => r.fieldId),
     )
     if (parentIds.length === 0) return
-    const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
-      const resolution = ctx.resolvePropertySchemaField(event.workspaceId, fieldId)
-      return resolution.status === 'resolved'
-        || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
-    }
+    // The tx-start SNAPSHOT, not the live resolver: a rename must classify
+    // field rows against the codec the definition had when the tx opened.
+    const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) =>
+      isResolvableFieldDefinition(ctx.resolvePropertySchemaField(event.workspaceId, fieldId))
     for (const parentId of parentIds) {
       await rekeyParent(ctx, parentId, renames, isFieldDefinition)
     }

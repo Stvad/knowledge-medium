@@ -46,11 +46,6 @@ export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
  *  write and the sync drain queued behind it. */
 export const TARGET_INSERT_ROWS = 190
 
-/** A registered key costs a field row and its value row. Over-counts a key
- *  that is unregistered or already materialized, which errs toward smaller
- *  transactions. */
-export const ROWS_PER_KEY = 2
-
 /** Candidates fetched per scan query. Independent of the write budget: this
  *  bounds how often the pass pays for a cursor seek, the budget bounds how
  *  long it holds the writer. */
@@ -72,8 +67,19 @@ const CARRIES_A_PROPERTY = `
      AND EXISTS (SELECT 1 FROM json_each(b.properties_json))`
 
 /**
- * Blocks carrying any property, oldest id first, with the key count the write
- * budget is drawn against.
+ * Blocks carrying any property, oldest id first, with the ROW count the write
+ * budget is drawn against: a field row per key, plus one value row per value.
+ * The only thing that makes a key multi-valued at this level is its value being
+ * an array, so an array is charged N + 1 and everything else 2 — an EMPTY array
+ * included, because this layer cannot see the codec and under a non-list one an
+ * empty array is still one value child holding `[]`. That is the only way the
+ * estimate could UNDER-count, which is the direction that matters; a genuine
+ * empty list property is merely over-counted by one, and so is an array under a
+ * codec that is not list-shaped.
+ *
+ * `json_each`'s own `type` column, never `json_type(value)` — that one PARSES
+ * its argument, so it raises "malformed JSON" on the first key holding a plain
+ * string.
  *
  * Deliberately NOT narrowed to "blocks that still owe children". A first
  * attempt compared key count against field-row count, which is not the
@@ -90,7 +96,9 @@ const CARRIES_A_PROPERTY = `
  */
 export const CANDIDATE_SQL = `
   SELECT b.id AS id,
-         (SELECT COUNT(*) FROM json_each(b.properties_json)) AS keys
+         (SELECT SUM(1 + CASE WHEN e.type = 'array'
+                              THEN MAX(1, json_array_length(e.value)) ELSE 1 END)
+            FROM json_each(b.properties_json) e) AS rows
     FROM blocks b
    WHERE b.workspace_id = ?
      AND b.deleted = 0
@@ -316,10 +324,10 @@ const sweep = async (
   }
 
   let cursor = ''
-  let queued: {id: string; keys: number}[] = []
+  let queued: {id: string; rows: number}[] = []
   for (;;) {
     if (queued.length === 0) {
-      queued = await ctx.getAll<{id: string; keys: number}>(
+      queued = await ctx.getAll<{id: string; rows: number}>(
         CANDIDATE_SQL, [ctx.workspaceId, cursor, SCAN_PAGE],
       )
       if (queued.length === 0) return
@@ -333,10 +341,10 @@ const sweep = async (
     const batch: {id: string}[] = []
     let budget = 0
     while (queued.length > 0 && (batch.length === 0
-           || budget + queued[0]!.keys * ROWS_PER_KEY <= TARGET_INSERT_ROWS)) {
+           || budget + queued[0]!.rows <= TARGET_INSERT_ROWS)) {
       const next = queued.shift()!
       batch.push(next)
-      budget += next.keys * ROWS_PER_KEY
+      budget += next.rows
     }
 
     await ctx.tx(async tx => {

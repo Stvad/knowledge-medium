@@ -122,10 +122,11 @@ import {
   recordAppliedPropertyDefinitionCodecs,
 } from './internals/propertyDefinitionBaseline'
 import {
-  encodedPropertyValueToChildContent,
-  isFieldValueChild,
-  isPropertyFieldInstance,
-  propertyChildContentToEncodedValue,
+  childContentsToEncodedPropertyValue,
+  encodedToValueChildContent,
+  fieldRowValues,
+  unionValuesAcrossFieldRows,
+  valueChildContentToEncoded,
   rekeyParentPropertyCell,
   type IsPropertyFieldDefinition,
 } from './propertyChildren'
@@ -173,6 +174,7 @@ import {
   awaitPropertySeedMaterializationAccess,
 } from './definitionSeeds'
 import {
+  isResolvableFieldDefinition,
   propertySchemaResolverForWorkspace,
   type PropertySchemaResolver,
 } from './internals/propertySchemaResolution'
@@ -4267,7 +4269,7 @@ export class Repo {
    * export and cross-workspace re-derive-by-content bind the name), re-encode
    * value children to the new codec's canonical content where they convert,
    * and re-key each consuming parent's cell (drop the old key; project the
-   * new one from the first parseable value). Writes ride ordinary repo.tx —
+   * new one from its value children, at whichever grain the codec has). Writes ride ordinary repo.tx —
    * field-row content and cells are synced state, and the flip-gated
    * processors' idempotence makes the overlap free.
    *
@@ -4491,49 +4493,23 @@ export class Repo {
     for (let i = 0; i < parentIds.length; i += CHUNK) {
       const chunk = parentIds.slice(i, i + CHUNK)
       await this.tx(async tx => {
-        // Flat §9 recognition: field-row selection below keys on the BIT +
-        // fieldId (the bit is what keeps a ref-typed value pointing at this
-        // very definition from being misread as a field row — no ancestry
-        // walk exists anymore, and every owner re-keys uniformly at any
-        // depth).
+        // Resolve against the BATCH'S CAPTURED resolver (threaded in from
+        // `schedulePropertyDefinitionMigrations`), never a freshly derived
+        // one: workspace retention is one-deep and fails closed, so once
+        // further switches drop this batch's workspace, a fresh resolver
+        // stops resolving every fieldId — including the ones `plans` already
+        // proved resolvable — `fieldRowValues` rejects every sibling, and the
+        // batch silently re-keys nothing while reporting non-empty plans.
         //
-        // `isFieldDefinition` closes over the batch's captured `resolver`
-        // (schedule-time snapshot, captured in
-        // `schedulePropertyDefinitionMigrations` and threaded through as a
-        // parameter — NOT re-derived here). It used to call
-        // `this.propertySchemaResolverFor(workspaceId)` fresh per
-        // chunk, but that has the exact same one-deep active/previous fail-
-        // closed behavior as the outer resolve this method used to do: once
-        // the deferred batch's own workspace fell out of retention (further
-        // switches while THIS batch's chunks are still running), every
-        // fieldId — including the ones `plans` already proved resolvable —
-        // would stop resolving, `isPropertyFieldInstance` below would reject
-        // every sibling, and the batch would silently re-key nothing despite
-        // having non-empty plans. Reusing the captured `resolver` fixes that:
-        // it's bound to a real snapshot for the life of the batch, not to
-        // whatever workspace happens to be live when a chunk executes. This
-        // also covers ancestor fieldIds unrelated to `plans` (arbitrary other
-        // definitions encountered walking up from `parentId`), which a
-        // plans-only lookup can't answer — the resolver is what actually knows
-        // "is this fieldId some (possibly shadowed) definition in this
-        // workspace's registry", not just "is it one of the migrating ones".
+        // Accepted: the snapshot is fixed for the batch, so a definition
+        // change landing mid-batch is not seen here. That is a separately
+        // diffed registry rebuild and schedules its own migration.
         //
-        // Trade-off: this is a fixed snapshot for the whole batch, so a
-        // genuinely concurrent definition change landing between chunks (or
-        // between schedule time and the batch running) isn't picked up
-        // here — but that's an independent, separately-diffed registry
-        // rebuild, so it schedules its OWN follow-up migration; it doesn't
-        // need this pass to also notice it. For the `plans` fieldIds
-        // specifically, `isFieldDefinition(change.fieldId)` is now
-        // provably always true (same resolver instance that already proved
-        // `change.fieldId` resolves when `plans` was built) — the guard below
-        // stays for the root-half/shared-recognizer symmetry with the
-        // ancestor walk, not as a live re-check.
-        const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
-          const rowResolution = resolver.resolveField(fieldId)
-          return rowResolution.status === 'resolved'
-            || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
-        }
+        // For the `plans` fieldIds this predicate is provably always true —
+        // the same resolver instance already proved them. Kept as the one
+        // composed recognizer rather than a hand-rolled restatement.
+        const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) =>
+          isResolvableFieldDefinition(resolver.resolveField(fieldId))
 
         for (const parentId of chunk) {
           // Shared swap-safe re-key: the helper owns the parent guard and
@@ -4547,51 +4523,48 @@ export class Repo {
               const oldNames: string[] = []
               const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
               for (const {change, schema} of plans) {
-                let projected: unknown
-                let hasProjection = false
+                // `null` = this parent carries no field row for this
+                // definition, so its cell keys for it are none of this
+                // change's business. It is also the gate
+                // `childContentsToEncodedPropertyValue` is called under.
+                const perFieldRow = await fieldRowValues(
+                  tx, siblings, change.fieldId, isFieldDefinition)
+                if (perFieldRow === null) continue
                 let parentUnconvertible = 0
-                let sawFieldRow = false
-                // Field-row content is `::((fieldId))` — id-addressed and
-                // rename-stable (§7), nothing to retitle. The fieldId
-                // equality picks THIS definition's field rows; the shared §9
-                // recognizer supplies the bit + root + resolvability
-                // conditions (`isFieldDefinition(change.fieldId)` is always
-                // true here — kept as the one composed predicate rather than
-                // a hand-rolled restatement).
-                for (const sibling of siblings) {
-                  if (
-                    (sibling.referenceTargetId ?? null) !== change.fieldId
-                    || !isPropertyFieldInstance(sibling, isFieldDefinition)
-                  ) continue
-                  sawFieldRow = true
-                  // §9 value set: bit-filtered — nested marked rows are
-                  // machinery, never value candidates.
-                  const values = (await tx.childrenOf(sibling.id, undefined))
-                    .filter(isFieldValueChild)
+                const canonicalized: Array<Array<Pick<BlockData, 'id' | 'content'>>> = []
+                for (const values of perFieldRow) {
+                  const group: Array<Pick<BlockData, 'id' | 'content'>> = []
                   for (const value of values) {
                     try {
-                      const encoded = propertyChildContentToEncodedValue(schema, value.content)
-                      if (!hasProjection) {
-                        projected = encoded
-                        hasProjection = true
-                      }
+                      // At value-child GRAIN, both ways: under a list codec
+                      // this row holds ONE member, and reading it against the
+                      // whole-array grammar would make every member
+                      // unconvertible.
+                      const encoded = valueChildContentToEncoded(schema, value.content)
                       // Canonicalize the child content under the new codec so
                       // the stored text matches what setProperty would write.
                       // Every change that reaches this batch is a codec change
                       // (the bridge filters to one, the baseline emits only
                       // those), so re-encoding is always what was asked for.
-                      const canonical = encodedPropertyValueToChildContent(schema, encoded)
+                      const canonical = encodedToValueChildContent(schema, encoded)
                       if (value.content !== canonical) {
                         await tx.update(value.id, {content: canonical}, {skipMetadata: true})
                       }
+                      group.push({id: value.id, content: canonical})
                     } catch {
                       parentUnconvertible += 1
                     }
                   }
+                  canonicalized.push(group)
                 }
-                // This parent carries no field row for this definition — its
-                // cell keys for it are none of this change's business.
-                if (!sawFieldRow) continue
+                // Union ACROSS field rows, the same rule the projection runs.
+                // The group carries each member's CANONICAL text because that
+                // is what gets published; keying is unaffected either way,
+                // since a member only reached the group by decoding from its
+                // stored text and the canonical form round-trips to the same
+                // value (mutation-checked: keying on the stored text passes).
+                const canonicalContents = unionValuesAcrossFieldRows(schema, canonicalized)
+                  .map(value => value.content)
                 if (parentUnconvertible > 0) {
                   unconvertibleByField.set(
                     change.fieldId,
@@ -4600,23 +4573,44 @@ export class Repo {
                 }
 
                 if (change.oldName !== schema.name) oldNames.push(change.oldName)
-                if (hasProjection) {
-                  assignments.push({name: schema.name, value: projected, unset: false})
-                } else if (parentUnconvertible === 0) {
-                  assignments.push({name: schema.name, value: undefined, unset: true})
+                const projected = childContentsToEncodedPropertyValue(
+                  schema, canonicalContents)
+                // PUBLISH NOTHING WHEN ANYTHING FAILED TO CONVERT. The cell
+                // write below is an ordinary `tx.update`, so MATERIALIZE runs on
+                // it in the same tx and reconciles the children against what was
+                // published — over the very rows this pass reports as preserved
+                // unchanged. Measured both ways: a partial LIST had its
+                // unconvertible member tombstoned, and a list migrated to a
+                // SCALAR had the unconvertible row's text overwritten with the
+                // converted value and the converted row folded away. One rule
+                // for both grains, because the promise is the same for both.
+                if (parentUnconvertible === 0) {
+                  assignments.push({
+                    name: schema.name,
+                    value: projected,
+                    unset: projected === undefined,
+                  })
                 }
-                // else (all-unconvertible): leave the new key unset — no
-                // assignment.
-                //   - rename: the old key is dropped and the new key stays
-                //     absent → the cell shows unset for the unparseable values,
-                //     §9's contract. Re-keying the stale value under the new name
-                //     would violate §9 (cell derives from children).
-                //   - no rename: the existing key rides untouched (no old name to
-                //     drop, no assignment) so a stale-but-fixable value stays
-                //     visible; the next valid edit reprojects and heals it
-                //     (§5 pending-reprojection).
-                // This pass NEVER deletes value rows, so they stay live
-                // unconditionally and the unconvertible COUNT is surfaced below.
+                // else (anything unconvertible): THIS PASS publishes no
+                // assignment. That is not the same as the cell standing still,
+                // and reading it that way is how a future fix enforces the
+                // wrong invariant. Canonicalizing a convertible child above is
+                // an ordinary content write, so `core.projectPropertyChildren`
+                // follows it and re-derives the cell from the children that
+                // parse — measured: a list with one bad member migrated to a
+                // scalar leaves the cell holding the CONVERTED value, not the
+                // stale one. So the cell ends up either:
+                //   - unchanged, when nothing was canonicalized (every
+                //     convertible member was already in the new grammar, so no
+                //     child write and no reprojection); or
+                //   - the PARTIAL projection under the definition's CURRENT
+                //     name, with the unparseable rows absent from it — §9's
+                //     contract, since the cell derives from the children.
+                // What the guard buys is the rows, not the cell: this pass
+                // never writes a value over children it promised to preserve,
+                // never deletes a value row, and the projection's own write is
+                // `settledWrites` so no materializer reconciles over them
+                // either. The unconvertible COUNT is surfaced below.
               }
               return {oldNames, assignments}
             },

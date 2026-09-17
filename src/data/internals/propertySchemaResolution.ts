@@ -29,6 +29,22 @@ export const isResolvedPropertySchema = <T>(
   return typeof candidate.fieldId === 'string' && typeof candidate.workspaceId === 'string'
 }
 
+/** §9 recognition, fieldId half: does this resolution name a definition the
+ *  workspace's registry can answer for? Shadowed losers COUNT — their field
+ *  rows keep classifying, and are excluded only from the name map and the
+ *  projection.
+ *
+ *  ONE owner for a rule three sites ask, because each holds a DIFFERENT
+ *  resolver — the live one, a tx-start snapshot, a migration batch's captured
+ *  one — so what they can share is the predicate, not the checker. Written out
+ *  per site, the shadow clause is what drifts, and dropping it detaches every
+ *  shadowed definition's field rows from their owners. */
+export const isResolvableFieldDefinition = (
+  resolution: PropertySchemaResolution<unknown>,
+): boolean =>
+  resolution.status === 'resolved'
+  || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
+
 /** A resolver is created for an owning transaction/workspace registry
  * snapshot; callers supply only the definition handle or name, never a
  * workspace id. */
