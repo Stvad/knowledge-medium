@@ -402,17 +402,13 @@ export const createPropertySchemaResolver = (
   snapshot: PropertyDefinitionRegistrySnapshot,
 ): PropertySchemaResolver => new SnapshotPropertySchemaResolver(snapshot, new Map(), false)
 
-/** The schema a write may use for `schema`'s name, or throw.
+/** The schema a write may use for `schema`'s name, or throw
+ *  `PropertySchemaIdentityError`.
  *
- *  The question is whether THIS schema may write that name, and the answer
- *  differs by kind. A handle resolves through its own seed identity, so it
- *  throws when that definition is absent from the workspace's snapshot. A plain
- *  schema is admitted on an UNCLAIMED name, and only in the ACTIVE workspace:
- *  that admission is how ambient code-defined properties work, and how a caller
- *  clears a cell under a name the code has retired. So a plain schema throws
- *  when another definition or seed claims the name, when seeds leave it
- *  ambiguous, or when the workspace is foreign — there no unclaimed plain name
- *  is admitted, since no faithful snapshot can confirm it a winner. */
+ *  Admission is `resolveBoundary`'s call: it turns on schema kind, on whether a
+ *  faithful snapshot exists, and on what else claims the name. That matrix is
+ *  stated there, beside the code that decides it, and is deliberately not
+ *  mirrored here — a copy of it drifts in a different corner each time. */
 export const requireWritablePropertySchema = <T>(
   schema: PropertySchema<T>,
   resolver: PropertySchemaResolver,
