@@ -127,18 +127,27 @@ const importMap = readImportMap(fs.readFileSync(path.join(distDir, 'index.html')
 const vendorEntries = Object.entries(importMap.imports ?? {}).filter(([, target]) => target.startsWith(`./${VENDOR_DIR}/`))
 if (vendorEntries.length === 0) fail('index.html importmap has no vendor entries; vendorImportMapPlugin did not run')
 if (Object.values(importMap.imports ?? {}).some(target => /^https?:/.test(target))) fail('index.html importmap maps a specifier to a remote URL')
-// What a facade may contain besides its import/export clauses: a directive,
-// a sourcemap comment, and the CommonJS shim's one `var` statement — the
-// interop call, optionally the `default` read, and the names destructured off
-// the namespace. Anything else is the package's own code.
-const FACADE_NOISE = /import\s*\{[^}]*\}\s*from\s*["'][^"']+["'];?|import\s*["'][^"']+["'];?|export\s*\{[^}]*\};?|export\s+default\s+[\w$.]+(?:\(\))?;?|["']use client["'];?|var\s+\w+\s*=\s*\w+\(\w+\(\)\)(?:\s*,\s*\w+\s*=\s*\w+\.default)?(?:\s*,\s*\{[^}]*\}\s*=\s*\w+)?;|\/\/#\s*sourceMappingURL=.*$/gm
+// Everything a facade may contain. Anything left after stripping these is the
+// package's own code, i.e. a second copy.
+const FACADE_NOISE = new RegExp(
+  [
+    /import\s*\{[^}]*\}\s*from\s*["'][^"']+["'];?/, // the re-export imports
+    /export\s*\{[^}]*\};?/, // the export clause (default included, as `x as default`)
+    /["']use client["'];?/, // a directive some packages carry
+    // The CommonJS shim's one statement: the interop call, optionally the
+    // `default` read, and the names destructured off the namespace.
+    /var\s+\w+\s*=\s*\w+\(\w+\(\)\)(?:\s*,\s*\w+\s*=\s*\w+\.default)?(?:\s*,\s*\{[^}]*\}\s*=\s*\w+)?;/,
+    /\/\/#\s*sourceMappingURL=.*$/,
+  ].map(re => re.source).join('|'),
+  'gm',
+)
 const facadeFile = (target: string): string => path.join(distDir, target.slice('./'.length))
 for (const [specifier, target] of vendorEntries) {
   const rel = target.slice('./'.length)
   const file = facadeFile(target)
   if (!fs.existsSync(file)) fail(`importmap maps ${specifier} to ${target}, which was not emitted`)
   const text = fs.readFileSync(file, 'utf8')
-  for (const [, from] of text.matchAll(/from\s*["']([^"']+)["']/g)) {
+  for (const [, from] of text.matchAll(/\b(?:from|import)\s*["']([^"']+)["']/g)) {
     const resolved = path.resolve(path.dirname(file), from)
     if (!resolved.startsWith(path.join(distDir, 'chunks') + path.sep)) fail(`${rel} imports ${from}, not a chunk`)
     if (!fs.existsSync(resolved)) fail(`${rel} imports ${from}, which was not emitted`)

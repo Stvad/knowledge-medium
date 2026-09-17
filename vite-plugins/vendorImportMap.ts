@@ -29,14 +29,11 @@
  * A CommonJS package gets a generated shim as its input, in dev and build
  * alike: rolldown's facade for a CommonJS entry (and Vite's optimized dep in
  * dev) carries `default` alone, so `import {useState} from 'react'` would fail
- * to link. The shim re-exports each name Node sees on the module, evaluated
- * from the SAME file Vite's build resolver picks — Node's own conditions choose
- * a dual package's CommonJS entry, and `react-dom/server`'s node build has
- * names its browser build lacks.
+ * to link. The shim re-exports each name Node sees on the resolved file.
  *
  * Dev: `/vendor/<specifier>.js` is a virtual module Vite's import analysis
  * rewrites onto the same `/node_modules/.vite/deps/…?v=` URL the kernel's
- * imports use. Two instances in dev would fail exactly like production.
+ * imports use.
  */
 import {execFileSync} from 'node:child_process'
 import fs from 'node:fs'
@@ -46,9 +43,23 @@ import {rewriteImportMapScript} from './importMapHtml'
 import {srcEntryFiles} from './srcEntries'
 
 export const VENDOR_DIR = 'vendor'
-const DEV_URL_PATTERN = /^\/vendor\/(.+)\.js$/
-const FACADE_ID_PREFIX = '\0km-vendor:'
+const DEV_URL_PATTERN = new RegExp(`^/${VENDOR_DIR}/(.+)\\.js$`)
 const CJS_INPUT_PREFIX = 'virtual:km-vendor-cjs/'
+/** The virtual facade id. In dev it carries a `.cjs` suffix so Vite treats the
+ *  facade as a CommonJS-side importer (`isFilePathESM` false) and its
+ *  default-import interop matches rolldown's: `default` is `module.exports`
+ *  only when the module is not flagged `__esModule`. Under the repo's
+ *  `"type": "module"` the id would otherwise be in node mode, and dev would
+ *  hand `import Babel from '@babel/standalone'` the exports object that the
+ *  production facade leaves undefined. The build id has no suffix: rolldown
+ *  would parse a `.cjs` id as CommonJS and reject the facade's `import`. */
+const FACADE_ID_PREFIX = '\0km-vendor:'
+const DEV_FACADE_ID_SUFFIX = '.cjs'
+const facadeSpecifier = (id: string): string | undefined => {
+  if (!id.startsWith(FACADE_ID_PREFIX)) return undefined
+  const rest = id.slice(FACADE_ID_PREFIX.length)
+  return rest.endsWith(DEV_FACADE_ID_SUFFIX) ? rest.slice(0, -DEV_FACADE_ID_SUFFIX.length) : rest
+}
 
 /** The automatic JSX runtime `@vitejs/plugin-react` emits into every
  *  transformed module; no source file names it. Applies when `react` is a
@@ -64,7 +75,8 @@ const BUILD_INJECTED_SPECIFIERS = ['react/jsx-runtime', 'react/compiler-runtime'
  *  neither carries identity-sensitive state. */
 const HEAVY_SURFACE = new Set(['lucide-react', 'lodash-es'])
 
-const vendorFileName = (specifier: string): string => `${VENDOR_DIR}/${specifier}.js`
+const vendorInputName = (specifier: string): string => `${VENDOR_DIR}/${specifier}`
+const vendorFileName = (specifier: string): string => `${vendorInputName(specifier)}.js`
 
 /** Importmap `imports` for a set of specifiers, keyed by bare name. Relative
  *  to the document, like the `"@/": "./src/"` entry beside them. */
@@ -101,14 +113,10 @@ const exposedVendorPackages = (rootDir: string): string[] =>
   Object.entries(readPackageJson(rootDir)?.dependencies ?? {})
     .filter(([pkg, spec]) => isExposed(pkg, spec))
     .map(([pkg]) => pkg)
-    .sort()
 
 const COMMENTS = /\/\*[\s\S]*?\*\/|\/\/[^\n]*/g
 const TYPE_ONLY_IMPORT = /\bimport\s+type\b[^;]*?from\s*['"][^'"]+['"]/g
 const SPECIFIER = /\b(?:from|import)\s*\(?\s*['"]([^'"\n]+)['"]/g
-
-const readSourceFiles = (rootDir: string): string[] =>
-  srcEntryFiles(rootDir).map(file => fs.readFileSync(path.join(rootDir, file), 'utf8'))
 
 /** Subpaths of `packages` that the app's own source imports at runtime
  *  (`react-dom/client`), sorted and unique. Comments and type-only imports
@@ -134,7 +142,8 @@ const exposedVendorSpecifiers = (rootDir: string): string[] => {
   const packages = exposedVendorPackages(rootDir)
   const set = new Set(packages)
   const injected = set.has('react') ? BUILD_INJECTED_SPECIFIERS : []
-  return [...new Set([...packages, ...appImportedSubpaths(readSourceFiles(rootDir), set), ...injected])].sort()
+  const sources = srcEntryFiles(rootDir).map(file => fs.readFileSync(path.join(rootDir, file), 'utf8'))
+  return [...new Set([...packages, ...appImportedSubpaths(sources, set), ...injected])].sort()
 }
 
 type ModuleKind = 'esm' | 'cjs'
@@ -179,14 +188,18 @@ const ENUMERATE_EXPORTS =
  *  `vite build` alive after it finishes. The child inherits NODE_ENV, so the
  *  names match the build the bundler picks. Loud on failure: a shim with no
  *  names is the link error this exists to prevent, one step later. */
+const cjsExportNamesByFile = new Map<string, string[]>()
 const cjsExportNames = (file: string): string[] => {
-  let out: string
+  const memo = cjsExportNamesByFile.get(file)
+  if (memo) return memo
+  let names: string[]
   try {
-    out = execFileSync(process.execPath, ['-e', ENUMERATE_EXPORTS, file], {
+    const out = execFileSync(process.execPath, ['-e', ENUMERATE_EXPORTS, file], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 30_000,
     })
+    names = JSON.parse(out) as string[]
   } catch (err) {
     throw new Error(
       `vendor-import-map: cannot require ${file} to enumerate its CommonJS exports; ` +
@@ -194,7 +207,9 @@ const cjsExportNames = (file: string): string[] => {
       {cause: err},
     )
   }
-  return (JSON.parse(out) as string[]).filter(k => IDENTIFIER.test(k) && k !== 'default' && k !== '__esModule').sort()
+  const filtered = names.filter(k => IDENTIFIER.test(k) && k !== 'default' && k !== '__esModule').sort()
+  cjsExportNamesByFile.set(file, filtered)
+  return filtered
 }
 
 /** The shim for a CommonJS package. Names are read off the NAMESPACE, not off
@@ -212,32 +227,40 @@ export const cjsShimSource = (specifier: string, names: readonly string[]): stri
   return `${head}const {${destructure}} = m;\nexport {${exports}};\n`
 }
 
-/** The dev facade for an ESM package. `export *` never forwards `default`;
- *  the namespace read makes it a plain `undefined` for a package without one
- *  instead of a load error. */
+/** The dev facade for an ESM package. `export *` never forwards `default`,
+ *  hence the namespace read. Accepted divergence: a package with no default
+ *  export links `default` as undefined here, where the production facade has
+ *  no such binding and importing it is a link error. The build is the
+ *  contract, and this is more permissive for that one name only. */
 const esmFacadeSource = (specifier: string): string => {
   const from = JSON.stringify(specifier)
   return `import * as m from ${from};\nexport * from ${from};\nexport default m.default;\n`
 }
 
 /** Facade source for `specifier` given the file the bundler resolves it to. */
-export const facadeSource = (specifier: string, file: string): string =>
-  moduleKind(file) === 'cjs' ? cjsShimSource(specifier, cjsExportNames(file)) : esmFacadeSource(specifier)
+export const facadeSource = (specifier: string, file: string, kind: ModuleKind = moduleKind(file)): string =>
+  kind === 'cjs' ? cjsShimSource(specifier, cjsExportNames(file)) : esmFacadeSource(specifier)
 
 export const vendorImportMapPlugin = ({rootDir}: {rootDir: string}): Plugin => {
   const exposed = exposedVendorSpecifiers(rootDir)
   const exposedSet = new Set(exposed)
   let isBuild = false
+  const facadeId = (specifier: string): string =>
+    `${FACADE_ID_PREFIX}${specifier}${isBuild ? '' : DEV_FACADE_ID_SUFFIX}`
   let resolveFile: ((specifier: string) => Promise<string>) | undefined
-  const files = new Map<string, string>()
-  const fileOf = async (specifier: string): Promise<string> => {
-    let file = files.get(specifier)
-    if (!file) {
+  type Resolved = {file: string; kind: ModuleKind}
+  const resolved = new Map<string, Resolved>()
+  /** What the bundler sees for `specifier`: decided once, used by the input
+   *  choice and the facade source alike. */
+  const resolve = async (specifier: string): Promise<Resolved> => {
+    let entry = resolved.get(specifier)
+    if (!entry) {
       if (!resolveFile) throw new Error('vendor-import-map: resolver used before configResolved')
-      file = await resolveFile(specifier)
-      files.set(specifier, file)
+      const file = await resolveFile(specifier)
+      entry = {file, kind: moduleKind(file)}
+      resolved.set(specifier, entry)
     }
-    return file
+    return entry
   }
 
   return {
@@ -248,9 +271,11 @@ export const vendorImportMapPlugin = ({rootDir}: {rootDir: string}): Plugin => {
       if (env.command !== 'serve') return null
       // Pre-bundle every exposed specifier up front: one the kernel's own graph
       // never imports would otherwise be discovered on an extension's first
-      // request, re-optimized, and reload the page mid-load.
+      // request, re-optimized, and reload the page mid-load. Exposed and
+      // pre-bundled are different sets: a package the config excludes from the
+      // optimizer (the PowerSync family) is still a facade, served from source.
       const excluded = new Set(userConfig.optimizeDeps?.exclude ?? [])
-      return {optimizeDeps: {include: exposed.filter(s => !excluded.has(packageNameOf(s) ?? s))}}
+      return {optimizeDeps: {include: exposed.filter(s => !excluded.has(packageNameOf(s) ?? ''))}}
     },
     configResolved(config: ResolvedConfig) {
       isBuild = config.command === 'build'
@@ -270,8 +295,8 @@ export const vendorImportMapPlugin = ({rootDir}: {rootDir: string}): Plugin => {
       }
       const input: Record<string, string> = {...(opts.input as Record<string, string>)}
       for (const specifier of exposed) {
-        const kind = moduleKind(await fileOf(specifier))
-        input[`${VENDOR_DIR}/${specifier}`] = kind === 'cjs' ? CJS_INPUT_PREFIX + specifier : specifier
+        const {kind} = await resolve(specifier)
+        input[vendorInputName(specifier)] = kind === 'cjs' ? CJS_INPUT_PREFIX + specifier : specifier
       }
       return {...opts, input}
     },
@@ -285,13 +310,14 @@ export const vendorImportMapPlugin = ({rootDir}: {rootDir: string}): Plugin => {
         const specifier = source.startsWith(CJS_INPUT_PREFIX)
           ? source.slice(CJS_INPUT_PREFIX.length)
           : DEV_URL_PATTERN.exec(source)?.[1]
-        return specifier && exposedSet.has(specifier) ? FACADE_ID_PREFIX + specifier : null
+        return specifier && exposedSet.has(specifier) ? facadeId(specifier) : null
       },
     },
     async load(id) {
-      if (!id.startsWith(FACADE_ID_PREFIX)) return null
-      const specifier = id.slice(FACADE_ID_PREFIX.length)
-      return facadeSource(specifier, await fileOf(specifier))
+      const specifier = facadeSpecifier(id)
+      if (!specifier) return null
+      const {file, kind} = await resolve(specifier)
+      return facadeSource(specifier, file, kind)
     },
     transformIndexHtml: {
       order: 'post',

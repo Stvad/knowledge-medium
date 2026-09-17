@@ -2,7 +2,6 @@
  *  and re-serialized, so the JSON shape and indentation stay one thing. */
 export type ImportMap = {
   imports?: Record<string, string>
-  integrity?: Record<string, string>
   [key: string]: unknown
 }
 
@@ -15,7 +14,7 @@ const formatImportMap = (importMap: ImportMap): string =>
 /** The first importmap block in `html`, parsed; `undefined` when there is
  *  none or it is not JSON. */
 export const readImportMap = (html: string): ImportMap | undefined => {
-  const match = new RegExp(importMapScriptPattern.source, 'i').exec(html)
+  const match = html.matchAll(importMapScriptPattern).next().value
   if (!match) return undefined
   try {
     return JSON.parse(match[3].trim()) as ImportMap

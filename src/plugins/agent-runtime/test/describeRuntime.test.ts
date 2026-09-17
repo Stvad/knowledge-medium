@@ -540,6 +540,32 @@ describe('describeRuntime', () => {
     )
   })
 
+  it('marks a vendor facade importmap entry safe for extensions and a remote one not', async () => {
+    const runtime = await resolveFacetRuntime([])
+    const doc = document.implementation.createHTMLDocument('agent runtime')
+    const importMap = doc.createElement('script')
+    importMap.type = 'importmap'
+    importMap.textContent = JSON.stringify({
+      imports: {
+        '@codemirror/view': './vendor/@codemirror/view.js',
+        'some-cdn-lib': 'https://cdn.example/some-cdn-lib.js',
+      },
+    })
+    doc.head.append(importMap)
+
+    const description = await describeRuntime({
+      repo: fakeRepo,
+      runtime,
+      safeMode: false,
+      actions: [],
+      renderers: {},
+      document: doc,
+    })
+    const byPath = new Map(description.authoring.modules.map(module => [module.importPath, module]))
+    expect(byPath.get('@codemirror/view')).toMatchObject({source: 'html-importmap', safeForExtensions: true})
+    expect(byPath.get('some-cdn-lib')?.safeForExtensions).not.toBe(true)
+  })
+
   it('reports safeMode=true when set', async () => {
     const runtime = await resolveFacetRuntime([])
     const description = await describeRuntime({

@@ -42,8 +42,9 @@
 // is a single file.
 // Bundled dependencies are importable by bare package name (`@codemirror/view`,
 // `zod`, `react`) — vite-plugins/vendorImportMap.ts emits a facade per package
-// and maps it in the importmap. Package names, plus the subpaths the app itself
-// imports (`react-dom/client`, `react/jsx-runtime`).
+// and maps it in the importmap. Package names (minus its HEAVY_SURFACE
+// exclusions), plus the subpaths the app itself imports (`react-dom/client`,
+// `react/jsx-runtime`).
 
 export interface ApiModuleGroup {
   /** Coarse grouping for discovery display (facets, data, ui, navigation, …). */

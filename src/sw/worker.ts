@@ -703,7 +703,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     if (isCacheableAsset(request.destination, url.pathname, isSameOrigin(url))) {
       return bootStoreFirst(request.url, () => assetCacheFirst(request))
     }
-    if (isVendor(url)) return bootStoreFirst(request.url, () => cacheFirst(request, VENDOR_CACHE))
+    if (isVendor(url)) return cacheFirst(request, VENDOR_CACHE)
     return undefined
   }
 

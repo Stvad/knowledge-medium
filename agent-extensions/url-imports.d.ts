@@ -5,7 +5,8 @@
 //
 // This is a real hole: nothing type-checks a URL-imported dependency. When the
 // app already bundles the thing you need, import it by its bare package name —
-// the importmap maps every dependency (vite-plugins/vendorImportMap.ts).
+// the importmap maps every runtime dependency except the few
+// vite-plugins/vendorImportMap.ts excludes for boot-chunk size (HEAVY_SURFACE).
 declare module 'https://*' {
   const value: any
   export = value

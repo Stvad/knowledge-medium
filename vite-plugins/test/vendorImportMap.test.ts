@@ -124,9 +124,11 @@ describe('vendorImportMapPlugin.resolveId', () => {
   const plugin = vendorImportMapPlugin({rootDir: fileURLToPath(new URL('../..', import.meta.url))})
   const resolveId = (plugin.resolveId as {handler: (source: string) => string | null}).handler
   it('maps an exposed specifier, from the dev URL or the build input', () => {
-    expect(resolveId('/vendor/react.js')).toBe('\0km-vendor:react')
-    expect(resolveId('/vendor/react/jsx-runtime.js')).toBe('\0km-vendor:react/jsx-runtime')
-    expect(resolveId('virtual:km-vendor-cjs/react')).toBe('\0km-vendor:react')
+    // The `.cjs` suffix keeps Vite's default-import interop in CommonJS mode,
+    // matching rolldown's `default` semantics (see facadeId).
+    expect(resolveId('/vendor/react.js')).toBe('\0km-vendor:react.cjs')
+    expect(resolveId('/vendor/react/jsx-runtime.js')).toBe('\0km-vendor:react/jsx-runtime.cjs')
+    expect(resolveId('virtual:km-vendor-cjs/react')).toBe('\0km-vendor:react.cjs')
   })
   it('refuses anything not exposed, including an absolute path smuggled into the URL', () => {
     expect(resolveId('/vendor//etc/hosts.js')).toBeNull()
