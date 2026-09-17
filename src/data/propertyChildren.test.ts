@@ -3520,6 +3520,34 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
   })
 
   describe('merge unions two divergent sets (§5 merge policy)', () => {
+    it('keeps two identically BROKEN members as two fixable rows', async () => {
+      // Equal valid members may fold: the reconciler restores the multiplicity
+      // from the cell. Two unparseable rows are not in any cell, so a fold
+      // destroys one for good — they are two independently fixable blocks.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'into')
+      await createBlock(repo, 'from')
+      await repo.tx(tx => tx.setProperty('into', peopleSchema, ['a-id']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('from', peopleSchema, ['b-id']),
+        {scope: ChangeScope.BlockDefault})
+      // Both edited to the SAME prose — the shape a person types into a ref.
+      for (const owner of ['into', 'from']) {
+        const member = (await memberRows(owner, PEOPLE_FIELD_ID))[0]!
+        await repo.tx(tx => tx.update(member.id, {content: 'not a reference'}),
+          {scope: ChangeScope.BlockDefault})
+      }
+
+      await repo.tx(async tx => {
+        const into = await tx.get('into')
+        const from = await tx.get('from')
+        await mergeBlocksInTx(tx, {into: into!, from: from!})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('into', PEOPLE_FIELD_ID))
+        .toEqual(['not a reference', 'not a reference'])
+    })
+
     it('folds members that are EQUAL though spelled differently', async () => {
       // The cell merge dedupes by value, so the collapse has to compare the
       // same way. Comparing raw text moved both rows under the survivor, the

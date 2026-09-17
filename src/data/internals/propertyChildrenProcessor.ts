@@ -717,20 +717,36 @@ const reconcileSingleValueChild = async (
  * already deduped them, so nothing reconciled and the projection published the
  * member twice.
  */
-const memberKeyFn = (
-  schema: AnyPropertySchema | null,
-): ((content: string) => string) => {
+interface MemberKeys {
+  /** A ROW's key. An unparseable row keys on its own IDENTITY, not its text:
+   *  it denotes no value at all, so it is equal to nothing — not even to
+   *  another row carrying the same broken text. Two rows both edited to
+   *  `not a reference` are two independently fixable blocks, and folding one
+   *  into the other destroys one of them for good: unlike two equal VALID
+   *  members, neither is in the projected cell, so nothing can recreate it. */
+  row: (row: Pick<BlockData, 'id' | 'content'>) => string
+  /** A DESIRED member's key, from the content the cell implies. Always a value
+   *  key in practice — it came from the encoder — and the fallback is shaped so
+   *  it can never equal a row key. */
+  content: (content: string) => string
+}
+
+const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
   if (schema === null || memberCodecOf(schema.codec) === undefined) {
-    return content => `c${content}`
+    // Single-valued: text IS the comparison, unchanged, and equal-content
+    // duplicates are copies of one value rather than occurrences.
+    return {row: row => `c${row.content}`, content: content => `c${content}`}
   }
-  return content => {
+  const valueKey = (content: string): string | undefined => {
     try {
       return `v${JSON.stringify(stableJsonValue(valueChildContentToEncoded(schema, content)))}`
     } catch {
-      // Unparseable text keys on itself, so it matches nothing and stays
-      // surplus, which is what it is.
-      return `c${content}`
+      return undefined
     }
+  }
+  return {
+    row: row => valueKey(row.content) ?? `r${row.id}`,
+    content: content => valueKey(content) ?? `c${content}`,
   }
 }
 
@@ -746,8 +762,8 @@ const reconcileMemberValueChildren = async (
   // what the canonical text projects to, and matching on text alone reaps that
   // row — with its comments, its own properties and its history — to mint a
   // replacement for a value that never changed.
-  const keyOf = memberKeyFn(schema)
-  const keyByRow = new Map(values.map(value => [value.id, keyOf(value.content)]))
+  const keys = memberKeysFor(schema)
+  const keyByRow = new Map(values.map(value => [value.id, keys.row(value)]))
 
   // Occurrence by occurrence, so a list holding one member twice consumes two
   // rows and a shortened list drops the surplus one rather than the wrong one.
@@ -758,7 +774,7 @@ const reconcileMemberValueChildren = async (
     if (bucket) bucket.push(value)
     else unused.set(key, [value])
   }
-  const kept = contents.map(content => unused.get(keyOf(content))?.shift())
+  const kept = contents.map(content => unused.get(keys.content(content))?.shift())
 
   // Everything unmatched, in the order the value set was read, so replicas
   // agree on which of several equal rows survives.
@@ -890,11 +906,11 @@ export const collapseDuplicateFieldRow = async (
   const duplicateChildren = await tx.childrenOf(
     duplicate.id, undefined,
   )
-  // The SAME comparison the member reconciler uses — see `memberKeyFn` for
-  // what a disagreement between the two costs. Resolves to raw-text matching
-  // for a scalar, and for a field row whose definition does not resolve.
+  // The SAME comparison the member reconciler uses — see `MemberKeys` for what
+  // a disagreement between the two costs. Resolves to raw-text matching for a
+  // scalar, and for a field row whose definition does not resolve.
   const fieldId = getPropertyFieldTargetId(duplicate)
-  const keyOf = memberKeyFn(fieldId === undefined
+  const keys = memberKeysFor(fieldId === undefined
     ? null
     : tx.resolvePropertyFieldSchema(duplicate.workspaceId, fieldId))
   for (const child of duplicateChildren) {
@@ -925,7 +941,7 @@ export const collapseDuplicateFieldRow = async (
     const survivorValues = survivorChildren.filter(isFieldValueChild)
     const match = mayNotRemove
       ? undefined
-      : survivorValues.find(v => keyOf(v.content) === keyOf(child.content))
+      : survivorValues.find(v => keys.row(v) === keys.row(child))
     if (match) {
       await collapseDuplicateValueChild(tx, match.id, child)
     } else {

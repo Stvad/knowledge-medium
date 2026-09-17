@@ -1009,8 +1009,11 @@ are themselves block references. Same primitive everywhere.
     (<code>Codec.member</code>); one that does not keeps the single-child shape. The members
     are an ORDERED LIST with multiplicity preserved &mdash; <code>[2, 2, 3]</code> is three
     value children, and reconciliation removes only the surplus occurrences, one at a time
-    &mdash; and an empty list projects as an ABSENT cell key, which reads back as the
-    preset's <code>[]</code> default.
+    &mdash; and an EXPLICITLY empty list is a value: a live field row with no value
+    children projects <code>[]</code> into the cell, and only removing the FIELD ROW
+    unsets the key. The distinction is observable for any list schema whose
+    <code>defaultValue</code> is not <code>[]</code>, where an absent key reads back as
+    that default and a stored <code>[]</code> reads back as itself.
   </li>
   <li>
     Ref-typed values reuse the block-reference primitive: a value child whose content is
