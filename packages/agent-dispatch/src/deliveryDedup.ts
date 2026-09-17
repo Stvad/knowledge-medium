@@ -35,6 +35,12 @@ export const createDeliveryDedup = (max = 500) => {
   // find, so those rows are simply gone.
   const claims = new Map<string, 'pending' | 'delivered'>()
   const remember = (id: string, state: 'pending' | 'delivered') => {
+    // DELETE first: `Map.set` on a key that already exists updates the value
+    // and leaves the key where it was, so a claim that stayed pending while
+    // the window filled would be evicted immediately after confirming — and
+    // its retry, if the acknowledgement was lost, would run the work again.
+    // The window a delivery gets should start when it is CONFIRMED.
+    claims.delete(id)
     claims.set(id, state)
     // Oldest-first eviction; Map preserves insertion order.
     if (claims.size > max) claims.delete(claims.keys().next().value as string)

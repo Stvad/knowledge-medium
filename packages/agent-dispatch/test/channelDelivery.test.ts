@@ -54,6 +54,16 @@ describe('channel delivery states its own failure cause', () => {
     expect((err as {dispatched?: string}).dispatched).toBe('no')
   })
 
+  it('vouches for a 502 — the listener saying it never reached the session', async () => {
+    // The listener answers 502 only from the branch that knows the dispatch
+    // rejected. Reading it here is what lets that probe keep its spend slot
+    // unspent; every other answer may also have acted on the event.
+    const never = vi.fn(async () => new Response('ambient session not connected', {status: 502}))
+    const err = await deliver(never as unknown as typeof fetch)({content: 'x', meta: {}})
+      .then(() => null, (thrown: unknown) => thrown)
+    expect((err as {dispatched?: string}).dispatched).toBe('no')
+  })
+
   it('will not vouch for a delivery that reached the listener', async () => {
     const answered = vi.fn(async () => new Response('busy', {status: 503}))
     const err = await deliver(answered as unknown as typeof fetch)({content: 'x', meta: {}})

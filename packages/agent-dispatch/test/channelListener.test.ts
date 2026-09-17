@@ -29,7 +29,10 @@ describe('channel listener', () => {
     // delivery of that id answered 503 until eviction or a restart.
     const dedup = createDeliveryDedup()
     const failing = vi.fn(async () => { throw new Error('Not connected') })
-    expect(await post(event('e-1'), failing, dedup)).toMatchObject({status: 503})
+    // 502, not 503: this branch KNOWS nothing was dispatched, and the sender
+    // reads that to leave the run's spend slot unspent. A 503 means someone
+    // holds the id and has not confirmed, which it must not be confused with.
+    expect(await post(event('e-1'), failing, dedup)).toMatchObject({status: 502})
 
     const ok = vi.fn(async () => {})
     expect(await post(event('e-1'), ok, dedup)).toEqual({status: 200, body: 'ok'})
@@ -53,6 +56,8 @@ describe('channel listener', () => {
     const inFlight = post(event('e-1'), slow, dedup)
 
     expect(await post(event('e-1'), vi.fn(async () => {}), dedup)).toMatchObject({status: 503})
+    // and NOT the 502 that means "provably never dispatched"
+    expect((await post(event('e-1'), vi.fn(async () => {}), dedup)).status).not.toBe(502)
     release?.()
     expect(await inFlight).toEqual({status: 200, body: 'ok'})
   })

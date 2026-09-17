@@ -32,6 +32,19 @@ describe('delivery dedup', () => {
     expect(dedup.claim(undefined)).toBe('dispatch')
   })
 
+  it('restarts a delivery\'s window when it is CONFIRMED, not when claimed', () => {
+    // `Map.set` on an existing key leaves the key where it was, so a claim
+    // that stayed pending while the window filled would be evicted right
+    // after confirming — and its retry, if the ack was lost, runs the work
+    // again.
+    const dedup = createDeliveryDedup(3)
+    dedup.claim('slow')                 // claimed first, confirmed last
+    dedup.claim('a'); dedup.claim('b')
+    dedup.confirm('slow')               // must move to the newest position
+    dedup.claim('c')                    // evicts the oldest, which is now 'a'
+    expect(dedup.claim('slow')).toBe('delivered')
+  })
+
   it('bounds what it remembers, oldest first', () => {
     const dedup = createDeliveryDedup(2)
     dedup.claim('a')

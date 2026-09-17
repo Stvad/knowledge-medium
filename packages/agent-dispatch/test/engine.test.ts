@@ -3141,6 +3141,91 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(props[PROPS.retryAfter]).toBe(0)
   })
 
+  it('charges a query delivery the sender cannot vouch for', async () => {
+    // A launch is normally recorded only after a delivery lands, but the
+    // listener starts the session before it acknowledges — so an ambiguous
+    // failure may already be running work, and leaving it uncharged ran
+    // query work outside runsPerHour for the length of the outage.
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    const deliverToChannel = vi.fn(async () => {
+      throw Object.assign(
+        withRunFailure('channel listener replied 503', {kind: 'network', retryable: true, label: 'network'}),
+        {dispatched: 'unknown'},
+      )
+    })
+    const engine = engineWith({
+      graph, state, deliverToChannel,
+      config: parseConfig({
+        watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(state.launches).toHaveLength(1)
+    expect(state.cursors.get('inbox')).toEqual([])   // rows still held
+  })
+
+  it('leaves a query delivery uncharged when the sender vouches nothing ran', async () => {
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    const deliverToChannel = vi.fn(async () => {
+      throw Object.assign(
+        withRunFailure('channel listener unreachable', {kind: 'network', retryable: true, label: 'network'}),
+        {dispatched: 'no'},
+      )
+    })
+    const engine = engineWith({
+      graph, state, deliverToChannel,
+      config: parseConfig({
+        watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(state.launches).toEqual([])
+  })
+
+  it('does not claim over a completion that landed since the pre-claim read', async () => {
+    // A channel task's lifecycle is finished by the ambient session, so a run
+    // accepted before an ack timed out can write `done` in that window.
+    // Claiming over it loses the completion, the listener answers the retry
+    // `duplicate`, and the stale sweep eventually re-runs finished work.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const state = memoryState()
+    // The completion lands between the pre-claim read and the claim write.
+    const realGetBlock = graph.getBlock
+    let reads = 0
+    graph.getBlock = async id => {
+      reads += 1
+      if (reads === 2) await graph.setTaskProps(id, {status: 'done', nowMs: NOW})
+      return realGetBlock(id)
+    }
+    const engine = engineWith({
+      graph, state, deliverToChannel: vi.fn(async () => {}),
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
+    expect(state.launches).toEqual([])   // the slot comes back, nothing spawned
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],

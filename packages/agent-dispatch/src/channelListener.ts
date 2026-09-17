@@ -67,11 +67,15 @@ export const handleChannelPost = async (
     // Nothing reached the session. On a stdio transport a rejection means it
     // was never connected or is gone — a message that made it into the pipe
     // does not reject — so releasing the claim is safe, and is what stops
-    // this id answering 503 forever. 503 rather than 400: the listener is up
-    // but the session behind it is not, which is the transient the sender's
-    // retry path exists for.
+    // this id answering 503 forever.
+    //
+    // 502, not 503, and the distinction is load-bearing: this branch KNOWS
+    // nothing was dispatched, while a 503 means "someone holds this id and
+    // has not confirmed". Answering both the same way threw that knowledge
+    // away, and the sender then had to assume work might be running and keep
+    // the run's spend slot. Both are retryable; only this one is free.
     dedup.release(eventId)
-    return {status: 503, body: 'ambient session not connected'}
+    return {status: 502, body: 'ambient session not connected'}
   }
   // Confirmed only once the write completed. Until then the claim reads
   // `unconfirmed`, so nobody may bank on it.

@@ -671,6 +671,23 @@ export const createEngine = (deps: EngineDeps) => {
 
     try {
       const claimStamp = now()
+      // Re-read immediately before claiming. A channel task's lifecycle is
+      // finished by the ambient session, so a run accepted before an
+      // acknowledgement timed out can write `done` between the pre-claim read
+      // and this write — and claiming over it loses the completion, while the
+      // listener answers the retry `duplicate`, so nothing restores it and the
+      // stale sweep eventually runs the finished work again.
+      //
+      // NARROWS to one bridge round-trip; it cannot close, because the read
+      // and the write are separate requests. Closing needs an update
+      // conditional on the state this read saw, which the bridge does not
+      // expose (tracked with the deferred-stop twin of the same race).
+      const beforeClaim = await graph.getBlock(sourceId)
+      const beforeStatus = beforeClaim?.properties?.[PROPS.status]
+      if (beforeStatus === 'done' || beforeStatus === 'error') {
+        log(`[${watcher.name}] not claiming ${sourceId} — it finished as ${beforeStatus} first`)
+        return refundLaunch(launchStamp)
+      }
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
         status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt,
@@ -1225,6 +1242,18 @@ export const createEngine = (deps: EngineDeps) => {
         // runsPerHour. The backoff bounds that to one attempt per window
         // while the log says what is wrong.
         noteInfraFailure(laneOf(watcher), failure, watcher.name)
+        // CHARGE an ambiguous one. A launch is normally recorded only after a
+        // delivery lands, but the listener starts the ambient session before
+        // it acknowledges — so `unknown` means work may be running now, and
+        // leaving it uncharged let a prolonged acknowledgement outage run
+        // query work outside runsPerHour entirely. A rejection the sender can
+        // vouch for (`no`) stays free, since nothing was dispatched.
+        //
+        // Charged per ATTEMPT, not once per logical event: the receiver's
+        // dedup makes a repeat harmless but it is best-effort and a restart
+        // forgets it, so over-counting during an outage is the direction that
+        // protects the budget rather than the throughput.
+        if ((error as {dispatched?: string} | null)?.dispatched === 'unknown') recordLaunch()
         throw error
       }
       // A delivery that lands proves the listener is back, and this path

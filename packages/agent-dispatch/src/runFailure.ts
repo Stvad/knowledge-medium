@@ -197,7 +197,10 @@ export const classifyThrown = (error: unknown, message: string): RunFailureClass
 export type Dispatched = 'no' | 'unknown'
 
 export const channelDispatched = (status: number | null, error: unknown): Dispatched => {
-  if (status !== null) return 'unknown'   // it answered; it may also have acted
+  // 502 is the listener saying it never reached the session (channelListener).
+  // Every other answer may also have acted on the event.
+  if (status === 502) return 'no'
+  if (status !== null) return 'unknown'
   const code = (error as {cause?: {code?: unknown}, code?: unknown} | null)
   const reason = code?.code ?? code?.cause?.code
   return reason === 'ECONNREFUSED' || reason === 'ENOTFOUND' || reason === 'EHOSTUNREACH' ? 'no' : 'unknown'
