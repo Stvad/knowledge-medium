@@ -255,7 +255,7 @@ const isExtensionContribution = (source: unknown, blockId: string): boolean => {
  *  Note that this EXECUTES the source's top-level module code, outside the
  *  #67 approval gate, on every install rather than only under `--verify`. The
  *  source arrives from the paired bridge — the same authorized local channel
- *  that re-pins approval below — so running it is no more privileged than the
+ *  that re-pins approval on an update — so it is no more privileged than the
  *  caller running it directly; what it must not do is run without the caller
  *  asking, which is why nothing here touches a block the caller did not
  *  supply source for. */
@@ -314,17 +314,19 @@ const resolveExtensionInIsolation = async (
   return {runtime: verificationRuntime, errors}
 }
 
-/** The value preset cores this extension itself registers. Filtered by
- *  contribution source rather than read off the facet map: the map is
- *  last-wins by preset id, so an extension contributing a core twice under one
- *  id would otherwise be compared on only one of them. */
+/** The value preset cores this extension registers.
+ *
+ *  Read off the RESOLVED facet map, not the raw contributions: the map is
+ *  last-wins by preset id, exactly as the app-wide one is, so it holds the core
+ *  that would actually end up registered. An extension contributing two cores
+ *  under one id has a loser that never reaches `repo.valuePresetCores` and must
+ *  not raise a conflict that cannot happen. The runtime holds only this
+ *  extension's tree (see `resolveExtensionInIsolation`), so no filter by source
+ *  is needed to keep other extensions' cores out. */
 const extensionPresetCores = (
   resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
-  blockId: string,
 ): AnyValuePresetCore[] =>
-  resolution.runtime.contributionsById(valuePresetCoresFacet.id)
-    .filter(contribution => isExtensionContribution(contribution.source, blockId))
-    .map(contribution => contribution.value as AnyValuePresetCore)
+  [...resolution.runtime.read(valuePresetCoresFacet).values()]
 
 const describeVerification = (
   resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
@@ -1114,7 +1116,7 @@ const installRuntimeExtension = async (
   const presetConflicts = await findPresetIdentityConflicts(
     repo,
     workspaceId,
-    extensionPresetCores(resolution, targetId),
+    extensionPresetCores(resolution),
   )
   if (presetConflicts.length > 0 && !input.allowPresetChange) {
     throw new Error(presetIdentityRefusal(

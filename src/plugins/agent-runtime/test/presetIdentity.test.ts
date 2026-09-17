@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ChangeScope,
   CodecError,
@@ -13,6 +13,7 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { seedProperty } from '@/data/propertySeeds'
+import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { definitionSeedsFacet } from '@/data/facets'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -238,6 +239,58 @@ describe('findPresetIdentityConflicts', () => {
     expect(conflict!.presetId).toBe('string')
     expect(conflict!.replacesKernelCore).toBe(true)
     expect(presetIdentityRefusal([conflict!], '"demo"', WS)).toContain('KERNEL preset')
+  })
+
+  it("counts cells under a seeded definition's DECLARED name, not a drifted stored one", async () => {
+    // The drift a seed RENAME leaves until the next materialization pass (and
+    // that an older client's synced row carries indefinitely): the row stores
+    // the old name, while the registry pins it to the declared one — which is
+    // the name cells are keyed under. Built on its own Repo because the row can
+    // only be written by the seed materializer, and the materializer run by a
+    // Repo that DECLARES the new name would write the new name too.
+    const seedKey = 'system:demo/property/drifted'
+    const declare = (name: string) => seedProperty<number, void>({
+      seedKey, revision: 1, name, preset: numberRating,
+      defaultValue: 0, changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setActiveWorkspaceId(null)
+    let minted = 0
+    const drifted = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => `drift-${++minted}`,
+      extensions: [
+        kernelPropertyUiExtension,
+        kernelValuePresetsExtension,
+        valuePresetCoresFacet.of(numberRating, {source: 'test-preset-plugin'}),
+        definitionSeedsFacet.of(declare('demo:declared-rating'), {source: 'test-drift-seed'}),
+      ],
+    }).repo
+    drifted.setActiveWorkspaceId(WS)
+    await drifted.ensureSystemPages(WS)
+    // Materialized from the OLD declaration, passed explicitly so the pass
+    // writes that name rather than the one the runtime declares.
+    await materializePropertySeeds(drifted, WS, [declare('demo:drifted-rating')])
+    const fieldId = propertyDefinitionBlockId(WS, seedKey)
+    await vi.waitFor(() => {
+      expect(drifted.propertyDefinitions?.definitionsByFieldId.get(fieldId)?.name)
+        .toBe('demo:declared-rating')
+    }, {timeout: 2_000})
+
+    await drifted.tx(async tx => {
+      await tx.create({
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'z1',
+        content: 'consumer',
+        properties: {'demo:declared-rating': 1},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed drifted consumer'})
+
+    const [conflict] = await findPresetIdentityConflicts(drifted, WS, [stringRating])
+    expect(conflict!.definitions).toEqual([
+      {fieldId, name: 'demo:declared-rating', cells: 1},
+    ])
   })
 
   it('names seeds declaring the preset, whose rows may not exist yet', async () => {

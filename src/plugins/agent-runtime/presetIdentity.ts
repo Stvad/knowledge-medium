@@ -134,12 +134,11 @@ const configsToProbe = (
   definitions: readonly DefinitionRow[],
 ): readonly unknown[] => {
   const seen = new Map<string, unknown>()
-  seen.set('', undefined)
   for (const row of definitions) {
     const key = JSON.stringify(row.config ?? null)
     if (!seen.has(key)) seen.set(key, row.config)
   }
-  return [...seen.values()]
+  return [undefined, ...seen.values()]
 }
 
 /** Every way the candidate core is not interchangeable with the registered
@@ -276,9 +275,12 @@ export const findPresetIdentityConflicts = async (
   candidates: readonly AnyValuePresetCore[],
 ): Promise<PresetIdentityConflict[]> => {
   const registered = repo.valuePresetCores
-  // Identity, not just presence: an extension that re-exports the core it
-  // imported (from the kernel, or from a plugin through the page importmap)
-  // contributes the SAME object, which cannot have changed behaviour.
+  // `current !== core` is a fast path, not a guard — comparing a core against
+  // itself finds no differences anyway. It is here because an extension that
+  // re-exports the core it imported (from the kernel, or from a plugin through
+  // the page importmap) contributes the SAME object, and that is the common
+  // case: without it every such install pays the definition scan below to
+  // reach the same answer.
   const contested = candidates.filter(core => {
     const current = registered.get(core.id)
     return current !== undefined && current !== core
@@ -286,6 +288,11 @@ export const findPresetIdentityConflicts = async (
   if (contested.length === 0) return []
 
   const definitionRows = await readDefinitionRows(repo, workspaceId)
+  // The workspace test is defence in depth; no test pins it. Install resolves
+  // the ACTIVE workspace, which is the one the registry is loaded for — but
+  // reading another workspace's registry here would rewrite every name through
+  // a stranger's seeds, and the stored-name fallback below is strictly better
+  // than that.
   const registry = repo.propertyDefinitions?.workspaceId === workspaceId
     ? repo.propertyDefinitions
     : null

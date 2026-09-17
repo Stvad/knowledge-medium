@@ -242,6 +242,31 @@ describe('agent runtime commands', () => {
       }
     })
 
+    it('compares the core that would WIN, when one id is contributed twice', async () => {
+      // `valuePresetCoresFacet` is a last-wins keyed map, here and app-wide, so
+      // the second contribution is the one that would reach
+      // `repo.valuePresetCores`. Comparing the loser would refuse an install
+      // over a codec that never gets registered.
+      registerNumberRating()
+      await addRatingDefinition()
+      const restore = __setCompileImplForTest(async () => ({
+        default: [
+          valuePresetCoresFacet.of(
+            definePresetCore<string>({id: 'demo:rating', build: () => codecs.string, defaultValue: ''}),
+          ),
+          valuePresetCoresFacet.of(
+            definePresetCore<number>({id: 'demo:rating', build: () => codecs.number, defaultValue: 0}),
+          ),
+        ],
+      }))
+      try {
+        const result = await installStringRating('install-preset-duplicate')
+        expect(result.presetChanges).toBeUndefined()
+      } finally {
+        restore()
+      }
+    })
+
     it('installs a preset id nothing is registered under', async () => {
       const restore = stubCompileToStringRating()
       try {
