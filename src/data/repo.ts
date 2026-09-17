@@ -4617,11 +4617,11 @@ export class Repo {
                 // converted value and the converted row folded away. One rule
                 // for both grains, because the promise is the same for both.
                 if (parentUnconvertible === 0) {
-                  if (projected !== undefined) {
-                    assignments.push({name: schema.name, value: projected, unset: false})
-                  } else {
-                    assignments.push({name: schema.name, value: undefined, unset: true})
-                  }
+                  assignments.push({
+                    name: schema.name,
+                    value: projected,
+                    unset: projected === undefined,
+                  })
                 }
                 // else (anything unconvertible): no assignment, so the key
                 // keeps whatever it held. The CHILDREN of convertible members

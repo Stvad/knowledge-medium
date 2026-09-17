@@ -56,11 +56,6 @@ export interface Codec<T> {
   readonly member?: AnyCodec
 }
 
-/** A `Codec` whose value is a list encoded member-wise. Narrows the optional
- *  {@link Codec.member} capability to the member type. */
-export interface ListCodec<T> extends Codec<readonly T[]> {
-  readonly member: Codec<T>
-}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyCodec = Codec<any>
@@ -213,19 +208,21 @@ const optionalRef = (options?: RefCodecOptions): OptionalRefCodec => ({
 })
 
 const refList = (options?: RefCodecOptions): RefListCodec => {
+  // A refList member is one ref, in every sense that matters downstream: the
+  // same `((id))` value-child content, the same decode that refuses prose typed
+  // into a ref property, the same `targetTypes`. Everything below is built OUT
+  // of it, so the `member` contract — a list's encode is its member's applied
+  // element-wise — holds by construction rather than by two definitions
+  // happening to agree.
+  const member = ref(options)
   return {
     type: 'refList',
     targetTypes: normalizeTargetTypes(options),
-    // A refList member is one ref, in every sense that matters downstream:
-    // the same `((id))` value-child content, the same decode that refuses
-    // prose typed into a ref property, the same `targetTypes`. Sharing the
-    // scalar codec is what makes "a refList is N sibling ref values" true
-    // rather than merely analogous.
-    member: ref(options),
-    encode: v => v.map(item => stringCodec.encode(item)),
+    member,
+    encode: v => v.map(item => member.encode(item)),
     decode: j => {
       if (!Array.isArray(j)) throw new CodecError('array', j)
-      return j.map(item => stringCodec.decode(item))
+      return j.map(item => member.decode(item))
     },
     decodeValid: j => {
       // Element-wise + fault-tolerant: a non-array has nothing to recover,
@@ -235,7 +232,7 @@ const refList = (options?: RefCodecOptions): RefListCodec => {
       const out: string[] = []
       for (const item of j) {
         try {
-          out.push(stringCodec.decode(item))
+          out.push(member.decode(item))
         } catch {
           // Drop only the malformed element; keep the well-formed ids.
         }

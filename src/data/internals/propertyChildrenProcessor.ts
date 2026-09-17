@@ -130,9 +130,6 @@ const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookup
 
 // ─── children → cell (project) ───────────────────────────────────────────
 
-const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
-
 interface AffectedProjection {
   readonly parentId: string
   readonly fieldId: string
@@ -262,7 +259,7 @@ const reprojectParentField = async (
   // tombstoning the rows, and an overwrite silently replaces a cell value
   // the user still owns (reconciling a populated cell against children is
   // the backfill's job, not a background repair's).
-  if (mode === 'additive' && hasOwn(parent.properties, schema.name)) return
+  if (mode === 'additive' && Object.hasOwn(parent.properties, schema.name)) return
   // No interior gate (§9 flat recognition): ANY block — value rows and
   // field rows included — hosts field rows via its `::` children, and its
   // cell projects from them like every other owner's. The old hazard (a
@@ -333,8 +330,8 @@ const changedPropertyNames = (
   const names = new Set([...Object.keys(before), ...Object.keys(after)])
   const changed: string[] = []
   for (const name of names) {
-    const beforeValue = hasOwn(before, name) ? before[name] : undefined
-    const afterValue = hasOwn(after, name) ? after[name] : undefined
+    const beforeValue = Object.hasOwn(before, name) ? before[name] : undefined
+    const afterValue = Object.hasOwn(after, name) ? after[name] : undefined
     if (!jsonValuesEqual(beforeValue, afterValue)) changed.push(name)
   }
   return changed
@@ -361,31 +358,22 @@ export interface MaterializeOptions {
   /** Bring a name's TOMBSTONED field row back instead of minting a
    *  replacement, when the owner has exactly one and no live one (#787).
    *
-   *  Opt-in, and only the revival path opts in. Owner liveness does NOT tell
-   *  a tombstone's cause apart, so what makes this safe is narrower: the
-   *  revival re-materializes the whole restored bag and would mint a
-   *  replacement field row anyway, so reviving changes which row id carries
-   *  the property, not whether it comes back. The cell backfill has no such
-   *  contract and would resurrect what the user reaped — declined there. */
+   *  Opt-in, and only the revival path opts in: it re-materializes the whole
+   *  restored bag and would mint a replacement field row anyway, so reviving
+   *  changes which row id carries the property, not whether it comes back. The
+   *  cell backfill has no such contract and would resurrect what the user
+   *  reaped — declined there. */
   reviveTombstoned?: boolean
   /** This call did not observe user intent for these names, so it may only ADD
    *  members, never remove one — the cell→children twin of the projection's
    *  `'additive'` mode, and for the same reason: an unobserved write must not
    *  be allowed to reap.
    *
-   *  The revival path's untouched half is the caller. A restore re-materializes
-   *  names the tx never wrote, from a cell that can be STALE against the
-   *  children — a peer's member can arrive under a tombstoned field row, which
-   *  sync-apply is free to do because it skips the parent-liveness trigger.
-   *  Reaping it is silent loss of a value this device never saw. Measured
-   *  before the flag existed: the arrived member came back `deleted = 1` while
-   *  the scalar path kept the same arrival as a live divergent peer.
-   *
-   *  Only the multi-value branch reads it, and only to skip the delete — a
-   *  retained row cannot collide with the member permutation, for the reason
-   *  stated where the slots are built. The scalar branch still OVERWRITES the
-   *  primary row's content from the cell on the same path, which is the narrower
-   *  half of the same staleness and is tracked separately. */
+   *  The revival path's untouched half is the caller: a restore re-materializes
+   *  names the tx never wrote, from a cell that can be STALE against children a
+   *  peer wrote while the owner was deleted. The scalar branch still OVERWRITES
+   *  its primary row's content on that path — the narrower half of the same
+   *  staleness, tracked separately. */
   mayNotRemove?: boolean
 }
 
@@ -435,15 +423,10 @@ const reviveTombstonedFieldRow = async (
 
   // Refuse BEFORE restoring anything, not after. Sync-apply skips the
   // parent-liveness trigger, so a LIVE value can sit under a tombstoned field
-  // row — an arrival that crossed sync while this row was dead, which is the
-  // authoritative side post-flip. Restoring the field row hands that value to
-  // the caller's cell→child convergence, which overwrites its content with the
-  // local cell's: measured, the arrived text is destroyed. Declining to revive
-  // leaves it untouched under its tombstone and the caller mints, which is
-  // exactly what happened before revival existed.
-  //
+  // row, and restoring the field row would hand that value to the caller's
+  // cell→child convergence, which overwrites its content with the local cell's.
   // This is also the ambiguity rule's live half — nothing live may hold the
-  // slot — but placement is what makes it a refusal rather than a repair.
+  // slot — but the POSITION is what makes it a refusal rather than a repair.
   const liveValues = (await tx.childrenOf(fieldRow.id, undefined)).filter(isValue)
   if (liveValues.length > 0) return false
 
@@ -492,7 +475,7 @@ export const materializePropertyChildrenForExistingRow = async (
       continue
     }
     const matchingChildren = fieldRowsForSchema(children, schema.fieldId)
-    const encoded = hasOwn(row.properties, name) ? row.properties[name] : undefined
+    const encoded = Object.hasOwn(row.properties, name) ? row.properties[name] : undefined
 
     if (encoded === undefined) {
       // Key removed from the cell by a LOCAL write: the delete is the
@@ -560,13 +543,10 @@ export const materializePropertyChildrenForExistingRow = async (
       if (primary.content !== fieldContent) {
         await tx.update(primary.id, {content: fieldContent})
       }
-      // BEFORE reconciling, not after. Collapsing relocates a duplicate field
-      // row's values under the survivor, so a reconcile that ran first never
-      // sees them — and for a list that means the members hiding under the
-      // duplicate are not reaped, the projection aggregates them straight back
-      // into the cell, and the user's removal does not stick until they repeat
-      // it. The scalar direction was insensitive to the order, which is why it
-      // sat after.
+      // BEFORE reconciling: collapsing relocates a duplicate field row's
+      // values under the survivor, and a reconcile that ran first would not see
+      // them — so for a list the members hiding under the duplicate survive a
+      // removal and the projection puts them straight back.
       for (const child of duplicates) {
         await collapseDuplicateFieldRow(tx, primary.id, child, opts.mayNotRemove)
       }
@@ -782,7 +762,9 @@ const freshSlots = (
   values: readonly BlockData[],
   count: number,
 ): string[] => {
-  const anchor = values.map(v => v.orderKey).sort().at(-1) ?? null
+  // `fieldValueChildren` returns `(order_key, id)` order, so the last row
+  // carries the largest key.
+  const anchor = values.at(-1)?.orderKey ?? null
   try {
     return keysBetween(anchor, null, count)
   } catch {
@@ -818,12 +800,12 @@ const reconcileMemberValueChildren = async (
 
   // Everything unmatched, in the order the value set was read, so replicas
   // agree on which of several equal rows survives.
-  const surplus = values.filter(value => !kept.includes(value))
+  const keptRows = new Set(kept)
+  const surplus = values.filter(value => !keptRows.has(value))
 
   // `mayNotRemove` governs EVERY removal, folding included: a fold takes a row
   // away, and multiplicity is part of a list's value, so a repeated member that
-  // arrived unobserved has to survive one too. Checking it only on the delete
-  // branch let an arrival that duplicated an existing member be collapsed.
+  // arrived unobserved has to survive one too.
   if (!mayNotRemove) {
     for (const row of surplus) {
       // A surplus row equal to a member we are keeping is one copy too many —
@@ -885,6 +867,17 @@ const reconcileMemberValueChildren = async (
   }
 }
 
+/** Move one row to the end of `parentId`'s children. */
+const appendUnder = async (
+  tx: Tx,
+  child: BlockData,
+  parentId: string,
+  siblings: readonly BlockData[],
+): Promise<void> => {
+  const anchor = siblings.at(-1)?.orderKey ?? null
+  await tx.move(child.id, {parentId, orderKey: keysBetween(anchor, null, 1)[0]!})
+}
+
 /** Move every child of `fromId` under `toId`, appended at the end. */
 const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<void> => {
   const movable = await tx.childrenOf(fromId, undefined)
@@ -899,11 +892,9 @@ const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<v
 
 /** §9 dedup, VALUE-child form: the survivor is picked deterministically by
  *  `(order_key, id)` — arbitrary relative to content — so the loser may carry
- *  user-authored sub-children (a comment thread under the losing value).
- *  Relocate those under the survivor BEFORE deleting; a bare subtree-delete
- *  would silently tombstone them, and a shallow delete would orphan them live
- *  under a tombstone (the two divergent semantics the spike's call sites had —
- *  unified here).
+ *  user-authored sub-children. Relocate those under the survivor BEFORE
+ *  deleting; a bare subtree-delete would silently tombstone them, and a shallow
+ *  delete would orphan them live under a tombstone.
  *
  *  WHETHER to fold is the caller's call, and it differs by grain: an
  *  equal-valued sibling is a redundant copy of ONE value to a scalar, and an
@@ -920,16 +911,12 @@ export const collapseDuplicateValueChild = async (
 /** §9 dedup, FIELD-row form: before deleting a duplicate field row, its
  *  values must not silently vanish.
  *
- *  For a MULTI-VALUED property, folding an equal member here merges two rows
- *  that are arguably two occurrences — the survivor keeps the loser's
- *  sub-children, so the annotations merge rather than vanish, and the
- *  reconciler that runs next restores the requested multiplicity, so the array
- *  is right either way. What is lost is which row carried which comment.
- *  ACCEPTED: the two callers want OPPOSITE things here — a merge gesture's
- *  settled policy is union-with-dedupe, so `mergeBlocksInTx` relies on this
- *  fold — and separating them costs a second policy axis on a function that
- *  already carries one, to buy row identity in a conflict that is already
- *  ambiguous about whether the two rows were ever distinct.
+ *  ACCEPTED for a MULTI-VALUED property, where folding an equal member merges
+ *  two rows that are arguably two occurrences: the rejected alternative, a
+ *  per-caller fold policy, buys row identity at the cost of a second policy
+ *  axis, and `mergeBlocksInTx` needs the fold either way (union-with-dedupe is
+ *  a merge gesture's settled policy). Content converges; the loser's
+ *  sub-children move to the survivor rather than vanishing.
  *
  *  A duplicate's value that MATCHES an existing survivor value folds into it
  *  (sub-children relocate), and one that does not is kept as a peer SIBLING
@@ -981,8 +968,7 @@ export const collapseDuplicateFieldRow = async (
       if (survivorOwn) {
         await collapseDuplicateFieldRow(tx, survivorOwn.id, child, mayNotRemove)
       } else {
-        const anchor = survivorChildren.at(-1)?.orderKey ?? null
-        await tx.move(child.id, {parentId: survivorFieldRowId, orderKey: keysBetween(anchor, null, 1)[0]!})
+        await appendUnder(tx, child, survivorFieldRowId, survivorChildren)
       }
       continue
     }
@@ -993,8 +979,7 @@ export const collapseDuplicateFieldRow = async (
     if (match) {
       await collapseDuplicateValueChild(tx, match.id, child)
     } else {
-      const anchor = survivorChildren.at(-1)?.orderKey ?? null
-      await tx.move(child.id, {parentId: survivorFieldRowId, orderKey: keysBetween(anchor, null, 1)[0]!})
+      await appendUnder(tx, child, survivorFieldRowId, survivorChildren)
     }
   }
   await deleteSubtreeInTx(tx, duplicate.id)

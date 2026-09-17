@@ -385,8 +385,7 @@ describe('multi-value: N contents round-trip to the list, duplicates and empties
     // does still index inline (#756) — a design question, not a misread.
     fc.assert(
       fc.property(fc.array(textArb, {maxLength: 6}), members => {
-        // Per MEMBER, through the grain encoder: the contents the projection
-        // sees are DEDUPED, so they cannot be zipped back against the input.
+        // Per MEMBER, through the grain encoder.
         for (const member of stringListSchema.codec.encode(members) as string[]) {
           const content = encodedToValueChildContent(stringListSchema, member)
           expect(parseExactReferenceBlockContent(content)).toBeNull()

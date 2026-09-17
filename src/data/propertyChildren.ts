@@ -147,13 +147,26 @@ const jsonFromContent = (content: string): unknown => {
   }
 }
 
+/** Does this codec read `null` as a value? Answered by CALLING it, because no
+ *  codec declares it — which means a required codec answers by constructing and
+ *  throwing a `CodecError`, stack capture included. Memoized per codec: the
+ *  member-grain paths ask once per MEMBER, so a workspace pass over every list
+ *  cell would otherwise throw one Error per member of every list in the graph.
+ *  Codecs are immutable and long-lived, so the cache is keyed on identity and
+ *  never invalidated. */
+const nullAcceptance = new WeakMap<AnyCodec, boolean>()
 const codecAcceptsNull = (codec: AnyCodec): boolean => {
+  const cached = nullAcceptance.get(codec)
+  if (cached !== undefined) return cached
+  let accepts: boolean
   try {
     codec.decode(null)
-    return true
+    accepts = true
   } catch {
-    return false
+    accepts = false
   }
+  nullAcceptance.set(codec, accepts)
+  return accepts
 }
 
 /** The codec ONE value child's content is encoded by: the MEMBER codec for a
@@ -165,7 +178,7 @@ const codecAcceptsNull = (codec: AnyCodec): boolean => {
  *  directly would read a list codec's whole-array grammar against one member's
  *  text: `["a","b"]` and the string `a` are both "not an array", so the errors
  *  are silent rather than loud. */
-export const valueChildCodec = (schema: AnyPropertySchema): AnyCodec =>
+const valueChildCodec = (schema: AnyPropertySchema): AnyCodec =>
   memberCodecOf(schema.codec) ?? schema.codec
 
 /** The characters every reference span OPENS with. Escaping these is what
@@ -220,7 +233,7 @@ export const contentLosesPropertyValue = (
   // was written under, not by the list codec's.
   const codec = valueChildCodec(schema)
   if (codec.type !== 'string' && codec.type !== 'url') return false
-  if (codecAcceptsNull(codec) && content.trim() === 'null') return true
+  if (content.trim() === 'null' && codecAcceptsNull(codec)) return true
   return parseExactReferenceBlockContent(content)?.fieldForm === true
     || hasLoneSurrogate(content)
 }
@@ -268,7 +281,7 @@ const isEscapedEnvelope = (trimmed: string): boolean =>
  *  A future one must too; content is not a value. */
 const needsEscape = (codec: AnyCodec, s: string): boolean => {
   const trimmed = s.trim()
-  if (codecAcceptsNull(codec) && trimmed === 'null') return true
+  if (trimmed === 'null' && codecAcceptsNull(codec)) return true
   if (verbatimContentLosesValue(s)) return true
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
     try {
@@ -506,13 +519,10 @@ export const valueChildContentToEncoded = (
  * the user's list.
  *
  * Its cost is that two devices concurrently writing `[a, b]` and `[a, c]`
- * converge to `[a, b, a, c]` rather than `[a, b, c]`. That is a conflict left
- * VISIBLE for the user to resolve by deleting a row, which is exactly what the
- * scalar rule does with a divergent peer instead of silently choosing — set
- * semantics here would have been the one place the model quietly decided.
- * Properties that are genuinely sets (`types`, `alias`) get that from their
- * WRITERS, which already refuse a member they hold (`addBlockTypeToProperties`),
- * and their side indexes absorb a duplicate through `INSERT OR IGNORE`.
+ * converge to `[a, b, a, c]`. That is a conflict left VISIBLE for the user to
+ * resolve by deleting a row, which is what the scalar rule does with a
+ * divergent peer instead of silently choosing. Properties that are genuinely
+ * sets (`types`, `alias`) get that from their WRITERS, not from storage.
  */
 export const encodedPropertyValueToChildContents = (
   schema: AnyPropertySchema,
@@ -539,14 +549,10 @@ export const encodedPropertyValueToChildContents = (
   // rejected with a reason (`propertyCellValueRejection` asks this same
   // question) instead of silently losing the member.
   //
-  // HERE and not in `codecs.refList().encode`, which would also catch the
-  // pre-flip window where no value child is written at all. Tried, and
-  // reverted: a refList's member IS the scalar ref codec, so refusing `''` in
-  // the list while the member accepts it breaks the `Codec.member` contract
-  // that the list's encode is its member's applied element-wise — the codec
-  // fuzz suites fail on it. Pre-flip the cell is still the truth and nothing
-  // is lost; the cell → children pass REPORTS such a key with its block id and
-  // leaves it cell-only, which is that window's designed safety net.
+  // HERE and not in `codecs.refList().encode`: a refList's member IS the scalar
+  // ref codec, so refusing `''` in the list while the member accepts it would
+  // break the `Codec.member` contract. Pre-flip, where no value child is
+  // written at all, the cell → children pass reports such a key instead.
   for (const [i, content] of contents.entries()) {
     if (content !== '') continue
     try {
@@ -579,9 +585,7 @@ export const encodedPropertyValueToChildContents = (
  * property is unset. Every caller gates on that first — the projection on
  * `fieldRows.length`, the rename and the deferred re-encode on `sawFieldRow` —
  * so the rule lives here rather than at each of them, and they cannot drift
- * into disagreeing about what an empty field row means. They did: this rule
- * was briefly only in the projection, and a rename then read a stored `[]`
- * back as the schema's default while a codec change tombstoned the field row.
+ * into disagreeing about what an empty field row means.
  *
  * NO whole-list canonicalization: members are canonicalized one at a time, and
  * the `member` contract (`encode` is element-wise) makes the array of

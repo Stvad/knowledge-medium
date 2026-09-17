@@ -117,18 +117,12 @@ export const optionalStringValuePresetCore = definePresetCore<string | undefined
 export const optionalNumberValuePresetCore = definePresetCore<number | undefined>({
   id: 'optional-number', build: () => codecs.optionalNumber, defaultValue: undefined,
 })
-const readonlyStringListCodec: Codec<readonly string[]> = {
-  type: 'list',
-  // Member-wise, so it opts into the multi-value child shape: `types` and
-  // `alias` store one value child per member rather than one JSON-text child
-  // per list.
-  member: codecs.string,
-  encode: values => values.map(value => codecs.string.encode(value)),
-  decode: json => {
-    if (!Array.isArray(json)) throw new CodecError('string array', json)
-    return json.map(value => codecs.string.decode(value))
-  },
-}
+/** `codecs.list(codecs.string)`, which is member-wise and so opts into the
+ *  multi-value child shape: `types` and `alias` store one value child per
+ *  member rather than one JSON-text child per list. Widened to `readonly`
+ *  elements for the seed handles that expose them that way. */
+const readonlyStringListCodec: Codec<readonly string[]> = codecs.list(codecs.string)
+
 export const stringListValuePresetCore = definePresetCore<readonly string[]>({
   id: 'string-list', build: () => readonlyStringListCodec, defaultValue: [],
 })

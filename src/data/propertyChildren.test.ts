@@ -3048,10 +3048,6 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
     })
 
     it('a member repeated in the value is a repeated sibling', async () => {
-      // Multiplicity is the VALUE's, not a redundancy to fold: a list may
-      // legitimately hold the same member twice. The scalar rule one grain up
-      // folds equal-content siblings because there they are copies of one
-      // value; here they are two members and folding would rewrite the list.
       const repo = await setupWithLists()
       await createBlock(repo, 'p')
       await repo.tx(tx => tx.setProperty('p', bagSchema, [2, 2, 3, 5, 5]),
@@ -3414,11 +3410,6 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
     })
 
     it('stores an undefined member as null, the same as the cell would', async () => {
-      // `undefined` is ABSENCE to a scalar codec, which renders it as empty
-      // content. An array ELEMENT cannot be absent — `JSON.stringify` writes it
-      // as `null`, which is what the cell already holds for it — so rendering
-      // it as empty content would make this same call succeed before the flip
-      // and fail after it.
       const repo = await setupWithLists()
       await createBlock(repo, 'p')
 
@@ -3451,9 +3442,6 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
     })
 
     it('refuses a list member whose content cannot be read back', async () => {
-      // `codecs.refList` accepts an empty id, and the ref encoder renders a
-      // cleared ref as empty content. A scalar may be cleared; a member may
-      // not — it would vanish on the way back and shorten the list silently.
       const repo = await setupWithLists()
       await createBlock(repo, 'p')
 

@@ -20,7 +20,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { WorkspaceBackfillContext } from '@/data/facets'
 import {
-  CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, rowsForValue, TARGET_INSERT_ROWS,
+  CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, TARGET_INSERT_ROWS,
   onPropertyCellBackfillProgress, runPropertyCellBackfill,
 } from './propertyCellBackfill'
 
@@ -108,7 +108,7 @@ const rawCell = async (id: string, properties: Record<string, unknown>) => {
 /** Enough blocks to span two write batches, derived from the budget rather than
  *  written as a literal: a fixed count silently stops crossing a boundary if the
  *  budget ever moves, and nothing would fail. */
-const TWO_BATCHES = TARGET_INSERT_ROWS / rowsForValue('one scalar') + 10
+const TWO_BATCHES = TARGET_INSERT_ROWS / 2 + 10
 
 /** `count` blocks, each carrying one registered cell key. One transaction, not
  *  one per block: the pass batches on inserted ROWS and reads cells off
@@ -259,7 +259,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     expect(result.outcome).toBe('ran')
     expect(await fieldRowCount()).toBe(ids.length)
     // TWO_BATCHES follows the budget's VALUE; this pins the batching RULE it
-    // assumes. Charge one row per key instead of `rowsForValue` — a real bug,
+    // assumes. Charge one row per key instead of per value — a real bug,
     // doubling every transaction — and the fixture collapses to one batch: this
     // test stops crossing a boundary, and the whole file still passes.
     expect(batchSizes[0]).toBeLessThan(ids.length)
@@ -568,9 +568,11 @@ describe('multi-value cells (km-h1hy)', {timeout: 30_000}, () => {
   })
 
   it('charges the write budget per MEMBER, not per key', async () => {
-    // The budget is spent in SQL and the estimate is stated in JS, so the two
-    // are copies of one rule and can drift. Run the real candidate query
-    // against bags whose answer `rowsForValue` already knows.
+    // The budget is spent in SQL, so the oracle here is the literal row count
+    // each bag implies — a field row per key plus one value row per value, with
+    // an empty array charged as one value because this layer cannot see the
+    // codec. Comparing the query against a JS mirror of itself would pass
+    // whenever both are wrong the same way.
     const bags: Record<string, unknown>[] = [
       {'demo:note': 'scalar'},
       {'demo:tags': ['a', 'b', 'c', 'd']},
@@ -582,11 +584,8 @@ describe('multi-value cells (km-h1hy)', {timeout: 30_000}, () => {
     const rows = await repo.db.getAll<{id: string; rows: number}>(
       CANDIDATE_SQL, [WS, '', 10])
 
-    expect(rows.map(r => r.rows)).toEqual(bags.map(bag =>
-      Object.values(bag).reduce<number>((sum, v) => sum + rowsForValue(v), 0)))
-    // And the member count is what moves it — a four-member list is not two
-    // rows.
-    expect(rows[1]!.rows).toBe(5)
+    //                    scalar   4 members   scalar + 2 members   empty array
+    expect(rows.map(r => r.rows)).toEqual([2, 5, 5, 2])
   })
 
   it('a list-heavy block heavier than the whole budget still gets its own batch', async () => {
