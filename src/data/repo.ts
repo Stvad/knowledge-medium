@@ -4040,12 +4040,7 @@ export class Repo {
           // user's history is being discarded either way, and the alternative
           // is teaching `record` about groups a pass cannot see.
           //
-          // THIS TAB ONLY, accepted (#1007): the manager is per Repo, so another
-          // tab of this device keeps its pre-pass entries exactly as a peer
-          // device does, with the same consequence — a replayed pre-pass
-          // snapshot is a stale cell over live children, projected away by the
-          // next write to them. The flip's dialog tells the operator to reload
-          // the others.
+          // This tab's manager only; a cross-tab clear was declined (#1007).
           drop?.finish()
           if (!announcedUndoClear) {
             announcedUndoClear = true
