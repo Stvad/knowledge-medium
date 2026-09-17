@@ -119,9 +119,7 @@ describe('PendingIdleJobs.drain', {timeout: 20_000}, () => {
     await second.settled
   })
 
-  // Reported where the job settles, not through the drain: a barrier that raised
-  // a job's error would have to decide which of several concurrent drains gets
-  // it, and each family already catches what it can retry from.
+  // Where a failure goes, and why, is on `schedule`'s doc.
   it('logs a failing job and leaves the drain to complete', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     const jobs = new PendingIdleJobs(immediate)
@@ -133,22 +131,28 @@ describe('PendingIdleJobs.drain', {timeout: 20_000}, () => {
     expect(jobs.size).toBe(0)
   })
 
-  it('releases a park at most once, however many times the job calls it', async () => {
+  // The re-park is what makes a doubled release observable. A second decrement
+  // drives the depth to -1, and the park that follows only brings it back to 0 —
+  // so the job reads as progressing while it waits, and the drain hangs on it.
+  // `awaitLocalMemberRole` lifts and re-enters its region on every wake-up, so
+  // this is the live shape, not a hypothetical one.
+  it('releases a park at most once, so a later re-park still registers', async () => {
     const jobs = new PendingIdleJobs(immediate)
     const external = gate()
     jobs.schedule(async (park: ParkHandle) => {
       const release = park()
       release()
       release()
+      park()
       await external.promise
     })
 
-    await vi.waitFor(() => expect(jobs.parkedSize).toBe(0), {timeout: 5_000, interval: 10})
+    await vi.waitFor(() => expect(jobs.parkedSize).toBe(1), {timeout: 5_000, interval: 10})
     const drain = startDrain(jobs)
-    expect(drain.state.done).toBe(false)
-
-    external.open()
     await expectDrained(drain.state)
     await drain.settled
+
+    external.open()
+    await vi.waitFor(() => expect(jobs.size).toBe(0), {timeout: 5_000, interval: 10})
   })
 })

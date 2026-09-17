@@ -143,20 +143,20 @@ describe('awaitLocalMemberRole', () => {
   // drain barrier can tell "blocked on a row only sync delivers" from "working"
   // (issue #1015). The region has to cover the SUBSCRIPTION wait and nothing
   // else, or a drain stops waiting on a pass that is about to run.
+  // 39ms of work for the whole file — the budget is for the 5s polls below, which
+  // vitest's 5s default would expire alongside rather than after.
   describe('park accounting', {timeout: 20_000}, () => {
     /** Net open regions, which is the invariant — a call count would pin how many
      *  times the wait happens to lift and re-enter its park, which is a detail of
      *  how rechecks arrive. */
     const parkSpy = () => {
       let depth = 0
+      // No idempotency guard, deliberately: `unpark` drops its release the moment
+      // it calls it, so a doubled release would be a bug, and an unguarded double
+      // shows up as a negative depth instead of being absorbed here.
       const onPark = vi.fn(() => {
         depth += 1
-        let released = false
-        return () => {
-          if (released) return
-          released = true
-          depth -= 1
-        }
+        return () => { depth -= 1 }
       })
       return {onPark, depth: () => depth}
     }

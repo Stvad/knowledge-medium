@@ -972,9 +972,8 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     expect(seedJobs().parkedSize).toBeGreaterThan(0)
   }
 
-  // #1015. Before the park accounting, both of these hung until the workspace
-  // was unpinned at scope teardown — surfacing as a bare "Test timed out"
-  // pointing at whatever the caller asserted next.
+  // #1015 — both drains below would otherwise hang on this workspace's
+  // membership wait.
   it('drains while the pass is parked on a membership row that never arrives', async () => {
     await startParkedPass()
     await expectDrainReturns(() => repo.awaitSeedMaterialization())

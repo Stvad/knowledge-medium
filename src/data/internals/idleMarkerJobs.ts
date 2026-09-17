@@ -35,6 +35,10 @@ interface JobState {
   parked: number
 }
 
+/** The one place "is this job parked?" is decided, so `drain` and `parkedSize`
+ *  cannot disagree about a depth the release guard is there to prevent. */
+const isParked = (state: JobState): boolean => state.parked > 0
+
 /** Tracks idle-deferred jobs so deterministic tests can wait for them.
  *  The task's promise is added to the pending set when the deferred
  *  callback fires and removed on settle. `drain` awaits everything whose
@@ -57,9 +61,11 @@ export class PendingIdleJobs {
    *  deferred callback runs.
    *
    *  A job owns its errors: every family here catches what it can retry from and
-   *  reports it with the workspace and pass in hand. What escapes is logged and
-   *  dropped, because `drain` is a barrier and not an error channel — a test that
-   *  needs a failure asserts on the outcome the job was supposed to produce.
+   *  reports it with the workspace and pass in hand, so nothing currently reaches
+   *  the catch below — it is the backstop for a future family that forgets, and
+   *  is pinned by a unit test rather than through any real job. What escapes is
+   *  logged and dropped, because `drain` is a barrier and not an error channel —
+   *  a test that needs a failure asserts on the outcome the job should produce.
    *
    *  A job that awaits an EXTERNAL signal — a row that must sync, a gate that
    *  opens on connectivity — must either wait for that signal BEFORE scheduling
@@ -79,7 +85,12 @@ export class PendingIdleJobs {
     })
   }
 
-  /** Open a park region for `state` and wake every drain awaiting it. */
+  /** Open a park region for `state` and wake every drain awaiting it.
+   *
+   *  The idempotent release is the single mechanism keeping the depth honest. A
+   *  `Math.max(0, …)` clamp was the other candidate and is strictly weaker: it
+   *  stops the depth going negative, but not a doubled release closing a nested
+   *  region that is still open. */
   private park(state: JobState): () => void {
     state.parked += 1
     this.parkWaiters.notify()
@@ -120,7 +131,7 @@ export class PendingIdleJobs {
   async drain(): Promise<void> {
     for (;;) {
       const active: Promise<void>[] = []
-      for (const [job, state] of this.pending) if (state.parked === 0) active.push(job)
+      for (const [job, state] of this.pending) if (!isParked(state)) active.push(job)
       if (active.length === 0) return
       const parkedSignal = this.whenSomeJobParks()
       try {
@@ -136,10 +147,10 @@ export class PendingIdleJobs {
   }
 
   /** Pending jobs currently inside a park region — what `drain()` returned
-   *  without, and the only honest answer to "why did the drain not wait?". */
+   *  without. */
   get parkedSize(): number {
     let n = 0
-    for (const state of this.pending.values()) if (state.parked > 0) n += 1
+    for (const state of this.pending.values()) if (isParked(state)) n += 1
     return n
   }
 }
