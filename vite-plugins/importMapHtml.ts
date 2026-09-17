@@ -1,6 +1,5 @@
 /** The one place the `<script type="importmap">` block in index.html is parsed
- *  and re-serialized. Both plugins that touch it (React CDN mode, vendor
- *  facades) go through here so the JSON shape and indentation stay one thing. */
+ *  and re-serialized, so the JSON shape and indentation stay one thing. */
 export type ImportMap = {
   imports?: Record<string, string>
   integrity?: Record<string, string>

@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {stampSwSource} from './stamp-sw-source'
 
-// Build a worker-shaped source expression whose three placeholders are wrapped in
+// Build a worker-shaped source expression whose placeholders are wrapped in
 // `quote` — ', ", or ` (backtick) — so a stamp can be exercised against each
 // delimiter a minifier might emit. Returns an expression we can eval back to read
 // what the runtime JSON.parse produced.
@@ -9,20 +9,18 @@ const swExpr = (quote: string): string =>
   `({` +
   `buildId:${quote}__BUILD_ID__${quote},` +
   `first:JSON.parse(${quote}__PRECACHE_ASSETS__${quote}),` +
-  `rest:JSON.parse(${quote}__PRECACHE_REST_ASSETS__${quote}),` +
-  `vendor:JSON.parse(${quote}__PRECACHE_VENDOR__${quote})` +
+  `rest:JSON.parse(${quote}__PRECACHE_REST_ASSETS__${quote})` +
   `})`
 
 // Eval the stamped first-party expression to read back its decoded runtime
 // values (what the worker's own JSON.parse would produce). Test-only, trusted input.
 const evalExpr = (src: string) =>
-  new Function(`return ${src}`)() as {buildId: string; first: string[]; rest: string[]; vendor: string[]}
+  new Function(`return ${src}`)() as {buildId: string; first: string[]; rest: string[]}
 
 describe('stampSwSource', () => {
   const buildId = 'abc123def456'
   const firstPaintAssets = ['/knowledge-medium/src/main.js', '/knowledge-medium/assets/index.css']
   const restAssets = ['/knowledge-medium/src/extensions/blockInteraction.js', '/knowledge-medium/assets/x.woff2']
-  const vendorAssets = ['https://esm.sh/react@19.2.6', 'https://esm.sh/react-dom@19.2.6/client']
 
   // The load-bearing property: the stamp survives whatever quote style the
   // minifier chose. oxc rewrites string literals to backticks, so the backtick
@@ -32,15 +30,14 @@ describe('stampSwSource', () => {
     ['double quotes', '"'],
     ['backticks (minified form)', '`'],
   ])('stamps build id + precache lists wrapped in %s', (_label, quote) => {
-    const stamped = stampSwSource(swExpr(quote), {buildId, firstPaintAssets, restAssets, vendorAssets})
-    for (const p of ['__BUILD_ID__', '__PRECACHE_ASSETS__', '__PRECACHE_REST_ASSETS__', '__PRECACHE_VENDOR__']) {
+    const stamped = stampSwSource(swExpr(quote), {buildId, firstPaintAssets, restAssets})
+    for (const p of ['__BUILD_ID__', '__PRECACHE_ASSETS__', '__PRECACHE_REST_ASSETS__']) {
       expect(stamped).not.toContain(p)
     }
     const decoded = evalExpr(stamped)
     expect(decoded.buildId).toBe(buildId)
     expect(decoded.first).toEqual(firstPaintAssets)
     expect(decoded.rest).toEqual(restAssets)
-    expect(decoded.vendor).toEqual(vendorAssets)
   })
 
   // The escaping trap: a payload carrying the JS-string metacharacters ($, ", \)
@@ -48,15 +45,15 @@ describe('stampSwSource', () => {
   // uses a function replacer rather than pasting the raw JSON.
   it('round-trips URLs containing $, quotes, and backslashes', () => {
     const nasty = ['/a$b/c"d', "/e'f", '/g\\h', '/i$&j']
-    const stamped = stampSwSource(swExpr('`'), {buildId, firstPaintAssets: nasty, restAssets, vendorAssets})
+    const stamped = stampSwSource(swExpr('`'), {buildId, firstPaintAssets: nasty, restAssets})
     expect(evalExpr(stamped).first).toEqual(nasty)
   })
 
   it('throws when the build-id placeholder is absent', () => {
     expect(() =>
       stampSwSource(
-        'JSON.parse(`__PRECACHE_ASSETS__`);JSON.parse(`__PRECACHE_REST_ASSETS__`);JSON.parse(`__PRECACHE_VENDOR__`)',
-        {buildId, firstPaintAssets, restAssets, vendorAssets},
+        'JSON.parse(`__PRECACHE_ASSETS__`);JSON.parse(`__PRECACHE_REST_ASSETS__`)',
+        {buildId, firstPaintAssets, restAssets},
       ),
     ).toThrow(/__BUILD_ID__ not found/)
   })
@@ -67,20 +64,8 @@ describe('stampSwSource', () => {
         buildId,
         firstPaintAssets,
         restAssets,
-        vendorAssets,
       }),
     ).toThrow(/__PRECACHE_REST_ASSETS__/)
-  })
-
-  it('throws when the vendor placeholder is absent', () => {
-    expect(() =>
-      stampSwSource('`__BUILD_ID__`;JSON.parse(`__PRECACHE_ASSETS__`);JSON.parse(`__PRECACHE_REST_ASSETS__`)', {
-        buildId,
-        firstPaintAssets,
-        restAssets,
-        vendorAssets,
-      }),
-    ).toThrow(/__PRECACHE_VENDOR__/)
   })
 
   it('throws when the stamped result would not parse as JS', () => {
@@ -88,8 +73,8 @@ describe('stampSwSource', () => {
     // so the guard must reject it rather than let a broken worker ship.
     expect(() =>
       stampSwSource(
-        '`__BUILD_ID__`;JSON.parse(`__PRECACHE_ASSETS__`);JSON.parse(`__PRECACHE_REST_ASSETS__`);JSON.parse(`__PRECACHE_VENDOR__`);(',
-        {buildId, firstPaintAssets, restAssets, vendorAssets},
+        '`__BUILD_ID__`;JSON.parse(`__PRECACHE_ASSETS__`);JSON.parse(`__PRECACHE_REST_ASSETS__`);(',
+        {buildId, firstPaintAssets, restAssets},
       ),
     ).toThrow(/not valid JS/)
   })

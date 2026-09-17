@@ -3,12 +3,10 @@ import path from "path"
 import {fileURLToPath} from "node:url"
 import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
-import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
-import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
-import {vendorImportMapPlugin, vendorInputs} from './vite-plugins/vendorImportMap'
+import {vendorImportMapPlugin} from './vite-plugins/vendorImportMap'
 import {resolveAppVersion} from './scripts/app-version'
 import {globSync} from 'node:fs'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
@@ -79,12 +77,6 @@ const isDashjsCommonjsVariableWarning = (log: RollupLogLike) => {
     )
 }
 
-const isReactImportExternal = (id: string): boolean =>
-    id === 'react' ||
-    id.startsWith('react/') ||
-    id === 'react-dom' ||
-    id.startsWith('react-dom/')
-
 // Root the dev-server fs allow-list at the primary checkout. In a git worktree
 // (.claude/worktrees/<name>) that's three levels up — the worktree has no
 // node_modules of its own, so deps resolve upward to the main checkout; outside
@@ -127,13 +119,10 @@ export default defineConfig(({command}) => {
             react(),
             babel({presets: [reactCompilerPreset()]}),
             wasm(),
-            externalize({
-                externals: [isReactImportExternal],
-            }),
-            reactImportMapProductionPlugin(),
-            // Bundled dependencies importable by bare name from dynamic
-            // extensions (facades over the app chunk + importmap entries). See
-            // vite-plugins/vendorImportMap.ts; tests in vite-plugins/test/.
+            // Bundled dependencies — React included — importable by bare name
+            // from dynamic extensions (facades over the app chunk + importmap
+            // entries). See vite-plugins/vendorImportMap.ts; tests in
+            // vite-plugins/test/.
             vendorImportMapPlugin({rootDir: __dirname}),
             // Substitutes the theme-boot placeholder tokens in index.html's
             // pre-paint script with the source-of-truth values from
@@ -192,13 +181,10 @@ export default defineConfig(({command}) => {
                     if (isDashjsCommonjsVariableWarning(log)) return
                     defaultHandler(level, log)
                 },
-                // Mark react and react-dom subpaths as external to rely on the import map.
-                external: isReactImportExternal,
                 input: {
                     index: path.resolve(__dirname, 'index.html'),
                     ...allSrcEntries(__dirname),
-                    // Bundled dependencies as importable facades (vite-plugins/vendorImportMap.ts).
-                    ...vendorInputs(__dirname),
+                    // vendorImportMapPlugin adds the vendor/<pkg> facade entries here.
                 },
                 // input: '/src/main.tsx',
                 // input: {

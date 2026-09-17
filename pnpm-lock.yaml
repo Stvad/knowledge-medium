@@ -127,6 +127,12 @@ importers:
       lucide-react:
         specifier: ^1.12.0
         version: 1.12.0(react@19.2.6)
+      react:
+        specifier: ^19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: ^19.2.6
+        version: 19.2.6(react@19.2.6)
       react-error-boundary:
         specifier: ^6.1.1
         version: 6.1.1(react@19.2.6)
@@ -266,12 +272,6 @@ importers:
       postcss:
         specifier: ^8.5.12
         version: 8.5.12
-      react:
-        specifier: ^19.2.6
-        version: 19.2.6
-      react-dom:
-        specifier: ^19.2.6
-        version: 19.2.6(react@19.2.6)
       tailwind-scrollbar:
         specifier: ^4.0.2
         version: 4.0.2(react@19.2.6)(tailwindcss@4.2.4)
@@ -299,9 +299,6 @@ importers:
       vite-plugin-dts:
         specifier: ^4.5.4
         version: 4.5.4(@types/node@25.9.1)(typescript@6.0.3)(vite@8.0.10(@types/node@25.9.1)(jiti@2.6.1)(yaml@2.8.3))
-      vite-plugin-externalize-dependencies:
-        specifier: ^1.0.1
-        version: 1.0.1
       vite-plugin-importmap:
         specifier: ^0.1.1
         version: 0.1.1
@@ -3883,9 +3880,6 @@ packages:
     peerDependenciesMeta:
       vite:
         optional: true
-
-  vite-plugin-externalize-dependencies@1.0.1:
-    resolution: {integrity: sha512-kRIizv+YcrXFwzjde1iqayKTOKLR0JE3JPVrwm/6bsrXnwGSz+3Q+pKOgamAtlASPXx13JpXB50/OfQ0GqiIUw==}
 
   vite-plugin-importmap@0.1.1:
     resolution: {integrity: sha512-yOnThDMPu/Dby+0s+S27QH3EmUbU4UZ2AWvwOVhwtssNnnDuIiEiZs7dUJl3JxDuCtYaI93VJa1r28tHA6B+HA==}
@@ -8024,8 +8018,6 @@ snapshots:
       - '@types/node'
       - rollup
       - supports-color
-
-  vite-plugin-externalize-dependencies@1.0.1: {}
 
   vite-plugin-importmap@0.1.1:
     dependencies:
