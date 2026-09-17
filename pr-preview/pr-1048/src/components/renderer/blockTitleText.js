@@ -1,0 +1,1 @@
+import{dk as e,fk as t}from"../../../chunks/app-CDMaLK_0.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};

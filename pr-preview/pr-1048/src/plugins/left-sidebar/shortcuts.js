@@ -1,0 +1,1 @@
+import{a_ as e,i_ as t,o_ as n}from"../../../chunks/app-CDMaLK_0.js";export{t as getOrCreateShortcutsBlock,e as journalShortcutBlockId,n as shortcutsBlockId};

@@ -1,0 +1,1 @@
+import{dw as e,fw as t,gt as n}from"../../../chunks/app-CDMaLK_0.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};

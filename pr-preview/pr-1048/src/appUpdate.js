@@ -1,0 +1,1 @@
+import{Fw as e,Iw as t}from"../chunks/app-CDMaLK_0.js";export{e as appUpdate,t as useAppUpdateAvailable};

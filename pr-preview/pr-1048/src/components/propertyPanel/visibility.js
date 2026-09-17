@@ -1,0 +1,1 @@
+import{aM as e,oM as t}from"../../../chunks/app-CDMaLK_0.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};

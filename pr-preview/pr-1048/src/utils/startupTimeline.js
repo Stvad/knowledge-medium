@@ -1,0 +1,1 @@
+import{BP as e,GP as t,HP as n,LP as r,RP as i,UP as a,VP as o,WP as s,zP as c}from"../../chunks/app-CDMaLK_0.js";export{r as getLastLongTaskEndMs,i as getStartupTimeline,c as hasStartupMark,e as longTasksSupported,o as markStartup,n as markStartupAt,a as onLongTask,s as resetStartupTimeline,t as startStartupObservers};

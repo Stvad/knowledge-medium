@@ -1,0 +1,1 @@
+import{cw as e,lw as t}from"../../../chunks/app-CDMaLK_0.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

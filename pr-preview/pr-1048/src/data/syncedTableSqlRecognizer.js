@@ -1,0 +1,1 @@
+import{AB as e,OB as t,kB as n}from"../../chunks/app-CDMaLK_0.js";export{t as SYNCED_TABLES,n as syncedWriteTarget,e as writeTargets};

@@ -1,0 +1,1 @@
+import{FS as e,MS as t,NS as n,PS as r}from"../../../chunks/app-CDMaLK_0.js";export{t as DEFAULT_QUICK_ACTION_ITEMS,n as SWIPE_RIGHT_BLOCK_ACTION_ID,r as isQuickActionItem,e as quickActionItemsFacet};

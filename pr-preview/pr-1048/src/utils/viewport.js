@@ -1,0 +1,1 @@
+import{vj as e,yj as t}from"../../chunks/app-CDMaLK_0.js";export{e as MOBILE_BREAKPOINT_QUERY,t as isMobileViewport};

@@ -1,0 +1,1 @@
+import{Nw as e,Pw as t}from"../chunks/app-CDMaLK_0.js";export{e as checkForAppUpdate,t as registerServiceWorker};

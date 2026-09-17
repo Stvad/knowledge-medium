@@ -1,0 +1,1 @@
+import{f2 as e,m2 as t,p2 as n}from"../../../chunks/app-CDMaLK_0.js";export{e as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,t as systemAuthor};
