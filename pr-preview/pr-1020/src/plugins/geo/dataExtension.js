@@ -1,1 +1,0 @@
-import{hL as e}from"../../../chunks/app-JTY2N3oO.js";export{e as geoDataExtension};

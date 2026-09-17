@@ -1,1 +1,0 @@
-import{ma as e}from"../chunks/app-JTY2N3oO.js";export{e as appVersion};
