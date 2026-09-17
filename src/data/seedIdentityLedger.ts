@@ -253,8 +253,11 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
 /** Property names no shipped seed may claim. Each was a declaration once. */
 export const RETIRED_PROPERTY_NAMES: readonly string[] = [
   // Renamed to `backlinks:predicates` when the filter shape changed from
-  // {includeIds, removeIds} to predicate arrays; values were not convertible
-  // and were discarded deliberately.
+  // {includeIds, removeIds} to predicate arrays; stored values were dropped,
+  // not converted. A remove id is ONE ancestor-scoped `referencedBy` predicate
+  // only because that predicate later absorbed the page-as-tag case; at the
+  // cutover the faithful mapping also needed `{scope: 'ancestor', id}`; without
+  // it the exclusion matches too narrowly and formerly-removed backlinks return.
   'backlinks:filter',
   // Same change, the daily-note defaults half: renamed to
   // `dailyNotes:backlinksPredicates`.

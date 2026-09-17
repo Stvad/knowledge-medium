@@ -189,9 +189,12 @@ export interface Tx {
    *  with setProperty's inline dual-write, recoverable via history — eager
    *  rather than left to the deferred MATERIALIZE pass, whose net-diff would
    *  miss a key set-then-unset in one tx); un-flipped it is a cell-only
-   *  removal. No-op when the key is already absent. Throws
-   *  `PropertySchemaIdentityError` if the schema has no resolvable definition,
-   *  same as `setProperty`. */
+   *  removal. No-op when the key is already absent.
+   *
+   *  Identity is checked on the schema you PASS, not on whether the NAME
+   *  resolves: in the active workspace a cell under a name nothing claims is
+   *  reachable here through a plain schema, which is what a stale-cell cleanup
+   *  needs. `resolveBoundary` decides admission and states the full matrix. */
   unsetProperty<T>(id: string, schema: PropertySchema<T>, opts?: TxWriteOpts): Promise<void>
 
   /** Atomically set and/or unset several properties in ONE bag rewrite. This

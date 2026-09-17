@@ -899,3 +899,60 @@ describe('typed property identity boundary', () => {
     expect(repo.block('foreign-incompatible-target').peek()!.properties[shadowed.name]).toBe(42)
   })
 })
+
+describe('writing a name the registry does not resolve', () => {
+  it('clears a cell under an unclaimed name through a plain schema', async () => {
+    // The orphan-cell cleanup path: an UNREGISTERED key, resolving to nothing
+    // by name, is still writable through a plain schema in the active
+    // workspace — so `unsetProperty` reaches the cell and no caller needs a
+    // whole-bag `tx.update` to drop it.
+    const repo = await setup()
+    await repo.tx(
+      tx => tx.create({
+        id: 'retired-name-target',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a1',
+        properties: {'retired:gone': 'stale', 'retired:kept': 'sibling'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(repo.block('retired-name-target').peek()!.properties['retired:gone'])
+      .toBe('stale')
+    expect(repo.propertySchemaResolverFor(WS).resolve('retired:gone').status)
+      .toBe('identity-unavailable')
+
+    const plain = defineProperty('retired:gone', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    await repo.tx(
+      tx => tx.unsetProperty('retired-name-target', plain),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const properties = repo.block('retired-name-target').peek()!.properties
+    expect(properties['retired:gone']).toBeUndefined()
+    // Targeted: the rest of the bag survives.
+    expect(properties['retired:kept']).toBe('sibling')
+  })
+
+  it('still refuses a plain lookalike for a name another definition claims', async () => {
+    // The other side of the same rule: "unclaimed is writable" must not become
+    // "any plain schema is writable", or an unauthorized identity could delete
+    // the winner's cell.
+    const repo = await setup()
+    const lookalike = defineProperty(shadowed.name, {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    await expect(repo.tx(
+      tx => tx.unsetProperty('target', lookalike),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toBeInstanceOf(PropertySchemaIdentityError)
+    expect(repo.block('target').peek()!.properties[shadowed.name]).toBe(42)
+  })
+})
