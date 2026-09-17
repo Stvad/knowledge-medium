@@ -1,0 +1,1 @@
+import{Ls as e,Rs as t}from"../../../chunks/app-S3GbQqA8.js";export{e as computePromotedFromChildren,t as detectInlineAttribute};
