@@ -1,1 +1,1 @@
-import{_f as e,bf as t,vf as n,xf as r,yf as i}from"../../chunks/app-CnPsIWrk.js";export{e as INSERT_IMAGE_ACTION_ID,n as INSERT_IMAGE_NORMAL_MODE_ACTION_ID,i as insertReferences,t as pickAndInsertImages,r as pickImagesIntoBlock};
+import{_f as e,bf as t,vf as n,xf as r,yf as i}from"../../chunks/app-zNpWVCWa.js";export{e as INSERT_IMAGE_ACTION_ID,n as INSERT_IMAGE_NORMAL_MODE_ACTION_ID,i as insertReferences,t as pickAndInsertImages,r as pickImagesIntoBlock};

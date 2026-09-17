@@ -1,1 +1,1 @@
-import{qu as e}from"../../../chunks/app-CnPsIWrk.js";export{e as LazyBlockEntry};
+import{qu as e}from"../../../chunks/app-zNpWVCWa.js";export{e as LazyBlockEntry};

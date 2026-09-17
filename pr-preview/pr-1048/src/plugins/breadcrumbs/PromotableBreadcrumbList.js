@@ -1,1 +1,1 @@
-import{Mg as e}from"../../../chunks/app-CnPsIWrk.js";export{e as PromotableBreadcrumbList};
+import{Mg as e}from"../../../chunks/app-zNpWVCWa.js";export{e as PromotableBreadcrumbList};

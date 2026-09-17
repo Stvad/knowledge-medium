@@ -1,1 +1,1 @@
-import{AE as e,jE as t,kE as n}from"../../../chunks/app-CnPsIWrk.js";export{n as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,t as writeBlockTypeLabel};
+import{AE as e,jE as t,kE as n}from"../../../chunks/app-zNpWVCWa.js";export{n as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,t as writeBlockTypeLabel};
