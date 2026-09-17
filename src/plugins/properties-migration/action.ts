@@ -387,9 +387,10 @@ const migrateUnderClaim = async (
     // FINISHED here. A replay already in flight when the flip started was
     // refused when the drop began; this takes the entries still on the stack.
     //
-    // THIS DEVICE ONLY, deliberately (#684): a peer that stayed open across the
-    // flip keeps its pre-flip entries, and nothing watches the column's arrival
-    // to clear them. Declined rather than built — the stack is in-memory and the
+    // THIS DEVICE, THIS TAB ONLY, deliberately (#684, #1007): a peer device, or
+    // another tab of this one, that stayed open across the flip keeps its
+    // pre-flip entries, and nothing watches the column's arrival to clear them.
+    // Declined rather than built — the stack is in-memory and the
     // transition happens once per workspace, so a watcher is permanent machinery
     // for a single scheduled event, and the damage a replayed pre-flip snapshot
     // does is a stale cell over live children, which the next write to those
