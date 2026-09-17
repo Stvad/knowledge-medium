@@ -1,1 +1,1 @@
-import{GB as e,KB as t}from"../../chunks/app-C8qD6LLY.js";export{e as DbForensics,t as dbForensics};
+import{KB as e,qB as t}from"../../chunks/app-qf3LzwfF.js";export{e as DbForensics,t as dbForensics};

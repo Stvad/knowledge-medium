@@ -1,1 +1,1 @@
-import{ch as e,lh as t,sh as n}from"../../../chunks/app-C8qD6LLY.js";export{n as getVimNormalModeActions,e as jumpVisibleBlocks,t as vimNormalModeActionsExtension};
+import{ch as e,lh as t,sh as n}from"../../../chunks/app-qf3LzwfF.js";export{n as getVimNormalModeActions,e as jumpVisibleBlocks,t as vimNormalModeActionsExtension};

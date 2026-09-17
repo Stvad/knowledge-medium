@@ -1,1 +1,1 @@
-import{Bu as e,Lu as t,Ru as n,Vu as r,zu as i}from"../../../chunks/app-C8qD6LLY.js";export{t as DEFAULT_BACKLINKS_VIEW_ID,n as FLAT_BACKLINKS_VIEW_ID,i as GROUPED_BACKLINKS_VIEW_ID,e as backlinksViewProp,r as defaultBacklinksViewIdForBlock};
+import{Bu as e,Lu as t,Ru as n,Vu as r,zu as i}from"../../../chunks/app-qf3LzwfF.js";export{t as DEFAULT_BACKLINKS_VIEW_ID,n as FLAT_BACKLINKS_VIEW_ID,i as GROUPED_BACKLINKS_VIEW_ID,e as backlinksViewProp,r as defaultBacklinksViewIdForBlock};
