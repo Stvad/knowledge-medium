@@ -5,8 +5,7 @@
  * importmap, and whatever it imports must be the module instance the running
  * app uses: CodeMirror checks extension values against ITS classes, so a
  * ViewPlugin from a second `@codemirror/state` is "Unrecognized extension
- * value", and a second React has no hooks state. React is on this path like
- * every other dependency.
+ * value", and a second React has no hooks state.
  *
  * The exposed set is package.json `dependencies` (minus `isExposed`) plus the
  * subpaths the app's own source imports (`react-dom/client`) and the JSX
@@ -15,6 +14,11 @@
  * package pins; a transitive package an extension needs is added to
  * `dependencies`. Not each package's `exports` map — across this dependency
  * set that is UMD builds, node variants, CSS and unresolvable `./types`.
+ *
+ * Exposing a package pins its WHOLE export surface into the boot chunk: the
+ * facade entry demands every name under `preserveEntrySignatures: 'strict'`,
+ * and the package already sits in the `app` group. That is the trade for one
+ * shared instance, and it is why `HEAVY_SURFACE` exists.
  *
  * Build: the `options` hook adds each specifier as a Rollup input at
  * `vendor/<specifier>` — the shape the `src/**` entries take, so each emits as
@@ -34,19 +38,17 @@
  * rewrites onto the same `/node_modules/.vite/deps/…?v=` URL the kernel's
  * imports use. Two instances in dev would fail exactly like production.
  */
+import {execFileSync} from 'node:child_process'
 import fs from 'node:fs'
-import {globSync} from 'node:fs'
-import {createRequire} from 'node:module'
 import path from 'node:path'
-import type {Plugin, ResolvedConfig} from 'vite'
+import type {Plugin, ResolvedConfig, UserConfig} from 'vite'
 import {rewriteImportMapScript} from './importMapHtml'
-import {SRC_ENTRY_EXCLUDE, SRC_ENTRY_GLOB} from './srcEntries'
+import {srcEntryFiles} from './srcEntries'
 
 export const VENDOR_DIR = 'vendor'
 const DEV_URL_PATTERN = /^\/vendor\/(.+)\.js$/
-const DEV_ID_PREFIX = '\0km-vendor:'
+const FACADE_ID_PREFIX = '\0km-vendor:'
 const CJS_INPUT_PREFIX = 'virtual:km-vendor-cjs/'
-const CJS_ID_PREFIX = `\0${CJS_INPUT_PREFIX}`
 
 /** The automatic JSX runtime `@vitejs/plugin-react` emits into every
  *  transformed module; no source file names it. Applies when `react` is a
@@ -55,6 +57,12 @@ const CJS_ID_PREFIX = `\0${CJS_INPUT_PREFIX}`
  *  built with a development JSX transform is better off failing to resolve
  *  than calling undefined. */
 const BUILD_INJECTED_SPECIFIERS = ['react/jsx-runtime', 'react/compiler-runtime']
+
+/** Packages whose full export surface costs more boot bytes than sharing them
+ *  is worth: lucide-react's icons (~180 KB of path data the app tree-shakes)
+ *  and all of lodash-es. Extensions that need them bundle their own copy —
+ *  neither carries identity-sensitive state. */
+const HEAVY_SURFACE = new Set(['lucide-react', 'lodash-es'])
 
 const vendorFileName = (specifier: string): string => `${VENDOR_DIR}/${specifier}.js`
 
@@ -87,10 +95,9 @@ const readPackageJson = (dir: string): PackageJson | undefined => {
 }
 
 const isExposed = (pkg: string, versionSpec: string): boolean =>
-  !pkg.startsWith('@types/') && !versionSpec.startsWith('workspace:')
+  !pkg.startsWith('@types/') && !versionSpec.startsWith('workspace:') && !HEAVY_SURFACE.has(pkg)
 
-/** The packages this build exposes, sorted. */
-export const exposedVendorPackages = (rootDir: string): string[] =>
+const exposedVendorPackages = (rootDir: string): string[] =>
   Object.entries(readPackageJson(rootDir)?.dependencies ?? {})
     .filter(([pkg, spec]) => isExposed(pkg, spec))
     .map(([pkg]) => pkg)
@@ -101,8 +108,7 @@ const TYPE_ONLY_IMPORT = /\bimport\s+type\b[^;]*?from\s*['"][^'"]+['"]/g
 const SPECIFIER = /\b(?:from|import)\s*\(?\s*['"]([^'"\n]+)['"]/g
 
 const readSourceFiles = (rootDir: string): string[] =>
-  globSync(SRC_ENTRY_GLOB, {cwd: rootDir, exclude: SRC_ENTRY_EXCLUDE})
-    .map(file => fs.readFileSync(path.join(rootDir, file), 'utf8'))
+  srcEntryFiles(rootDir).map(file => fs.readFileSync(path.join(rootDir, file), 'utf8'))
 
 /** Subpaths of `packages` that the app's own source imports at runtime
  *  (`react-dom/client`), sorted and unique. Comments and type-only imports
@@ -124,17 +130,14 @@ export const appImportedSubpaths = (
 }
 
 /** Every specifier this build exposes, sorted. */
-export const exposedVendorSpecifiers = (
-  rootDir: string,
-  sources: Iterable<string> = readSourceFiles(rootDir),
-): string[] => {
+const exposedVendorSpecifiers = (rootDir: string): string[] => {
   const packages = exposedVendorPackages(rootDir)
   const set = new Set(packages)
   const injected = set.has('react') ? BUILD_INJECTED_SPECIFIERS : []
-  return [...new Set([...packages, ...appImportedSubpaths(sources, set), ...injected])].sort()
+  return [...new Set([...packages, ...appImportedSubpaths(readSourceFiles(rootDir), set), ...injected])].sort()
 }
 
-export type ModuleKind = 'esm' | 'cjs'
+type ModuleKind = 'esm' | 'cjs'
 
 // `import` followed by whitespace-then-identifier, or directly by a brace,
 // star or quote. Bare `import\s*[a-z]` would also match `import_x = 1`.
@@ -162,14 +165,28 @@ export const moduleKind = (
 
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
 
+// Runs in the child: print the module's own keys and exit. `process.argv[1]`
+// is the file under `node -e`.
+const ENUMERATE_EXPORTS =
+  'const m = require(process.argv[1]);' +
+  'process.stdout.write(JSON.stringify(m && (typeof m === "object" || typeof m === "function") ? Object.keys(m) : []));' +
+  'process.exit(0)'
+
 /** Named exports Node sees on a CommonJS file, `default`/`__esModule` aside.
- *  Evaluates under this process's NODE_ENV, which is the build the bundler
- *  picks too. Loud on failure: a shim with no names is the link error this
- *  exists to prevent, one step later. */
+ *  Evaluated in a CHILD process that exits explicitly: a package's
+ *  module-level side effects must not share the build's event loop —
+ *  react-dom's browser server build opens a MessageChannel that would keep
+ *  `vite build` alive after it finishes. The child inherits NODE_ENV, so the
+ *  names match the build the bundler picks. Loud on failure: a shim with no
+ *  names is the link error this exists to prevent, one step later. */
 const cjsExportNames = (file: string): string[] => {
-  let mod: unknown
+  let out: string
   try {
-    mod = createRequire(file)(file) as unknown
+    out = execFileSync(process.execPath, ['-e', ENUMERATE_EXPORTS, file], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+    })
   } catch (err) {
     throw new Error(
       `vendor-import-map: cannot require ${file} to enumerate its CommonJS exports; ` +
@@ -177,28 +194,28 @@ const cjsExportNames = (file: string): string[] => {
       {cause: err},
     )
   }
-  if (typeof mod !== 'object' && typeof mod !== 'function') return []
-  return Object.keys(mod as object).filter(k => IDENTIFIER.test(k) && k !== 'default' && k !== '__esModule').sort()
+  return (JSON.parse(out) as string[]).filter(k => IDENTIFIER.test(k) && k !== 'default' && k !== '__esModule').sort()
 }
 
-/** The shim for a CommonJS package: `module.exports` as `default`, each name
- *  destructured off it under a local alias and exported under its own name.
- *  The alias form is what lets a reserved word (`catch`, `enum`) be an export
- *  name, which shorthand destructuring cannot. `m` is the bundler's own module
- *  object in both modes. */
+/** The shim for a CommonJS package. Names are read off the NAMESPACE, not off
+ *  `default`: for a module flagged `__esModule` both bundlers' interop leaves
+ *  `default` undefined (`@babel/standalone`), while the namespace carries every
+ *  own key in either case and `default` is `module.exports` where that applies.
+ *  Names are destructured under aliases so a reserved word (`catch`, `enum`)
+ *  can still be an export name. */
 export const cjsShimSource = (specifier: string, names: readonly string[]): string => {
   const from = JSON.stringify(specifier)
-  if (names.length === 0) return `import m from ${from};\nexport default m;\n`
-  const locals = names.map((_, i) => `_${i}`)
-  const destructure = names.map((name, i) => `${name}: ${locals[i]}`).join(', ')
-  const exports = names.map((name, i) => `${locals[i]} as ${name}`).join(', ')
-  return `import m from ${from};\nexport default m;\nconst {${destructure}} = m;\nexport {${exports}};\n`
+  const head = `import * as m from ${from};\nexport default m.default;\n`
+  if (names.length === 0) return head
+  const destructure = names.map((name, i) => `${name}: _${i}`).join(', ')
+  const exports = names.map((name, i) => `_${i} as ${name}`).join(', ')
+  return `${head}const {${destructure}} = m;\nexport {${exports}};\n`
 }
 
 /** The dev facade for an ESM package. `export *` never forwards `default`;
  *  the namespace read makes it a plain `undefined` for a package without one
  *  instead of a load error. */
-export const esmFacadeSource = (specifier: string): string => {
+const esmFacadeSource = (specifier: string): string => {
   const from = JSON.stringify(specifier)
   return `import * as m from ${from};\nexport * from ${from};\nexport default m.default;\n`
 }
@@ -209,6 +226,7 @@ export const facadeSource = (specifier: string, file: string): string =>
 
 export const vendorImportMapPlugin = ({rootDir}: {rootDir: string}): Plugin => {
   const exposed = exposedVendorSpecifiers(rootDir)
+  const exposedSet = new Set(exposed)
   let isBuild = false
   let resolveFile: ((specifier: string) => Promise<string>) | undefined
   const files = new Map<string, string>()
@@ -226,6 +244,14 @@ export const vendorImportMapPlugin = ({rootDir}: {rootDir: string}): Plugin => {
     name: 'vendor-import-map',
     // Before Vite's resolver, which would otherwise try `/vendor/…` as a file.
     enforce: 'pre',
+    config(userConfig: UserConfig, env) {
+      if (env.command !== 'serve') return null
+      // Pre-bundle every exposed specifier up front: one the kernel's own graph
+      // never imports would otherwise be discovered on an extension's first
+      // request, re-optimized, and reload the page mid-load.
+      const excluded = new Set(userConfig.optimizeDeps?.exclude ?? [])
+      return {optimizeDeps: {include: exposed.filter(s => !excluded.has(packageNameOf(s) ?? s))}}
+    },
     configResolved(config: ResolvedConfig) {
       isBuild = config.command === 'build'
       // Vite's resolver, not Node's: the browser conditions decide which entry
@@ -249,25 +275,23 @@ export const vendorImportMapPlugin = ({rootDir}: {rootDir: string}): Plugin => {
       }
       return {...opts, input}
     },
-    // Filtered so the hook never runs for the rest of the graph.
+    // Only an EXPOSED specifier becomes a facade id: the dev URL is attacker
+    // shaped (`/vendor//abs/path.js` would otherwise resolve, and a CommonJS
+    // verdict would `require` that file). Filtered so the hook never runs for
+    // the rest of the graph.
     resolveId: {
       filter: {id: [DEV_URL_PATTERN, new RegExp(`^${CJS_INPUT_PREFIX}`)]},
       handler(source) {
-        if (source.startsWith(CJS_INPUT_PREFIX)) return `\0${source}`
-        const match = DEV_URL_PATTERN.exec(source)
-        return match ? DEV_ID_PREFIX + match[1] : null
+        const specifier = source.startsWith(CJS_INPUT_PREFIX)
+          ? source.slice(CJS_INPUT_PREFIX.length)
+          : DEV_URL_PATTERN.exec(source)?.[1]
+        return specifier && exposedSet.has(specifier) ? FACADE_ID_PREFIX + specifier : null
       },
     },
     async load(id) {
-      if (id.startsWith(CJS_ID_PREFIX)) {
-        const specifier = id.slice(CJS_ID_PREFIX.length)
-        return cjsShimSource(specifier, cjsExportNames(await fileOf(specifier)))
-      }
-      if (id.startsWith(DEV_ID_PREFIX)) {
-        const specifier = id.slice(DEV_ID_PREFIX.length)
-        return facadeSource(specifier, await fileOf(specifier))
-      }
-      return null
+      if (!id.startsWith(FACADE_ID_PREFIX)) return null
+      const specifier = id.slice(FACADE_ID_PREFIX.length)
+      return facadeSource(specifier, await fileOf(specifier))
     },
     transformIndexHtml: {
       order: 'post',

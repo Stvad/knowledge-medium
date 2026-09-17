@@ -510,7 +510,7 @@ describe('describeRuntime', () => {
     importMap.textContent = JSON.stringify({
       imports: {
         '@/': './src/',
-        react: 'https://esm.sh/react@19.2.6?dev',
+        '@codemirror/view': './vendor/@codemirror/view.js',
       },
     })
     doc.head.append(importMap)

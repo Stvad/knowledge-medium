@@ -128,11 +128,14 @@ const vendorEntries = Object.entries(importMap.imports ?? {}).filter(([, target]
 if (vendorEntries.length === 0) fail('index.html importmap has no vendor entries; vendorImportMapPlugin did not run')
 if (Object.values(importMap.imports ?? {}).some(target => /^https?:/.test(target))) fail('index.html importmap maps a specifier to a remote URL')
 // What a facade may contain besides its import/export clauses: a directive,
-// and the CommonJS shim's one `var` statement (interop call + destructuring).
-const FACADE_NOISE = /import\s*\{[^}]*\}\s*from\s*["'][^"']+["'];?|import\s*["'][^"']+["'];?|export\s*\{[^}]*\};?|export\s+default\s+[^;]+;?|["']use client["'];?|var\s+[^;]+;|\/\/#\s*sourceMappingURL=.*$/gm
+// a sourcemap comment, and the CommonJS shim's one `var` statement — the
+// interop call, optionally the `default` read, and the names destructured off
+// the namespace. Anything else is the package's own code.
+const FACADE_NOISE = /import\s*\{[^}]*\}\s*from\s*["'][^"']+["'];?|import\s*["'][^"']+["'];?|export\s*\{[^}]*\};?|export\s+default\s+[\w$.]+(?:\(\))?;?|["']use client["'];?|var\s+\w+\s*=\s*\w+\(\w+\(\)\)(?:\s*,\s*\w+\s*=\s*\w+\.default)?(?:\s*,\s*\{[^}]*\}\s*=\s*\w+)?;|\/\/#\s*sourceMappingURL=.*$/gm
+const facadeFile = (target: string): string => path.join(distDir, target.slice('./'.length))
 for (const [specifier, target] of vendorEntries) {
-  const rel = target.slice(2)
-  const file = path.join(distDir, rel)
+  const rel = target.slice('./'.length)
+  const file = facadeFile(target)
   if (!fs.existsSync(file)) fail(`importmap maps ${specifier} to ${target}, which was not emitted`)
   const text = fs.readFileSync(file, 'utf8')
   for (const [, from] of text.matchAll(/from\s*["']([^"']+)["']/g)) {
@@ -150,7 +153,7 @@ const vendorSamples: Array<[specifier: string, exportName: string]> = [
 ]
 for (const [specifier, exportName] of vendorSamples) {
   const target = importMap.imports?.[specifier] ?? fail(`index.html importmap does not map ${specifier}`)
-  const text = fs.readFileSync(path.join(distDir, target.slice(2)), 'utf8')
+  const text = fs.readFileSync(facadeFile(target), 'utf8')
   if (!emittedExportNames(text).has(exportName)) fail(`${target} lacks the ${exportName} export`)
 }
 

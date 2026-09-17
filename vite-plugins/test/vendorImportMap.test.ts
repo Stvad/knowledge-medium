@@ -7,6 +7,7 @@ import {
   facadeSource,
   moduleKind,
   packageNameOf,
+  vendorImportMapPlugin,
   vendorImports,
 } from '@/../vite-plugins/vendorImportMap'
 
@@ -67,12 +68,13 @@ describe('moduleKind', () => {
 })
 
 describe('cjsShimSource', () => {
-  it('exports the module object as default and every given name off it, reserved words included', () => {
+  it('reads names off the namespace, never off default, and lets a reserved word be an export name', () => {
     const src = cjsShimSource('x', ['createContext', 'catch'])
-    expect(src).toMatch(/^import m from "x";/)
-    expect(src).toContain('export default m;')
-    expect(src).toContain('const {createContext: _0, catch: _1} = m;')
-    expect(src).toContain('export {_0 as createContext, _1 as catch};')
+    expect(src).toMatch(/^import \* as m from "x";/)
+    expect(src).toContain('export default m.default;')
+    expect(src).toMatch(/const \{[^}]*\} = m;/)
+    expect(src).not.toMatch(/= m\.default;/)
+    expect(src).toMatch(/export \{[^}]*\b_\d+ as catch\b[^}]*\};/)
   })
 })
 
@@ -84,9 +86,13 @@ describe('facadeSource', () => {
   const resolve = (specifier: string) => fileURLToPath(import.meta.resolve(specifier))
   it('shims a CommonJS package with the names Node sees on it', () => {
     const src = facadeSource('react', resolve('react'))
-    expect(src).toContain('export default m;')
+    expect(src).toContain('export default m.default;')
     expect(src).toMatch(/const \{[^}]*\buseState: _\d+\b[^}]*\} = m;/)
     expect(src).not.toContain('export *')
+  })
+  it('shims a CommonJS package flagged __esModule the same way (its default is undefined)', () => {
+    const src = facadeSource('@babel/standalone', resolve('@babel/standalone'))
+    expect(src).toMatch(/const \{[^}]*\btransform: _\d+\b[^}]*\} = m;/)
   })
   it('re-exports an ESM package as a whole', () => {
     const src = facadeSource('zod', resolve('zod'))
@@ -109,5 +115,23 @@ describe('importmap helpers', () => {
     const out = rewriteImportMapScript(html, m => ({...m, imports: {...m.imports, ...vendorImports(['zod'])}}))
     expect(readImportMap(out)).toEqual({imports: {'@/': './src/', zod: './vendor/zod.js'}})
     expect(readImportMap('<p>no map</p>')).toBeUndefined()
+  })
+})
+
+describe('vendorImportMapPlugin.resolveId', () => {
+  // The dev URL is attacker-shaped; only an exposed specifier may become a
+  // facade id, since a CommonJS verdict on the resolved file `require`s it.
+  const plugin = vendorImportMapPlugin({rootDir: fileURLToPath(new URL('../..', import.meta.url))})
+  const resolveId = (plugin.resolveId as {handler: (source: string) => string | null}).handler
+  it('maps an exposed specifier, from the dev URL or the build input', () => {
+    expect(resolveId('/vendor/react.js')).toBe('\0km-vendor:react')
+    expect(resolveId('/vendor/react/jsx-runtime.js')).toBe('\0km-vendor:react/jsx-runtime')
+    expect(resolveId('virtual:km-vendor-cjs/react')).toBe('\0km-vendor:react')
+  })
+  it('refuses anything not exposed, including an absolute path smuggled into the URL', () => {
+    expect(resolveId('/vendor//etc/hosts.js')).toBeNull()
+    expect(resolveId('/vendor/../src/main.js')).toBeNull()
+    expect(resolveId('/vendor/lucide-react.js')).toBeNull()
+    expect(resolveId('virtual:km-vendor-cjs//tmp/x')).toBeNull()
   })
 })

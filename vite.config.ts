@@ -7,10 +7,8 @@ import wasm from "vite-plugin-wasm"
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
 import {vendorImportMapPlugin} from './vite-plugins/vendorImportMap'
-import {SRC_ENTRY_EXCLUDE, SRC_ENTRY_GLOB} from './vite-plugins/srcEntries'
+import {srcEntryFiles} from './vite-plugins/srcEntries'
 import {resolveAppVersion} from './scripts/app-version'
-import {globSync} from 'node:fs'
-// import noBundlePlugin from 'vite-plugin-no-bundle';
 
 
 /** Every internal module as a Rollup input, so an extension can import ANY of
@@ -27,15 +25,12 @@ import {globSync} from 'node:fs'
  *  rather than driven off `apiCatalog`: that catalog is a discovery surface,
  *  not a whitelist. */
 const allSrcEntries = (rootDir: string): Record<string, string> => {
-    const files = globSync(SRC_ENTRY_GLOB, {
-        cwd: rootDir,
-        exclude: SRC_ENTRY_EXCLUDE,
-        // Accepted: this also makes src/minimal-editor.tsx an entry, the script
-        // for a second page that is not itself a build input, so it emits with
-        // nothing importing it. Kept rather than special-cased — it IS an
-        // internal module, and carving out page bootstraps would reintroduce
-        // the per-file judgement this list exists to avoid. ~1 KB.
-    })
+    // Accepted: this also makes src/minimal-editor.tsx an entry, the script
+    // for a second page that is not itself a build input, so it emits with
+    // nothing importing it. Kept rather than special-cased — it IS an
+    // internal module, and carving out page bootstraps would reintroduce
+    // the per-file judgement this list exists to avoid. ~1 KB.
+    const files = srcEntryFiles(rootDir)
     return Object.fromEntries(files.map((file: string) => {
         // globSync yields platform separators; the entry KEY becomes the emitted
         // path, which the page importmap resolves as a URL, so it must be POSIX.
