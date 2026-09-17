@@ -9,12 +9,12 @@ import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { Repo } from '@/data/repo'
 import {
   applySchemaReconciliation,
+  fitPlannedPropertyValues,
   ensurePromotedPropertySchemas,
   isRegistrablePropertyName,
   collectSchemaReconciliationPlan,
-  normalizeListPropertyValues,
   normalizeRefPropertyValues,
-  normalizeStringPropertyValues,
+  promotedValueAcceptorFor,
 } from '../schemaReconciliation'
 
 const WS = 'ws-roam'
@@ -267,51 +267,6 @@ describe('applySchemaReconciliation', () => {
   })
 })
 
-describe('normalizeStringPropertyValues', () => {
-  it('stringifies non-string JSON values for string-classified properties', () => {
-    const blocks: BlockData[] = [
-      block('a', {'roam:mixed': 'plain'}),
-      block('b', {'roam:mixed': 1}),
-      block('c', {'roam:mixed': ['one', 'two']}),
-      block('d', {'roam:mixed': {nested: true}}),
-      block('e', {'roam:other': ['untouched']}),
-    ]
-
-    normalizeStringPropertyValues(blocks, new Set(['roam:mixed']))
-
-    expect(blocks.map(b => b.properties['roam:mixed'])).toEqual([
-      'plain',
-      '1',
-      '["one","two"]',
-      '{"nested":true}',
-      undefined,
-    ])
-    expect(blocks[4].properties['roam:other']).toEqual(['untouched'])
-  })
-})
-
-describe('normalizeListPropertyValues', () => {
-  it('wraps scalar values and leaves array values untouched for list-classified properties', () => {
-    const blocks: BlockData[] = [
-      block('a', {'roam:email': 'gliderok@gmail.com'}),
-      block('b', {'roam:email': ['gliderok@gmail.com', 'aix123@yandex.ru']}),
-      block('c', {'roam:rank-list': 1}),
-      block('d', {'roam:other': 'untouched'}),
-    ]
-
-    normalizeListPropertyValues(blocks, new Set(['roam:email', 'roam:rank-list']))
-
-    expect(blocks.map(b => b.properties['roam:email'])).toEqual([
-      ['gliderok@gmail.com'],
-      ['gliderok@gmail.com', 'aix123@yandex.ru'],
-      undefined,
-      undefined,
-    ])
-    expect(blocks[2].properties['roam:rank-list']).toEqual([1])
-    expect(blocks[3].properties['roam:other']).toBe('untouched')
-  })
-})
-
 describe('normalizeRefPropertyValues', () => {
   it('refList: replaces page-token strings with id arrays via aliasIdMap', () => {
     const blocks: BlockData[] = [
@@ -528,8 +483,10 @@ describe('ensurePromotedPropertySchemas', () => {
   })
 
   it('reports a value no reshaping can fix, since post-flip that write is rejected', async () => {
-    // Normalization only covers string and list; a narrower pre-existing
-    // schema can still receive text that cannot be made to fit (#594).
+    // Reshaping only reaches string and list; a narrower pre-existing schema
+    // can still receive text that cannot be made to fit. This is the RESIDUE
+    // path — a caller that declines at promotion (promotedValueAcceptorFor)
+    // never gets here — so the note is all that is left to do about it.
     await env.repo.userSchemas.addSchema({name: 'matrix:count', presetId: 'number'})
 
     const notes = await ensurePromotedPropertySchemas(env.repo, [
@@ -537,7 +494,7 @@ describe('ensurePromotedPropertySchemas', () => {
     ])
 
     expect(notes.join(' ')).toMatch(/matrix:count/)
-    expect(notes.join(' ')).toMatch(/does not decode/i)
+    expect(notes.join(' ')).toMatch(/cannot hold/i)
   })
 
   it('abandons the batch when the active workspace changes mid-registration', async () => {
@@ -590,6 +547,81 @@ describe('ensurePromotedPropertySchemas', () => {
 
   it('is a no-op for an empty batch', async () => {
     await expect(ensurePromotedPropertySchemas(env.repo, [])).resolves.toEqual([])
+  })
+})
+
+describe('promotedValueAcceptorFor', () => {
+  // Pass it as `PromotionOptions.acceptValue`. What it protects is the write:
+  // post-flip the materialize processor rejects a value its key's definition
+  // cannot hold and rolls the whole transaction back, which for a poll-driven
+  // caller that holds its cursor on failure is a permanent stall (#594).
+  it('accepts a name with no definition — the mint fits the value by construction', () => {
+    expect(promotedValueAcceptorFor(env.repo)('matrix:brand-new', 'anything at all')).toBe(true)
+  })
+
+  it('declines text a narrower existing definition cannot hold', async () => {
+    await env.repo.userSchemas.addSchema({name: 'matrix:count', presetId: 'number'})
+
+    expect(promotedValueAcceptorFor(env.repo)('matrix:count', 'many')).toBe(false)
+  })
+
+  it('accepts what reshaping can still fit, so a decline is a last resort', async () => {
+    // A `string` definition takes a promoted array as JSON text, and a `list`
+    // definition takes a scalar wrapped — the same reshaping
+    // `ensurePromotedPropertySchemas` applies before the write, asked here.
+    await env.repo.userSchemas.addSchema({name: 'matrix:topic', presetId: 'string'})
+    await env.repo.userSchemas.addSchema({name: 'matrix:tag', presetId: 'list'})
+    const accepts = promotedValueAcceptorFor(env.repo)
+
+    expect(accepts('matrix:topic', ['one', 'two'])).toBe(true)
+    expect(accepts('matrix:tag', 'solo')).toBe(true)
+  })
+
+  it('declines a ref value that decodes but could never be written as a value child', async () => {
+    // The `ref` leg: its codec takes any string, so this one only fails when
+    // the value is rendered into its child's content. Asking the codec alone
+    // would wave it through and stall the caller one step later. Scoped to
+    // values no `((id))` can carry — a one-word value is accepted, matching
+    // what the processor itself accepts.
+    await env.repo.userSchemas.addSchema({name: 'matrix:assignee', presetId: 'ref'})
+
+    expect(promotedValueAcceptorFor(env.repo)('matrix:assignee', 'Some Person')).toBe(false)
+  })
+})
+
+describe('fitPlannedPropertyValues', () => {
+  it('reports an unstorable value and KEEPS it, naming the block and the key', async () => {
+    // Removing it would be silent loss for a key with no source bullet behind
+    // it: `propertiesFromRoam` lifts raw Roam `:block/props` straight into the
+    // bag, so there is nothing else holding that text. Leaving it makes the
+    // post-flip failure loud instead, with this diagnostic already naming it.
+    await env.repo.userSchemas.addSchema({name: 'roam:count', presetId: 'number'})
+    const blocks = [block('b1', {'roam:count': 'many', 'roam:kept': 'yes'})]
+    const diagnostics: string[] = []
+
+    fitPlannedPropertyValues(blocks, env.repo, diagnostics)
+
+    expect(blocks[0]!.properties).toEqual({'roam:count': 'many', 'roam:kept': 'yes'})
+    expect(diagnostics.join(' ')).toContain('b1')
+    expect(diagnostics.join(' ')).toContain('roam:count')
+  })
+
+  it('reshapes a value a fit exists for', async () => {
+    await env.repo.userSchemas.addSchema({name: 'roam:topic', presetId: 'list'})
+    const blocks = [block('b1', {'roam:topic': 'solo'})]
+
+    fitPlannedPropertyValues(blocks, env.repo, [])
+
+    expect(blocks[0]!.properties['roam:topic']).toEqual(['solo'])
+  })
+
+  it('leaves a key with no definition alone — nothing is known about what fits', () => {
+    // Also what makes it safe in a dry run, where nothing has been registered.
+    const blocks = [block('b1', {'roam:unregistered': {deep: 'shape'}})]
+
+    fitPlannedPropertyValues(blocks, env.repo, [])
+
+    expect(blocks[0]!.properties['roam:unregistered']).toEqual({deep: 'shape'})
   })
 })
 

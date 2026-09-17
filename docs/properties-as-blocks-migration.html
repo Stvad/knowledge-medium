@@ -336,8 +336,14 @@
 
 <aside class="doc-status">
   <strong>Status: current (planning), with one §9 correction — and slice C is no
-  longer planning.</strong>
-  <strong>Last verified against code: 2026-08-21, branch
+  longer planning. Five entries are REVERSED or qualified as of km-h1hy and now
+  describe the shipped shape: the &ldquo;scalar-first&rdquo; narrowing in §5, the
+  &ldquo;refList stays JSON&rdquo; note in §9, and the &ldquo;Value
+  decoding&rdquo;, &ldquo;Duplicates and divergence&rdquo; and
+  &ldquo;Default-value vs. unset&rdquo; entries, each of which stated a
+  SCALAR-only rule as the whole rule.</strong>
+  <strong>Last verified against code: 2026-09-16 for the multi-value shape;
+  2026-08-21 for the rest, branch
   <code>claude/e2ee-synthesis-namespace</code>.</strong>
   That verification covers the entries marked <strong>landed</strong> below
   &mdash; each was checked against the implementation on this branch, not
@@ -998,11 +1004,19 @@ are themselves block references. Same primitive everywhere.
     change <code>name</code> without touching stored children.
   </li>
   <li>
-    <strong>Scalar-first.</strong> The prototype projects one primary value child per
-    field row; list values serialize as JSON into that one child for now.
-    Multi-value-as-N-children is a follow-up slice (§11), not part of the first cut. This
-    is a deliberate narrowing from rev 1, which promised list-cardinality-as-children
-    up front.
+    <strong>Scalar-first, until km-h1hy.</strong> The prototype projected one primary
+    value child per field row and serialized a list as JSON into that one child. That
+    narrowing is REVERSED, before the first flip: a multi-value property is N sibling
+    value children, one per member, sibling order = list order, and the projection is a
+    list aggregate rather than first-wins. A codec opts in by naming its member codec
+    (<code>Codec.member</code>); one that does not keeps the single-child shape. The members
+    are an ORDERED LIST with multiplicity preserved &mdash; <code>[2, 2, 3]</code> is three
+    value children, and reconciliation removes only the surplus occurrences, one at a time
+    &mdash; and an EXPLICITLY empty list is a value: a live field row with no value
+    children projects <code>[]</code> into the cell, and only removing the FIELD ROW
+    unsets the key. The distinction is observable for any list schema whose
+    <code>defaultValue</code> is not <code>[]</code>, where an absent key reads back as
+    that default and a stored <code>[]</code> reads back as itself.
   </li>
   <li>
     Ref-typed values reuse the block-reference primitive: a value child whose content is
@@ -2691,7 +2705,16 @@ supabase skill if it's kept.
     skipped. If <em>no</em> child parses, the projection <em>removes</em> the key from
     the cell. (This rule — and default-vs-unset below — presupposes a <em>live field
     row</em>; a cell key with no child rows at all is pending materialization and is
-    never removed, per the §5 global rule.) Rev 1 said "log + omit, keep data visible" — the spike keeps the rows (data
+    never removed, per the §5 global rule.)
+    <strong>Scalar-only as of km-h1hy.</strong> A MULTI-VALUED property aggregates
+    instead: every parseable member, in sibling order, multiplicity kept, with an
+    unparseable member dropping only itself — and a live field row with nothing
+    parseable under it reads as <code>[]</code>, not unset, because removing the
+    field row is what unsets a list. Across DUPLICATE field rows the members are
+    UNIONED, not concatenated, since that is what the collapse will produce.
+    <code>childContentsToEncodedPropertyValue</code> and
+    <code>unionValuesAcrossFieldRows</code> own both rules; read them rather than
+    this paragraph. Rev 1 said "log + omit, keep data visible" — the spike keeps the rows (data
     is never destroyed) but the cell-side key vanishes, which downstream readers see as
     "unset". Acceptable; document that "field with only-invalid values" reads as unset
     while remaining visible/fixable in the tree — with one addition (PR-review P2, via
@@ -2736,9 +2759,9 @@ supabase skill if it's kept.
     coercing into a fake block id as bare-id storage did. It also puts property
     refs on the reference-maintenance rails: merge-retarget rewrites
     <code>((A))</code>→<code>((B))</code> inside a value and the cell follows.
-    <code>refList</code> stays JSON for now — the direction is "a refList is N
-    <code>((id))</code> sibling values," deferred with the multi-value design pass
-    (it needs list-aggregate projection semantics).</dd>
+    <code>refList</code> is N <code>((id))</code> sibling values, as of km-h1hy — each
+    member is a value row like any scalar ref, on the same reference-maintenance rails
+    and refusing prose the same way.</dd>
 
   <dt><strong>Deleting a referenced block keeps the value dangling — never inline
     it.</strong></dt>
@@ -2786,7 +2809,8 @@ supabase skill if it's kept.
     purely textually with no existence check, so the stamp survives the target's
     deletion and the property survives re-materialization.)</dd>
 
-  <dt><strong>Duplicates and divergence — union-with-dedupe (as shipped).</strong></dt>
+  <dt><strong>Duplicates and divergence — union-with-dedupe (as shipped;
+    SCALAR only as of km-h1hy).</strong></dt>
   <dd>PR #386 (divergence item 7) replaced both rev 1's "keep extras, pick lowest
     orderKey" and the spike's delete-all-duplicates: <strong>a field row holds a
     <em>set</em> of value children — its <code>is_field_form IS NOT 1</code> children
@@ -2811,12 +2835,30 @@ supabase skill if it's kept.
     collapse to a single row whose value set is the union, deduped by the same
     content rule. Divergent siblings are thus a real, expected shape — a surfaced
     conflict — but still not the user-facing multi-value affordance; that (and
-    refList-as-children) gets its own design pass.</dd>
+    refList-as-children) gets its own design pass.
+    <p><strong>Scalar only, as of km-h1hy.</strong> For a MULTI-VALUED property
+    the siblings <em>are</em> the value, so none of the above holds: content-equal
+    values are two MEMBERS and are never folded (<code>[2, 2, 3]</code> is three
+    value children), the projection aggregates every parseable member instead of
+    taking the first, and there is no set semantics — properties that genuinely
+    want it (<code>types</code>, <code>alias</code>) get it from their WRITERS.
+    What survives across the grain is the DUPLICATE-FIELD-ROW rule: two field rows
+    for one fieldId still collapse to one whose values are the union, folding a
+    member equal to one an earlier row already carries — so multiplicity is kept
+    WITHIN a field row and folded ACROSS them.
+    <code>unionValuesAcrossFieldRows</code> and
+    <code>childContentsToEncodedPropertyValue</code> own both halves; read them
+    rather than this paragraph.</p></dd>
 
   <dt><strong>Default-value vs. unset.</strong></dt>
   <dd>Unchanged from rev 1: zero value children <em>under a live field row</em> ⇒ key
     omitted from the cell ⇒ <code>block.get</code> falls back to
-    <code>defaultValue</code>. No reader change.</dd>
+    <code>defaultValue</code>. No reader change.
+    <strong>Scalar only, as of km-h1hy.</strong> A MULTI-VALUED property reads the
+    same shape as an EXPLICIT EMPTY LIST: a live field row with no parseable member
+    projects <code>[]</code>, not an omitted key, because removing the FIELD ROW is
+    what unsets a list. That is why the aggregate is documented as callable only
+    once a live field row has been observed.</dd>
 
   <dt><strong>Codec / preset changes are migrations, not edits.</strong></dt>
   <dd>§9's "only-invalid values reads as unset" is fine for one malformed child; it is

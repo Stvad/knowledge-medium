@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Fuzz suite for `src/data/propertyChildren.ts`'s pure codec-boundary
- * functions — `propertyValueToChildContent` / `propertyChildContentToEncodedValue`
+ * functions — `propertyValueToChildContent` / `valueChildContentToEncoded`
  * (the property-value ↔ child-content translation, docs/properties-as-blocks-migration.html §7) across the
  * property-type zoo, plus the content-escaping guard (`needsEscape`) it
  * protects. See docs/fuzzing.md for tier mechanics;
@@ -11,7 +11,7 @@
  * Oracles, grounded in propertyChildren.ts:
  *  - Round trip: for a value V in a codec's documented domain,
  *    `propertyValueToChildContent` renders V to child content and
- *    `propertyChildContentToEncodedValue` must recover the SAME canonical
+ *    `valueChildContentToEncoded` must recover the SAME canonical
  *    encoded form `schema.codec.encode(V)`. This is exactly the
  *    dual-write/materialize contract (`writePropertyValueChild`,
  *    `materializePropertyChildrenForExistingRow`): the child holds the
@@ -31,7 +31,7 @@
  *    round-trips through content (`decode` is lenient on membership,
  *    `codecs.ts`) but is kept in its DECODED form rather than
  *    re-encoded, because `encode`/`where` would reject it — documented in
- *    the try/catch in `propertyChildContentToEncodedValue`.
+ *    the try/catch in `valueChildContentToEncoded`.
  *  - Ref addressing: a non-empty ref value renders as
  *    an editable `((id))` span and reads back via the CALLER-SUPPLIED
  *    `referenceTargetId` (the derived column), not by re-parsing content.
@@ -46,12 +46,25 @@ import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
 import { utf16UnitArb } from '@/test/arbitraries/utf16'
-import { ChangeScope, CodecError, codecs, defineProperty } from '@/data/api'
-import { propertyChildContentToEncodedValue, propertyValueToChildContent } from './propertyChildren'
+import { ChangeScope, CodecError, codecs, defineProperty, type PropertySchema } from '@/data/api'
+import {
+  childContentsToEncodedPropertyValue,
+  encodedPropertyValueToChildContents,
+  encodedToValueChildContent,
+  valueChildContentToEncoded,
+} from './propertyChildren'
+import { kernelValuePresetCoresById } from './kernelValuePresetCores'
 import { parseExactReferenceBlockContent } from './referenceBlock'
 // Tests are exempt from `boundary/no-core-to-plugin-imports`, and the inline
 // parser is the other reader this content must be inert to.
 import { parseReferences } from '@/plugins/references/referenceParser'
+
+/** One scalar value's child content. Every schema in this file is
+ *  single-valued, so grain and property value are the same thing here. */
+const propertyValueToChildContent = <T>(
+  schema: PropertySchema<T>,
+  value: T,
+): string => encodedToValueChildContent(schema, schema.codec.encode(value))
 
 // ──── schemas under test, one per codec family ────
 
@@ -117,12 +130,12 @@ const textArb = fc.oneof(
   ),
 )
 
-describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildContent(v)) recovers encode(v)', () => {
+describe('round trip: valueChildContentToEncoded(propertyValueToChildContent(v)) recovers encode(v)', () => {
   it('string (required): any string round-trips through content', () => {
     fc.assert(
       fc.property(textArb, v => {
         const content = propertyValueToChildContent(requiredStringSchema, v)
-        expect(propertyChildContentToEncodedValue(requiredStringSchema, content)).toBe(v)
+        expect(valueChildContentToEncoded(requiredStringSchema, content)).toBe(v)
       }),
       fuzzParams(150),
     )
@@ -132,7 +145,7 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
     fc.assert(
       fc.property(textArb, v => {
         const content = propertyValueToChildContent(urlSchema, v)
-        expect(propertyChildContentToEncodedValue(urlSchema, content)).toBe(v)
+        expect(valueChildContentToEncoded(urlSchema, content)).toBe(v)
       }),
       fuzzParams(150),
     )
@@ -143,7 +156,7 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
       fc.property(fc.option(textArb, {nil: undefined}), v => {
         const content = propertyValueToChildContent(optionalStringSchema, v)
         expect(content === 'null').toBe(v === undefined)
-        expect(propertyChildContentToEncodedValue(optionalStringSchema, content))
+        expect(valueChildContentToEncoded(optionalStringSchema, content))
           .toBe(optionalStringSchema.codec.encode(v))
       }),
       fuzzParams(200),
@@ -155,7 +168,7 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
       fc.property(fc.option(fc.date({noInvalidDate: true}), {nil: undefined}), v => {
         const content = propertyValueToChildContent(dateSchema, v)
         expect(content === 'null').toBe(v === undefined)
-        expect(propertyChildContentToEncodedValue(dateSchema, content))
+        expect(valueChildContentToEncoded(dateSchema, content))
           .toBe(dateSchema.codec.encode(v))
       }),
       fuzzParams(150),
@@ -168,7 +181,7 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
       fc.property(finiteArb, v => {
         const content = propertyValueToChildContent(numberSchema, v)
         expect(content).toBe(String(v))
-        expect(propertyChildContentToEncodedValue(numberSchema, content)).toBe(v)
+        expect(valueChildContentToEncoded(numberSchema, content)).toBe(v)
       }),
       fuzzParams(150),
     )
@@ -179,7 +192,7 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
       fc.property(fc.boolean(), v => {
         const content = propertyValueToChildContent(booleanSchema, v)
         expect(content).toBe(String(v))
-        expect(propertyChildContentToEncodedValue(booleanSchema, content)).toBe(v)
+        expect(valueChildContentToEncoded(booleanSchema, content)).toBe(v)
       }),
       fuzzParams(100),
     )
@@ -193,7 +206,7 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
         // The decode parses the span rather than reading the derived column
         // (#443 group 3), so this is a genuine round trip through one string
         // and the fuzz has no second input to keep consistent with it.
-        expect(propertyChildContentToEncodedValue(refSchema, content)).toBe(id)
+        expect(valueChildContentToEncoded(refSchema, content)).toBe(id)
       }),
       fuzzParams(150),
     )
@@ -207,9 +220,9 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
   it('ref: rejects the name form and the marked form for every id', () => {
     fc.assert(
       fc.property(idArb, id => {
-        expect(() => propertyChildContentToEncodedValue(refSchema, `[[${id}]]`))
+        expect(() => valueChildContentToEncoded(refSchema, `[[${id}]]`))
           .toThrow(CodecError)
-        expect(() => propertyChildContentToEncodedValue(refSchema, `::((${id}))`))
+        expect(() => valueChildContentToEncoded(refSchema, `::((${id}))`))
           .toThrow(CodecError)
       }),
       fuzzParams(150),
@@ -221,7 +234,7 @@ describe('round trip: propertyChildContentToEncodedValue(propertyValueToChildCon
       fc.property(fc.constantFrom(...enumOptions), v => {
         const content = propertyValueToChildContent(enumSchema, v)
         expect(content).toBe(JSON.stringify(v))
-        expect(propertyChildContentToEncodedValue(enumSchema, content)).toBe(v)
+        expect(valueChildContentToEncoded(enumSchema, content)).toBe(v)
       }),
       fuzzParams(100),
     )
@@ -233,7 +246,7 @@ describe('null-sentinel escaping (needsEscape)', () => {
     for (const v of ['null', '"null"', '""null""', ' null ']) {
       const content = propertyValueToChildContent(optionalStringSchema, v)
       expect(content, `value ${JSON.stringify(v)}`).not.toBe('null')
-      expect(propertyChildContentToEncodedValue(optionalStringSchema, content))
+      expect(valueChildContentToEncoded(optionalStringSchema, content))
         .toBe(optionalStringSchema.codec.encode(v))
     }
   })
@@ -241,7 +254,7 @@ describe('null-sentinel escaping (needsEscape)', () => {
   it('required string: the literal "null" needs no escaping (codec never accepts null, so there is no sentinel to protect)', () => {
     const content = propertyValueToChildContent(requiredStringSchema, 'null')
     expect(content).toBe('null')
-    expect(propertyChildContentToEncodedValue(requiredStringSchema, content)).toBe('null')
+    expect(valueChildContentToEncoded(requiredStringSchema, content)).toBe('null')
   })
 })
 
@@ -310,9 +323,9 @@ describe('enum leniency: a retired option decodes but is not re-canonicalized', 
     const content = JSON.stringify('retired-option')
     // decode is lenient (only checks it's a string, `enumCodec`); encode
     // would reject it (not a current member) — the fallback in
-    // propertyChildContentToEncodedValue keeps the decoded value verbatim
+    // valueChildContentToEncoded keeps the decoded value verbatim
     // instead of throwing or dropping it.
-    expect(propertyChildContentToEncodedValue(enumSchema, content)).toBe('retired-option')
+    expect(valueChildContentToEncoded(enumSchema, content)).toBe('retired-option')
   })
 })
 
@@ -320,15 +333,76 @@ describe('ref: the empty/cleared value is a documented non-round-trip', () => {
   it('renders as empty content, and empty content alone is not decodable (no span to read an id from)', () => {
     const content = propertyValueToChildContent(refSchema, '')
     expect(content).toBe('')
-    expect(() => propertyChildContentToEncodedValue(refSchema, content)).toThrow(CodecError)
+    expect(() => valueChildContentToEncoded(refSchema, content)).toThrow(CodecError)
   })
 })
 
 describe('number: blank content is unparseable, never a silent zero', () => {
   it('empty and whitespace-only content throw CodecError', () => {
     for (const content of ['', '   ', '\t\n']) {
-      expect(() => propertyChildContentToEncodedValue(numberSchema, content), `content ${JSON.stringify(content)}`)
+      expect(() => valueChildContentToEncoded(numberSchema, content), `content ${JSON.stringify(content)}`)
         .toThrow(CodecError)
     }
+  })
+})
+
+describe('multi-value: N contents round-trip to the list, duplicates and empties included', () => {
+  const stringListSchema = defineProperty<readonly string[]>('sl', {
+    codec: kernelValuePresetCoresById['string-list'].build(),
+    defaultValue: [], changeScope: ChangeScope.BlockDefault,
+  })
+  const refListSchema = defineProperty<readonly string[]>('rl', {
+    codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault,
+  })
+
+  /** The whole-property round trip, as the projection actually performs it:
+   *  encode to N contents, then aggregate those contents back. The oracle is
+   *  the list ITSELF, with no exceptions — multiplicity included, which is the
+   *  point (a repeated member is a repeated sibling, not a redundancy), and the
+   *  empty list included too, since a live field row with no member is an
+   *  explicitly empty list rather than an absent key. */
+  const roundTrips = (schema: typeof stringListSchema, members: readonly string[]): void => {
+    const contents = encodedPropertyValueToChildContents(
+      schema, schema.codec.encode(members))
+    expect(childContentsToEncodedPropertyValue(schema, contents)).toEqual(members)
+  }
+
+  it('string-list: arbitrary members, including ones shaped like the grammar', () => {
+    fc.assert(
+      fc.property(fc.array(textArb, {maxLength: 6}), members => {
+        roundTrips(stringListSchema, members)
+      }),
+      fuzzParams(150),
+    )
+  })
+
+  it('no member content is a WHOLE-content reference', () => {
+    // The escape rule applies per MEMBER now. Same two legs as the scalar
+    // string case above and for the same reasons: the whole-block reader must
+    // see nothing in ANY member, or that member is re-roled out of the value
+    // set; an escaped one must also be inert to the inline reader, which a
+    // rename rewrites through. A span embedded in prose stays verbatim and
+    // does still index inline (#756) — a design question, not a misread.
+    fc.assert(
+      fc.property(fc.array(textArb, {maxLength: 6}), members => {
+        // Per MEMBER, through the grain encoder.
+        for (const member of stringListSchema.codec.encode(members) as string[]) {
+          const content = encodedToValueChildContent(stringListSchema, member)
+          expect(parseExactReferenceBlockContent(content)).toBeNull()
+          if (content !== member) expect(parseReferences(content)).toEqual([])
+        }
+      }),
+      fuzzParams(150),
+    )
+  })
+
+  it('refList: id members round-trip through their `((id))` spans', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.stringMatching(/^[A-Za-z0-9-]{1,12}$/), {maxLength: 6}),
+        members => { roundTrips(refListSchema, members) },
+      ),
+      fuzzParams(150),
+    )
   })
 })

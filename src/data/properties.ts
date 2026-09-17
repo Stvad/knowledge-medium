@@ -205,6 +205,11 @@ export const isCollapsedProp = seedProperty({
   hidden: true,
 })
 
+/** Deliberately NOT a `refList`, though the value children are now N siblings
+ *  either way: a seeded type's token is a short string that must resolve with
+ *  no backing block, so a ref codec would point every membership at a block
+ *  that does not exist. `mergeTypeMembershipProcessor`'s header has the second
+ *  reason and what covers merge retargeting instead. */
 export const typesProp = seedProperty({
   seedKey: 'system:kernel-data/property/types',
   revision: 1,

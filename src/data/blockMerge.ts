@@ -7,7 +7,12 @@ import {
   type Tx,
 } from '@/data/api'
 import { keysBetween } from './orderKey'
-import { getPropertyFieldTargetId } from './propertyChildren'
+import {
+  childContentsToEncodedPropertyValue,
+  fieldRowValues,
+  getPropertyFieldTargetId,
+  unionValuesAcrossFieldRows,
+} from './propertyChildren'
 import {
   collapseDuplicateFieldRow,
   materializePropertyChildrenForExistingRow,
@@ -122,6 +127,40 @@ export const foldBlocksInTx = async (
 
   const intoFieldByFieldId = new Map<string, BlockData>()
   let intoAnchor: string | null = null
+  /** Fold the child-derived value of each contributed key into `mergedProperties`
+   *  — see the call site for why the source's own cell cannot be trusted for
+   *  these keys. Child-backed properties are owned by their ROWS (§5's
+   *  one-direction rule), so the rows are what the merged cell must say. */
+  const projectContributedKeys = async (
+    contributed: readonly BlockData[],
+  ): Promise<void> => {
+    const fieldIds = new Set<string>()
+    for (const row of contributed) {
+      const fieldId = getPropertyFieldTargetId(row)
+      if (fieldId !== undefined) fieldIds.add(fieldId)
+    }
+    if (fieldIds.size === 0) return
+    const children = await tx.childrenOf(into.id, undefined)
+    const isFieldDefinition = (fieldId: string): boolean =>
+      tx.isPropertyFieldDefinition(into.workspaceId, fieldId)
+    for (const fieldId of fieldIds) {
+      const schema = tx.resolvePropertyFieldSchema(into.workspaceId, fieldId)
+      if (schema === null) continue
+      const perFieldRow = await fieldRowValues(tx, children, fieldId, isFieldDefinition)
+      if (perFieldRow === null) continue
+      const projected = childContentsToEncodedPropertyValue(
+        schema,
+        unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content),
+      )
+      // `undefined` = nothing under the rows parses. Leave the merged bag's own
+      // answer alone rather than unsetting: §9's unset is PROJECT's call to
+      // make on a settled write, not a merge's.
+      if (projected !== undefined) {
+        mergedProperties = {...mergedProperties, [schema.name]: projected}
+      }
+    }
+  }
+
   const scanIntoChildren = async (): Promise<void> => {
     intoFieldByFieldId.clear()
     intoAnchor = null
@@ -274,6 +313,22 @@ export const foldBlocksInTx = async (
       intoAnchor = key
       if (fieldId !== undefined) intoFieldByFieldId.set(fieldId, fromField)
     }
+
+    // Re-derive the merged CELL for every key this source contributed rows for,
+    // from the rows themselves. The source CELL can be STALE against them: a
+    // synced arrival lands under a field row without passing through `repo.tx`,
+    // so nothing reprojected the owner, and the bag `mergeProps` just built
+    // from that cell is missing the arrival. MATERIALIZE runs BEFORE PROJECT,
+    // so it would read the arrival as surplus and tombstone it — and a merge
+    // RELOCATES, never reaps, least of all a member it never observed.
+    //
+    // Projecting here rather than leaving it to PROJECT is what puts the right
+    // answer in front of MATERIALIZE, and it is the same answer: the three
+    // functions below ARE the projection, shared rather than restated. It does
+    // not invert `mergeProperties`' target-wins rule — post-collapse the
+    // target's own value is the primary one, so a scalar's first-parseable IS
+    // the target's, and for a list a union is what the strategy does anyway.
+    await projectContributedKeys(fromPropertyChildren)
 
     mergedContent = computeMergedContent(mergedContent, from.content, contentStrategy)
     // Delete before the survivor's write so aliases held by `from` are released
