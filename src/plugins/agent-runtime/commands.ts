@@ -372,8 +372,15 @@ const presetRegistryAfter = (
       spliced = true
     }
   }
-  // A first install (or a block contributing none today) appends, which is
-  // where its contributions will land.
+  // No anchor — a first install, or a block that contributes no preset core
+  // today — appends. For a first install that is exactly where its
+  // contributions land. For an existing block it is an APPROXIMATION of its
+  // place in `findExtensionBlocks` order, and a deliberate one: it can only
+  // make the candidate win a same-precedence tie it would really lose, and the
+  // core that would really win is the one live under that id today, so the
+  // error is a spurious refusal (with `--allow-preset-change` to hand) and
+  // never a missed one. Reconstructing the true position would mean asserting
+  // that block order and resolver order agree, which nothing here can pin.
   if (!spliced) merged.push(...candidate)
 
   const after = new Map<string, AnyValuePresetCore | undefined>(
@@ -1232,7 +1239,15 @@ const installRuntimeExtension = async (
       // leave nothing behind. Writing the source and then refusing would change
       // the block's hash, which un-pins the approved version on this device and
       // stops a working extension dead — a silent side effect of saying no.
-      if (overrides !== null) {
+      //
+      // A candidate that did not LOAD is skipped rather than diffed. It
+      // contributed nothing, which the diff would read as dropping every id the
+      // block registers today — but a source that will not transpile cannot be
+      // pinned either (`approveExtension` below is best-effort and leaves the
+      // old pin running), so the registry does not move. Diffing it would
+      // refuse the install over a preset change that is not happening, and
+      // bury the compile error the author actually needs under it.
+      if (overrides !== null && resolution.errors.length === 0) {
         presetScan = await findPresetIdentityConflicts(
           repo, workspaceId, presetRegistryAfter(context, resolution, targetId))
       }
@@ -1252,7 +1267,10 @@ const installRuntimeExtension = async (
   }
   const presetChanges: {presetChanges?: PresetIdentityConflict[]} =
     presetConflicts.length > 0 ? {presetChanges: presetConflicts} : {}
-  const verification = resolution && input.verify
+  // Reported unasked when the candidate failed to load: an install that stores
+  // source nothing can run is worth saying so about, and it is what makes
+  // skipping the preset diff above legible rather than silent.
+  const verification = resolution && (input.verify || resolution.errors.length > 0)
     ? describeVerification(resolution, candidate)
     : undefined
 

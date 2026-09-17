@@ -64,18 +64,30 @@
  * and it does not need to be, because nothing it stores runs. The gap that
  * leaves is the ENABLE that later does make it run, which is #1046.
  *
- * ACCEPTED: the per-stored-config probes are best-effort. They come from this
- * device's live definition rows at scan time, so a row inside a durable sync
- * gap is not probed (`syncGap` reports that basis rather than refusing on it),
- * and one landing between the scan and the commit is not either — `Tx` exposes
- * no raw read, so an in-transaction re-scan would have to ask a narrower
- * question than the pre-check and answer all-clear over a subset, which is
- * worse than not asking. Both can only MISS a refusal, never invent one, and
- * both need a preset whose built codec type varies with its config: no preset
- * in the tree has one, and the default-config probe and `configCodec.type`
- * comparison — which decide every case that exists today — read nothing from
- * the workspace at all. Refusing every install on a device with a durable gap
- * would be a certain cost against that.
+ * ACCEPTED, all three instances of one bound: this is a POINT-IN-TIME
+ * comparison against what is live, and anything not yet live is outside it.
+ *
+ *  - definition rows inside a durable sync gap are not probed (`syncGap`
+ *    reports that basis rather than refusing on it), and neither is one landing
+ *    between the scan and the commit. `Tx` exposes no raw read, so an
+ *    in-transaction re-scan would have to ask a narrower question than the
+ *    pre-check and answer all-clear over a subset, which is worse than not
+ *    asking. Both bound only the per-stored-config probes, which need a preset
+ *    whose built codec type varies with its config — no preset in the tree has
+ *    one, and the default-config probe and `configCodec.type` comparison decide
+ *    every case that exists today without reading the workspace at all.
+ *  - two installs landing between reloads each scan the same live registry and
+ *    are each right about it, while the pair is not: one may drop a preset id
+ *    as the other changes the core it was shadowing. SERIALIZING them does not
+ *    help, which is the part worth knowing — a stored source contributes
+ *    nothing until a reload, so the second scan sees the same registry however
+ *    the two are ordered. Seeing the other's effect would mean compiling every
+ *    installed extension's stored source on every install, which the approval
+ *    gate forbids and the cost rules out. It also takes two extensions
+ *    contributing ONE preset id, the shadowing #692 exists to refuse outright;
+ *    this residual leaves with it.
+ *
+ * Every one of them can only MISS a refusal, never invent one.
  */
 
 import type { AnyValuePresetCore } from '@/data/api'
@@ -122,26 +134,44 @@ export interface PresetIdentityConflict {
 }
 
 /** What a core makes of one stored config: the codec type it would publish, or
- *  the reason it could not get there. A core that starts REFUSING a config it
- *  used to read has changed what the definition publishes just as surely as one
- *  that changes the codec's type, so both are the same kind of answer and
- *  compare as strings. */
+ *  that it would publish NOTHING.
+ *
+ *  A core that starts REFUSING a config it used to read has changed what the
+ *  definition publishes just as surely as one that changes the codec's type, so
+ *  both are outcomes of the same kind. But `unavailable` carries no identity
+ *  beyond itself: whether the config decode threw or `build` did, and whatever
+ *  either said, `tryBuildSchema` returns null and the definition stays
+ *  metadata-only — no stored value changes interpretation. Comparing the
+ *  message would refuse an update that only reworded a validation error, so
+ *  `detail` exists for the refusal to print and is never compared. */
+export type PresetCodecOutcome =
+  | {kind: 'codec'; type: string}
+  | {kind: 'unavailable'; detail: string}
+
 export const presetCodecOutcome = (
   core: AnyValuePresetCore,
   storedConfig: unknown,
-): string => {
+): PresetCodecOutcome => {
   let config: unknown
   try {
     config = decodePresetConfig(core, storedConfig)
   } catch (error) {
-    return `config rejected (${(error as Error).message})`
+    return {kind: 'unavailable', detail: `config rejected (${(error as Error).message})`}
   }
   try {
-    return `codec type ${JSON.stringify(core.build(config as never).type)}`
+    return {kind: 'codec', type: core.build(config as never).type}
   } catch (error) {
-    return `build threw (${(error as Error).message})`
+    return {kind: 'unavailable', detail: `build threw (${(error as Error).message})`}
   }
 }
+
+/** What the comparison is ON. See {@link PresetCodecOutcome}. */
+const outcomeIdentity = (outcome: PresetCodecOutcome): string =>
+  outcome.kind === 'codec' ? `codec type ${JSON.stringify(outcome.type)}` : 'unavailable'
+
+/** What the refusal PRINTS — the identity, plus the diagnosis where there is one. */
+const describeOutcome = (outcome: PresetCodecOutcome): string =>
+  outcome.kind === 'codec' ? `codec type ${JSON.stringify(outcome.type)}` : outcome.detail
 
 /** The stored configs a comparison must cover: every distinct one in use, plus
  *  `undefined` for the preset's own default. The default probe is what makes a
@@ -188,14 +218,14 @@ export const presetIdentityDifferences = (
   for (const config of configsToProbe(definitions)) {
     const before = presetCodecOutcome(current, config)
     const after = presetCodecOutcome(candidate, config)
-    if (before === after) continue
-    const pair = `${before} -> ${after}`
+    const pair = `${outcomeIdentity(before)} -> ${outcomeIdentity(after)}`
+    if (outcomeIdentity(before) === outcomeIdentity(after)) continue
     if (reported.has(pair)) continue
     reported.add(pair)
     const where = config === undefined
       ? 'at the preset default config'
       : `at stored config ${JSON.stringify(config)}`
-    differences.push(`${pair} (${where})`)
+    differences.push(`${describeOutcome(before)} -> ${describeOutcome(after)} (${where})`)
   }
 
   return differences
@@ -341,7 +371,7 @@ export const findPresetIdentityConflicts = async (
   for (const {presetId, current, next} of contested) {
     const rows = definitionRows.filter(row => row.presetId === presetId)
     const differences = next === undefined
-      ? [`${presetCodecOutcome(current, undefined)} -> no core registers this id `
+      ? [`${describeOutcome(presetCodecOutcome(current, undefined))} -> no core registers this id `
           + '(every definition using it publishes no schema, so its cells read as unset)']
       : presetIdentityDifferences(current, next, rows)
     if (differences.length === 0) continue

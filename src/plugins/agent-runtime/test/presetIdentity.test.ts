@@ -298,6 +298,46 @@ describe('findPresetIdentityConflicts', () => {
     ])
   })
 
+  it('ignores changed error TEXT when both cores reject the same config', async () => {
+    // Both leave `tryBuildSchema` returning null, so the definition stays
+    // metadata-only and no stored value changes interpretation. Comparing the
+    // message would refuse an update that only reworded a validation error.
+    const rejecting = (message: string) => definePresetCore<string, {mode: string}>({
+      id: PRESET,
+      build: () => codecs.string,
+      defaultValue: '',
+      defaultConfig: {mode: 'wide'},
+      configCodec: {
+        type: 'demo:rating-config',
+        encode: value => ({mode: value.mode}),
+        decode: () => { throw new CodecError(message, null) },
+      },
+    })
+    register(rejecting('mode must be wide'))
+    await createDefinitionBlock('demo-rating', PRESET, {mode: 'narrow'})
+
+    const {conflicts} = await findPresetIdentityConflicts(
+      repo, WS, registryAfter(rejecting('mode has to be "wide"')))
+    expect(conflicts).toEqual([])
+  })
+
+  it('still reports a core that BECOMES unavailable', async () => {
+    // The other side of the same comparison: going from a published codec to
+    // none is a real change, so only the message is discarded, not the kind.
+    register(numberRating)
+    await addDefinitionWithCells('demo-rating', PRESET, 1)
+    const broken = definePresetCore<string>({
+      id: PRESET,
+      build: () => { throw new Error('not configured') },
+      defaultValue: '',
+    })
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(
+      repo, WS, registryAfter(broken))
+    expect(conflict?.differences).toEqual([
+      'codec type "number" -> build threw (not configured) (at the preset default config)',
+    ])
+  })
+
   it('reports an id whose core goes away entirely', async () => {
     // The drop direction: the extension stops contributing an id nothing else
     // claims, so every definition using it publishes no schema at all.

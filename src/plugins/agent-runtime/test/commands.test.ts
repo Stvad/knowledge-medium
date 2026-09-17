@@ -523,6 +523,40 @@ describe('agent runtime commands', () => {
       }
     })
 
+    it('does not diff a candidate that failed to LOAD, and reports why', async () => {
+      // A source that will not transpile cannot be pinned either — the old
+      // pinned output keeps running, so the registry does not move. Diffing the
+      // empty runtime would read it as dropping every id the block registers
+      // and refuse over a preset change that is not happening.
+      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
+      let id: string
+      try {
+        const installed = await install('install-broken-base')
+        await executeCommand({
+          commandId: 'enable-broken', type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
+      await getOrCreatePropertiesPage(env.repo, WS)
+      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
+
+      const restore = __setCompileImplForTest(async () => {
+        throw new SyntaxError('Unexpected token')
+      })
+      try {
+        const result = await install('install-broken')
+        expect(result.presetChanges).toBeUndefined()
+        // Reported without `--verify`, so a plain install does not look clean.
+        expect(result.verification?.ok).toBe(false)
+        expect(result.verification?.errors[0]?.message).toContain('Unexpected token')
+      } finally {
+        restore()
+      }
+    })
+
     it('compares the core that would WIN, when one id is contributed twice', async () => {
       // `valuePresetCoresFacet` is a last-wins keyed map, here and app-wide, so
       // the second contribution is the one that would reach

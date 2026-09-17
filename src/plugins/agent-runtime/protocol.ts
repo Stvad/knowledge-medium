@@ -180,6 +180,9 @@ export interface InstallExtensionResult {
    *  Absent when no conflict was found OR when the source was never executed to
    *  look (see `verify`). */
   presetChanges?: PresetIdentityConflict[]
+  /** Present when `--verify` asked for it, and ALSO when the candidate was
+   *  resolved and failed to load — an install that stores source nothing can
+   *  run says so rather than reporting success. */
   verification?: ExtensionVerificationResult
 }
 
