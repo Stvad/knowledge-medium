@@ -1,1 +1,1 @@
-import{Hu as e,Uu as t}from"../../../../chunks/app-CDMaLK_0.js";export{e as BACKLINKS_COUNT_FOR_BLOCK_QUERY,t as backlinksCountForBlockQuery};
+import{Hu as e,Uu as t}from"../../../../chunks/app-BnwFLDyO.js";export{e as BACKLINKS_COUNT_FOR_BLOCK_QUERY,t as backlinksCountForBlockQuery};

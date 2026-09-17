@@ -1,1 +1,1 @@
-import{GR as e,KR as t,WR as n}from"../../../chunks/app-CDMaLK_0.js";export{n as charLimitProp,e as charProfileProp,t as charScopeProp};
+import{GR as e,KR as t,WR as n}from"../../../chunks/app-BnwFLDyO.js";export{n as charLimitProp,e as charProfileProp,t as charScopeProp};

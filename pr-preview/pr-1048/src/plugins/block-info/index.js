@@ -1,1 +1,1 @@
-import{du as e}from"../../../chunks/app-CDMaLK_0.js";export{e as blockInfoPlugin};
+import{du as e}from"../../../chunks/app-BnwFLDyO.js";export{e as blockInfoPlugin};

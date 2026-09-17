@@ -1,1 +1,1 @@
-import{Fd as e,Id as t,Pd as n}from"../../chunks/app-CDMaLK_0.js";export{n as backlinkCompletionSource,e as createBacklinkAutocomplete,t as isInsideBacklinkBrackets};
+import{Fd as e,Id as t,Pd as n}from"../../chunks/app-BnwFLDyO.js";export{n as backlinkCompletionSource,e as createBacklinkAutocomplete,t as isInsideBacklinkBrackets};

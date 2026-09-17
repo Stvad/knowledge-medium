@@ -1,1 +1,1 @@
-import{Ig as e}from"../../../chunks/app-CDMaLK_0.js";export{e as BreadcrumbList};
+import{Ig as e}from"../../../chunks/app-BnwFLDyO.js";export{e as BreadcrumbList};

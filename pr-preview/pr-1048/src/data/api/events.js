@@ -1,1 +1,1 @@
-import{O2 as e,k2 as t}from"../../../chunks/app-CDMaLK_0.js";export{e as CORE_BLOCK_DELETED_EVENT,t as CORE_BLOCK_MERGED_EVENT};
+import{O2 as e,k2 as t}from"../../../chunks/app-BnwFLDyO.js";export{e as CORE_BLOCK_DELETED_EVENT,t as CORE_BLOCK_MERGED_EVENT};

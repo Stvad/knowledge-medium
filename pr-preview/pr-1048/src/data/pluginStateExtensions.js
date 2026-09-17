@@ -1,1 +1,1 @@
-import{gz as e,hz as t}from"../../chunks/app-CDMaLK_0.js";export{t as pluginPrefsExtension,e as pluginUIStateExtension};
+import{gz as e,hz as t}from"../../chunks/app-BnwFLDyO.js";export{t as pluginPrefsExtension,e as pluginUIStateExtension};

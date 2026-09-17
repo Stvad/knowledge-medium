@@ -1,1 +1,1 @@
-import{Mj as e,jj as t}from"../../chunks/app-CDMaLK_0.js";export{t as anyBlockTombstoned,e as isBlockTombstoned};
+import{Mj as e,jj as t}from"../../chunks/app-BnwFLDyO.js";export{t as anyBlockTombstoned,e as isBlockTombstoned};
