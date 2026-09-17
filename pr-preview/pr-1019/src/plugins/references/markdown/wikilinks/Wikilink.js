@@ -1,1 +1,1 @@
-import{Cd as e}from"../../../../../chunks/app-C-OChlZu.js";export{e as Wikilink};
+import{Cd as e}from"../../../../../chunks/app-DcC6trh9.js";export{e as Wikilink};
