@@ -1,1 +1,1 @@
-import{Zd as e}from"../../chunks/app-DbPmCk9y.js";export{e as BlockSearchPicker};
+import{Zd as e}from"../../chunks/app-DERQhhGQ.js";export{e as BlockSearchPicker};

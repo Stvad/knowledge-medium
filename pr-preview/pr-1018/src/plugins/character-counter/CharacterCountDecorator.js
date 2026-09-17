@@ -1,1 +1,1 @@
-import{j as e}from"../../../chunks/app-DbPmCk9y.js";export{e as characterCountDecoratorContribution};
+import{j as e}from"../../../chunks/app-DERQhhGQ.js";export{e as characterCountDecoratorContribution};
