@@ -385,6 +385,23 @@ const presetRegistryAfter = (
 
   const after = new Map<string, AnyValuePresetCore | undefined>(
     combineFacetContributions(valuePresetCoresFacet, merged, {}))
+
+  // A candidate that reported load errors may have failed to contribute
+  // something it declares, so ABSENCE proves nothing about it — but PRESENCE
+  // still does. Keep only what it positively registered and conclude nothing
+  // from the rest: a module that throws in one function-valued sibling still
+  // transpiles, still pins, and still registers the preset core beside it,
+  // while one that does not transpile at all cannot be pinned and leaves the
+  // old contributions running.
+  if (resolution.errors.length > 0) {
+    const registered = new Set(candidate.map(contribution =>
+      (contribution.value as AnyValuePresetCore).id))
+    for (const presetId of [...after.keys()]) {
+      if (!registered.has(presetId)) after.delete(presetId)
+    }
+    return after
+  }
+
   // An id this block claims today that the fold no longer holds at all stops
   // resolving. An absent key cannot say that — it reads the same as an id
   // nobody ever claimed — so it is recorded explicitly.
@@ -1240,14 +1257,10 @@ const installRuntimeExtension = async (
       // the block's hash, which un-pins the approved version on this device and
       // stops a working extension dead — a silent side effect of saying no.
       //
-      // A candidate that did not LOAD is skipped rather than diffed. It
-      // contributed nothing, which the diff would read as dropping every id the
-      // block registers today — but a source that will not transpile cannot be
-      // pinned either (`approveExtension` below is best-effort and leaves the
-      // old pin running), so the registry does not move. Diffing it would
-      // refuse the install over a preset change that is not happening, and
-      // bury the compile error the author actually needs under it.
-      if (overrides !== null && resolution.errors.length === 0) {
+      // A candidate that reported load errors is still diffed — on what it
+      // registered, never on what is missing. `presetRegistryAfter` draws that
+      // line; see the note there.
+      if (overrides !== null) {
         presetScan = await findPresetIdentityConflicts(
           repo, workspaceId, presetRegistryAfter(context, resolution, targetId))
       }

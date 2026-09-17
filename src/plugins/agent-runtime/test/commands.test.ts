@@ -523,6 +523,37 @@ describe('agent runtime commands', () => {
       }
     })
 
+    it('diffs what a PARTIALLY failed candidate did register', async () => {
+      // A module that throws in one function-valued sibling still transpiles,
+      // still pins, and still registers the preset core beside it. Errors mean
+      // absence proves nothing; presence still does.
+      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
+      let id: string
+      try {
+        const installed = await install('install-partial-base')
+        await executeCommand({
+          commandId: 'enable-partial', type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
+      await getOrCreatePropertiesPage(env.repo, WS)
+      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
+
+      const restore = compileTo([
+        valuePresetCoresFacet.of(stringRating),
+        () => { throw new Error('sibling blew up') },
+      ])
+      try {
+        await expect(install('install-partial'))
+          .rejects.toThrow(/codec type "number" -> codec type "string"/)
+      } finally {
+        restore()
+      }
+    })
+
     it('does not diff a candidate that failed to LOAD, and reports why', async () => {
       // A source that will not transpile cannot be pinned either — the old
       // pinned output keeps running, so the registry does not move. Diffing the

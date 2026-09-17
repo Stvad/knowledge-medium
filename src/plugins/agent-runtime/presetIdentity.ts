@@ -76,6 +76,12 @@
  *    whose built codec type varies with its config — no preset in the tree has
  *    one, and the default-config probe and `configCodec.type` comparison decide
  *    every case that exists today without reading the workspace at all.
+ *  - a core registered IMPERATIVELY, by an `appEffect` calling
+ *    `setRuntimeContributions`, is invisible on both sides: the live
+ *    contribution carries the effect's own source id rather than `block:<id>`,
+ *    so it is not recognized as the block's, and the isolated resolution
+ *    collects declarations without ever starting an effect. Nothing here can
+ *    see it; #1054 is whether such a bucket should be allowed at all.
  *  - two installs landing between reloads each scan the same live registry and
  *    are each right about it, while the pair is not: one may drop a preset id
  *    as the other changes the core it was shadowing. SERIALIZING them does not
@@ -177,9 +183,16 @@ const describeOutcome = (outcome: PresetCodecOutcome): string =>
  *  `undefined` for the preset's own default. The default probe is what makes a
  *  workspace with no definitions yet still comparable — and it is the only
  *  probe when a preset's codec type does not vary with config, which is every
- *  preset in the tree today. */
+ *  preset in the tree today.
+ *
+ *  "In use" is not only the definition ROWS. A code-owned seed declaring this
+ *  preset already supplies the schema its cells are written under, whether or
+ *  not its definition row has materialized yet, so its `encodedConfig` belongs
+ *  here too — otherwise a candidate that preserves the codec at the default and
+ *  changes it at the seed's config passes, and materialization reads those cells
+ *  under the new one. */
 const configsToProbe = (
-  definitions: readonly DefinitionRow[],
+  definitions: readonly {config: unknown}[],
 ): readonly unknown[] => {
   const seen = new Map<string, unknown>()
   for (const row of definitions) {
@@ -200,7 +213,7 @@ const configsToProbe = (
 export const presetIdentityDifferences = (
   current: AnyValuePresetCore,
   candidate: AnyValuePresetCore,
-  definitions: readonly DefinitionRow[],
+  storedConfigs: readonly {config: unknown}[],
 ): string[] => {
   const differences: string[] = []
 
@@ -215,7 +228,7 @@ export const presetIdentityDifferences = (
   // probe yields the same answer and would otherwise repeat the same line once
   // per definition; the config named is the first that produced the pair.
   const reported = new Set<string>()
-  for (const config of configsToProbe(definitions)) {
+  for (const config of configsToProbe(storedConfigs)) {
     const before = presetCodecOutcome(current, config)
     const after = presetCodecOutcome(candidate, config)
     const pair = `${outcomeIdentity(before)} -> ${outcomeIdentity(after)}`
@@ -370,10 +383,17 @@ export const findPresetIdentityConflicts = async (
   const conflicts: PresetIdentityConflict[] = []
   for (const {presetId, current, next} of contested) {
     const rows = definitionRows.filter(row => row.presetId === presetId)
+    const seeds = [...(registry?.seedsByKey.values() ?? [])]
+      .filter(seed => seed.presetId === presetId)
     const differences = next === undefined
       ? [`${describeOutcome(presetCodecOutcome(current, undefined))} -> no core registers this id `
           + '(every definition using it publishes no schema, so its cells read as unset)']
-      : presetIdentityDifferences(current, next, rows)
+      : presetIdentityDifferences(current, next, [
+          ...rows,
+          // A seed's declared config counts whether or not its row has
+          // materialized — see `configsToProbe`.
+          ...seeds.map(seed => ({config: seed.encodedConfig})),
+        ])
     if (differences.length === 0) continue
 
     const names = rows.map(row =>
@@ -392,10 +412,7 @@ export const findPresetIdentityConflicts = async (
     const cells = [...new Set(definitions.map(d => d.name))]
       .reduce((total, name) => total + (cellsByName.get(name) ?? 0), 0)
 
-    const seedNames = [...(registry?.seedsByKey.values() ?? [])]
-      .filter(seed => seed.presetId === presetId)
-      .map(seed => seed.name)
-      .sort()
+    const seedNames = seeds.map(seed => seed.name).sort()
 
     conflicts.push({
       presetId,

@@ -102,6 +102,18 @@ const createDefinitionBlock = async (
 const registryAfter = (...cores: AnyValuePresetCore[]) =>
   new Map<string, AnyValuePresetCore | undefined>(cores.map(core => [core.id, core]))
 
+/** Live `property-schema` rows in the workspace — the probe set's OTHER
+ *  source, asserted at zero so a seed test cannot pass through a row. */
+const readDefinitionCount = async (): Promise<number> => {
+  const row = await repo.db.get<{n: number}>(
+    `SELECT COUNT(*) AS n FROM blocks b
+       JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
+      WHERE t.type = 'property-schema' AND b.workspace_id = ? AND b.deleted = 0`,
+    [WS],
+  )
+  return row?.n ?? 0
+}
+
 describe('findPresetIdentityConflicts', () => {
   it('reports nothing for a preset id nothing is registered under', async () => {
     expect((await findPresetIdentityConflicts(repo, WS, registryAfter(numberRating))).conflicts).toEqual([])
@@ -335,6 +347,47 @@ describe('findPresetIdentityConflicts', () => {
       repo, WS, registryAfter(broken))
     expect(conflict?.differences).toEqual([
       'codec type "number" -> build threw (not configured) (at the preset default config)',
+    ])
+  })
+
+  it("probes a SEED's declared config, materialized row or not", async () => {
+    // A seed already supplies the schema its cells are written under before its
+    // definition row exists, so a candidate that preserves the codec at the
+    // default and changes it at the seed's config must not pass.
+    // `seedProperty` requires an encoded config to be a JSON object, so this
+    // one is shaped the way a real seed's would be.
+    const modeCodec: Codec<{mode: string}> = {
+      type: 'demo:mode',
+      encode: value => ({mode: value.mode}),
+      decode: json => ({mode: String((json as {mode?: unknown}).mode ?? 'wide')}),
+    }
+    const core = (whenNarrow: Codec<unknown>) => definePresetCore<unknown, {mode: string}>({
+      id: PRESET,
+      build: config => (config.mode === 'narrow' ? whenNarrow : codecs.string),
+      defaultValue: '',
+      defaultConfig: {mode: 'wide'},
+      configCodec: modeCodec,
+    })
+    const registered = core(codecs.string)
+    register(registered)
+    const seed = seedProperty<unknown, {mode: string}>({
+      seedKey: 'system:demo/property/narrow-rating',
+      revision: 1,
+      name: 'demo:narrow-rating',
+      preset: registered,
+      config: {mode: 'narrow'},
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-narrow-seed', [seed])
+    // No definition row and no cells — the seed declaration alone is the reason
+    // this config is in use.
+    expect(await readDefinitionCount()).toBe(0)
+
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(
+      repo, WS, registryAfter(core(codecs.number)))
+    expect(conflict?.differences).toEqual([
+      'codec type "string" -> codec type "number" (at stored config {"mode":"narrow"})',
     ])
   })
 
