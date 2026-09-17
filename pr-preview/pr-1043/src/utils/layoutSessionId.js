@@ -1,1 +1,0 @@
-import{GZ as e,JZ as t,KZ as n,UZ as r,WZ as i,qZ as a}from"../../chunks/app-DG-lfGQ6.js";export{r as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,i as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,e as __resetLayoutSessionIdForTesting,n as getLayoutSessionId,a as isInstalledAppDisplayMode,t as readOrCreateLayoutSessionId};
