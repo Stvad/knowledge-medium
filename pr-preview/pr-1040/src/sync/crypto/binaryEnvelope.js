@@ -1,1 +1,0 @@
-import{Bp as e,Hp as t,Rp as n,Up as r,Vp as i,Wp as a,zp as o}from"../../../chunks/app-9zBQU0yu.js";export{n as BINARY_ENVELOPE_MAGIC,o as BINARY_ENVELOPE_MIN_BYTES,e as BINARY_ENVELOPE_OVERHEAD_BYTES,i as BINARY_MAGIC_BYTES,t as decodeBinaryEnvelope,r as encodeBinaryEnvelope,a as hasBinaryEnvelopeMagic};
