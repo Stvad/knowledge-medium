@@ -16,12 +16,14 @@ import {
   readApproval,
 } from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
-import { valuePresetCoresFacet } from '@/data/facets'
+import { definitionSeedsFacet, valuePresetCoresFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getPluginPrefsBlock } from '@/data/stateBlocks'
 import { extensionsOverridesProp, extensionsPrefsType } from '@/plugins/extensions-settings/config'
 import { userToggle } from '@/facets/togglable'
-import { codecs, definePresetCore } from '@/data/api'
+import { codecs, definePresetCore, type Codec } from '@/data/api'
+import { seedProperty } from '@/data/propertySeeds'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds'
 import { ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
@@ -628,6 +630,110 @@ describe('agent runtime commands', () => {
           .rejects.toThrow(/cannot read this device's extension overrides/)
       } finally {
         restore()
+      }
+    })
+
+    it('carries the candidate\'s own seed configs into the diff', async () => {
+      // End-to-end for the same rule: the configs come off the isolated
+      // resolution's seeds, not the registry's.
+      const modeCodec: Codec<{mode: string}> = {
+        type: 'demo:mode',
+        encode: value => ({mode: value.mode}),
+        decode: json => ({mode: String((json as {mode?: unknown})?.mode ?? 'wide')}),
+      }
+      const core = (whenNarrow: Codec<unknown>) => definePresetCore<unknown, {mode: string}>({
+        id: RATING,
+        build: config => (config.mode === 'narrow' ? whenNarrow : codecs.string),
+        defaultValue: '',
+        defaultConfig: {mode: 'wide'},
+        configCodec: modeCodec,
+      })
+      const registered = core(codecs.string)
+      const restoreBase = compileTo(valuePresetCoresFacet.of(registered))
+      let id: string
+      try {
+        const installed = await install('install-seedcfg-base')
+        await executeCommand({
+          commandId: 'enable-seedcfg', type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [registered])
+
+      // The update keeps a core that agrees at the default config and parts at
+      // `narrow`, and moves its own seed onto `narrow`.
+      const changed = core(codecs.number)
+      const restore = compileTo([
+        valuePresetCoresFacet.of(changed),
+        definitionSeedsFacet.of(seedProperty<unknown, {mode: string}>({
+          // A dynamic extension's seeds must carry a block-owned key; the
+          // loader rebinds it and rejects anything else.
+          seedKey: extensionPropertySeedKey('seedcfg'),
+          revision: 1,
+          name: 'demo:seedcfg-rating',
+          preset: changed,
+          config: {mode: 'narrow'},
+          // The seed's default encodes through the codec its config selects.
+          defaultValue: 0,
+          changeScope: ChangeScope.BlockDefault,
+        })),
+      ])
+      try {
+        await expect(install('install-seedcfg'))
+          .rejects.toThrow(/at stored config \{"mode":"narrow"\}/)
+      } finally {
+        restore()
+      }
+    })
+
+    it('refuses when the active workspace moved while the candidate compiled', async () => {
+      // The scan reads the CAPTURED workspace's definition rows against the
+      // ACTIVE workspace's registry and runtime, both of which a switch
+      // re-filters. Comparing the two answers about neither — an
+      // extension-owned preset absent from the new workspace reads as
+      // "nothing registers this id" — so the install must not proceed on it.
+      await registerNumberRatingWithDefinition()
+      await installApproved(valuePresetCoresFacet.of(numberRating))
+
+      const restore = __setCompileImplForTest(async () => {
+        // The switch lands inside the await the install makes here.
+        env.repo.setActiveWorkspaceId('ws-elsewhere')
+        return {default: valuePresetCoresFacet.of(stringRating)}
+      })
+      try {
+        await expect(install('install-ws-switch'))
+          .rejects.toThrow(/not the active one/)
+      } finally {
+        restore()
+        env.repo.setActiveWorkspaceId(WS)
+      }
+    })
+
+    it('refuses when the active workspace moves between the scan and the write', async () => {
+      // The other half of the same window: the scan has passed, and the switch
+      // lands while `repo.tx` waits for the write lock. Without the re-check
+      // inside it, the transaction re-pins this workspace's extension off a
+      // scan that no longer describes anything.
+      await registerNumberRatingWithDefinition()
+      await installApproved(valuePresetCoresFacet.of(numberRating))
+
+      const restore = compileTo(valuePresetCoresFacet.of(numberRating))
+      // `snapshotTypeRegistries` is the last call before `repo.tx`, so it is
+      // the window's near edge.
+      const spy = vi.spyOn(env.repo, 'snapshotTypeRegistries').mockImplementation(function (this: Repo) {
+        env.repo.setActiveWorkspaceId('ws-elsewhere')
+        spy.mockRestore()
+        return env.repo.snapshotTypeRegistries()
+      })
+      try {
+        await expect(install('install-ws-late-switch'))
+          .rejects.toThrow(/not the active one/)
+      } finally {
+        restore()
+        spy.mockRestore()
+        env.repo.setActiveWorkspaceId(WS)
       }
     })
 

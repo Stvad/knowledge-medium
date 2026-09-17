@@ -68,12 +68,16 @@
  * anything not yet live is outside it: definition rows inside a durable sync
  * gap or landing after the scan (`syncGap` reports that basis rather than
  * refusing on it), another install landing before the next reload, and a core
- * registered imperatively by an effect (#1054). The candidate is also resolved
- * against the block's PRE-write row — its new source, but its old content and
- * properties — so an extension choosing its core by reading its own block is
- * outside it too; overlaying one row would cover `load` and leave every query
- * and `repo.db` path uncovered, which is worse than saying so. All of them can
- * only MISS a refusal, never invent one.
+ * registered imperatively by an effect (#1054). All of them can only MISS a
+ * refusal, never invent one.
+ *
+ * The candidate row is the one exception, in both senses. It carries the new
+ * source — which IS its `content` — beside the block's other fields as they
+ * stand BEFORE the write, so an extension choosing its core by reading its own
+ * properties is compared on values the install is about to change. That can
+ * invent a refusal as easily as miss one, since the old properties may select
+ * either core. Overlaying the row would cover `load` and leave every query and
+ * `repo.db` path uncovered, which reads as complete and is not.
  *
  * Neither obvious repair works, which is why none is attempted. An
  * in-transaction re-scan would have to ask a NARROWER question than the
@@ -314,17 +318,25 @@ const countCells = async (
   return new Map(rows.map(row => [String(row.property ?? ''), row.cells]))
 }
 
-/** The effective core each AFFECTED preset id would resolve to once this
- *  install takes effect — `undefined` for an id nothing would register any
- *  more.
- *
- *  Affected is both directions, which is why this is a REGISTRY DIFF and not a
- *  scan of what the candidate declares. An extension that currently shadows a
- *  kernel or plugin core and simply STOPS contributing that id declares
- *  nothing, and the id still changes codec — to whatever was underneath. The
- *  caller is what knows the two sides (`presetRegistryAfter` in
+/** What this install would make of one AFFECTED preset id. */
+export interface PresetAfter {
+  /** The core that would resolve under the id — `undefined` for one nothing
+   *  would register any more. */
+  readonly core: AnyValuePresetCore | undefined
+  /** Encoded configs the CANDIDATE's own seeds declare for this preset. A seed
+   *  publishes its schema from the declaration, so a config an update
+   *  introduces is in use the moment it loads, materialized row or not — and
+   *  the registry only carries the configs the seeds declare TODAY. */
+  readonly seedConfigs: readonly unknown[]
+}
+
+/** The affected ids, both directions, which is why this is a REGISTRY DIFF and
+ *  not a scan of what the candidate declares. An extension that currently
+ *  shadows a kernel or plugin core and simply STOPS contributing that id
+ *  declares nothing, and the id still changes codec — to whatever was
+ *  underneath. The caller is what knows the two sides (`presetRegistryAfter` in
  *  `commands.ts`); this compares them. */
-export type PresetRegistryAfter = ReadonlyMap<string, AnyValuePresetCore | undefined>
+export type PresetRegistryAfter = ReadonlyMap<string, PresetAfter>
 
 export interface PresetIdentityScan {
   conflicts: PresetIdentityConflict[]
@@ -353,13 +365,13 @@ export const findPresetIdentityConflicts = async (
   // the page importmap) contributes the SAME object, and that is the common
   // case: without it every such install pays the definition scan below to
   // reach the same answer.
-  const contested = [...after].flatMap(([presetId, next]) => {
+  const contested = [...after].flatMap(([presetId, {core: next, seedConfigs}]) => {
     const current = registered.get(presetId)
     // Nothing resolves this id today, so nothing is stored under a codec this
     // install could change.
     if (current === undefined) return []
     if (current === next) return []
-    return [{presetId, current, next}]
+    return [{presetId, current, next, seedConfigs}]
   })
   if (contested.length === 0) return {conflicts: [], syncGap: null}
 
@@ -375,7 +387,7 @@ export const findPresetIdentityConflicts = async (
     : null
 
   const conflicts: PresetIdentityConflict[] = []
-  for (const {presetId, current, next} of contested) {
+  for (const {presetId, current, next, seedConfigs} of contested) {
     const rows = definitionRows.filter(row => row.presetId === presetId)
     const seeds = [...(registry?.seedsByKey.values() ?? [])]
       .filter(seed => seed.presetId === presetId)
@@ -384,9 +396,11 @@ export const findPresetIdentityConflicts = async (
           + '(every definition using it publishes no schema, so its cells read as unset)']
       : presetIdentityDifferences(current, next, [
           ...rows,
-          // A seed's declared config counts whether or not its row has
-          // materialized — see `configsToProbe`.
+          // Declared configs count whether or not a row has materialized — see
+          // `configsToProbe`. Both sides of the update: the seeds live today,
+          // and the ones the candidate would publish.
           ...seeds.map(seed => ({config: seed.encodedConfig})),
+          ...seedConfigs.map(config => ({config})),
         ])
     if (differences.length === 0) continue
 

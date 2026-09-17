@@ -52,7 +52,7 @@ import {
   revokeExtensionApproval,
 } from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
-import { valuePresetCoresFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, valuePresetCoresFacet } from '@/data/facets.js'
 import type { AnyValuePresetCore } from '@/data/api'
 import { v4 as uuidv4 } from 'uuid'
 import { lintExtensionSource } from './extensionLint.ts'
@@ -397,18 +397,30 @@ const presetRegistryAfter = (
   // that block order and resolver order agree, which nothing here can pin.
   if (!spliced) merged.push(...candidate)
 
-  const after = new Map<string, AnyValuePresetCore | undefined>(
-    combineFacetContributions(valuePresetCoresFacet, merged, {}))
+  const folded = combineFacetContributions(valuePresetCoresFacet, merged, {})
+  // Configs the candidate's OWN seeds declare, by preset. The registry carries
+  // what the seeds live today declare; an update that moves a seed onto a new
+  // config publishes it from the declaration, so it is in use before any row
+  // exists to compare against.
+  const candidateSeedConfigs = new Map<string, unknown[]>()
+  for (const seed of resolution.runtime.read(definitionSeedsFacet)) {
+    const configs = candidateSeedConfigs.get(seed.presetId) ?? []
+    configs.push(seed.encodedConfig)
+    candidateSeedConfigs.set(seed.presetId, configs)
+  }
 
+  const presetIds = new Set([...folded.keys(), ...candidateSeedConfigs.keys()])
   // An id this block claims today that the fold no longer holds at all stops
   // resolving. An absent key cannot say that — it reads the same as an id
   // nobody ever claimed — so it is recorded explicitly.
   for (const contribution of live) {
     if (!isExtensionContribution(contribution.source, blockId)) continue
-    const presetId = (contribution.value as AnyValuePresetCore).id
-    if (!after.has(presetId)) after.set(presetId, undefined)
+    presetIds.add((contribution.value as AnyValuePresetCore).id)
   }
-  return after
+  return new Map([...presetIds].map(presetId => [presetId, {
+    core: folded.get(presetId),
+    seedConfigs: candidateSeedConfigs.get(presetId) ?? [],
+  }]))
 }
 
 const describeVerification = (
@@ -1259,6 +1271,16 @@ const installRuntimeExtension = async (
       // stops a working extension dead — a silent side effect of saying no.
       //
       if (overrides !== null) {
+        // The scan's inputs are split between the CAPTURED workspace (the
+        // definition rows) and the ACTIVE one (`repo.valuePresetCores` and
+        // `context.runtime`, both re-filtered on a workspace switch), and
+        // compiling the candidate is an await a switch can land inside.
+        // Comparing the two answers about neither: an extension-owned preset
+        // absent from the new workspace reads as "nothing registers this id",
+        // which skips the conflict. Re-checked in the writing tx too, where the
+        // same switch would re-pin this workspace's extension off a scan that
+        // never saw it.
+        assertActiveWorkspace(repo, 'install-extension', workspaceId)
         presetScan = await findPresetIdentityConflicts(
           repo, workspaceId, presetRegistryAfter(context, resolution, targetId))
       }
@@ -1288,6 +1310,7 @@ const installRuntimeExtension = async (
   if (existing) {
     const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
+      assertActiveWorkspace(repo, 'install-extension', workspaceId)
       const current = await tx.get(existing.id)
       if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
       const properties = extensionBlockProperties(current.properties, label, description)

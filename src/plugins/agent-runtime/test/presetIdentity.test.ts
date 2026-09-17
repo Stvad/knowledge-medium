@@ -19,7 +19,11 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
-import { findPresetIdentityConflicts, presetIdentityRefusal } from '../presetIdentity'
+import {
+  findPresetIdentityConflicts,
+  presetIdentityRefusal,
+  type PresetRegistryAfter,
+} from '../presetIdentity'
 
 const WS = 'ws-preset-identity'
 const PRESET = 'demo:rating'
@@ -99,8 +103,12 @@ const createDefinitionBlock = async (
 
 /** The effective-registry map the install path builds, for the ordinary case
  *  where the candidate simply re-registers these ids. */
-const registryAfter = (...cores: AnyValuePresetCore[]) =>
-  new Map<string, AnyValuePresetCore | undefined>(cores.map(core => [core.id, core]))
+const registryAfter = (...cores: AnyValuePresetCore[]): PresetRegistryAfter =>
+  new Map(cores.map(core => [core.id, {core, seedConfigs: []}]))
+
+/** The same, for an id the candidate stops registering entirely. */
+const registryDrops = (presetId: string, core?: AnyValuePresetCore): PresetRegistryAfter =>
+  new Map([[presetId, {core, seedConfigs: []}]])
 
 /** Live `property-schema` rows in the workspace — the probe set's OTHER
  *  source, asserted at zero so a seed test cannot pass through a row. */
@@ -391,6 +399,46 @@ describe('findPresetIdentityConflicts', () => {
     ])
   })
 
+  it("probes a config the CANDIDATE's seed introduces", async () => {
+    // The mirror of the previous case. The registry carries what the seeds
+    // declare TODAY; an update that moves a seed onto a new config publishes it
+    // from the declaration, so that config is in use the moment it loads and
+    // nothing compared the core against it.
+    const modeCodec: Codec<{mode: string}> = {
+      type: 'demo:mode',
+      encode: value => ({mode: value.mode}),
+      decode: json => ({mode: String((json as {mode?: unknown}).mode ?? 'wide')}),
+    }
+    const core = (whenNarrow: Codec<unknown>) => definePresetCore<unknown, {mode: string}>({
+      id: PRESET,
+      build: config => (config.mode === 'narrow' ? whenNarrow : codecs.string),
+      defaultValue: '',
+      defaultConfig: {mode: 'wide'},
+      configCodec: modeCodec,
+    })
+    const registered = core(codecs.string)
+    register(registered)
+    // The seed live TODAY sits on `wide`, where both cores agree.
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-wide-seed', [
+      seedProperty<unknown, {mode: string}>({
+        seedKey: 'system:demo/property/wide-rating',
+        revision: 1,
+        name: 'demo:wide-rating',
+        preset: registered,
+        config: {mode: 'wide'},
+        defaultValue: '',
+        changeScope: ChangeScope.BlockDefault,
+      }),
+    ])
+
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, new Map([
+      [PRESET, {core: core(codecs.number), seedConfigs: [{mode: 'narrow'}]}],
+    ]))
+    expect(conflict?.differences).toEqual([
+      'codec type "string" -> codec type "number" (at stored config {"mode":"narrow"})',
+    ])
+  })
+
   it('reports an id whose core goes away entirely', async () => {
     // The drop direction: the extension stops contributing an id nothing else
     // claims, so every definition using it publishes no schema at all.
@@ -398,7 +446,7 @@ describe('findPresetIdentityConflicts', () => {
     await addDefinitionWithCells('demo-rating', PRESET, 2)
 
     const {conflicts: [conflict]} = await findPresetIdentityConflicts(
-      repo, WS, new Map([[PRESET, undefined]]))
+      repo, WS, registryDrops(PRESET))
     expect(conflict!.differences).toEqual([
       'codec type "number" -> no core registers this id '
       + '(every definition using it publishes no schema, so its cells read as unset)',
@@ -417,7 +465,7 @@ describe('findPresetIdentityConflicts', () => {
 
     const kernelString = kernelValuePresetCoresById.string
     const {conflicts: [conflict]} = await findPresetIdentityConflicts(
-      repo, WS, new Map([['string', kernelString]]))
+      repo, WS, registryDrops('string', kernelString))
     expect(conflict!.differences).toEqual([
       'codec type "number" -> codec type "string" (at the preset default config)',
     ])
