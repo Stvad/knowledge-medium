@@ -31,9 +31,12 @@
  *    tx sees a rebuilt registry where the old name resolves to nothing, so no
  *    delete.) A test asserts field rows SURVIVE.
  *
- * 3. Value children are re-encoded only when the codec TYPE changed, and their
- *    content is read under the NEW codec — the conversion IS "what does this
- *    text mean to the new type". What will not parse is counted and REPORTED
+ * 3. Value children are re-encoded when the codec's INPUTS changed — the
+ *    definition row's preset id and preset config, NOT the built codec's type
+ *    string, which cannot tell `optional-string` from `string`
+ *    (`codecInputsChanged`). Their content is read under the NEW codec: the
+ *    conversion IS "what does this text mean to the new type". What will not
+ *    parse is counted and REPORTED
  *    (§9: "N values can't convert" must be user-visible, never a silent unset)
  *    and never deleted; the rows stay in the tree, fixable by hand.
  *
@@ -214,8 +217,10 @@ export const withoutContestedRenames = <T extends {
       if (destination === null) return false
       const owner = destination.holding[0]
       if (owner !== undefined && owner !== candidate.fieldId) return false
-      if (destination.arriving.some(peer => peer !== candidate.fieldId)) return false
+      // A codec-only change is never judged here — its caller refuses it
+      // outright when anyone arrives at the name it keeps.
       if (candidate.oldName === candidate.newName) return true
+      if (destination.arriving.some(peer => peer !== candidate.fieldId)) return false
       const vacated = claimOf(candidate.oldName)
       if (vacated === null) return false
       // A kept candidate inheriting this name re-keys its own consumers under
@@ -228,14 +233,38 @@ export const withoutContestedRenames = <T extends {
   }
 }
 
+/** Why a change's fan-out could not run. Both end in the same refusal, and
+ *  differ only in what the user is told to do about it. */
+type RefusalReason = 'unbuildable' | 'contested'
+
+const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
+  unbuildable: {
+    code: 'property.definition-change.unbuildable',
+    message:
+      'cannot change a property definition whose value type does not load: the '
+      + 'blocks using it could not be updated to match. Fix the property type '
+      + 'first, then rename or re-type it.',
+  },
+  contested: {
+    code: 'property.definition-change.contested',
+    message:
+      'cannot change a property definition\'s value type while another '
+      + 'definition is taking the same name in the same edit: which of the two '
+      + 'the property answers to afterwards is not decided yet, so the blocks '
+      + 'using it could not be updated. Make the two changes separately.',
+  },
+}
+
 type CollectedChanges =
   | 'unjudgeable'
   | {
       readonly changes: DefinitionChange[]
-      /** Definitions this tx leaves naming a codec that does not build, having
-       *  changed their name or their encoding, so the fan-out cannot reproject
-       *  their consumers' cells. */
-      readonly unbuildableChanges: readonly string[]
+      /** Changes whose ROW commits but whose fan-out cannot run, with the
+       *  reason that decides what the user is told. Held rather than dropped:
+       *  each leaves consumers holding values in an encoding the registry will
+       *  not be reading them with, so the caller refuses the transaction once
+       *  any of them has a consumer. */
+      readonly unfanoutable: ReadonlyArray<{fieldId: string; reason: RefusalReason}>
     }
 
 interface DefinitionChange {
@@ -266,7 +295,7 @@ const collectChanges = (
 ): CollectedChanges => {
   // Pass 1: candidate changes (name or codec inputs differ, after row builds).
   const candidates: DefinitionChange[] = []
-  const unbuildableChanges: string[] = []
+  const unfanoutable: Array<{fieldId: string; reason: RefusalReason}> = []
   /** Any name this tx touches — enough to ask whether the WORKSPACE can be
    *  judged at all, which is not a question about the name. */
   let probeName: string | null = null
@@ -297,53 +326,45 @@ const collectChanges = (
     // resolver "does this fieldId resolve" instead would conflate shadowing
     // with having no buildable codec, which is the repair case below and must
     // NOT be skipped.
-    const afterSchema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
-    const beforeSchema = buildSchemaOrNull(before, ctx.valuePresets, beforeMeta)
-    if (afterSchema === null) {
-      // The row this tx leaves behind publishes no codec, so nothing here can
-      // reproject a single cell. Two shapes reach this, and letting either
-      // through strands consumers with no repair path, so both are held for the
-      // caller's refusal:
-      //
-      //  - a RENAME: consumers keep the old key, and the transaction that
-      //    eventually repairs the preset cannot drop it, because by then both
-      //    sides of that transaction carry the new name.
-      //  - a RE-TYPE off a preset that DID build: the values stay in the old
-      //    encoding while the row now names a different codec, and the moment
-      //    that preset becomes available — an extension registering, a code fix
-      //    — the registry publishes it over them with no transaction in between
-      //    for anything to fan out from.
-      //
-      // A definition whose BEFORE row built no codec either is deliberately not
-      // held: its cells were already stranded by whatever broke the preset,
-      // this edit adds no hazard, and refusing would block the user's own
-      // attempts to repair it.
-      if (beforeSchema !== null || beforeMeta.name !== afterMeta.name) {
-        unbuildableChanges.push(after.id)
-        probeName ??= afterMeta.name
-      }
-      continue
-    }
     // Off the block's own rows, never the registry, whose tx-start snapshot is
     // at-or-older than `before` — a change an earlier tx already fanned out
     // would read as this one's and be re-encoded (and re-reported) again.
     //
-    // `beforeSchema` is deliberately not consulted: whether a row builds is
-    // itself a function of the two properties `codecInputsChanged` compares, so
-    // a definition whose broken preset has just been fixed already reports its
-    // inputs as changed. The old codec DETECTS a change and never performs one
-    // — the conversion parses the child's TEXT under the new codec either way.
+    // Nothing asks whether the BEFORE row built a codec, because that is itself
+    // a function of the two properties compared here: a definition whose broken
+    // preset has just been fixed already reports its inputs as changed. The old
+    // codec DETECTS a change and never performs one — the conversion parses the
+    // child's TEXT under the new codec either way.
     //
     // ACCEPTED: a bag edited while the row was UNPUBLISHED (a tombstone, or a
     // row stripped of its metadata) is judged against the MOVED bag, and
     // nothing remembers the encoding its consumers are in. Re-encoding on every
     // revival instead is worse — re-parsing is not the identity for editable
     // representations, so it rewrites every plain restore. #1031.
+    const renamed = beforeMeta.name !== afterMeta.name
     const encodingChanged = codecInputsChanged(before, after)
     // Every write to a definition block's bag reaches this processor —
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
     // would sweep every consumer of that definition inside the user's tx.
-    if (beforeMeta.name === afterMeta.name && !encodingChanged) continue
+    if (!renamed && !encodingChanged) continue
+    const afterSchema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
+    if (afterSchema === null) {
+      // This tx leaves the row naming a codec that does not build, so nothing
+      // here can reproject a single cell — and the row is the ONLY durable
+      // record of what encoding its consumers are in. Whether the OLD preset
+      // built is beside the point: the edit overwrites that record either way,
+      // and the destination preset can arrive later with no definition-row
+      // transaction at all — an extension registering, a code fix — at which
+      // point the registry publishes its codec straight over values nothing
+      // re-encoded. Held for the caller, which refuses if it has consumers.
+      //
+      // Repairing a broken definition is unaffected: a preset that BUILDS is
+      // not this branch, and re-encoding reads the child's text, not the old
+      // codec. What is refused is trading one unavailable preset for another.
+      unfanoutable.push({fieldId: after.id, reason: 'unbuildable'})
+      probeName ??= afterMeta.name
+      continue
+    }
     probeName ??= afterMeta.name
     candidates.push({
       fieldId: after.id,
@@ -353,8 +374,8 @@ const collectChanges = (
       encodingChanged,
     })
   }
-  if (candidates.length === 0 && unbuildableChanges.length === 0) {
-    return {changes: [], unbuildableChanges}
+  if (candidates.length === 0 && unfanoutable.length === 0) {
+    return {changes: [], unfanoutable}
   }
   // ONE derivation of what this tx does to names, read off the ROWS: every
   // definition it touches either keeps the name the tx-start registry files it
@@ -390,8 +411,24 @@ const collectChanges = (
   }
   // Pass 2: drop a rename whose destination or vacated name is contested — see
   // the refusal above for how the two halves differ.
+  // A codec-only change whose KEPT name a peer arrives at cannot be decided
+  // here, in either direction. Dropping its fan-out commits the re-type over
+  // consumers left in the old encoding; running it re-keys them under a name
+  // the rebuilt registry may hand to the arriver instead. Which happens turns
+  // on a `createdAt` ordering this tx cannot see — so neither answer is safe
+  // and the caller refuses. A RENAME is a different question: it is contested
+  // rather than undecidable, and that one is #1028's, below.
+  const undecidable = new Set<string>()
+  for (const candidate of candidates) {
+    if (candidate.oldName !== candidate.newName) continue
+    const arriving = arrivingByName.get(candidate.newName) ?? []
+    if (!arriving.some(peer => peer !== candidate.fieldId)) continue
+    unfanoutable.push({fieldId: candidate.fieldId, reason: 'contested'})
+    undecidable.add(candidate.fieldId)
+  }
   return {
-    changes: withoutContestedRenames(candidates, (name) => {
+    changes: withoutContestedRenames(
+      candidates.filter(candidate => !undecidable.has(candidate.fieldId)), (name) => {
       const atTxStart = ctx.propertyDefinitionsClaimingName(workspaceId, name)
       return atTxStart === null
         ? null
@@ -400,7 +437,7 @@ const collectChanges = (
           arriving: arrivingByName.get(name) ?? [],
         }
     }),
-    unbuildableChanges,
+    unfanoutable,
   }
 }
 
@@ -635,21 +672,21 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         {workspaceId: event.workspaceId},
       )
     }
-    const {changes, unbuildableChanges} = collected
-    if (unbuildableChanges.length > 0) {
+    const {changes, unfanoutable} = collected
+    if (unfanoutable.length > 0) {
       // Only a change with CONSUMERS strands anything; one on an unused
-      // definition is the user's to make, and telling them to repair a preset
+      // definition is the user's to make, and telling them to fix something
       // first would be friction for nothing.
       const stranded = await consumingParentIds(
-        ctx.db, event.workspaceId, unbuildableChanges,
+        ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
       )
       if (stranded.length > 0) {
+        // One refusal per transaction, named for the first reason held. The
+        // user fixes one cause at a time either way, and a combined message
+        // would describe a state that no longer exists after the first fix.
+        const {code, message} = REFUSALS[unfanoutable[0]!.reason]
         throw new ProcessorRejection(
-          'cannot change a property definition whose value type does not load: '
-          + 'the blocks using it could not be updated to match. Fix the '
-          + 'property type first, then rename or re-type it.',
-          'property.definition-change.unbuildable',
-          {fieldIds: [...unbuildableChanges]},
+          message, code, {fieldIds: unfanoutable.map(held => held.fieldId)},
         )
       }
     }

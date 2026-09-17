@@ -302,13 +302,14 @@ describe('withoutContestedRenames', () => {
     )).toEqual([change('a', 'alpha', 'beta')])
   })
 
-  it('drops an in-place change when a peer lands on the name it keeps', () => {
-    // `b` re-types in place under `beta` while `a` renames onto it. Whether
-    // a's fan-out is kept or dropped, a's ROW lands on beta — so the two share
-    // the name after commit and the rebuilt registry picks between them. `b`
-    // must not re-encode values a's codec might then be read through.
+  it('does not judge an in-place change at all; its caller refuses those', () => {
+    // `b` re-types in place under `beta` while `a` renames onto it. Neither
+    // answer is safe for `b` — dropping commits its re-type over consumers in
+    // the old encoding, keeping re-keys them under a name the rebuilt registry
+    // may hand to `a` — so the caller holds it for refusal instead and never
+    // passes it here. `a`'s RENAME is still judged, and contested by `b`.
     expect(withoutContestedRenames(
-      [change('a', 'alpha', 'beta'), change('b', 'beta', 'beta')],
+      [change('a', 'alpha', 'beta')],
       claimants({beta: ['b']}, {beta: ['a']}),
     )).toEqual([])
   })
@@ -338,11 +339,15 @@ describe('withoutContestedRenames', () => {
     )).toEqual([])
   })
 
-  it('drops an in-place change when a foreign definition arrives at its name', () => {
+  it('keeps an in-place change it is handed, even with a peer arriving', () => {
+    // Deliberately NOT a re-statement of the rule above: the caller filters the
+    // undecidable ones out, so anything in-place that reaches here is one it
+    // chose to keep. Judging it a second time on the arrival would drop a
+    // change the caller had already cleared.
     expect(withoutContestedRenames(
       [change('a', 'status', 'status')],
       claimants({status: ['a']}, {status: ['revived']}),
-    )).toEqual([])
+    )).toEqual([change('a', 'status', 'status')])
   })
 
   it('drops a rename whose VACATED name a definition arriving in this tx will hold', () => {
@@ -633,25 +638,28 @@ describe('codec change', () => {
     expect(await referenceTargetOf(valueRowId)).toBeNull()
   })
 
-  it('survives a preset whose build THROWS, and still repairs off it', async () => {
+  it('REFUSES a re-type onto a preset whose build throws, rather than aborting raw', async () => {
     // `preset.build` is extension code, and a THROW is not the same as a
     // missing preset: `tryBuildSchema` answers null for one and lets the other
-    // escape. An escape here would abort the user's own transaction — and the
-    // transaction it would abort is the one repairing the broken definition.
+    // escape. An escape would abort the user's transaction with whatever the
+    // extension threw; caught, it is the same answer as null and the user gets
+    // the refusal that names what to do.
     const throwing = {
-      id: UNLOADABLE_PRESET,
+      id: 'test-throwing-preset',
       build: () => { throw new Error('[test] preset build failed') },
       defaultValue: '',
     } as unknown as AnyValuePresetCore
     await seedWorkspace('children')
-    const {repo, valueRowId} = await withPresetUnloaded(' 42 ', [throwing])
+    const repo = await setupDefinition('string', [throwing])
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
+
+    await expect(retype(repo, FIELD_ID, throwing.id)).rejects.toMatchObject({
+      code: 'property.definition-change.unbuildable',
+    })
     expect(await rowContent(valueRowId)).toBe(' 42 ')
-
-    await retype(repo, FIELD_ID, 'number')
-
-    expect(await cell('p')).toEqual({status: 42})
-    expect(await rowContent(valueRowId)).toBe('42')
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('string')
   })
+
 
   it('treats a switch between presets sharing a codec TYPE as an encoding change', async () => {
     // An optional preset and its required twin report the SAME `codec.type`
@@ -781,6 +789,26 @@ describe('codec change', () => {
     expect(await cell('p')).toEqual({status: 'done'})
   })
 
+  it('leaves an unrelated bag write on an unbuildable definition alone', async () => {
+    // Every write to a definition block's bag reaches this processor —
+    // MATERIALIZE's own field-row bookkeeping included. The no-change guard has
+    // to come BEFORE the unbuildable hold, or each of those writes refuses the
+    // transaction for a definition whose preset merely is not loaded, which is
+    // most of a session for a workspace missing an extension.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded()
+
+    await repo.tx(async tx => {
+      const definition = await tx.get(FIELD_ID)
+      await tx.update(FIELD_ID, {
+        properties: {...definition!.properties, 'test:unrelated': 'note'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
+    expect(await cell('p')).toEqual({status: 'done'})
+  })
+
   it('refuses a rename when NEITHER row builds a codec and consumers exist', async () => {
     // Nothing can reproject the cell, and the transaction that eventually
     // repairs the preset cannot drop the old key either — by then both sides
@@ -795,12 +823,28 @@ describe('codec change', () => {
     expect(await cell('p')).toEqual({status: 'done'})
   })
 
-  it('allows a RE-TYPE when the definition already built no codec', async () => {
-    // Its cells were stranded by whatever broke the preset, not by this edit —
-    // and refusing here would block the very edits that repair it, including
-    // the ones that guess wrong on the way.
+  it('refuses a RE-TYPE between two presets that BOTH fail to build', async () => {
+    // The row is the only durable record of what encoding its consumers are in,
+    // and it is that record whether or not the preset it names loads today.
+    // Trading one unavailable preset for another overwrites it, so whichever of
+    // the two eventually registers, its codec is published over values nothing
+    // re-encoded.
     await seedWorkspace('children')
     const {repo} = await withPresetUnloaded()
+
+    await expect(retype(repo, FIELD_ID, 'another-missing-preset')).rejects.toMatchObject({
+      code: 'property.definition-change.unbuildable',
+    })
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
+  })
+
+  it('still allows that re-type when the definition has no consumers', async () => {
+    // Nothing to strand, so the refusal would be friction for nothing — and
+    // this is the path a user takes to point a definition at a preset whose
+    // extension has not loaded yet.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await retype(repo, FIELD_ID, 'no-such-preset')
 
     await retype(repo, FIELD_ID, 'another-missing-preset')
 
@@ -946,14 +990,22 @@ describe('claimants the batch itself adds or removes', () => {
     await createDefinition(repo, FIELD_PEER, 'status', 'string')
     await repo.tx(tx => tx.delete(FIELD_PEER), {scope: ChangeScope.BlockDefault})
 
-    await repo.tx(async tx => {
+    await expect(repo.tx(async tx => {
       await tx.restore(FIELD_PEER)
       await tx.setProperty(FIELD_ID, presetIdProp, 'number')
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+      code: 'property.definition-change.contested',
+    })
 
-    // Untouched: no re-encode under a codec the name may not answer to.
+    // Rolled back WHOLE. Committing the re-type and skipping its fan-out was
+    // the earlier answer, and it is wrong whenever the incumbent keeps the name
+    // — which is most of the time, since the registry picks the older row: the
+    // re-type lands and its consumers are read through the new codec in the old
+    // encoding. Refusing needs no `createdAt` ordering to be correct.
     expect(await cell('p')).toEqual({status: ' 42 '})
     expect(await rowContent(valueRowId)).toBe(' 42 ')
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('string')
+    expect(await isLive(FIELD_PEER)).toBe(false)
   })
 
   it('leaves value content untouched on a plain RESTORE', async () => {
