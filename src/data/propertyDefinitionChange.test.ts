@@ -169,11 +169,7 @@ const seedProperty = async (
  *  — `optional-string` builds a codec of type `string`. Defaults to the preset
  *  id because the two coincide for `string` / `number` / `ref`, and every
  *  caller that needs a twin passes it. */
-const setupDefinition = async (
-  presetId = 'string',
-  extensions?: readonly AnyValuePresetCore[],
-  codecType = presetId,
-): Promise<Repo> => {
+const makeRepo = (extensions?: readonly AnyValuePresetCore[]): Repo => {
   const {repo} = createTestRepo({
     db: sharedDb.db,
     user: {id: 'user-1'},
@@ -182,9 +178,55 @@ const setupDefinition = async (
       : {}),
   })
   repo.setActiveWorkspaceId(WS)
+  return repo
+}
+
+const setupDefinition = async (
+  presetId = 'string',
+  extensions?: readonly AnyValuePresetCore[],
+  codecType = presetId,
+): Promise<Repo> => {
+  const repo = makeRepo(extensions)
   await createDefinition(repo, FIELD_ID, 'status', presetId)
   await awaitDefinition(repo, 'status', codecType)
   return repo
+}
+
+const UNLOADABLE_PRESET = 'test-unloadable-preset'
+
+/** A `status` definition on an EXTENSION's preset with one consumer holding
+ *  `value`, reopened in a repo where that preset no longer builds — so the row
+ *  is still published as metadata while carrying no codec.
+ *
+ *  The long way round on purpose. Re-typing a definition ONTO a preset that
+ *  does not build is refused once it has consumers, so the only route left into
+ *  the no-codec state is the one that has always been its real cause: the
+ *  preset going missing UNDER a definition that was already using it. `reloadAs`
+ *  chooses how — absent by default, or present but throwing. */
+const withPresetUnloaded = async (
+  value: unknown = 'done',
+  reloadAs?: readonly AnyValuePresetCore[],
+): Promise<{repo: Repo; valueRowId: string}> => {
+  const preset = {
+    id: UNLOADABLE_PRESET,
+    build: () => codecs.string,
+    defaultValue: '',
+  } as unknown as AnyValuePresetCore
+  const authoring = await setupDefinition(UNLOADABLE_PRESET, [preset], 'string')
+  const {valueRowId} = await seedProperty(authoring, 'p', 'status', value)
+  const repo = makeRepo(reloadAs)
+  await vi.waitFor(() => {
+    // BOTH halves are the precondition: a registry that is LIVE for this
+    // workspace — otherwise an edit refuses as unjudgeable and a test would
+    // pass on the wrong refusal — publishing a definition with no behaviour.
+    if (repo.propertyDefinitions?.definitionsByName.get('status') === undefined) {
+      throw new Error('[test] status definition not published yet')
+    }
+    if (repo.propertySchemas.get('status') !== undefined) {
+      throw new Error('[test] status still has behaviour in the registry')
+    }
+  }, {timeout: 3000})
+  return {repo, valueRowId}
 }
 
 const rename = (repo: Repo, fieldId: string, newName: string): Promise<void> =>
@@ -565,14 +607,7 @@ describe('codec change', () => {
     // only moment the re-encode can happen, and the old codec is not needed to
     // do it — the conversion parses the child's TEXT under the new one.
     await seedWorkspace('children')
-    const repo = await setupDefinition()
-    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
-    await retype(repo, FIELD_ID, 'no-such-preset')
-    await vi.waitFor(() => {
-      if (repo.propertySchemas.get('status') !== undefined) {
-        throw new Error('[test] status still has behaviour in the registry')
-      }
-    }, {timeout: 3000})
+    const {repo, valueRowId} = await withPresetUnloaded(' 42 ')
 
     await retype(repo, FIELD_ID, 'number')
 
@@ -599,26 +634,17 @@ describe('codec change', () => {
   })
 
   it('survives a preset whose build THROWS, and still repairs off it', async () => {
-    // `preset.build` is extension code. The projector catches a throw and
-    // publishes metadata only; here an escape would abort the user's own
-    // transaction — and the transaction it would abort is the one repairing the
-    // broken definition.
+    // `preset.build` is extension code, and a THROW is not the same as a
+    // missing preset: `tryBuildSchema` answers null for one and lets the other
+    // escape. An escape here would abort the user's own transaction — and the
+    // transaction it would abort is the one repairing the broken definition.
     const throwing = {
-      id: 'test-throwing-preset',
+      id: UNLOADABLE_PRESET,
       build: () => { throw new Error('[test] preset build failed') },
       defaultValue: '',
     } as unknown as AnyValuePresetCore
     await seedWorkspace('children')
-    const repo = await setupDefinition('string', [throwing])
-    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
-
-    await retype(repo, FIELD_ID, throwing.id)
-    await vi.waitFor(() => {
-      if (repo.propertySchemas.get('status') !== undefined) {
-        throw new Error('[test] status still has behaviour in the registry')
-      }
-    }, {timeout: 3000})
-    // The re-type onto the broken preset built nothing, so nothing fanned out.
+    const {repo, valueRowId} = await withPresetUnloaded(' 42 ', [throwing])
     expect(await rowContent(valueRowId)).toBe(' 42 ')
 
     await retype(repo, FIELD_ID, 'number')
@@ -648,33 +674,34 @@ describe('codec change', () => {
     expect(await rowContent(valueRowId)).toBe('null')
   })
 
-  it('still re-keys when the SAME edit switches to a preset that cannot build', async () => {
-    // Rename plus a broken preset in one tx. Skipping wholesale would leave the
-    // old key on every consumer — and the later repair transaction cannot
-    // recover it, because by then both before and after carry the NEW name, so
-    // it would add the new key beside an orphaned old one.
+  it('refuses the SAME edit when it renames AND switches to a preset that cannot build', async () => {
+    // Re-keying under the BEFORE row's codec and letting it commit was the
+    // earlier answer, and it leaves the definition naming a codec nothing built
+    // over values in the old one — with no transaction left in which to
+    // reconcile them, because the preset can arrive without one. Refusing keeps
+    // the rename and the fan-out together: neither half lands.
     await seedWorkspace('children')
     const repo = await setupDefinition('number')
     const {valueRowId} = await seedProperty(repo, 'p', 'status', 42)
-    const {valueRowId: staleRowId} = await seedProperty(repo, 'q', 'status', 7)
-    await setRawValueContent(staleRowId, 'not a number')
     const errors = collectUserErrors(repo)
 
-    await repo.tx(async tx => {
+    await expect(repo.tx(async tx => {
       await tx.setProperty(FIELD_ID, propertyNameProp, 'state')
       await tx.setProperty(FIELD_ID, presetIdProp, 'no-such-preset')
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+      code: 'property.definition-change.unbuildable',
+    })
     await repo.awaitProcessors()
 
-    // Re-keyed under the BEFORE row's codec — the values are still in that
-    // encoding — and content is untouched, since there is no new codec to
-    // re-encode into.
-    expect(await cell('p')).toEqual({state: 42})
+    // Rolled back whole: the definition row did not land either.
+    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('number')
+    expect(await cell('p')).toEqual({status: 42})
     expect(await rowContent(valueRowId)).toBe('42')
-    // And nothing is REPORTED: "could not convert to the new type" would be a
-    // lie when the edit produced no new type, and the stale value predates it.
-    expect(errors).toEqual([])
-    expect(await rowContent(staleRowId)).toBe('not a number')
+    // Only the refusal reaches the user — no "could not convert to the new
+    // type" beside it, which would be a lie about an edit that did not land.
+    expect(errors.map(error => error.code))
+      .toEqual(['property.definition-change.unbuildable'])
   })
 
   it('re-encodes when CONFIG changes the built codec under one preset id', async () => {
@@ -738,25 +765,46 @@ describe('codec change', () => {
     expect(await cell('p')).toEqual({status: 'null'})
   })
 
+  it('refuses an in-place RE-TYPE off a preset that loads, when consumers exist', async () => {
+    // The values stay in the old encoding while the row names a codec nothing
+    // can build. Dropping the edit silently is the trap: the preset can become
+    // available later with no definition-row transaction at all — an extension
+    // registering — and the registry then publishes it straight over them.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+
+    await expect(retype(repo, FIELD_ID, 'no-such-preset')).rejects.toMatchObject({
+      code: 'property.definition-change.unbuildable',
+    })
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('string')
+    expect(await cell('p')).toEqual({status: 'done'})
+  })
+
   it('refuses a rename when NEITHER row builds a codec and consumers exist', async () => {
     // Nothing can reproject the cell, and the transaction that eventually
     // repairs the preset cannot drop the old key either — by then both sides
     // carry the new name. Refusing keeps the two halves together.
     await seedWorkspace('children')
-    const repo = await setupDefinition()
-    await seedProperty(repo, 'p', 'status', 'done')
-    await retype(repo, FIELD_ID, 'no-such-preset')
-    await vi.waitFor(() => {
-      if (repo.propertySchemas.get('status') !== undefined) {
-        throw new Error('[test] status still has behaviour in the registry')
-      }
-    }, {timeout: 3000})
+    const {repo} = await withPresetUnloaded()
 
     await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
-      code: 'property.definition-rename.unbuildable',
+      code: 'property.definition-change.unbuildable',
     })
     expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
     expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('allows a RE-TYPE when the definition already built no codec', async () => {
+    // Its cells were stranded by whatever broke the preset, not by this edit —
+    // and refusing here would block the very edits that repair it, including
+    // the ones that guess wrong on the way.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded()
+
+    await retype(repo, FIELD_ID, 'another-missing-preset')
+
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('another-missing-preset')
   })
 
   it('allows that rename when the definition has no consumers', async () => {
@@ -908,23 +956,23 @@ describe('claimants the batch itself adds or removes', () => {
     expect(await rowContent(valueRowId)).toBe(' 42 ')
   })
 
-  it('re-encodes on RESTORE when the bag was re-typed while the row was deleted', async () => {
-    // Two transactions: the re-type lands on a tombstone, where the fan-out
-    // correctly does nothing, and the later plain restore then has identical
-    // before/after bags that both describe the NEW preset. Nothing on the row
-    // remembers the encoding its consumers are actually in.
+  it('leaves value content untouched on a plain RESTORE', async () => {
+    // A restore that changes no codec input must not re-encode: re-parsing is
+    // not the identity for editable representations, so a speculative rewrite
+    // would silently canonicalize text the user typed. `1.50` is the cheap
+    // witness; a labelled ref value child losing its label is the expensive
+    // one. The cost of NOT speculating is #1031.
     await seedWorkspace('children')
-    const repo = await setupDefinition()
-    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
+    const repo = await setupDefinition('number')
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 1.5)
+    await setRawValueContent(valueRowId, '1.50')
+    expect(await rowContent(valueRowId)).toBe('1.50')
+
     await repo.tx(tx => tx.delete(FIELD_ID), {scope: ChangeScope.BlockDefault})
-    await repo.tx(tx => tx.setProperty(FIELD_ID, presetIdProp, 'number'),
-      {scope: ChangeScope.BlockDefault})
-    expect(await rowContent(valueRowId)).toBe(' 42 ')
-
     await repo.tx(tx => tx.restore(FIELD_ID), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
 
-    expect(await cell('p')).toEqual({status: 42})
-    expect(await rowContent(valueRowId)).toBe('42')
+    expect(await rowContent(valueRowId)).toBe('1.50')
   })
 
   it('re-encodes a definition RESTORED and re-typed in the same tx', async () => {

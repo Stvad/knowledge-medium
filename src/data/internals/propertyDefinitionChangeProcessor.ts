@@ -155,37 +155,6 @@ const buildSchemaOrNull = (
 export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUnconvertible'
 
 /**
- * Drop a rename whose OLD or NEW name a DIFFERENT definition owns and is not
- * itself vacating. Both halves protect a cell key that isn't this definition's
- * to write:
- *
- *  - NEW name: re-keying under a name someone else OWNS overwrites that owner's
- *    cell projection with the wrong value — the renamer is likely shadowed
- *    there, not the winner. The owner is the winner, so the head claimant
- *    settles it.
- *  - OLD name, and only when the candidate actually VACATES it: a rename
- *    un-shadows every definition that shared that name, so afterwards the name
- *    answers to a sibling — and dropping the key strands that sibling's cell
- *    until some unrelated edit reprojects it. The winner cannot answer this
- *    one: while the renamer still holds the name IT is the winner, so asking
- *    who owns the old name names the renamer itself and the refusal never
- *    fires. Every claimant has to be consulted. A codec-only change vacates
- *    nothing and is not subject to this half at all — it keeps the name it
- *    already wins, and a peer shadowed under that name is the status quo
- *    rather than something the change creates.
- *
- * Either way the contested case belongs to the shadowing model's own reconcile
- * (#389 item 8), not to a one-shot re-key.
- *
- * Two subtleties:
- *
- *  - Only a peer that CHANGES ITS NAME can vacate one. A codec-only change
- *    (`oldName === newName`) is in the same batch but keeps its name, so it
- *    must not grant the exemption.
- *  - Dropping a candidate can un-vacate the name that kept ANOTHER one, so this
- *    iterates to a fixpoint.
- *
-/**
  * Drop a rename or re-type whose destination, or whose vacated name, is not
  * this definition's to write.
  *
@@ -223,10 +192,11 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  * (#389 item 8), not to a one-shot re-key.
  *
  * WHAT NONE OF THIS REACHES: a name's cells outlive the definition that owned
- * it. Every way of leaving a name — a refused rename, an unbuildable one, a
- * deletion, losing the definition metadata — leaves that definition's consumers
+ * it. The ways of leaving a name that still commit — a refused rename, a
+ * deletion, losing the definition metadata — leave that definition's consumers
  * keyed under it, because the fan-out only visits consumers of definitions
- * whose own fan-out was kept. Whoever takes the name next then reads those
+ * whose own fan-out was kept. (An unbuildable change is the one that does not
+ * commit: the caller refuses the whole tx once it has consumers.) Whoever takes the name next then reads those
  * values through its own schema. Contesting the name does not repair them and
  * strands the arriving definition's consumers as well; the choices that do are
  * a reconcile, a refusal, or retiring the departing definition's cells, and
@@ -277,42 +247,41 @@ type CollectedChanges =
   | 'unjudgeable'
   | {
       readonly changes: DefinitionChange[]
-      /** Definitions RENAMED in this tx whose rows build no codec on either
-       *  side, so the fan-out cannot reproject their consumers' cells. */
-      readonly unbuildableRenames: readonly string[]
+      /** Definitions this tx leaves naming a codec that does not build, having
+       *  changed their name or their encoding, so the fan-out cannot reproject
+       *  their consumers' cells. */
+      readonly unbuildableChanges: readonly string[]
     }
 
 interface DefinitionChange {
   readonly fieldId: string
   readonly oldName: string
   readonly newName: string
-  /** The codec every value child is read under and the cell is projected with.
-   *  The AFTER row's, except when that row builds none — a rename that also
-   *  switched to a missing, invalid or throwing preset still has to re-key, and
-   *  the values are still in the BEFORE row's encoding, which makes its codec
-   *  the right one to reproject them with. */
+  /** The codec every value child is read under and the cell is projected with:
+   *  the AFTER row's, which is the one the rebuilt registry will publish. A
+   *  change whose after-row builds no codec never becomes a candidate — the
+   *  caller refuses it instead. */
   readonly schema: AnyPropertySchema
   /** The stored ENCODING may now differ, so value-child content is rewritten
    *  and anything that will not parse is REPORTED. False for a pure rename,
    *  where the encoding is untouched and an unparseable value is pre-existing
-   *  staleness rather than a consequence of this edit — and false when the
-   *  after-row builds no codec, since nothing can be re-encoded into one that
-   *  does not exist; the transaction repairing the preset picks that up. */
+   *  staleness rather than a consequence of this edit. */
   readonly encodingChanged: boolean
 }
 
-/** Definition blocks in `changedRows` whose NAME or CODEC TYPE changed this tx.
- *  A brand-new definition (no `before`) has no existing consumer cells, and one
- *  whose after-row builds no codec cannot be reprojected — both are skipped, as
- *  is a rename onto a name a DIFFERENT non-renaming definition already owns. */
+/** Definition blocks in `changedRows` whose NAME or CODEC INPUTS changed this
+ *  tx. A brand-new definition (no `before`) has no existing consumer cells and
+ *  is skipped; one whose after-row builds no codec cannot be reprojected at all
+ *  and is held for the caller's refusal; a rename onto a name a DIFFERENT
+ *  non-renaming definition already owns is dropped. */
 const collectChanges = (
   ctx: SameTxCtx,
   workspaceId: string,
   changedRows: ReadonlyArray<{before: BlockData | null; after: BlockData | null}>,
 ): CollectedChanges => {
-  // Pass 1: candidate changes (name or encoding differs, some row buildable).
+  // Pass 1: candidate changes (name or codec inputs differ, after row builds).
   const candidates: DefinitionChange[] = []
-  const unbuildableRenames: string[] = []
+  const unbuildableChanges: string[] = []
   /** Any name this tx touches — enough to ask whether the WORKSPACE can be
    *  judged at all, which is not a question about the name. */
   let probeName: string | null = null
@@ -323,6 +292,9 @@ const collectChanges = (
     if (after === null || after.deleted || before === null) continue
     const afterMeta = parsePropertyDefinitionMetadata(after)
     const beforeMeta = definitionAsOfBefore(before)
+    // A row that was not a definition BEFORE re-enters with no before-state to
+    // diff, so a bag edited while it was unpublished is invisible here — the
+    // metadata arm of #1031, same accepted case as the tombstone one below.
     if (!afterMeta || !beforeMeta) continue
     // A SEED's name and preset are code-owned and frozen once shipped
     // (`seedIdentityLedger.ts`), so a change to either across a build is a
@@ -343,15 +315,27 @@ const collectChanges = (
     // NOT be skipped.
     const afterSchema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
     const beforeSchema = buildSchemaOrNull(before, ctx.valuePresets, beforeMeta)
-    const schema = afterSchema ?? beforeSchema
-    if (schema === null) {
-      // NEITHER row builds a codec, so there is nothing to reproject a cell
-      // with. A rename here cannot be dropped silently: consumers keep the old
-      // key, and the transaction that eventually repairs the preset cannot
-      // remove it, because by then both sides carry the new name. Held for the
-      // caller, which refuses the tx if any of these actually has consumers.
-      if (beforeMeta.name !== afterMeta.name) {
-        unbuildableRenames.push(after.id)
+    if (afterSchema === null) {
+      // The row this tx leaves behind publishes no codec, so nothing here can
+      // reproject a single cell. Two shapes reach this, and letting either
+      // through strands consumers with no repair path, so both are held for the
+      // caller's refusal:
+      //
+      //  - a RENAME: consumers keep the old key, and the transaction that
+      //    eventually repairs the preset cannot drop it, because by then both
+      //    sides of that transaction carry the new name.
+      //  - a RE-TYPE off a preset that DID build: the values stay in the old
+      //    encoding while the row now names a different codec, and the moment
+      //    that preset becomes available — an extension registering, a code fix
+      //    — the registry publishes it over them with no transaction in between
+      //    for anything to fan out from.
+      //
+      // A definition whose BEFORE row built no codec either is deliberately not
+      // held: its cells were already stranded by whatever broke the preset,
+      // this edit adds no hazard, and refusing would block the user's own
+      // attempts to repair it.
+      if (beforeSchema !== null || beforeMeta.name !== afterMeta.name) {
+        unbuildableChanges.push(after.id)
         probeName ??= afterMeta.name
       }
       continue
@@ -370,24 +354,23 @@ const collectChanges = (
     // fanned out would read as this tx's and be re-encoded a second time
     // (idempotent, but it would re-report to the user).
     //
-    // An unbuildable BEFORE row counts as changed. The old codec is what
-    // DETECTS a change, never what performs one — the conversion parses the
-    // child's TEXT under the new codec either way — so a definition whose
-    // preset or config was broken and has now been repaired re-encodes on the
-    // repairing tx, which is the only moment anything can.
-    // A REVIVAL counts as changed whatever the two bags say. A tombstone can be
-    // edited — by sync, or by a script — and a later plain `tx.restore` then
-    // presents identical before/after bags that both describe the POST-edit
-    // preset, while the consumers are still in the pre-delete encoding. Nothing
-    // on the row remembers that encoding once the bag has moved, so the
-    // revival, which is when the registry starts publishing the new codec
-    // again, is the only moment anything can reconcile them. Re-parsing under
-    // an unchanged codec is idempotent, so a plain restore of an untouched
-    // definition writes nothing.
-    const revived = before.deleted === true
-    const encodingChanged = afterSchema !== null && (
-      beforeSchema === null || revived || codecInputsChanged(before, after)
-    )
+    // Asking the INPUTS also answers REPAIR without a second clause, which is
+    // the reason nothing here consults `beforeSchema`: whether a row builds is
+    // itself a function of those two properties and the shared preset map, so a
+    // definition whose broken preset or config has just been fixed necessarily
+    // reports its inputs as changed. The old codec is what DETECTS a change,
+    // never what performs one — the conversion parses the child's TEXT under
+    // the new codec either way — so the repairing tx re-encodes, which is the
+    // only moment anything can.
+    //
+    // A bag edited while the row was UNPUBLISHED — a tombstone, or a row
+    // stripped of its definition metadata — is judged here against the MOVED
+    // bag, and nothing remembers the encoding its consumers are actually in.
+    // Accepted rather than re-encoding on every revival: re-parsing is not the
+    // identity for editable representations (a ref value child loses its label,
+    // `1.50` becomes `1.5`), so speculating would rewrite every plain restore.
+    // #1031.
+    const encodingChanged = codecInputsChanged(before, after)
     // Every write to a definition block's bag reaches this processor —
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
     // would sweep every consumer of that definition inside the user's tx.
@@ -397,12 +380,12 @@ const collectChanges = (
       fieldId: after.id,
       oldName: beforeMeta.name,
       newName: afterMeta.name,
-      schema,
+      schema: afterSchema,
       encodingChanged,
     })
   }
-  if (candidates.length === 0 && unbuildableRenames.length === 0) {
-    return {changes: [], unbuildableRenames}
+  if (candidates.length === 0 && unbuildableChanges.length === 0) {
+    return {changes: [], unbuildableChanges}
   }
   // Every definition this tx leaves live under a name it did NOT hold at tx
   // start. The registry lists none of them: a created row has no entry, a
@@ -451,7 +434,7 @@ const collectChanges = (
           arriving: arrivingByName.get(name) ?? [],
         }
     }),
-    unbuildableRenames,
+    unbuildableChanges,
   }
 }
 
@@ -678,21 +661,21 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         {workspaceId: event.workspaceId},
       )
     }
-    const {changes, unbuildableRenames} = collected
-    if (unbuildableRenames.length > 0) {
-      // Only a rename with CONSUMERS strands anything; one on an unused
+    const {changes, unbuildableChanges} = collected
+    if (unbuildableChanges.length > 0) {
+      // Only a change with CONSUMERS strands anything; one on an unused
       // definition is the user's to make, and telling them to repair a preset
       // first would be friction for nothing.
       const stranded = await consumingParentIds(
-        ctx.db, event.workspaceId, unbuildableRenames,
+        ctx.db, event.workspaceId, unbuildableChanges,
       )
       if (stranded.length > 0) {
         throw new ProcessorRejection(
-          'cannot rename a property definition whose value type does not load: '
-          + 'the blocks using it could not be updated to the new name. Fix the '
-          + 'property type first, then rename.',
-          'property.definition-rename.unbuildable',
-          {fieldIds: [...unbuildableRenames]},
+          'cannot change a property definition whose value type does not load: '
+          + 'the blocks using it could not be updated to match. Fix the '
+          + 'property type first, then rename or re-type it.',
+          'property.definition-change.unbuildable',
+          {fieldIds: [...unbuildableChanges]},
         )
       }
     }
