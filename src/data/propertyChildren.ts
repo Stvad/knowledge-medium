@@ -845,12 +845,6 @@ export const isPropertyFieldRow = async (
   tx: Tx,
   row: Pick<BlockData, 'id' | 'parentId' | 'workspaceId' | 'referenceTargetId' | 'isFieldForm'>,
 ): Promise<boolean> => {
-  // One cheap pre-filter, and it earns its place: the bit is stamped on every
-  // field row, so an unmarked row is decided without the async definition
-  // lookup. The remaining conditions (non-null parent, resolvable definition)
-  // are the composed predicate's own — restating them here would just be a
-  // second copy to keep in sync.
-  if (row.isFieldForm !== true) return false
   return isPropertyFieldInstance(row, (fieldId) =>
     tx.isPropertyFieldDefinition(row.workspaceId, fieldId))
 }

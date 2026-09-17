@@ -81,6 +81,7 @@ import {
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
 import {
+  isResolvableFieldDefinition,
   isResolvedPropertySchema,
   requireWritablePropertySchema,
   type PropertySchemaResolver,
@@ -469,16 +470,10 @@ export class TxImpl implements Tx {
     return found
   }
 
-  /** §9 recognition, fieldId half: does this id name a definition the
-   *  workspace's registry can resolve? Shadowed losers COUNT — their field
-   *  rows keep classifying (excluded only from the name map / projection). */
+  /** §9 recognition, fieldId half, bound to this workspace's LIVE resolver. */
   private isFieldDefinitionCheckerFor(workspaceId: string): IsPropertyFieldDefinition {
     const resolver = this.propertySchemaResolverFor(workspaceId)
-    return (fieldId) => {
-      const resolution = resolver.resolveField(fieldId)
-      return resolution.status === 'resolved'
-        || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
-    }
+    return (fieldId) => isResolvableFieldDefinition(resolver.resolveField(fieldId))
   }
 
   /** See the `Tx.isPropertyFieldDefinition` contract — the same checker

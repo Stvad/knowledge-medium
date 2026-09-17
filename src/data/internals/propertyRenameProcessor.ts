@@ -47,6 +47,7 @@ import {
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import { withoutContestedRenames } from './propertyDefinitionMigrations'
+import { isResolvableFieldDefinition } from './propertySchemaResolution'
 import {
   childContentsToEncodedPropertyValue,
   fieldRowValues,
@@ -204,11 +205,10 @@ export const MIGRATE_PROPERTY_RENAME_PROCESSOR = defineSameTxProcessor({
       ctx, event.workspaceId, renames.map(r => r.fieldId),
     )
     if (parentIds.length === 0) return
-    const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
-      const resolution = ctx.resolvePropertySchemaField(event.workspaceId, fieldId)
-      return resolution.status === 'resolved'
-        || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
-    }
+    // The tx-start SNAPSHOT, not the live resolver: a rename must classify
+    // field rows against the codec the definition had when the tx opened.
+    const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) =>
+      isResolvableFieldDefinition(ctx.resolvePropertySchemaField(event.workspaceId, fieldId))
     for (const parentId of parentIds) {
       await rekeyParent(ctx, parentId, renames, isFieldDefinition)
     }

@@ -174,6 +174,7 @@ import {
   awaitPropertySeedMaterializationAccess,
 } from './definitionSeeds'
 import {
+  isResolvableFieldDefinition,
   propertySchemaResolverForWorkspace,
   type PropertySchemaResolver,
 } from './internals/propertySchemaResolution'
@@ -4492,49 +4493,23 @@ export class Repo {
     for (let i = 0; i < parentIds.length; i += CHUNK) {
       const chunk = parentIds.slice(i, i + CHUNK)
       await this.tx(async tx => {
-        // Flat §9 recognition: field-row selection below keys on the BIT +
-        // fieldId (the bit is what keeps a ref-typed value pointing at this
-        // very definition from being misread as a field row — no ancestry
-        // walk exists anymore, and every owner re-keys uniformly at any
-        // depth).
+        // Resolve against the BATCH'S CAPTURED resolver (threaded in from
+        // `schedulePropertyDefinitionMigrations`), never a freshly derived
+        // one: workspace retention is one-deep and fails closed, so once
+        // further switches drop this batch's workspace, a fresh resolver
+        // stops resolving every fieldId — including the ones `plans` already
+        // proved resolvable — `fieldRowValues` rejects every sibling, and the
+        // batch silently re-keys nothing while reporting non-empty plans.
         //
-        // `isFieldDefinition` closes over the batch's captured `resolver`
-        // (schedule-time snapshot, captured in
-        // `schedulePropertyDefinitionMigrations` and threaded through as a
-        // parameter — NOT re-derived here). It used to call
-        // `this.propertySchemaResolverFor(workspaceId)` fresh per
-        // chunk, but that has the exact same one-deep active/previous fail-
-        // closed behavior as the outer resolve this method used to do: once
-        // the deferred batch's own workspace fell out of retention (further
-        // switches while THIS batch's chunks are still running), every
-        // fieldId — including the ones `plans` already proved resolvable —
-        // would stop resolving, `fieldRowValues` below would reject
-        // every sibling, and the batch would silently re-key nothing despite
-        // having non-empty plans. Reusing the captured `resolver` fixes that:
-        // it's bound to a real snapshot for the life of the batch, not to
-        // whatever workspace happens to be live when a chunk executes. This
-        // also covers ancestor fieldIds unrelated to `plans` (arbitrary other
-        // definitions encountered walking up from `parentId`), which a
-        // plans-only lookup can't answer — the resolver is what actually knows
-        // "is this fieldId some (possibly shadowed) definition in this
-        // workspace's registry", not just "is it one of the migrating ones".
+        // Accepted: the snapshot is fixed for the batch, so a definition
+        // change landing mid-batch is not seen here. That is a separately
+        // diffed registry rebuild and schedules its own migration.
         //
-        // Trade-off: this is a fixed snapshot for the whole batch, so a
-        // genuinely concurrent definition change landing between chunks (or
-        // between schedule time and the batch running) isn't picked up
-        // here — but that's an independent, separately-diffed registry
-        // rebuild, so it schedules its OWN follow-up migration; it doesn't
-        // need this pass to also notice it. For the `plans` fieldIds
-        // specifically, `isFieldDefinition(change.fieldId)` is now
-        // provably always true (same resolver instance that already proved
-        // `change.fieldId` resolves when `plans` was built) — the guard below
-        // stays for the root-half/shared-recognizer symmetry with the
-        // ancestor walk, not as a live re-check.
-        const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
-          const rowResolution = resolver.resolveField(fieldId)
-          return rowResolution.status === 'resolved'
-            || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
-        }
+        // For the `plans` fieldIds this predicate is provably always true —
+        // the same resolver instance already proved them. Kept as the one
+        // composed recognizer rather than a hand-rolled restatement.
+        const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) =>
+          isResolvableFieldDefinition(resolver.resolveField(fieldId))
 
         for (const parentId of chunk) {
           // Shared swap-safe re-key: the helper owns the parent guard and
