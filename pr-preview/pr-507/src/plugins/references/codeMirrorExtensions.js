@@ -1,1 +1,1 @@
-import{Rd as e,zd as t}from"../../../chunks/app-dHLzNFYH.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};
+import{Rd as e,zd as t}from"../../../chunks/app-SYm0Q-Da.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};

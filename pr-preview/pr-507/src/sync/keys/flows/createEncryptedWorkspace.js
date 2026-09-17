@@ -1,1 +1,1 @@
-import{b_ as e}from"../../../../chunks/app-dHLzNFYH.js";export{e as createEncryptedWorkspace};
+import{b_ as e}from"../../../../chunks/app-SYm0Q-Da.js";export{e as createEncryptedWorkspace};
