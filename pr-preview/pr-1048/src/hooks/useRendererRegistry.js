@@ -1,1 +1,1 @@
-import{XT as e,YT as t,ZT as n}from"../../chunks/app-BnwFLDyO.js";export{n as defaultRegistry,t as refreshRendererRegistry,e as useRenderer};
+import{XT as e,YT as t,ZT as n}from"../../chunks/app-DJ-cWksk.js";export{n as defaultRegistry,t as refreshRendererRegistry,e as useRenderer};

@@ -1,1 +1,1 @@
-import{JT as e}from"../../chunks/app-BnwFLDyO.js";export{e as BlockLoadingPlaceholder};
+import{JT as e}from"../../chunks/app-DJ-cWksk.js";export{e as BlockLoadingPlaceholder};
