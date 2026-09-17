@@ -213,109 +213,75 @@ const setRawValueContent = (valueRowId: string, content: string): Promise<unknow
 describe('withoutContestedRenames', () => {
   const change = (fieldId: string, oldName: string, newName: string) =>
     ({fieldId, oldName, newName})
-  /** name -> who holds it at TX START, winner first. A single-entry list is the
-   *  ordinary unshadowed case; the multiplicity is what the un-shadowing
-   *  refusal needs. `arriving` carries only FOREIGN arrivals — rows created or
-   *  revived in the tx — since the refusal derives candidate arrivals from its
-   *  own batch. */
+  /** POST-COMMIT claims, which is what the refusal reads: `holding` is who
+   *  still has the name after the tx, `arriving` is who newly has it. A rename
+   *  appears in `arriving` under its destination and in NEITHER list under the
+   *  name it leaves — including a rename this refusal drops, since suppressing
+   *  a fan-out does not cancel the row. */
   const claimants = (
-    atTxStart: Record<string, string[]>,
+    holding: Record<string, string[]>,
     arriving: Record<string, string[]> = {},
   ) => (name: string) => ({
-    atTxStart: atTxStart[name] ?? [],
+    holding: holding[name] ?? [],
     arriving: arriving[name] ?? [],
   })
 
-  it('drops a rename onto a NEW name a different, non-migrating definition owns', () => {
+  it('drops a rename onto a NEW name a different definition still holds', () => {
     expect(withoutContestedRenames(
-      [change('a', 'alpha', 'beta')], claimants({alpha: ['a'], beta: ['b']}),
+      [change('a', 'alpha', 'beta')],
+      claimants({beta: ['b']}, {beta: ['a']}),
     )).toEqual([])
   })
 
   it('drops a rename whose OLD name a different definition now answers to', () => {
+    // `a` leaves `shared`, which un-shadows `b` — and `b` has no fan-out of its
+    // own here, so the dropped key strands its cell.
     expect(withoutContestedRenames(
-      [change('a', 'shared', 'alpha')], claimants({shared: ['b', 'a']}),
+      [change('a', 'shared', 'alpha')],
+      claimants({shared: ['b']}, {alpha: ['a']}),
     )).toEqual([])
   })
 
-  it('keeps a swap — each contested name is owned by a peer migrating in the same batch', () => {
+  it('keeps a swap — each inherits a name the other re-keys in the same tx', () => {
     const swap = [change('a', 'alpha', 'beta'), change('b', 'beta', 'alpha')]
     expect(withoutContestedRenames(
-      swap,
-      claimants({alpha: ['a'], beta: ['b']}),
+      swap, claimants({}, {beta: ['a'], alpha: ['b']}),
     )).toEqual(swap)
   })
 
-  it('re-contests a rename whose exempting peer was itself dropped', () => {
-    // `a -> beta` is exempt only while `b` vacates `beta`; but `b -> gamma`
-    // collides with a third, non-migrating owner and is dropped, which
-    // un-vacates `beta` and takes `a` with it on the next round.
+  it('keeps a rename onto a name whose holder leaves, even when THAT rename is dropped', () => {
+    // `b` moves `beta -> gamma` and is refused, because `c` holds gamma. Its
+    // ROW still commits, so `beta` really is free and `a` may take it.
+    // Deriving departures from the surviving batch instead made the refusal
+    // cascade into `a`.
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta'), change('b', 'beta', 'gamma')],
-      claimants({alpha: ['a'], beta: ['b'], gamma: ['c']}),
-    )).toEqual([])
+      claimants({gamma: ['c']}, {beta: ['a'], gamma: ['b']}),
+    )).toEqual([change('a', 'alpha', 'beta')])
   })
 
-  it('drops a rename that UN-SHADOWS a peer sharing the old name', () => {
-    // `a` wins `shared` and renames away, which hands `shared` to `b`. Asking
-    // who OWNS `shared` names `a` itself — it still holds it at tx start — so
-    // only the full claimant list can see `b` about to inherit the key this
-    // rename would drop.
-    expect(withoutContestedRenames(
-      [change('a', 'shared', 'alpha')], claimants({shared: ['a', 'b']}),
-    )).toEqual([])
-  })
-
-  it('keeps a codec-only change on a name it shares with a shadowed peer', () => {
-    // The peer under `shared` is the status quo, not something a re-type
-    // creates: nothing is vacated, so the old-name half does not apply.
-    const codecOnly = [change('a', 'shared', 'shared')]
-    expect(withoutContestedRenames(codecOnly, claimants({shared: ['a', 'b']})))
-      .toEqual(codecOnly)
-  })
-
-  it('refuses the exemption to a codec-only peer, which vacates nothing', () => {
-    // `b` is in the batch (its codec changed) but KEEPS the name `beta`, so it
-    // cannot free it for `a`.
+  it('drops an in-place change when a peer lands on the name it keeps', () => {
+    // `b` re-types in place under `beta` while `a` renames onto it. Whether
+    // a's fan-out is kept or dropped, a's ROW lands on beta — so the two share
+    // the name after commit and the rebuilt registry picks between them. `b`
+    // must not re-encode values a's codec might then be read through.
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta'), change('b', 'beta', 'beta')],
-      claimants({alpha: ['a'], beta: ['b']}),
-    )).toEqual([change('b', 'beta', 'beta')])
+      claimants({beta: ['b']}, {beta: ['a']}),
+    )).toEqual([])
+  })
+
+  it('keeps an uncontested rename, and a codec-only change that keeps its name', () => {
+    const changes = [change('a', 'alpha', 'gamma'), change('b', 'beta', 'beta')]
+    expect(withoutContestedRenames(
+      changes, claimants({beta: ['b']}, {gamma: ['a']}),
+    )).toEqual(changes)
   })
 
   it('drops two renames converging on one previously unclaimed name', () => {
-    // Neither sees a tx-start claimant for `gamma`, so only the batch itself
-    // can tell they collide. Letting both through assigns that key twice and
-    // the last writer wins — which need not be the definition the rebuilt
-    // registry picks.
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'gamma'), change('b', 'beta', 'gamma')],
-      claimants({alpha: ['a'], beta: ['b']}),
-    )).toEqual([])
-  })
-
-  // `null` is "nothing here can be judged", not "nobody claims this name" — the
-  // permissive reading would approve a rename onto a seed-owned key in a
-  // workspace with no registry snapshot. Split per NAME because either clause
-  // alone drops the candidate, so a single test with both unknown leaves
-  // whichever one is deleted covered by the other.
-  it('drops a rename whose VACATED name a definition arriving in this tx will hold', () => {
-    // The mirror of the un-shadowing rule: whoever inherits the key this rename
-    // drops is stranded by it, and a definition revived onto that name in the
-    // same tx inherits it just as a shadowed peer would.
-    expect(withoutContestedRenames(
-      [change('a', 'alpha', 'beta')],
-      claimants({alpha: ['a']}, {alpha: ['revived']}),
-    )).toEqual([])
-  })
-
-  it('drops an in-place change when a foreign definition arrives at its name', () => {
-    // The incumbent is the tx-start head, so the owner test passes it. Only the
-    // arrival can refuse it, and it must — the arrival is not a candidate, so
-    // nothing else will.
-    expect(withoutContestedRenames(
-      [change('a', 'status', 'status')],
-      claimants({status: ['a']}, {status: ['revived']}),
+      claimants({}, {gamma: ['a', 'b']}),
     )).toEqual([])
   })
 
@@ -326,29 +292,43 @@ describe('withoutContestedRenames', () => {
     // registry's to decide, which may hand it cells the renamer wrote.
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'gamma')],
-      claimants({alpha: ['a']}, {gamma: ['revived']}),
+      claimants({}, {gamma: ['a', 'revived']}),
     )).toEqual([])
   })
 
+  it('drops an in-place change when a foreign definition arrives at its name', () => {
+    expect(withoutContestedRenames(
+      [change('a', 'status', 'status')],
+      claimants({status: ['a']}, {status: ['revived']}),
+    )).toEqual([])
+  })
+
+  it('drops a rename whose VACATED name a definition arriving in this tx will hold', () => {
+    // The mirror of the un-shadowing rule, and the arrival has no fan-out of
+    // its own to project it under the name it inherits.
+    expect(withoutContestedRenames(
+      [change('a', 'alpha', 'beta')],
+      claimants({}, {beta: ['a'], alpha: ['revived']}),
+    )).toEqual([])
+  })
+
+  // `null` is "nothing here can be judged", not "nobody claims this name" — the
+  // permissive reading would approve a rename onto a seed-owned key in a
+  // workspace with no registry snapshot. Split per NAME because either clause
+  // alone drops the candidate, so a single test with both unknown leaves
+  // whichever one is deleted covered by the other.
   it('refuses a rename whose DESTINATION cannot be judged', () => {
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta')],
-      (name) => name === 'beta' ? null : {atTxStart: [], arriving: []},
+      (name) => name === 'beta' ? null : {holding: [], arriving: []},
     )).toEqual([])
   })
 
   it('refuses a rename whose VACATED name cannot be judged', () => {
     expect(withoutContestedRenames(
       [change('a', 'alpha', 'beta')],
-      (name) => name === 'alpha' ? null : {atTxStart: [], arriving: []},
+      (name) => name === 'alpha' ? null : {holding: [], arriving: []},
     )).toEqual([])
-  })
-
-  it('keeps an uncontested rename, and a codec-only change that keeps its name', () => {
-    const changes = [change('a', 'alpha', 'gamma'), change('b', 'beta', 'beta')]
-    expect(withoutContestedRenames(
-      changes, claimants({alpha: ['a'], beta: ['b']}),
-    )).toEqual(changes)
   })
 })
 
@@ -934,6 +914,27 @@ describe('claimants the batch itself adds or removes', () => {
     // Untouched: no re-encode under a codec the name may not answer to.
     expect(await cell('p')).toEqual({status: ' 42 '})
     expect(await rowContent(valueRowId)).toBe(' 42 ')
+  })
+
+  it('renames onto the name of a definition that STOPS being one in the same tx', async () => {
+    // Stripping the `property-schema` type leaves a live row that the rebuilt
+    // registry no longer publishes — so the name is free after commit, even
+    // though nothing was deleted and the row is still there.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await createDefinition(repo, FIELD_PEER, 'former', 'string')
+    await awaitDefinition(repo, 'former', 'string')
+
+    await repo.tx(async tx => {
+      const peer = await tx.get(FIELD_PEER)
+      const withoutType = {...peer!.properties}
+      delete withoutType.types
+      await tx.update(FIELD_PEER, {properties: withoutType})
+      await tx.setProperty(FIELD_ID, propertyNameProp, 'former')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cell('p')).toEqual({former: 'done'})
   })
 
   it('renames onto the name of a definition DELETED in the same tx', async () => {

@@ -170,48 +170,51 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  *  - Dropping a candidate can un-vacate the name that kept ANOTHER one, so this
  *    iterates to a fixpoint.
  *
- * `claimOf` answers who will hold a name once THIS TX COMMITS, which the
- * tx-start registry alone cannot say. Three rounds of review each found another
- * source it was missing — a shadowed peer the winner lookup hides, a workspace
- * with no snapshot, a peer moving onto the same destination, a tombstoned
- * definition revived beside the rename — so it is derived once now rather than
- * accumulated. The two halves read it differently, and the difference is the
- * whole rule:
+/**
+ * Drop a rename or re-type whose destination, or whose vacated name, is not
+ * this definition's to write.
  *
- *  - The DESTINATION is contested when the tx-start OWNER is not free, or —
- *    for a candidate that is itself ARRIVING — when any other definition
- *    arrives at it too. The owner settles the first half because only the
- *    winner projects, so a peer shadowed under the destination is not harmed by
- *    a write it never sees. The second takes no vacating exemption: a peer that
- *    leaves its own name is still arriving at this one, and two definitions
- *    landing on one key means the later write wins a race the rebuilt registry
- *    may then decide the other way. An incumbent re-typing in place races
- *    nobody — the peer moving onto ITS name is refused by the first half.
- *  - The name being VACATED is contested when ANY claimant, at tx start or
- *    arriving, is not free. Every one of them inherits the key this rename
- *    drops, and stranding a sibling's cell is the same damage whichever of them
- *    ends up the winner.
+ * `claimOf` answers who holds a name once THIS TX COMMITS. Six review rounds
+ * went into that answer, each finding another source it was missing, so it is
+ * derived from the ROWS rather than accumulated: definitions the tx deletes,
+ * revives, creates, renames or strips of their metadata all move a name, and
+ * none of them appears in the tx-start registry under the name it ends up with.
+ *
+ * The decisive correction, and the reason nothing here is derived from which
+ * candidates SURVIVE: dropping a candidate suppresses its FAN-OUT, never its
+ * definition row. The rename commits either way. A model that treated a dropped
+ * rename as not having happened re-contested names it really did vacate, and
+ * cascaded — refusing one fan-out made the refusal refuse the next.
+ *
+ * So both halves read a post-commit claim that does not depend on this
+ * function's own outcome:
+ *
+ *  - The DESTINATION is contested when anyone ELSE holds it after commit, or
+ *    when anyone else ARRIVES at it. Two definitions landing on one key means
+ *    the later write wins a race the rebuilt registry may decide the other way,
+ *    and that is true whether the peer's own fan-out was kept or dropped.
+ *  - The name being VACATED is contested when anyone else will hold it whose
+ *    cells this pass does NOT fix. Whoever inherits the key this rename drops
+ *    is stranded by it — unless they are a kept candidate, whose own fan-out
+ *    projects them under that name in this same tx. That exemption is the one
+ *    thing here that depends on the outcome, which is why this still iterates
+ *    to a fixpoint: dropping a candidate can strand whoever was relying on it.
  *
  * `null` is not "nobody claims it" — it is a workspace with no registry, where
  * nothing can be judged. The caller refuses the transaction rather than
  * committing a definition change it cannot fan out.
  *
  * A candidate dropped here belongs to the shadowing model's own reconcile
- * (#389 item 8), not to a one-shot re-key. Dropping one can un-vacate the name
- * that kept ANOTHER, so this iterates to a fixpoint.
+ * (#389 item 8), not to a one-shot re-key.
  */
 export interface NameClaim {
-  /** Claimants at TX START that will still hold the name once this tx commits,
-   *  winner first. The head is the one that projects — and an owner that leaves
-   *  hands that role to the next claimant, which is why departures are filtered
-   *  out rather than noted. */
-  readonly atTxStart: readonly string[]
-  /** Definitions this tx leaves live under the name that did NOT hold it at tx
-   *  start AND are not among the candidates — a created row, or a revived
-   *  tombstone. Their rank against the incumbent is decided by the rebuilt
-   *  registry, not knowable here. Candidates renaming onto the name are NOT
-   *  listed: the refusal derives those from its own batch, because whether one
-   *  arrives depends on whether it survives. */
+  /** Definitions that will STILL hold this name once the tx commits, winner
+   *  first — the tx-start claimants minus any the tx moves off it. The head is
+   *  the one that projects, so an owner that leaves hands that role on. */
+  readonly holding: readonly string[]
+  /** Definitions that will NEWLY hold it: created, revived, or renamed onto it.
+   *  Renames whose fan-out this refusal drops are included — suppressing a
+   *  re-key does not cancel the row's name change. */
   readonly arriving: readonly string[]
 }
 
@@ -225,41 +228,20 @@ export const withoutContestedRenames = <T extends {
 ): T[] => {
   let kept: T[] = [...candidates]
   for (;;) {
-    const movers = kept.filter(candidate => candidate.oldName !== candidate.newName)
-    const vacating = new Set(movers.map(candidate => candidate.fieldId))
-    // Derived from the SURVIVING batch each round, not from the caller: a
-    // candidate dropped this round keeps its old name and arrives nowhere.
-    const movingOnto = (name: string): readonly string[] =>
-      movers.filter(candidate => candidate.newName === name).map(c => c.fieldId)
-    const free = (claimant: string | undefined, self: string): boolean =>
-      claimant === undefined || claimant === self || vacating.has(claimant)
+    const keptIds = new Set(kept.map(candidate => candidate.fieldId))
     const next = kept.filter(candidate => {
-      const moves = candidate.oldName !== candidate.newName
       const destination = claimOf(candidate.newName)
       if (destination === null) return false
-      if (!free(destination.atTxStart[0], candidate.fieldId)) return false
-      // A row this tx CREATES or REVIVES at the name contests every candidate
-      // there, moving or not. Nothing refuses it — it is not a candidate, since
-      // nothing about its own name changed — and it may outrank the incumbent
-      // in the rebuilt registry, which would read the value the incumbent just
-      // re-encoded as its own, under a different codec.
-      if (destination.arriving.length > 0) return false
-      // Two candidates MOVING onto one name race each other instead: the later
-      // write wins, and the rebuilt registry may hand the key to the other. An
-      // incumbent staying put races none of them — a candidate moving onto ITS
-      // name is refused by the owner test above.
-      if (moves && movingOnto(candidate.newName)
-        .some(claimant => claimant !== candidate.fieldId)) {
-        return false
-      }
-      if (!moves) return true
+      const owner = destination.holding[0]
+      if (owner !== undefined && owner !== candidate.fieldId) return false
+      if (destination.arriving.some(peer => peer !== candidate.fieldId)) return false
+      if (candidate.oldName === candidate.newName) return true
       const vacated = claimOf(candidate.oldName)
-      return vacated !== null
-        // Candidates moving ONTO the vacated name are deliberately not consulted:
-        // a candidate that moves is vacating by construction, so it is always
-        // free and could never contest anything here.
-        && [...vacated.atTxStart, ...vacated.arriving]
-          .every(claimant => free(claimant, candidate.fieldId))
+      if (vacated === null) return false
+      // A kept candidate inheriting this name re-keys its own consumers under
+      // it in this same tx, so it is not stranded by the drop. Anyone else is.
+      return [...vacated.holding, ...vacated.arriving]
+        .every(peer => peer === candidate.fieldId || keptIds.has(peer))
     })
     if (next.length === kept.length) return next
     kept = next
@@ -393,50 +375,32 @@ const collectChanges = (
   // still filed under its old name. A revived or created claimant never becomes
   // a candidate either — nothing about its own name changed — so this is the
   // only place it can be seen.
-  // Definitions that will NOT hold, once this tx commits, the name the tx-start
-  // registry files them under — deleted, or renamed away without being
-  // candidates. They can never reach `vacating`, which holds only kept
-  // candidates, so without this they contest a name they are about to leave:
-  // the fan-out is dropped while the definition rows take their new names
-  // anyway, and the consumers keep keys nothing answers to.
-  //
-  // Static, unlike `vacating`, and that is the difference between the two: a
-  // candidate might be dropped by the refusal and keep its name, whereas
-  // nothing here can be — a deletion is not this pass's to refuse, and an
-  // unbuildable rename is either refused outright (which aborts the tx) or
-  // committed. Each appears in `atTxStart` only under the name it is leaving,
-  // so filtering by fieldId is precise.
-  const released = new Set<string>(unbuildableRenames)
-  for (const {before, after} of changedRows) {
-    if (before === null || before.deleted) continue
-    if ((after === null || after.deleted) && parsePropertyDefinitionMetadata(before)) {
-      released.add(before.id)
-    }
-  }
-  const candidateIds = new Set(candidates.map(candidate => candidate.fieldId))
+  // ONE derivation of what this tx does to names, read off the ROWS. Every
+  // definition it touches either keeps the name the tx-start registry files it
+  // under, or leaves it — by being deleted, renamed, or stripped of the
+  // metadata that made it a definition at all — and may land on a new one.
+  // Neither list depends on which fan-outs the refusal keeps, because a dropped
+  // fan-out still commits its row: see the refusal's own doc.
+  const released = new Set<string>()
   const arrivingByName = new Map<string, string[]>()
   for (const {before, after} of changedRows) {
-    if (after === null || after.deleted) continue
-    // Candidates are excluded: whether one arrives depends on whether the
-    // refusal keeps it, so the refusal derives those from its own batch.
-    if (candidateIds.has(after.id)) continue
-    const afterMeta = parsePropertyDefinitionMetadata(after)
-    if (!afterMeta || afterMeta.seedKey !== undefined) continue
-    const heldBefore = before !== null && !before.deleted
-      && parsePropertyDefinitionMetadata(before)?.name === afterMeta.name
-    if (heldBefore) continue
-    const arriving = arrivingByName.get(afterMeta.name) ?? []
-    arriving.push(after.id)
-    arrivingByName.set(afterMeta.name, arriving)
+    const beforeMeta = before !== null && !before.deleted
+      ? parsePropertyDefinitionMetadata(before)
+      : null
+    const afterMeta = after !== null && !after.deleted
+      ? parsePropertyDefinitionMetadata(after)
+      : null
+    if (beforeMeta === null && afterMeta === null) continue
+    const keepsItsName = beforeMeta !== null && afterMeta !== null
+      && beforeMeta.name === afterMeta.name
+    if (keepsItsName) continue
+    if (beforeMeta !== null) released.add(before!.id)
+    if (afterMeta !== null) {
+      const arriving = arrivingByName.get(afterMeta.name) ?? []
+      arriving.push(after!.id)
+      arrivingByName.set(afterMeta.name, arriving)
+    }
   }
-  // Whether a name can be judged is a property of the WORKSPACE, not of the
-  // name, so one lookup settles it for every candidate. Answered here rather
-  // than left to the refusal below because the two decisions are different: the
-  // refusal decides whether a NAME is this definition's to write, and dropping
-  // a candidate there is correct and silent. Having no registry at all is not a
-  // verdict about any name — it means the fan-out cannot run, and letting the
-  // definition row commit without it would leave every consumer in the old
-  // encoding with nothing left to repair them.
   if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName!) === null) {
     return 'unjudgeable'
   }
@@ -448,7 +412,7 @@ const collectChanges = (
       return atTxStart === null
         ? null
         : {
-          atTxStart: atTxStart.filter(fieldId => !released.has(fieldId)),
+          holding: atTxStart.filter(fieldId => !released.has(fieldId)),
           arriving: arrivingByName.get(name) ?? [],
         }
     }),
