@@ -1,1 +1,0 @@
-import{GM as e}from"../../chunks/app-OVRJrypK.js";export{e as defineVerbFacet};

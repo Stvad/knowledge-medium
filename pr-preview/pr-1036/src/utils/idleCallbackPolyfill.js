@@ -1,1 +1,0 @@
-import{t as e}from"../../chunks/app-OVRJrypK.js";export{e as installIdleCallbackPolyfill};

@@ -1,1 +1,0 @@
-import{P_ as e}from"../../../chunks/app-OVRJrypK.js";export{e as PendingInvitations};

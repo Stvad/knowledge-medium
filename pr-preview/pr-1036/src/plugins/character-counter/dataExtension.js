@@ -1,1 +1,0 @@
-import{LR as e}from"../../../chunks/app-OVRJrypK.js";export{e as characterCounterDataExtension};
