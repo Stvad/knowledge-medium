@@ -1,1 +1,1 @@
-import{MC as e,NC as t}from"../../chunks/app-CjPYHxVK.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
+import{MC as e,NC as t}from"../../chunks/app-CnimD1tV.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
