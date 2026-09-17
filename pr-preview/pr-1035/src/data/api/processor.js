@@ -1,0 +1,1 @@
+import{x2 as e}from"../../../chunks/app-CdCgLRvl.js";export{e as definePostCommitProcessor};

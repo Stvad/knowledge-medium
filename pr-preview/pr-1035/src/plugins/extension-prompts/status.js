@@ -1,0 +1,1 @@
+import{nw as e,rw as t}from"../../../chunks/app-CdCgLRvl.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

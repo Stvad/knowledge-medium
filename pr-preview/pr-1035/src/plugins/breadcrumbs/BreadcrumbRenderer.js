@@ -1,0 +1,1 @@
+import{kg as e}from"../../../chunks/app-CdCgLRvl.js";export{e as BreadcrumbRenderer};

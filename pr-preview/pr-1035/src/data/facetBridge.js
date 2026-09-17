@@ -1,0 +1,1 @@
+import{CH as e}from"../../chunks/app-CdCgLRvl.js";export{e as FacetBridge};

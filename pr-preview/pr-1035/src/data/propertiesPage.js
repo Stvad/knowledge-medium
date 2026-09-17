@@ -1,0 +1,1 @@
+import{C$ as e,w$ as t}from"../../chunks/app-CdCgLRvl.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

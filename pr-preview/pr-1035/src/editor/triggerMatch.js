@@ -1,0 +1,1 @@
+import{HL as e}from"../../chunks/app-CdCgLRvl.js";export{e as matchCharTrigger};

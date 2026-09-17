@@ -1,0 +1,1 @@
+import{ZC as e}from"../../chunks/app-CdCgLRvl.js";export{e as editorAutocompleteExtension};

@@ -1,0 +1,1 @@
+import{Dr as e}from"../../../chunks/app-CdCgLRvl.js";export{e as propertiesMigrationPlugin};
