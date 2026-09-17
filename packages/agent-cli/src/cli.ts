@@ -365,9 +365,8 @@ const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   // disconnected tab. A stale token 401s right here, and reporting that as "no
   // app tab" names the wrong cause and discards the typed error the top-level
   // handler needs. The loop below keeps its catch because the app really is
-  // mid-reload there. NOT unit-pinned: reaching this line needs a live bridge
-  // answering 401, which no harness stands up, so a green suite says nothing
-  // about it.
+  // mid-reload there. NOT unit-pinned — reaching this line needs a live bridge
+  // answering 401, which no harness stands up.
   const before = await whoamiWithToken(token)
   if (!before.connected) {
     throw new Error('No app tab is currently connected — nothing to reload. Open the app, then retry.')
@@ -524,11 +523,10 @@ const cli = cac('kmagent')
 const wireDescription = (type: KnownCommandType): string =>
   getCommandMeta(type).description
 
-// Global option. The catch-all `--profile <name>` selects which CLI
-// token profile to use; defaults to AGENT_RUNTIME_PROFILE then to
-// "default". We apply it from `cli.options.profile` after parse rather
-// than inside each action so the value is consistently set before
-// `ensureBridgeRunning`/token lookup runs.
+// The catch-all `--profile <name>` selects which CLI token profile to use;
+// defaults to AGENT_RUNTIME_PROFILE, then to "default". Applied from
+// `cli.options.profile` after parse rather than inside each action, so the
+// value is set before `ensureBridgeRunning`/token lookup runs.
 cli.option('--profile, -p <name>', 'Saved CLI token profile to use')
 
 // ----- Local / bridge-management commands ---------------------------
@@ -952,13 +950,12 @@ cli
     })
   })
 
-// A full properties migration is hundreds of thousands of writes; measured
-// runs land near 8 minutes on a fast native engine and a browser is a
-// multiple of that. Set one minute under the server's inFlightCommandTtlMs
-// (60 min, server.ts) rather than equal to it: at an exact match, the
-// bridge can reap the in-flight command in the same instant this timeout
-// elapses, and the next poll would surface "Unknown command" instead of
-// the CLI's own clear timeout message.
+// A full properties migration is hundreds of thousands of writes and runs
+// for many minutes in a browser. Set one minute under the server's
+// inFlightCommandTtlMs rather than equal to it: at an exact match the bridge
+// can reap the in-flight command in the same instant this timeout elapses,
+// and the next poll would surface "Unknown command" instead of the CLI's own
+// clear timeout message.
 const runBackfillDefaultWaitSeconds = 3540
 
 /** Same bound, same reason — see the note above `runBackfillDefaultWaitSeconds`. */

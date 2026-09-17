@@ -55,23 +55,17 @@ export const loadOrCreateChannelSecret = async (
   // separate processes with no shared memory — so creation must be atomic:
   // exactly one write wins and every loser re-reads the winner's value, or a
   // process ends up holding a secret the file no longer contains (channel 401s
-  // until restart). `createFileExclusive` gives that (see atomicFile.ts): it
-  // never leaves an empty file and never deletes, so concurrent creators always
-  // converge on one winner.
+  // until restart). `createFileExclusive` gives that (atomicFile.ts): it never
+  // leaves an empty file and never deletes, so creators converge on one winner.
   //
-  // A file that reads back EMPTY is therefore genuine corruption, not a
-  // transient create window — an old/truncated file, never something we just
-  // made. Reclaiming it means delete + recreate, a non-atomic REPLACE that two
-  // processes can't race without diverging (one deletes the other's fresh
-  // secret from a stale "empty" read). So the reclaim — and only the reclaim —
-  // is serialized behind an exclusive `mkdir` gate, the same shape pidfile.ts
-  // uses to serialize its stale-pid takeover.
+  // A file that reads back EMPTY is therefore genuine corruption rather than a
+  // transient create window, and reclaiming it is serialized (see
+  // `reclaimEmptyFile`).
   //
-  // Each pass reads → creates-if-absent → reclaims; `reclaimEmptyFile` fully
-  // resolves (heals the file, or waits out and reaps a crashed reclaimer)
-  // before returning, so a couple of passes always suffice. The bound is a
-  // backstop; it is NOT the crash-recovery mechanism (that lives in the
-  // reclaim's own wait), so a stale gate is always waited out and reaped rather
+  // Each pass reads → creates-if-absent → reclaims, and `reclaimEmptyFile`
+  // fully resolves before returning, so a couple of passes always suffice.
+  // The bound is a backstop, NOT the crash-recovery mechanism (that lives in
+  // the reclaim's own wait), so a stale gate is waited out and reaped rather
   // than surfaced as a throw.
   for (let pass = 0; pass < 4; pass += 1) {
     const existing = await readSecretAt(file)

@@ -1,11 +1,10 @@
 /**
- * Programmatic bridge client — the token store + authed command runner
- * that used to live inline in cli.ts, extracted so other Node processes
- * (the agent-dispatch daemon, the km MCP server, scripts) can drive the
- * bridge without shelling out to `kmagent`.
+ * Programmatic bridge client — the token store + authed command runner, so
+ * other Node processes (the agent-dispatch daemon, the km MCP server,
+ * scripts) can drive the bridge without shelling out to `kmagent`.
  *
- * cli.ts remains the interactive surface (pairing, printing, bridge
- * auto-start); everything here is side-effect-free library code.
+ * cli.ts is the interactive surface (pairing, printing, bridge auto-start);
+ * everything here is side-effect-free library code.
  */
 import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
@@ -40,16 +39,15 @@ export const errorMessage = (error: unknown): string =>
  * is overriding the selection. Printed underneath that error.
  *
  * FACTS ONLY — no cause, no recommended remedy. A diagnosis composed from this
- * state has to hold across every combination of it, and the combinations
- * outnumber the branches you would write: "most recently paired" ranks nothing
- * when entries are undated, and a bare `kmagent connect` re-pairs `default`
- * rather than the profile that failed. A printed fact has no such failure mode,
- * and the reader draws the conclusion from the listing in one glance.
+ * state would have to hold across every combination of it, and the
+ * combinations outnumber the branches you would write ("most recently paired"
+ * ranks nothing when entries are undated; a bare `kmagent connect` re-pairs
+ * `default` rather than the profile that failed). A printed fact has no such
+ * failure mode.
  *
- * `profiles: null` means the store could not be read. It is a value rather
- * than a throw because the override and the selection are true regardless —
- * letting an unreadable store suppress them lost the one piece of advice that
- * needed no store at all.
+ * `profiles: null` means the store could not be read. A value rather than a
+ * throw, because the override and the selection are true regardless — letting
+ * an unreadable store suppress them would drop the advice that needs no store.
  */
 export const formatTokenContext = (
   {profiles, tokenStorePath, selected, envTokenOverride}: {
@@ -88,11 +86,10 @@ export const formatTokenContext = (
  *  pasted into issues, and it must mean the same thing wherever it is read.
  *
  *  A number out of Date's range (the store only checks `typeof === 'number'`)
- *  makes `toISOString` THROW, which would take the whole listing down with it —
- *  the same "one bad input suppresses every fact" failure the nullable
- *  `profiles` exists to prevent, through a different door. Reported as its own
- *  state rather than folded into "no timestamp", since a garbage value and an
- *  absent one are different facts. */
+ *  makes `toISOString` THROW, taking the whole listing down with it — the same
+ *  "one bad input suppresses every fact" failure the nullable `profiles`
+ *  prevents. Reported as its own state rather than folded into "no timestamp",
+ *  since a garbage value and an absent one are different facts. */
 const pairedAt = (savedAt: number | null | undefined): string => {
   if (typeof savedAt !== 'number') return '(no pairing timestamp)'
   const instant = new Date(savedAt)
@@ -146,9 +143,8 @@ const isMissingTokenError = (error: unknown): boolean =>
  *
  *  Fires on `kmagent connect`'s verification of a freshly pasted token too,
  *  where the store is beside the point. ACCEPTED rather than plumbed around:
- *  under facts-only that output is irrelevant, not misleading, and carrying a
- *  token-source flag through the error would re-add the branch this module was
- *  rewritten to delete. */
+ *  under facts-only that output is irrelevant rather than misleading, and a
+ *  token-source flag threaded through the error would re-add a branch. */
 export const withProfileHelp = (
   error: unknown,
   help: () => Promise<string>,
@@ -322,11 +318,11 @@ export const requestJson = async <T = unknown>(
   return body as T
 }
 
-// Errors the server returns when the client has temporarily lost its
-// token registration (typical after a `kmagent reload` or after
-// `install-extension` triggers refreshAppRuntime). Retrying on these
-// for ~10–15s smooths over the reconnect gap without papering over
-// real auth failures (scope mismatch, missing token, etc.).
+// Errors the server returns when the client has temporarily lost its token
+// registration (typical after a `kmagent reload`, or after
+// `install-extension` triggers refreshAppRuntime). Retrying on just these
+// smooths over the reconnect gap without papering over real auth failures
+// (scope mismatch, missing token, etc.).
 export const isTransientTokenError = (error: unknown): boolean => {
   const message = errorMessage(error)
   return message.includes('Unknown or expired token')
