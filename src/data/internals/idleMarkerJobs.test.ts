@@ -126,6 +126,28 @@ describe('PendingIdleJobs.drain', {timeout: 20_000}, () => {
     await expect(jobs.drain()).rejects.toThrow('job blew up')
   })
 
+  // Both jobs resume on the same turn, the failure first. A park settles the
+  // drain's race, so a failure recorded only by the drain could still be in
+  // flight when the next iteration found nothing but parked jobs and returned.
+  it('surfaces a failing job even when a sibling parks in the same turn', async () => {
+    const jobs = new PendingIdleJobs(immediate)
+    const turn = gate()
+    const external = gate()
+    jobs.schedule(async () => {
+      await turn.promise
+      throw new Error('job blew up')
+    })
+    jobs.schedule(async (park: ParkHandle) => {
+      await turn.promise
+      park()
+      await external.promise
+    })
+
+    const drain = jobs.drain()
+    turn.open()
+    await expect(drain).rejects.toThrow('job blew up')
+  })
+
   it('releases a park at most once, however many times the job calls it', async () => {
     const jobs = new PendingIdleJobs(immediate)
     const external = gate()

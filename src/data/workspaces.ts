@@ -558,14 +558,28 @@ export const awaitLocalMemberRole = async (
     let settled = false
     let unsubscribe: (() => void) | null = null
     let disposeRequested = false
-    // Opened before the subscription and released on every settle path, since
+    // Rechecks in flight. The park says "waiting on the outside world", so it is
+    // held exactly when no bounded local read is running: `check` lifts it on the
+    // way in and the LAST one out re-enters it. Counting rather than re-entering
+    // per check, because overlapping notifications would otherwise re-park while
+    // a read was still running — which is the same lie the park exists to avoid.
+    let runningChecks = 0
+    // Opened before the subscription and closed on every settle path, since
     // `dispose` is what both `succeed` and `fail` run — and run SYNCHRONOUSLY,
     // before resolve/reject, so a drain racing an abort sees the job progressing
-    // again rather than still parked.
-    const releasePark = options.onPark?.()
+    // again rather than still parked. A mutable slot, because the region is
+    // re-entered rather than opened once.
+    let releasePark = options.onPark?.()
+    const unpark = (): void => {
+      releasePark?.()
+      releasePark = undefined
+    }
+    const repark = (): void => {
+      if (!settled && !releasePark) releasePark = options.onPark?.()
+    }
 
     const dispose = (): unknown | null => {
-      releasePark?.()
+      unpark()
       signal?.removeEventListener('abort', onAbort)
       if (unsubscribe) {
         const current = unsubscribe
@@ -597,6 +611,8 @@ export const awaitLocalMemberRole = async (
     }
     const check = async () => {
       if (settled) return
+      runningChecks += 1
+      unpark()
       try {
         const role = await getLocalMemberRole(repo, workspaceId, userId)
         if (signal?.aborted) {
@@ -606,6 +622,10 @@ export const awaitLocalMemberRole = async (
         }
       } catch (error) {
         fail(error)
+      } finally {
+        runningChecks -= 1
+        // A settled wait has already disposed, and `repark` declines then.
+        if (runningChecks === 0) repark()
       }
     }
     function onAbort() {

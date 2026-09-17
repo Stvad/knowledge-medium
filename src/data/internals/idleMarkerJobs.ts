@@ -45,6 +45,11 @@ export class PendingIdleJobs {
   /** Woken when any job enters a park region, so a `drain` already awaiting that
    *  job re-evaluates instead of waiting on it forever. */
   private readonly parkWaiters = new CallbackSet('PendingIdleJobs.park')
+  /** Rejections captured as each job settles, for the next `drain` to raise.
+   *  Held here rather than inside `drain` because a job can fail in the same turn
+   *  a sibling parks: a drain-local capture would still be in flight when the
+   *  loop found only parked jobs left and returned, losing the failure. */
+  private readonly failures: unknown[] = []
 
   /** @param scheduler defers a callback off the critical path. Defaults to
    *  `scheduleIdle`; pass a `scheduleDeepIdle(fn, opts)` wrapper for jobs
@@ -65,7 +70,16 @@ export class PendingIdleJobs {
   schedule(task: (park: ParkHandle) => Promise<void>): void {
     this.scheduler(() => {
       const state: JobState = {parked: 0}
-      const p = task(() => this.park(state)).finally(() => { this.pending.delete(p) })
+      // Catch BEFORE the removal, so a job's error is recorded while it is still
+      // pending and no `drain` can return between the two. Logged as well: this
+      // handler is what stops an un-drained failure from being an unhandled
+      // rejection, so without it the only report would be a drain nobody makes.
+      const p = task(() => this.park(state))
+        .catch((error: unknown) => {
+          console.error('[PendingIdleJobs] deferred job failed:', error)
+          this.failures.push(error)
+        })
+        .finally(() => { this.pending.delete(p) })
       this.pending.set(p, state)
     })
   }
@@ -110,22 +124,16 @@ export class PendingIdleJobs {
    *  was unpinned). Parking during the await counts too, which is why this races
    *  the pending jobs against the park signal instead of awaiting them outright. */
   async drain(): Promise<void> {
-    // A park can win the race while `Promise.all` is still in flight; capturing
-    // its rejection here keeps a failing job surfacing from the next iteration
-    // rather than vanishing into an already-settled race. A box, not a `let`:
-    // the compiler narrows a closure-assigned `let` back to its initializer.
-    const failures: unknown[] = []
     for (;;) {
-      if (failures.length > 0) throw failures[0]
+      // Before `active` is read, and so before the `return` below — with no await
+      // between, a failure recorded by a job leaving `pending` cannot slip past.
+      if (this.failures.length > 0) throw this.failures.shift()
       const active: Promise<void>[] = []
       for (const [job, state] of this.pending) if (state.parked === 0) active.push(job)
       if (active.length === 0) return
       const parkedSignal = this.whenSomeJobParks()
       try {
-        await Promise.race([
-          Promise.all(active).catch((error: unknown) => { failures.push(error) }),
-          parkedSignal.promise,
-        ])
+        await Promise.race([Promise.all(active), parkedSignal.promise])
       } finally {
         parkedSignal.dispose()
       }
