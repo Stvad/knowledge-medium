@@ -375,8 +375,18 @@ const collectChanges = (
     // child's TEXT under the new codec either way — so a definition whose
     // preset or config was broken and has now been repaired re-encodes on the
     // repairing tx, which is the only moment anything can.
+    // A REVIVAL counts as changed whatever the two bags say. A tombstone can be
+    // edited — by sync, or by a script — and a later plain `tx.restore` then
+    // presents identical before/after bags that both describe the POST-edit
+    // preset, while the consumers are still in the pre-delete encoding. Nothing
+    // on the row remembers that encoding once the bag has moved, so the
+    // revival, which is when the registry starts publishing the new codec
+    // again, is the only moment anything can reconcile them. Re-parsing under
+    // an unchanged codec is idempotent, so a plain restore of an untouched
+    // definition writes nothing.
+    const revived = before.deleted === true
     const encodingChanged = afterSchema !== null && (
-      beforeSchema === null || codecInputsChanged(before, after)
+      beforeSchema === null || revived || codecInputsChanged(before, after)
     )
     // Every write to a definition block's bag reaches this processor —
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
@@ -462,6 +472,11 @@ export const FIELD_PROBE_CHUNK = 500
  *  definition that its child-backed peers then read old encodings through. The
  *  flag was only ever a cheap proxy for this query, which asks the rows
  *  themselves and cannot be stale about rows this device has.
+ *
+ *  Field rows only, which means a parent the cell-to-children backfill has not
+ *  reached yet is NOT a consumer here. The runbook flips before backfilling, so
+ *  that window is real and a definition edit inside it strands those cells
+ *  permanently — #1029, and the same blind spot the pass this replaced had.
  *
  *  The Set is load-bearing across chunks, not tidiness:
  *  `SELECT DISTINCT` dedupes only WITHIN one statement, so a parent consuming
@@ -552,7 +567,10 @@ const applyToParent = async (
         }
         if (!change.encodingChanged) continue
         // Canonicalize the stored text under the new codec so it reads back as
-        // what `setProperty` would have written.
+        // what `setProperty` would have written. Re-parsing the TEXT is what
+        // makes a cross-type conversion possible at all, and it costs one
+        // ambiguity: a bare `null` is a literal to a codec that rejects null
+        // and the unset sentinel to one that accepts it (#1030).
         const canonical = encodedPropertyValueToChildContent(change.schema, encoded)
         if (value.content === canonical) continue
         // Re-stamp the reference columns from the REWRITTEN content, the same

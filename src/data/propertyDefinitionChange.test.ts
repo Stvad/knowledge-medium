@@ -908,6 +908,25 @@ describe('claimants the batch itself adds or removes', () => {
     expect(await rowContent(valueRowId)).toBe(' 42 ')
   })
 
+  it('re-encodes on RESTORE when the bag was re-typed while the row was deleted', async () => {
+    // Two transactions: the re-type lands on a tombstone, where the fan-out
+    // correctly does nothing, and the later plain restore then has identical
+    // before/after bags that both describe the NEW preset. Nothing on the row
+    // remembers the encoding its consumers are actually in.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
+    await repo.tx(tx => tx.delete(FIELD_ID), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty(FIELD_ID, presetIdProp, 'number'),
+      {scope: ChangeScope.BlockDefault})
+    expect(await rowContent(valueRowId)).toBe(' 42 ')
+
+    await repo.tx(tx => tx.restore(FIELD_ID), {scope: ChangeScope.BlockDefault})
+
+    expect(await cell('p')).toEqual({status: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
+  })
+
   it('re-encodes a definition RESTORED and re-typed in the same tx', async () => {
     // Deleting a definition does not tombstone its consumers' field rows, so a
     // revival brings back a live registry entry over values still in the old
