@@ -151,57 +151,48 @@ const buildSchemaOrNull = (
 export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUnconvertible'
 
 /**
- * Drop a rename or re-type whose destination, or whose vacated name, is not
- * this definition's to write.
+ * Changes whose destination, or whose vacated name, is not this definition's to
+ * write. The caller REFUSES the transaction over any of them that has consumers
+ * (#1028): a rename whose consumers cannot be re-keyed is the mass silent unset
+ * this pass exists to prevent, so committing the row without its fan-out is
+ * committing half a change.
  *
  * `claimOf` answers who holds a name once THIS TX COMMITS, derived from the
  * ROWS rather than accumulated source by source: definitions the tx deletes,
  * revives, creates, renames or strips of their metadata all move a name, and
  * none of them appears in the tx-start registry under the name it ends up with.
- *
- * Nothing here may be derived from which candidates SURVIVE, because dropping a
- * candidate suppresses its FAN-OUT and never its definition row — the rename
- * commits either way. So both halves read a post-commit claim that does not
- * depend on this function's own outcome:
+ * It describes the state the tx WOULD commit, which is the state the refusal is
+ * judged against.
  *
  *  - The DESTINATION is contested when anyone ELSE holds it after commit, or
  *    when anyone else ARRIVES at it. Two definitions landing on one key means
- *    the later write wins a race the rebuilt registry may decide the other way,
- *    and that is true whether the peer's own fan-out was kept or dropped.
+ *    the later write wins a race the rebuilt registry may decide the other way.
  *  - The name being VACATED is contested when anyone else will hold it whose
- *    cells this pass does NOT fix. Whoever inherits the key this rename drops
- *    is stranded by it — unless they are a kept candidate, whose own fan-out
- *    projects them under that name in this same tx. That exemption is the one
- *    thing here that depends on the outcome, which is why this still iterates
- *    to a fixpoint: dropping a candidate can strand whoever was relying on it.
+ *    cells this pass does not fix. Whoever inherits the key this rename drops
+ *    is stranded by it — unless they are a peer in this same batch, which
+ *    re-keys its own consumers under that name in this same tx.
  *
  * `null` is not "nobody claims it" — it is a workspace with no registry, where
- * nothing can be judged. The caller refuses the transaction rather than
- * committing a definition change it cannot fan out.
+ * nothing can be judged, so it is contested too.
  *
- * A candidate dropped here belongs to the shadowing model's own reconcile
- * (#389 item 8), not to a one-shot re-key.
- *
- * WHAT NONE OF THIS REACHES: a name's cells outlive the definition that owned
- * it. Every way of leaving a name that still COMMITS — a refused rename, a
- * deletion, losing the definition metadata — leaves that definition's consumers
- * keyed under it, and whoever takes the name next reads those values through
- * its own schema. Contesting the name does not repair them and strands the
- * arriving definition's consumers too; the choices that do are a reconcile, a
- * refusal, or retiring the departing cells, and picking between them is #1028.
+ * WHAT THIS STILL DOES NOT REACH: a name's cells outlive the definition that
+ * owned it, and the ways of leaving a name that do NOT pass through here — a
+ * deletion, losing the definition metadata — still commit, leaving that
+ * definition's consumers keyed under a name whoever takes it next reads through
+ * their own schema. That is the same question one step out, and the answers are
+ * a reconcile or retiring the departing cells (#1031).
  */
 export interface NameClaim {
   /** Definitions that will STILL hold this name once the tx commits, winner
    *  first — the tx-start claimants minus any the tx moves off it. The head is
    *  the one that projects, so an owner that leaves hands that role on. */
   readonly holding: readonly string[]
-  /** Definitions that will NEWLY hold it: created, revived, or renamed onto it.
-   *  Renames whose fan-out this refusal drops are included — suppressing a
-   *  re-key does not cancel the row's name change. */
+  /** Definitions that will NEWLY hold it: created, revived, or renamed onto
+   *  it. */
   readonly arriving: readonly string[]
 }
 
-export const withoutContestedRenames = <T extends {
+export const contestedChanges = <T extends {
   readonly fieldId: string
   readonly oldName: string
   readonly newName: string
@@ -209,28 +200,25 @@ export const withoutContestedRenames = <T extends {
   candidates: readonly T[],
   claimOf: (name: string) => NameClaim | null,
 ): T[] => {
-  let kept: T[] = [...candidates]
-  for (;;) {
-    const keptIds = new Set(kept.map(candidate => candidate.fieldId))
-    const next = kept.filter(candidate => {
-      const destination = claimOf(candidate.newName)
-      if (destination === null) return false
-      const owner = destination.holding[0]
-      if (owner !== undefined && owner !== candidate.fieldId) return false
-      // A codec-only change is never judged here — its caller refuses it
-      // outright when anyone arrives at the name it keeps.
-      if (candidate.oldName === candidate.newName) return true
-      if (destination.arriving.some(peer => peer !== candidate.fieldId)) return false
-      const vacated = claimOf(candidate.oldName)
-      if (vacated === null) return false
-      // A kept candidate inheriting this name re-keys its own consumers under
-      // it in this same tx, so it is not stranded by the drop. Anyone else is.
-      return [...vacated.holding, ...vacated.arriving]
-        .every(peer => peer === candidate.fieldId || keptIds.has(peer))
-    })
-    if (next.length === kept.length) return next
-    kept = next
-  }
+  const batch = new Set(candidates.map(candidate => candidate.fieldId))
+  return candidates.filter(candidate => {
+    const destination = claimOf(candidate.newName)
+    if (destination === null) return true
+    const owner = destination.holding[0]
+    if (owner !== undefined && owner !== candidate.fieldId) return true
+    if (destination.arriving.some(peer => peer !== candidate.fieldId)) return true
+    // A change that KEEPS its name vacates nothing, so the second half — who
+    // inherits what this one drops — does not arise for it.
+    if (candidate.oldName === candidate.newName) return false
+    const vacated = claimOf(candidate.oldName)
+    if (vacated === null) return true
+    // A peer in this batch re-keys its own consumers under the name it
+    // inherits, in this same tx. EVERY candidate qualifies, not only the
+    // uncontested ones: one contested candidate refuses the whole transaction,
+    // so there is no outcome in which some fan-outs run and others do not.
+    return ![...vacated.holding, ...vacated.arriving]
+      .every(peer => peer === candidate.fieldId || batch.has(peer))
+  })
 }
 
 /** Why a change's fan-out could not run. Both end in the same refusal, and
@@ -248,10 +236,11 @@ const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
   contested: {
     code: 'property.definition-change.contested',
     message:
-      'cannot change a property definition\'s value type while another '
-      + 'definition is taking the same name in the same edit: which of the two '
-      + 'the property answers to afterwards is not decided yet, so the blocks '
-      + 'using it could not be updated. Make the two changes separately.',
+      'cannot rename or re-type a property definition while another definition '
+      + 'claims one of the names involved: which of them the property answers '
+      + 'to afterwards is not this edit\'s to decide, so the blocks using it '
+      + 'could not be updated. Resolve the duplicate name first, or make the '
+      + 'changes in separate edits.',
   },
 }
 
@@ -286,8 +275,8 @@ interface DefinitionChange {
 /** Definition blocks in `changedRows` whose NAME or CODEC INPUTS changed this
  *  tx. A brand-new definition (no `before`) has no existing consumer cells and
  *  is skipped; one whose after-row builds no codec cannot be reprojected at all
- *  and is held for the caller's refusal; a rename onto a name a DIFFERENT
- *  non-renaming definition already owns is dropped. */
+ *  and is held for the caller's refusal, as is a change whose name another
+ *  definition claims. */
 const collectChanges = (
   ctx: SameTxCtx,
   workspaceId: string,
@@ -384,8 +373,8 @@ const collectChanges = (
   // registry lists no arrival (a created row has no entry, a revived one lost
   // its entry, a renamed one is still filed under its old name), and a revived
   // or created claimant never becomes a candidate either, so this is the only
-  // place either can be seen. Neither list depends on which fan-outs the
-  // refusal keeps, because a dropped fan-out still commits its row.
+  // place either can be seen. Both describe the state this tx WOULD commit,
+  // which is the state the refusal has to be judged against.
   const released = new Set<string>()
   const arrivingByName = new Map<string, string[]>()
   for (const {before, after} of changedRows) {
@@ -409,34 +398,28 @@ const collectChanges = (
   if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName!) === null) {
     return 'unjudgeable'
   }
-  // Pass 2: drop a rename whose destination or vacated name is contested — see
-  // the refusal above for how the two halves differ.
-  // A codec-only change whose KEPT name a peer arrives at cannot be decided
-  // here, in either direction. Dropping its fan-out commits the re-type over
-  // consumers left in the old encoding; running it re-keys them under a name
-  // the rebuilt registry may hand to the arriver instead. Which happens turns
-  // on a `createdAt` ordering this tx cannot see — so neither answer is safe
-  // and the caller refuses. A RENAME is a different question: it is contested
-  // rather than undecidable, and that one is #1028's, below.
-  const undecidable = new Set<string>()
-  for (const candidate of candidates) {
-    if (candidate.oldName !== candidate.newName) continue
-    const arriving = arrivingByName.get(candidate.newName) ?? []
-    if (!arriving.some(peer => peer !== candidate.fieldId)) continue
+  // Pass 2: hold every change whose destination or vacated name another
+  // definition also claims — see `contestedChanges` for the two halves.
+  const contested = contestedChanges(candidates, (name) => {
+    const atTxStart = ctx.propertyDefinitionsClaimingName(workspaceId, name)
+    return atTxStart === null
+      ? null
+      : {
+        holding: atTxStart.filter(fieldId => !released.has(fieldId)),
+        arriving: arrivingByName.get(name) ?? [],
+      }
+  })
+  for (const candidate of contested) {
     unfanoutable.push({fieldId: candidate.fieldId, reason: 'contested'})
-    undecidable.add(candidate.fieldId)
   }
+  // Defence in depth, and unpinnable through the public path: a contested
+  // change either has a consumer, and then the caller refuses the whole tx, or
+  // it has none and there is nothing for it to fan out to. Kept because the
+  // cost of that reasoning going stale is a re-key under a name this definition
+  // does not own.
+  const refused = new Set(contested.map(candidate => candidate.fieldId))
   return {
-    changes: withoutContestedRenames(
-      candidates.filter(candidate => !undecidable.has(candidate.fieldId)), (name) => {
-      const atTxStart = ctx.propertyDefinitionsClaimingName(workspaceId, name)
-      return atTxStart === null
-        ? null
-        : {
-          holding: atTxStart.filter(fieldId => !released.has(fieldId)),
-          arriving: arrivingByName.get(name) ?? [],
-        }
-    }),
+    changes: candidates.filter(candidate => !refused.has(candidate.fieldId)),
     unfanoutable,
   }
 }
