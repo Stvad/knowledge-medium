@@ -1,1 +1,1 @@
-import{JG as e,XG as t,YG as n}from"../../chunks/app-DTL5E-LA.js";export{e as USER_TYPES_PROJECTOR_ID,n as UserTypesService,t as userTypesProjector};
+import{JG as e,XG as t,YG as n}from"../../chunks/app-C4m6MXMT.js";export{e as USER_TYPES_PROJECTOR_ID,n as UserTypesService,t as userTypesProjector};
