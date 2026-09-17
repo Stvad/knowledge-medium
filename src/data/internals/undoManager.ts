@@ -307,11 +307,14 @@ export class UndoManager {
    *  Notifies subscribers on every scope that previously had state.
    *
    *  Moves the epoch, which {@link beginHistoryDropInWriteLock}'s `finish` does
-   *  not: a bare clear is a drop with no pass in front of it, so it is also the
-   *  only thing that can refuse a replay already in flight. A PASS must use a
-   *  {@link HistoryDrop} instead — this is instantaneous, so it neither reaches
-   *  the entry `undo()` has already popped nor covers the window while the
-   *  pass's writes are landing. */
+   *  not, so it DOES reach a replay already in flight: `undo()` sampled the
+   *  epoch before popping, and the popped entry is refused when it re-checks.
+   *
+   *  What it cannot do is cover a DURATION. A pass's writes land over a window
+   *  — for the lockless flip, a server round trip — and a gesture STARTING
+   *  inside that window samples the already-moved epoch and passes. So a pass
+   *  uses a {@link HistoryDrop}, which is in progress until it ends; this is
+   *  for a drop with no pass behind it, where there is no window to cover. */
   clear(): void {
     this.clears += 1
     this.emptyStacks()
