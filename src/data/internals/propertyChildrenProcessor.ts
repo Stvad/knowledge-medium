@@ -58,12 +58,13 @@ import {
   getPropertyFieldTargetId,
   fieldValueChildren,
   isFieldValueChild,
+  memberKeysFor,
   propertiesEqual,
   propertyCellValueRejection,
   propertyFieldContent,
-  valueChildContentToEncoded,
+  unionValuesAcrossFieldRows,
 } from '@/data/propertyChildren'
-import { jsonValuesEqual, stableJsonValue } from './jsonCanonical'
+import { jsonValuesEqual } from './jsonCanonical'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
@@ -199,38 +200,20 @@ const projectedFieldValue = async (
   schema: AnyPropertySchema,
   fieldRows: readonly BlockData[],
 ): Promise<unknown | undefined> => {
-  // ACROSS field rows this is the UNION `collapseDuplicateFieldRow` will
-  // produce, not a concatenation. Duplicate field rows are a transient conflict
-  // that the collapse resolves by folding a duplicate's member into an equal
-  // one under the survivor and moving a divergent one over as a peer — so
-  // concatenating here predicts a list the collapse will never build, and two
-  // field rows carrying the SAME members (two offline devices materializing one
-  // value) doubled it in the cell. Permanently: the doubled cell is then what
-  // the reconciler is asked to reproduce.
-  //
-  // WITHIN one field row multiplicity is kept, because there two equal rows are
-  // two members (`encodedPropertyValueToChildContents` says why).
-  const keys = memberKeysFor(schema)
-  const contents: string[] = []
-  const seen = new Set<string>()
-  for (const [index, fieldRow] of fieldRows.entries()) {
-    // §9 value set: `is_field_form IS NOT 1` children only — a nested marked
-    // row materialized under the field row is its own machinery, never a
-    // value candidate.
-    const rows = await fieldValueChildren(tx, fieldRow.id)
-    for (const value of rows) {
-      if (index > 0 && seen.has(keys.row(value).key)) continue
-      contents.push(value.content)
-      if (index > 0) seen.add(keys.row(value).key)
-    }
-    if (index === 0) for (const value of rows) seen.add(keys.row(value).key)
-  }
   // NO field row at all: the key is unset. That is the only thing that unsets a
   // multi-valued property, and it is the precondition
   // `childContentsToEncodedPropertyValue` is documented to be called under —
   // it answers `[]` for a live field row with nothing parseable under it.
   if (fieldRows.length === 0) return undefined
-  return childContentsToEncodedPropertyValue(schema, contents)
+  // §9 value set: `is_field_form IS NOT 1` children only — a nested marked row
+  // materialized under the field row is its own machinery, never a value
+  // candidate. `unionValuesAcrossFieldRows` owns what happens across the rows.
+  const perFieldRow: BlockData[][] = []
+  for (const fieldRow of fieldRows) {
+    perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
+  }
+  return childContentsToEncodedPropertyValue(
+    schema, unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content))
 }
 
 // §9 selection: the bit + target pair (the JS twin of
@@ -723,57 +706,6 @@ const reconcileSingleValueChild = async (
     if (duplicate.content === content) {
       await collapseDuplicateValueChild(tx, primary.id, duplicate)
     }
-  }
-}
-
-/** What a value row is, for comparison. `denotesValue` is false when the row's
- *  text does not decode: such a row denotes NOTHING, which is why its `key` is
- *  its own identity and equal to nothing — not even to another row carrying the
- *  same broken text. Two rows both edited to `not a reference` are two
- *  independently fixable blocks; unlike two equal VALID members, neither is in
- *  the projected cell, so nothing can recreate one that was folded or reaped. */
-interface MemberKey {
-  readonly key: string
-  readonly denotesValue: boolean
-}
-
-interface MemberKeys {
-  row: (row: Pick<BlockData, 'id' | 'content'>) => MemberKey
-  /** A DESIRED member's key, from the content the cell implies. Always a value
-   *  key in practice — it came from the encoder — and the fallback is shaped so
-   *  it can never equal a row key. */
-  content: (content: string) => string
-}
-
-/** How one property's value children are compared to EACH OTHER: by decoded
- *  value for a multi-valued property, by raw text otherwise. ONE factory,
- *  because three places ask — the projection's cross-field-row union, the
- *  member reconciler, and the duplicate-field-row collapse — and a
- *  disagreement between any two of them is silent in both directions. */
-const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
-  if (schema === null || memberCodecOf(schema.codec) === undefined) {
-    // Single-valued: text IS the comparison, unchanged, and equal-content
-    // duplicates are copies of one value rather than occurrences.
-    return {
-      row: row => ({key: `c${row.content}`, denotesValue: true}),
-      content: content => `c${content}`,
-    }
-  }
-  const valueKey = (content: string): string | undefined => {
-    try {
-      return `v${JSON.stringify(stableJsonValue(valueChildContentToEncoded(schema, content)))}`
-    } catch {
-      return undefined
-    }
-  }
-  return {
-    row: row => {
-      const key = valueKey(row.content)
-      return key === undefined
-        ? {key: `r${row.id}`, denotesValue: false}
-        : {key, denotesValue: true}
-    },
-    content: content => valueKey(content) ?? `c${content}`,
   }
 }
 

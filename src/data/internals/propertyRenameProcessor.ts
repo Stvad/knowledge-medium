@@ -48,10 +48,10 @@ import {
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import { withoutContestedRenames } from './propertyDefinitionMigrations'
 import {
-  isFieldValueChild,
-  isPropertyFieldInstance,
   childContentsToEncodedPropertyValue,
+  fieldRowValues,
   rekeyParentPropertyCell,
+  unionValuesAcrossFieldRows,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 
@@ -139,11 +139,14 @@ const consumingParentIds = async (
  *  PLAN — project each renamed field under the tx-start (rename-unchanged)
  *  codec, drop the old name, set the new.
  *
- *  Projection is `childContentsToEncodedPropertyValue`, the same function
- *  `core.projectPropertyChildren` uses, so the two cannot disagree about what
- *  a field row's value is: first parseable value for a SCALAR, every parseable
- *  member for a LIST. A rename that projected first-wins for both would
- *  silently shorten every renamed list property to one member. */
+ *  Projection goes through the same pair of functions
+ *  `core.projectPropertyChildren` uses — `unionValuesAcrossFieldRows` then
+ *  `childContentsToEncodedPropertyValue` — so the two cannot disagree about
+ *  what a field row's value is: first parseable value for a SCALAR, every
+ *  parseable member for a LIST, and duplicate field rows UNIONED rather than
+ *  concatenated. A rename that projected first-wins for both would silently
+ *  shorten every renamed list property to one member; one that concatenated
+ *  would double it, and `settledWrites` means nothing follows to correct it. */
 const rekeyParent = (
   ctx: SameTxCtx,
   parentId: string,
@@ -154,26 +157,22 @@ const rekeyParent = (
     const oldNames: string[] = []
     const assignments: Array<{name: string; value: unknown}> = []
     for (const rename of renames) {
-      let sawFieldRow = false
-      const contents: string[] = []
-      for (const sibling of siblings) {
-        if ((sibling.referenceTargetId ?? null) !== rename.fieldId) continue
-        if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
-        sawFieldRow = true
-        // §9 value set: bit-filtered — nested marked rows are machinery.
-        for (const value of (await ctx.tx.childrenOf(sibling.id, undefined))
-          .filter(isFieldValueChild)) {
-          contents.push(value.content)
-        }
-      }
-      if (!sawFieldRow) continue
+      // `null` = this parent carries no field row for the definition, which is
+      // also the gate `childContentsToEncodedPropertyValue` is called under.
+      const perFieldRow = await fieldRowValues(
+        ctx.tx, siblings, rename.fieldId, isFieldDefinition)
+      if (perFieldRow === null) continue
+      const contents = unionValuesAcrossFieldRows(rename.schema, perFieldRow)
+        .map(value => value.content)
       oldNames.push(rename.oldName)
-      // The same projection rule as `core.projectPropertyChildren`, through
-      // the same function: first parseable value for a scalar, every member
-      // for a list. Unparseable values are skipped — a rename doesn't change
-      // the codec, so those are pre-existing and stale — and if none parse the
-      // new key stays unset while the old one is still dropped (§9: the cell
-      // derives from the children, so a stale value shows unset until re-set).
+      // The same projection rule as `core.projectPropertyChildren`, through the
+      // same two functions — the cross-field-row union AND the aggregate — so
+      // the two cannot disagree: first parseable value for a scalar, every
+      // member for a list. Unparseable values are skipped — a rename doesn't
+      // change the codec, so those are pre-existing and stale — and if none
+      // parse the new key stays unset while the old one is still dropped (§9:
+      // the cell derives from the children, so a stale value shows unset until
+      // re-set).
       const projected = childContentsToEncodedPropertyValue(rename.schema, contents)
       if (projected !== undefined) {
         assignments.push({name: rename.newName, value: projected})

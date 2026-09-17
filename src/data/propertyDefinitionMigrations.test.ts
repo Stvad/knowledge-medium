@@ -31,6 +31,7 @@ import {
   withoutContestedRenames,
 } from './internals/propertyDefinitionMigrations'
 import { PROPERTY_DEFINITION_BASELINE_PREFIX } from './internals/clientSchema'
+import { propertyFieldContent } from './propertyChildren'
 import type { Repo } from './repo'
 
 const WS = 'ws-def-migrations'
@@ -565,6 +566,72 @@ describe('codec-change migration across the multi-value boundary (km-h1hy)', () 
     )).map(row => row.id)
   }
 
+  /** A SECOND field row for the same definition, carrying `members` — what two
+   *  offline devices materializing one value leave behind. Raw, because
+   *  sync-apply never passes through `repo.tx`. */
+  const addDuplicateFieldRow = async (
+    owner: string, members: readonly string[],
+  ): Promise<void> => {
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+         properties_json, reference_target_id, is_field_form, deleted,
+         created_at, updated_at, user_updated_at, created_by, updated_by)
+       VALUES ('dupfield', ?, ?, 'zz', ?, '{}', ?, 1, 0, 1, 1, 1, 'user-1', 'user-1')`,
+      [WS, owner, propertyFieldContent(FIELD_ID), FIELD_ID],
+    )
+    for (const [i, member] of members.entries()) {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES (?, ?, 'dupfield', ?, ?, '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [`dupmember-${i}`, WS, `a${i}`, member],
+      )
+    }
+  }
+
+  /** Every live value row under every live field row for this definition. */
+  const liveMembers = async (owner: string): Promise<string[]> =>
+    (await sharedDb.db.getAll<{content: string}>(
+      `SELECT v.content FROM blocks v JOIN blocks f ON v.parent_id = f.id
+        WHERE f.parent_id = ? AND f.reference_target_id = ? AND f.deleted = 0
+          AND v.deleted = 0 AND v.is_field_form IS NOT 1
+        ORDER BY v.order_key, v.id`,
+      [owner, FIELD_ID],
+    )).map(row => row.content)
+
+  it('a re-encode UNIONS duplicate field rows, as the projection does', async () => {
+    // Two field rows carrying the SAME member are a transient sync conflict the
+    // collapse resolves by folding one into the other. Concatenating them here
+    // publishes a doubled cell, and MATERIALIZE — which runs on this pass's
+    // ordinary `tx.update` — then folds the duplicate row to one member and
+    // MINTS a second to satisfy that cell. The transient duplicate becomes
+    // permanent, user-visible multiplicity.
+    await seedWorkspace('children')
+    const repo = setup(statusRefList)
+    await seedListProperty(repo, 'p', statusRefList, ['a-id'])
+    await addDuplicateFieldRow('p', ['((a-id))'])
+
+    await republish(repo, statusStringList)
+
+    expect(await cell('p')).toEqual({status: ['((a-id))']})
+    expect(await liveMembers('p')).toHaveLength(1)
+  })
+
+  it('a RENAME unions duplicate field rows, as the projection does', async () => {
+    // Same rule, and the rename processor is `settledWrites` — no materializer
+    // or projector follows it, so a doubled cell here stays doubled until some
+    // later child edit happens to re-project.
+    await seedWorkspace('children')
+    const repo = await setupWithRealDefinition(statusStringList)
+    await seedListProperty(repo, 'p', statusStringList, ['alpha'])
+    await addDuplicateFieldRow('p', ['alpha'])
+
+    await renameDefinitionBlock(repo, FIELD_ID, 'state')
+
+    expect(await cell('p')).toEqual({state: ['alpha']})
+  })
+
   it('scalar -> list reads the one value child as a single member', async () => {
     await seedWorkspace('children')
     const repo = setup()
@@ -679,6 +746,12 @@ describe('codec-change migration across the multi-value boundary (km-h1hy)', () 
     // The CONVERTIBLE row is canonicalized — that is the re-encode doing its
     // job, and it is not what the preservation promise is about.
     expect(await rowContent(ids[1]!)).toBe('1')
+    // The CELL, meanwhile, is re-derived: canonicalizing a child is an
+    // ordinary content write, so `core.projectPropertyChildren` follows it and
+    // publishes the value the PARSEABLE children carry. The pass publishing
+    // nothing is not the same as the cell staying put — it only means the pass
+    // never writes a partial value over rows it promised to preserve.
+    expect(await cell('p')).toEqual({status: 1})
     const live = await sharedDb.db.getAll<{deleted: number}>(
       'SELECT deleted FROM blocks WHERE id IN (?, ?) ORDER BY id', [ids[0]!, ids[1]!])
     expect(live.map(r => r.deleted)).toEqual([0, 0])

@@ -54,7 +54,7 @@ import {
   parseExactReferenceBlockContent,
   referenceBlockContentForId,
 } from '@/data/referenceBlock'
-import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
+import { jsonValuesEqual, stableJsonValue } from '@/data/internals/jsonCanonical'
 import { hasLoneSurrogate } from '@/utils/string'
 
 export const getPropertyFieldTargetId = (
@@ -616,6 +616,125 @@ export const childContentsToEncodedPropertyValue = (
     }
   }
   return members
+}
+
+/** What a value row is, for comparison. `denotesValue` is false when the row's
+ *  text does not decode: such a row denotes NOTHING, which is why its `key` is
+ *  its own identity and equal to nothing — not even to another row carrying the
+ *  same broken text. Two rows both edited to `not a reference` are two
+ *  independently fixable blocks; unlike two equal VALID members, neither is in
+ *  the projected cell, so nothing can recreate one that was folded or reaped. */
+export interface MemberKey {
+  readonly key: string
+  readonly denotesValue: boolean
+}
+
+export interface MemberKeys {
+  row: (row: Pick<BlockData, 'id' | 'content'>) => MemberKey
+  /** A DESIRED member's key, from the content the cell implies. Always a value
+   *  key in practice — it came from the encoder — and the fallback is shaped so
+   *  it can never equal a row key. */
+  content: (content: string) => string
+}
+
+/** How one property's value children are compared to EACH OTHER: by decoded
+ *  value for a multi-valued property, by raw text otherwise. ONE factory,
+ *  because every place that folds equal value rows asks — the cross-field-row
+ *  union below, the member reconciler, and the duplicate-field-row collapse —
+ *  and a disagreement between any two of them is silent in both directions. */
+export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
+  if (schema === null || memberCodecOf(schema.codec) === undefined) {
+    // Single-valued: text IS the comparison, unchanged, and equal-content
+    // duplicates are copies of one value rather than occurrences.
+    return {
+      row: row => ({key: `c${row.content}`, denotesValue: true}),
+      content: content => `c${content}`,
+    }
+  }
+  const valueKey = (content: string): string | undefined => {
+    try {
+      return `v${JSON.stringify(stableJsonValue(valueChildContentToEncoded(schema, content)))}`
+    } catch {
+      return undefined
+    }
+  }
+  return {
+    row: row => {
+      const key = valueKey(row.content)
+      return key === undefined
+        ? {key: `r${row.id}`, denotesValue: false}
+        : {key, denotesValue: true}
+    },
+    content: content => valueKey(content) ?? `c${content}`,
+  }
+}
+
+/**
+ * Fold one definition's value rows ACROSS its field rows, into the order the
+ * owner's cell reads them in.
+ *
+ * THE cross-field-row rule. Duplicate field rows are a transient conflict that
+ * `collapseDuplicateFieldRow` resolves by folding a duplicate's member into an
+ * equal one under the survivor and moving a divergent one over as a peer — so
+ * this is the UNION the collapse will produce, never a concatenation.
+ * Concatenating predicts a list the collapse never builds: two field rows
+ * carrying the same members (two offline devices materializing one value)
+ * double it, and the doubled cell is then what the reconciler is asked to
+ * reproduce, minting a member to match. Every caller that aggregates a cell
+ * from children comes through here for that reason — the projection, the
+ * rename re-key and the deferred re-encode — because a site that skips it
+ * turns a transient duplicate into permanent multiplicity.
+ *
+ * WITHIN one field row multiplicity is KEPT, because there two equal rows are
+ * two members ({@link encodedPropertyValueToChildContents} says why).
+ *
+ * `rows` carries each value's content as the caller will PUBLISH it, which is
+ * not always `row.content`: the re-encode pass canonicalizes a member first and
+ * must compare the canonical text, since the stored text is still in the old
+ * codec's grammar and would decode to nothing.
+ */
+export const unionValuesAcrossFieldRows = <T extends Pick<BlockData, 'id' | 'content'>>(
+  schema: AnyPropertySchema | null,
+  perFieldRow: readonly (readonly T[])[],
+): T[] => {
+  const keys = memberKeysFor(schema)
+  const unioned: T[] = []
+  const seen = new Set<string>()
+  for (const [index, values] of perFieldRow.entries()) {
+    for (const value of values) {
+      if (index > 0 && seen.has(keys.row(value).key)) continue
+      unioned.push(value)
+      if (index > 0) seen.add(keys.row(value).key)
+    }
+    if (index === 0) for (const value of values) seen.add(keys.row(value).key)
+  }
+  return unioned
+}
+
+/** This definition's value rows under `siblings`, GROUPED BY FIELD ROW and each
+ *  group in `(order_key, id)` order — or `null` when the owner carries no field
+ *  row for it, which is the precondition
+ *  {@link childContentsToEncodedPropertyValue} is called under.
+ *
+ *  Grouped, not flat, because the caller's next step is
+ *  {@link unionValuesAcrossFieldRows} and a flat list has already lost the
+ *  boundary that rule turns on. */
+export const fieldRowValues = async (
+  tx: Pick<Tx, 'childrenOf'>,
+  siblings: readonly BlockData[],
+  fieldId: string,
+  isFieldDefinition: IsPropertyFieldDefinition,
+): Promise<BlockData[][] | null> => {
+  const groups: BlockData[][] = []
+  for (const sibling of siblings) {
+    // Field-row content is `::((fieldId))` — id-addressed and rename-stable
+    // (§7). The fieldId equality picks THIS definition's rows; the shared §9
+    // recognizer supplies the bit + root + resolvability conditions.
+    if (getPropertyFieldTargetId(sibling) !== fieldId) continue
+    if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
+    groups.push(await fieldValueChildren(tx, sibling.id))
+  }
+  return groups.length === 0 ? null : groups
 }
 
 /**
