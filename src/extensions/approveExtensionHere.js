@@ -1,1 +1,1 @@
-import{hw as e}from"../../chunks/app-Dw80x57t.js";export{e as approveExtensionHere};
+import{hw as e}from"../../chunks/app-Dmvof6Ut.js";export{e as approveExtensionHere};
