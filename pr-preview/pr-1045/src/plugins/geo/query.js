@@ -1,1 +1,0 @@
-import{_L as e,gL as t}from"../../../chunks/app-r82nIqSd.js";export{t as PLACES_UNDER_BLOCK_QUERY,e as placesUnderBlockQuery};
