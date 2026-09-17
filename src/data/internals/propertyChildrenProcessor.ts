@@ -131,25 +131,33 @@ const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookup
 
 // ─── children → cell (project) ───────────────────────────────────────────
 
-interface AffectedProjection {
-  readonly parentId: string
-  readonly fieldId: string
-}
-
-const affectedKey = (affected: AffectedProjection): string =>
-  `${affected.parentId}\u0000${affected.fieldId}`
+/** Owner id → the fields on that owner this pass must re-project, each carrying
+ *  the schema resolution that admitted it. Grouped by OWNER because every read
+ *  and the write below are per-owner: an owner with *k* touched properties
+ *  costs one `get` + one `childrenOf` + one `update`, not *k* of each. The
+ *  `setProperties` fan-out and the one-time cell→children pass both hit this
+ *  with several fields on one row. */
+type AffectedOwners = Map<string, Map<string, AnyPropertySchema>>
 
 const addAffectedProjection = (
-  out: Map<string, AffectedProjection>,
+  out: AffectedOwners,
   parentId: string | null,
   fieldId: string | undefined,
   lookups: ProjectionLookups,
 ): void => {
   if (parentId === null) return
   if (fieldId === undefined) return
-  if (!lookups.resolveFieldSchema(fieldId)) return
-  const affected = {parentId, fieldId}
-  out.set(affectedKey(affected), affected)
+  // Resolved ONCE, here, and carried: this is the gate that admits a field at
+  // all, so a re-resolve downstream is both a second lookup and a branch
+  // nothing can reach.
+  const schema = lookups.resolveFieldSchema(fieldId)
+  if (!schema) return
+  let fields = out.get(parentId)
+  if (fields === undefined) {
+    fields = new Map()
+    out.set(parentId, fields)
+  }
+  fields.set(fieldId, schema)
 }
 
 /** Walk up at most two levels from a changed row to the (parent, fieldId)
@@ -158,7 +166,7 @@ const addAffectedProjection = (
  *  before and after sides of a move are collected by the caller. */
 const collectAffectedProjection = async (
   tx: Tx,
-  out: Map<string, AffectedProjection>,
+  out: AffectedOwners,
   row: ProjectableRow | null,
   lookups: ProjectionLookups,
 ): Promise<void> => {
@@ -225,48 +233,57 @@ const fieldRowsForSchema = (
 ): BlockData[] => children.filter(child =>
   child.isFieldForm === true && getPropertyFieldTargetId(child) === fieldId)
 
-const reprojectParentField = async (
+/** Re-project ONE owner's cell for every field of it this pass touched.
+ *
+ *  The `childrenOf` read is hoisted out of the field loop because it is
+ *  invariant across it: the only write here is the owner's OWN cell, which
+ *  changes no child, and post-commit processors cannot run mid-tx. */
+const reprojectOwner = async (
   tx: Tx,
-  affected: AffectedProjection,
-  lookups: ProjectionLookups,
+  parentId: string,
+  fields: ReadonlyMap<string, AnyPropertySchema>,
   mode: ProjectionMode,
 ): Promise<void> => {
-  const schema = lookups.resolveFieldSchema(affected.fieldId)
-  if (!schema) return
-
-  const parent = await tx.get(affected.parentId)
+  const parent = await tx.get(parentId)
   if (parent === null || parent.deleted) return
-  // Additive mode stops at a key the owner already holds — BEFORE the value
-  // scan, since the answer can't change the outcome. Both directions are
-  // unsafe from an unsettled caller: an unset cascades into materialize
-  // tombstoning the rows, and an overwrite silently replaces a cell value
-  // the user still owns (reconciling a populated cell against children is
-  // the backfill's job, not a background repair's).
-  if (mode === 'additive' && Object.hasOwn(parent.properties, schema.name)) return
   // No interior gate (§9 flat recognition): ANY block — value rows and
   // field rows included — hosts field rows via its `::` children, and its
   // cell projects from them like every other owner's. The old hazard (a
   // ref-typed value misread as a field row of its parent) is structurally
   // gone: unmarked rows never classify.
-  const children = await tx.childrenOf(affected.parentId, undefined)
-  const fieldRows = fieldRowsForSchema(children, affected.fieldId)
-  // Additive mode also declines to break a TIE: adding the key is unsettled,
-  // so materialize follows and `collapseDuplicateFieldRow` reaps the loser —
-  // a background repair must not reap a user's row. Accepted cost: post-flip
-  // both rows are recognized and hidden, and the key stays unset, until a
-  // write to that property name or a rename migration converges them.
-  // Editing the OWNER does not help — `collectAffectedProjection` maps a
-  // CHANGED row through its own bit or its parent's.
-  if (mode === 'additive' && fieldRows.length > 1) return
-  const projected = await projectedFieldValue(tx, schema, fieldRows)
+  const children = await tx.childrenOf(parentId, undefined)
   const nextProperties = {...parent.properties}
-  if (projected === undefined) {
-    // LIVE field rows with no parseable value ⇒ key unset (default-value
-    // rule, §9). A key with NO field rows AT ALL is only reachable here via
-    // a child change that just deleted the last one — the deletion won.
-    delete nextProperties[schema.name]
-  } else {
-    nextProperties[schema.name] = projected
+  // Both additive checks are PER FIELD, never hoisted to the owner: they ask
+  // about one property name and one property's field rows.
+  for (const [fieldId, schema] of fields) {
+    // Additive mode stops at a key the owner already holds — BEFORE the value
+    // scan, since the answer can't change the outcome. Both directions are
+    // unsafe from an unsettled caller: an unset cascades into materialize
+    // tombstoning the rows, and an overwrite silently replaces a cell value
+    // the user still owns (reconciling a populated cell against children is
+    // the backfill's job, not a background repair's). Asked of the value being
+    // BUILT, not of the snapshot, so a key an earlier field of this same owner
+    // just added is one this field may not overwrite either — two fieldIds
+    // resolve to one name whenever a definition is shadowed (§6).
+    if (mode === 'additive' && Object.hasOwn(nextProperties, schema.name)) continue
+    const fieldRows = fieldRowsForSchema(children, fieldId)
+    // Additive mode also declines to break a TIE: adding the key is unsettled,
+    // so materialize follows and `collapseDuplicateFieldRow` reaps the loser —
+    // a background repair must not reap a user's row. Accepted cost: post-flip
+    // both rows are recognized and hidden, and the key stays unset, until a
+    // write to that property name or a rename migration converges them.
+    // Editing the OWNER does not help — `collectAffectedProjection` maps a
+    // CHANGED row through its own bit or its parent's.
+    if (mode === 'additive' && fieldRows.length > 1) continue
+    const projected = await projectedFieldValue(tx, schema, fieldRows)
+    if (projected === undefined) {
+      // LIVE field rows with no parseable value ⇒ key unset (default-value
+      // rule, §9). A key with NO field rows AT ALL is only reachable here via
+      // a child change that just deleted the last one — the deletion won.
+      delete nextProperties[schema.name]
+    } else {
+      nextProperties[schema.name] = projected
+    }
   }
   // Idempotence short-circuit (§5 invariant 1).
   if (propertiesEqual(parent.properties, nextProperties)) return
@@ -295,12 +312,12 @@ export const reprojectOwnersForRowStates = async (
   lookups: ProjectionLookups,
   mode: ProjectionMode,
 ): Promise<void> => {
-  const affected = new Map<string, AffectedProjection>()
+  const affected: AffectedOwners = new Map()
   for (const row of rowStates) {
     await collectAffectedProjection(tx, affected, row, lookups)
   }
-  for (const projection of affected.values()) {
-    await reprojectParentField(tx, projection, lookups, mode)
+  for (const [parentId, fields] of affected) {
+    await reprojectOwner(tx, parentId, fields, mode)
   }
 }
 
