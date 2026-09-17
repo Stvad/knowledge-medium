@@ -4582,10 +4582,12 @@ export class Repo {
                   }
                   canonicalized.push(group)
                 }
-                // Union ACROSS field rows, the same rule the projection runs —
-                // and on the CANONICAL text, because the stored text is still
-                // in the old codec's grammar and would decode to nothing, so
-                // every member would key as unparseable and fold with nothing.
+                // Union ACROSS field rows, the same rule the projection runs.
+                // The group carries each member's CANONICAL text because that
+                // is what gets published; keying is unaffected either way,
+                // since a member only reached the group by decoding from its
+                // stored text and the canonical form round-trips to the same
+                // value (mutation-checked: keying on the stored text passes).
                 const canonicalContents = unionValuesAcrossFieldRows(schema, canonicalized)
                   .map(value => value.content)
                 if (parentUnconvertible > 0) {

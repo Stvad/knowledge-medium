@@ -688,10 +688,9 @@ export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
  * WITHIN one field row multiplicity is KEPT, because there two equal rows are
  * two members ({@link encodedPropertyValueToChildContents} says why).
  *
- * `rows` carries each value's content as the caller will PUBLISH it, which is
- * not always `row.content`: the re-encode pass canonicalizes a member first and
- * must compare the canonical text, since the stored text is still in the old
- * codec's grammar and would decode to nothing.
+ * Each entry carries the content the caller will PUBLISH, which is not always
+ * the row's stored text — the re-encode pass canonicalizes a member first, and
+ * passes the canonical form so what it unions is what it publishes.
  */
 export const unionValuesAcrossFieldRows = <T extends Pick<BlockData, 'id' | 'content'>>(
   schema: AnyPropertySchema | null,
