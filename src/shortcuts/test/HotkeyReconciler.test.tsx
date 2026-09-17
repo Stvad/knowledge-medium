@@ -221,7 +221,7 @@ const LayoutKeydownWhenActive = ({
  * Passive effects flush in tree order, so this effect running means the
  * reconciler's own install effect — the one that fills `installedRef` —
  * already ran for the same commit. Rendered before it, the probe would fire
- * a commit too early and be a proxy again.
+ * a commit too early.
  */
 const ReconciledContextProbe = ({
   context,
@@ -1904,17 +1904,12 @@ describe('HotkeyReconciler', () => {
         dispatchKeydown('s')
 
         // Fence on the POSTCONDITION — the modal binding installed — never on
-        // wall clock and never on a fixed number of React turns. The `h`
-        // keydown below is a ONE-SHOT event: dispatched before that binding
-        // exists it isn't late, it's lost (the reconciler routes it against
-        // the pre-activation binding set and nothing re-delivers it), so no
-        // wait afterwards can recover the modal handler. The two obvious
-        // proxies are both bets: a handler-side flag says only that the
-        // handler ran, and one `await act(async () => {})` says only that one
-        // macrotask elapsed — neither says the reconciler installed anything,
-        // and under full-suite CPU contention a bet on one turn is the bet
-        // that loses. `waitFor` retries across macrotask boundaries for
-        // however many turns React takes; `holdFired` is checked first only so
+        // wall clock and never on a fixed number of React turns, because the
+        // `h` keydown below is a ONE-SHOT event: dispatched before that
+        // binding exists it isn't late, it's lost (the reconciler routes it
+        // against the pre-activation binding set and nothing re-delivers it).
+        // Declined: a handler-side flag or a single `await act(async () => {})`
+        // — neither observes the install. `holdFired` is checked first only so
         // a timeout names the earliest missing precondition. Only the keydown
         // stays outside act(); that unwrapped keypress is what this test
         // exists to pin, and it mirrors the browser path where the next press
