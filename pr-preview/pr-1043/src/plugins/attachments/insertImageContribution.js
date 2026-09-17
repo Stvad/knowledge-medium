@@ -1,1 +1,1 @@
-import{df as e,ff as t,uf as n}from"../../../chunks/app-BfUu_FTz.js";export{n as insertImageAction,e as insertImageNormalModeAction,t as insertImageToolbarItem};
+import{df as e,ff as t,uf as n}from"../../../chunks/app-DG-lfGQ6.js";export{n as insertImageAction,e as insertImageNormalModeAction,t as insertImageToolbarItem};

@@ -1,1 +1,1 @@
-import{XN as e,ZN as t}from"../../../chunks/app-BfUu_FTz.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
+import{XN as e,ZN as t}from"../../../chunks/app-DG-lfGQ6.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
