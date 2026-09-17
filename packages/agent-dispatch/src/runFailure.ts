@@ -145,9 +145,11 @@ export const classifyRunFailure = (signals: RunFailureSignals): RunFailureClass 
  *
  *  Capped at 5 minutes ON PURPOSE. Each probe is a spawn that fails
  *  immediately without billing a token, so a long ceiling buys nothing —
- *  while a short one bounds how long the user waits after topping up
- *  credits or re-running `claude login` (the daemon's cooldown lives in
- *  memory, so an app-side "retry" gesture cannot clear it). */
+ *  while a short one bounds how long an UNTOUCHED queue waits after the
+ *  cause is fixed (credits topped up, `claude login` re-run). A user who
+ *  says so explicitly waits no time at all: that gesture stamps
+ *  `agent:asked-at`, and a stamp newer than the window takes the probe
+ *  (see `inInfraCooldown`). */
 export const RETRY_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000] as const
 
 export const retryBackoffMs = (consecutiveFailures: number): number =>

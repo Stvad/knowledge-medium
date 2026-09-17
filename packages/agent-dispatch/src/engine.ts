@@ -250,6 +250,14 @@ export const createEngine = (deps: EngineDeps) => {
    *  records the generation it launched under and may only clear THAT one. */
   const laneGeneration = new Map<string, number>()
   const generationOf = (lane: string): number => laneGeneration.get(lane) ?? 0
+  /** Arm a new window on `lane`; returns the generation that arming owns.
+   *  Every holder of an older token — a pending clear, a probe release — is
+   *  refused from here on. */
+  const armLane = (lane: string): number => {
+    const generation = generationOf(lane) + 1
+    laneGeneration.set(lane, generation)
+    return generation
+  }
 
   /** The failure domain a watcher shares with others: the credential its
    *  spawned runs bill, or the channel its deliveries go to. */
@@ -266,7 +274,7 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   const noteInfraFailure = (lane: string, failure: RunFailureClass, sourceLabel: string): number => {
-    laneGeneration.set(lane, generationOf(lane) + 1)
+    armLane(lane)
     const state = cooldownFor(lane)
     state.consecutiveFailures += 1
     const backoff = retryBackoffMs(state.consecutiveFailures)
@@ -306,6 +314,7 @@ export const createEngine = (deps: EngineDeps) => {
     const state = cooldowns.get(lane)
     if (!state || state.consecutiveFailures === 0) return () => {}
     const {until, armedAt} = state
+    const reserved = armLane(lane)
     state.until = now() + retryBackoffMs(state.consecutiveFailures)
     state.armedAt = now()
     // Returned so a launch that never became a run can hand the window back.
@@ -315,13 +324,17 @@ export const createEngine = (deps: EngineDeps) => {
     // run afterwards, and a reservation left behind for one of those makes
     // unrelated work on the lane wait out another backoff for a probe that
     // never happened. Restores rather than clears: a real failure may have
-    // armed a newer window in between, and that one must stand.
+    // armed a newer window in between, and that one must stand — which is
+    // what the GENERATION decides. Comparing the window's own fields cannot:
+    // `state` is the live map entry, so a failure in between moves them both
+    // and the release still reads as its own, restoring an expired window
+    // over the outage that just re-armed it.
     return () => {
+      if (generationOf(lane) !== reserved) return
       const current = cooldowns.get(lane)
-      if (current && current.armedAt === state.armedAt) {
-        current.until = until
-        current.armedAt = armedAt
-      }
+      if (!current) return
+      current.until = until
+      current.armedAt = armedAt
     }
   }
 
@@ -1187,7 +1200,6 @@ export const createEngine = (deps: EngineDeps) => {
 
   const tickQueryWatcher = async (watcher: QueryWatcher) => {
     const key = `query:${watcher.name}`
-    const laneAtLaunch = generationOf(laneOf(watcher))
     if (running.has(key)) return
 
     const rows = await graph.sqlAll(watcher.sql, watcher.params)
@@ -1221,6 +1233,11 @@ export const createEngine = (deps: EngineDeps) => {
     // (`running.has(key)`), but a SECOND query watcher on the same lane
     // would otherwise fire into the same outage in this very tick.
     reserveProbe(laneOf(watcher))
+    // Captured AFTER the reservation, which arms a generation of its own:
+    // a clear from this run is only valid while nothing newer has armed the
+    // lane, and the window this run is the probe for is its own (see
+    // `armLane`).
+    const laneAtLaunch = generationOf(laneOf(watcher))
 
     const batch = diff.newRows.slice(0, watcher.maxRowsPerFire)
     const overflow = diff.newRows.length - batch.length

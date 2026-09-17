@@ -3315,6 +3315,41 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(blocks.get('b-2')?.properties?.[PROPS.status]).toBeDefined()
   })
 
+  it('keeps the window a FAILED probe armed, instead of handing back the expired one', async () => {
+    // The probe is the one run allowed through a lapsed window, and it
+    // re-arms that window as it launches. When it then fails, the failure
+    // arms a LONGER one — and the reservation must not be handed back over
+    // it, or the lane reopens instantly and the next tick launches the
+    // backlog into the same outage.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}],
+      blocks: {'b-1': {content: '[[claude]] one'}, 'b-2': {content: '[[claude]] two'}},
+    })
+    const time = clock()
+    const runTask = vi.fn(async () => outOfCreditsRun())
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: mentionConfig({maxConcurrent: 1, runsPerHour: 100}),
+    })
+
+    await engine.tick()                 // b-1 runs out of credits — 30s window
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+
+    time.advance(30_001)                // it lapses; b-1 goes back out as the probe
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(2)
+
+    // The probe failed too, so the lane is cooling for 60s from now. b-2 is
+    // pending and unblocked by anything else, so it moves only if that
+    // window was lost.
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(2)
+    expect(blocks.get('b-2')?.properties?.[PROPS.status]).toBeUndefined()
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],
