@@ -26,21 +26,35 @@ export type RunEvent =
   | {kind: 'activity', label: string}
   | {kind: 'text', text: string}
 
-export interface AgentRunOptions {
-  claudeBin: string
+/** What the engine sets for a run whichever executor it dispatches to.
+ *  Declared once so the two executors' option types cannot drift. */
+export interface CommonRunOptions {
   prompt: string
   cwd?: string
-  allowedTools: string[]
-  mcpConfigPath?: string
   model?: string
-  /** Resume an existing session (thread follow-up). */
-  resumeSessionId?: string
   timeoutMs: number
   env?: NodeJS.ProcessEnv
+  /** Resume an existing session/thread (a follow-up in the same thread). */
+  resumeSessionId?: string
+  /** Billing mode (config.ts). 'api' skips the env scrub so the run can
+   *  use usage-based credentials; anything else (incl. undefined) scrubs
+   *  — the safe default, so a missing value never accidentally bills the
+   *  API. */
+  billing?: 'subscription' | 'api'
   /** Called for each parsed progress event as the run streams. Errors
    *  thrown by the handler are caught and logged — a broken consumer
    *  must never kill the run. */
   onEvent?: (event: RunEvent) => void
+  /** Abort the in-flight run (UI Stop). The engine holds the controller
+   *  and reads `signal.aborted` after the run to tell a cancel apart from
+   *  a timeout/crash. */
+  signal?: AbortSignal
+}
+
+export interface AgentRunOptions extends CommonRunOptions {
+  claudeBin: string
+  allowedTools: string[]
+  mcpConfigPath?: string
   /** Which CLI the engine should dispatch this run to (daemon.ts's
    *  runTask wiring); the engine itself stays executor-agnostic — this
    *  field just rides along with the rest of the run options. */
@@ -50,15 +64,6 @@ export interface AgentRunOptions {
   codexNetworkAccess?: boolean
   codexApprovalPolicy?: CodexApprovalPolicy
   codexApprovalsReviewer?: CodexApprovalsReviewer
-  /** Billing mode (config.ts). 'api' skips the env scrub so the run can
-   *  use usage-based credentials; anything else (incl. undefined) scrubs
-   *  — the safe default, so a missing value never accidentally bills the
-   *  API. */
-  billing?: 'subscription' | 'api'
-  /** Abort the in-flight run (UI Stop). The engine holds the controller
-   *  and reads `signal.aborted` after the run to tell a cancel apart from
-   *  a timeout/crash. */
-  signal?: AbortSignal
 }
 
 export interface AgentRunResult {
@@ -212,11 +217,10 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
       }
       // The finalized summary must only ADVANCE the cumulative text, never
       // rewrite it backwards: the partial-message deltas (always on) have
-      // already built the full running text, so re-emitting per-block here
-      // used to SHRINK it (the last block superseding the whole). Adopt the
-      // summary only when it's longer than what the deltas produced — that
-      // covers the (rare) case where deltas didn't fire, without ever
-      // losing streamed text on a multi-text-block message.
+      // already built the full running text, and re-emitting per-block would
+      // SHRINK it, the last block superseding the whole. Adopting the summary
+      // only when it is longer covers the rare case where deltas didn't fire
+      // without losing streamed text on a multi-text-block message.
       if (messageText.length > textAccumulator.length) {
         textAccumulator = messageText
         emit({kind: 'text', text: textAccumulator})
