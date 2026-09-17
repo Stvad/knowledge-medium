@@ -30,7 +30,7 @@ const MIGRATIONS_PAGE_NS = 'f1c0a7e2-5b3d-4a8e-9c1f-2d6b8e4a0c73'
  *  empty. Since creation is lazy (see above), a collision now fails the
  *  operator's migration rather than the workspace open; still worth not
  *  provoking, so the name is one nobody types. */
-const MIGRATIONS_ALIAS = 'System Migrations (km)'
+export const MIGRATIONS_PAGE_ALIAS = 'System Migrations (km)'
 
 export const migrationsPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, MIGRATIONS_PAGE_NS)
@@ -47,6 +47,6 @@ export const migrationsPageBlockId = (workspaceId: string): string =>
 export const getOrCreateMigrationsPage = (repo: Repo, workspaceId: string): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: MIGRATIONS_PAGE_NS,
-    alias: MIGRATIONS_ALIAS,
+    alias: MIGRATIONS_PAGE_ALIAS,
     markerType: MIGRATIONS_PAGE_TYPE,
   }, {skipUndo: true})
