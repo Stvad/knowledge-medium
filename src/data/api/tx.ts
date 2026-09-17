@@ -191,13 +191,14 @@ export interface Tx {
    *  miss a key set-then-unset in one tx); un-flipped it is a cell-only
    *  removal. No-op when the key is already absent.
    *
-   *  Identity is checked on the schema you PASS, not on whether the name has a
-   *  definition: `PropertySchemaIdentityError` means something ELSE claims the
-   *  name, or identity could not be established — never "this key is
-   *  unregistered". A plain schema for an unclaimed name IS writable in the
-   *  active workspace, so this is also how you clear a cell left behind under a
-   *  retired name. Same rule as `setProperty`; `requireWritablePropertySchema`
-   *  owns it. */
+   *  Identity is checked on the schema you PASS, so the error means different
+   *  things per kind. A HANDLE must find its own definition in this workspace's
+   *  snapshot, and throws when it is absent or stale. A PLAIN schema only has to
+   *  avoid a collision: an unclaimed name IS writable in the active workspace,
+   *  which is how ambient code-defined properties work and how you clear a cell
+   *  left behind under a name the code retired. So a throw on a plain schema
+   *  means something ELSE claims the name, never that the name is unregistered.
+   *  Same rule as `setProperty`; `requireWritablePropertySchema` owns it. */
   unsetProperty<T>(id: string, schema: PropertySchema<T>, opts?: TxWriteOpts): Promise<void>
 
   /** Atomically set and/or unset several properties in ONE bag rewrite. This
