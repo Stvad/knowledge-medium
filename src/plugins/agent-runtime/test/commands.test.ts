@@ -12,6 +12,9 @@ import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExten
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { __setCompileImplForTest, readApproval } from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
+import { valuePresetCoresFacet } from '@/data/facets'
+import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
+import { codecs, definePresetCore } from '@/data/api'
 import { ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
@@ -179,6 +182,76 @@ describe('agent runtime commands', () => {
     const installed = await env.repo.load(result.id)
     expect(installed?.properties[extensionNameProp.name]).toEqual('No description')
     expect(installed?.properties[extensionDescriptionProp.name]).toBeUndefined()
+  })
+
+  describe('value preset identity at install', () => {
+    // `demo:rating` starts out registered as a number, the way a running
+    // earlier version of this extension would have left it.
+    const addRatingDefinition = async (): Promise<void> => {
+      await getOrCreatePropertiesPage(env.repo, WS)
+      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: 'demo:rating'})
+    }
+    const registerNumberRating = () => {
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, 'installed-extension', [
+        definePresetCore<number>({id: 'demo:rating', build: () => codecs.number, defaultValue: 0}),
+      ])
+    }
+    const installStringRating = (commandId: string, extra: Record<string, unknown> = {}) =>
+      executeCommand({
+        commandId,
+        type: 'install-extension',
+        source: 'STUBBED', // ignored — compile is stubbed below
+        label: 'Ratings',
+        reload: false,
+        ...extra,
+      }, env.context) as Promise<InstallExtensionResult>
+    const stubCompileToStringRating = () => __setCompileImplForTest(async () => ({
+      default: valuePresetCoresFacet.of(
+        definePresetCore<string>({id: 'demo:rating', build: () => codecs.string, defaultValue: ''}),
+      ),
+    }))
+
+    it('refuses an install that re-types values stored under a preset it re-registers', async () => {
+      registerNumberRating()
+      await addRatingDefinition()
+      const restore = stubCompileToStringRating()
+      try {
+        await expect(installStringRating('install-preset-refuse'))
+          .rejects.toThrow(/codec type "number" -> codec type "string"/)
+      } finally {
+        restore()
+      }
+
+      // The refusal wrote nothing: no extension block, and in particular no
+      // source change that would un-pin an approved version on this device.
+      const blocks = await env.repo.query.findExtensionBlocks({workspaceId: WS}).load() as BlockData[]
+      expect(blocks).toEqual([])
+    })
+
+    it('installs anyway under allowPresetChange, and reports what it re-typed', async () => {
+      registerNumberRating()
+      await addRatingDefinition()
+      const restore = stubCompileToStringRating()
+      try {
+        const result = await installStringRating('install-preset-allow', {allowPresetChange: true})
+        expect(result.presetChanges?.map(change => change.presetId)).toEqual(['demo:rating'])
+        expect(result.presetChanges?.[0]?.definitions.map(d => d.name)).toEqual(['demo-rating'])
+        expect(await env.repo.load(result.id)).not.toBeNull()
+      } finally {
+        restore()
+      }
+    })
+
+    it('installs a preset id nothing is registered under', async () => {
+      const restore = stubCompileToStringRating()
+      try {
+        const result = await installStringRating('install-preset-new')
+        expect(result.presetChanges).toBeUndefined()
+        expect(result.inserted).toBe(true)
+      } finally {
+        restore()
+      }
+    })
   })
 
   it('verify reports actions reached via FacetContribution.enables', async () => {

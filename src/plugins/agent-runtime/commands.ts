@@ -50,7 +50,15 @@ import {
   revokeExtensionApproval,
 } from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
+import { valuePresetCoresFacet } from '@/data/facets.js'
+import type { AnyValuePresetCore } from '@/data/api'
+import { v4 as uuidv4 } from 'uuid'
 import { lintExtensionSource } from './extensionLint.ts'
+import {
+  findPresetIdentityConflicts,
+  presetIdentityRefusal,
+  type PresetIdentityConflict,
+} from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
@@ -233,16 +241,32 @@ const isExtensionContribution = (source: unknown, blockId: string): boolean => {
   return source === prefix || source.startsWith(`${prefix}/`)
 }
 
-const verifyExtensionBlock = async (
+/** One extension's contributions, resolved on their own.
+ *
+ *  Every install resolves the CANDIDATE source this way before writing it —
+ *  the preset-identity check has no other way to see what codecs the new
+ *  source would register (see `presetIdentity.ts`) — and `--verify` reports
+ *  from the same resolution rather than paying for a second one.
+ *
+ *  `block` is the row the source WOULD produce, which on an update is the
+ *  stored row with its new content and on a first install is a row that does
+ *  not exist yet. Only `id`, `content` and `workspaceId` are read here.
+ *
+ *  Note that this EXECUTES the source's top-level module code, outside the
+ *  #67 approval gate, on every install rather than only under `--verify`. The
+ *  source arrives from the paired bridge — the same authorized local channel
+ *  that re-pins approval below — so running it is no more privileged than the
+ *  caller running it directly; what it must not do is run without the caller
+ *  asking, which is why nothing here touches a block the caller did not
+ *  supply source for. */
+const resolveExtensionInIsolation = async (
   repo: Repo,
   context: AgentRuntimeContext,
-  blockId: string,
-): Promise<ExtensionVerificationResult> => {
-  const block = await repo.load(blockId)
-  if (!block) {
-    throw new Error(`Extension block ${blockId} not found after install`)
-  }
-
+  block: BlockData,
+): Promise<{
+  runtime: Awaited<ReturnType<typeof resolveAppRuntime>>
+  errors: ExtensionVerificationResult['errors']
+}> => {
   const errors: ExtensionVerificationResult['errors'] = []
   const singleBlockRepo = {
     query: {
@@ -287,6 +311,27 @@ const verifyExtensionBlock = async (
     },
   )
 
+  return {runtime: verificationRuntime, errors}
+}
+
+/** The value preset cores this extension itself registers. Filtered by
+ *  contribution source rather than read off the facet map: the map is
+ *  last-wins by preset id, so an extension contributing a core twice under one
+ *  id would otherwise be compared on only one of them. */
+const extensionPresetCores = (
+  resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
+  blockId: string,
+): AnyValuePresetCore[] =>
+  resolution.runtime.contributionsById(valuePresetCoresFacet.id)
+    .filter(contribution => isExtensionContribution(contribution.source, blockId))
+    .map(contribution => contribution.value as AnyValuePresetCore)
+
+const describeVerification = (
+  resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
+  block: BlockData,
+): ExtensionVerificationResult => {
+  const {runtime: verificationRuntime, errors} = resolution
+  const blockId = block.id
   const renderersContribs = verificationRuntime.contributionsById(blockRenderersFacet.id)
   const appMountsContribs = verificationRuntime.contributionsById(appMountsFacet.id)
   const appEffectsContribs = verificationRuntime.contributionsById(appEffectsFacet.id)
@@ -1035,6 +1080,58 @@ const installRuntimeExtension = async (
       }))?.block ?? null
     : null
 
+  // Mint a first install's id HERE rather than inside `tx.create`, so the
+  // candidate row below — and every contribution source, error and warning
+  // resolved from it — already carries the id the block will be stored under.
+  // A synthetic stand-in would put a nonexistent id in `--verify`'s output.
+  const targetId = existing?.id ?? (input.id?.trim() || uuidv4())
+  // The row this source WOULD produce. Only `id`, `content` and `workspaceId`
+  // are read from it; the rest is what a first install's row will hold once
+  // the tx below places it under its parent.
+  const candidate: BlockData = existing
+    ? {...existing, content: source}
+    : {
+        id: targetId,
+        workspaceId,
+        parentId: null,
+        orderKey: '',
+        content: source,
+        properties: {},
+        references: [],
+        createdAt: 0,
+        updatedAt: 0,
+        userUpdatedAt: 0,
+        createdBy: repo.user.id,
+        updatedBy: repo.user.id,
+        deleted: false,
+      }
+  const resolution = await resolveExtensionInIsolation(repo, context, candidate)
+
+  // BEFORE the write, and before the re-pin + reload below: a refusal must
+  // leave nothing behind. Writing the source and then refusing would change
+  // the block's hash, which un-pins the approved version on this device and
+  // stops a working extension dead — a silent side effect of saying no.
+  const presetConflicts = await findPresetIdentityConflicts(
+    repo,
+    workspaceId,
+    extensionPresetCores(resolution, targetId),
+  )
+  if (presetConflicts.length > 0 && !input.allowPresetChange) {
+    throw new Error(presetIdentityRefusal(
+      presetConflicts,
+      label ? JSON.stringify(label) : targetId,
+      workspaceId,
+    ))
+  }
+  // Reached only when the override let a conflict through, so the result
+  // records what was overridden rather than leaving it in a refusal nobody
+  // kept.
+  const presetChanges: {presetChanges?: PresetIdentityConflict[]} =
+    presetConflicts.length > 0 ? {presetChanges: presetConflicts} : {}
+  const verification = input.verify
+    ? describeVerification(resolution, candidate)
+    : undefined
+
   if (existing) {
     // Was THIS device already running this block? If so, the trust decision
     // has been made and the update arrives through the same authorized local
@@ -1054,14 +1151,6 @@ const installRuntimeExtension = async (
       })
       await repo.addTypeInTx(tx, existing.id, EXTENSION_TYPE, {}, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
-    // Run verify *before* refreshAppRuntime so the verify's isolated
-    // facet resolution doesn't contend with the app-wide runtime
-    // rebuild that the refresh kicks off. Without this ordering, an
-    // install --verify against a large workspace times out the bridge
-    // poll waiting for resolveAppRuntime to settle.
-    const verification = input.verify
-      ? await verifyExtensionBlock(repo, context, existing.id)
-      : undefined
     if (wasApproved) {
       // Best-effort: a source that no longer transpiles can't be pinned, and
       // that failure belongs to verify/reload, not to the install itself.
@@ -1079,6 +1168,7 @@ const installRuntimeExtension = async (
       reloaded,
       ...(runState ?? {}),
       ...(hint ? {hint} : {}),
+      ...presetChanges,
       ...(verification ? {verification} : {}),
     }
   }
@@ -1088,9 +1178,9 @@ const installRuntimeExtension = async (
     ? null
     : await repo.query.aliasLookup({workspaceId, alias: agentExtensionsParentAlias}).load() as BlockData | null
 
-  // Already validated raw at the top of the function; the trim is now only
-  // the `undefined`/`''` → "no id supplied, mint one" normalization.
-  let installedId = input.id?.trim() || ''
+  // Minted (or taken from the caller) above, where the candidate row the
+  // preset check resolves from needed it.
+  const installedId = targetId
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     let rootId = parentIdFromInput ?? defaultParent?.id ?? null
@@ -1140,8 +1230,8 @@ const installRuntimeExtension = async (
 
     const siblings = await tx.childrenOf(parentId, workspaceId)
     const properties = extensionBlockProperties(undefined, label, description)
-    installedId = await tx.create({
-      id: installedId || undefined,
+    await tx.create({
+      id: installedId,
       workspaceId,
       parentId,
       orderKey: keyAtEnd(siblings.at(-1)?.orderKey ?? null),
@@ -1151,9 +1241,6 @@ const installRuntimeExtension = async (
     await repo.addTypeInTx(tx, installedId, EXTENSION_TYPE, {}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? 'unnamed'}`})
 
-  const verification = input.verify
-    ? await verifyExtensionBlock(repo, context, installedId)
-    : undefined
   const reloaded = input.reload !== false
   if (reloaded) refreshAppRuntime()
   // A first install grants no trust and sets no intent, so it does NOT run
@@ -1171,6 +1258,7 @@ const installRuntimeExtension = async (
     ...(runState && runStateHint(runState, label ? `"${label}"` : installedId)
       ? {hint: runStateHint(runState, label ? `"${label}"` : installedId)}
       : {}),
+    ...presetChanges,
     ...(verification ? {verification} : {}),
   }
 }
@@ -1972,6 +2060,9 @@ export const executeCommand = async (
         verify: command.verify === undefined
           ? undefined
           : Boolean(command.verify),
+        allowPresetChange: command.allowPresetChange === undefined
+          ? undefined
+          : Boolean(command.allowPresetChange),
       })
 
     case 'set-extension-enabled':

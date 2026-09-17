@@ -221,6 +221,7 @@ export const installExtensionCommandSchema = z.looseObject({
   id: z.string().optional(),
   reload: z.boolean().optional(),
   verify: z.boolean().optional(),
+  allowPresetChange: z.boolean().optional(),
   ...commandIdField,
 })
 
@@ -671,8 +672,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: false,
   },
   'install-extension': {
-    usage: 'kmagent install-extension [--verify] [--description <text>] <file> [label]',
-    description: 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext.',
+    usage: 'kmagent install-extension [--verify] [--allow-preset-change] [--description <text>] <file> [label]',
+    description: 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext. REFUSES when a value preset the extension registers would build a different codec under an id already registered here — that re-types every value stored under it with no row edit to migrate from, so nothing downstream repairs it; the refusal names what moved and the definitions and cell counts at stake. --allow-preset-change installs anyway and reports what it changed.',
     readOnly: false,
   },
   'enable-extension': {

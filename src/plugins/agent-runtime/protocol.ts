@@ -98,7 +98,15 @@ export interface InstallExtensionInput {
   id?: string
   reload?: boolean
   verify?: boolean
+  /** Install anyway when a value preset this extension registers would re-type
+   *  values already stored under its id. See `presetIdentity.ts` — the refusal
+   *  names what moved and how many cells are stored under it, and this is the
+   *  caller saying those values are disposable. */
+  allowPresetChange?: boolean
 }
+
+export type {PresetIdentityConflict} from './presetIdentity.ts'
+import type {PresetIdentityConflict} from './presetIdentity.ts'
 
 export interface ExtensionVerificationError {
   blockId: string
@@ -159,6 +167,10 @@ export interface InstallExtensionResult {
   running?: boolean
   /** What to do about `running: false`. */
   hint?: string
+  /** Value presets this install re-typed, present only when
+   *  `allowPresetChange` let it through — so the override records what it
+   *  overrode. Absent means the install found no such conflict. */
+  presetChanges?: PresetIdentityConflict[]
   verification?: ExtensionVerificationResult
 }
 

@@ -52,8 +52,12 @@
  *    answer for renames.
  *  - a value preset whose `build` starts returning a different codec under the
  *    same preset id: no row edit at all, so nothing fires. Already a
- *    frozen-identity violation (`seedIdentityLedger.ts`, #797); catching it
- *    where it is DONE is #1022.
+ *    frozen-identity violation (`seedIdentityLedger.ts`, #797). Caught where it
+ *    is DONE instead: the ledger's test for a code-owned core, and for a core a
+ *    runtime extension registers, the install-time refusal in
+ *    `@/plugins/agent-runtime/presetIdentity` (#1022) — which sees the change
+ *    only while the core it replaces is registered on that device, so an
+ *    extension re-installed while not running still lands here.
  *  - a re-type in a workspace with no field rows yet, which fans nothing out
  *    and is remembered by nothing for after the flip. The flip skips any key
  *    whose cell will not decode under the current codec and reports the block,
