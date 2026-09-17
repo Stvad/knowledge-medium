@@ -1,0 +1,1 @@
+import{cw as e,gt as t,sw as n}from"../../../chunks/app-CGh9AT7h.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
