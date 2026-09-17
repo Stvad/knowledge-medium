@@ -104,7 +104,14 @@ const createRunWatch = () => {
  *  rerun as a duplicate. Hence one derivation and three call sites, not
  *  three derivations that could disagree. */
 const runIdentity = (sourceId: string, block: BlockView | undefined, attempt: number): string => {
-  const askedAt = block?.properties?.[PROPS.askedAt]
+  // `agent:asked-at` separates runs a PERSON asked for — EXCEPT on a task
+  // still marked `queued`. That is a deferral the app expedited rather than
+  // re-ran, and it may have work in flight that was deferred only because an
+  // acknowledgement was lost; minting a fresh identity there walks past the
+  // receiver's dedup and dispatches a second billed run beside the first.
+  // Expediting deliberately leaves the status in place to say so.
+  const deferred = block?.properties?.[PROPS.status] === 'queued'
+  const askedAt = deferred ? undefined : block?.properties?.[PROPS.askedAt]
   return `${sourceId}:${attempt}:${typeof askedAt === 'number' ? askedAt : 0}`
 }
 
@@ -295,11 +302,27 @@ export const createEngine = (deps: EngineDeps) => {
    *
    *  Also what bounds a bulk "Retry all failed": moving `armedAt` forward
    *  spends the asked-at bypass below for every task but the first. */
-  const reserveProbe = (lane: string) => {
+  const reserveProbe = (lane: string): (() => void) => {
     const state = cooldowns.get(lane)
-    if (!state || state.consecutiveFailures === 0) return
+    if (!state || state.consecutiveFailures === 0) return () => {}
+    const {until, armedAt} = state
     state.until = now() + retryBackoffMs(state.consecutiveFailures)
     state.armedAt = now()
+    // Returned so a launch that never became a run can hand the window back.
+    // The reservation has to happen at the DECISION — that is what stops a
+    // second probe in the same scan — but the checks that can still bail
+    // (block gone, no longer pending, a Stop, a session already running)
+    // run afterwards, and a reservation left behind for one of those makes
+    // unrelated work on the lane wait out another backoff for a probe that
+    // never happened. Restores rather than clears: a real failure may have
+    // armed a newer window in between, and that one must stand.
+    return () => {
+      const current = cooldowns.get(lane)
+      if (current && current.armedAt === state.armedAt) {
+        current.until = until
+        current.armedAt = armedAt
+      }
+    }
   }
 
   const inInfraCooldown = (lane: string, source?: BlockView): boolean => {
@@ -428,8 +451,13 @@ export const createEngine = (deps: EngineDeps) => {
 
   const processMention = async (
     watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
-    quietExempt: boolean,
+    quietExempt: boolean, releaseProbe: () => void = () => {},
   ) => {
+    /** Nothing spawned: give back the spend slot AND the probe reservation. */
+    const abandonLaunch = () => {
+      refundLaunch(launchStamp)
+      releaseProbe()
+    }
     const {runner} = watcher
     // Captured before anything can fail: a clear from this run is only valid
     // while the lane has not been armed by a newer one (see clearInfraCooldown).
@@ -480,7 +508,7 @@ export const createEngine = (deps: EngineDeps) => {
       log(`[${watcher.name}] could not prepare ${sourceId}: ${reason}`)
       return null
     })
-    if (!prepared) return refundLaunch(launchStamp)
+    if (!prepared) return abandonLaunch()
     const {block, ancestorBlocks, decision} = prepared
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
@@ -489,7 +517,7 @@ export const createEngine = (deps: EngineDeps) => {
       ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
       : null
     const sessionKey = session ? `session:${session}` : null
-    if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
+    if (sessionKey && running.has(sessionKey)) return abandonLaunch()
     if (sessionKey) running.set(sessionKey, Promise.resolve())
 
     // A fresh run's session id is unknown until mid-run. The instant it is
@@ -626,7 +654,7 @@ export const createEngine = (deps: EngineDeps) => {
       // sender reports `dispatched: 'no'` only for a connection that never
       // opened, and anything it cannot vouch for keeps its slot.
       if ((thrown as {dispatched?: string} | undefined)?.dispatched !== 'unknown') {
-        refundLaunch(launchStamp)
+        abandonLaunch()
       }
       // DURABLE STATE FIRST, note second. The note is keyed by the attempt
       // number this write rolls back, so if the note lands and this does
@@ -686,7 +714,7 @@ export const createEngine = (deps: EngineDeps) => {
       const beforeStatus = beforeClaim?.properties?.[PROPS.status]
       if (beforeStatus === 'done' || beforeStatus === 'error') {
         log(`[${watcher.name}] not claiming ${sourceId} — it finished as ${beforeStatus} first`)
-        return refundLaunch(launchStamp)
+        return abandonLaunch()
       }
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
@@ -711,7 +739,7 @@ export const createEngine = (deps: EngineDeps) => {
       const props = verified?.properties ?? {}
       if (props[PROPS.watcher] !== watcher.name || props[PROPS.updatedAt] !== claimStamp) {
         log(`[${watcher.name}] lost claim race on ${sourceId} — backing off`)
-        refundLaunch(launchStamp)
+        abandonLaunch()
         return
       }
 
@@ -1149,9 +1177,11 @@ export const createEngine = (deps: EngineDeps) => {
       }
       // Budget is consumed at the launch DECISION (synchronously) — the
       // async task body would record too late to gate this same loop.
-      reserveProbe(laneOf(watcher))
+      const releaseProbe = reserveProbe(laneOf(watcher))
       const launchStamp = recordLaunch()
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt))
+      launch(source.id, () => processMention(
+        watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt, releaseProbe,
+      ))
     }
   }
 

@@ -129,9 +129,25 @@ export const createStateStore = (filePath: string): StateStore => {
     getDeliveryGeneration: async name => (await load()).deliveryGenerations[name] ?? 0,
     commitDelivery: async (name, ids) => {
       const state = await load()
+      // RESTORED if the write fails. The cache is what the next tick reads,
+      // so advancing it before the disk write succeeded left the daemon
+      // believing rows were committed while disk still said otherwise:
+      // nothing re-attempted the persist, and a restart re-delivered the
+      // acknowledged query under its OLD id — past the receiver's dedup if
+      // that had been forgotten too.
+      const previousGeneration = state.deliveryGenerations[name]
+      const previousCursor = state.queryCursors[name]
       state.deliveryGenerations[name] = (state.deliveryGenerations[name] ?? 0) + 1
       state.queryCursors[name] = ids
-      await persist(state)
+      try {
+        await persist(state)
+      } catch (error) {
+        if (previousGeneration === undefined) delete state.deliveryGenerations[name]
+        else state.deliveryGenerations[name] = previousGeneration
+        if (previousCursor === undefined) delete state.queryCursors[name]
+        else state.queryCursors[name] = previousCursor
+        throw error
+      }
     },
     setCursor: async (name, ids) => {
       const state = await load()

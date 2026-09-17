@@ -42,7 +42,14 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       (seed.backlinksByTarget?.[pageId.replace(/^page:/, '')] ?? seed.backlinks ?? []).map(({id, deepLink}) => ({
         id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: ['content'],
       }))),
-    getBlock: async id => blocks.get(id) ?? null,
+    // A SNAPSHOT, like the bridge's: it answers with deserialized JSON, so a
+    // later write cannot reach back and change what an earlier read returned.
+    // Handing out the live object let a claim mutate a caller's pre-claim
+    // block and made correct code look wrong (and would hide the reverse).
+    getBlock: async id => {
+      const target = blocks.get(id)
+      return target ? {...target, properties: {...target.properties}} : null
+    },
     ancestors: async id => {
       const chain: BlockData[] = []
       let current = blocks.get(id)
@@ -3224,6 +3231,88 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
 
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
     expect(state.launches).toEqual([])   // the slot comes back, nothing spawned
+  })
+
+  it('keeps an EXPEDITED deferral on its original delivery id', async () => {
+    // The deferral may exist only because an acknowledgement was lost while
+    // work was already running. A fresh id walks past the receiver's dedup
+    // and dispatches a second billed run beside the first, so expediting
+    // must stay the same logical delivery.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const time = clock()
+    let listenerDown = true
+    const deliverToChannel = vi.fn(async () => {
+      if (listenerDown) throw new Error('connection refused')
+    })
+    const engine = engineWith({
+      graph, deliverToChannel, now: time.now,
+      config: parseConfig({
+        runsPerHour: 100,
+        watchers: [{kind: 'backlinks', name: 'ambient', target: 'claude', quietMs: 0, delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('queued')
+
+    // What the app's "Retry now" writes for a DEFERRED task: the clock goes,
+    // the status and attempts stay, asked-at is stamped.
+    listenerDown = false
+    time.advance(1_000)
+    const props = blocks.get('b-1')!.properties!
+    blocks.get('b-1')!.properties = {...props, [PROPS.retryAfter]: 0, [PROPS.askedAt]: time.now()}
+
+    await engine.tick()
+    await engine.drain()
+
+    const ids = deliverToChannel.mock.calls.map(call => (call[0] as {meta: {event_id?: string}}).meta.event_id)
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).toBeTruthy()
+    expect(ids[1]).toBe(ids[0])
+  })
+
+  it('hands the probe window back when the reserved launch never runs', async () => {
+    // The reservation happens at the DECISION — that is what stops a second
+    // probe in the same scan — but the checks that can still bail run after
+    // it. A reservation left behind for one of those makes unrelated work on
+    // the lane wait out another full backoff for a probe that never happened.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}],
+      blocks: {'b-1': {content: '[[claude]] vanishes'}, 'b-2': {content: '[[claude]] two'}},
+    })
+    const time = clock()
+    const runTask = vi.fn(async () => outOfCreditsRun())
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: mentionConfig({maxConcurrent: 1, runsPerHour: 100}),
+    })
+
+    await engine.tick()               // b-1 runs out of credits — lane cools
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+
+    // The window lapses, b-1 is reserved as the probe — and then disappears
+    // before the run can claim it, so nothing launches and no run result
+    // exists to clear the window it just re-armed.
+    time.advance(10 * 60_000)
+    const realGetBlock = graph.getBlock
+    graph.getBlock = async id => (id === 'b-1' ? null : realGetBlock(id))
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)   // nothing ran
+
+    // It is gone for good now, so it stops consuming the scan's one slot.
+    blocks.delete('b-1')
+
+    // Next tick, still inside what that reservation would have covered: b-2
+    // moves only because the unused reservation was given back.
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-2')?.properties?.[PROPS.status]).toBeDefined()
   })
 
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {

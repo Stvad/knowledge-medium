@@ -63,7 +63,13 @@ export const retryAgentTask = async (block: Block): Promise<boolean> => {
     // against a possibly-stale snapshot, and the daemon may have claimed
     // the block since. Resetting a live claim would orphan its run.
     if (!isRequeueableStatus(fresh.properties[AGENT_PROPS.status])) return
-    await requeueAgentTask(tx, block.id, {clearTerminalState: true})
+    // A DEFERRED task is expedited, not re-run: it may still have work in
+    // flight that the daemon deferred only because the acknowledgement was
+    // lost, and re-running it would be a second billed run beside the first.
+    // Its status and attempt count survive so the daemon keeps treating it
+    // as the same logical run; only the clock it is waiting out is dropped.
+    const deferred = fresh.properties[AGENT_PROPS.status] === 'queued'
+    await requeueAgentTask(tx, block.id, {mode: deferred ? 'expedite' : 'rerun'})
     requeued = true
   }, {scope: ChangeScope.BlockDefault, description: 'retry agent task'})
 
@@ -105,7 +111,7 @@ export const retryFailedAgentTasks = async (repo: Repo): Promise<number> => {
       // or a Stop may have landed since and parked it as cancelled.
       if (fresh.properties[AGENT_PROPS.status] !== 'error') continue
       if (fresh.properties[AGENT_PROPS.error] === AGENT_CANCELLED_ERROR) continue
-      await requeueAgentTask(tx, row.id, {clearTerminalState: true})
+      await requeueAgentTask(tx, row.id, {mode: 'rerun'})   // the sweep only selects `error`
       requeued.push(row.id)
     }
   }, {scope: ChangeScope.BlockDefault, description: 'retry failed agent tasks'})

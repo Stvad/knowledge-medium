@@ -85,9 +85,16 @@ describe('retryAgentTask', () => {
     expect((await new Block(repo, 'codex-task').load())!.content).toBe('[[codex]] fix the flake')
   })
 
-  it('clears the retry clock on a DEFERRED task so it goes now, not on the daemon schedule', async () => {
+  it('expedites a DEFERRED task — drops its clock, KEEPS it the same run', async () => {
+    // "Retry now" on a deferral means sooner, not again. The deferral may
+    // exist only because an acknowledgement was lost while work was already
+    // running, so the status and attempt count survive: that is what tells
+    // the daemon this is the same logical run, and keeps a channel delivery
+    // on the event id the receiver already knows. A fresh identity there
+    // dispatches a second billed run beside the first.
     const block = await createBlock('deferred', {
       [AGENT_PROPS.status]: 'queued',
+      [AGENT_PROPS.attempts]: 2,
       [AGENT_PROPS.retryAfter]: Date.now() + 300_000,
       [AGENT_PROPS.error]: 'out of credits / usage limit reached — waiting to retry',
     })
@@ -95,8 +102,24 @@ describe('retryAgentTask', () => {
     expect(await retryAgentTask(block)).toBe(true)
 
     const props = await propsOf('deferred')
+    expect(props[AGENT_PROPS.retryAfter]).toBeUndefined()   // the clock goes
+    expect(props[AGENT_PROPS.status]).toBe('queued')        // the run identity stays
+    expect(props[AGENT_PROPS.attempts]).toBe(2)
+    expect(props[AGENT_PROPS.askedAt]).toBeTypeOf('number') // still bypasses the cooldown
+  })
+
+  it('re-runs a TERMINAL task — clears the lot, so it gets a fresh identity', async () => {
+    const block = await createBlock('failed', {
+      [AGENT_PROPS.status]: 'error',
+      [AGENT_PROPS.attempts]: 2,
+      [AGENT_PROPS.error]: 'exit 1: boom',
+    })
+
+    expect(await retryAgentTask(block)).toBe(true)
+
+    const props = await propsOf('failed')
     expect(props[AGENT_PROPS.status]).toBeUndefined()
-    expect(props[AGENT_PROPS.retryAfter]).toBeUndefined()
+    expect(props[AGENT_PROPS.attempts]).toBeUndefined()
   })
 
   it('refuses to reset a RUNNING task — that would orphan the daemon\'s live run', async () => {

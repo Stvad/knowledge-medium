@@ -60,7 +60,7 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
     // reintroducing the clobber setProperties exists to avoid.
     await tx.update(block.id, {content: contentWithAgentMention(liveContent ?? fresh.content ?? '')})
     await requeueAgentTask(tx, block.id, {
-      clearTerminalState: isRequeueableStatus(fresh.properties[AGENT_PROPS.status]),
+      mode: isRequeueableStatus(fresh.properties[AGENT_PROPS.status]) ? 'rerun' : 'ask',
     })
     wrote = true
   }, {scope: ChangeScope.BlockDefault, description: 'ask agent'})
