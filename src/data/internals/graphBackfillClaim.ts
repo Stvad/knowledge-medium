@@ -134,13 +134,11 @@ export const readGraphBackfillClaim = async (
 /** Is a run of `backfillId` in flight for this workspace, as the caller's own
  *  view of `blocks` has it?
  *
- *  Asked by anything that must not write while a once-per-graph pass is midway
- *  through the same data — today the definition-change refusal
- *  (`propertyDefinitionChangeProcessor`), which asks it INSIDE the user's
- *  transaction so the answer is that transaction's own. The claim lives in
- *  SYNCED data, so a peer device that has received the claim row refuses too;
- *  one that has not yet is the same staleness every other reader of this row
- *  has. */
+ *  Asked by the commit pipeline's migration lock, once per transaction whose
+ *  scope the lock refuses, so a pass that started a moment ago is seen by the
+ *  next write rather than the next reload. The claim lives in SYNCED data, so a
+ *  peer device that has received the claim row refuses too; one that has not yet
+ *  is the same staleness every other reader of this row has. */
 export const isGraphBackfillClaimActive = async (
   db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
   workspaceId: string,
@@ -170,6 +168,22 @@ export const STRANDED_CLAIM_RECOVERY =
   'if nothing is running, check the claim block on the '
   + `"${MIGRATIONS_PAGE_ALIAS}" page and delete it to release the pass`
 
+/** Code carried by the refusal `repo.tx` throws while a claim is in flight, so
+ *  a toast contribution can claim it. */
+export const GRAPH_MIGRATION_LOCKED = 'graph.migration-running'
+
+/** What an operator is told when a write is refused because the migration owns
+ *  the graph.
+ *
+ *  Says what is happening, that it is temporary, and the one thing to check if
+ *  it is NOT temporary, because a lock with no stated way out reads as a bug in
+ *  the app rather than a pass to wait for. */
+export const GRAPH_MIGRATION_LOCKED_MESSAGE =
+  'The properties migration is running on this workspace, so the graph is not '
+  + 'accepting edits: it is rewriting every block\'s properties against a plan '
+  + 'it fixed when it started, and a change made behind it would be converted '
+  + `under a plan that no longer describes it. Wait for it to finish — ${STRANDED_CLAIM_RECOVERY}.`
+
 // ---------------------------------------------------------------------------
 // The seam implementation
 // ---------------------------------------------------------------------------
@@ -180,7 +194,12 @@ export interface GraphBackfillClaimDeps {
   readonly db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>}
   tx<R>(
     fn: (tx: Tx) => Promise<R>,
-    opts: {scope: ChangeScope; skipUndo?: boolean; description?: string},
+    opts: {
+      scope: ChangeScope
+      skipUndo?: boolean
+      graphMigrationWrite?: boolean
+      description?: string
+    },
   ): Promise<R>
   /** Who holds the claim. LOAD-BEARING: `decideClaim` returns `proceed` only
    *  when a live claim names this id, and `releaseClaim` refuses unless it
@@ -216,6 +235,11 @@ export const createGraphBackfillClaim = (
     // Ensure our own parent rather than trusting bootstrap ordering: a claim
     // that silently fails to write reads as "unclaimed" on every device,
     // which is the one outcome that turns this into a duplicated pass.
+    //
+    // Exempt from the migration lock like the claim row itself: this runs
+    // before every `tryClaim`, including one a PEER's in-flight claim is about
+    // to decline, and a lock refusal here would report "could not claim" for a
+    // graph that is merely busy.
     await deps.ensureHome(workspaceId)
 
     const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId, workspaceId), deps.claimantId)
@@ -315,7 +339,7 @@ export const createGraphBackfillClaim = (
         properties: claimProperties,
       }, {systemMint: true})
       return 'minted'
-    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
+    }, {scope: ChangeScope.BlockDefault, skipUndo: true, graphMigrationWrite: true,
         description: `claim backfill ${backfillId}`})
 
     // No convergence wait. Under an operator trigger there is nothing to
@@ -346,7 +370,7 @@ export const createGraphBackfillClaim = (
       await tx.update(claimId, {
         properties: {...row.properties, [migrationCompletedAtProp.name]: Date.now()},
       })
-    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
+    }, {scope: ChangeScope.BlockDefault, skipUndo: true, graphMigrationWrite: true,
         description: `complete backfill ${backfillId}`})
   },
 
@@ -375,7 +399,7 @@ export const createGraphBackfillClaim = (
       // that was refused — now reaches this delete with the prior completion
       // stamp already overwritten. Same residual, more ways in.
       await tx.delete(claimId)
-    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
+    }, {scope: ChangeScope.BlockDefault, skipUndo: true, graphMigrationWrite: true,
         description: `release backfill claim ${backfillId}`})
   },
 })

@@ -41,15 +41,31 @@ export const isChangeScope = (value: unknown): value is ChangeScope =>
  *  longer a routing-time downgrade. */
 export type TxSource = 'user'
 
-/** Read-only behavior per scope: either reject the write outright or let
- *  it proceed (the upload will still be attempted; server-side RLS or FK
- *  errors land in the rejection quarantine). */
-export type ReadOnlyScopeBehavior = 'reject' | 'allow'
+/** What a write-admission gate does with a scope: reject the write outright,
+ *  or let it proceed (the upload will still be attempted; server-side RLS or
+ *  FK errors land in the rejection quarantine). */
+export type ScopeGateBehavior = 'reject' | 'allow'
 
 export interface ChangeScopePolicy {
   readonly undoable: boolean
   readonly source: TxSource
-  readonly readOnly: ReadOnlyScopeBehavior
+  readonly readOnly: ScopeGateBehavior
+  /** Behavior while a once-per-graph data migration holds this workspace's
+   *  claim (`graphBackfillClaim`).
+   *
+   *  Its own column, though it agrees with `readOnly` on three scopes.
+   *  Read-only is about this device's ROLE and admits nothing that writes
+   *  documents; the migration lock is about the graph being rewritten
+   *  underneath, so it admits the derivation that rewrite produces
+   *  (`References`) and refuses program-authored records the app can do
+   *  without (`Automation`) — the pass re-sweeps until a sweep materializes
+   *  nothing, so every row written while it runs is another sweep, and it
+   *  gives up after a bounded number of them.
+   *
+   *  A migration's OWN writes are exempted per transaction rather than by
+   *  scope (`RepoTxOptions.graphMigrationWrite`): the pass writes documents
+   *  under `BlockDefault` on purpose, so no scope separates it from the user. */
+  readonly graphMigration: ScopeGateBehavior
 }
 
 export const CHANGE_SCOPE_POLICIES = {
@@ -57,26 +73,31 @@ export const CHANGE_SCOPE_POLICIES = {
     undoable: true,
     source: 'user',
     readOnly: 'reject',
+    graphMigration: 'reject',
   },
   [ChangeScope.UiState]: {
     undoable: false,
     source: 'user',
     readOnly: 'allow',
+    graphMigration: 'allow',
   },
   [ChangeScope.UserPrefs]: {
     undoable: false,
     source: 'user',
     readOnly: 'allow',
+    graphMigration: 'allow',
   },
   [ChangeScope.Automation]: {
     undoable: false,
     source: 'user',
     readOnly: 'allow',
+    graphMigration: 'reject',
   },
   [ChangeScope.References]: {
     undoable: true,
     source: 'user',
     readOnly: 'reject',
+    graphMigration: 'allow',
   },
 } satisfies Readonly<Record<ChangeScope, ChangeScopePolicy>>
 
@@ -90,7 +111,11 @@ export const policyForScope = (scope: ChangeScope): ChangeScopePolicy =>
  *  under its own References bucket). A write admitted under one scope may only
  *  touch a property whose resolved scope is policy-equivalent — otherwise it
  *  would bypass the read-only gate or misroute its undo entry. Used by the
- *  typed write seam (`tx.setProperty`) and the raw property-delete path. */
+ *  typed write seam (`tx.setProperty`) and the raw property-delete path.
+ *
+ *  `graphMigration` is deliberately NOT an axis here: it says who may write
+ *  RIGHT NOW, not what kind of row this is, and a property's declared scope
+ *  cannot be asked that. */
 export const scopePoliciesEquivalent = (a: ChangeScope, b: ChangeScope): boolean => {
   const pa = policyForScope(a)
   const pb = policyForScope(b)
@@ -99,6 +124,11 @@ export const scopePoliciesEquivalent = (a: ChangeScope, b: ChangeScope): boolean
 
 export const scopeAllowedInReadOnly = (scope: ChangeScope): boolean =>
   policyForScope(scope).readOnly !== 'reject'
+
+/** May a write in this scope proceed while a once-per-graph migration holds the
+ *  workspace's claim? See `ChangeScopePolicy.graphMigration`. */
+export const scopeAllowedDuringGraphMigration = (scope: ChangeScope): boolean =>
+  policyForScope(scope).graphMigration !== 'reject'
 
 export const scopeIsUndoable = (scope: ChangeScope): boolean =>
   policyForScope(scope).undoable

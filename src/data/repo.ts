@@ -51,6 +51,8 @@ import {
   UndoHistoryDroppedError,
 } from './api/errors'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { isGraphBackfillClaimActive } from './internals/graphBackfillClaim'
+import { PROPERTY_CELL_BACKFILL_ID } from './internals/propertyCellBackfill'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
@@ -2178,6 +2180,7 @@ export class Repo {
         opts,
         user: this.user,
         isReadOnly: this.isReadOnly,
+        graphMigrationLocked: this.graphMigrationLocked,
         // uuid, never `this.newId`: `command_events.tx_id` is a PRIMARY KEY on
         // a database that outlives any single Repo, while `newId` is injectable
         // and the test harness injects per-Repo counters that restart. Deriving
@@ -3573,6 +3576,28 @@ export class Repo {
   }
 
   /**
+   * Is a once-per-graph migration holding the ACTIVE workspace's claim?
+   *
+   * The commit pipeline's migration lock asks this per transaction, for scopes
+   * whose `graphMigration` policy is `reject`. An arrow property rather than a
+   * method so it can be handed to `runTx` unbound.
+   *
+   * The ACTIVE workspace, matching `propertySchemaWorkspaceId` beside it: a tx
+   * pins its own workspace at its first write, which is after this is asked,
+   * and cross-workspace writes are refused elsewhere. No active workspace means
+   * nothing to lock.
+   *
+   * One backfill because one backfill rewrites source-of-truth rows today.
+   * Generalizing means a `WorkspaceBackfill` declaring that it locks the graph,
+   * and a scan of the Migrations page in place of this point lookup.
+   */
+  private readonly graphMigrationLocked = async (): Promise<boolean> => {
+    const workspaceId = this.client.activeWorkspaceId
+    if (workspaceId === null) return false
+    return isGraphBackfillClaimActive(this.db, workspaceId, PROPERTY_CELL_BACKFILL_ID)
+  }
+
+  /**
    * Take the claim for one backfill, or say why this device may not.
    *
    * The preconditions and the claim write live in ONE method because their
@@ -4024,6 +4049,9 @@ export class Repo {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
             skipUndo: true,
+            // The batch is the migration, so the lock that keeps every other
+            // writer out of the graph cannot keep it out.
+            graphMigrationWrite: true,
           }).catch((err: unknown) => {
             // Rolled back, so there is nothing for an entry to be replayed onto
             // and the history is not owed.

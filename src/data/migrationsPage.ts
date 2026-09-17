@@ -49,4 +49,4 @@ export const getOrCreateMigrationsPage = (repo: Repo, workspaceId: string): Prom
     namespace: MIGRATIONS_PAGE_NS,
     alias: MIGRATIONS_PAGE_ALIAS,
     markerType: MIGRATIONS_PAGE_TYPE,
-  }, {skipUndo: true})
+  }, {skipUndo: true, graphMigrationWrite: true})

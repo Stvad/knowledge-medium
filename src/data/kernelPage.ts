@@ -93,12 +93,17 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
  *  `repo.undoGroup` merges into the operation that needed it. Pass `skipUndo`
  *  only when there is no user operation to merge into: an unattended create
  *  lands alone on the stack, and `UndoManager.record` clears the redo branch
- *  on every push, so it silently discards a redo the user still wanted. */
+ *  on every push, so it silently discards a redo the user still wanted.
+ *
+ *  `graphMigrationWrite` is for the one caller whose page IS migration
+ *  machinery — the Migrations page the backfill claim hangs under, which has to
+ *  exist before a claim can be read or released. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
   spec: KernelPageSpec,
-  {skipUndo = false}: {skipUndo?: boolean} = {},
+  {skipUndo = false, graphMigrationWrite = false}:
+    {skipUndo?: boolean; graphMigrationWrite?: boolean} = {},
 ): Promise<Block> => {
   const id = kernelPageBlockId(workspaceId, spec.namespace)
   const aliases: readonly string[] = [spec.alias]
@@ -192,7 +197,7 @@ export const getOrCreateKernelPage = async (
         await tx.setProperty(id, aliasesProp, merged)
       }
       await tagTypes(tx, typeSnapshot, claimable)
-    }, {scope: ChangeScope.BlockDefault, skipUndo})
+    }, {scope: ChangeScope.BlockDefault, skipUndo, graphMigrationWrite})
     return repo.block(id)
   }
 
@@ -223,7 +228,7 @@ export const getOrCreateKernelPage = async (
     }, {systemMint: true})
     const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
     await tagTypes(tx, typeSnapshot, claimable)
-  }, {scope: ChangeScope.BlockDefault, skipUndo})
+  }, {scope: ChangeScope.BlockDefault, skipUndo, graphMigrationWrite})
 
   return repo.block(id)
 }

@@ -41,11 +41,17 @@ import type {
   User,
 } from '@/data/api'
 import {
+  ProcessorRejection,
   ReadOnlyError,
+  scopeAllowedDuringGraphMigration,
   scopeAllowedInReadOnly,
   scopeUploadsToServer,
   sourceForScope,
 } from '@/data/api'
+import {
+  GRAPH_MIGRATION_LOCKED,
+  GRAPH_MIGRATION_LOCKED_MESSAGE,
+} from './graphBackfillClaim'
 import {
   assertNoSeedDefinitionWrites,
   newTxMeta,
@@ -284,6 +290,14 @@ export interface RunTxParams<R> {
   opts: RepoTxOptions
   user: User
   isReadOnly: boolean
+  /** Is a once-per-graph migration holding the active workspace's claim right
+   *  now? Asked per transaction, and only for a scope the migration lock
+   *  refuses, so the common answer costs one indexed lookup and the pass's own
+   *  transactions cost nothing.
+   *
+   *  Injected rather than read here: WHICH backfill locks the graph, and which
+   *  workspace a tx belongs to, are the Repo's to know. */
+  graphMigrationLocked: () => Promise<boolean>
   newTxId: () => string
   /** Monotonically increasing INTEGER per `repo.tx`. Written into
    *  `tx_context.tx_seq` so the upload-routing triggers can stamp
@@ -378,7 +392,7 @@ export interface TxResult<R> {
 
 export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => {
   const {
-    db, cache, fn, opts, user, isReadOnly,
+    db, cache, fn, opts, user, isReadOnly, graphMigrationLocked,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
     mutators, processors, sameTxProcessors, propertySchemas, valuePresets,
     typeDefinitionsForWorkspace,
@@ -394,6 +408,31 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // (RLS / FK) lands in the upload-rejection quarantine.
   if (isReadOnly && !scopeAllowedInReadOnly(scope)) {
     throw new ReadOnlyError(scope)
+  }
+
+  // The migration lock: while a once-per-graph pass holds this workspace's
+  // claim, the graph stops accepting writes rather than each gesture guarding
+  // itself against the pass (#1057).
+  //
+  // HERE, beside the read-only gate, for the property no other position has:
+  // this is above the `isReplay` skip, so an undo or redo is refused too — and
+  // replay deliberately bypasses the same-tx processor pass, so nothing at
+  // processor level can ever see it.
+  //
+  // A `ProcessorRejection` though no processor raised it: that is the type
+  // `repo.tx` fans out to `onUserError`, and a refusal the user cannot see is a
+  // gesture that silently does nothing.
+  //
+  // ACCEPTED: entry-time, so a claim landing between here and the write is not
+  // seen by this transaction. One transaction wide, and the pass's own first
+  // write is several awaits behind its claim on the claiming device and a sync
+  // round trip behind it everywhere else.
+  if (!opts.graphMigrationWrite
+      && !scopeAllowedDuringGraphMigration(scope)
+      && await graphMigrationLocked()) {
+    throw new ProcessorRejection(
+      GRAPH_MIGRATION_LOCKED_MESSAGE, GRAPH_MIGRATION_LOCKED, {scope},
+    )
   }
 
   const txId = newTxId()
