@@ -584,6 +584,53 @@ describe('agent runtime commands', () => {
       }
     })
 
+    it('does not re-pin a source the scan could not transpile', async () => {
+      // The skip and the pin have to agree: skipping the diff is justified only
+      // by "this cannot be pinned", so pinning it anyway — `approveExtension`
+      // transpiles a SECOND time, and a transient failure would not repeat —
+      // would make live a core nothing compared.
+      const id = await liveRatingExtension('install-nopin')
+      const before = await readApproval(id)
+      let attempts = 0
+      const restore = __setTranspileImplForTest(async () => {
+        attempts += 1
+        // Transient: the scan's attempt fails, a retry would succeed.
+        if (attempts === 1) throw new SyntaxError('transient')
+        return 'export default []'
+      })
+      try {
+        await install('install-nopin')
+      } finally {
+        restore()
+      }
+      // One attempt only, and the pin is untouched.
+      expect(attempts).toBe(1)
+      expect(await readApproval(id)).toEqual(before)
+    })
+
+    it('refuses an unreadable override map for --verify too', async () => {
+      // `--verify` asks for a REPORT, and a report built from an empty override
+      // map calls a preset behind a default-off nested toggle absent. "No
+      // conflicts" is then a finding the caller acts on and a later enable
+      // contradicts.
+      const prefsBlock = await getPluginPrefsBlock(
+        env.repo, WS, env.repo.user, extensionsPrefsType)
+      await env.repo.tx(async tx => {
+        const current = await tx.get(prefsBlock.id)
+        await tx.update(prefsBlock.id, {
+          properties: {...current!.properties, [extensionsOverridesProp.name]: 'not-a-map'},
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'corrupt stored overrides'})
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        await expect(install('install-verify-badprefs', {verify: true}))
+          .rejects.toThrow(/cannot read this device's extension overrides/)
+      } finally {
+        restore()
+      }
+    })
+
     it('reports an id a PINNABLE candidate drops, even with a failing sibling', async () => {
       // Transpiled is pinned, and pinned takes effect. The resolution ran the
       // same code the reload will, so its absences are real absences — a

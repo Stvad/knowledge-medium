@@ -1235,9 +1235,12 @@ const installRuntimeExtension = async (
     const overrides = await readExtensionOverrides(repo, workspaceId)
     // Unreadable overrides leave BOTH questions unanswerable — whether this
     // install goes live, and which toggles the candidate resolves behind — and
-    // both default in the unsafe direction. Refuse unless the caller has
-    // already said the stored values are disposable.
-    if (wasApproved && overrides === null && !input.allowPresetChange) {
+    // both default in the unsafe direction. That is as true of the REPORT
+    // `--verify` asks for as of the refusal: a preset behind a default-off
+    // nested toggle reads as absent, and "no conflicts" is then a finding the
+    // caller acts on and a later enable contradicts. Refuse either way unless
+    // the caller has already said the stored values are disposable.
+    if (overrides === null && !input.allowPresetChange) {
       throw new Error(
         'install-extension: cannot read this device\'s extension overrides, so the value-preset '
         + 'check can tell neither whether this install goes live nor which toggles the new '
@@ -1294,9 +1297,14 @@ const installRuntimeExtension = async (
       })
       await repo.addTypeInTx(tx, existing.id, EXTENSION_TYPE, {}, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
-    if (wasApproved) {
-      // Best-effort: a source that no longer transpiles can't be pinned, and
-      // that failure belongs to verify/reload, not to the install itself.
+    // Not re-pinned when the scan concluded the source cannot be pinned: that
+    // conclusion is what let it skip the preset diff, so acting against it
+    // would pin — and make live — a core nothing compared. `approveExtension`
+    // transpiles the source a SECOND time, and a first failure that was
+    // transient would otherwise succeed here and take effect unrefused.
+    if (wasApproved && resolution?.pinnable !== false) {
+      // Best-effort otherwise: a source that no longer transpiles can't be
+      // pinned, and that failure belongs to verify/reload, not to the install.
       await approveExtension(existing.id, source).catch(() => undefined)
     }
     const reloaded = input.reload !== false

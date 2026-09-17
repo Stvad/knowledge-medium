@@ -68,8 +68,12 @@
  * anything not yet live is outside it: definition rows inside a durable sync
  * gap or landing after the scan (`syncGap` reports that basis rather than
  * refusing on it), another install landing before the next reload, and a core
- * registered imperatively by an effect (#1054). All of them can only MISS a
- * refusal, never invent one.
+ * registered imperatively by an effect (#1054). The candidate is also resolved
+ * against the block's PRE-write row — its new source, but its old content and
+ * properties — so an extension choosing its core by reading its own block is
+ * outside it too; overlaying one row would cover `load` and leave every query
+ * and `repo.db` path uncovered, which is worse than saying so. All of them can
+ * only MISS a refusal, never invent one.
  *
  * Neither obvious repair works, which is why none is attempted. An
  * in-transaction re-scan would have to ask a NARROWER question than the
@@ -285,7 +289,14 @@ const readDefinitionRows = async (
   })
 }
 
-/** Live blocks carrying a cell under each of `names`. */
+/** Live blocks carrying a cell under each of `names`.
+ *
+ *  The names go in as ONE bound JSON array rather than a generated `IN` list,
+ *  so the statement binds two parameters whatever the name count. Defence in
+ *  depth, and unpinned: a generated list only raises `too many SQL variables`
+ *  past this build's limit, which a measured 1,100 definitions on one preset
+ *  does not come near. It is the shape that cannot have the problem, for the
+ *  same cost. */
 const countCells = async (
   repo: Repo,
   workspaceId: string,
@@ -296,9 +307,9 @@ const countCells = async (
     `SELECT j.key AS property, COUNT(*) AS cells
        FROM blocks b, json_each(${OBJECT_BAG}) j
       WHERE b.workspace_id = ? AND b.deleted = 0
-        AND j.key IN (${names.map(() => '?').join(',')})
+        AND j.key IN (SELECT n.value FROM json_each(?) n)
       GROUP BY j.key`,
-    [workspaceId, ...names],
+    [workspaceId, JSON.stringify(names)],
   )
   return new Map(rows.map(row => [String(row.property ?? ''), row.cells]))
 }
