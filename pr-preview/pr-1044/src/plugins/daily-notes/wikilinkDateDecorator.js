@@ -1,0 +1,1 @@
+import{_b as e}from"../../../chunks/app-Xia_b9wx.js";export{e as dailyDateWikilinkDecorator};

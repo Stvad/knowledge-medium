@@ -1,0 +1,1 @@
+import{C$ as e,w$ as t}from"../../chunks/app-Xia_b9wx.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

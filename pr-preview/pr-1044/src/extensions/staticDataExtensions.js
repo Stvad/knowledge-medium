@@ -1,0 +1,1 @@
+import{cF as e}from"../../chunks/app-Xia_b9wx.js";export{e as staticDataExtensions};
