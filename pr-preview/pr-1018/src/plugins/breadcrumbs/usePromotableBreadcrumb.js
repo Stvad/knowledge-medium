@@ -1,1 +1,0 @@
-import{Dg as e}from"../../../chunks/app-B_OZPOB6.js";export{e as usePromotableBreadcrumb};
