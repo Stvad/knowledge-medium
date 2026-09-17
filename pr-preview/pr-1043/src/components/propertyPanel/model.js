@@ -1,1 +1,1 @@
-import{$k as e,eA as t}from"../../../chunks/app-DvXrOvZ7.js";export{e as HIDDEN_SECTION,t as buildPropertyPanelModel};
+import{$k as e,eA as t}from"../../../chunks/app-Bx7SGeXO.js";export{e as HIDDEN_SECTION,t as buildPropertyPanelModel};
