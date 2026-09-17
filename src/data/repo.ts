@@ -4039,6 +4039,8 @@ export class Repo {
           // an empty stack — so one cmd-Z reverts only the tail. Accepted: the
           // user's history is being discarded either way, and the alternative
           // is teaching `record` about groups a pass cannot see.
+          //
+          // This tab's manager only; a cross-tab clear was declined (#1007).
           drop?.finish()
           if (!announcedUndoClear) {
             announcedUndoClear = true
