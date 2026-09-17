@@ -1,1 +1,0 @@
-import{lB as e}from"../../../chunks/app-CdCgLRvl.js";export{e as agentDispatchCompanionDataExtension};

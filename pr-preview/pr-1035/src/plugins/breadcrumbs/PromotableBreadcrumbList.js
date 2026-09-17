@@ -1,1 +1,0 @@
-import{Og as e}from"../../../chunks/app-CdCgLRvl.js";export{e as PromotableBreadcrumbList};

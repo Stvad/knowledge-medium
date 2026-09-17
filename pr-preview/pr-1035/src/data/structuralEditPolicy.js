@@ -1,1 +1,0 @@
-import{MC as e,NC as t}from"../../chunks/app-CdCgLRvl.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

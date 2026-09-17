@@ -1,1 +1,0 @@
-import{Mg as e}from"../../../chunks/app-CdCgLRvl.js";export{e as BreadcrumbList};

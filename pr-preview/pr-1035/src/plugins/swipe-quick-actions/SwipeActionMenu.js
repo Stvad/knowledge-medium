@@ -1,1 +1,0 @@
-import{cS as e}from"../../../chunks/app-CdCgLRvl.js";export{e as SwipeActionMenu};
