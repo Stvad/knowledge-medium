@@ -119,11 +119,13 @@ export class ProcessorRunner {
    *  need to flush a delayed job should use vi.useFakeTimers /
    *  vi.runAllTimers (or just sleep).
    *
-   *  A processor is tracked from DISPATCH, so — unlike `PendingIdleJobs`, which
-   *  has a `ParkHandle` for it — a processor that awaits an external signal (a
-   *  row that must sync, a gate that opens on connectivity) hangs this drain on
-   *  any device or fixture where that signal never comes. Schedule such work
-   *  into one of the gated idle families instead of awaiting it here (#1015). */
+   *  A processor is tracked from the moment it starts RUNNING, with no way to
+   *  say it has stopped making progress — unlike `PendingIdleJobs`, which has a
+   *  `ParkHandle` for exactly that. So a processor that awaits an external
+   *  signal (a row that must sync, a gate that opens on connectivity) hangs this
+   *  drain from its first await on any device or fixture where that signal never
+   *  comes. Schedule such work into one of the gated idle families instead of
+   *  awaiting it here (#1015). */
   async awaitIdle(): Promise<void> {
     while (this.pending.size > 0) {
       // Snapshot — new jobs scheduled while we wait will be in `pending`

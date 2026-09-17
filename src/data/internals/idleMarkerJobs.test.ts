@@ -25,7 +25,11 @@ const startDrain = (jobs: PendingIdleJobs) => {
 const expectDrained = (state: {done: boolean}): Promise<void> =>
   vi.waitFor(() => expect(state.done).toBe(true), {timeout: 5_000, interval: 10})
 
-describe('PendingIdleJobs.drain', () => {
+// The work here is microtasks — the whole file measures ~100ms of test time.
+// The budget is for the POLLS: each is 5s, and an enclosing timeout at vitest's
+// 5s default would expire first, reporting a drain regression as the opaque
+// "Test timed out" this file exists to replace.
+describe('PendingIdleJobs.drain', {timeout: 20_000}, () => {
   it('awaits a job that is progressing', async () => {
     const jobs = new PendingIdleJobs(immediate)
     const work = gate()
