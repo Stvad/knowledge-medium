@@ -3350,6 +3350,48 @@ describe('retryable infrastructure failures (out of credits, expired login, netw
     expect(blocks.get('b-2')?.properties?.[PROPS.status]).toBeUndefined()
   })
 
+  it("reopens the lane when a query watcher's probe delivery lands", async () => {
+    // The probe re-arms the window as it launches, so its SUCCESS is what
+    // takes that window away again. A generation read before the reservation
+    // is a generation older than the window being cleared, the clear is
+    // refused, and the watcher goes on holding its rows for the rest of a
+    // backoff there is no longer anything wrong with.
+    const {graph} = fakeGraph()
+    const rows = [[{id: 'a'}], [{id: 'a'}], [{id: 'a'}, {id: 'b'}]]
+    let call = 0
+    graph.sqlAll = vi.fn(async () => rows[Math.min(call++, rows.length - 1)])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    const time = clock()
+    let deliveries = 0
+    const deliverToChannel = vi.fn(async () => {
+      deliveries += 1
+      if (deliveries === 1) throw new Error('connection refused')
+    })
+    const engine = engineWith({
+      graph, state, deliverToChannel, now: time.now,
+      config: parseConfig({
+        runsPerHour: 100,
+        watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', delivery: 'channel'}],
+      }),
+    })
+
+    await engine.tick()                 // the listener is down — lane armed
+    await engine.drain()
+    expect(deliveries).toBe(1)
+
+    time.advance(30_001)                // the window lapses; the probe goes out
+    await engine.tick()
+    await engine.drain()
+    expect(deliveries).toBe(2)
+
+    // No clock advance: row 'b' is delivered only because the probe landing
+    // reopened the lane.
+    await engine.tick()
+    await engine.drain()
+    expect(deliveries).toBe(3)
+  })
+
   it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}],
