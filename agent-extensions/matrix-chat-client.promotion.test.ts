@@ -282,7 +282,10 @@ describe('matrix ingest into a child-backed workspace', () => {
 
     await vi.waitFor(async () => {
       expect(await rowByContent('second'), 'ingest stalled on the first message').toBeDefined()
+      // Inside the poll, like the sibling test above: the cursor save is a
+      // SEPARATE write from the message row, so a poll that stops at the row can
+      // still read the previous cursor.
+      expect(savedCursor()).toBe('cursor-2')
     }, {timeout: 10_000, interval: 50})
-    expect(savedCursor()).toBe('cursor-2')
   }, 30_000)
 })

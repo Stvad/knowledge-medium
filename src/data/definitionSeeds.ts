@@ -25,6 +25,7 @@ import {propertiesPageBlockId, getOrCreatePropertiesPage} from '@/data/propertie
 import {typesPageBlockId, getOrCreateTypesPage} from '@/data/typesPage'
 import type {Repo} from '@/data/repo'
 import {awaitLocalMemberRole} from '@/data/workspaces'
+import type {ParkHandle} from '@/data/internals/idleMarkerJobs'
 
 /** Namespace for every deterministic code-owned definition block — property
  * AND type seeds. Identity is always workspace-scoped:
@@ -265,6 +266,9 @@ export type PropertySeedMaterializationAccess =
 export interface AwaitPropertySeedMaterializationAccessOptions {
   readonly freshlyCreated: boolean
   readonly signal?: AbortSignal
+  /** The scheduled job's `ParkHandle`, forwarded to the membership wait so a
+   *  drain barrier can tell "parked on a row that must sync" from "working". */
+  readonly onPark?: ParkHandle
 }
 
 const propertySeedAccessAbortError = (): DOMException =>
@@ -304,6 +308,7 @@ export const awaitPropertySeedMaterializationAccess = async (
   if (!options.freshlyCreated) {
     const role = await awaitLocalMemberRole(repo, workspaceId, repo.user.id, {
       signal: options.signal,
+      onPark: options.onPark,
     })
     throwIfPropertySeedAccessAborted(options.signal)
     if (repo.activeWorkspaceId !== workspaceId) {

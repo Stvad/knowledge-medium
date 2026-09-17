@@ -121,7 +121,7 @@ import {
   type ProjectionLookups,
 } from './internals/propertyChildrenProcessor'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
-import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
+import { PendingIdleJobs, MarkerStore, type ParkHandle } from './internals/idleMarkerJobs'
 import {
   parseAliasCollisionError,
   parseParentDeletedError,
@@ -3045,10 +3045,9 @@ export class Repo {
       // NOT `onFirstSync` — `hasSynced` persists across sessions, so it fires
       // synchronously on every warm client and gates nothing.
       //
-      // Gate FIRST, then defer to idle: an idle job that awaited the gate from
-      // inside would never settle on a device that never connects, parking a
-      // promise in the drain set forever and hanging
-      // `awaitWorkspaceBackfills`. A session that never catches up therefore
+      // Gate FIRST, then defer to idle — the cheaper half of the rule on
+      // `PendingIdleJobs.schedule` (a job may not await an external signal from
+      // inside without declaring it). A session that never catches up therefore
       // schedules nothing, which is correct for catch-up work.
       const arm = (): void => {
         this.disposeBackfillSyncGate?.()
@@ -3130,7 +3129,7 @@ export class Repo {
       return
     }
     this.pendingSeedMaterializationWorkspaces.add(workspaceId)
-    this.seedMaterializationJobs.schedule(async () => {
+    this.seedMaterializationJobs.schedule(async (park) => {
       try {
         // Re-run while dirty: a seed-set change that coalesced onto this pass
         // after it snapshotted its seeds — or a switch-away that aborted it — sets
@@ -3147,7 +3146,7 @@ export class Repo {
         do {
           this.dirtySeedMaterializationWorkspaces.delete(workspaceId)
           await this.runWorkspaceSeedMaterialization(
-            workspaceId, freshlyCreated, this.seedMaterializationGeneration.signal,
+            workspaceId, freshlyCreated, this.seedMaterializationGeneration.signal, park,
           )
         } while (this.dirtySeedMaterializationWorkspaces.has(workspaceId))
       } finally {
@@ -3161,9 +3160,14 @@ export class Repo {
     workspaceId: string,
     freshlyCreated: boolean,
     signal: AbortSignal,
+    /** The scheduled job's park handle. Absent when a test calls this directly,
+     *  where there is no drain barrier to tell. */
+    onPark?: ParkHandle,
   ): Promise<void> {
     try {
-      const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated, signal})
+      const access = await awaitPropertySeedMaterializationAccess(
+        this, workspaceId, {freshlyCreated, signal, onPark},
+      )
       if (!access.allowed) return
     } catch (err) {
       // A superseded generation (the user switched workspaces) aborts the parked
@@ -4143,12 +4147,11 @@ export class Repo {
   scheduleReferenceTargetDerivePass(workspaceId: string): void {
     if (!workspaceId) return
     this.referenceTargetDeriveJobs.schedule(() =>
-      // Swallow + log a transient sweep failure rather than leak an unhandled
-      // rejection (the idle-job runner only does `.finally`, like the sibling
-      // `drainNameRederives` guards its own body). The sweep marker is left
-      // UNSET on throw, so the next workspace open retries — the pass is
-      // strictly additive (`reference_target_id IS NULL`), never a re-stamp,
-      // so a partial run can't double-stamp or clobber.
+      // Caught here, not left to the runner's generic log, so the report names
+      // the workspace and the pass. The sweep marker is left UNSET on throw, so
+      // the next workspace open retries — the pass is strictly additive
+      // (`reference_target_id IS NULL`), never a re-stamp, so a partial run
+      // can't double-stamp or clobber.
       this.runReferenceTargetDerivePass(workspaceId).catch((err) => {
         const reason = err instanceof Error ? err.message : String(err)
         console.error(`[referenceTargetDerive] workspace ${workspaceId} sweep failed: ${reason}`)
@@ -4712,7 +4715,10 @@ export class Repo {
    *  NOT a fixed point across families, and NOT a cancel. Like its members it
    *  does not advance timers: work whose deferral timer has not fired is not
    *  pending yet, so an armed `delayMs` processor or idle callback survives
-   *  this (#892 — cancelling one needs a handle neither framework keeps). */
+   *  this (#892 — cancelling one needs a handle neither framework keeps). Nor
+   *  does it wait out a job PARKED on a signal only the outside world can send
+   *  (`PendingIdleJobs.drain`) — the seed pass parks on the `workspace_members`
+   *  row, which in a fixture never arrives, so awaiting it would be a hang. */
   async awaitDeferredWork(): Promise<void> {
     await Promise.all([
       this.awaitSeedMaterialization(),
