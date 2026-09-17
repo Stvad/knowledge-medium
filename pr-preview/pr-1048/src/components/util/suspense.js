@@ -1,1 +1,1 @@
-import{IP as e}from"../../../chunks/app-DJ-cWksk.js";export{e as SuspenseFallback};
+import{IP as e}from"../../../chunks/app-CnPsIWrk.js";export{e as SuspenseFallback};
