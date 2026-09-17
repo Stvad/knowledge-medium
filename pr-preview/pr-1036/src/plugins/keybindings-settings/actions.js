@@ -1,1 +1,1 @@
-import{_x as e}from"../../../chunks/app-ChPVDnc3.js";export{e as openKeybindingsSettingsAction};
+import{_x as e}from"../../../chunks/app-OVRJrypK.js";export{e as openKeybindingsSettingsAction};
