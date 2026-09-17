@@ -119,33 +119,18 @@ describe('PendingIdleJobs.drain', {timeout: 20_000}, () => {
     await second.settled
   })
 
-  it('surfaces a failing job rather than swallowing it', async () => {
+  // Reported where the job settles, not through the drain: a barrier that raised
+  // a job's error would have to decide which of several concurrent drains gets
+  // it, and each family already catches what it can retry from.
+  it('logs a failing job and leaves the drain to complete', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     const jobs = new PendingIdleJobs(immediate)
-    jobs.schedule(async () => { throw new Error('job blew up') })
+    const boom = new Error('job blew up')
+    jobs.schedule(async () => { throw boom })
 
-    await expect(jobs.drain()).rejects.toThrow('job blew up')
-  })
-
-  // Both jobs resume on the same turn, the failure first. A park settles the
-  // drain's race, so a failure recorded only by the drain could still be in
-  // flight when the next iteration found nothing but parked jobs and returned.
-  it('surfaces a failing job even when a sibling parks in the same turn', async () => {
-    const jobs = new PendingIdleJobs(immediate)
-    const turn = gate()
-    const external = gate()
-    jobs.schedule(async () => {
-      await turn.promise
-      throw new Error('job blew up')
-    })
-    jobs.schedule(async (park: ParkHandle) => {
-      await turn.promise
-      park()
-      await external.promise
-    })
-
-    const drain = jobs.drain()
-    turn.open()
-    await expect(drain).rejects.toThrow('job blew up')
+    await expect(jobs.drain()).resolves.toBeUndefined()
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('deferred job failed'), boom)
+    expect(jobs.size).toBe(0)
   })
 
   it('releases a park at most once, however many times the job calls it', async () => {
