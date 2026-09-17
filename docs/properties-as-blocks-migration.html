@@ -336,9 +336,10 @@
 
 <aside class="doc-status">
   <strong>Status: current (planning), with one §9 correction — and slice C is no
-  longer planning. The &ldquo;scalar-first&rdquo; narrowing in §5 and the
-  &ldquo;refList stays JSON&rdquo; note in §9 are REVERSED as of km-h1hy; both
-  paragraphs now describe the shipped shape.</strong>
+  longer planning. The &ldquo;scalar-first&rdquo; narrowing in §5, the
+  &ldquo;refList stays JSON&rdquo; note in §9 and the scalar-only
+  &ldquo;Value decoding&rdquo; rule are REVERSED or qualified as of km-h1hy; all
+  three now describe the shipped shape.</strong>
   <strong>Last verified against code: 2026-09-16 for the multi-value shape;
   2026-08-21 for the rest, branch
   <code>claude/e2ee-synthesis-namespace</code>.</strong>
@@ -2702,7 +2703,16 @@ supabase skill if it's kept.
     skipped. If <em>no</em> child parses, the projection <em>removes</em> the key from
     the cell. (This rule — and default-vs-unset below — presupposes a <em>live field
     row</em>; a cell key with no child rows at all is pending materialization and is
-    never removed, per the §5 global rule.) Rev 1 said "log + omit, keep data visible" — the spike keeps the rows (data
+    never removed, per the §5 global rule.)
+    <strong>Scalar-only as of km-h1hy.</strong> A MULTI-VALUED property aggregates
+    instead: every parseable member, in sibling order, multiplicity kept, with an
+    unparseable member dropping only itself — and a live field row with nothing
+    parseable under it reads as <code>[]</code>, not unset, because removing the
+    field row is what unsets a list. Across DUPLICATE field rows the members are
+    UNIONED, not concatenated, since that is what the collapse will produce.
+    <code>childContentsToEncodedPropertyValue</code> and
+    <code>unionValuesAcrossFieldRows</code> own both rules; read them rather than
+    this paragraph. Rev 1 said "log + omit, keep data visible" — the spike keeps the rows (data
     is never destroyed) but the cell-side key vanishes, which downstream readers see as
     "unset". Acceptable; document that "field with only-invalid values" reads as unset
     while remaining visible/fixable in the tree — with one addition (PR-review P2, via

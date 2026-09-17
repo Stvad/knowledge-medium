@@ -140,14 +140,13 @@ const consumingParentIds = async (
  *  PLAN — project each renamed field under the tx-start (rename-unchanged)
  *  codec, drop the old name, set the new.
  *
- *  Projection goes through the same pair of functions
+ *  Projection goes through the same two functions
  *  `core.projectPropertyChildren` uses — `unionValuesAcrossFieldRows` then
- *  `childContentsToEncodedPropertyValue` — so the two cannot disagree about
- *  what a field row's value is: first parseable value for a SCALAR, every
- *  parseable member for a LIST, and duplicate field rows UNIONED rather than
- *  concatenated. A rename that projected first-wins for both would silently
- *  shorten every renamed list property to one member; one that concatenated
- *  would double it, and `settledWrites` means nothing follows to correct it. */
+ *  `childContentsToEncodedPropertyValue` — which OWN the cross-field-row fold
+ *  and the per-grain aggregate. Restating either rule here is how the two
+ *  drift, and both drifts were shipped: a rename projecting first-wins at both
+ *  grains shortened every renamed list to one member, and one that concatenated
+ *  doubled it — with `settledWrites` meaning nothing follows to correct it. */
 const rekeyParent = (
   ctx: SameTxCtx,
   parentId: string,
@@ -166,14 +165,10 @@ const rekeyParent = (
       const contents = unionValuesAcrossFieldRows(rename.schema, perFieldRow)
         .map(value => value.content)
       oldNames.push(rename.oldName)
-      // The same projection rule as `core.projectPropertyChildren`, through the
-      // same two functions — the cross-field-row union AND the aggregate — so
-      // the two cannot disagree: first parseable value for a scalar, every
-      // member for a list. Unparseable values are skipped — a rename doesn't
-      // change the codec, so those are pre-existing and stale — and if none
-      // parse the new key stays unset while the old one is still dropped (§9:
-      // the cell derives from the children, so a stale value shows unset until
-      // re-set).
+      // Unparseable values are skipped — a rename doesn't change the codec, so
+      // those are pre-existing and stale — and if none parse, the new key stays
+      // unset while the old one is still dropped (§9: the cell derives from the
+      // children, so a stale value shows unset until re-set).
       const projected = childContentsToEncodedPropertyValue(rename.schema, contents)
       if (projected !== undefined) {
         assignments.push({name: rename.newName, value: projected})

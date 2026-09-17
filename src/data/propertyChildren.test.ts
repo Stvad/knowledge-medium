@@ -3420,6 +3420,24 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await bagOf('p')).bag).toEqual([null, 'x'])
     })
 
+    it('stores a HOLE as null too — a sparse slot is the same absence', async () => {
+      // `[, 'x']` is not `[undefined, 'x']` to `Array.prototype.map`, which
+      // skips holes without calling its callback — so the normalization above
+      // it never ran and the member reached the child create as `undefined`,
+      // landing as empty content the projection cannot read. The cell says
+      // `[null, 'x']` either way (JSON has no hole), so the two spellings have
+      // to store the same thing.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+
+      // eslint-disable-next-line no-sparse-arrays -- the case under test
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [, 'x']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', BAG_FIELD_ID)).toEqual(['null', '"x"'])
+      expect((await bagOf('p')).bag).toEqual([null, 'x'])
+    })
+
     it('an unparseable member survives an unrelated write to the same property', async () => {
       // It is not a member the cell removed — it is one the cell never held,
       // because the projection could not read it. Reaping it on the next write

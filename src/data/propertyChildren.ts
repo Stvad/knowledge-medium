@@ -539,7 +539,12 @@ export const encodedPropertyValueToChildContents = (
   // `null`, so that is what the cell already stores for it, and rendering it as
   // empty content instead would make the same `setProperty` call succeed before
   // the flip and fail after it. Normalize to the persisted form first.
-  const contents = encoded.map(item =>
+  //
+  // `Array.from`, never `map`: a SPARSE array is the second spelling of that
+  // same absence, and `map` skips a hole without calling its callback — so the
+  // normalization right above would be bypassed for exactly the element that
+  // needs it, and `[, 'x']` would store what `[null, 'x']` does not.
+  const contents = Array.from(encoded, item =>
     encodedValueToContent(member, item === undefined ? null : item))
   // Empty content is how a codec spells ABSENCE — `codecs.ref` renders a
   // cleared ref that way, and that is a documented non-round-trip a SCALAR can
@@ -784,11 +789,14 @@ export interface CellRekeyPlan {
  *  recognized field rows — value rows and field rows included — re-keys like
  *  every other owner; its `::` children are its field rows at any depth.
  *  `computePlan` receives the parent's live children and returns the drops +
- *  assignments — the ONLY part the two callers differ in (rename projects the
- *  first parseable value under the tx-start codec; the batch iterates all
- *  values, canonicalizes them under the possibly-new codec, and counts
- *  unconvertibles). The write is `skipMetadata` machinery, not a "last edited"
- *  bump. */
+ *  assignments — the ONLY part the two callers differ in. Both project through
+ *  the same pair, `unionValuesAcrossFieldRows` then
+ *  `childContentsToEncodedPropertyValue`, which own what a definition's value
+ *  is across its field rows and at either grain; neither caller restates those
+ *  rules. They differ in the CODEC: the rename reads the values under the
+ *  tx-start one, while the batch re-encodes each under the possibly-new one and
+ *  counts unconvertibles. The write is `skipMetadata` machinery, not a "last
+ *  edited" bump. */
 export const rekeyParentPropertyCell = async (
   tx: Tx,
   parentId: string,

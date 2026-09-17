@@ -4269,7 +4269,7 @@ export class Repo {
    * export and cross-workspace re-derive-by-content bind the name), re-encode
    * value children to the new codec's canonical content where they convert,
    * and re-key each consuming parent's cell (drop the old key; project the
-   * new one from the first parseable value). Writes ride ordinary repo.tx —
+   * new one from its value children, at whichever grain the codec has). Writes ride ordinary repo.tx —
    * field-row content and cells are synced state, and the flip-gated
    * processors' idempotence makes the overlap free.
    *
