@@ -1,1 +1,1 @@
-import{Mw as e,jw as t}from"../chunks/app-Dmvof6Ut.js";export{t as appUpdate,e as useAppUpdateAvailable};
+import{Mw as e,jw as t}from"../chunks/app-C2Gz-7pR.js";export{t as appUpdate,e as useAppUpdateAvailable};
