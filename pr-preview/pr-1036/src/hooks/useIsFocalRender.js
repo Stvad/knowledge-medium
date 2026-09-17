@@ -1,0 +1,1 @@
+import{Lk as e,Rk as t}from"../../chunks/app-ChPVDnc3.js";export{e as isFocalRender,t as useIsFocalRender};

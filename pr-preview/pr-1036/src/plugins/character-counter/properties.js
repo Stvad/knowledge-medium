@@ -1,0 +1,1 @@
+import{BR as e,HR as t,VR as n}from"../../../chunks/app-ChPVDnc3.js";export{e as charLimitProp,n as charProfileProp,t as charScopeProp};

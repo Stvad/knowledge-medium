@@ -1,0 +1,1 @@
+import{nM as e,tM as t}from"../../../chunks/app-ChPVDnc3.js";export{t as isPropertyPanelHiddenProperty,e as isPropertyPanelReadOnlyProperty};

@@ -1,0 +1,1 @@
+import{_v as e,bv as t,vv as n,yv as r}from"../../../chunks/app-ChPVDnc3.js";export{e as OPEN_RECENTS_ACTION_ID,n as openRecentsAction,r as recentsHeaderItem,t as recentsPlugin};

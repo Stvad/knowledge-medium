@@ -1,0 +1,1 @@
+import{c2 as e,l2 as t,s2 as n}from"../../../chunks/app-ChPVDnc3.js";export{n as SYSTEM_AUTHOR_PREFIX,e as isSystemAuthor,t as systemAuthor};

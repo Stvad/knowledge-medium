@@ -1,0 +1,1 @@
+import{Bw as e,Vw as t}from"../../chunks/app-ChPVDnc3.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};
