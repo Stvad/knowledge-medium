@@ -70,6 +70,7 @@ import {
   type SameTxCtx,
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
+import { isResolvableFieldDefinition } from './propertySchemaResolution'
 import { presetConfigProp, presetIdProp } from '@/data/properties'
 import { peekRowProperty } from '@/data/rowProperty'
 import { jsonValuesEqual } from './jsonCanonical'
@@ -79,11 +80,12 @@ import {
 } from './referenceTargetProcessor'
 import { tryBuildSchema } from '@/data/userSchemasService'
 import {
-  encodedPropertyValueToChildContent,
-  isFieldValueChild,
-  isPropertyFieldInstance,
+  childContentsToEncodedPropertyValue,
+  encodedToValueChildContent,
+  fieldRowValues,
   propertiesEqual,
-  propertyChildContentToEncodedValue,
+  unionValuesAcrossFieldRows,
+  valueChildContentToEncoded,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 
@@ -488,36 +490,37 @@ const applyToParent = async (
   const oldNames: string[] = []
   const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
   for (const change of changes) {
-    let projected: unknown
-    let hasProjection = false
-    let sawFieldRow = false
+    // `null` = this parent carries no field row for this definition, so its
+    // cell keys for it are none of this change's business. It is also the gate
+    // `childContentsToEncodedPropertyValue` is called under.
+    const perFieldRow = await fieldRowValues(
+      ctx.tx, siblings, change.fieldId, isFieldDefinition,
+    )
+    if (perFieldRow === null) continue
     let unconvertible = 0
-    for (const sibling of siblings) {
-      if ((sibling.referenceTargetId ?? null) !== change.fieldId) continue
-      if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
-      sawFieldRow = true
-      // §9 value set: bit-filtered — nested marked rows are machinery.
-      const values = (await ctx.tx.childrenOf(sibling.id, undefined))
-        .filter(isFieldValueChild)
+    const canonicalized: Array<Array<Pick<BlockData, 'id' | 'content'>>> = []
+    for (const values of perFieldRow) {
+      const group: Array<Pick<BlockData, 'id' | 'content'>> = []
       for (const value of values) {
         let encoded: unknown
         try {
-          encoded = propertyChildContentToEncodedValue(change.schema, value.content)
+          // At value-child GRAIN, both ways: under a list codec this row holds
+          // ONE member, and reading it against the whole-array grammar would
+          // make every member unconvertible.
+          encoded = valueChildContentToEncoded(change.schema, value.content)
         } catch {
           unconvertible += 1
           continue
         }
-        if (!hasProjection) {
-          projected = encoded
-          hasProjection = true
-        }
-        if (!change.encodingChanged) continue
         // Canonicalize the stored text under the new codec so it reads back as
         // what `setProperty` would have written. Re-parsing the TEXT is what
         // makes a cross-type conversion possible at all, and it costs one
         // ambiguity: a bare `null` is a literal to a codec that rejects null
         // and the unset sentinel to one that accepts it (#1030).
-        const canonical = encodedPropertyValueToChildContent(change.schema, encoded)
+        const canonical = change.encodingChanged
+          ? encodedToValueChildContent(change.schema, encoded)
+          : value.content
+        group.push({id: value.id, content: canonical})
         if (value.content === canonical) continue
         // Re-stamp the reference columns from the REWRITTEN content, the same
         // duty every same-tx processor that rewrites `content` after
@@ -546,12 +549,16 @@ const applyToParent = async (
         }
         await ctx.tx.update(value.id, patch, {skipMetadata: true})
       }
+      canonicalized.push(group)
     }
-    // This parent carries no field row for this definition, so its cell keys
-    // for it are none of this change's business. Defence in depth: MATERIALIZE
-    // gives every recognized key a field row, so a parent reached by the query
-    // above normally has one for whichever change put it there.
-    if (!sawFieldRow) continue
+    // Union ACROSS field rows, the same rule the projection runs, over the
+    // CANONICAL text because that is what gets published. Both this and
+    // `childContentsToEncodedPropertyValue` own what a definition's value is at
+    // either grain — a list property is N sibling value children, and a
+    // first-parseable-wins read here would publish one member and let
+    // MATERIALIZE reap the rest.
+    const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
+      .map(value => value.content)
     if (change.encodingChanged && unconvertible > 0) {
       unconvertibleByField.set(
         change.fieldId,
@@ -559,22 +566,26 @@ const applyToParent = async (
       )
     }
     if (change.oldName !== change.newName) oldNames.push(change.oldName)
-    if (hasProjection) assignments.push({name: change.newName, value: projected, unset: false})
-    else if (unconvertible === 0) {
-      assignments.push({name: change.newName, value: undefined, unset: true})
-    }
-    // else (all-unconvertible): leave the new key as it is.
-    //   - rename: the old key is dropped and the new key stays absent, so the
-    //     cell shows unset for the unparseable values, §9's contract. Re-keying
-    //     a stale value under the new name would violate §9 (cell derives from
-    //     children).
-    //   - no rename: the existing key rides untouched, so a stale-but-fixable
-    //     value stays visible; the next valid edit reprojects and heals it
-    //     (§5 pending-reprojection). Unsetting it instead costs the value rows:
-    //     the name still resolves to this definition, so the next tx to touch
-    //     this parent hands MATERIALIZE a missing key and it tombstones them as
-    //     a user deletion.
-    // This pass NEVER deletes value rows; the unconvertible COUNT is reported.
+    // PUBLISH NOTHING WHEN ANYTHING FAILED TO CONVERT. The cell write below is
+    // `skipMetadata` but not settled against MATERIALIZE's own reconcile in a
+    // later tx, which compares the children against what was published — over
+    // the very rows this pass reports as preserved unchanged. One rule for both
+    // grains, because the promise is the same for both: a partial LIST would
+    // have its unconvertible member tombstoned, and a list migrated to a SCALAR
+    // would have the unconvertible row overwritten and the converted one folded
+    // away.
+    //
+    // The cell is then either unchanged (nothing was canonicalized, so no child
+    // write and no reprojection) or the PARTIAL projection under the
+    // definition's current name — §9's contract, since the cell derives from
+    // the children. What the guard buys is the ROWS, not the cell: this pass
+    // never writes a value over children it promised to preserve and never
+    // deletes a value row. The unconvertible COUNT is reported after commit.
+    if (unconvertible > 0) continue
+    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
+    assignments.push({
+      name: change.newName, value: projected, unset: projected === undefined,
+    })
   }
   const next = {...parent.properties}
   for (const name of oldNames) delete next[name]
@@ -653,12 +664,11 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     // consumers are the ones the repair exists to reach. Every OTHER fieldId
     // encountered walking a parent's children is the resolver's to classify.
     const changing = new Set(changes.map(change => change.fieldId))
-    const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
-      if (changing.has(fieldId)) return true
-      const resolution = ctx.resolvePropertySchemaField(event.workspaceId, fieldId)
-      return resolution.status === 'resolved'
-        || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
-    }
+    const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) =>
+      changing.has(fieldId)
+      || isResolvableFieldDefinition(
+        ctx.resolvePropertySchemaField(event.workspaceId, fieldId),
+      )
     const unconvertibleByField = new Map<string, number>()
     for (const parentId of parentIds) {
       await applyToParent(ctx, parentId, changes, isFieldDefinition, unconvertibleByField)

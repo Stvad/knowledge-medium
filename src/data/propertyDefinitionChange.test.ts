@@ -1136,3 +1136,269 @@ describe('name round-trip guard (§7)', () => {
     }
   })
 })
+
+describe('the multi-value boundary (#1010)', () => {
+  const FIELD_PEER = 'field-peer-multivalue'
+
+  /** A list-valued property's value rows, in tree order. `seedProperty` returns
+   *  only the first; a list stores N sibling value children (#1010). */
+  const seedListProperty = async (
+    repo: Repo, blockId: string, name: string, value: readonly string[],
+  ): Promise<string[]> => {
+    await createHost(repo, blockId)
+    await repo.tx(tx => tx.setProperty(blockId, schemaFor(repo, name), value),
+      {scope: ChangeScope.BlockDefault})
+    const field = await sharedDb.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
+      [blockId, FIELD_ID])
+    return (await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [field.id])).map(row => row.id)
+  }
+
+  /** A SECOND field row for the same definition — what two offline devices
+   *  materializing one value leave behind. Raw, because sync-apply never passes
+   *  through `repo.tx` and so schedules no processor to normalize it. */
+  const addDuplicateFieldRow = async (
+    owner: string, members: readonly string[],
+  ): Promise<void> => {
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+         properties_json, reference_target_id, is_field_form, deleted,
+         created_at, updated_at, user_updated_at, created_by, updated_by)
+       VALUES ('dupfield', ?, ?, 'zz', ?, '{}', ?, 1, 0, 1, 1, 1, 'user-1', 'user-1')`,
+      [WS, owner, `::((${FIELD_ID}))`, FIELD_ID])
+    for (const [i, member] of members.entries()) {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES (?, ?, 'dupfield', ?, ?, '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [`dupmember-${i}`, WS, `a${i}`, member])
+    }
+  }
+
+  const liveMembers = async (owner: string): Promise<string[]> =>
+    (await sharedDb.db.getAll<{content: string}>(
+      `SELECT v.content FROM blocks v JOIN blocks f ON v.parent_id = f.id
+        WHERE f.parent_id = ? AND f.reference_target_id = ? AND f.deleted = 0
+          AND v.deleted = 0 AND v.is_field_form IS NOT 1
+        ORDER BY v.order_key, v.id`,
+      [owner, FIELD_ID])).map(row => row.content)
+
+  it('re-encodes EVERY member, not just the first', async () => {
+    // The scalar rule — take the first value child that parses — truncates a
+    // list to one member. The SECOND member is the whole point here: under
+    // `refList` each is a bare `((id))` span, and the string member codec has
+    // to ESCAPE it, or a later rename or merge rewrites it as a reference.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('refList')
+    await createHost(repo, 'a-id')
+    await createHost(repo, 'b-id')
+    const ids = await seedListProperty(repo, 'p', 'status', ['a-id', 'b-id'])
+    expect(await rowContent(ids[0]!)).toBe('((a-id))')
+
+    await retype(repo, FIELD_ID, 'string-list')
+
+    expect(await cell('p')).toEqual({status: ['((a-id))', '((b-id))']})
+    expect(await rowContent(ids[1]!)).not.toBe('((b-id))')
+    expect(await rowContent(ids[1]!)).not.toMatch(/[[(]/)
+  })
+
+  it('UNIONS across duplicate field rows, as the projection does', async () => {
+    // Two field rows carrying the same member are a transient sync conflict the
+    // collapse folds away. Concatenating them publishes a DOUBLED cell, and
+    // MATERIALIZE then folds one row to a single member and MINTS a second to
+    // satisfy that cell — turning the transient duplicate into permanent,
+    // user-visible multiplicity.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('refList')
+    await createHost(repo, 'a-id')
+    await seedListProperty(repo, 'p', 'status', ['a-id'])
+    await addDuplicateFieldRow('p', ['((a-id))'])
+
+    await retype(repo, FIELD_ID, 'string-list')
+
+    expect(await cell('p')).toEqual({status: ['((a-id))']})
+    // The duplicate ROW survives, and should: this pass is `settledWrites`, so
+    // no materializer follows it, and folding the two rows is the collapse's
+    // job rather than this one's. What must not happen is the DOUBLED cell —
+    // that is what turns a transient conflict into permanent multiplicity,
+    // because whoever reconciles next mints a row to satisfy it.
+    expect(await liveMembers('p')).toHaveLength(2)
+  })
+
+  it('unions across duplicate field rows on a RENAME too', async () => {
+    // Same rule, and this processor is `settledWrites` — no materializer or
+    // projector follows it, so a doubled cell would stay doubled until some
+    // later child edit happened to reproject.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    await seedListProperty(repo, 'p', 'status', ['alpha'])
+    await addDuplicateFieldRow('p', ['alpha'])
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect(await cell('p')).toEqual({state: ['alpha']})
+  })
+
+  it('scalar -> list reads the one value child as a single member', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 'alpha')
+
+    await retype(repo, FIELD_ID, 'string-list')
+
+    expect(await cell('p')).toEqual({status: ['alpha']})
+    expect(await rowContent(valueRowId)).toBe('alpha')
+  })
+
+  it('list -> scalar takes the first member and leaves the rest in the tree', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    const ids = await seedListProperty(repo, 'p', 'status', ['alpha', 'beta'])
+
+    await retype(repo, FIELD_ID, 'string')
+
+    expect(await cell('p')).toEqual({status: 'alpha'})
+    // This pass never deletes a value row, so the member the scalar codec has
+    // no room for stays visible and fixable rather than vanishing.
+    expect(await rowContent(ids[1]!)).toBe('beta')
+  })
+
+  it('keeps an EXPLICITLY empty list, field row and all', async () => {
+    // A stored `[]` read as "nothing projected" unsets the key, and MATERIALIZE
+    // then tombstones the field row the empty list was stored in. The rule
+    // lives in the shared aggregate so every caller that saw a field row gets
+    // it.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    await createHost(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', schemaFor(repo, 'status'), []),
+      {scope: ChangeScope.BlockDefault})
+    const fieldRowId = await liveFieldRow('p', FIELD_ID)
+    expect(fieldRowId).toBeDefined()
+
+    await retype(repo, FIELD_ID, 'refList')
+
+    expect(await cell('p')).toEqual({status: []})
+    expect(await isLive(fieldRowId!)).toBe(true)
+  })
+
+  it('publishes NOTHING when any member fails to convert, so those rows survive', async () => {
+    // The cell write is `skipMetadata` but not settled against a later
+    // MATERIALIZE, which reconciles the children against what was published —
+    // over the very rows this pass reports as preserved. Publishing a partial
+    // list gets the unconvertible member tombstoned.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    await createHost(repo, 'a-id')
+    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
+    // Member 0 is hand-edited into a bare span, which the ref member codec
+    // converts; member 1 stays prose, which it refuses. Through the TREE, not
+    // the cell, because the string member codec would escape a span.
+    await repo.tx(tx => tx.update(ids[0]!, {content: '((a-id))'}),
+      {scope: ChangeScope.BlockDefault})
+
+    await retype(repo, FIELD_ID, 'refList')
+    await repo.awaitProcessors()
+
+    expect(await isLive(ids[0]!)).toBe(true)
+    expect(await isLive(ids[1]!)).toBe(true)
+    expect(await rowContent(ids[1]!)).toBe('y')
+  })
+
+  it('list -> SCALAR never overwrites a leading unconvertible member', async () => {
+    // The scalar destination has no member codec, so a whole-list guard would
+    // not apply: the scalar value gets published, MATERIALIZE takes the scalar
+    // branch, overwrites the FIRST value row — the unconvertible one — with the
+    // published text and folds the row that converted. One rule for both
+    // grains, because the preservation promise is the same for both.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    const ids = await seedListProperty(repo, 'p', 'status', ['bad', ' 1 '])
+
+    await retype(repo, FIELD_ID, 'number')
+    await repo.awaitProcessors()
+
+    expect(await rowContent(ids[0]!)).toBe('bad')
+    // The convertible row IS canonicalized — that is the re-encode doing its
+    // job, and not what the preservation promise covers.
+    expect(await rowContent(ids[1]!)).toBe('1')
+    expect(await isLive(ids[0]!)).toBe(true)
+    expect(await isLive(ids[1]!)).toBe(true)
+  })
+
+  it('does not stamp an empty list on a parent that carries no field row for it', async () => {
+    // `consumingParentIds` returns every parent holding a field row for ANY
+    // changed definition, so a parent consuming only one of two is visited for
+    // both. The null gate is what keeps the other change off it: an empty group
+    // aggregates to `[]` under a list codec, which is a VALUE — this parent
+    // would gain a key it never had.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    await createDefinition(repo, FIELD_PEER, 'other', 'string')
+    await awaitDefinition(repo, 'other', 'string')
+    await seedListProperty(repo, 'p', 'status', ['alpha'])
+    const {valueRowId} = await seedProperty(repo, 'q', 'other', 'done', FIELD_PEER)
+    expect(await cell('q')).toEqual({other: 'done'})
+
+    // ONE tx renaming both, so both are changes in the same batch.
+    await repo.tx(async tx => {
+      await tx.setProperty(FIELD_ID, propertyNameProp, 'state')
+      await tx.setProperty(FIELD_PEER, propertyNameProp, 'another')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cell('q')).toEqual({another: 'done'})
+    expect(await cell('p')).toEqual({state: ['alpha']})
+    expect(await rowContent(valueRowId)).toBe('done')
+  })
+
+  it('re-encodes between two LIST presets that share a codec type (#1024)', async () => {
+    // `string-list` and the generic `list` preset both report `codec.type ===
+    // 'list'`, so a detector keyed on the type string sees no change. At member
+    // grain they disagree about the child TEXT: `string-list` stores a string
+    // member verbatim (`x`), the generic one stores it as JSON (`"x"`). Left
+    // un-re-encoded, `x` is then read as JSON, `JSON.parse` fails, and the
+    // projection drops every member — the whole list, silently.
+    //
+    // Keying on the codec's INPUTS is what sees it: the preset id moved, and
+    // nothing derived from the built codec did.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
+    const errors = collectUserErrors(repo)
+    expect(await rowContent(ids[0]!)).toBe('x')
+
+    await retype(repo, FIELD_ID, 'list')
+    await repo.awaitProcessors()
+
+    // DETECTED, which is the whole of what keying on the inputs buys here. The
+    // conversion then fails honestly: `x` is not JSON, so the identity member
+    // codec cannot read it, and the pass preserves the rows and REPORTS rather
+    // than converting. The cell is stale until something reprojects it and the
+    // members drop out — so #1024 is narrowed to a reported failure, not
+    // closed.
+    expect(errors.map(error => error.code))
+      .toEqual(['property.codec-change.unconvertible'])
+    expect(errors[0]!.meta).toMatchObject({count: 2})
+    expect(await rowContent(ids[0]!)).toBe('x')
+    expect(await rowContent(ids[1]!)).toBe('y')
+  })
+
+  it('reports members that cannot convert and leaves the cell key stale', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    await seedListProperty(repo, 'p', 'status', ['alpha', 'beta'])
+    const errors = collectUserErrors(repo)
+
+    // Bare id-shaped strings are what a refList member must refuse: there is no
+    // grammar in them, so nothing can tell one from prose.
+    await retype(repo, FIELD_ID, 'refList')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: ['alpha', 'beta']})
+    expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
+    expect(errors[0]!.meta).toMatchObject({count: 2})
+  })
+})
