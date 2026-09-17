@@ -37,30 +37,24 @@
  *    (§9: "N values can't convert" must be user-visible, never a silent unset)
  *    and never deleted; the rows stay in the tree, fixable by hand.
  *
- * ── The accepted residual ──
+ * ── The accepted residuals ──
  *
- * A device offline across the change, holding a block it created under the old
- * codec, is re-encoded by nobody — this runs on the initiating client only.
- * That is already the answer for renames, and the repair for both is the
+ * Three ways a consumer is left in the old encoding, all of them the same shape
+ * — a change this processor is not present for — and all repaired by the
  * content-driven reconcile that compares a cell against its field rows (#389
- * item 8), the only thing that can see such a row at all.
+ * item 8), the only thing that can see such a row:
  *
- * The same residual, reached a different way: a value preset whose `build`
- * starts returning a DIFFERENT codec type under the same preset id changes
- * every definition using it with no row edit at all, so nothing fires here.
- * That is already a frozen-identity violation — a preset id and its codec type
- * are keys user data is stored under (`seedIdentityLedger.ts`, #797) — and it
- * leaves exactly the cell-versus-children divergence the reconcile above
- * detects. Detecting it where it is DONE rather than sweeping for it
- * afterwards is #1022.
- *
- * And a third: a re-type in a workspace that genuinely has no field rows yet
- * fans nothing out, and nothing remembers it for after the flip. Measured
- * rather than reasoned: the flip materializes children FROM each cell and skips
- * any key whose cell value will not decode under the CURRENT codec, reporting
- * the block instead — so a value stranded by such a re-type gets no field row,
- * and a pass that walks field rows would have nothing to walk. The flip's own
- * per-key report is the surface for it.
+ *  - a device offline across the change, holding a block it created under the
+ *    old codec. This runs on the initiating client only, which is already the
+ *    answer for renames.
+ *  - a value preset whose `build` starts returning a different codec under the
+ *    same preset id: no row edit at all, so nothing fires. Already a
+ *    frozen-identity violation (`seedIdentityLedger.ts`, #797); catching it
+ *    where it is DONE is #1022.
+ *  - a re-type in a workspace with no field rows yet, which fans nothing out
+ *    and is remembered by nothing for after the flip. The flip skips any key
+ *    whose cell will not decode under the current codec and reports the block,
+ *    so its own per-key report is the surface for this one.
  *
  * Dormant until a definition has field rows — see `consumingParentIds`, which
  * is the gate.
@@ -114,19 +108,16 @@ const definitionAsOfBefore = (
  *
  *  `tryBuildSchema` derives a codec from exactly two properties of the row — the
  *  preset id and the preset config — so comparing those answers the question
- *  exactly, where every observable derived from the codec only approximates it.
- *  Three review rounds went to that approximation: `codec.type` cannot tell
- *  `optional-string` from `string` (they report the same one), a preset id alone
- *  cannot see a configurable preset whose `build(config)` returns a different
- *  codec, and the two together still miss a config edit that moves between
- *  codecs SHARING a type. The inputs have no such blind spot.
+ *  exactly. Every observable derived from the codec only approximates it, and
+ *  each approximation has a blind spot: `codec.type` cannot tell
+ *  `optional-string` from `string`, a preset id alone cannot see a configurable
+ *  preset whose `build(config)` returns a different codec, and the two together
+ *  still miss a config edit that moves between codecs SHARING a type.
  *
- *  Wider than the registry diff this replaced, which treated a config edit as no
- *  change. The extra cost is re-parsing a property's value children on a config
- *  edit that did not move the encoding — which writes nothing, since
- *  `value.content !== canonical` guards it, and reports nothing, because a codec
- *  that reads leniently across such an edit (enum keeping a value whose option
- *  was removed) decodes it successfully and is never counted. */
+ *  Deliberately wider than it needs to be: a config edit that did not move the
+ *  encoding re-parses the value children, which writes nothing
+ *  (`value.content !== canonical` guards it) and reports nothing (a codec that
+ *  reads leniently across the edit decodes successfully and is never counted). */
 const codecInputsChanged = (before: BlockData, after: BlockData): boolean =>
   peekRowProperty(before, presetIdProp) !== peekRowProperty(after, presetIdProp)
   || !jsonValuesEqual(
@@ -158,20 +149,15 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  * Drop a rename or re-type whose destination, or whose vacated name, is not
  * this definition's to write.
  *
- * `claimOf` answers who holds a name once THIS TX COMMITS. Six review rounds
- * went into that answer, each finding another source it was missing, so it is
- * derived from the ROWS rather than accumulated: definitions the tx deletes,
+ * `claimOf` answers who holds a name once THIS TX COMMITS, derived from the
+ * ROWS rather than accumulated source by source: definitions the tx deletes,
  * revives, creates, renames or strips of their metadata all move a name, and
  * none of them appears in the tx-start registry under the name it ends up with.
  *
- * The decisive correction, and the reason nothing here is derived from which
- * candidates SURVIVE: dropping a candidate suppresses its FAN-OUT, never its
- * definition row. The rename commits either way. A model that treated a dropped
- * rename as not having happened re-contested names it really did vacate, and
- * cascaded — refusing one fan-out made the refusal refuse the next.
- *
- * So both halves read a post-commit claim that does not depend on this
- * function's own outcome:
+ * Nothing here may be derived from which candidates SURVIVE, because dropping a
+ * candidate suppresses its FAN-OUT and never its definition row — the rename
+ * commits either way. So both halves read a post-commit claim that does not
+ * depend on this function's own outcome:
  *
  *  - The DESTINATION is contested when anyone ELSE holds it after commit, or
  *    when anyone else ARRIVES at it. Two definitions landing on one key means
@@ -192,15 +178,12 @@ export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUn
  * (#389 item 8), not to a one-shot re-key.
  *
  * WHAT NONE OF THIS REACHES: a name's cells outlive the definition that owned
- * it. The ways of leaving a name that still commit — a refused rename, a
- * deletion, losing the definition metadata — leave that definition's consumers
- * keyed under it, because the fan-out only visits consumers of definitions
- * whose own fan-out was kept. (An unbuildable change is the one that does not
- * commit: the caller refuses the whole tx once it has consumers.) Whoever takes the name next then reads those
- * values through its own schema. Contesting the name does not repair them and
- * strands the arriving definition's consumers as well; the choices that do are
- * a reconcile, a refusal, or retiring the departing definition's cells, and
- * picking between them is #1028.
+ * it. Every way of leaving a name that still COMMITS — a refused rename, a
+ * deletion, losing the definition metadata — leaves that definition's consumers
+ * keyed under it, and whoever takes the name next reads those values through
+ * its own schema. Contesting the name does not repair them and strands the
+ * arriving definition's consumers too; the choices that do are a reconcile, a
+ * refusal, or retiring the departing cells, and picking between them is #1028.
  */
 export interface NameClaim {
   /** Definitions that will STILL hold this name once the tx commits, winner
@@ -302,8 +285,7 @@ const collectChanges = (
     // out. The materializer writes those rows under Automation scope, which
     // would otherwise reach this processor. Unpinned: reaching it needs a
     // shipped seed to change a frozen field, which the ledger test refuses
-    // first — this keeps the exclusion the registry diff made before #1013,
-    // rather than silently widening the pass to a path designed to be frozen.
+    // first.
     if (afterMeta.seedKey !== undefined) continue
     // There is deliberately no eligibility check for SHADOWING here. The
     // contested-name refusal below already covers both of its shapes from the
@@ -340,36 +322,21 @@ const collectChanges = (
       }
       continue
     }
-    // The PRESET is the discriminator, not `codec.type`. A codec's type string
-    // is not its identity: `optional-string` and `string` both report 'string'
-    // while the optional one stores an unset value as `null`, which the
-    // required one reads back as literal text — so switching between twins
-    // changes the stored encoding without changing the type, and the
-    // seed-identity rules freeze preset AND codec for exactly that reason.
-    // Compared by the codec's INPUTS rather than by anything derived from the
-    // codec it built — see `codecInputsChanged`.
+    // Off the block's own rows, never the registry, whose tx-start snapshot is
+    // at-or-older than `before` — a change an earlier tx already fanned out
+    // would read as this one's and be re-encoded (and re-reported) again.
     //
-    // Read from the block's own rows, not from the registry: the tx-start
-    // snapshot is at-or-older than `before`, so a change an earlier tx already
-    // fanned out would read as this tx's and be re-encoded a second time
-    // (idempotent, but it would re-report to the user).
+    // `beforeSchema` is deliberately not consulted: whether a row builds is
+    // itself a function of the two properties `codecInputsChanged` compares, so
+    // a definition whose broken preset has just been fixed already reports its
+    // inputs as changed. The old codec DETECTS a change and never performs one
+    // — the conversion parses the child's TEXT under the new codec either way.
     //
-    // Asking the INPUTS also answers REPAIR without a second clause, which is
-    // the reason nothing here consults `beforeSchema`: whether a row builds is
-    // itself a function of those two properties and the shared preset map, so a
-    // definition whose broken preset or config has just been fixed necessarily
-    // reports its inputs as changed. The old codec is what DETECTS a change,
-    // never what performs one — the conversion parses the child's TEXT under
-    // the new codec either way — so the repairing tx re-encodes, which is the
-    // only moment anything can.
-    //
-    // A bag edited while the row was UNPUBLISHED — a tombstone, or a row
-    // stripped of its definition metadata — is judged here against the MOVED
-    // bag, and nothing remembers the encoding its consumers are actually in.
-    // Accepted rather than re-encoding on every revival: re-parsing is not the
-    // identity for editable representations (a ref value child loses its label,
-    // `1.50` becomes `1.5`), so speculating would rewrite every plain restore.
-    // #1031.
+    // ACCEPTED: a bag edited while the row was UNPUBLISHED (a tombstone, or a
+    // row stripped of its metadata) is judged against the MOVED bag, and
+    // nothing remembers the encoding its consumers are in. Re-encoding on every
+    // revival instead is worse — re-parsing is not the identity for editable
+    // representations, so it rewrites every plain restore. #1031.
     const encodingChanged = codecInputsChanged(before, after)
     // Every write to a definition block's bag reaches this processor —
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
@@ -387,18 +354,15 @@ const collectChanges = (
   if (candidates.length === 0 && unbuildableChanges.length === 0) {
     return {changes: [], unbuildableChanges}
   }
-  // Every definition this tx leaves live under a name it did NOT hold at tx
-  // start. The registry lists none of them: a created row has no entry, a
-  // revived one lost its entry when it was tombstoned, and a renamed one is
-  // still filed under its old name. A revived or created claimant never becomes
-  // a candidate either — nothing about its own name changed — so this is the
-  // only place it can be seen.
-  // ONE derivation of what this tx does to names, read off the ROWS. Every
+  // ONE derivation of what this tx does to names, read off the ROWS: every
   // definition it touches either keeps the name the tx-start registry files it
-  // under, or leaves it — by being deleted, renamed, or stripped of the
-  // metadata that made it a definition at all — and may land on a new one.
-  // Neither list depends on which fan-outs the refusal keeps, because a dropped
-  // fan-out still commits its row: see the refusal's own doc.
+  // under, or LEAVES it — by being deleted, renamed, or stripped of the
+  // metadata that made it a definition — and may land on a new one. The
+  // registry lists no arrival (a created row has no entry, a revived one lost
+  // its entry, a renamed one is still filed under its old name), and a revived
+  // or created claimant never becomes a candidate either, so this is the only
+  // place either can be seen. Neither list depends on which fan-outs the
+  // refusal keeps, because a dropped fan-out still commits its row.
   const released = new Set<string>()
   const arrivingByName = new Map<string, string[]>()
   for (const {before, after} of changedRows) {
@@ -440,9 +404,8 @@ const collectChanges = (
 
 /** One bound variable per changed definition would blow
  *  SQLITE_MAX_VARIABLE_NUMBER on a scripted transaction that edits a whole
- *  registry's worth of them — and this probe runs INSIDE the user's tx, so the
- *  throw takes their entire edit down rather than costing a deferred pass a
- *  retry the way it used to. */
+ *  registry's worth of them, and this probe runs INSIDE the user's tx — so the
+ *  throw would take their entire edit down. */
 export const FIELD_PROBE_CHUNK = 500
 
 /** Parents holding a live field row for any of `fieldIds` — and the only gate
@@ -459,7 +422,7 @@ export const FIELD_PROBE_CHUNK = 500
  *  Field rows only, which means a parent the cell-to-children backfill has not
  *  reached yet is NOT a consumer here. The runbook flips before backfilling, so
  *  that window is real and a definition edit inside it strands those cells
- *  permanently — #1029, and the same blind spot the pass this replaced had.
+ *  permanently — #1029.
  *
  *  The Set is load-bearing across chunks, not tidiness:
  *  `SELECT DISTINCT` dedupes only WITHIN one statement, so a parent consuming
