@@ -1,1 +1,0 @@
-import{Jk as e,qk as t}from"../../../chunks/app-COG3iDi4.js";export{t as MetadataRow,e as PropertySectionLabel};

@@ -1,1 +1,0 @@
-import{MC as e,NC as t}from"../../chunks/app-COG3iDi4.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

@@ -1,1 +1,0 @@
-import{UW as e,WW as t}from"../../../chunks/app-COG3iDi4.js";export{e as open,t as seal};
