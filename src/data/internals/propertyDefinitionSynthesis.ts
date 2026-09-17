@@ -1025,6 +1025,13 @@ export const applyPropertyDefinitionSynthesis = async (
     // two (peer holds the claim, pass defers), leaving these as the only
     // committed write with a live undo entry that cmd-Z would delete.
     skipUndo: true,
+  }).catch((err: unknown) => {
+    // A drop begun inside a transaction that then failed to commit must be
+    // released, or it refuses every replay until reload. Nothing was written,
+    // so the history is not owed either.
+    drop?.abandon()
+    drop = undefined
+    throw err
   })
   // Finished once the transaction has COMMITTED. About the entries ALREADY on
   // the stack, not this pass's own writes, which are `skipUndo` above: a key

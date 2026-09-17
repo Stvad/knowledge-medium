@@ -145,7 +145,7 @@ import {
   parseParentDeletedError,
   type ParsedAliasCollision,
 } from './internals/raiseProtocol'
-import { UndoManager, type UndoEntry } from './internals/undoManager'
+import { UndoManager, type HistoryDrop, type UndoEntry } from './internals/undoManager'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
@@ -1954,6 +1954,17 @@ export class Repo {
     // replay queued behind a pass is refused before its stack is ever dropped.
     // None of them can happen across the pop itself, so this is the same value
     // either side.
+    // A drop is UNDER WAY: its pass's writes are landing right now and the
+    // stacks still hold entries from before them, so replaying one restores
+    // rows the pass is in the middle of replacing. The epoch cannot express
+    // this — it marks an instant, so a gesture STARTING mid-drop samples the
+    // already-moved value and passes every check. For the lockless flip that
+    // window is a server round trip wide.
+    //
+    // Refused rather than queued: the gesture is the user's, and answering
+    // "nothing happened" immediately is better than a cmd-Z that silently
+    // applies a minute later against rows it no longer describes.
+    if (manager.historyDropInProgress) return false
     const clearEpoch = manager.clearEpoch
     const opposite = action === 'undo' ? 'redo' : 'undo'
     const entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
@@ -4009,10 +4020,15 @@ export class Repo {
           // definition readiness and the write lock, so a check before it can
           // go stale before `fn` reads a row. Throwing here aborts the tx and
           // the run with no marker recorded, so the next open retries.
-          // One drop per batch, carried OUT of the transaction rather than
-          // assigned into an outer `let`, so the batch cannot reach its
-          // `finish` without having begun one.
-          const {value, drop} = await this.tx(async t => {
+          // Held OUTSIDE the transaction, deliberately, though that costs the
+          // structural guarantee that a batch cannot reach `finish` without
+          // having begun a drop. A drop now refuses replays for its whole
+          // duration, so one left open by a commit that throws after the
+          // callback returned would disable undo until reload — and the
+          // callback's return value never arrives on that path. Release beats
+          // the guarantee; the `catch` below is the other half.
+          let drop: HistoryDrop | undefined
+          const value = await this.tx(async t => {
             await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
             const value = await fn(t)
             // AGAIN, now the body has returned — see the method. `fn` can span a
@@ -4024,11 +4040,17 @@ export class Repo {
             // database handing the lock to a waiting replay and `this.tx`
             // resolving, which the harness cannot schedule into. Kept because
             // what it loses is a committed batch of a once-per-graph migration.
-            return {value, drop: this.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()}
+            drop = this.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
+            return value
           }, {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
             skipUndo: true,
+          }).catch((err: unknown) => {
+            // Rolled back, so there is nothing for an entry to be replayed onto
+            // and the history is not owed.
+            drop?.abandon()
+            throw err
           })
           // After EVERY committed batch, not just the first. A chunked pass
           // runs for minutes, and an entry the USER records between two batches
@@ -4043,7 +4065,7 @@ export class Repo {
           // an empty stack — so one cmd-Z reverts only the tail. Accepted: the
           // user's history is being discarded either way, and the alternative
           // is teaching `record` about groups a pass cannot see.
-          drop.finish()
+          drop?.finish()
           if (!announcedUndoClear) {
             announcedUndoClear = true
             undoHistoryCleared = true

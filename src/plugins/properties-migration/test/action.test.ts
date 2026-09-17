@@ -60,12 +60,15 @@ const plan = (candidates = 0) => ({
 
 import type { OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
 import type { SynthesisResult } from '@/data/internals/propertyDefinitionSynthesis'
+import type { HistoryDrop } from '@/data/internals/undoManager'
 import { claimStub, type ClaimStubLog } from './claimStub.ts'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
 const finishUndoDrop = vi.fn()
-const beginHistoryDrop = vi.fn(() => ({finish: finishUndoDrop}))
+const abandonUndoDrop = vi.fn()
+const beginHistoryDrop = vi.fn(
+  (): HistoryDrop => ({finish: finishUndoDrop, abandon: abandonUndoDrop}))
 const USER = 'user-1'
 
 const RAN = {outcome: 'ran', undoHistoryCleared: false} as OperatorBackfillResult
@@ -132,6 +135,7 @@ const invoke = (repo: Repo) =>
 afterEach(() => {
   clearUndo.mockReset()
   finishUndoDrop.mockReset()
+  abandonUndoDrop.mockReset()
   beginHistoryDrop.mockClear()
   showInfo.mockReset()
   dismissToast.mockReset()
@@ -359,7 +363,10 @@ describe('migrate_properties_to_blocks action', () => {
     // is off the stack by then. Only the epoch bump refuses it, and it has to
     // land before the workspace changes underneath.
     const order: string[] = []
-    beginHistoryDrop.mockImplementation(() => { order.push('begin'); return {finish: finishUndoDrop} })
+    beginHistoryDrop.mockImplementation(() => {
+      order.push('begin')
+      return {finish: finishUndoDrop, abandon: abandonUndoDrop}
+    })
     finishUndoDrop.mockImplementation(() => { order.push('finish') })
     flipWorkspace.mockImplementation(async () => { order.push('flip'); return {localApplied: true} })
     const {repo} = makeRepo(RAN)
@@ -419,6 +426,9 @@ describe('migrate_properties_to_blocks action', () => {
     await invoke(repo)
 
     expect(finishUndoDrop).not.toHaveBeenCalled()
+    // ENDED all the same: a drop left open refuses every replay in this
+    // workspace until the page reloads.
+    expect(abandonUndoDrop).toHaveBeenCalled()
     expect(progressHandle.fail).not.toHaveBeenCalledWith(
       expect.stringMatching(/undo history for this workspace was cleared/i))
     flipWorkspace.mockReset()

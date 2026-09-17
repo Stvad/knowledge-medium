@@ -626,6 +626,69 @@ describe('undo against a pass that drops the history', () => {
     expect(await readContent(repo, 'a')).toBe('edited')
   })
 
+  it('refuses a cmd-Z STARTED while a lockless pass is still landing', async () => {
+    // The window the epoch cannot cover. A drop marks an instant, so a gesture
+    // that starts after it samples the already-moved value and passes every
+    // check — then restores rows from before writes that are landing as it
+    // runs. For the flip that window is a server round trip wide, and what it
+    // would commit is a pre-flip snapshot over a PATCH the server has taken.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'pre-flip')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'user edit, still pre-flip'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    // The pass has begun its drop and is awaiting the server.
+    const drop = repo.undoManager.beginHistoryDrop()
+
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(false)
+    expect(await readContent(repo, 'a')).toBe('user edit, still pre-flip')
+
+    // And once it has landed, the entry is gone rather than merely deferred.
+    drop.finish()
+    expect(undoDepth(repo)).toBe(0)
+  })
+
+  it('takes undo back when a pass ABANDONS its drop, having written nothing', async () => {
+    // A pass that can prove it did not write owes the user nothing — but the
+    // drop still has to END, or it refuses every replay until reload. That is
+    // the failure mode that made a plain suspension the wrong shape here.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    const drop = repo.undoManager.beginHistoryDrop()
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(false)
+
+    drop.abandon()
+
+    // The history survived, and works.
+    expect(undoDepth(repo)).toBe(1)
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('original')
+  })
+
+  it('keeps refusing until the LAST of two overlapping drops ends', async () => {
+    // Counted rather than a flag, so the first pass to finish cannot hand
+    // replays back while the second is still writing.
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    const first = repo.undoManager.beginHistoryDrop()
+    const second = repo.undoManager.beginHistoryDrop()
+    first.abandon()
+
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(false)
+
+    second.abandon()
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(true)
+  })
+
   it('drops an entry whose transaction was recorded after a pass cleared', async () => {
     // A user transaction can hold the write lock ahead of a pass's chunk,
     // commit, release — and only reach its own recording continuation after

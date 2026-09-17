@@ -344,7 +344,12 @@ const migrateUnderClaim = async (
       // was written, and charging the user their history for an ordinary
       // refusal — a trigger, a permission — would be a cost with no hazard.
       const provenNoWrite = flipRejectionProvesNoWrite(err)
-      if (!provenNoWrite) {
+      if (provenNoWrite) {
+        // ABANDONED, not finished: nothing was written, so the history is not
+        // owed — but the drop still has to END, or it refuses every replay in
+        // this workspace until the page reloads.
+        undoDrop.abandon()
+      } else {
         undoDrop.finish()
         undoCleared = true
       }
