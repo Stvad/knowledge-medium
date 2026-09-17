@@ -51,13 +51,18 @@
  * `seedIdentityLedger.ts` already asks of a plugin-owned core, and what makes
  * the change detectable both here and there.
  *
- * SCOPE. This compares against what is registered on THIS device right now, so
- * it sees a conflict only while the core it replaces is live: the previous
- * version of an extension that is running, a plugin's core, or a kernel one.
- * A re-install of an extension that is installed but not approved/enabled here
- * replaces nothing yet and is not flagged. That is the honest limit of an
- * install-time check — the old encoding exists nowhere in the data, only in the
- * code that is running.
+ * SCOPE, on both sides. What it compares AGAINST is what is registered on THIS
+ * device right now, so it sees a conflict only while the core it replaces is
+ * live: the previous version of a running extension, a plugin's core, or a
+ * kernel one. The old encoding exists nowhere in the data — only in the code
+ * that is running — so that is the honest limit of an install-time check.
+ *
+ * What it compares is whatever the caller's install EXECUTES, and install does
+ * not execute source it will not make live (#67: a first install grants no
+ * trust and sets no intent). So a re-install of a block this device has not
+ * approved is not checked at all unless `--verify` asks for the evaluation —
+ * and it does not need to be, because nothing it stores runs. The gap that
+ * leaves is the ENABLE that later does make it run, which is #1046.
  */
 
 import type { AnyValuePresetCore } from '@/data/api'
@@ -189,26 +194,6 @@ export interface DefinitionRow {
   storedName: string
 }
 
-interface DefinitionSqlRow {
-  id: string
-  presetId: string | null
-  config: string | null
-  name: string | null
-}
-
-/** `json_each(...).value` hands back JSON TEXT for an object or array cell and
- *  a plain SQLite value for a scalar. A config cell is an object, so it arrives
- *  as text that has to be parsed back; anything unparseable is treated as
- *  absent, which is what `rawPresetConfig` does with an undefined cell. */
-const parseConfigCell = (raw: string | null): unknown => {
-  if (raw === null) return undefined
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return undefined
-  }
-}
-
 /** Every live property-definition row in the workspace, with the two cells the
  *  codec is built from.
  *
@@ -220,28 +205,40 @@ const readDefinitionRows = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<DefinitionRow[]> => {
-  // The LAST occurrence of each key, and the `OBJECT_BAG` guard, both for the
-  // reasons `propertyKeyScan` spells out: a repeated key in a hand-written bag
-  // is read by `JSON.parse` (and so by the projector) as the last one, and
-  // `json_extract` RAISES on a malformed bag instead of skipping the row.
-  const cell = (): string =>
-    `(SELECT j.value FROM json_each(${OBJECT_BAG}) j WHERE j.key = ? ORDER BY j.id DESC LIMIT 1)`
-  const rows = await repo.db.getAll<DefinitionSqlRow>(
-    `SELECT b.id AS id, ${cell()} AS presetId, ${cell()} AS config, ${cell()} AS name
+  // The WHOLE bag, parsed in JS, rather than a cell at a time in SQL. A config
+  // is an arbitrary JSON value — `presetConfigProp` stores it through
+  // `unsafeIdentity` — and `json_each(...).value` flattens that: a string cell
+  // comes back unquoted, a boolean as 0/1, JSON null as NULL, so parsing the
+  // column back as JSON mangles every config that is not an object. Reading it
+  // the way the runtime does removes the whole class, and gets the
+  // last-duplicate-key rule (`propertyKeyScan`'s `ORDER BY j.id DESC`) for
+  // free, since `JSON.parse` is what defines it. `OBJECT_BAG` is still the
+  // guard: `json_valid`/`json_type` in a CASE short-circuit, so a malformed bag
+  // degrades to `{}` rather than raising.
+  const rows = await repo.db.getAll<{id: string; bag: string}>(
+    `SELECT b.id AS id, ${OBJECT_BAG} AS bag
        FROM blocks b
        JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
       WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0`,
-    [presetIdProp.name, presetConfigProp.name, propertyNameProp.name,
-      PROPERTY_SCHEMA_TYPE, workspaceId],
+    [PROPERTY_SCHEMA_TYPE, workspaceId],
   )
-  return rows.flatMap(row => typeof row.presetId === 'string' && row.presetId
-    ? [{
-        fieldId: row.id,
-        presetId: row.presetId,
-        config: parseConfigCell(row.config),
-        storedName: typeof row.name === 'string' ? row.name : '',
-      }]
-    : [])
+  return rows.flatMap(row => {
+    let bag: Record<string, unknown>
+    try {
+      bag = JSON.parse(row.bag) as Record<string, unknown>
+    } catch {
+      return []
+    }
+    const presetId = bag[presetIdProp.name]
+    if (typeof presetId !== 'string' || !presetId) return []
+    const storedName = bag[propertyNameProp.name]
+    return [{
+      fieldId: row.id,
+      presetId,
+      config: bag[presetConfigProp.name],
+      storedName: typeof storedName === 'string' ? storedName : '',
+    }]
+  })
 }
 
 /** Live blocks carrying a cell under each of `names`. */

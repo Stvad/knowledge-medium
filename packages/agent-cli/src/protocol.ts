@@ -673,7 +673,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'install-extension': {
     usage: 'kmagent install-extension [--verify] [--allow-preset-change] [--description <text>] <file> [label]',
-    description: 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext. REFUSES when a value preset the extension registers would build a different codec under an id already registered here — that re-types every value stored under it with no row edit to migrate from, so nothing downstream repairs it; the refusal names what moved and the definitions and cell counts at stake. --allow-preset-change installs anyway and reports what it changed.',
+    description: 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext. REFUSES when a value preset the extension registers would build a different codec under an id already registered here — that re-types every value stored under it with no row edit to migrate from, so nothing downstream repairs it; the refusal names what moved and the definitions and cell counts at stake. That check EXECUTES the source, so it runs only when this install makes the source live (the block is already approved on this device) or --verify asks for it; a first install stores source nothing runs and is not checked. --allow-preset-change installs anyway and reports what it changed.',
     readOnly: false,
   },
   'enable-extension': {

@@ -79,7 +79,9 @@ const addDefinitionWithCells = async (
 
 /** A definition row written directly, for the names `addSchema` refuses to
  *  mint twice. Written through `repo.tx` so the projector still sees it. */
-const createDefinitionBlock = async (name: string, presetId: string): Promise<string> => {
+const createDefinitionBlock = async (
+  name: string, presetId: string, config: unknown = {},
+): Promise<string> => {
   const id = await repo.mutate.createChild({parentId: repo.propertiesPageId!})
   await repo.tx(async tx => {
     await tx.update(id, {
@@ -87,7 +89,7 @@ const createDefinitionBlock = async (name: string, presetId: string): Promise<st
         types: ['property-schema'],
         'property-schema:name': name,
         'property-schema:preset': presetId,
-        'property-schema:config': {},
+        'property-schema:config': config,
       },
     })
   }, {scope: ChangeScope.BlockDefault, description: 'seed competing definition'})
@@ -229,6 +231,35 @@ describe('findPresetIdentityConflicts', () => {
     expect(conflict!.definitions).toHaveLength(2)
     expect(conflict!.definitions.map(d => d.cells)).toEqual([3, 3])
     expect(conflict!.cells).toBe(3)
+  })
+
+  it('probes a SCALAR config a definition stores', async () => {
+    // A config is an arbitrary JSON value, not necessarily an object, and the
+    // scan has to hand `build` the same value the projector would. These two
+    // cores agree at the default config and part only at the stored one, so a
+    // config read back as absent hides the whole conflict.
+    const modeCodec: Codec<string> = {
+      type: 'demo:mode',
+      encode: value => value,
+      decode: json => {
+        if (typeof json !== 'string') throw new CodecError('mode string', json)
+        return json
+      },
+    }
+    const core = (narrowBuilds: Codec<unknown>) => definePresetCore<unknown, string>({
+      id: PRESET,
+      build: mode => mode === 'narrow' ? narrowBuilds : codecs.string,
+      defaultValue: '',
+      defaultConfig: 'wide',
+      configCodec: modeCodec,
+    })
+    register(core(codecs.string))
+    await createDefinitionBlock('demo-rating', PRESET, 'narrow')
+
+    const [conflict] = await findPresetIdentityConflicts(repo, WS, [core(codecs.number)])
+    expect(conflict?.differences).toEqual([
+      'codec type "string" -> codec type "number" (at stored config "narrow")',
+    ])
   })
 
   it('flags replacing a kernel core, which re-types definitions the extension never made', async () => {

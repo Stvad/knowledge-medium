@@ -14,6 +14,9 @@ import { __setCompileImplForTest, readApproval } from '@/extensions/compileExten
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
 import { valuePresetCoresFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
+import { getPluginPrefsBlock } from '@/data/stateBlocks'
+import { extensionsOverridesProp, extensionsPrefsType } from '@/plugins/extensions-settings/config'
+import { userToggle } from '@/facets/togglable'
 import { codecs, definePresetCore } from '@/data/api'
 import { ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
@@ -183,63 +186,145 @@ describe('agent runtime commands', () => {
     expect(installed?.properties[extensionNameProp.name]).toEqual('No description')
     expect(installed?.properties[extensionDescriptionProp.name]).toBeUndefined()
   })
-
   describe('value preset identity at install', () => {
-    // `demo:rating` starts out registered as a number, the way a running
-    // earlier version of this extension would have left it.
-    const addRatingDefinition = async (): Promise<void> => {
+    const RATING = 'demo:rating'
+    const numberRating = definePresetCore<number>({
+      id: RATING, build: () => codecs.number, defaultValue: 0,
+    })
+    const stringRating = definePresetCore<string>({
+      id: RATING, build: () => codecs.string, defaultValue: '',
+    })
+
+    /** `demo:rating` starts out registered as a number, the way a running
+     *  earlier version of this extension would have left it, with one
+     *  definition using it. */
+    const registerNumberRatingWithDefinition = async (): Promise<void> => {
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, 'installed-extension', [numberRating])
       await getOrCreatePropertiesPage(env.repo, WS)
-      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: 'demo:rating'})
+      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
     }
-    const registerNumberRating = () => {
-      env.repo.setRuntimeContributions(valuePresetCoresFacet, 'installed-extension', [
-        definePresetCore<number>({id: 'demo:rating', build: () => codecs.number, defaultValue: 0}),
-      ])
-    }
-    const installStringRating = (commandId: string, extra: Record<string, unknown> = {}) =>
+
+    const compileTo = (extension: unknown) =>
+      __setCompileImplForTest(async () => ({default: extension}))
+
+    const install = (commandId: string, extra: Record<string, unknown> = {}) =>
       executeCommand({
         commandId,
         type: 'install-extension',
-        source: 'STUBBED', // ignored — compile is stubbed below
+        source: `STUBBED ${commandId}`, // ignored — compile is stubbed by the caller
         label: 'Ratings',
         reload: false,
         ...extra,
       }, env.context) as Promise<InstallExtensionResult>
-    const stubCompileToStringRating = () => __setCompileImplForTest(async () => ({
-      default: valuePresetCoresFacet.of(
-        definePresetCore<string>({id: 'demo:rating', build: () => codecs.string, defaultValue: ''}),
-      ),
-    }))
 
-    it('refuses an install that re-types values stored under a preset it re-registers', async () => {
-      registerNumberRating()
-      await addRatingDefinition()
-      const restore = stubCompileToStringRating()
+    /** Install + enable, so the block is APPROVED on this device — the state in
+     *  which the next install re-pins the new source and makes it live. */
+    const installApproved = async (extension: unknown): Promise<string> => {
+      const restore = compileTo(extension)
       try {
-        await expect(installStringRating('install-preset-refuse'))
+        const installed = await install('install-approved')
+        await executeCommand({
+          commandId: 'enable-approved',
+          type: 'enable-extension',
+          id: installed.id,
+        }, env.context)
+        return installed.id
+      } finally {
+        restore()
+      }
+    }
+
+    it('refuses an install that re-types values under a preset it re-registers', async () => {
+      await registerNumberRatingWithDefinition()
+      const id = await installApproved(valuePresetCoresFacet.of(numberRating))
+      const before = (await env.repo.load(id))?.content
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        await expect(install('install-preset-refuse'))
           .rejects.toThrow(/codec type "number" -> codec type "string"/)
       } finally {
         restore()
       }
 
-      // The refusal wrote nothing: no extension block, and in particular no
-      // source change that would un-pin an approved version on this device.
-      const blocks = await env.repo.query.findExtensionBlocks({workspaceId: WS}).load() as BlockData[]
-      expect(blocks).toEqual([])
+      // The refusal wrote nothing. That matters beyond tidiness: storing the
+      // new source would change the block's hash and un-pin the approved
+      // version, stopping a working extension dead as a side effect of no.
+      expect((await env.repo.load(id))?.content).toBe(before)
+      expect(await readApproval(id)).not.toBeNull()
     })
 
     it('installs anyway under allowPresetChange, and reports what it re-typed', async () => {
-      registerNumberRating()
-      await addRatingDefinition()
-      const restore = stubCompileToStringRating()
+      await registerNumberRatingWithDefinition()
+      await installApproved(valuePresetCoresFacet.of(numberRating))
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
       try {
-        const result = await installStringRating('install-preset-allow', {allowPresetChange: true})
-        expect(result.presetChanges?.map(change => change.presetId)).toEqual(['demo:rating'])
+        const result = await install('install-preset-allow', {allowPresetChange: true})
+        expect(result.presetChanges?.map(change => change.presetId)).toEqual([RATING])
         expect(result.presetChanges?.[0]?.definitions.map(d => d.name)).toEqual(['demo-rating'])
-        expect(await env.repo.load(result.id)).not.toBeNull()
       } finally {
         restore()
       }
+    })
+
+    it('does not execute source this install will not make live', async () => {
+      // #67: a first install neither approves nor enables, so nothing it
+      // stores runs — and evaluating it to inspect it would defeat the gate it
+      // never passed. No conflict can be found, because none can happen yet.
+      await registerNumberRatingWithDefinition()
+      let compiled = 0
+      const restore = __setCompileImplForTest(async () => {
+        compiled += 1
+        return {default: valuePresetCoresFacet.of(stringRating)}
+      })
+      try {
+        const result = await install('install-preset-unapproved')
+        expect(compiled).toBe(0)
+        expect(result.presetChanges).toBeUndefined()
+      } finally {
+        restore()
+      }
+    })
+
+    it('reports without refusing when --verify finds a conflict that cannot run yet', async () => {
+      await registerNumberRatingWithDefinition()
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        const result = await install('install-preset-verify', {verify: true})
+        expect(result.presetChanges?.map(change => change.presetId)).toEqual([RATING])
+        expect(result.verification?.ok).toBe(true)
+      } finally {
+        restore()
+      }
+    })
+
+    it('sees a core behind a nested toggle the device has switched on', async () => {
+      // The extension declares its own `userToggle` for part of itself. It is
+      // off by default and ON in this device's overrides, so the app registers
+      // the core beneath it — and so must the isolated resolution, or the
+      // refusal never fires for anything an extension puts behind a toggle.
+      const advanced = userToggle({id: 'demo:advanced', name: 'Advanced ratings'})
+      await registerNumberRatingWithDefinition()
+      const id = await installApproved(advanced.of([valuePresetCoresFacet.of(numberRating)]))
+
+      const prefsBlock = await getPluginPrefsBlock(
+        env.repo, WS, env.repo.user, extensionsPrefsType)
+      const overrides = prefsBlock.peekProperty(extensionsOverridesProp)
+        ?? new Map<string, boolean>()
+      await prefsBlock.set(
+        extensionsOverridesProp,
+        new Map([...overrides, [advanced.id, true]]),
+      )
+
+      const restore = compileTo(advanced.of([valuePresetCoresFacet.of(stringRating)]))
+      try {
+        await expect(install('install-preset-nested'))
+          .rejects.toThrow(/codec type "number" -> codec type "string"/)
+      } finally {
+        restore()
+      }
+      expect(await readApproval(id)).not.toBeNull()
     })
 
     it('compares the core that would WIN, when one id is contributed twice', async () => {
@@ -247,20 +332,15 @@ describe('agent runtime commands', () => {
       // the second contribution is the one that would reach
       // `repo.valuePresetCores`. Comparing the loser would refuse an install
       // over a codec that never gets registered.
-      registerNumberRating()
-      await addRatingDefinition()
-      const restore = __setCompileImplForTest(async () => ({
-        default: [
-          valuePresetCoresFacet.of(
-            definePresetCore<string>({id: 'demo:rating', build: () => codecs.string, defaultValue: ''}),
-          ),
-          valuePresetCoresFacet.of(
-            definePresetCore<number>({id: 'demo:rating', build: () => codecs.number, defaultValue: 0}),
-          ),
-        ],
-      }))
+      await registerNumberRatingWithDefinition()
+      await installApproved(valuePresetCoresFacet.of(numberRating))
+
+      const restore = compileTo([
+        valuePresetCoresFacet.of(stringRating),
+        valuePresetCoresFacet.of(numberRating),
+      ])
       try {
-        const result = await installStringRating('install-preset-duplicate')
+        const result = await install('install-preset-duplicate')
         expect(result.presetChanges).toBeUndefined()
       } finally {
         restore()
@@ -268,9 +348,9 @@ describe('agent runtime commands', () => {
     })
 
     it('installs a preset id nothing is registered under', async () => {
-      const restore = stubCompileToStringRating()
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
       try {
-        const result = await installStringRating('install-preset-new')
+        const result = await install('install-preset-new', {verify: true})
         expect(result.presetChanges).toBeUndefined()
         expect(result.inserted).toBe(true)
       } finally {

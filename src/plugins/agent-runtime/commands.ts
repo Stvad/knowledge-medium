@@ -40,7 +40,7 @@ import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
-import { applyToggle, isEnabled } from '@/facets/togglable.js'
+import { applyToggle, isEnabled, type Overrides } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
 import {
   approveExtension,
@@ -243,31 +243,38 @@ const isExtensionContribution = (source: unknown, blockId: string): boolean => {
 
 /** One extension's contributions, resolved on their own.
  *
- *  Every install resolves the CANDIDATE source this way before writing it —
- *  the preset-identity check has no other way to see what codecs the new
- *  source would register (see `presetIdentity.ts`) — and `--verify` reports
- *  from the same resolution rather than paying for a second one.
+ *  This EXECUTES the candidate's top-level module code and its extension
+ *  factory, which is the only way to see what it registers — so it runs behind
+ *  the two conditions install already licenses, and no others: the caller
+ *  asked (`--verify`), or the block is already approved on this device and
+ *  this install is about to re-pin it to this very source. A first install
+ *  grants no trust and sets no intent (#67), so the source it stores is
+ *  executed by nothing, and evaluating it to inspect it would be the one thing
+ *  that gate exists to prevent. `installRuntimeExtension` owns that decision;
+ *  everything here assumes it has been made.
  *
- *  `block` is the row the source WOULD produce, which on an update is the
- *  stored row with its new content and on a first install is a row that does
- *  not exist yet. Only `id`, `content` and `workspaceId` are read here.
+ *  `liveOverrides` is the device's real enable-intent map, not an empty one:
+ *  the block itself is forced on (it is what we came to resolve), but a
+ *  boundary NESTED inside its tree — a `userToggle` the extension declares for
+ *  part of itself — must be evaluated exactly as the app will evaluate it.
+ *  Resolving those against an empty map prunes any that is off by default and
+ *  on by override, so the preset check would see none of the cores beneath it
+ *  and the app-wide rebuild would then register them unrefused.
  *
- *  Note that this EXECUTES the source's top-level module code, outside the
- *  #67 approval gate, on every install rather than only under `--verify`. The
- *  source arrives from the paired bridge — the same authorized local channel
- *  that re-pins approval on an update — so it is no more privileged than the
- *  caller running it directly; what it must not do is run without the caller
- *  asking, which is why nothing here touches a block the caller did not
- *  supply source for. */
+ *  `block` is the row the source WOULD produce: on an update the stored row
+ *  with its new content, on a first install a row that does not exist yet.
+ *  Only `id`, `content` and `workspaceId` are read here. */
 const resolveExtensionInIsolation = async (
   repo: Repo,
   context: AgentRuntimeContext,
   block: BlockData,
+  liveOverrides: Overrides,
 ): Promise<{
   runtime: Awaited<ReturnType<typeof resolveAppRuntime>>
   errors: ExtensionVerificationResult['errors']
 }> => {
   const errors: ExtensionVerificationResult['errors'] = []
+  const overrides = new Map([...liveOverrides, [block.id, true]])
   const singleBlockRepo = {
     query: {
       findExtensionBlocks: () => ({
@@ -287,7 +294,7 @@ const resolveExtensionInIsolation = async (
       repo: singleBlockRepo,
       workspaceId: block.workspaceId,
       safeMode: false,
-      overrides: new Map([[block.id, true]]),
+      overrides,
       // Verification compiles the brand-new LIVE source in isolation to
       // inspect its contributions before any device-local approval exists,
       // so it bypasses the approval gate (#67). This does NOT run the
@@ -301,7 +308,7 @@ const resolveExtensionInIsolation = async (
       },
     }),
     {
-      overrides: new Map([[block.id, true]]),
+      overrides,
       context: {
         repo,
         workspaceId: repo.activeWorkspaceId,
@@ -373,6 +380,21 @@ const describeVerification = (
   }
 }
 
+/** The device's synced enable-intent map — what the app resolves every
+ *  extension toggle through. Empty when prefs are unavailable (fresh profile,
+ *  read failure), which for a user-installed extension reads as disabled. */
+const readExtensionOverrides = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<Overrides> => {
+  try {
+    const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
+    return prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
+  } catch {
+    return new Map<string, boolean>()
+  }
+}
+
 /** Will this extension actually run on this device, and if not, why not?
  *
  *  Two independent gates gate every extension: a SYNCED enabled intent, and
@@ -388,15 +410,10 @@ const readRunState = async (
 ): Promise<{approved: boolean; enabled: boolean; running: boolean}> => {
   const approval = await readApproval(block.id).catch(() => null)
   const approved = Boolean(approval) && (await hashExtensionSource(block.content ?? '')) === approval?.sourceHash
-  let enabled = false
-  try {
-    const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
-    const overrides = prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
-    enabled = isEnabled(userExtensionToggle(block), overrides)
-  } catch {
-    // Prefs unavailable (fresh profile / read failure) — intent reads as
-    // absent, which for a user-installed extension means disabled.
-  }
+  const enabled = isEnabled(
+    userExtensionToggle(block),
+    await readExtensionOverrides(repo, workspaceId),
+  )
   return {approved, enabled, running: approved && enabled}
 }
 
@@ -1107,41 +1124,52 @@ const installRuntimeExtension = async (
         updatedBy: repo.user.id,
         deleted: false,
       }
-  const resolution = await resolveExtensionInIsolation(repo, context, candidate)
+  // Was THIS device already running this block? If so the trust decision has
+  // been made and the update arrives through the same authorized local channel
+  // (the paired bridge), so the install re-pins to the new source below rather
+  // than leaving the extension silently dead until someone re-enables it. A
+  // block this device never approved stays unapproved: install is not where
+  // trust gets granted for the first time.
+  const wasApproved = existing
+    ? Boolean(await readApproval(existing.id).catch(() => null))
+    : false
+
+  // `wasApproved` is therefore also "will this install make the source LIVE
+  // here", and that is what decides whether the candidate is EXECUTED. Anything
+  // else stores source that nothing runs — no preset of its can re-type a
+  // value, and evaluating it to find that out would defeat the approval gate
+  // it never passed. `--verify` is the caller asking for that evaluation
+  // explicitly, which is what it has always meant.
+  const resolution = wasApproved || input.verify
+    ? await resolveExtensionInIsolation(
+        repo, context, candidate, await readExtensionOverrides(repo, workspaceId))
+    : undefined
 
   // BEFORE the write, and before the re-pin + reload below: a refusal must
   // leave nothing behind. Writing the source and then refusing would change
   // the block's hash, which un-pins the approved version on this device and
   // stops a working extension dead — a silent side effect of saying no.
-  const presetConflicts = await findPresetIdentityConflicts(
-    repo,
-    workspaceId,
-    extensionPresetCores(resolution),
-  )
-  if (presetConflicts.length > 0 && !input.allowPresetChange) {
+  const presetConflicts = resolution
+    ? await findPresetIdentityConflicts(repo, workspaceId, extensionPresetCores(resolution))
+    : []
+  // Refuse only when the install is what makes the new codec live. A conflict
+  // found under `--verify` on a block that will not run is a fact about a
+  // future enable, not a re-typing this command performs — it is REPORTED
+  // (below) and the enable path is #1046.
+  if (presetConflicts.length > 0 && wasApproved && !input.allowPresetChange) {
     throw new Error(presetIdentityRefusal(
       presetConflicts,
       label ? JSON.stringify(label) : targetId,
       workspaceId,
     ))
   }
-  // Reached only when the override let a conflict through, so the result
-  // records what was overridden rather than leaving it in a refusal nobody
-  // kept.
   const presetChanges: {presetChanges?: PresetIdentityConflict[]} =
     presetConflicts.length > 0 ? {presetChanges: presetConflicts} : {}
-  const verification = input.verify
+  const verification = resolution && input.verify
     ? describeVerification(resolution, candidate)
     : undefined
 
   if (existing) {
-    // Was THIS device already running this block? If so, the trust decision
-    // has been made and the update arrives through the same authorized local
-    // channel (the paired bridge) — so re-pin it to the new source rather
-    // than leaving the extension silently dead until someone re-enables it.
-    // A block this device never approved stays unapproved: install is not
-    // where trust gets granted for the first time.
-    const wasApproved = Boolean(await readApproval(existing.id).catch(() => null))
     const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
       const current = await tx.get(existing.id)

@@ -97,6 +97,10 @@ export interface InstallExtensionInput {
   parentId?: string
   id?: string
   reload?: boolean
+  /** Execute the source in isolation and report what it contributes. Also the
+   *  way to run the preset-identity check against a block this device has not
+   *  approved: an install that makes nothing live does not evaluate the source
+   *  on its own. */
   verify?: boolean
   /** Install anyway when a value preset this extension registers would re-type
    *  values already stored under its id. See `presetIdentity.ts` — the refusal
@@ -167,9 +171,13 @@ export interface InstallExtensionResult {
   running?: boolean
   /** What to do about `running: false`. */
   hint?: string
-  /** Value presets this install re-typed, present only when
+  /** Value presets whose codec this source changes under an id already
+   *  registered here. Present when the install went ahead anyway: either
    *  `allowPresetChange` let it through — so the override records what it
-   *  overrode. Absent means the install found no such conflict. */
+   *  overrode — or the block is not approved on this device, so nothing it
+   *  registers runs and the conflict is a fact about a future enable rather
+   *  than a re-typing this command performs. Absent when no conflict was found
+   *  OR when the source was never executed to look (see `verify`). */
   presetChanges?: PresetIdentityConflict[]
   verification?: ExtensionVerificationResult
 }
