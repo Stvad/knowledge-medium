@@ -3906,8 +3906,11 @@ export class Repo {
     undoHistoryCleared: boolean
     deferred: string | null
     /** Whether waiting clears `deferred` — see {@link OperatorBackfillResult.retryable}.
-     *  True for every deferral but a durable view gap, which is the only one
-     *  nothing is working on. */
+     *  True by default, because most deferrals are momentary; false for the two
+     *  that nothing is working on — a DURABLE view gap, which is rows no drain
+     *  will apply, and a REVOKED role, which needs the role back. Carried on the
+     *  thrown error by the site that knows, not re-derived here; `retryableAfter`
+     *  answers the same question for the refusal path. */
     deferredRetryable: boolean
     failed: string | null
   }> {

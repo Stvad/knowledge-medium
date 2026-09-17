@@ -64,8 +64,14 @@ export interface UndoManagerOptions {
   maxDepth?: number
 }
 
-/** The second half of a {@link UndoManager.beginHistoryDrop}: empties the
- *  stacks once the pass's writes are durable, without moving the epoch again. */
+/** The second half of a history drop: empties the stacks once the pass's writes
+ *  are durable.
+ *
+ *  Whether it also moves the epoch is THE VARIANT'S, not this interface's, and
+ *  it is the whole difference between the two — see
+ *  {@link UndoManager.beginHistoryDrop} and
+ *  {@link UndoManager.beginHistoryDropInWriteLock}. A caller holds whichever it
+ *  asked for; nothing reads a `HistoryDrop` without knowing which it began. */
 export interface HistoryDrop {
   finish(): void
 }
@@ -75,8 +81,8 @@ export class UndoManager {
   private readonly redoStacks: Map<ChangeScope, UndoEntry[]> = new Map()
   private readonly listenersByScope: Map<ChangeScope, CallbackSet<[]>> = new Map()
   private readonly maxDepth: number
-  /** Moved only by {@link clear} and by a {@link HistoryDrop}'s two ends — see
-   *  {@link clearEpoch}. */
+  /** Moved only by {@link clear} and by beginning a {@link HistoryDrop} — and
+   *  by FINISHING one, for the variant that says so. See {@link clearEpoch}. */
   private clears = 0
 
   constructor(opts: UndoManagerOptions = {}) {
@@ -242,12 +248,12 @@ export class UndoManager {
     return {finish: () => { this.emptyStacks() }}
   }
 
-  /** Moved by {@link clear} and by the ends of a {@link HistoryDrop}, and by
-   *  nothing else
-   *  — deliberately not by an ordinary record or pop, so a caller asking "was
-   *  my entry invalidated" cannot read normal activity as invalidation. This
-   *  answers only "the history was DROPPED", which is the event that makes an
-   *  entry already taken off the stack unsafe to replay. */
+  /** Moved by {@link clear}, by BEGINNING a {@link HistoryDrop}, and by
+   *  finishing one of the variant whose `finish` says it does — and by nothing
+   *  else. Deliberately not by an ordinary record or pop, so a caller asking
+   *  "was my entry invalidated" cannot read normal activity as invalidation.
+   *  This answers only "the history was DROPPED", which is the event that makes
+   *  an entry already taken off the stack unsafe to replay. */
   get clearEpoch(): number {
     return this.clears
   }
