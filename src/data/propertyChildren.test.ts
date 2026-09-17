@@ -3343,6 +3343,28 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await bagOf('p')).tags).toEqual(['a'])
     })
 
+    it('survives a sibling whose order key the generator cannot parse', async () => {
+      // `tx.create` validates no order key and the design invites hand-made
+      // sibling rows into the value set, so a member can carry `zzz`. The key
+      // generator REFUSES such an anchor, and it sits on the ordinary
+      // add-a-member path — so without a fallback one such row makes every
+      // growth write to that property throw out of the processor and roll the
+      // user's whole transaction back, for as long as the row exists.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: field.id, orderKey: 'zzz', content: 'stray',
+      }), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta'])
+    })
+
     it('gives members distinct slots when existing rows share an order key', async () => {
       // Synced or imported rows can tie. A tie cannot express an order at all,
       // so the reorder completes and then projects back the old way.
@@ -3407,6 +3429,27 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await bagOf('p')).bag).toEqual([null, 'x'])
     })
 
+    it('an unparseable member survives an unrelated write to the same property', async () => {
+      // It is not a member the cell removed — it is one the cell never held,
+      // because the projection could not read it. Reaping it on the next write
+      // deletes a row the user still has to repair, and its sub-children too.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['a-id', 'b-id']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+      await repo.tx(tx => tx.update(members[1]!.id, {content: 'Marry'}),
+        {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).people).toEqual(['a-id'])
+
+      // An unrelated growth write to the same property.
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['a-id', 'c-id']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', PEOPLE_FIELD_ID))
+        .toContain('Marry')
+    })
+
     it('refuses a list member whose content cannot be read back', async () => {
       // `codecs.refList` accepts an empty id, and the ref encoder renders a
       // cleared ref as empty content. A scalar may be cleared; a member may
@@ -3423,7 +3466,89 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
     })
   })
 
+  describe('conflicts between two field rows for one property', () => {
+    /** A second field row for the same fieldId, carrying `members` — the shape
+     *  two offline devices leave when each materializes a property that had no
+     *  field row yet. Raw, because sync-apply never passes through `repo.tx`. */
+    const addDuplicateFieldRow = async (
+      repo: Repo, owner: string, fieldId: string, members: readonly string[],
+    ): Promise<void> => {
+      const dupKey = await appendKey(owner)
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, reference_target_id, is_field_form, deleted,
+           created_at, updated_at, user_updated_at, created_by, updated_by)
+         VALUES ('dupfield', ?, ?, ?, ?, '{}', ?, 1, 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, owner, dupKey, propertyFieldContent(fieldId), fieldId],
+      )
+      for (const i of members.keys()) {
+        await sharedDb.db.execute(
+          `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+             properties_json, deleted, created_at, updated_at, user_updated_at,
+             created_by, updated_by)
+           VALUES (?, ?, 'dupfield', ?, 'placeholder', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+          [`dupmember-${i}`, WS, `a${i}`],
+        )
+      }
+      // Through the tx layer, so the write is a REAL content change and the
+      // projection actually re-runs over the arrived rows. Writing the final
+      // text raw would leave the cell untouched and the test passing on the
+      // value it already had.
+      await repo.tx(async tx => {
+        for (const [i, member] of members.entries()) {
+          await tx.update(`dupmember-${i}`, {content: member})
+        }
+      }, {scope: ChangeScope.BlockDefault})
+    }
+
+    it('a duplicate field row holding the SAME members does not double the list', async () => {
+      // The projection aggregates ACROSS field rows, and the collapse FOLDS an
+      // equal member rather than making it a peer — so concatenating predicts a
+      // list the collapse will never build. One value materialized twice is one
+      // value.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+
+      await addDuplicateFieldRow(repo, 'p', TAGS_FIELD_ID, ['alpha', 'beta'])
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta'])
+    })
+
+    it('a duplicate field row holding DIVERGENT members still unions', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+
+      await addDuplicateFieldRow(repo, 'p', TAGS_FIELD_ID, ['gamma'])
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'gamma'])
+    })
+  })
+
   describe('a caller that did not observe intent may not reap a member', () => {
+    it('restoring an EMPTY list does not resurrect the member that emptied it', async () => {
+      // An explicitly empty list leaves exactly one tombstoned value under a
+      // live field row — the member the user deleted. That is the one count at
+      // which the scalar revival rule matches for a list, and taking it undoes
+      // the deletion; `mayNotRemove` then stops the reconciler undoing that.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, []),
+        {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual([])
+
+      await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual([])
+      expect((await bagOf('p')).tags).toEqual([])
+    })
+
     it('keeps an arrived member that DUPLICATES one already there', async () => {
       // `mayNotRemove` has to govern folding too, not just deletion: a fold
       // takes the row away just the same, and multiplicity is part of a list's
