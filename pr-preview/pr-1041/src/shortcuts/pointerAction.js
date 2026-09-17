@@ -1,0 +1,1 @@
+import{Bw as e,Vw as t}from"../../chunks/app-DyhF_j3I.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};
