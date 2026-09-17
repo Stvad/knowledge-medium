@@ -1,1 +1,1 @@
-import{Ot as e}from"../../../chunks/app-DwBFuYka.js";export{e as perfMonitorPlugin};
+import{Ot as e}from"../../../chunks/app-D_sn6RTa.js";export{e as perfMonitorPlugin};
