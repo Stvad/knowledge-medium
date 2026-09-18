@@ -99,6 +99,25 @@ const seedTargetIn = async (
   }, {scope: ChangeScope.BlockDefault, description: 'seed'})
 }
 
+/** A definition block written RAW, so no projector primes a registry for it —
+ *  the shape a client has for a workspace it does not have open. */
+const seedDefinitionIn = async (
+  workspaceId: string, id: string, name: string,
+): Promise<void> => {
+  await sharedDb.db.execute(
+    `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+       properties_json, deleted, created_at, updated_at, user_updated_at,
+       created_by, updated_by)
+     VALUES (?, ?, NULL, 'k-def', ?, ?, 0, 1, 1, 1, 'user-1', 'user-1')`,
+    [id, workspaceId, name, JSON.stringify({
+      types: [PROPERTY_SCHEMA_TYPE],
+      [propertyNameProp.name]: name,
+      [propertyChangeScopeProp.name]: ChangeScope.BlockDefault,
+      [presetIdProp.name]: 'string',
+    })],
+  )
+}
+
 const seedTarget = (repo: Repo): Promise<void> => seedTargetIn(repo, WS, TARGET)
 
 /** Write one property on the seeded block, under whichever scope is being
@@ -342,6 +361,30 @@ describe('while a once-per-graph backfill holds this workspace\'s claim', () => 
 
     expect(await markOn()).toBeUndefined()
     expect(await claimIsLive()).toBe(true)
+  })
+
+  it('refuses BEFORE the fan-out processors, so they do not answer in its place', async () => {
+    // The lock sits above the same-tx pass, and the property-definition
+    // processor's own header now says so ("the migration lock refuses the whole
+    // transaction before this processor is reached"). Positioned below it
+    // instead, that processor's rejection reaches the user first — telling them
+    // about a registry when the answer is that a migration is running — and the
+    // refusal costs the whole fan-out before rolling it back.
+    //
+    // Discriminated with a definition edit in a workspace this client has no
+    // registry for, which is a case the processor refuses on its own.
+    const repo = makeRepo()
+    await seedTargetIn(repo, OTHER_WS, OTHER_TARGET)
+    await seedDefinitionIn(OTHER_WS, 'field-other', 'status')
+    await seedClaim({workspaceId: OTHER_WS})
+
+    await expect(repo.tx(async tx => {
+      const row = await tx.get('field-other')
+      await tx.update('field-other', {
+        properties: {...row!.properties, [propertyNameProp.name]: 'state'},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'rename under the lock'}))
+      .rejects.toMatchObject({code: GRAPH_MIGRATION_LOCKED})
   })
 
   it('refuses the CLAIM HOLDER\'s own edits too, not only a peer\'s', async () => {
