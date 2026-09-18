@@ -1,1 +1,0 @@
-import{bw as e}from"../../../chunks/app-xnbRXk-1.js";export{e as appUpdatePromptExtension};
