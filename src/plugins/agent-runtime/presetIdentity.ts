@@ -98,13 +98,13 @@
 import type { AnyValuePresetCore } from '@/data/api'
 import {
   cellCountsByKey,
+  definitionNameOf,
   readPropertyDefinitionBags,
 } from '@/data/internals/propertyKeyScan'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import {
   presetConfigProp,
   presetIdProp,
-  propertyNameProp,
 } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { decodePresetConfig } from '@/data/userSchemasService'
@@ -315,7 +315,9 @@ interface DefinitionRow {
  *  entirely while its cells are still stored under its name.
  *
  *  Rows without a preset id are dropped here rather than in SQL: they carry no
- *  codec this check could compare. */
+ *  codec this check could compare. A non-string NAME is coerced rather than
+ *  dropped — the row still uses the preset, so it belongs in the counts, and
+ *  `''` keeps the definition sort below total. */
 const readDefinitionRows = async (
   repo: Repo,
   workspaceId: string,
@@ -323,12 +325,11 @@ const readDefinitionRows = async (
   (await readPropertyDefinitionBags(repo.db, workspaceId)).flatMap(row => {
     const presetId = row.bag[presetIdProp.name]
     if (typeof presetId !== 'string' || !presetId) return []
-    const storedName = row.bag[propertyNameProp.name]
     return [{
       fieldId: row.id,
       presetId,
       config: row.bag[presetConfigProp.name],
-      storedName: typeof storedName === 'string' ? storedName : '',
+      storedName: definitionNameOf(row.bag) ?? '',
     }]
   })
 

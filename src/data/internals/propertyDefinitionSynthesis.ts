@@ -60,7 +60,7 @@ import {
   valueSurvivesChildRoundTrip,
 } from '@/data/propertyChildren'
 import {
-  OBJECT_BAG, keyOf, requirePropertyRegistryFor, scanPropertyKeys,
+  LIVE_CELLS_FOR_NAMES, keyOf, requirePropertyRegistryFor, scanPropertyKeys,
   type UnresolvedPropertyKey,
 } from './propertyKeyScan'
 
@@ -432,9 +432,7 @@ const distinctValuesByKey = async (
   const lastPerBlock = `
     SELECT b.id AS block, j.key AS property, j.type AS type, j.value AS value,
            ROW_NUMBER() OVER (PARTITION BY b.id, j.key ORDER BY j.id DESC) AS occurrence
-      FROM blocks b, json_each(${OBJECT_BAG}) j
-     WHERE b.workspace_id = ? AND b.deleted = 0
-       AND j.key IN (SELECT value FROM json_each(?))`
+    ${LIVE_CELLS_FOR_NAMES}`
   // Counted first so an oversized key is never READ. A LIMIT on the value
   // query instead would silently truncate one key's values and prove a preset
   // against a subset, which is the guessing this replaced.

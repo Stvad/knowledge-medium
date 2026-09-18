@@ -85,7 +85,7 @@ const addDefinitionWithCells = async (
 /** A definition row written directly, for the names `addSchema` refuses to
  *  mint twice. Written through `repo.tx` so the projector still sees it. */
 const createDefinitionBlock = async (
-  name: string, presetId: string, config: unknown = {}, omitConfig = false,
+  name: unknown, presetId: string, config: unknown = {}, omitConfig = false,
 ): Promise<string> => {
   const id = await repo.mutate.createChild({parentId: repo.propertiesPageId!})
   await repo.tx(async tx => {
@@ -602,6 +602,19 @@ describe('findPresetIdentityConflicts', () => {
     expect(refusal.indexOf('demo-busiest')).toBeLessThan(refusal.indexOf('demo-row-'))
     expect(refusal).toMatch(/and 1 more/)
     expect(refusal).toContain('declared by seed(s): demo:seeded-refusal')
+  })
+
+  it('survives a definition row whose stored name is not a string', async () => {
+    // Only a corrupt or hand-written row can hold one, but the scan must
+    // still produce a refusal for it rather than throwing partway through —
+    // the sort over definition names is total only while every name is one.
+    register(numberRating)
+    await addDefinitionWithCells('demo-rating', PRESET, 2)
+    await createDefinitionBlock({not: 'a string'}, PRESET)
+
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(
+      repo, WS, registryAfter(stringRating))
+    expect(conflict!.definitions.map(d => d.name)).toEqual(['demo-rating', ''])
   })
 
   it('reports an id whose core goes away entirely', async () => {

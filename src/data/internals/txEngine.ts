@@ -87,8 +87,10 @@ import {
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
-import { readPropertyDefinitionBags } from '@/data/internals/propertyKeyScan'
-import { propertyNameProp } from '@/data/properties'
+import {
+  definitionNameOf,
+  readPropertyDefinitionBags,
+} from '@/data/internals/propertyKeyScan'
 import {
   isPropertyFieldInstance,
   type IsPropertyFieldDefinition,
@@ -450,8 +452,8 @@ export class TxImpl implements Tx {
     const wanted = new Set(names)
     const found = new Map<string, string[]>()
     for (const row of rows) {
-      const name = row.bag[propertyNameProp.name]
-      if (typeof name !== 'string' || !wanted.has(name)) continue
+      const name = definitionNameOf(row.bag)
+      if (name === undefined || !wanted.has(name)) continue
       const ids = found.get(name) ?? []
       ids.push(row.id)
       found.set(name, ids)
