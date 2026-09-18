@@ -7,7 +7,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { DialogContextProps } from '@/utils/dialogs.js'
-import { RELEASE_STRANDED_CLAIM_COMMAND } from '@/data/internals/graphBackfillClaim'
 import { agree, pluralize } from '@/utils/pluralize'
 
 export interface ConfirmMigrationDialogProps {
@@ -116,19 +115,18 @@ export const ConfirmMigrationDialog = ({
             check that for you.{' '}</>}
           This runs on this device only — your other devices receive the result
           through sync, so run it in one place. It can take several minutes, and
-          while it runs the workspace stops accepting edits on every device.
+          while it runs every device holds a dialog asking you to wait.
           Interrupting it loses no data: run it again <em>on this device</em> and it
-          picks up where it stopped. But the workspace keeps refusing edits until you
-          do — an interrupted run does not hand it back, and clearing it by hand takes
-          the <em>{RELEASE_STRANDED_CLAIM_COMMAND}</em> command.
+          picks up where it stopped. But every device keeps waiting until you do —
+          an interrupted run does not hand the workspace back, and that dialog is
+          where you release it.
         </p>
         <p className="text-destructive">
           {!childBacked && <>The switch cannot be undone from the app — it only ever
             moves forward, and reversing it is a hand-run database migration.{' '}</>}
-          Undo history for this workspace will be cleared on this device — undoing
-          an edit made before the migration would revert part of it. A device that
-          stays open while it runs keeps its own, so reload your other tabs and
-          devices afterwards.
+          Undo history for this workspace will be cleared — undoing an edit made
+          before the migration would revert part of it. On every device that is open
+          while it runs, not only this one.
         </p>
       </div>
       <DialogFooter>

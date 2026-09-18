@@ -22,8 +22,8 @@ vi.mock('@/utils/toast.js', () => ({
   showInfo: (message: string, opts?: unknown) => showInfo(message, opts),
   dismissToast: vi.fn(),
 }))
-vi.mock('../blockingProgress.ts', () => ({
-  showBlockingMigrationProgress: () => progressHandle,
+vi.mock('../progressReport.ts', () => ({
+  reportMigrationProgress: () => progressHandle,
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 // The gesture flips before it backfills, and the fixture below starts at

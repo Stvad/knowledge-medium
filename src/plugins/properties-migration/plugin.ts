@@ -2,19 +2,19 @@
  * Properties-as-blocks migration plugin.
  *
  * Contributes the palette command that runs the one-time cell → children pass,
- * and the one that clears a claim nobody will release — which the migration
- * lock makes the only way out of a stranded run.
+ * and the mount that blocks the workspace for as long as that pass holds its
+ * claim — on every device, since the claim is synced.
  * Deliberately its own plugin rather than a line in db-maintenance: this is a
  * data migration with a runbook, not routine upkeep, and the flip that follows
  * it will live here too.
  */
 import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/facets/facet.js'
-import { actionsFacet } from '@/extensions/core.js'
+import { actionsFacet, appMountsFacet } from '@/extensions/core.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { migratePropertiesToBlocksAction } from './action.ts'
-import { releaseMigrationClaimAction } from './releaseClaimAction.ts'
+import { MigrationGate } from './MigrationGate.tsx'
 
 export const propertiesMigrationPlugin = ({repo}: {repo: Repo}): AppExtension =>
   systemToggle({
@@ -25,6 +25,9 @@ export const propertiesMigrationPlugin = ({repo}: {repo: Repo}): AppExtension =>
       'Run it on a single device; the others receive the result through sync.',
   }).of([
     actionsFacet.of(migratePropertiesToBlocksAction({repo}), {source: 'properties-migration'}),
-    actionsFacet.of(releaseMigrationClaimAction({repo}), {source: 'properties-migration'}),
+    appMountsFacet.of(
+      {id: 'properties-migration.gate', component: MigrationGate},
+      {source: 'properties-migration'},
+    ),
     dialogAppMountExtension,
   ])

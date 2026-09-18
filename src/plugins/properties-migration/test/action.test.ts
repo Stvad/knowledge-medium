@@ -19,8 +19,8 @@ vi.mock('@/utils/toast.js', () => ({
   showInfo: (...args: unknown[]) => showInfo(...args),
   dismissToast: (...args: unknown[]) => dismissToast(...args),
 }))
-vi.mock('../blockingProgress.ts', () => ({
-  showBlockingMigrationProgress: () => progressHandle,
+vi.mock('../progressReport.ts', () => ({
+  reportMigrationProgress: () => progressHandle,
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 const flipWorkspace = vi.fn<(repo: unknown, workspaceId: string) => Promise<{localApplied: boolean}>>()

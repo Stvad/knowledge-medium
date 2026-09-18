@@ -27,7 +27,7 @@ import { isRemoteSyncActive } from '@/data/repoProvider'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
-import { showBlockingMigrationProgress, type MigrationProgress } from './blockingProgress.ts'
+import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
 import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
 
 /** The runner's reasons come from several places and only some end in a
@@ -551,10 +551,11 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // before anything refused.
     if (repo.activeWorkspaceId !== workspaceId) return
 
-    // A modal, so the operator is not left typing into an app that refuses
-    // every edit. The data-layer lock is what actually refuses them, and it
-    // reaches this user's other devices, where nothing of ours is mounted.
-    const banner = showBlockingMigrationProgress('Migrating properties to blocks…')
+    // Reported into the dialog the CLAIM raises, not one this gesture opens —
+    // see `MigrationGate`. That is why the progress line and the outcome go to
+    // different places: the dialog closes when the claim clears, and several
+    // outcomes below are reported on paths where no claim was ever taken.
+    const banner = reportMigrationProgress('Migrating properties to blocks…')
     try {
       // ABOVE the synthesis block, not below it: below, the "Nothing was changed"
       // this prints is false the moment synthesis commits.
@@ -608,17 +609,18 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
           else banner.done(message)
         }
     } finally {
-      // The modal cannot be dismissed while it reads as running, so a path that
-      // returns or throws without reporting an outcome would leave the app
-      // needing a reload. Over EVERY exit from the moment it opened, which is
-      // why the `try` starts there rather than at the claim.
+      // A path that returns or throws without reporting an outcome would leave
+      // the operator watching the dialog vanish with no account of the run.
+      // Over EVERY exit from the moment reporting began, which is why the `try`
+      // starts there rather than at the claim.
       banner.settleUnreported()
-      // And then say whether the graph was handed back. Nothing else can: an
-      // interrupted or declined run leaves the claim in flight — a run that
+      // And then say whether the workspace was handed back. Nothing else can:
+      // an interrupted or declined run leaves the claim in flight — a run that
       // only INHERITED one never releases it at all — and until it is finished
-      // or released the workspace refuses every edit on every device. The
-      // outcome messages are written before any of that is known, and "run it
-      // again" over a silently locked graph is the wrong thing to be told.
+      // or released every device holds the waiting dialog up. The outcome
+      // messages are written before any of that is known, and "run it again"
+      // over a workspace that is still telling everyone to wait is the wrong
+      // thing to be told.
       //
       // WHOSE claim decides what to advise, so the claimant is read and not
       // just its liveness: telling a device that a PEER holds the workspace to
@@ -647,12 +649,12 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       if (claimHoldsGraph(held)) {
         banner.addNote(
           held.claimantId === getClientId()
-            ? 'This workspace is still not accepting edits: this device holds the '
+            ? 'Every device is still waiting on this workspace: this device holds the '
               + 'migration until a run here finishes it. If one is still going — in '
               + 'this tab or another — let it; otherwise run this again to resume it, '
               + `or ${STRANDED_CLAIM_RECOVERY}.`
-            : 'This workspace is still not accepting edits: another device holds the '
-              + 'migration. It stays that way until that device finishes — running '
+            : 'Every device is still waiting on this workspace: another device holds '
+              + 'the migration. It stays that way until that device finishes — running '
               + `this here is declined while it does. If it never will, ${
                 STRANDED_CLAIM_RECOVERY}.`,
         )

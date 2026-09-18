@@ -23,7 +23,7 @@
  * strands a claim, which needs reclaim, which needs arbitration.
  */
 
-import { ChangeScope, type Tx } from '@/data/api'
+import { ChangeScope, type BlockData, type Tx } from '@/data/api'
 import type { BackfillCompletionClaim, ClaimAttempt } from '@/data/facets'
 import { keyAtStart } from '@/data/orderKey'
 import { MIGRATION_CLAIM_TYPE } from '@/data/blockTypes'
@@ -149,6 +149,26 @@ export const claimHoldsGraph = (
   claim: GraphBackfillClaim | null,
 ): claim is GraphBackfillClaim => claim !== null && claim.completedAt === undefined
 
+/** The claim a BLOCK ROW carries, when that row is this workspace's live claim.
+ *
+ *  For the reader that holds the row rather than a db handle: the migration
+ *  dialog subscribes to the claim block, so the claim reaches every device —
+ *  and clears again — through the same invalidation any other block read uses,
+ *  with no polling and nothing to arm at startup.
+ *
+ *  Workspace-SCOPED for the reason {@link readGraphBackfillClaim} spells out: a
+ *  row owned by another workspace can arrive at this id, and holding a modal
+ *  over this workspace because of it would be unrecoverable from inside the
+ *  app. */
+export const claimHoldingGraph = (
+  row: Pick<BlockData, 'deleted' | 'workspaceId' | 'properties'> | null | undefined,
+  workspaceId: string,
+): GraphBackfillClaim | null => {
+  if (!row || row.deleted || row.workspaceId !== workspaceId) return null
+  const claim = claimFromProperties(row.properties)
+  return claimHoldsGraph(claim) ? claim : null
+}
+
 /** Is a run of `backfillId` in flight for this workspace, as the caller's own
  *  view of `blocks` has it?
  *
@@ -172,15 +192,13 @@ export const isGraphBackfillClaimActive = async (
  *  every message that needs it uses.
  *
  *  Every message that mentions a held claim — the pass reporting one held by
- *  another client, the lock refusing a write, the gesture reporting that it did
- *  not hand the workspace back — describes the SAME recovery, and an operator
- *  who reads them as different situations goes looking for a second thing to
- *  do. */
-export const RELEASE_STRANDED_CLAIM_COMMAND = 'Release the migration claim'
-
+ *  another client, the definition-change refusal, the gesture reporting that it
+ *  did not hand the workspace back — describes the SAME recovery, and an
+ *  operator who reads them as different situations goes looking for a second
+ *  thing to do. */
 export const STRANDED_CLAIM_RECOVERY =
-  `the claim block is on the "${MIGRATIONS_PAGE_ALIAS}" page, and if nothing is `
-  + `running anywhere, the "${RELEASE_STRANDED_CLAIM_COMMAND}" command clears it`
+  'the dialog this workspace is blocked behind offers to release it, and the '
+  + `claim block itself is on the "${MIGRATIONS_PAGE_ALIAS}" page`
 
 // ---------------------------------------------------------------------------
 // The seam implementation
