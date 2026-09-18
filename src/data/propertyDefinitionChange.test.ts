@@ -653,7 +653,7 @@ describe('codec change', () => {
 
     await retype(repo, FIELD_ID, 'string')
 
-    expect(await rowContent(valueRowId)).not.toBe('((target))')
+    expect(await rowContent(valueRowId)).toBe('target')
     expect(await referenceTargetOf(valueRowId)).toBeNull()
   })
 
@@ -1444,6 +1444,27 @@ describe('the multi-value boundary (#1010)', () => {
     expect(await cell('p')).toEqual({state: ['alpha']})
   })
 
+  it('REFUSES when duplicate field rows CONVERGE on one member', async () => {
+    // A loss with nothing unreadable in it, and the only shape that produces
+    // one: two rows holding DIFFERENT values (the string `42` and the number
+    // 42) re-spell to the same text, so the union that the projection takes
+    // folds them into one member. Nothing is unconvertible; the cell still
+    // stops holding a value, so the same refusal applies.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('list')
+    await seedListProperty(repo, 'p', 'status', ['42'])
+    // Raw, so the cell is not reprojected — the duplicate is visible only to
+    // the union this pass takes, which is where the two values meet.
+    await addDuplicateFieldRow('p', ['42'])
+    expect(await cell('p')).toEqual({status: ['42']})
+
+    await expect(retype(repo, FIELD_ID, 'string-list')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+    })
+    expect(await cell('p')).toEqual({status: ['42']})
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('list')
+  })
+
   it('scalar -> list reads the one value child as a single member', async () => {
     await seedWorkspace('children')
     const repo = await setupDefinition()
@@ -1600,7 +1621,11 @@ describe('the multi-value boundary (#1010)', () => {
     // the string `x` either way, and only its spelling moves.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
-    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
+    // `42` is in the list because the TARGET is an identity codec, which can
+    // hold anything: the round trip passes, so the value is carried and the
+    // member stays the STRING it was. Re-reading the text would make it the
+    // number — the same spelling-beats-value error in the other direction.
+    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y', '42'])
     const errors = collectUserErrors(repo)
     expect(await rowContent(ids[0]!)).toBe('x')
 
@@ -1609,11 +1634,31 @@ describe('the multi-value boundary (#1010)', () => {
 
     expect(await rowContent(ids[0]!)).toBe('"x"')
     expect(await rowContent(ids[1]!)).toBe('"y"')
-    expect(await cell('p')).toEqual({status: ['x', 'y']})
+    expect(await cell('p')).toEqual({status: ['x', 'y', '42']})
     // The one place this channel is still worth asserting on: a refusal throws
     // out of the awaited `repo.tx` and would fail the test above it, so an
     // empty list here only rules out one leaking from an internal tx.
     expect(errors).toEqual([])
+  })
+
+  it('canonicalizes a tolerant spelling where the OLD codec normalizes', async () => {
+    // `date` is the kernel codec whose decode NORMALIZES, so it is the one
+    // preset where carrying the value rewrites the row text. The cell is what
+    // survives; the spelling a person typed does not, and is unrecoverable.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('date')
+    const {valueRowId} = await seedProperty(
+      repo, 'p', 'status', new Date('2024-01-02T00:00:00.000Z'))
+    // Raw, because a tolerant spelling is what a synced or hand-edited row
+    // carries — the local writer would have canonicalized it on the way in.
+    await setRawValueContent(valueRowId, '2024-01-02')
+    expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
+
+    await retype(repo, FIELD_ID, 'string')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
+    expect(await rowContent(valueRowId)).toBe('2024-01-02T00:00:00.000Z')
   })
 
   it('ESCAPES a member the target codec would otherwise store as a live span', async () => {
@@ -1661,6 +1706,8 @@ describe('the multi-value boundary (#1010)', () => {
 
     await retype(repo, FIELD_ID, 'list')
     await awaitDefinition(repo, 'status', 'list')
+    expect(await rowContent(ids[0]!)).toBe('"x"')
+
     await retype(repo, FIELD_ID, 'string-list')
     await repo.awaitProcessors()
 

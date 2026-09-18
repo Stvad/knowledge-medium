@@ -2885,14 +2885,13 @@ supabase skill if it's kept.
     <code>valuesLostBy</code> own the two halves; read them rather than this
     paragraph.</p>
     <p><strong>Route order (2026-09-18, #1055):</strong> the conversion carries
-    the VALUE the old codec holds and re-reads the TEXT only where it cannot —
-    the reverse of how it first shipped. Two presets that hold the same values
-    and disagree only about spelling BOTH read the text, so reading the text
-    first let the spelling win over the value: the generic list preset stores
-    the string x as the JSON text &ldquo;x&rdquo;, which a re-type to
-    string-list then read as the three-character string. The value route is
-    accepted only when the value survives a round trip under the new codec,
-    which is what leaves every coercion to the text route.</p></dd>
+    the VALUE the old codec holds, and re-reads the TEXT only where the new
+    codec cannot hold that value — the reverse of how it first shipped, because
+    two presets that disagree only about SPELLING both read the text, so
+    reading the text first let the spelling win over the value. The consequence
+    worth knowing: a re-type onto an identity codec no longer re-interprets
+    text that happens to parse, so a string property holding 42 stays the
+    string 42 instead of becoming the number.</p></dd>
 
   <dt><strong>Field-row placement (decided: no special logic).</strong></dt>
   <dd>Owner decision (2026-07-19): there is <em>no placement policy for property

@@ -34,10 +34,9 @@
  * 3. Value children are re-encoded when the codec's INPUTS changed — the
  *    definition row's preset id and preset config, NOT the built codec's type
  *    string, which cannot tell `optional-string` from `string`
- *    (`codecInputsChanged`). The conversion is `convertValueChildContent`:
- *    what the OLD codec holds, re-spelled by the new one, and failing that
- *    what the text means to the NEW codec. A value NEITHER route carries is
- *    one this edit would take
+ *    (`codecInputsChanged`). `convertValueChildContent` owns which reading of
+ *    a value child wins, and states the rule; it is not restated here. A value
+ *    NEITHER of its routes carries is one this edit would take
  *    away, and the transaction is REFUSED — §9's "N values can't convert" is
  *    user-visible here as the reason the change did not happen, which is the
  *    only form of it that keeps the value. A value already unreadable before
@@ -310,10 +309,10 @@ interface DefinitionChange {
    *  caller refuses it instead. */
   readonly schema: AnyPropertySchema
   /** The codec the definition was PUBLISHING, which is what says what a stored
-   *  value child HOLDS when the new codec cannot read its text — the second
-   *  route in `convertValueChildContent`, and what tells a value this edit
-   *  takes away from one that was already unreadable. `null` when the before
-   *  row's preset does not build, where nothing records the stored encoding. */
+   *  value child HOLDS — the route `convertValueChildContent` tries FIRST, and
+   *  what tells a value this edit takes away from one that was already
+   *  unreadable. `null` when the before row's preset does not build, where
+   *  nothing records the stored encoding. */
   readonly beforeSchema: AnyPropertySchema | null
   /** The stored ENCODING may now differ, so value-child content is rewritten.
    *  False for a pure rename, where the encoding is untouched and the stored
@@ -373,7 +372,8 @@ const collectChanges = (
     // definition whose broken preset has just been fixed already reports its
     // inputs as changed. The old codec is carried for the CONVERSION, as the
     // only record of what encoding the stored text is in, and `null` there
-    // costs the fallback route rather than the change.
+    // costs the primary route rather than the change — the text route still
+    // answers.
     //
     // ACCEPTED: a bag edited while the row was UNPUBLISHED (a tombstone, or a
     // row stripped of its metadata) is judged against the MOVED bag, and
@@ -398,8 +398,9 @@ const collectChanges = (
       // re-encoded. Held for the caller, which refuses if it has consumers.
       //
       // Repairing a broken definition is unaffected: a preset that BUILDS is
-      // not this branch, and re-encoding reads the child's text, not the old
-      // codec. What is refused is trading one unavailable preset for another.
+      // not this branch, and with no old codec to read the value with,
+      // re-encoding falls to the child's TEXT. What is refused is trading one
+      // unavailable preset for another.
       unfanoutable.push({fieldId: after.id, reason: 'unbuildable'})
       probeName ??= afterMeta.name
       continue
@@ -630,10 +631,9 @@ const applyToParent = async (
         // ONE member, and reading it against the whole-array grammar would
         // make every member unreadable.
         //
-        // The TEXT route, which takes over where the value route cannot
-        // carry the value, costs one ambiguity: a bare `null` is a literal to
-        // a codec that rejects null and the unset sentinel to one that accepts
-        // it (#1030).
+        // Whichever route answers, a bare `null` stays ambiguous: it is a
+        // literal to a codec that rejects null and the unset sentinel to one
+        // that accepts it (#1030).
         const conversion = convertValueChildContent(
           change.beforeSchema, change.schema, value.content,
         )
@@ -857,10 +857,14 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       const count = lostByField.get(change.fieldId) ?? 0
       if (count === 0) continue
       throw new ProcessorRejection(
-        `cannot change the type of property "${change.oldName}": ${count} `
-        + `stored value${count === 1 ? '' : 's'} cannot be read as the new `
-        + 'type, and the blocks holding them would lose them. Fix or remove '
-        + 'those values first, or choose a type that can hold them.',
+        // Not "cannot be read": `valuesLostBy` counts what the cell would
+        // STOP holding, and two readable values that re-spell to the same
+        // text converge into one, which is a loss with nothing unreadable in
+        // it.
+        `cannot change the type of property "${change.oldName}": the blocks `
+        + `using it would lose ${count} stored `
+        + `value${count === 1 ? '' : 's'}. Fix or remove those values first, `
+        + 'or choose a type that can hold them.',
         'property.definition-change.unconvertible',
         {
           fieldId: change.fieldId,

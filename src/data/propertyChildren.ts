@@ -194,6 +194,22 @@ const SPAN_OPENERS_RE = /[[(]/g
  *  across calls, so testing with one answers differently on alternate calls. */
 const SPAN_OPENER_RE = /[[(]/
 
+/** Does this codec store a value as RAW content, so that the text in the row
+ *  is the value itself rather than a formatting of it?
+ *
+ *  The one owner of a question three sites ask: only these codecs can have
+ *  their value destroyed by the content being read back as something else, so
+ *  only they escape ({@link needsEscape} / {@link escapeContent}) and only
+ *  their decode can be looking at an envelope. The three must agree or a value
+ *  is escaped on write and not unwrapped on read.
+ *
+ *  Answered by the discriminator rather than by running the codec, which the
+ *  neighbouring {@link codecAcceptsNull} can do and this cannot: `date` also
+ *  returns a string unchanged, and is deliberately NOT in this set — its text
+ *  is a canonical instant, not raw content. */
+const storesContentVerbatim = (codec: AnyCodec): boolean =>
+  codec.type === 'string' || codec.type === 'url'
+
 /** Would this text, stored VERBATIM as a value row's content, read back as
  *  something other than itself? A whole-content reference does — one of the
  *  two readers takes it as a pointer rather than text, EMBEDS included
@@ -232,7 +248,7 @@ export const contentLosesPropertyValue = (
   // so a `string-list` member is governed by the string rules its own content
   // was written under, not by the list codec's.
   const codec = valueChildCodec(schema)
-  if (codec.type !== 'string' && codec.type !== 'url') return false
+  if (!storesContentVerbatim(codec)) return false
   if (content.trim() === 'null' && codecAcceptsNull(codec)) return true
   return parseExactReferenceBlockContent(content)?.fieldForm === true
     || hasLoneSurrogate(content)
@@ -318,10 +334,7 @@ const encodedValueToContent = (codec: AnyCodec, encoded: unknown): string => {
     if (encoded === '') return ''
     return referenceBlockContentForId(encoded)
   }
-  if (
-    codec.type === 'string'
-    || codec.type === 'url'
-  ) {
+  if (storesContentVerbatim(codec)) {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
     return needsEscape(codec, encoded) ? escapeContent(encoded) : encoded
   }
@@ -347,10 +360,7 @@ const contentToEncodedValue = (
   // user wrote. The discriminator is free, because escaping openers is already
   // what makes the envelope inert: a real envelope carries NO literal `[` or
   // `(`, so content that has one was written by someone else and is text.
-  if (
-    (codec.type === 'string' || codec.type === 'url')
-    && isEscapedEnvelope(content.trim())
-  ) {
+  if (storesContentVerbatim(codec) && isEscapedEnvelope(content.trim())) {
     try {
       const parsed: unknown = JSON.parse(content.trim())
       if (typeof parsed === 'string' && needsEscape(codec, parsed)) return parsed
@@ -517,17 +527,11 @@ export type ValueChildConversion =
 
 /** THE VALUE ROUTE: the value `from` holds, re-spelled by `to`.
  *
- *  Two presets can hold the same values and disagree only about how a member is
- *  SPELLED — a `string-list` member is stored verbatim (`x`) where a generic
- *  `list` member is stored as JSON (`"x"`). Only the codec that WROTE the text
- *  can say which of the two spellings it is.
- *
- *  Accepted only when the value survives the round trip, asked by running it: a
- *  `to` that re-spells the value into text it reads back as something else has
- *  moved the value rather than carrying it. That check is also what lets this
- *  route go first ({@link convertValueChildContent}): a re-type that changes
- *  the value's TYPE fails it, so coercions fall through to the text route by
- *  construction instead of by an ordering rule. */
+ *  Only the codec that WROTE the text can say what it holds. Accepted only when
+ *  the value survives the round trip, asked by running it: a `to` that re-spells
+ *  the value into text it reads back as something else has moved the value
+ *  rather than carrying it. Which route runs when is
+ *  {@link convertValueChildContent}'s to state. */
 const respellUnderTargetCodec = (
   from: AnyPropertySchema,
   to: AnyPropertySchema,
@@ -546,7 +550,7 @@ const respellUnderTargetCodec = (
       return {outcome: 'unreadable'}
     }
   } catch {
-    // `to` cannot write this value at all.
+    // `to` cannot write this value, or cannot read back what it wrote.
     return {outcome: 'unreadable'}
   }
   // DECLINED when re-spelling MINTS A REFERENCE the stored text did not carry:
@@ -589,18 +593,26 @@ const readTextUnderTargetCodec = (
 
 /**
  * Re-read ONE value child's text for a property whose codec changed, at
- * {@link valueChildCodec} grain.
+ * {@link valueChildCodec} grain. THE ONE OWNER of which reading wins; every
+ * other site points here rather than restating it.
  *
- * THE VALUE FIRST: what the property HELD is what a re-type has to carry, and
- * the text alone cannot say what that is — the JSON `"x"` and the
- * three-character string `"x"` are the same text under two codecs. Taking the
- * text's own reading instead keeps the spelling and swaps the value silently,
- * and swaps the CELL with it: a `refList` cell of bare ids becomes
- * span-shaped strings (#1055).
+ * THE VALUE FIRST ({@link respellUnderTargetCodec}), because what the property
+ * HELD is what a re-type has to carry and the text alone cannot say what that
+ * is: the JSON `"x"` and the three-character string `"x"` are the same text
+ * under two codecs. Taking the text's own reading keeps the spelling and swaps
+ * the value silently, and swaps the CELL with it — a `refList` cell of bare ids
+ * becomes span-shaped strings (#1055).
  *
- * {@link readTextUnderTargetCodec} is the fallback, and takes every conversion
- * that CHANGES the value — ` 1 ` to the number 1, and the rest — because those
- * fail the value route's round trip rather than needing a rule of their own.
+ * THE TEXT ({@link readTextUnderTargetCodec}) answers only where `to` cannot
+ * hold the value `from` held, which the round trip decides. Two consequences
+ * worth knowing, both of them the rule rather than exceptions to it:
+ *  - a re-type that changes the value's TYPE re-reads the text, because the
+ *    round trip fails — ` 1 ` becomes the number 1, `'true'` the boolean.
+ *  - a re-type onto an IDENTITY codec never re-reads it, because such a codec
+ *    holds anything the round trip can throw at it. A `string` holding the
+ *    text `42` stays the STRING `42` under `list`; it does not become a
+ *    number. The cell is what is being preserved, not the text's plausible
+ *    reading.
  *
  * `from` is null when the definition's previous preset does not build: nothing
  * then records what encoding the text is in, so there is no value to re-spell

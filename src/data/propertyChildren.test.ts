@@ -16,8 +16,10 @@ import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
+  convertValueChildContent,
   encodedToValueChildContent,
   valueChildContentToEncoded,
+  type ValueChildConversion,
 } from './propertyChildren'
 import { propertyDefinitionBlockId } from './definitionSeeds'
 import { addBlockTypeToProperties, aliasesProp, blockTypeLabelProp, typesProp } from './properties'
@@ -3914,5 +3916,50 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
         .toEqual(['shared', 'mine', 'theirs'])
       expect((await bagOf('into')).tags).toEqual(['shared', 'mine', 'theirs'])
     })
+  })
+})
+
+describe('convertValueChildContent: which reading of a value child wins (#1055)', () => {
+  // Direct, because the route decisions are pure and every other test reaches
+  // them through a workspace seed plus a processor round, which can only
+  // assert the CELL.
+  type PresetId = keyof typeof kernelValuePresetCoresById
+  const schemaOf = (presetId: PresetId): AnyPropertySchema => {
+    const core = kernelValuePresetCoresById[presetId]
+    return {
+      name: 'p',
+      codec: core.build(core.defaultConfig as never),
+      defaultValue: core.defaultValue,
+      changeScope: ChangeScope.BlockDefault,
+    } as AnyPropertySchema
+  }
+  const convert = (
+    from: PresetId | null, to: PresetId, content: string,
+  ): ValueChildConversion =>
+    convertValueChildContent(from === null ? null : schemaOf(from), schemaOf(to), content)
+
+  it('carries the VALUE across a pure spelling disagreement, both directions', () => {
+    expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
+    expect(convert('list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
+  })
+
+  it('re-reads the TEXT where the target cannot hold the value', () => {
+    // The round trip fails on a type change, which is what routes every
+    // coercion here without an ordering rule of its own. Asserted on the
+    // canonicalized content: carrying the value would have kept the spacing.
+    expect(convert('string', 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
+    expect(convert('string', 'boolean', ' true ')).toEqual({outcome: 'converted', content: 'true'})
+  })
+
+  it('does NOT re-read the text for an IDENTITY target, which holds anything', () => {
+    // The same rule and its surprising half: `list` holds the STRING `42`
+    // perfectly well, so the round trip passes and the value is carried. Text
+    // that merely looks like a number is not one, and the cell said so.
+    expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"'})
+    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
+  })
+
+  it('falls to the text route when no old codec records the encoding', () => {
+    expect(convert(null, 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
   })
 })
