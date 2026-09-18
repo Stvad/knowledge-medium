@@ -4,8 +4,6 @@
 // scans the WORKING TREE's tracked files (it measures progress mid-cleanup);
 // --added <range> counts only the lines a diff adds, classified against each
 // file's postimage so block-comment state survives hunk boundaries.
-// --no-ext-diff is mandatory: this repo routes `git diff` through difftastic,
-// and a subprocess without that flag reads an empty string.
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -173,6 +171,8 @@ const runAdded = range => {
     [
       '-c', 'core.quotePath=false',
       'diff',
+      // --no-ext-diff: a parsed diff must not depend on the caller's git config.
+      // An external differ (difftastic, delta) makes this read as empty, not as an error.
       '--no-ext-diff',
       '--no-color',
       '--full-index',
