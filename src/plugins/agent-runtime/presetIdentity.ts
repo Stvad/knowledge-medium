@@ -96,8 +96,10 @@
  */
 
 import type { AnyValuePresetCore } from '@/data/api'
-import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { keyOf, OBJECT_BAG } from '@/data/internals/propertyKeyScan'
+import {
+  cellCountsByKey,
+  readPropertyDefinitionBags,
+} from '@/data/internals/propertyKeyScan'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import {
   presetConfigProp,
@@ -310,80 +312,25 @@ interface DefinitionRow {
  *  Read from `blocks` rather than the registry because the registry carries no
  *  preset id — `PropertyDefinitionMetadata` is deliberately codec-less — and
  *  because a row whose metadata fails to parse is absent from the registry
- *  entirely while its cells are still stored under its name. */
+ *  entirely while its cells are still stored under its name.
+ *
+ *  Rows without a preset id are dropped here rather than in SQL: they carry no
+ *  codec this check could compare. */
 const readDefinitionRows = async (
   repo: Repo,
   workspaceId: string,
-): Promise<DefinitionRow[]> => {
-  // Every guard below against a MALFORMED row — `OBJECT_BAG`, the `JSON.parse`
-  // catch, and the two typeof checks — is defence in depth and unpinned: the
-  // writers upstream cannot produce one, so no test drives it through this
-  // path. They stay because a row can also arrive by sync from an older or
-  // hand-edited client, where a throw here would fail the whole install.
-  //
-  // The WHOLE bag, parsed in JS, rather than a cell at a time in SQL. A config
-  // is an arbitrary JSON value — `presetConfigProp` stores it through
-  // `unsafeIdentity` — and `json_each(...).value` flattens that: a string cell
-  // comes back unquoted, a boolean as 0/1, JSON null as NULL, so parsing the
-  // column back as JSON mangles every config that is not an object. Reading it
-  // the way the runtime does removes the whole class, and gets the
-  // last-duplicate-key rule (`propertyKeyScan`'s `ORDER BY j.id DESC`) for
-  // free, since `JSON.parse` is what defines it. `OBJECT_BAG` is still the
-  // guard: `json_valid`/`json_type` in a CASE short-circuit, so a malformed bag
-  // degrades to `{}` rather than raising.
-  // `b.deleted = 0` is defence in depth, and unpinned: deleting a block drops
-  // its `block_types` row, so the join already excludes a tombstoned
-  // definition. The cell count below carries the load-bearing twin — it reads
-  // `blocks` with no join to exclude one.
-  const rows = await repo.db.getAll<{id: string; bag: string}>(
-    `SELECT b.id AS id, ${OBJECT_BAG} AS bag
-       FROM blocks b
-       JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
-      WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0`,
-    [PROPERTY_SCHEMA_TYPE, workspaceId],
-  )
-  return rows.flatMap(row => {
-    let bag: Record<string, unknown>
-    try {
-      bag = JSON.parse(row.bag) as Record<string, unknown>
-    } catch {
-      return []
-    }
-    const presetId = bag[presetIdProp.name]
+): Promise<DefinitionRow[]> =>
+  (await readPropertyDefinitionBags(repo.db, workspaceId)).flatMap(row => {
+    const presetId = row.bag[presetIdProp.name]
     if (typeof presetId !== 'string' || !presetId) return []
-    const storedName = bag[propertyNameProp.name]
+    const storedName = row.bag[propertyNameProp.name]
     return [{
       fieldId: row.id,
       presetId,
-      config: bag[presetConfigProp.name],
+      config: row.bag[presetConfigProp.name],
       storedName: typeof storedName === 'string' ? storedName : '',
     }]
   })
-}
-
-/** Cells under each of `names`, by name.
- *
- *  The names go in as ONE bound JSON array rather than a generated `IN` list,
- *  so the statement binds two parameters whatever the name count. Defence in
- *  depth, and unpinned — no reachable definition count comes near this build's
- *  variable limit — but it is the shape that cannot have the problem, at the
- *  same cost. */
-const countCells = async (
-  repo: Repo,
-  workspaceId: string,
-  names: readonly string[],
-): Promise<Map<string, number>> => {
-  if (names.length === 0) return new Map()
-  const rows = await repo.db.getAll<{property: string | null; cells: number}>(
-    `SELECT j.key AS property, COUNT(*) AS cells
-       FROM blocks b, json_each(${OBJECT_BAG}) j
-      WHERE b.workspace_id = ? AND b.deleted = 0
-        AND j.key IN (SELECT n.value FROM json_each(?) n)
-      GROUP BY j.key`,
-    [workspaceId, JSON.stringify(names)],
-  )
-  return new Map(rows.map(row => [keyOf(row.property), row.cells]))
-}
 
 /** What this install would make of one AFFECTED preset id. */
 export interface PresetAfter {
@@ -496,8 +443,8 @@ export const findPresetIdentityConflicts = async (
     return [{presetId, rows, names, differences, seedNames}]
   })
 
-  const cellsByName = await countCells(
-    repo, workspaceId, [...new Set(affected.flatMap(entry => entry.names))])
+  const cellsByName = await cellCountsByKey(
+    repo.db, workspaceId, [...new Set(affected.flatMap(entry => entry.names))])
 
   const conflicts = affected.map(({presetId, rows, names, differences, seedNames}) => {
     const definitions = rows

@@ -426,7 +426,9 @@ const distinctValuesByKey = async (
   // of them judges values nothing can observe: `{"k":"obsolete","k":42}` is a
   // number at runtime but would be proven as `raw-json`, and enough dead
   // occurrences could push a key past the limit and block the flip outright.
-  // Same rule, same reason, as `Tx.livePropertyDefinitionNames` and the scan.
+  // Same rule, same reason, as `readPropertyDefinitionBags` — which gets it
+  // from `JSON.parse` instead, being a per-ROW read. This one is per-CELL
+  // over every key, so it has to say it in SQL.
   const lastPerBlock = `
     SELECT b.id AS block, j.key AS property, j.type AS type, j.value AS value,
            ROW_NUMBER() OVER (PARTITION BY b.id, j.key ORDER BY j.id DESC) AS occurrence
