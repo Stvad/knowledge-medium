@@ -54,15 +54,6 @@ import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { isGraphBackfillClaimActive } from './internals/graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from './internals/propertyCellBackfill'
 
-/** The backfill whose claim stops the graph accepting writes, and therefore the
- *  only one whose own transactions are exempt from that (#1057). ONE name for
- *  both halves: a pass that locks but is not exempt deadlocks against itself,
- *  and one that is exempt but does not lock is an unexplained hole.
- *
- *  A constant rather than a `WorkspaceBackfill` field because exactly one pass
- *  rewrites source-of-truth rows today. A second would make it a declaration on
- *  the seam, read here and by `Repo.graphMigrationLocked`. */
-const GRAPH_LOCKING_BACKFILL_ID = PROPERTY_CELL_BACKFILL_ID
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
@@ -175,6 +166,16 @@ import {
   type PropertySchemaResolver,
 } from './internals/propertySchemaResolution'
 import { runFreshInitialLoad } from './internals/freshInitialLoad'
+
+/** The backfill whose claim stops the graph accepting writes, and therefore the
+ *  only one whose own transactions are exempt from that (#1057). ONE name for
+ *  both halves: a pass that locks but is not exempt deadlocks against itself,
+ *  and one that is exempt but does not lock is an unexplained hole.
+ *
+ *  A constant rather than a `WorkspaceBackfill` field because exactly one pass
+ *  rewrites source-of-truth rows today. A second would make it a declaration on
+ *  the seam, read here and by `Repo.graphMigrationLocked`. */
+const GRAPH_LOCKING_BACKFILL_ID = PROPERTY_CELL_BACKFILL_ID
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project

@@ -444,7 +444,7 @@ export const createGraphBackfillClaim = (
       await tx.update(claimId, {
         properties: {...row.properties, [migrationCompletedAtProp.name]: Date.now()},
       })
-  })
+    })
   },
 
   async releaseClaim(workspaceId, backfillId) {
@@ -472,6 +472,6 @@ export const createGraphBackfillClaim = (
       // that was refused — now reaches this delete with the prior completion
       // stamp already overwritten. Same residual, more ways in.
       await tx.delete(claimId)
-  })
+    })
   },
 })
