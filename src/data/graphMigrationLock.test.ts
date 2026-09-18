@@ -18,6 +18,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   createGraphBackfillClaim,
   graphBackfillClaimBlockId,
+  releaseStrandedGraphBackfillClaim,
   type GraphBackfillClaimDeps,
   GRAPH_MIGRATION_LOCKED,
 } from '@/data/internals/graphBackfillClaim'
@@ -93,6 +94,12 @@ const write = (
     const row = await tx.get(TARGET)
     await tx.update(TARGET, {properties: {...row!.properties, 'probe:mark': scope}})
   }, {scope, description: `probe ${scope}`, ...opts})
+
+const claimIsLive = async (): Promise<boolean> =>
+  (await sharedDb.db.getOptional<{deleted: number}>(
+    'SELECT deleted FROM blocks WHERE id = ?',
+    [graphBackfillClaimBlockId(WS, PROPERTY_CELL_BACKFILL_ID)],
+  ))?.deleted === 0
 
 const markOn = async (id = TARGET): Promise<unknown> => {
   const row = await sharedDb.db.getOptional<{properties_json: string}>(
@@ -385,5 +392,50 @@ describe('the migration itself, running under the lock it raised', () => {
 
     expect(result.outcome).toBe('held-by-peer')
     expect(await valueChildOfTarget()).toBeUndefined()
+  })
+})
+
+describe('the way out of the lock', () => {
+  /** A claim left by a device that will never come back: a DIFFERENT claimant,
+   *  which is what makes `releaseClaim` useless here — it decides ownership by
+   *  claimant id, so the stranded case is exactly the one it declines. */
+  const strand = (): Promise<string> => seedClaim({claimantId: 'a-device-that-is-gone'})
+
+  const release = (repo: Repo): Promise<'released' | 'not-held'> =>
+    releaseStrandedGraphBackfillClaim(repo, WS, PROPERTY_CELL_BACKFILL_ID)
+
+  it('clears a stranded claim, though clearing it is a write the lock refuses', async () => {
+    // Without the release being exempt from the lock it lifts, a claimant that
+    // died leaves the graph locked with no way out from inside the app: the
+    // documented recovery was to delete the claim block, and that delete is a
+    // BlockDefault write like any other.
+    const repo = makeRepo()
+    await seedTarget(repo)
+    await strand()
+    await expect(write(repo, ChangeScope.BlockDefault)).rejects.toThrow()
+
+    expect(await release(repo)).toBe('released')
+
+    await write(repo, ChangeScope.BlockDefault)
+    expect(await markOn()).toBe(ChangeScope.BlockDefault)
+  })
+
+  it('leaves a COMPLETED claim alone — that is the record of the run, not a lock', async () => {
+    // Deleting it would leave the graph reading as never-migrated, and it locks
+    // nothing, so there is nothing for this command to do.
+    const repo = makeRepo()
+    await seedTarget(repo)
+    await seedClaim({completed: true})
+
+    expect(await release(repo)).toBe('not-held')
+
+    expect(await claimIsLive()).toBe(true)
+  })
+
+  it('says so when nothing is held, rather than reporting a release', async () => {
+    const repo = makeRepo()
+    await seedTarget(repo)
+
+    expect(await release(repo)).toBe('not-held')
   })
 })

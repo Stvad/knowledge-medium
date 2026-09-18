@@ -1,7 +1,9 @@
 /**
  * Properties-as-blocks migration plugin.
  *
- * Contributes the palette command that runs the one-time cell → children pass.
+ * Contributes the palette command that runs the one-time cell → children pass,
+ * and the one that clears a claim nobody will release — which the migration
+ * lock makes the only way out of a stranded run.
  * Deliberately its own plugin rather than a line in db-maintenance: this is a
  * data migration with a runbook, not routine upkeep, and the flip that follows
  * it will live here too.
@@ -12,6 +14,7 @@ import { actionsFacet } from '@/extensions/core.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { migratePropertiesToBlocksAction } from './action.ts'
+import { releaseMigrationClaimAction } from './releaseClaimAction.ts'
 
 export const propertiesMigrationPlugin = ({repo}: {repo: Repo}): AppExtension =>
   systemToggle({
@@ -22,5 +25,6 @@ export const propertiesMigrationPlugin = ({repo}: {repo: Repo}): AppExtension =>
       'Run it on a single device; the others receive the result through sync.',
   }).of([
     actionsFacet.of(migratePropertiesToBlocksAction({repo}), {source: 'properties-migration'}),
+    actionsFacet.of(releaseMigrationClaimAction({repo}), {source: 'properties-migration'}),
     dialogAppMountExtension,
   ])
