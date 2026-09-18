@@ -640,7 +640,7 @@ describe('codec change', () => {
   })
 
   it('re-stamps the reference columns when a ref value becomes plain text', async () => {
-    // Retyping a ref property rewrites `((id))` into escaped text AFTER
+    // Retyping a ref property rewrites `((id))` into the bare id AFTER
     // `core.deriveReferenceTarget` ran, and this processor's writes are
     // settled, so the derive re-run never revisits the row. Without an inline
     // re-stamp the column keeps naming a target the content no longer
@@ -1388,21 +1388,23 @@ describe('the multi-value boundary (#1010)', () => {
 
   it('re-encodes EVERY member, not just the first', async () => {
     // The scalar rule — take the first value child that parses — truncates a
-    // list to one member. The SECOND member is the whole point here: under
-    // `refList` each is a bare `((id))` span, and the string member codec has
-    // to ESCAPE it, or a later rename or merge rewrites it as a reference.
+    // list to one member, which is why the SECOND member is asserted. A
+    // refList cell holds BARE IDS: the `((id))` span is how the child SPELLS
+    // one, not what the property holds, so carrying the values across leaves
+    // the cell untouched and leaves no span for a later rename or merge to
+    // rewrite.
     await seedWorkspace('children')
     const repo = await setupDefinition('refList')
     await createHost(repo, 'a-id')
     await createHost(repo, 'b-id')
     const ids = await seedListProperty(repo, 'p', 'status', ['a-id', 'b-id'])
     expect(await rowContent(ids[0]!)).toBe('((a-id))')
+    expect(await cell('p')).toEqual({status: ['a-id', 'b-id']})
 
     await retype(repo, FIELD_ID, 'string-list')
 
-    expect(await cell('p')).toEqual({status: ['((a-id))', '((b-id))']})
-    expect(await rowContent(ids[1]!)).not.toBe('((b-id))')
-    expect(await rowContent(ids[1]!)).not.toMatch(/[[(]/)
+    expect(await cell('p')).toEqual({status: ['a-id', 'b-id']})
+    expect(await rowContent(ids[1]!)).toBe('b-id')
   })
 
   it('UNIONS across duplicate field rows, as the projection does', async () => {
@@ -1419,7 +1421,7 @@ describe('the multi-value boundary (#1010)', () => {
 
     await retype(repo, FIELD_ID, 'string-list')
 
-    expect(await cell('p')).toEqual({status: ['((a-id))']})
+    expect(await cell('p')).toEqual({status: ['a-id']})
     // The duplicate ROW survives, and should: this pass is `settledWrites`, so
     // no materializer follows it, and folding the two rows is the collapse's
     // job rather than this one's. What must not happen is the DOUBLED cell —
@@ -1614,16 +1616,28 @@ describe('the multi-value boundary (#1010)', () => {
     expect(errors).toEqual([])
   })
 
-  it('does NOT survive the return trip — the other direction mangles (#1055)', async () => {
-    // ASYMMETRY, pinned so a change to the route order fails here rather than
-    // silently. Coming back, the JSON text `"x"` READS under the string member
-    // codec — which accepts anything — so the value route never runs and the
-    // member becomes the three-character string `"x"`.
-    //
-    // Not fixed with #1024 because the rule that would fix it (prefer the value
-    // route wherever both read) also moves `refList` -> `string-list` off the
-    // escaped `((a-id))` span the test above deliberately pins, and the two
-    // cases want opposite answers.
+  it('ESCAPES a member the target codec would otherwise store as a live span', async () => {
+    // The value route re-spells under the TARGET codec, so escaping is its
+    // duty too: a generic `list` stores the string `((a-id))` as JSON with the
+    // parens intact, and written verbatim into a `string-list` row the inline
+    // reference reader takes it as a pointer — a later rename or merge then
+    // edits the value.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('list')
+    const ids = await seedListProperty(repo, 'p', 'status', ['((a-id))'])
+
+    await retype(repo, FIELD_ID, 'string-list')
+    await repo.awaitProcessors()
+
+    expect(await rowContent(ids[0]!)).not.toMatch(/[[(]/)
+    expect(await cell('p')).toEqual({status: ['((a-id))']})
+  })
+
+  it('SURVIVES the return trip, both spellings intact (#1055)', async () => {
+    // Coming back, the JSON text `"x"` READS under the string member codec —
+    // which accepts anything — so reading the TEXT would make the member the
+    // three-character string `"x"`. Reading the VALUE first is what keeps the
+    // pair symmetric: the codec that WROTE the text settles what it spells.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
     const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
@@ -1633,8 +1647,8 @@ describe('the multi-value boundary (#1010)', () => {
     await retype(repo, FIELD_ID, 'string-list')
     await repo.awaitProcessors()
 
-    expect(await rowContent(ids[0]!)).toBe('"x"')
-    expect(await cell('p')).toEqual({status: ['"x"', '"y"']})
+    expect(await rowContent(ids[0]!)).toBe('x')
+    expect(await cell('p')).toEqual({status: ['x', 'y']})
   })
 
   it('re-keys the members it CAN read past one it cannot, on a rename', async () => {
