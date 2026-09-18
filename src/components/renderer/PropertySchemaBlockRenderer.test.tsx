@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -143,6 +143,42 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
 
     expect(screen.queryByText(/Delete schema/)).toBeNull()
     expect(screen.getByText(/Built-in property defined in code/)).toBeTruthy()
+  })
+
+  it('snaps the type picker back when the kernel REFUSES the re-type', async () => {
+    // The picker must not be left displaying a type the kernel refused. React's
+    // controlled-state restore is what delivers this, not anything in the
+    // renderer — pinned because the property is user-facing and an `onChange`
+    // that ever writes local state before awaiting would silently lose it.
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode,
+          wk_canary, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS])
+    const schema = await vi.waitFor(() => {
+      const registered = repo.propertySchemas.get('test:myProp')
+      if (!registered) throw new Error('[test] test:myProp not registered yet')
+      return registered
+    }, {timeout: 3000})
+    // Prose under a string property: `number` cannot read it, so the re-type
+    // below is refused rather than dropping it.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'host', workspaceId: WS, parentId: 'root', orderKey: 'a3', content: 'host',
+      })
+      await tx.setProperty('host', schema, 'not a number')
+    }, {scope: ChangeScope.BlockDefault})
+
+    renderSchema('user-schema')
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('string')
+
+    fireEvent.change(screen.getByRole('combobox'), {target: {value: 'number'}})
+
+    await waitFor(() => {
+      expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('string')
+    })
+    expect(repo.block('user-schema')).toBeTruthy()
   })
 
   it('keeps a user-created schema editable', () => {

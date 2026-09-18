@@ -341,9 +341,11 @@
   &ldquo;refList stays JSON&rdquo; note in §9, and the &ldquo;Value
   decoding&rdquo;, &ldquo;Duplicates and divergence&rdquo; and
   &ldquo;Default-value vs. unset&rdquo; entries, each of which stated a
-  SCALAR-only rule as the whole rule.</strong>
-  <strong>Last verified against code: 2026-09-16 for the multi-value shape;
-  2026-08-21 for the rest, branch
+  SCALAR-only rule as the whole rule. A sixth, &ldquo;Codec / preset changes are
+  migrations, not edits&rdquo;, carries an as-shipped correction: the
+  &ldquo;N values can't convert&rdquo; outcome is a REFUSAL (#1024).</strong>
+  <strong>Last verified against code: 2026-09-17 for the codec-change outcome;
+  2026-09-16 for the multi-value shape; 2026-08-21 for the rest, branch
   <code>claude/e2ee-synthesis-namespace</code>.</strong>
   That verification covers the entries marked <strong>landed</strong> below
   &mdash; each was checked against the implementation on this branch, not
@@ -2871,7 +2873,16 @@ supabase skill if it's kept.
     an explicit re-encode/validate pass over existing values (with a user-visible
     "N values can't convert" outcome), not lean on the projection's remove-on-invalid
     behavior. Same machinery as the rename reproject; build them together in slice
-    B.</dd>
+    B.
+    <p><strong>As shipped (2026-09-17, #1024):</strong> the outcome is a
+    REFUSAL, not a report — a value the new codec cannot read rolls the whole
+    transaction back, definition row included. Whether anything is lost is
+    judged at CELL grain, comparing what the definition was publishing against
+    what it would publish now, so a narrowing that drops a list member counts
+    and a divergent row the projection never read does not.
+    <code>convertValueChildContent</code> and
+    <code>valuesLostBy</code> own the two halves; read them rather than this
+    paragraph.</p></dd>
 
   <dt><strong>Field-row placement (decided: no special logic).</strong></dt>
   <dd>Owner decision (2026-07-19): there is <em>no placement policy for property
@@ -3514,8 +3525,9 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
         the rebuild); a rename re-keys the <em>cell only</em>, since
         <code>::((fieldId))</code> content is rename-stable (§7 — no retitle pass);
         the migrations run under the References maintenance bucket (never on
-        cmd-Z); unconvertible values are reported via the user-error channel, never
-        silently unset; <code>addSchema</code> rejects <code>]]</code>-lossy names.
+        cmd-Z); values the new codec cannot read REFUSE the change rather than
+        being reported after it (as shipped, 2026-09-17 — #1024);
+        <code>addSchema</code> rejects <code>]]</code>-lossy names.
         B2 also carries the §7 <em>name→content mirror</em> (PR-review round 28):
         user definitions are created with empty content today, so
         <code>addSchema</code> starts writing <code>content = name</code>, renames
@@ -3596,8 +3608,8 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
         preset — retargeted under B with a different codec, the next projection
         would skip them as invalid and the property reads unset) — so it runs
         the rename-style cell re-key <em>plus</em> B2's codec-change
-        re-encode/validate pass over the retargeted rows (unconvertible values
-        report via the user-error channel, never silently unset) in the same tx
+        re-encode/validate pass over the retargeted rows (values the new codec
+        cannot read refuse the change — #1024) in the same tx
         through B2's funnel, with the ordering pinned; incompatible presets
         refuse the merge up front — and incompatible <em>write scopes</em>
         refuse it the same way (PR #417 review): retargeting A's rows

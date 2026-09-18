@@ -248,8 +248,8 @@ const retype = (repo: Repo, fieldId: string, presetId: string): Promise<void> =>
   repo.tx(tx => tx.setProperty(fieldId, presetIdProp, presetId),
     {scope: ChangeScope.BlockDefault})
 
-/** The unconvertible-values report rides `afterCommit`, so it lands one
- *  post-commit tx after the edit resolves. */
+/** A refusal reaches this channel as well as the awaited promise: `repo.tx`
+ *  notifies the listeners before it rethrows. */
 const collectUserErrors = (repo: Repo): ProcessorRejection[] => {
   const errors: ProcessorRejection[] = []
   repo.onUserError(err => { errors.push(err) })
@@ -466,7 +466,7 @@ describe('rename', () => {
     expect(await isLive(valueRowId), valueRowId).toBe(true)
   })
 
-  it('leaves value text alone, and reports nothing, even when it is stale', async () => {
+  it('leaves value text alone on a rename, even when it is stale', async () => {
     // A rename does not change the codec, so a value the codec would write
     // differently is the user's text, not a conversion candidate: re-encoding
     // it here would normalize `1.50` to `1.5` behind their back, and an
@@ -479,14 +479,12 @@ describe('rename', () => {
     const {valueRowId: staleRowId} = await seedProperty(repo, 'q', 'status', 7)
     await setRawValueContent(valueRowId, '1.50')
     await setRawValueContent(staleRowId, 'not a number')
-    const errors = collectUserErrors(repo)
 
     await rename(repo, FIELD_ID, 'state')
     await repo.awaitProcessors()
 
     expect(await rowContent(valueRowId)).toBe('1.50')
     expect(await rowContent(staleRowId)).toBe('not a number')
-    expect(errors).toEqual([])
   })
 
   it('skips a soft-deleted consumer instead of failing the whole edit', async () => {
@@ -553,55 +551,77 @@ describe('codec change', () => {
     expect(await rowContent(valueRowId)).toBe(' 42 ')
   })
 
-  it('reports unconvertible values and KEEPS the stale cell key, leaving rows in the tree', async () => {
+  it('REFUSES a re-type that would take a value away, and leaves the graph untouched', async () => {
+    // Refusal, not report-and-commit: a committed report leaves the cell
+    // holding what the OLD codec projected until something reprojects it
+    // (#1024). Everything below is the pre-edit state, down to the definition
+    // row.
     await seedWorkspace('children')
     const repo = await setupDefinition()
     const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'status', 'not a number')
-    const errors = collectUserErrors(repo)
 
-    await retype(repo, FIELD_ID, 'number')
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+      meta: {name: 'status', count: 1},
+    })
     await repo.awaitProcessors()
 
-    // All-unconvertible must NOT unset the cell key: MATERIALIZE reads a missing
-    // key as delete-intent and would tombstone the very rows the user is told
-    // are preserved (#800). The stale old-codec value is what stays.
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('string')
     expect(await cell('p')).toEqual({status: 'not a number'})
     expect(await rowContent(valueRowId)).toBe('not a number')
     expect(await isLive(fieldRowId), fieldRowId).toBe(true)
     expect(await isLive(valueRowId), valueRowId).toBe(true)
-    expect(errors).toHaveLength(1)
-    expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
-    expect(errors[0]!.meta).toMatchObject({name: 'status', count: 1})
   })
 
-  it('counts every unconvertible value across every consumer, not just the first', async () => {
+  it('counts every lost value across every consumer, not just the first', async () => {
     await seedWorkspace('children')
     const repo = await setupDefinition()
     await seedProperty(repo, 'p', 'status', 'not a number')
     await seedProperty(repo, 'q', 'status', 'also not a number')
-    const errors = collectUserErrors(repo)
 
-    await retype(repo, FIELD_ID, 'number')
+    // Summed over consumers — a per-parent early exit would tell the user to
+    // fix one block and leave them to rediscover the rest one refusal at a
+    // time.
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+      meta: {count: 2},
+    })
+  })
+
+  it('does NOT refuse over a value that was already unreadable before the edit', async () => {
+    // A hand-broken value row is not in the cell and has not been for as long
+    // as it has been broken — the projection could not read it either. A
+    // refusal over it would block every later change to the definition on a row
+    // this edit neither takes away nor repairs, so it is left exactly as stored
+    // and the convertible value re-encodes around it.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('number')
+    const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'status', 7)
+    await setRawValueContent(valueRowId, 'not a number')
+    expect(await cell('p')).toEqual({status: 7})
+
+    await retype(repo, FIELD_ID, 'boolean')
     await repo.awaitProcessors()
 
-    // One report per definition, summed over consumers — a per-parent early
-    // exit here would under-report the damage.
-    expect(errors).toHaveLength(1)
-    expect(errors[0]!.meta).toMatchObject({count: 2})
+    // §9's default-value rule: a live field row with nothing parseable under it
+    // reads as unset, which is what the projection has been saying about this
+    // row since it arrived.
+    expect(await cell('p')).toEqual({})
+    expect(await rowContent(valueRowId)).toBe('not a number')
+    expect(await isLive(fieldRowId), fieldRowId).toBe(true)
+    expect(await isLive(valueRowId), valueRowId).toBe(true)
   })
 
   it('leaves a value that already reads as the new type alone', async () => {
     await seedWorkspace('children')
     const repo = await setupDefinition()
     const {valueRowId} = await seedProperty(repo, 'p', 'status', '42')
-    const errors = collectUserErrors(repo)
 
     await retype(repo, FIELD_ID, 'number')
     await repo.awaitProcessors()
 
     expect(await rowContent(valueRowId)).toBe('42')
     expect(await cell('p')).toEqual({status: 42})
-    expect(errors).toEqual([])
   })
 
   it('re-encodes on the tx that REPAIRS a definition with no buildable codec', async () => {
@@ -665,20 +685,86 @@ describe('codec change', () => {
     // while storing an unset value differently — `optional-number` writes
     // `null`, which the required `number` cannot parse at all. Keying the
     // decision off the type string calls this switch a no-op, so the stranded
-    // value is never reported and the user is told nothing.
+    // cell is never re-projected and the stale value stands.
     await seedWorkspace('children')
     const repo = await setupDefinition('optional-number', undefined, 'number')
     const {valueRowId} = await seedProperty(repo, 'p', 'status', 7)
     await setRawValueContent(valueRowId, 'null')
-    const errors = collectUserErrors(repo)
+    expect(await cell('p')).toEqual({status: 7})
 
     await retype(repo, FIELD_ID, 'number')
     await repo.awaitProcessors()
 
-    expect(errors).toHaveLength(1)
-    expect(errors[0]!.meta).toMatchObject({name: 'status', count: 1})
-    // Never deleted — the unconvertible value stays exactly as it was.
+    // The cell moving AT ALL is what pins detection: a switch read as a no-op
+    // leaves the stale `7` standing.
+    expect(await cell('p')).toEqual({})
     expect(await rowContent(valueRowId)).toBe('null')
+  })
+
+  it('does not refuse a narrowing over a value the user CLEARED', async () => {
+    // `null` under a null-accepting codec is the encoded form of unset, not a
+    // value — `optionalNumber.encode(undefined)` writes exactly this. Counting
+    // it as one would refuse every optional -> required narrowing on every
+    // block that ever cleared the property, with a message naming a value
+    // there is none of.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('optional-number', undefined, 'number')
+    const schema = schemaFor(repo, 'status')
+    await createHost(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', schema, undefined),
+      {scope: ChangeScope.BlockDefault})
+
+    await retype(repo, FIELD_ID, 'number')
+    await repo.awaitProcessors()
+
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('number')
+  })
+
+  it('REFUSES a re-type it cannot read the old values with at all', async () => {
+    // A definition whose preset does not build is the one case where the cell
+    // is the only record: PROJECT skips the key for want of a schema, so the
+    // cell keeps what the preset published while it still loaded, and reading
+    // the children answers "no values" about a cell plainly holding one.
+    // Treating that as "nothing was there" committed the re-type and emptied
+    // the cell silently — strictly worse than the report it replaced.
+    await seedWorkspace('children')
+    const {repo, valueRowId} = await withPresetUnloaded('prose value')
+    expect(await cell('p')).toEqual({status: 'prose value'})
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+      meta: {name: 'status', count: 1},
+    })
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: 'prose value'})
+    expect(await rowContent(valueRowId)).toBe('prose value')
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
+  })
+
+  it('does not refuse over a divergent PEER row the cell never projected', async () => {
+    // Two value children under one scalar field row are a surfaced conflict
+    // (§9): the projection reads the first that parses and the other is not in
+    // the cell. Refusing over it asks the user to go fix a row that costs them
+    // nothing, and the message could not even name it.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {fieldRowId} = await seedProperty(repo, 'p', 'status', '42')
+    const peer = 'peer-value-row'
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+         properties_json, deleted, created_at, updated_at, user_updated_at,
+         created_by, updated_by)
+       VALUES (?, ?, ?, 'zz', 'prose', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+      [peer, WS, fieldRowId])
+    expect(await cell('p')).toEqual({status: '42'})
+
+    await retype(repo, FIELD_ID, 'number')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: 42})
+    expect(await rowContent(peer)).toBe('prose')
+    expect(await isLive(peer), peer).toBe(true)
   })
 
   it('refuses the SAME edit when it renames AND switches to a preset that cannot build', async () => {
@@ -866,18 +952,14 @@ describe('codec change', () => {
     expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('state')
   })
 
-  it('rename + re-type in ONE edit: value rows stay live, cell unsets per §9', async () => {
-    // Both triggers in one tx: `status` (string) becomes `state` (number), and
-    // the existing value does not convert.
-    //
-    // The DATA guarantee is that the value ROWS survive — the field row's
-    // content is id-addressed and rename-stable, and the value child keeps its
-    // text. The CELL ends UNSET: the pass drops the old key and has nothing
-    // parseable to project under the new one (§9's default-value rule).
+  it('rename + re-type in ONE edit re-keys AND re-encodes together', async () => {
+    // Both triggers in one tx: `status` (string) becomes `state` (number). The
+    // field row's content is id-addressed and rename-stable, so only the
+    // name-keyed cell moves and the value child's TEXT is re-spelled under the
+    // new codec.
     await seedWorkspace('children')
     const repo = await setupDefinition()
-    const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'status', 'not a number')
-    const errors = collectUserErrors(repo)
+    const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'status', ' 42 ')
 
     await repo.tx(async tx => {
       await tx.setProperty(FIELD_ID, propertyNameProp, 'state')
@@ -885,13 +967,34 @@ describe('codec change', () => {
     }, {scope: ChangeScope.BlockDefault})
     await repo.awaitProcessors()
 
-    expect(await cell('p')).toEqual({})
-    expect(await rowContent(valueRowId)).toBe('not a number')
+    expect(await cell('p')).toEqual({state: 42})
+    expect(await rowContent(valueRowId)).toBe('42')
     expect(await rowContent(fieldRowId)).toBe(`::((${FIELD_ID}))`)
     expect(await isLive(fieldRowId), fieldRowId).toBe(true)
-    expect(await isLive(valueRowId), valueRowId).toBe(true)
-    expect(errors).toHaveLength(1)
-    expect(errors[0]!.meta).toMatchObject({name: 'state', count: 1})
+  })
+
+  it('refuses a rename + re-type whose value does not convert, keeping BOTH halves', async () => {
+    // The rename is the half that would strand the consumer worst: it drops the
+    // old key, so committing it without a value to publish under the new name
+    // loses the property outright. Neither half lands.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 'not a number')
+
+    await expect(repo.tx(async tx => {
+      await tx.setProperty(FIELD_ID, propertyNameProp, 'state')
+      await tx.setProperty(FIELD_ID, presetIdProp, 'number')
+    }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+      // The name it still ANSWERS TO after the rollback, not the one this tx
+      // tried to give it — the user has no property called `state` to go fix.
+      meta: {name: 'status', count: 1},
+    })
+    await repo.awaitProcessors()
+
+    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
+    expect(await cell('p')).toEqual({status: 'not a number'})
+    expect(await rowContent(valueRowId)).toBe('not a number')
   })
 })
 
@@ -1350,17 +1453,36 @@ describe('the multi-value boundary (#1010)', () => {
     expect(await rowContent(valueRowId)).toBe('alpha')
   })
 
-  it('list -> scalar takes the first member and leaves the rest in the tree', async () => {
+  it('REFUSES list -> scalar when the scalar has no room for every member', async () => {
+    // Every member converts on its own, so a per-ROW loss check sees nothing —
+    // the loss is at cell grain, where the scalar aggregate keeps only the
+    // first. Publishing it drops `beta` from the cell, and MATERIALIZE then
+    // folds its row away on the next ordinary write to the property, so
+    // "the row stays visible and fixable" does not survive contact.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
     const ids = await seedListProperty(repo, 'p', 'status', ['alpha', 'beta'])
 
+    await expect(retype(repo, FIELD_ID, 'string')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+      meta: {count: 1, blockIds: ['p']},
+    })
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: ['alpha', 'beta']})
+    expect(await rowContent(ids[1]!)).toBe('beta')
+  })
+
+  it('allows list -> scalar when the list holds ONE member', async () => {
+    // The narrowing itself is not the loss — the members past the first are.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    await seedListProperty(repo, 'p', 'status', ['alpha'])
+
     await retype(repo, FIELD_ID, 'string')
+    await repo.awaitProcessors()
 
     expect(await cell('p')).toEqual({status: 'alpha'})
-    // This pass never deletes a value row, so the member the scalar codec has
-    // no room for stays visible and fixable rather than vanishing.
-    expect(await rowContent(ids[1]!)).toBe('beta')
   })
 
   it('keeps an EXPLICITLY empty list, field row and all', async () => {
@@ -1382,46 +1504,57 @@ describe('the multi-value boundary (#1010)', () => {
     expect(await isLive(fieldRowId!)).toBe(true)
   })
 
-  it('publishes NOTHING when any member fails to convert, so those rows survive', async () => {
-    // The cell write is `skipMetadata` but not settled against a later
-    // MATERIALIZE, which reconciles the children against what was published —
-    // over the very rows this pass reports as preserved. Publishing a partial
-    // list gets the unconvertible member tombstoned.
+  it('refuses a PARTIAL list conversion, and keeps every member', async () => {
+    // A partial list is not a smaller list — it is the members the user still
+    // has silently missing from every reader of that cell. The refusal takes
+    // the member that DID convert back with it, which is the point: the list
+    // is left exactly as it was.
+    //
+    // Bare id-shaped strings are what a refList member must refuse: there is
+    // no grammar in them, so nothing can tell one from prose. Re-spelling the
+    // string `alpha` as `((alpha))` is no way round that — it would mint an
+    // identity nobody wrote — so route 2 declines and both stay lost.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
     await createHost(repo, 'a-id')
-    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
-    // Member 0 is hand-edited into a bare span, which the ref member codec
-    // converts; member 1 stays prose, which it refuses. Through the TREE, not
-    // the cell, because the string member codec would escape a span.
+    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'alpha', 'beta'])
+    // Member 0 becomes a bare span, which the ref member codec converts.
+    // Through the TREE, not the cell, because the string member codec would
+    // escape a span.
     await repo.tx(tx => tx.update(ids[0]!, {content: '((a-id))'}),
       {scope: ChangeScope.BlockDefault})
+    const before = await cell('p')
 
-    await retype(repo, FIELD_ID, 'refList')
+    await expect(retype(repo, FIELD_ID, 'refList')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+      meta: {count: 2, blockIds: ['p']},
+    })
     await repo.awaitProcessors()
 
-    expect(await isLive(ids[0]!)).toBe(true)
-    expect(await isLive(ids[1]!)).toBe(true)
-    expect(await rowContent(ids[1]!)).toBe('y')
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('string-list')
+    expect(await cell('p')).toEqual(before)
+    expect(await rowContent(ids[0]!)).toBe('((a-id))')
+    expect(await rowContent(ids[1]!)).toBe('alpha')
+    expect(await rowContent(ids[2]!)).toBe('beta')
+    expect(await isLive(ids[1]!), ids[1]).toBe(true)
   })
 
-  it('list -> SCALAR never overwrites a leading unconvertible member', async () => {
-    // The scalar destination has no member codec, so a whole-list guard would
-    // not apply: the scalar value gets published, MATERIALIZE takes the scalar
-    // branch, overwrites the FIRST value row — the unconvertible one — with the
-    // published text and folds the row that converted. One rule for both
-    // grains, because the preservation promise is the same for both.
+  it('refuses list -> SCALAR rather than publishing over a member that did not convert', async () => {
+    // The sole pin for the CONVERTED sibling rolling back too: ` 1 ` would have
+    // been canonicalized to `1`, and the refusal takes that write with it.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
     const ids = await seedListProperty(repo, 'p', 'status', ['bad', ' 1 '])
 
-    await retype(repo, FIELD_ID, 'number')
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+      meta: {count: 1},
+    })
     await repo.awaitProcessors()
 
     expect(await rowContent(ids[0]!)).toBe('bad')
-    // The convertible row IS canonicalized — that is the re-encode doing its
-    // job, and not what the preservation promise covers.
-    expect(await rowContent(ids[1]!)).toBe('1')
+    expect(await rowContent(ids[1]!)).toBe(' 1 ')
+    expect(await cell('p')).toEqual({status: ['bad', ' 1 ']})
     expect(await isLive(ids[0]!)).toBe(true)
     expect(await isLive(ids[1]!)).toBe(true)
   })
@@ -1459,8 +1592,10 @@ describe('the multi-value boundary (#1010)', () => {
     // un-re-encoded, `x` is then read as JSON, `JSON.parse` fails, and the
     // projection drops every member — the whole list, silently.
     //
-    // Keying on the codec's INPUTS is what sees it: the preset id moved, and
-    // nothing derived from the built codec did.
+    // Two halves fix it. Keying on the codec's INPUTS SEES the change: the
+    // preset id moved, and nothing derived from the built codec did. Reading
+    // the member under the codec that WROTE it then converts it — the value is
+    // the string `x` either way, and only its spelling moves.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
     const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
@@ -1470,33 +1605,56 @@ describe('the multi-value boundary (#1010)', () => {
     await retype(repo, FIELD_ID, 'list')
     await repo.awaitProcessors()
 
-    // DETECTED, which is the whole of what keying on the inputs buys here. The
-    // conversion then fails honestly: `x` is not JSON, so the identity member
-    // codec cannot read it, and the pass preserves the rows and REPORTS rather
-    // than converting. The cell is stale until something reprojects it and the
-    // members drop out — so #1024 is narrowed to a reported failure, not
-    // closed.
-    expect(errors.map(error => error.code))
-      .toEqual(['property.codec-change.unconvertible'])
-    expect(errors[0]!.meta).toMatchObject({count: 2})
-    expect(await rowContent(ids[0]!)).toBe('x')
-    expect(await rowContent(ids[1]!)).toBe('y')
+    expect(await rowContent(ids[0]!)).toBe('"x"')
+    expect(await rowContent(ids[1]!)).toBe('"y"')
+    expect(await cell('p')).toEqual({status: ['x', 'y']})
+    // The one place this channel is still worth asserting on: a refusal throws
+    // out of the awaited `repo.tx` and would fail the test above it, so an
+    // empty list here only rules out one leaking from an internal tx.
+    expect(errors).toEqual([])
   })
 
-  it('reports members that cannot convert and leaves the cell key stale', async () => {
+  it('does NOT survive the return trip — the other direction mangles (#1055)', async () => {
+    // ASYMMETRY, pinned so a change to the route order fails here rather than
+    // silently. Coming back, the JSON text `"x"` READS under the string member
+    // codec — which accepts anything — so the value route never runs and the
+    // member becomes the three-character string `"x"`.
+    //
+    // Not fixed with #1024 because the rule that would fix it (prefer the value
+    // route wherever both read) also moves `refList` -> `string-list` off the
+    // escaped `((a-id))` span the test above deliberately pins, and the two
+    // cases want opposite answers.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
-    await seedListProperty(repo, 'p', 'status', ['alpha', 'beta'])
-    const errors = collectUserErrors(repo)
+    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
 
-    // Bare id-shaped strings are what a refList member must refuse: there is no
-    // grammar in them, so nothing can tell one from prose.
-    await retype(repo, FIELD_ID, 'refList')
+    await retype(repo, FIELD_ID, 'list')
+    await awaitDefinition(repo, 'status', 'list')
+    await retype(repo, FIELD_ID, 'string-list')
     await repo.awaitProcessors()
 
-    expect(await cell('p')).toEqual({status: ['alpha', 'beta']})
-    expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
-    expect(errors[0]!.meta).toMatchObject({count: 2})
+    expect(await rowContent(ids[0]!)).toBe('"x"')
+    expect(await cell('p')).toEqual({status: ['"x"', '"y"']})
+  })
+
+  it('re-keys the members it CAN read past one it cannot, on a rename', async () => {
+    // A rename touches no encoding, so an unreadable member is pre-existing
+    // staleness and must not take the rest of the list with it. Publishing
+    // nothing here drops the OLD key — which the rename removes — and never
+    // writes the new one, so the property disappears from the block outright.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('refList')
+    await createHost(repo, 'a-id')
+    const ids = await seedListProperty(repo, 'p', 'status', ['a-id', 'b-id'])
+    await setRawValueContent(ids[1]!, 'not a reference')
+    expect(await cell('p')).toEqual({status: ['a-id', 'b-id']})
+
+    await rename(repo, FIELD_ID, 'state')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({state: ['a-id']})
+    expect(await rowContent(ids[1]!)).toBe('not a reference')
+    expect(await isLive(ids[1]!), ids[1]).toBe(true)
   })
 })
 

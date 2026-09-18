@@ -243,7 +243,15 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
             className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
             value={presetId}
             disabled={readOnly}
-            onChange={(e) => { void writePresetId(e.target.value) }}
+            onChange={(e) => {
+              // A refusal is already surfaced: `repo.tx` notifies the
+              // user-error channel before it rethrows, and the toast layer
+              // listens. Catching keeps the rethrow from becoming an unhandled
+              // rejection — nothing here has anything to add to it. Routine
+              // now that a re-type over values the new type cannot read is one
+              // of the refusals (#1024).
+              writePresetId(e.target.value).catch(() => {})
+            }}
           >
             {presetEntries.map(p => (
               <option key={p.id} value={p.id}>{p.label}</option>
