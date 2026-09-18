@@ -18,20 +18,10 @@
  *      possibly-different generation and graft mismatched module bytes onto an
  *      old page — the `does not provide an export named …` skew). It also makes
  *      the app fully offline.
- *   4. The VENDOR URL list (`__PRECACHE_VENDOR__` placeholder) — the cross-origin
- *      esm.sh React set (the import map's integrity keys, see
- *      vite-plugins/reactImportMapMode.ts). React is externalized to esm.sh in
- *      prod, so those URLs are absolute + cross-origin and thus EXCLUDED from the
- *      dist/-walking same-origin precache above — leaving an offline hole (an
- *      uncontrolled first load can't import React with no network). Injecting the
- *      known-integrity set lets install seed the shared vendor cache so a
- *      controlled offline load resolves React.
- *
  *   The same-origin lists are separate for install ORDERING, not cache mode — the
  *   SW fetches BOTH with `{ cache: 'no-cache' }` (a conditional revalidate that
  *   can't copy a stale prior-deploy entry), first-paint first because it's the
- *   offline-boot-critical set. Vendor URLs are immutable (version- + SRI-pinned),
- *   so the SW fetches them with `{ cache: 'default' }` instead.
+ *   offline-boot-critical set.
  *
  * Runs after the SW build (vite.sw.config.ts) which emits dist/sw.js from
  * src/sw/sw.ts. Fails the build if any placeholder is missing — all are
@@ -43,7 +33,6 @@ import {dirname, resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {bootWorkerAssets, collectRestAssets} from './precache-assets'
 import {stampSwSource} from './stamp-sw-source'
-import {productionReactIntegrity} from '../vite-plugins/reactImportMapMode'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const distDir = resolve(scriptDir, '..', 'dist')
@@ -146,11 +135,6 @@ const restAssets = collectRestAssets({
   firstPaint: firstPaintAssets,
   toBaseUrl,
 })
-// The cross-origin esm.sh React URLs are absolute (not under dist/), so the walk
-// above never sees them. Take the exact known-integrity set the import-map plugin
-// injects into index.html — that's precisely what the app can import at runtime.
-const vendorAssets = Object.keys(productionReactIntegrity).sort()
-
 const fail = (msg: string): never => {
   console.error(`[inject-sw-build-id] ${msg}`)
   process.exit(1)
@@ -167,7 +151,6 @@ const source = (() => {
       buildId,
       firstPaintAssets,
       restAssets,
-      vendorAssets,
     })
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err))
@@ -177,6 +160,5 @@ const source = (() => {
 writeFileSync(swPath, source)
 console.log(
   `[inject-sw-build-id] stamped sw.js with ${buildId}, ` +
-    `${firstPaintAssets.length} first-paint + ${restAssets.length} rest + ` +
-    `${vendorAssets.length} vendor precache assets`,
+    `${firstPaintAssets.length} first-paint + ${restAssets.length} rest precache assets`,
 )

@@ -3,14 +3,12 @@ import path from "path"
 import {fileURLToPath} from "node:url"
 import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
-import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
-import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
+import {vendorImportMapPlugin} from './vite-plugins/vendorImportMap'
+import {srcEntryFiles} from './vite-plugins/srcEntries'
 import {resolveAppVersion} from './scripts/app-version'
-import {globSync} from 'node:fs'
-// import noBundlePlugin from 'vite-plugin-no-bundle';
 
 
 /** Every internal module as a Rollup input, so an extension can import ANY of
@@ -27,29 +25,12 @@ import {globSync} from 'node:fs'
  *  rather than driven off `apiCatalog`: that catalog is a discovery surface,
  *  not a whitelist. */
 const allSrcEntries = (rootDir: string): Record<string, string> => {
-    const files = globSync('src/**/*.{ts,tsx,js}', {
-        cwd: rootDir,
-        exclude: [
-            // `*.test.*` also covers the fuzz suites: docs/fuzzing.md fixes them
-            // as `*.fuzz.test.ts`, so a bare `*.fuzz.*` pattern matched nothing.
-            '**/test/**', '**/*.test.*', '**/*.d.ts',
-            // Example sources are imported as TEXT (`?raw`) and already emitted
-            // by that import. Adding them as entries compiles a second copy and
-            // Rollup dedups the name to `<name>2.js` — pure duplication.
-            '**/examples/**',
-            // The service worker's own graph, built by vite.sw.config.ts. Scoped
-            // to those four roots, NOT all of src/sw: previewDatabases.ts is
-            // client-graph code (src/data/localDbStorage.ts imports it) and
-            // excluding the directory wholesale left it emitting 3 of its 5
-            // exports — the very bug this input list exists to prevent.
-            'src/sw/{sw,worker,ledger,preview}.ts',
-        ],
-        // Accepted: this also makes src/minimal-editor.tsx an entry, the script
-        // for a second page that is not itself a build input, so it emits with
-        // nothing importing it. Kept rather than special-cased — it IS an
-        // internal module, and carving out page bootstraps would reintroduce
-        // the per-file judgement this list exists to avoid. ~1 KB.
-    })
+    // Accepted: this also makes src/minimal-editor.tsx an entry, the script
+    // for a second page that is not itself a build input, so it emits with
+    // nothing importing it. Kept rather than special-cased — it IS an
+    // internal module, and carving out page bootstraps would reintroduce
+    // the per-file judgement this list exists to avoid. ~1 KB.
+    const files = srcEntryFiles(rootDir)
     return Object.fromEntries(files.map((file: string) => {
         // globSync yields platform separators; the entry KEY becomes the emitted
         // path, which the page importmap resolves as a URL, so it must be POSIX.
@@ -77,12 +58,6 @@ const isDashjsCommonjsVariableWarning = (log: RollupLogLike) => {
         value?.includes('node_modules/dashjs/dist/modern/esm/dash.all.min.js'),
     )
 }
-
-const isReactImportExternal = (id: string): boolean =>
-    id === 'react' ||
-    id.startsWith('react/') ||
-    id === 'react-dom' ||
-    id.startsWith('react-dom/')
 
 // Root the dev-server fs allow-list at the primary checkout. In a git worktree
 // (.claude/worktrees/<name>) that's three levels up — the worktree has no
@@ -126,10 +101,10 @@ export default defineConfig(({command}) => {
             react(),
             babel({presets: [reactCompilerPreset()]}),
             wasm(),
-            externalize({
-                externals: [isReactImportExternal],
-            }),
-            reactImportMapProductionPlugin(),
+            // Bundled dependencies importable by bare name from dynamic
+            // extensions (facades over the app chunk + importmap entries). See
+            // vite-plugins/vendorImportMap.ts; tests in vite-plugins/test/.
+            vendorImportMapPlugin({rootDir: __dirname}),
             // Substitutes the theme-boot placeholder tokens in index.html's
             // pre-paint script with the source-of-truth values from
             // src/themeBootDefaults.ts — see that file and
@@ -187,11 +162,10 @@ export default defineConfig(({command}) => {
                     if (isDashjsCommonjsVariableWarning(log)) return
                     defaultHandler(level, log)
                 },
-                // Mark react and react-dom subpaths as external to rely on the import map.
-                external: isReactImportExternal,
                 input: {
                     index: path.resolve(__dirname, 'index.html'),
                     ...allSrcEntries(__dirname),
+                    // vendorImportMapPlugin adds the vendor/<pkg> facade entries here.
                 },
                 // input: '/src/main.tsx',
                 // input: {

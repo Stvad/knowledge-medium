@@ -73,7 +73,7 @@ The compile is a deliberate **two-step** pipeline (`src/extensions/compileExtens
 So today: **dynamic `import()` of a Blob object URL**, no `eval`, no SW.
 
 **Inter-module imports resolve through the realm-global import map** in `index.html:37`
-(`"react"`/`"react-dom"` → esm.sh, `"@/"` → `"./src/"`), *not* relatively. An import map is keyed to the
+(`"@/"` → `"./src/"`, plus a `./vendor/<pkg>.js` facade per bundled dependency), *not* relatively. An import map is keyed to the
 *document/realm*, not the importer's URL, and its relative address values (`./src/`) resolve against the
 **document** base — which is why a Blob module can `import {…} from '@/extensions/core.js'`
 (`src/extensions/exampleExtensions.ts:83`) and get **the same module instance the app uses** (the
