@@ -1,1 +1,1 @@
-import{Fu as e,Pu as t}from"../../../chunks/app-D0_-nBvP.js";export{t as BacklinksViewSection,e as backlinksViewFooterContribution};
+import{Fu as e,Pu as t}from"../../../chunks/app-BX-Nq-uf.js";export{t as BacklinksViewSection,e as backlinksViewFooterContribution};

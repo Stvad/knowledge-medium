@@ -1,1 +1,1 @@
-import{Uw as e,Ww as t}from"../../chunks/app-D0_-nBvP.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};
+import{Uw as e,Ww as t}from"../../chunks/app-BX-Nq-uf.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};
