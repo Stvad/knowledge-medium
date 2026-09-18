@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { claimFromProperties, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
+import { claimFromProperties, claimHoldingGraph, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
 
 const ME = 'device-a'
 const THEM = 'device-b'
@@ -40,6 +40,42 @@ describe('a live row that is not a decodable claim', () => {
     expect(claimFromProperties({
       'migration:claimant': 'device-a', 'migration:claimed-at': 1000,
     })).toEqual({claimantId: 'device-a', claimedAt: 1000})
+  })
+})
+
+describe('claimHoldingGraph, over the row a subscription hands back', () => {
+  const live = {
+    deleted: false,
+    workspaceId: 'ws',
+    properties: {'migration:claimant': ME, 'migration:claimed-at': 1000},
+  }
+
+  it('reads a live claim for THIS workspace', () => {
+    expect(claimHoldingGraph(live, 'ws')).toEqual({claimantId: ME, claimedAt: 1000})
+  })
+
+  it('reads nothing from a TOMBSTONE — releasing a claim deletes the block', () => {
+    // Unreachable through the migration dialog, whose handle maps a tombstone
+    // to null before this sees it; pinned here because the parameter is a raw
+    // row and this is the clause that keeps a released claim from holding a
+    // modal over the workspace for good.
+    expect(claimHoldingGraph({...live, deleted: true}, 'ws')).toBeNull()
+  })
+
+  it('reads nothing from a row owned by ANOTHER workspace', () => {
+    // The id is derived from the workspace, but a row can still arrive at it
+    // owned by someone else — an import that keeps its ids is the realistic
+    // route — and this workspace would then be blocked by a stranger's run.
+    expect(claimHoldingGraph({...live, workspaceId: 'ws-other'}, 'ws')).toBeNull()
+  })
+
+  it('reads nothing from a COMPLETED claim, or from a bag that is not one', () => {
+    expect(claimHoldingGraph(
+      {...live, properties: {...live.properties, 'migration:completed-at': 2000}}, 'ws',
+    )).toBeNull()
+    expect(claimHoldingGraph({...live, properties: {}}, 'ws')).toBeNull()
+    expect(claimHoldingGraph(null, 'ws')).toBeNull()
+    expect(claimHoldingGraph(undefined, 'ws')).toBeNull()
   })
 })
 

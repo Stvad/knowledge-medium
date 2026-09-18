@@ -80,6 +80,13 @@ const renderGate = (): void => {
 
 const dialog = (): HTMLElement | null => screen.queryByRole('dialog')
 
+/** The claim row has been READ, so "no dialog" is a verdict rather than a
+ *  render that got there first. `useHandle` kicks off the load on mount, so
+ *  every absence assertion below is trivially true until this settles. */
+const claimHasBeenRead = async (): Promise<void> => {
+  await waitFor(() => { expect(repo.block(CLAIM_ID).peek()).not.toBeUndefined() })
+}
+
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
@@ -106,7 +113,8 @@ describe('while the migration holds this workspace', () => {
 
   it('puts it up when a PEER\'s claim arrives, with nothing armed in advance', async () => {
     renderGate()
-    await waitFor(() => { expect(dialog()).toBeNull() })
+    await claimHasBeenRead()
+    expect(dialog()).toBeNull()
 
     await deliverClaimBySync()
 
@@ -128,7 +136,8 @@ describe('while the migration holds this workspace', () => {
 
     renderGate()
 
-    await waitFor(() => { expect(dialog()).toBeNull() })
+    await claimHasBeenRead()
+    expect(dialog()).toBeNull()
   })
 
   it('ignores a row at our claim id that belongs to ANOTHER workspace', async () => {
@@ -139,7 +148,9 @@ describe('while the migration holds this workspace', () => {
 
     renderGate()
 
-    await waitFor(() => { expect(dialog()).toBeNull() })
+    await claimHasBeenRead()
+    expect(repo.block(CLAIM_ID).peek()).toMatchObject({workspaceId: OTHER_WS})
+    expect(dialog()).toBeNull()
   })
 
   it('cannot be dismissed', async () => {
@@ -182,7 +193,8 @@ describe('undo, which the dialog itself cannot cover', () => {
     // The mount is always there; only a held claim may take undo away.
     await recordAnUndoableEdit()
     renderGate()
-    await waitFor(() => { expect(dialog()).toBeNull() })
+    await claimHasBeenRead()
+    expect(dialog()).toBeNull()
 
     expect(await repo.undo()).toBe(true)
 
