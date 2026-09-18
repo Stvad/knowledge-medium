@@ -482,6 +482,13 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
   handler: async () => {
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
+    // This workspace's claim row, read fresh each call — the pre-flight check
+    // below and the post-run re-read in `finally` each need their own read.
+    const readOurClaim = () => readGraphBackfillClaim(
+      repo.db,
+      graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID),
+      workspaceId,
+    )
     // Un-flipped: flip, then backfill. Already flipped: backfill alone.
     const childBacked = await readIsChildBackedWorkspace(repo.db, workspaceId)
     // Only the FLIP needs the server, and `supabase` is built from BUILD-time
@@ -506,11 +513,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // OUR OWN claimant is deliberately let through: an inherited claim is
     // exactly the state a resume starts from, and "run this again to resume it"
     // is what the gesture's own report tells the operator to do.
-    const owner = await readGraphBackfillClaim(
-      repo.db,
-      graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID),
-      workspaceId,
-    )
+    const owner = await readOurClaim()
     if (claimHoldsGraph(owner) && owner.claimantId !== getClientId()) {
       showInfo('Another client is already migrating this workspace. Wait for it to finish; '
         + 'the dialog it puts up on every device is where you can release its claim.')
@@ -618,20 +621,20 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // user-length pause blocks every other device while a dialog sits open,
       // and a tab closed at the dialog strands it — over a flipped workspace,
       // once the flip below has landed.
-        const gesture = await repo.withOperatorBackfillClaim(
-          workspaceId, PROPERTY_CELL_BACKFILL_ID,
-          pass => migrateUnderClaim(
-            {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}, pass),
-        )
-        if (!gesture.claimed) {
-          // The same reporter the pass's own outcomes go through. Which step
-          // turned this device away is an implementation detail of where the
-          // claim sits; a second vocabulary for "another device owns this run"
-          // would drift from the first.
-          const {message, failed} = describeOutcome(gesture.result, NOTHING_MIGRATED)
-          if (failed) banner.fail(message)
-          else banner.done(message)
-        }
+      const gesture = await repo.withOperatorBackfillClaim(
+        workspaceId, PROPERTY_CELL_BACKFILL_ID,
+        pass => migrateUnderClaim(
+          {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}, pass),
+      )
+      if (!gesture.claimed) {
+        // The same reporter the pass's own outcomes go through. Which step
+        // turned this device away is an implementation detail of where the
+        // claim sits; a second vocabulary for "another device owns this run"
+        // would drift from the first.
+        const {message, failed} = describeOutcome(gesture.result, NOTHING_MIGRATED)
+        if (failed) banner.fail(message)
+        else banner.done(message)
+      }
     } finally {
       // A path that returns or throws without reporting an outcome would leave
       // the operator watching the dialog vanish with no account of the run.
@@ -652,21 +655,17 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // pointing it at the release points it at deleting a claim another
       // device is still writing under.
       //
-      // The claimant is per browser PROFILE, so "this device" can also be a
-      // sibling tab, or this gesture's own earlier invocation that the
-      // single-flight turned away. Hence the conditional wording rather than an
-      // instruction to re-run: a second concurrent pass is what that would
-      // start.
+      // claimantId is per browser PROFILE — see describePassOutcome's
+      // held-by-peer comment. So "this device" can also be a sibling tab, or
+      // this gesture's own earlier invocation that the single-flight turned
+      // away. Hence the conditional wording rather than an instruction to
+      // re-run: a second concurrent pass is what that would start.
       //
       // Caught, because this is a database read on a path that runs after the
       // outcome is already painted: a throw here would replace the gesture's
       // own exit with an unrelated one, and drop the note exactly when the read
       // that produces it is failing.
-      const held = await readGraphBackfillClaim(
-        repo.db,
-        graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID),
-        workspaceId,
-      ).catch((err: unknown) => {
+      const held = await readOurClaim().catch((err: unknown) => {
         console.error('[properties-migration] could not re-read the claim:', err)
         return null
       })

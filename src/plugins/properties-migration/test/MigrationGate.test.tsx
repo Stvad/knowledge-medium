@@ -213,10 +213,7 @@ afterEach(() => {
 
 describe('before the claim exists', () => {
   it('is already up for this device\'s own gesture', async () => {
-    // The claim is written after several preflight reads and a page-ensure.
-    // Without this the operator confirms a one-way fleet-wide flip and the app
-    // goes back to normal for a few seconds — master showed a progress toast
-    // here, and the split that moved progress into the dialog dropped it.
+    // Why this matters: see MigrationGate.tsx's holderOf comment.
     renderGate()
     await claimHasBeenRead()
 
@@ -234,8 +231,7 @@ describe('before the claim exists', () => {
 
 describe('while the migration holds this workspace', () => {
   it('puts the dialog up for a claim this device already has', async () => {
-    // The reload case: a tab opened midway through the run has no session state
-    // to re-arm, and reads the claim it already has.
+    // Why this matters: see MigrationGate.tsx's file header comment.
     await seedClaimInBlocks()
 
     renderGate()
@@ -273,9 +269,7 @@ describe('while the migration holds this workspace', () => {
   })
 
   it('ignores a row at our claim id that belongs to ANOTHER workspace', async () => {
-    // The id is derived from the workspace, but a row can still arrive at it
-    // owned by someone else — and a modal raised by one would be unrecoverable
-    // from inside this workspace.
+    // Why this matters: see graphBackfillClaim.ts's claimHoldingGraph comment.
     await seedClaimInBlocks({workspaceId: OTHER_WS})
 
     renderGate()
@@ -286,11 +280,7 @@ describe('while the migration holds this workspace', () => {
   })
 
   it('shadows the surface underneath, so a bare key cannot write through it', async () => {
-    // Radix makes the app pointer-inert and traps focus; it does NOT stop the
-    // surface underneath claiming KEYS. Without the modal context, Enter still
-    // matches the editor's split binding — a structural write into a graph
-    // being converted, through the modal that exists to stop exactly that —
-    // and its preventDefault also eats the Enter the dialog's button wanted.
+    // Why this matters: see useActionContext.ts's useModalShadowing comment.
     await seedClaimInBlocks()
     renderGate()
     await screen.findByRole('dialog')
@@ -299,11 +289,7 @@ describe('while the migration holds this workspace', () => {
   })
 
   it('tells a tab that LOST the claim, rather than that nothing has been written', async () => {
-    // "No claim" is true at both ends of a run. The release this dialog itself
-    // offers can take the claim from under a tab that is still writing, and
-    // that tab must not then read "Nothing has been written yet" — it is the
-    // one tab whose closing costs something, and the copy it would lose is
-    // "Leave this tab open."
+    // Why this matters: see MigrationGate.tsx's holderOf comment.
     await seedClaimInBlocks({claimantId: getClientId()})
     renderGate()
     await screen.findByRole('dialog')
@@ -354,9 +340,7 @@ describe('while the migration holds this workspace', () => {
   })
 
   it('does not report our own progress line as a PEER\'s progress', async () => {
-    // The gesture publishes its first line before it takes the claim, so in
-    // that window a peer's claim can be what is on screen. Reading the message
-    // alone would caption someone else's run with what this device was doing.
+    // Why this matters: see MigrationGate.tsx's holderOf comment.
     renderGate()
     await claimHasBeenRead()
     await act(async () => {
@@ -374,10 +358,7 @@ describe('while the migration holds this workspace', () => {
   })
 
   it('tells the running tab how to get out if it looks stuck', async () => {
-    // It is not offered the release — it cannot have been stranded by a run it
-    // is still executing — so without this a run whose promise never settles
-    // leaves this tab behind a modal with no exit, reading copy that tells it
-    // not to close.
+    // Why this matters: see MigrationGateDialog.tsx's this-tab reload comment.
     await seedClaimInBlocks({claimantId: getClientId()})
     renderGate()
     await screen.findByRole('dialog')
@@ -388,10 +369,7 @@ describe('while the migration holds this workspace', () => {
   })
 
   it('names THIS BROWSER rather than another device when the claim is our own profile', async () => {
-    // `claimantId` is per browser PROFILE, so a sibling tab's live run carries
-    // our id. Telling the operator's second tab that another DEVICE holds the
-    // workspace sends them to release a claim their own first tab is writing
-    // under.
+    // Why this matters: see MigrationGateDialog.tsx's ClaimHolder comment.
     await seedClaimInBlocks({claimantId: getClientId()})
 
     renderGate()
@@ -440,10 +418,7 @@ describe('undo, which the dialog itself cannot cover', () => {
   })
 
   it('survives a claim that was taken and handed back without writing anything', async () => {
-    // A run refused after taking the claim — the flip declined for a non-owner,
-    // synthesis throwing, the workspace switched under it — writes NOTHING and
-    // releases. Charging every device its whole history for that is a cost with
-    // no cause, and the gesture invites a retry, so it would be charged again.
+    // Why this matters: see MigrationGate.tsx's history-drop teardown comment.
     await recordAnUndoableEdit()
     await seedClaimInBlocks()
     renderGate()
@@ -470,21 +445,15 @@ describe('undo, which the dialog itself cannot cover', () => {
     await deliverClaimBySync({completed: true})
     await waitFor(() => { expect(dialog()).toBeNull() })
 
-    // Handed back, not emptied. Emptying is the writers' call — the gesture's
-    // own drop and the runner's per batch — because only they know a write
-    // happened. This device may be a peer that received nothing at all.
+    // Why this matters: see MigrationGate.tsx's history-drop teardown comment.
     expect(await repo.undo()).toBe(true)
   })
 })
 
 describe('when the dialog itself cannot render', () => {
   it('still pauses undo while the dialog is merely SLOW to render', async () => {
-    // The common half, and the one the boundary's `Suspense` covers: the
-    // dialog's first render suspends on a workspace read every single run.
-    // Without an inner boundary that propagates to the shared app-mount one, so
-    // the effect holding the pause is never committed — and the pause is late
-    // by the whole length of that read, on the ordinary path rather than a
-    // rare one.
+    // Why this matters: see MigrationGate.tsx's ExtensionRenderBoundary comment.
+    // This is the common half: the dialog hangs rather than throwing.
     await recordAnUndoableEdit()
     await seedClaimInBlocks()
     dialogBreak.hang = true
@@ -499,12 +468,7 @@ describe('when the dialog itself cannot render', () => {
   })
 
   it('still pauses undo, rather than taking the pause down with it', async () => {
-    // The dialog reaches the shortcut activation funnel, which suspends on the
-    // workspace's UI-state block and throws if that read fails. App mounts share
-    // ONE boundary per mount, so without a boundary of its own a dialog that
-    // cannot render stops the effect above it from ever committing — and the
-    // migration proceeds with no modal, no undo pause, and nothing on screen to
-    // say so. The pause protects rows; the dialog only talks.
+    // Why this matters: see MigrationGate.tsx's ExtensionRenderBoundary comment.
     await recordAnUndoableEdit()
     await seedClaimInBlocks()
 
@@ -522,10 +486,7 @@ describe('when the dialog itself cannot render', () => {
 
 describe('after a run that finished', () => {
   it('leaves the peer something telling it to reload, since the dialog goes', async () => {
-    // The peer keeps pre-migration entries the run has made stale, and the
-    // dialog — its only instruction — unmounts at exactly the moment reloading
-    // starts to matter. In a shared workspace this user never saw the
-    // operator's confirmation either.
+    // Why this matters: see MigrationGate.tsx's showReloadNotice comment.
     await recordAnUndoableEdit()
     await seedClaimInBlocks()
     renderGate()
@@ -538,9 +499,7 @@ describe('after a run that finished', () => {
   })
 
   it('says nothing to a device with no entries left to replay', async () => {
-    // The tab that ran the pass cleared its own stack as it committed, and its
-    // outcome toast already says so — a second infinite toast telling it to
-    // reload before using undo would contradict the first.
+    // Why this matters: see MigrationGate.tsx's history-drop teardown comment.
     await seedClaimInBlocks()
     renderGate()
     await screen.findByRole('dialog')
@@ -554,9 +513,7 @@ describe('after a run that finished', () => {
 
   it('says nothing when the claim was merely handed back', async () => {
     await recordAnUndoableEdit()
-    // A release, or a run that refused before writing, owes the user nothing —
-    // and a reload notice after a migration that never happened is noise that
-    // teaches them to ignore the next one.
+    // Why this matters: see MigrationGate.tsx's history-drop teardown comment.
     await seedClaimInBlocks()
     renderGate()
     await screen.findByRole('dialog')
@@ -580,10 +537,7 @@ describe('the way out of a claim nobody will release', () => {
   }
 
   it('is not offered to the tab that is RUNNING the pass', async () => {
-    // "Leave this tab open" and "Nothing is running?" side by side is an
-    // invitation to release the claim this tab is writing under — which drops
-    // the modal and the undo pause on every device while the writes continue,
-    // and frees a peer to start the same uploading pass.
+    // Why this matters: see MigrationGateDialog.tsx's canRelease comment.
     await seedClaimInBlocks({claimantId: getClientId()})
     renderGate()
     await screen.findByRole('dialog')
@@ -614,11 +568,7 @@ describe('the way out of a claim nobody will release', () => {
   })
 
   it('lets a device that can do NOTHING about the claim out of the modal', async () => {
-    // The gate mount is `essential`, so safe mode and the settings toggle are
-    // no longer escapes. A viewer whose owner stranded a claim would otherwise
-    // be behind a non-dismissible modal with no button, on every reload,
-    // forever. Hiding it drops only the DIALOG — the undo pause lives above and
-    // keeps running, which is the half that protects rows.
+    // Why this matters: see MigrationGateDialog.tsx's "Hide this" comment.
     repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, isReadOnly: true}).repo
     repo.setActiveWorkspaceId(WS)
     await seedClaimInBlocks()
@@ -640,9 +590,7 @@ describe('the way out of a claim nobody will release', () => {
   })
 
   it('is not offered where this device may not write, which names who can', async () => {
-    // The release is a BlockDefault transaction like any other, so a viewer in
-    // a shared workspace could only ever produce the read-only error from it —
-    // behind a modal they cannot dismiss.
+    // Why this matters: see MigrationGateDialog.tsx's release prop comment.
     repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, isReadOnly: true}).repo
     repo.setActiveWorkspaceId(WS)
     await seedClaimInBlocks()
@@ -675,12 +623,8 @@ describe('the way out of a claim nobody will release', () => {
   })
 
   it('withdraws the consent panel when the claim under it is replaced', async () => {
-    // The gap between reading "held at least 3 hour(s) ago" and clicking is a
-    // human pause, and in it the run they were told about can finish and a fresh
-    // one take the workspace. The age on screen would then be an argument for
-    // releasing a claim that is seconds old. The panel stops being current
-    // instead — and the release ITSELF still refuses a claim it was not given
-    // consent for, pinned directly in `propertiesMigrationClaim.test.ts`.
+    // Why this matters: see MigrationGateDialog.tsx's confirming/current comment.
+    // The release itself is pinned separately in propertiesMigrationClaim.test.ts.
     await seedClaimInBlocks({claimantId: 'a-device-that-is-gone', claimedAt: 1})
     renderGate()
     await openTheRelease()

@@ -39,8 +39,7 @@ import { useModalShadowing } from '@/shortcuts/useActionContext.js'
  *  argues for killing a live run. `claimedAt` is the CLAIMING device's clock and
  *  there is no server one, so a claim from a device running ahead of this one
  *  produces a negative age — reported as what it is rather than clamped to
- *  "0 minute(s) ago", which is the strongest possible argument against
- *  releasing and would be shown exactly when the claimant is most likely dead. */
+ *  "0 minute(s) ago". */
 const heldFor = (claimedAt: number, now: number): string => {
   const minutes = Math.floor((now - claimedAt) / 60_000)
   // A MINUTE of tolerance, not zero: two devices' `Date.now()` are independent,
@@ -104,11 +103,8 @@ const STALE_UNDO = <>Reload this tab afterwards: undo entries from before the
  *  switch on the arm.
  *
  *  TOTAL on purpose. A shared sentence is a sentence somebody has to check
- *  against every state, and the states outgrew the checks twice: the tab
- *  running the pass was told its undo history was NOT cleared while its own
- *  gesture was clearing it, and a reloaded tab was told another tab of this
- *  browser was running when there was no other tab. Written out per arm, a
- *  sentence can only be wrong about the one state it is under. */
+ *  against every state. Written out per arm, a sentence can only be wrong
+ *  about the one state it is under. */
 const COPY: Record<ClaimHolder['kind'], {status?: string; body: ReactNode}> = {
   'starting': {
     body: <>Checking whether this workspace can be converted. Nothing has been
@@ -180,11 +176,7 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
   const confirming = pending !== null && pending.of === current ? pending : null
 
   // Unconditional, because this component only exists while the claim is held.
-  // Radix already makes the app pointer-inert and traps focus; what it does NOT
-  // do is stop the surface underneath claiming KEYS. Without this, bare Enter
-  // still matches the editor's split binding and writes a block — through the
-  // modal that exists to stop exactly that — and its `preventDefault` also eats
-  // the Enter the button below was waiting for.
+  // See useModalShadowing's own docstring for why this call must exist at all.
   useModalShadowing(!dismissed)
 
   const onRelease = (shown: GraphBackfillClaim) => {

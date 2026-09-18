@@ -76,23 +76,15 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
     //
     // What `finish` would add is EMPTYING this device's stacks, and this is not
     // the place that can decide that. The claim is taken BEFORE the first write
-    // and handed back on paths that wrote nothing — a non-owner refused by the
-    // flip trigger, synthesis throwing, a re-run over an already-migrated
-    // workspace — and "the claim went away" cannot tell those from a pass that
-    // rewrote the graph. Finishing charged every device its whole history for
-    // them, repeatably, since the gesture invites a retry.
+    // and handed back on paths that wrote nothing — a re-run over an
+    // already-migrated workspace, say — and "the claim went away" cannot tell
+    // those from a pass that rewrote the graph.
     //
     // So the clear stays with the writers that know they wrote: the gesture's
     // own drop around the flip, and the runner's per batch. A PEER therefore
-    // keeps pre-migration entries a completed run has made stale — #684/#1007,
-    // where a watcher was declined. A sound clear here needs the claim to
-    // record that the run WROTE, stamped in the same transaction as the first
-    // write; it cannot be inferred from the claim going away.
+    // keeps pre-migration entries a completed run has made stale — #684/#1007.
     //
-    // Which is why the reload notice is a TOAST rather than a line in the
-    // dialog: the dialog unmounts at exactly the moment reloading starts to
-    // matter, and in a shared workspace the peer belongs to someone who never
-    // sees the operator's confirmation.
+    // Why a toast, and why sticky: see `showReloadNotice`.
     return () => {
       drop.abandon()
       // The row as it is NOW, not as it was when the drop began — the handle is
@@ -138,10 +130,7 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
  *
  *  One value rather than two booleans at the point of use, because the two
  *  questions the dialog asks — what to tell the user, and whether to offer the
- *  release — have to be answered from the same reading. Answering them
- *  separately is what produced a dialog that told the operator's second tab
- *  another DEVICE held the workspace, and offered the running tab itself a
- *  button to release the claim it was writing under.
+ *  release — have to be answered from the same reading.
  *
  *  BOTH halves for `this-tab`, not the local message alone. The gesture
  *  publishes its first line before it takes the claim, so between those two
@@ -171,9 +160,12 @@ const holderOf = (
     : {kind: 'this-tab', message: localRun.message, claim}
 }
 
-/** What is left on screen after the dialog goes. Sticky, because the user it is
- *  for is a PEER — whose own device kept undo entries the run has made stale,
- *  and who may have walked away for the several minutes the run took. */
+/** What is left on screen after the dialog goes. A TOAST rather than a line in
+ *  the dialog, because the dialog unmounts at exactly the moment reloading
+ *  starts to matter. Sticky, because the user it is for is a PEER — who never
+ *  saw the operator's confirmation, whose own device kept undo entries the run
+ *  has made stale, and who may have walked away for the several minutes the
+ *  run took. */
 const showReloadNotice = (): void => {
   showInfo(
     'This workspace finished migrating. Reload this tab before using undo: entries from '
