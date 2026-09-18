@@ -54,8 +54,8 @@ describe('routeProcessorRejection', () => {
     routeProcessorRejection(
       new ProcessorRejection('second failed', 'code.two'), repo, new Map())
 
-    expect(showError.mock.calls.map(([, opts]) => (opts as {id: string}).id))
-      .toEqual(['code.one', 'code.two'])
+    expect(showError).toHaveBeenNthCalledWith(1, 'first failed', {id: 'code.one'})
+    expect(showError).toHaveBeenNthCalledWith(2, 'second failed', {id: 'code.two'})
   })
 })
 
