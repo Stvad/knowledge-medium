@@ -3952,11 +3952,16 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
   })
 
   it('does NOT re-read the text for an IDENTITY target, which holds anything', () => {
-    // The same rule and its surprising half: `list` holds the STRING `42`
-    // perfectly well, so the round trip passes and the value is carried. Text
-    // that merely looks like a number is not one, and the cell said so.
     expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"'})
     expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
+  })
+
+  it('re-reads the text for a row the OLD codec cannot read, whatever the target', () => {
+    // The second of the value route's three declines, and the one the identity
+    // target makes visible: within ONE `number` property re-typed to `list`, a
+    // readable row keeps its number and a stale row is re-read as JSON.
+    expect(convert('number', 'list', '42')).toEqual({outcome: 'converted', content: '42'})
+    expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
   })
 
   it('falls to the text route when no old codec records the encoding', () => {
