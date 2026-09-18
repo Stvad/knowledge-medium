@@ -1,1 +1,1 @@
-import{hh as e,lh as t,ph as n}from"../../../chunks/app-DwJNkpkH.js";export{t as cursorFollowsScrollPlugin,n as isRowInViewport,e as resolveViewportAnchor};
+import{hh as e,lh as t,ph as n}from"../../../chunks/app-EGXDy01b.js";export{t as cursorFollowsScrollPlugin,n as isRowInViewport,e as resolveViewportAnchor};

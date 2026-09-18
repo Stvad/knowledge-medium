@@ -1,1 +1,1 @@
-import{g2 as e}from"../../../chunks/app-DwJNkpkH.js";export{e as defineQuery};
+import{g2 as e}from"../../../chunks/app-EGXDy01b.js";export{e as defineQuery};
