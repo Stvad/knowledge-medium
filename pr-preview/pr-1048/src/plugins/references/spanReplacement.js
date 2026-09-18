@@ -1,1 +1,1 @@
-import{sI as e}from"../../../chunks/app-C5RbFnzP.js";export{e as preferredSpanReplacement};
+import{sI as e}from"../../../chunks/app-D0xxRC6W.js";export{e as preferredSpanReplacement};

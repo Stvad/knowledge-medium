@@ -1,1 +1,1 @@
-import{Ng as e}from"../../../chunks/app-C5RbFnzP.js";export{e as Breadcrumbs};
+import{Ng as e}from"../../../chunks/app-D0xxRC6W.js";export{e as Breadcrumbs};
