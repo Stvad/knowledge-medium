@@ -41,17 +41,11 @@ import type {
   User,
 } from '@/data/api'
 import {
-  ProcessorRejection,
   ReadOnlyError,
-  scopeAllowedDuringGraphMigration,
   scopeAllowedInReadOnly,
   scopeUploadsToServer,
   sourceForScope,
 } from '@/data/api'
-import {
-  GRAPH_MIGRATION_LOCKED,
-  GRAPH_MIGRATION_LOCKED_MESSAGE,
-} from './graphBackfillClaim'
 import {
   assertNoSeedDefinitionWrites,
   newTxMeta,
@@ -290,35 +284,6 @@ export interface RunTxParams<R> {
   opts: RepoTxOptions
   user: User
   isReadOnly: boolean
-  /** Was a once-per-graph migration holding this workspace's claim when this
-   *  transaction started?
-   *
-   *  Asked with the tx's PINNED workspace, so the answer is about the rows being
-   *  written rather than about whatever workspace happens to be on screen. Only
-   *  reached for a scope the lock refuses and a tx that wrote something, so the
-   *  pass's own transactions and every read-only one cost nothing.
-   *
-   *  Handed the TX's OWN db handle and a lookup of what this tx found at a row
-   *  before it wrote there. Both halves are load-bearing:
-   *
-   *  - the handle must be the transaction's, because the pipeline calls this
-   *    while holding the write lock. On a single-connection pool — which is
-   *    every browser but one — an outer read cannot be served until that lock is
-   *    released, so asking the Repo's handle deadlocks the tab on any write.
-   *  - which makes the read see the tx's OWN uncommitted writes, so a tx that
-   *    deleted or completed the claim would read itself as unlocked. `priorRow`
-   *    is the answer: for a row this tx wrote, judge the state it found there.
-   *
-   *  `priorRow` returns `undefined` when the tx did not touch that row, which is
-   *  when the handle's view of it IS committed state.
-   *
-   *  Injected rather than read here: WHICH backfill locks the graph, and what a
-   *  claim row means, are the Repo's to know. */
-  graphMigrationLocked: (
-    db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
-    workspaceId: string,
-    priorRow: (id: string) => BlockData | null | undefined,
-  ) => Promise<boolean>
   newTxId: () => string
   /** Monotonically increasing INTEGER per `repo.tx`. Written into
    *  `tx_context.tx_seq` so the upload-routing triggers can stamp
@@ -413,7 +378,7 @@ export interface TxResult<R> {
 
 export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => {
   const {
-    db, cache, fn, opts, user, isReadOnly, graphMigrationLocked,
+    db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
     mutators, processors, sameTxProcessors, propertySchemas, valuePresets,
     typeDefinitionsForWorkspace,
@@ -430,7 +395,6 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   if (isReadOnly && !scopeAllowedInReadOnly(scope)) {
     throw new ReadOnlyError(scope)
   }
-
 
   const txId = newTxId()
   const txSeq = newTxSeq()
@@ -581,52 +545,6 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // a snapshot so the command_events row written in step 4 reflects
     // every mutator the tx actually ran.
     const result = await fn(tx)
-
-    // Step 3.4: the migration lock — while a once-per-graph pass holds this
-    // workspace's claim, the graph stops accepting writes rather than each
-    // gesture guarding itself against the pass (#1057).
-    //
-    // Read through `txDb`, never the Repo's handle: this runs while the write
-    // lock is held, and on a single-connection pool — every browser except the
-    // one that gets `additionalReaders` — an outer read cannot be served until
-    // that lock is released, so it would deadlock the tab on every write.
-    //
-    // Which means the read sees this transaction's OWN uncommitted writes, so a
-    // tx that deleted the claim row or stamped a completion onto it would read
-    // itself as unlocked and commit that plus whatever else it was doing.
-    // `priorRow` closes that: for a row this tx wrote, the predicate judges what
-    // the tx FOUND there. The lock's input is then something no transaction can
-    // move, without asking for a connection we are already holding.
-    //
-    // Over the tx's PINNED workspace, which is why it cannot be asked at entry:
-    // `repo.tx` admits a write to a workspace that is not the active one, and a
-    // lock decided from the active one lets every such write past. A zero-write
-    // tx pins nothing and is admitted — it has nothing to strand.
-    //
-    // Before the same-tx pass below, so a refusal costs neither the fan-out's
-    // work nor its error message: a rejection raised in that pass would reach
-    // the user in place of this one, telling them about a registry when the
-    // answer is that a migration is running.
-    //
-    // NOT exempted for replay, unlike the seed guard further down: undo and
-    // redo are exactly what no same-tx refusal can reach, since replay skips
-    // that pass by design (#1052), and restoring a pre-pass row over migrated
-    // children is the hazard.
-    //
-    // A `ProcessorRejection` though no processor raised it: that is the type
-    // `repo.tx` fans out to `onUserError`, and a refusal the user cannot see is
-    // a gesture that silently does nothing.
-    if (meta.workspaceId !== null
-        && !opts.graphMigrationWrite
-        && !scopeAllowedDuringGraphMigration(scope)
-        && await graphMigrationLocked(
-          txDb, meta.workspaceId, id => snapshots.get(id)?.before,
-        )) {
-      throw new ProcessorRejection(
-        GRAPH_MIGRATION_LOCKED_MESSAGE, GRAPH_MIGRATION_LOCKED,
-        {scope, workspaceId: meta.workspaceId},
-      )
-    }
 
     // Step 3.5: same-tx processor pass. Runs after `fn` returns but
     // before the command_events insert — inside the writeTransaction,

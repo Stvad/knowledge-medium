@@ -51,15 +51,7 @@ import {
   UndoHistoryDroppedError,
 } from './api/errors'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
-import {
-  claimFromProperties,
-  claimHoldsGraph,
-  graphBackfillClaimBlockId,
-  isGraphBackfillClaimActive,
-  STRANDED_CLAIM_RECOVERY,
-} from './internals/graphBackfillClaim'
-import { PROPERTY_CELL_BACKFILL_ID } from './internals/propertyCellBackfill'
-
+import { STRANDED_CLAIM_RECOVERY } from './internals/graphBackfillClaim'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
@@ -172,16 +164,6 @@ import {
   type PropertySchemaResolver,
 } from './internals/propertySchemaResolution'
 import { runFreshInitialLoad } from './internals/freshInitialLoad'
-
-/** The backfill whose claim stops the graph accepting writes, and therefore the
- *  only one whose own transactions are exempt from that (#1057). ONE name for
- *  both halves: a pass that locks but is not exempt deadlocks against itself,
- *  and one that is exempt but does not lock is an unexplained hole.
- *
- *  A constant rather than a `WorkspaceBackfill` field because exactly one pass
- *  rewrites source-of-truth rows today. A second would make it a declaration on
- *  the seam, read here and by `Repo.graphMigrationLocked`. */
-const GRAPH_LOCKING_BACKFILL_ID = PROPERTY_CELL_BACKFILL_ID
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -2197,7 +2179,6 @@ export class Repo {
         opts,
         user: this.user,
         isReadOnly: this.isReadOnly,
-        graphMigrationLocked: this.graphMigrationLocked,
         // uuid, never `this.newId`: `command_events.tx_id` is a PRIMARY KEY on
         // a database that outlives any single Repo, while `newId` is injectable
         // and the test harness injects per-Repo counters that restart. Deriving
@@ -2250,14 +2231,7 @@ export class Repo {
       if (parentDeleted !== null) {
         throw new ParentDeletedError(parentDeleted.parentId)
       }
-      // Not for a TELEMETRY tx: that flag means the app measuring itself, and a
-      // refusal of the app's own bookkeeping is not something the user did or
-      // can act on. It still throws — the caller decides what to do — but it
-      // does not become a toast. Under the migration lock this is the
-      // difference between one explained refusal and one per metrics sample.
-      if (err instanceof ProcessorRejection && opts.telemetry !== true) {
-        this.userErrorListeners.notify(err)
-      }
+      if (err instanceof ProcessorRejection) this.userErrorListeners.notify(err)
       throw err
     }
     // Track the slowest tx by description so cold-start metrics can
@@ -3592,60 +3566,6 @@ export class Repo {
   }
 
   /**
-   * Was a once-per-graph migration holding this workspace's claim when this
-   * transaction started?
-   *
-   * The commit pipeline's migration lock asks this once per transaction that
-   * wrote something under a scope whose `graphMigration` policy is `reject`,
-   * handing over the tx's own pinned workspace, the tx's own db handle, and a
-   * lookup of what the tx found at a row before writing there. An arrow
-   * property rather than a method so it can go to `runTx` unbound.
-   *
-   * The claim row gets the `priorRow` treatment and everything else the read,
-   * because the read is the TX's and therefore shows the tx its own writes: a
-   * transaction that deleted the claim, blanked it, or stamped a completion onto
-   * it would otherwise read itself as unlocked and commit whatever else it was
-   * carrying. Judging that row by what the tx FOUND there is what makes the
-   * lock's input something no transaction can move — and it costs no second
-   * connection, which an outer read taken under the write lock would, on every
-   * browser but the one PowerSync gives extra readers.
-   *
-   * One backfill because one backfill rewrites source-of-truth rows today.
-   * Generalizing means a `WorkspaceBackfill` declaring that it locks the graph,
-   * and a scan of the Migrations page in place of this point lookup — which is
-   * also what would let the runner exempt only the pass that holds the claim.
-   */
-  private readonly graphMigrationLocked = (
-    db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
-    workspaceId: string,
-    priorRow: (id: string) => BlockData | null | undefined,
-  ): Promise<boolean> => {
-    const before = priorRow(
-      graphBackfillClaimBlockId(workspaceId, GRAPH_LOCKING_BACKFILL_ID),
-    )
-    // `undefined` means untouched, which is when the tx's own view of that row
-    // and committed state are the same thing.
-    if (before === undefined) {
-      return isGraphBackfillClaimActive(db, workspaceId, GRAPH_LOCKING_BACKFILL_ID)
-    }
-    // A tombstone or an absent row was not holding anything. `!before.deleted`
-    // is load-bearing in its own right: without it, RESTORING a tombstoned
-    // claim block — an ordinary write on an unlocked graph — reads as locked
-    // and the block becomes un-restorable.
-    //
-    // DEFENCE IN DEPTH, labelled: the workspace check cannot be reached by an
-    // ordinary write, because `checkWorkspace` makes a pinned tx
-    // single-workspace, so a snapshot at this id always carries this workspace.
-    // `applyRaw` pins without that check, which is the only theoretical route.
-    return Promise.resolve(
-      before !== null
-      && !before.deleted
-      && before.workspaceId === workspaceId
-      && claimHoldsGraph(claimFromProperties(before.properties)),
-    )
-  }
-
-  /**
    * Take the claim for one backfill, or say why this device may not.
    *
    * The preconditions and the claim write live in ONE method because their
@@ -3890,8 +3810,8 @@ export class Repo {
       } finally {
         // `finally`, because the body reports its own outcomes and returns
         // early from several of them. A claim left behind by a device that is
-        // no longer running anything blocks every WRITE in the graph, not just
-        // the pass, until the release command clears it.
+        // no longer running anything keeps every device's migration dialog up
+        // until it is released.
         //
         // Only one this call MINTED, though. An inherited claim already named
         // this claimant, and claimant ids are per browser PROFILE — so it may
@@ -4084,8 +4004,8 @@ export class Repo {
           // read on the Repo's handle taken while this transaction holds the
           // write lock cannot be SERVED on a single-connection pool — which is
           // every browser but the one PowerSync gives `additionalReaders` — so
-          // the batch would hang rather than refuse, behind a progress modal
-          // with no exit, over a claim that locks the whole graph.
+          // the batch would hang rather than refuse, behind a modal that stays
+          // up for as long as the claim it hangs under does.
           //
           // What moving it out costs is one batch's worth of window: a drain
           // that commits between this probe and the write is seen by the NEXT
@@ -4110,13 +4030,6 @@ export class Repo {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
             skipUndo: true,
-            // Only the pass whose claim RAISES the lock is exempt from it. Any
-            // other backfill writing during that pass is an ordinary
-            // program-authored write into a graph being converted, and the lock
-            // is what should stop it — a blanket exemption here would admit the
-            // next `workspace-open` backfill anyone registers, silently, since
-            // those are deep-idle scheduled and would routinely land mid-run.
-            graphMigrationWrite: backfill.id === GRAPH_LOCKING_BACKFILL_ID,
           }).catch((err: unknown) => {
             // Rolled back, so there is nothing for an entry to be replayed onto
             // and the history is not owed.

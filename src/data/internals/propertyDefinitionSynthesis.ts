@@ -726,7 +726,7 @@ export const applyPropertyDefinitionSynthesis = async (
   // then throws can leave a freshly-created Properties page behind. Harmless
   // (bootstrap creates the same page at the same deterministic id) but it is
   // why the atomicity claim above is scoped to the definitions.
-  await getOrCreatePropertiesPage(repo, workspaceId, {graphMigrationWrite: true})
+  await getOrCreatePropertiesPage(repo, workspaceId)
   const parentId = propertiesPageBlockId(workspaceId)
 
   let created = 0
@@ -1020,10 +1020,6 @@ export const applyPropertyDefinitionSynthesis = async (
     // two (peer holds the claim, pass defers), leaving these as the only
     // committed write with a live undo entry that cmd-Z would delete.
     skipUndo: true,
-    // Runs with the graph-wide claim already held — the gesture takes it before
-    // synthesis, so these definitions and the flip are one claimed region — and
-    // the migration lock would otherwise refuse the migration's own first write.
-    graphMigrationWrite: true,
   }).catch((err: unknown) => {
     // A drop begun inside a transaction that then failed to commit must be
     // released, or it refuses every replay until reload. Nothing was written,

@@ -487,25 +487,4 @@ export interface RepoTxOptions {
    *  where the scope must stay `BlockDefault` for gating reasons but the entry
    *  would be a trap. Default false (entries are recorded as usual). */
   skipUndo?: boolean
-
-  /** This transaction IS the once-per-graph migration, so the lock that holds
-   *  every other writer out of the graph does not hold it out.
-   *
-   *  While a workspace backfill's claim is in flight, `repo.tx` refuses every
-   *  scope whose `graphMigration` policy is `reject`. The migration's own
-   *  writes — the claim row, the Migrations page under it, the definitions the
-   *  gesture synthesizes, the pass's batches — are `BlockDefault` deliberately,
-   *  so nothing about them distinguishes them from the user's edits except this
-   *  flag. A migration write that omits it deadlocks the migration against its
-   *  own claim.
-   *
-   *  Covers THIS transaction only. A post-commit processor opens its own tx
-   *  with opts it constructs and nothing propagates the flag into it, which is
-   *  why the scope policy — not this flag — is what keeps the pass's derivation
-   *  (`References`) running while the lock is up.
-   *
-   *  Not a general-purpose override: set it only from the migration machinery
-   *  itself and from the gesture that releases a stranded claim. Default
-   *  false. */
-  graphMigrationWrite?: boolean
 }

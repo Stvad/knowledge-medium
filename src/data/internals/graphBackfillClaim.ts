@@ -141,9 +141,10 @@ export const readGraphBackfillClaim = async (
  *  {@link readGraphBackfillClaim} takes and for the same reason: a half-written
  *  bag must never wedge a workspace shut for good.
  *
- *  One predicate because three callers ask it — the lock, the release command
- *  and the gesture's own report — and a copy that drifts means one of them
- *  saying "nothing is held" while another refuses every write. */
+ *  One predicate because three callers ask it — the dialog that blocks the
+ *  workspace, the release it offers, and the gesture's own report — and a copy
+ *  that drifts means one of them saying "nothing is held" while the others
+ *  hold a modal over the app. */
 export const claimHoldsGraph = (
   claim: GraphBackfillClaim | null,
 ): claim is GraphBackfillClaim => claim !== null && claim.completedAt === undefined
@@ -151,25 +152,21 @@ export const claimHoldsGraph = (
 /** Is a run of `backfillId` in flight for this workspace, as the caller's own
  *  view of `blocks` has it?
  *
- *  Asked by the commit pipeline's migration lock, once per transaction that
- *  wrote something under a scope the lock refuses — and, because the caller is
- *  holding the write lock, through that transaction's own handle. Which means
- *  this answer is only committed state for a row the transaction has NOT
- *  written; `Repo.graphMigrationLocked` is where the claim row's own case is
- *  decided, and why.
- *
- *  The claim lives in SYNCED data, so a peer device that has received the claim
- *  row refuses too; one that has not yet is the same staleness every other
- *  reader of this row has. */
+ *  Asked by anything that must not write while a once-per-graph pass is midway
+ *  through the same data — today the definition-change refusal
+ *  (`propertyDefinitionChangeProcessor`), which asks it INSIDE the user's
+ *  transaction so the answer is that transaction's own. The claim lives in
+ *  SYNCED data, so a peer device that has received the claim row refuses too;
+ *  one that has not yet is the same staleness every other reader of this row
+ *  has. */
 export const isGraphBackfillClaimActive = async (
   db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
   workspaceId: string,
   backfillId: string,
-): Promise<boolean> => {
-  return claimHoldsGraph(await readGraphBackfillClaim(
+): Promise<boolean> =>
+  claimHoldsGraph(await readGraphBackfillClaim(
     db, graphBackfillClaimBlockId(workspaceId, backfillId), workspaceId,
   ))
-}
 
 /** Where a claim nobody will release is found and cleared, in the one wording
  *  every message that needs it uses.
@@ -185,22 +182,6 @@ export const STRANDED_CLAIM_RECOVERY =
   `the claim block is on the "${MIGRATIONS_PAGE_ALIAS}" page, and if nothing is `
   + `running anywhere, the "${RELEASE_STRANDED_CLAIM_COMMAND}" command clears it`
 
-/** Code carried by the refusal `repo.tx` throws while a claim is in flight, so
- *  a toast contribution can claim it. */
-export const GRAPH_MIGRATION_LOCKED = 'graph.migration-running'
-
-/** What an operator is told when a write is refused because the migration owns
- *  the graph.
- *
- *  Says what is happening, that it is temporary, and the one thing to check if
- *  it is NOT temporary, because a lock with no stated way out reads as a bug in
- *  the app rather than a pass to wait for. */
-export const GRAPH_MIGRATION_LOCKED_MESSAGE =
-  'The properties migration is running on this workspace, so the graph is not '
-  + 'accepting edits: it is rewriting every block\'s properties against a plan '
-  + 'it fixed when it started, and a change made behind it would be converted '
-  + `under a plan that no longer describes it. Wait for it to finish — ${STRANDED_CLAIM_RECOVERY}.`
-
 // ---------------------------------------------------------------------------
 // The seam implementation
 // ---------------------------------------------------------------------------
@@ -214,7 +195,6 @@ export interface GraphBackfillClaimDeps {
     opts: {
       scope: ChangeScope
       skipUndo?: boolean
-      graphMigrationWrite?: boolean
       description?: string
     },
   ): Promise<R>
@@ -229,12 +209,9 @@ export interface GraphBackfillClaimDeps {
 
 /** Every write this module makes, under the one set of options they all need.
  *
- *  Not tidiness: `graphMigrationWrite` is what keeps the claim's own bookkeeping
- *  out of the lock that bookkeeping raises, and a fifth write added later that
- *  forgets it deadlocks the migration against its own claim with no error that
- *  says so. `skipUndo` because none of this is a document edit the user could
- *  mean to undo, and `BlockDefault` because the row is an ordinary block that
- *  must stay read-only-gated and seed-guarded. */
+ *  `skipUndo` because none of this is a document edit the user could mean to
+ *  undo, and `BlockDefault` because the row is an ordinary block that must stay
+ *  read-only-gated and seed-guarded. */
 const claimTx = <R>(
   deps: Pick<GraphBackfillClaimDeps, 'tx'>,
   description: string,
@@ -242,7 +219,6 @@ const claimTx = <R>(
 ): Promise<R> => deps.tx(fn, {
   scope: ChangeScope.BlockDefault,
   skipUndo: true,
-  graphMigrationWrite: true,
   description,
 })
 
@@ -360,14 +336,6 @@ export const createGraphBackfillClaim = (
     // `inherited` rather than as a win: this claimant is a browser profile, so
     // the row may be a sibling TAB's live claim, and a caller that released it
     // would delete a claim somebody is still writing under.
-    // DEFENCE IN DEPTH, and labelled because deleting `graphMigrationWrite`
-    // here fails no test: every branch that reaches this write has already
-    // established the claim is absent, completed or undecodable, none of which
-    // the lock reads as active. It is load-bearing for one race — a peer's
-    // claim landing between the read above and this transaction — where with
-    // the flag `tx.get` sees it and returns `declined`, and without it the lock
-    // throws at a caller that reads a throw as a failure rather than as a peer
-    // winning.
     const won: ClaimAttempt = first === 'proceed'
       ? 'inherited'
       : await claimTx(deps, `claim backfill ${backfillId}`, async tx => {

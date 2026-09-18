@@ -41,9 +41,8 @@ describe('routeProcessorRejection', () => {
 
     routeProcessorRejection(error, repo, new Map())
 
-    // Keyed by CODE, so a refusal the user meets on every attempt — every
-    // debounced edit against a workspace whose writes are refused — replaces
-    // its toast instead of stacking another copy of the same sentence.
+    // Keyed by code AND sentence, so a refusal the user meets on every attempt
+    // replaces its toast instead of stacking another copy of the same sentence.
     expect(showError).toHaveBeenCalledWith(
       'something failed', {id: 'unknown.code:something failed'})
     expect(showCustom).not.toHaveBeenCalled()
@@ -71,16 +70,16 @@ describe('routeProcessorRejection', () => {
 
   it('reuses one slot for the SAME sentence met over and over', () => {
     const repeated = () => routeProcessorRejection(
-      new ProcessorRejection('the migration is running', 'graph.migration-running'),
+      new ProcessorRejection('"status" lost 2 values', 'codec.unconvertible'),
       repo, new Map())
 
     repeated()
     repeated()
 
-    expect(showError).toHaveBeenNthCalledWith(1, 'the migration is running',
-      {id: 'graph.migration-running:the migration is running'})
-    expect(showError).toHaveBeenNthCalledWith(2, 'the migration is running',
-      {id: 'graph.migration-running:the migration is running'})
+    expect(showError).toHaveBeenNthCalledWith(1, '"status" lost 2 values',
+      {id: 'codec.unconvertible:"status" lost 2 values'})
+    expect(showError).toHaveBeenNthCalledWith(2, '"status" lost 2 values',
+      {id: 'codec.unconvertible:"status" lost 2 values'})
   })
 })
 

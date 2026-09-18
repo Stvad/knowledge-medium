@@ -62,11 +62,11 @@
  *    so its own per-key report is the surface for this one.
  *
  * The FAN-OUT is dormant until a definition has field rows — see
- * `consumingParentIds`, which is its gate. The unconvertible refusal is a fact
- * about values this pass actually READ, so it can only be reached through that
- * gate. {@link MIGRATION_RUNNING_REFUSAL} is the opposite: it exists because a
- * consumer with no field row YET is invisible to that gate, which is the whole
- * shape of a workspace the cell-to-children backfill has not finished.
+ * `consumingParentIds`, which is its gate. The refusals split on that gate and
+ * the split is deliberate: `MIGRATION_RUNNING_REFUSAL` exists precisely because
+ * a consumer with no field row YET is invisible to it, while the unconvertible
+ * refusal is a fact about values this pass actually read and so can only be
+ * reached through it.
  */
 
 import {
@@ -87,8 +87,8 @@ import {
 } from './referenceTargetProcessor'
 import { tryBuildSchema } from '@/data/userSchemasService'
 import {
-  isGraphBackfillClaimActive,
   STRANDED_CLAIM_RECOVERY,
+  isGraphBackfillClaimActive,
 } from './graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
@@ -256,29 +256,24 @@ const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
   },
 }
 
-/** Refusing a definition rename or re-type while the cell-to-children backfill
- *  holds this workspace's claim.
+/** Refusing every definition rename and re-type for as long as the
+ *  cell-to-children backfill holds this workspace's claim (#1029).
  *
- *  NARROWER than the commit pipeline's migration lock (#1057), and not made
- *  redundant by it. That lock refuses whole transactions by SCOPE, and it
- *  admits `References` deliberately — the pass's own writes fan out to the
- *  references processor, which re-derives in transactions carrying no
- *  exemption, so refusing that scope would leave exactly the rows the migration
- *  wrote without their derived references. `References` and `BlockDefault` are
- *  policy-equivalent, so a write admitted under it may touch a definition's
- *  name, and a rename would reach the fan-out below with the pass still
- *  running. This is what covers the gap the scope policy opens on purpose.
+ *  The recovery half is {@link STRANDED_CLAIM_RECOVERY}, shared with the pass's
+ *  own report of a claim held elsewhere, so an operator who meets both does not
+ *  read them as two situations with two things to do.
  *
- *  ACCEPTED, and the reason this is not also raised to the pipeline: asked
- *  here, it reads the claim through the transaction's own handle, so a
- *  transaction that deleted the claim row in the same breath would read itself
- *  as unclaimed. Reaching that needs a `References`-scoped write that both
- *  clears the claim and renames a definition, which nothing does. Closing it
- *  properly is the pipeline lock's `priorRow` treatment, and the pipeline lock
- *  is not asked for this scope.
+ *  An in-flight claim is a PROXY for "this workspace still has cell-only
+ *  consumers". The exact question needs an unindexed `json_each` scan over
+ *  every bag, inside the user's own editing transaction — declined in #1029.
+ *  So it does not reach a write that skips the same-tx processors, which
+ *  replay does by design; a claim released or completed while consumers
+ *  remain; a definition created mid-run (#1052, #1050); or a DELETION, which
+ *  leaves no changed name or codec to collect (#1042).
  *
- *  The recovery half is {@link STRANDED_CLAIM_RECOVERY}, shared with every
- *  other message that mentions a held claim. */
+ *  DECLINED: disabling the schema editor under the same predicate. Every
+ *  write to a definition already goes through `repo.tx`, so it added a
+ *  surface without adding a refusal. */
 const MIGRATION_RUNNING_REFUSAL = {
   code: 'property.definition-change.migration-running',
   message:
@@ -752,8 +747,39 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     }
     const {changes, unfanoutable} = collected
+    // ABOVE the refusal below and above the two dormancy returns under it: every
+    // one of those consults `consumingParentIds`, which sees FIELD ROWS, and the
+    // hazard here is a consumer that has none. The runbook flips before
+    // backfilling, so a chunked backfill's un-reached parents hold cells for
+    // this definition and no field row — which makes a definition with NO field
+    // rows the WORST case rather than an exempt one.
+    //
+    // Permanent rather than late, and NOT because later batches stop resolving
+    // the old name — the pass holds ONE resolver for its whole run (see where
+    // `resolveNameSchema` is bound in `Repo`), so they go on resolving it. That
+    // is what makes it permanent: the parents the fan-out reached are re-keyed,
+    // the parents it did not are materialized under the name and codec this tx
+    // just moved off, and nothing re-derives either half afterwards. DECLINED,
+    // fanning out to those owners instead: finding them is an unindexed
+    // `json_each` scan over the workspace's bags inside the user's own editing
+    // transaction (#1029).
+    //
+    // These two lists PARTITION the renames and re-types this tx makes — every
+    // candidate ends in exactly one of them — so together they answer "does
+    // this transaction change a definition at all", which is the question here.
+    // Reading them is sound only while that holds: a change dropped into
+    // NEITHER would commit its new name with its consumers unreached and this
+    // gate would not even look. #1028 made the contested ones held rather than
+    // dropped, which closed the last such path.
+    //
+    // What the gate keeps out is the writes that are not a rename or a re-type
+    // at all — a CREATE has no before row, and neither an unrelated bag edit
+    // nor the materializer's own field-row bookkeeping survives
+    // `collectChanges`. That is what lets the migration gesture mint its orphan
+    // definitions while holding its own claim.
     if (changes.length > 0 || unfanoutable.length > 0) {
-      // The TRANSACTION's own view, like every other read here.
+      // The TRANSACTION's own view, like every other read here. The claim is
+      // synced data, so a peer device holding the row refuses too.
       if (await isGraphBackfillClaimActive(
         ctx.db, event.workspaceId, PROPERTY_CELL_BACKFILL_ID,
       )) {

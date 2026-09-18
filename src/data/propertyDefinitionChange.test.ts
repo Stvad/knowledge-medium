@@ -43,6 +43,15 @@ import {
   contestedChanges,
   type NameClaim,
 } from './internals/propertyDefinitionChangeProcessor'
+import { graphBackfillClaimBlockId } from './internals/graphBackfillClaim'
+import { PROPERTY_CELL_BACKFILL_ID } from './internals/propertyCellBackfill'
+import { MIGRATION_CLAIM_TYPE } from './blockTypes'
+import {
+  addBlockTypeToProperties,
+  migrationClaimantProp,
+  migrationClaimedAtProp,
+  migrationCompletedAtProp,
+} from './properties'
 import type { Repo } from './repo'
 
 const WS = 'ws-def-change'
@@ -1646,5 +1655,238 @@ describe('the multi-value boundary (#1010)', () => {
     expect(await cell('p')).toEqual({state: ['a-id']})
     expect(await rowContent(ids[1]!)).toBe('not a reference')
     expect(await isLive(ids[1]!), ids[1]).toBe(true)
+  })
+})
+
+describe('while the cell-to-children backfill holds this workspace\'s claim', () => {
+  /** A claim row as SYNC delivers one: written raw, so no processor runs over
+   *  it and nothing in the test depends on the claim seam's own write path. */
+  const seedBackfillClaim = async (
+    {completed = false, workspaceId = WS}: {completed?: boolean; workspaceId?: string} = {},
+  ): Promise<string> => {
+    const id = graphBackfillClaimBlockId(WS, PROPERTY_CELL_BACKFILL_ID)
+    const properties = addBlockTypeToProperties({
+      [migrationClaimantProp.name]: 'peer-device',
+      [migrationClaimedAtProp.name]: 1,
+      ...(completed ? {[migrationCompletedAtProp.name]: 2} : {}),
+    }, MIGRATION_CLAIM_TYPE)
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+         properties_json, deleted, created_at, updated_at, user_updated_at,
+         created_by, updated_by)
+       VALUES (?, ?, NULL, 'k-claim', ?, ?, 0, 1, 1, 1, 'user-1', 'user-1')`,
+      [id, workspaceId, PROPERTY_CELL_BACKFILL_ID, JSON.stringify(properties)],
+    )
+    return id
+  }
+
+  /** A parent the backfill has NOT reached yet: a cell and no field row.
+   *
+   *  Written RAW because that is the only way to get this shape — the same
+   *  shape a row that predates the flip has. `setProperty` on a flipped
+   *  workspace materializes the children this parent is defined by not having,
+   *  and those children are exactly what makes the fan-out able to see it. */
+  const seedCellOnlyProperty = async (
+    repo: Repo, blockId: string, name: string, value: unknown,
+  ): Promise<void> => {
+    await createHost(repo, blockId)
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[name]: value}), blockId],
+    )
+  }
+
+  it('refuses a rename, and the cell-only parent keeps a key that still resolves', async () => {
+    // The mixed case, which is the whole hazard: `backfilled` has field rows and
+    // would be re-keyed, `cellOnly` has none and would not — leaving its value
+    // under a name the registry no longer publishes, which later backfill
+    // batches skip as unregistered and nothing ever visits again.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'backfilled', 'status', 'done')
+    await seedCellOnlyProperty(repo, 'cell-only', 'status', 'pending')
+    await seedBackfillClaim()
+
+    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
+      code: 'property.definition-change.migration-running',
+    })
+
+    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
+    expect(await cell('backfilled')).toEqual({status: 'done'})
+    expect(await cell('cell-only')).toEqual({status: 'pending'})
+  })
+
+  it('refuses a re-type', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedCellOnlyProperty(repo, 'cell-only', 'status', 'pending')
+    await seedBackfillClaim()
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.migration-running',
+    })
+
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('string')
+  })
+
+  it('refuses although the definition has NO field row anywhere', async () => {
+    // The WORST case, not an exempt one: a definition with no field rows is one
+    // whose every consumer is cell-only. The fan-out is dormant for it —
+    // `consumingParentIds` finds nothing — so a refusal that asked "does this
+    // have consumers" the way the two other refusals do would pass it through.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedCellOnlyProperty(repo, 'cell-only', 'status', 'pending')
+    await seedBackfillClaim()
+
+    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
+      code: 'property.definition-change.migration-running',
+    })
+    // The gate itself, asserted rather than assumed: it is blind to this
+    // parent, which is why the refusal must not consult it.
+    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toEqual([])
+    expect(await cell('cell-only')).toEqual({status: 'pending'})
+  })
+
+  it('names the MIGRATION, not the broken type, when the re-type is also unbuildable', async () => {
+    // Position: above the unbuildable hold. Both refusals apply and the user
+    // fixes one thing at a time, so the one to name is the one that is true of
+    // the whole workspace — repairing the preset would not make this edit land.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await seedBackfillClaim()
+
+    await expect(retype(repo, FIELD_ID, 'no-such-preset')).rejects.toMatchObject({
+      code: 'property.definition-change.migration-running',
+    })
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('string')
+  })
+
+  it('refuses an unbuildable re-type that no consumer would otherwise hold up', async () => {
+    // The unbuildable refusal is gated on FIELD-ROW consumers, so with none it
+    // commits — and a `changes`-only claim check placed below it would too,
+    // because an unbuildable change never becomes a `change`.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedCellOnlyProperty(repo, 'cell-only', 'status', 'pending')
+    await seedBackfillClaim()
+
+    await expect(retype(repo, FIELD_ID, 'no-such-preset')).rejects.toMatchObject({
+      code: 'property.definition-change.migration-running',
+    })
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('string')
+  })
+
+  it('lets the rename through once the claim records a COMPLETED run', async () => {
+    // A completed claim is never released — it is the graph's record that the
+    // pass ran. Reading it as active would refuse definition edits in this
+    // workspace for good.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await seedBackfillClaim({completed: true})
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect(await cell('p')).toEqual({state: 'done'})
+  })
+
+  it('lets the rename through when the claim block is gone', async () => {
+    // Deleting the claim is the documented recovery for a device that died
+    // mid-pass, and the message this refusal carries tells the operator to do
+    // exactly that — so a tombstone has to read as "not running".
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    const claimId = await seedBackfillClaim()
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [claimId])
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect(await cell('p')).toEqual({state: 'done'})
+  })
+
+  it('ignores a claim row at this id owned by ANOTHER workspace', async () => {
+    // The id is derived from the workspace but the row is not scoped by it —
+    // an import that keeps its ids lands a foreign block here, and reading it
+    // unscoped would let another graph's migration freeze this one's editing.
+    await seedWorkspace('children')
+    await seedWorkspace('children', 'ws-elsewhere')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await seedBackfillClaim({workspaceId: 'ws-elsewhere'})
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect(await cell('p')).toEqual({state: 'done'})
+  })
+
+  it('refuses a CONTESTED rename that no field-row consumer would hold up', async () => {
+    // #1028's own refusal of a contested change is gated on field-row
+    // consumers, so with none it commits: the row takes its new name and the
+    // consumers it did not re-key keep the old one. That is this refusal's
+    // case, not that one's — the cell-only consumer is invisible to the probe
+    // both of them would otherwise ask.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await createDefinition(repo, 'field-state', 'state', 'string')
+    await awaitDefinition(repo, 'state', 'string')
+    await seedCellOnlyProperty(repo, 'cell-only', 'status', 'pending')
+    await seedBackfillClaim()
+
+    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
+      code: 'property.definition-change.migration-running',
+    })
+    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
+    expect(await cell('cell-only')).toEqual({status: 'pending'})
+  })
+
+  it('leaves a contested rename alone when no migration is running', async () => {
+    // The control, and the boundary of this PR: with no field-row consumer to
+    // trip #1028's refusal and no claim to trip this one, a contested rename
+    // commits its row with no fan-out. Whether that should refuse too is
+    // #1028's question, and this refusal must not have quietly taken it over.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await createDefinition(repo, 'field-state', 'state', 'string')
+    await awaitDefinition(repo, 'state', 'string')
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('state')
+  })
+
+  it('lets a definition be CREATED, which is how the gesture mints its own', async () => {
+    // The migration gesture holds this claim across orphan-definition synthesis
+    // and mints definitions under it. A created row has no `before`, so no
+    // change is collected and this refusal never sees it.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedBackfillClaim()
+
+    await createDefinition(repo, 'field-priority', 'priority', 'string')
+
+    expect((await cell('field-priority'))[propertyNameProp.name]).toBe('priority')
+  })
+
+  it('lets an unrelated bag write on a definition through', async () => {
+    // Every write to a definition's bag reaches this processor, the
+    // materializer's own field-row bookkeeping included. Refusing those would
+    // freeze far more than renaming for the length of the pass.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await seedBackfillClaim()
+
+    await repo.tx(async tx => {
+      const definition = await tx.get(FIELD_ID)
+      await tx.update(FIELD_ID, {
+        properties: {...definition!.properties, 'test:unrelated': 'note'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect((await cell(FIELD_ID))['test:unrelated']).toBe('note')
+    expect(await cell('p')).toEqual({status: 'done'})
   })
 })
