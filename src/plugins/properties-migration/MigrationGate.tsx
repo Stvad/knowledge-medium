@@ -55,6 +55,12 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
   const claim = useHandle(claimBlock, {
     selector: row => claimHoldingGraph(row, workspaceId),
   })
+  // The same row read for the OTHER ending: `claimHoldingGraph` filters a
+  // completed claim out by design, so liveness alone cannot tell a pass that
+  // ran to the end from a claim that was handed back.
+  const completed = useHandle(claimBlock, {
+    selector: row => completedClaimFor(row, workspaceId),
+  })
   const readLocal = useCallback(() => localMigrationRunFor(workspaceId), [workspaceId])
   const localRun = useSyncExternalStore(subscribeLocalMigrationRun, readLocal, readLocal)
   const readOnly = useSyncExternalStore(
@@ -68,8 +74,7 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
 
   useEffect(() => {
     if (!held) return
-    const manager = repo.undoManagerFor(workspaceId)
-    const drop = manager.beginHistoryDrop()
+    const drop = repo.undoManagerFor(workspaceId).beginHistoryDrop()
     // ABANDON, never finish. The refusal is the whole job here and `abandon`
     // keeps all of it — `dropsInProgress` is decremented by either ending, so
     // replays are refused for exactly as long as the claim is held.
@@ -83,28 +88,30 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
     // So the clear stays with the writers that know they wrote: the gesture's
     // own drop around the flip, and the runner's per batch. A PEER therefore
     // keeps pre-migration entries a completed run has made stale — #684/#1007.
-    //
-    // Why a toast, and why sticky: see `showReloadNotice`.
-    return () => {
-      drop.abandon()
-      // The row as it is NOW, not as it was when the drop began — the handle is
-      // the same object and its cache has the ending that just fired.
-      // `claimHoldingGraph` filters a completed claim out by design, so
-      // liveness alone cannot tell "the pass finished" from "the claim was
-      // handed back", and only the first owes the user anything.
-      //
-      // AND only a device that still has entries to replay. The tab that ran
-      // the pass cleared its own as it committed, and telling it to reload
-      // before using an undo stack it no longer has put a second infinite toast
-      // on screen contradicting its own outcome ("Undo history was cleared").
-      // Asking the stack is truer than asking who the claimant was: a sibling
-      // tab of the same profile kept its entries and does need this.
-      if (completedClaimFor(claimBlock.peek(), workspaceId) !== null
-          && manager.depths(ChangeScope.BlockDefault).undo > 0) {
-        showReloadNotice()
-      }
-    }
-  }, [repo, workspaceId, held, claimBlock])
+    return () => { drop.abandon() }
+  }, [repo, workspaceId, held])
+
+  // Driven by the COMPLETION, not by the drop's teardown. The teardown fires on
+  // the way out of `held`, and a completion can arrive after that — `markComplete`
+  // restores a claim its own sibling tombstoned, and a workspace switch or a
+  // reload unmounts the gate before the run ends. Every one of those left the
+  // notice silent for a device that had just had its undo entries invalidated.
+  //
+  // `completedAt` says the pass RAN TO THE END, not that it wrote (km-5ccs), and
+  // the depth check is the proxy that covers most of the gap: a device with
+  // nothing on its stack has nothing to be warned about, and the tab that ran
+  // the pass cleared its own as it committed — which is what stopped this
+  // sitting beside that tab's own "undo history was cleared" outcome. The case
+  // the proxy still gets wrong is a re-run that commits nothing on a workspace
+  // already migrated: entries survive, are perfectly safe, and get warned about.
+  //
+  // Why a toast, and why sticky: see `showReloadNotice`.
+  const completedAt = completed?.completedAt ?? null
+  useEffect(() => {
+    if (completedAt === null) return
+    if (repo.undoManagerFor(workspaceId).depths(ChangeScope.BlockDefault).undo === 0) return
+    showReloadNotice()
+  }, [repo, workspaceId, completedAt])
 
   const holder = holderOf(claim, localRun)
   if (holder === null) return null
@@ -132,32 +139,43 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
  *  questions the dialog asks — what to tell the user, and whether to offer the
  *  release — have to be answered from the same reading.
  *
- *  BOTH halves for `this-tab`, not the local message alone. The gesture
- *  publishes its first line before it takes the claim, so between those two
- *  moments a PEER's claim can be what is on screen — and a message this device
- *  wrote would otherwise be reported as that peer's progress. */
+ *  TWO INDEPENDENT INPUTS, and the claim row answers only one of them. It says
+ *  whose browser profile holds the migration; it cannot say whether THIS tab is
+ *  the one running it, because a claimant id is a profile and every tab of that
+ *  profile shares it. `localRun.claimed` is the other half and the run is the
+ *  only thing that knows it.
+ *
+ *  Reading the claim FIRST is what makes a tab that has lost its claim
+ *  unreachable: released mid-write — which is a click this dialog itself offers
+ *  a peer — the row then holds someone else's claim, and a tab that is still
+ *  writing gets told a peer is converting, loses its own progress line, loses
+ *  "anything still in flight here is no longer protected", and is handed a
+ *  button to delete that peer's live claim. So `claimed` is asked first, and a
+ *  claim that is not ours cannot outrank it. */
 const holderOf = (
   claim: GraphBackfillClaim | null, localRun: LocalRunSnapshot | null,
 ): ClaimHolder | null => {
-  // NO CLAIM is two situations, not one, and the row cannot tell them apart —
-  // it is equally absent before a run takes it and after a run loses it. Before
-  // is `starting`, and covers the window between the confirmation and the claim
-  // write, which holds two preflight reads and a page-ensure; without it the
-  // operator confirms a one-way fleet-wide flip and the app goes quiet. AFTER
-  // is a tab that was writing and is no longer protected, which must not be
-  // told that nothing has been written — it is the one tab whose closing costs
-  // something, and the released case reaches it from a click the dialog itself
-  // offers.
-  if (claim === null) {
-    if (localRun === null) return null
-    return localRun.claimed
-      ? {kind: 'lost-claim', message: localRun.message}
-      : {kind: 'starting', message: localRun.message}
+  const ours = claim !== null && claim.claimantId === getClientId()
+  // Our own run took a claim and the live one is not it. Covers a claim that is
+  // simply gone (released, or completed) and one that has been REPLACED, which
+  // reads identically from here: either way this tab's writes are unprotected.
+  if (localRun?.claimed === true && !ours) {
+    return {kind: 'lost-claim', message: localRun.message}
   }
-  if (claim.claimantId !== getClientId()) return {kind: 'another-device', claim}
-  return localRun === null
-    ? {kind: 'this-browser', claim}
-    : {kind: 'this-tab', message: localRun.message, claim}
+  // No claim and our run has not taken one: the window between the confirmation
+  // and the claim write, which holds two preflight reads and a page-ensure.
+  // Without this arm the operator confirms a one-way fleet-wide flip and the
+  // app simply goes quiet.
+  if (claim === null) {
+    return localRun === null ? null : {kind: 'starting', message: localRun.message}
+  }
+  if (!ours) return {kind: 'another-device', claim}
+  // Ours, but only `this-tab` if OUR RUN is the one holding it. A sibling tab's
+  // claim reads as ours, and telling this tab that closing it stops the run
+  // would be false — the run is in the other tab.
+  return localRun?.claimed === true
+    ? {kind: 'this-tab', message: localRun.message, claim}
+    : {kind: 'this-browser', claim}
 }
 
 /** What is left on screen after the dialog goes. A TOAST rather than a line in

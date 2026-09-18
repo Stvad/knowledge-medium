@@ -78,6 +78,12 @@ export type ClaimHolder =
   | {kind: 'this-browser'; claim: GraphBackfillClaim}
   | {kind: 'another-device'; claim: GraphBackfillClaim}
 
+/** Identity of a claim for the purposes of "is this still the same situation".
+ *  Claimant plus the instant it was taken: a re-claim by the same device after a
+ *  release is a different situation with the same claimant. */
+const claimKey = (claim: GraphBackfillClaim): string =>
+  `${claim.claimantId}:${claim.claimedAt}`
+
 /** The arms a stranded claim can be released from. */
 type ReleasableHolder = Extract<ClaimHolder, {kind: 'this-browser' | 'another-device'}>
 const releasable = (holder: ClaimHolder): ReleasableHolder | null =>
@@ -155,13 +161,27 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
     useState<{claim: GraphBackfillClaim; askedAt: number; of: string} | null>(null)
   const [releasing, setReleasing] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
-  const [dismissed, setDismissed] = useState(false)
+  // WHAT was dismissed, not merely that something was. The escape is offered
+  // only to a device that can do nothing about the claim, so a dismissal must
+  // not outlive that: a viewer who hides the modal and is then granted write
+  // access is the device that could release a stranded claim, and would
+  // otherwise stay blind to it for the rest of the run.
+  const [dismissed, setDismissed] = useState<string | null>(null)
 
   // The release is for a claim nobody will release. Neither the tab running the
   // pass nor one whose claim does not exist yet can be in that situation, and
   // releasing from the running tab drops the modal and the undo pause while its
   // own writes continue.
   const canRelease = releasable(holder)
+  // The state a dismissal is ABOUT — `null` where there is nothing to dismiss,
+  // because this device CAN act on the claim. A new claim, a change of arm, or
+  // being granted write access are each a different situation the user has not
+  // dismissed; the last one matters most, since it turns this device into the
+  // one that could release a stranded claim.
+  const dismissKey = release !== null
+    ? null
+    : `${holder.kind}:${canRelease === null ? '' : claimKey(canRelease.claim)}`
+  const hidden = dismissKey !== null && dismissed === dismissKey
 
   // The panel is about ONE claim and says how long that claim has been held, so
   // a claim replaced underneath it would keep a stale age on screen — and a
@@ -170,14 +190,12 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
   // one. Consent itself is already safe — the release re-checks inside its own
   // transaction and answers `changed`; this is about not showing a reason that
   // has stopped being true.
-  const current = canRelease === null
-    ? null
-    : `${canRelease.claim.claimantId}:${canRelease.claim.claimedAt}`
+  const current = canRelease === null ? null : claimKey(canRelease.claim)
   const confirming = pending !== null && pending.of === current ? pending : null
 
-  // Unconditional, because this component only exists while the claim is held.
-  // See useModalShadowing's own docstring for why this call must exist at all.
-  useModalShadowing(!dismissed)
+  // Follows the dialog: dismissing releases the shadow along with the modal it
+  // was shadowing for. See useModalShadowing's docstring for why it is needed.
+  useModalShadowing(!hidden)
 
   const onRelease = (shown: GraphBackfillClaim) => {
     if (release === null) return
@@ -202,7 +220,7 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
     })
   }
 
-  if (dismissed) return null
+  if (hidden) return null
   return (
     // `open` is fixed and `onOpenChange` does nothing: Radix routes Escape,
     // outside-click and the corner button all through it and can close none of
@@ -232,7 +250,7 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
               leave this tab behind a modal with no exit at all, reading copy
               that tells it not to close. Reloading makes it an ordinary tab
               again, and the release comes back with it. */}
-          {holder.kind === 'this-tab' && (
+          {'message' in holder && holder.kind !== 'lost-claim' && (
             <p className="text-muted-foreground">
               If this tab looks stuck, reload it. The migration resumes where it
               stopped when you run it again, and a reloaded tab is offered the
@@ -262,7 +280,7 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
             running, which is the half that protects rows. */}
         {release === null && (
           <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => { setDismissed(true) }}>
+            <Button variant="ghost" size="sm" onClick={() => { setDismissed(dismissKey) }}>
               Hide this
             </Button>
           </DialogFooter>
