@@ -555,7 +555,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // see `MigrationGate`. That is why the progress line and the outcome go to
     // different places: the dialog closes when the claim clears, and several
     // outcomes below are reported on paths where no claim was ever taken.
-    const banner = reportMigrationProgress('Migrating properties to blocks…')
+    const banner = reportMigrationProgress(workspaceId, 'Migrating properties to blocks…')
     try {
       // ABOVE the synthesis block, not below it: below, the "Nothing was changed"
       // this prints is false the moment synthesis commits.

@@ -26,7 +26,7 @@ import {
 import { graphBackfillClaimBlockId } from '@/data/internals/graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
 import { MigrationGate } from '../MigrationGate.tsx'
-import { setLocalMigrationMessage } from '../localRunMessage.ts'
+import { setLocalMigrationRun } from '../localRunMessage.ts'
 
 const WS = 'ws-migration-gate'
 const OTHER_WS = 'ws-migration-gate-other'
@@ -91,13 +91,13 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  setLocalMigrationMessage(null)
+  setLocalMigrationRun(null)
   repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
   repo.setActiveWorkspaceId(WS)
 })
 afterEach(() => {
   cleanup()
-  setLocalMigrationMessage(null)
+  setLocalMigrationRun(null)
 })
 
 describe('while the migration holds this workspace', () => {
@@ -169,10 +169,28 @@ describe('while the migration holds this workspace', () => {
     expect(await screen.findByRole('dialog'))
       .toHaveTextContent(/Another device is converting this workspace/)
 
-    act(() => { setLocalMigrationMessage('Switching this workspace to property blocks…') })
+    act(() => {
+      setLocalMigrationRun({workspaceId: WS, message: 'Switching this workspace to property blocks…'})
+    })
 
     expect(dialog()).toHaveTextContent(/Switching this workspace to property blocks/)
     expect(dialog()).not.toHaveTextContent(/Another device is converting/)
+  })
+
+  it('does not report a run on a DIFFERENT workspace as this one\'s progress', async () => {
+    // Two situations — a run this device started over there, and a peer's claim
+    // over here — and the operator reading one as the other would be told their
+    // own run is what is blocking a workspace it never touched.
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    act(() => {
+      setLocalMigrationRun({workspaceId: OTHER_WS, message: 'Converting the other one…'})
+    })
+
+    expect(dialog()).toHaveTextContent(/Another device is converting this workspace/)
+    expect(dialog()).not.toHaveTextContent(/Converting the other one/)
   })
 })
 

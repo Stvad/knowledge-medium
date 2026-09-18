@@ -11,7 +11,7 @@
  * dialog is up at all.
  */
 import { showError, showInfo } from '@/utils/toast.js'
-import { setLocalMigrationMessage } from './localRunMessage.ts'
+import { setLocalMigrationRun } from './localRunMessage.ts'
 
 const OUTCOME_TOAST = {id: 'properties-migration-outcome', duration: Number.POSITIVE_INFINITY}
 
@@ -40,17 +40,20 @@ export interface MigrationProgress {
   addNote: (note: string) => void
 }
 
-export const reportMigrationProgress = (initial: string): MigrationProgress => {
+export const reportMigrationProgress = (
+  workspaceId: string, initial: string,
+): MigrationProgress => {
   let outcome: {message: string; failed: boolean} | null = null
-  setLocalMigrationMessage(initial)
+  const running = (message: string): void => { setLocalMigrationRun({workspaceId, message}) }
+  running(initial)
   const settle = (message: string, failed: boolean): void => {
     if (outcome !== null) return
     outcome = {message, failed}
-    setLocalMigrationMessage(null)
+    setLocalMigrationRun(null)
     ;(failed ? showError : showInfo)(message, OUTCOME_TOAST)
   }
   return {
-    update: message => { if (outcome === null) setLocalMigrationMessage(message) },
+    update: message => { if (outcome === null) running(message) },
     done: finalMessage => { settle(finalMessage ?? 'Migration finished.', false) },
     fail: message => { settle(message, true) },
     settleUnreported: () => { settle(UNREPORTED, true) },

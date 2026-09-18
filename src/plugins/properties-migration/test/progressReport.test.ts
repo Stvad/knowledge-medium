@@ -13,22 +13,39 @@ vi.mock('@/utils/toast.js', () => ({
 }))
 
 const { reportMigrationProgress } = await import('../progressReport.ts')
-const { getLocalMigrationMessage, setLocalMigrationMessage } =
+const { getLocalMigrationRun, setLocalMigrationRun } =
   await import('../localRunMessage.ts')
 
+const WS = 'ws-1'
+const start = (initial = '…') => reportMigrationProgress(WS, initial)
+const line = (): string | null => getLocalMigrationRun()?.message ?? null
+
 beforeEach(() => { showInfo.mockClear(); showError.mockClear() })
-afterEach(() => { setLocalMigrationMessage(null) })
+afterEach(() => { setLocalMigrationRun(null) })
 
 describe('while the pass is running', () => {
   it('drives the dialog\'s status line and raises no toast', () => {
-    const progress = reportMigrationProgress('Migrating properties to blocks…')
-    expect(getLocalMigrationMessage()).toBe('Migrating properties to blocks…')
+    const progress = start('Migrating properties to blocks…')
+    expect(line()).toBe('Migrating properties to blocks…')
 
     progress.update('Switching this workspace to property blocks…')
 
-    expect(getLocalMigrationMessage()).toBe('Switching this workspace to property blocks…')
+    expect(line()).toBe('Switching this workspace to property blocks…')
     expect(showInfo).not.toHaveBeenCalled()
     expect(showError).not.toHaveBeenCalled()
+  })
+})
+
+describe('a run on a workspace the user is not looking at', () => {
+  it('is reported as ITS workspace\'s, not as whatever dialog happens to be up', () => {
+    // A run started on one workspace and a dialog raised by a PEER's claim on
+    // another are two situations; the dialog keys on the workspace to keep them
+    // apart, and can only do that if the run says which one it is.
+    reportMigrationProgress('ws-other', 'Switching that workspace over…')
+
+    expect(getLocalMigrationRun()).toEqual({
+      workspaceId: 'ws-other', message: 'Switching that workspace over…',
+    })
   })
 })
 
@@ -38,16 +55,16 @@ describe('when it ends', () => {
     // gesture finishes reporting — so an outcome shown there would be swept
     // away with it, and several outcomes are reported on paths where no claim
     // was ever taken at all.
-    const progress = reportMigrationProgress('…')
+    const progress = start()
 
     progress.done('Migrated 7 blocks.')
 
-    expect(getLocalMigrationMessage()).toBeNull()
+    expect(line()).toBeNull()
     expect(showInfo).toHaveBeenCalledWith('Migrated 7 blocks.', expect.anything())
   })
 
   it('reports a failure as a failure', () => {
-    reportMigrationProgress('…').fail('Could not switch this workspace over.')
+    start().fail('Could not switch this workspace over.')
 
     expect(showError).toHaveBeenCalledWith(
       'Could not switch this workspace over.', expect.anything())
@@ -58,16 +75,16 @@ describe('when it ends', () => {
     // The pass notifies per committed batch and its subscription is torn down
     // after the outcome; a notification that lands in between would otherwise
     // put a finished migration back on screen as running.
-    const progress = reportMigrationProgress('…')
+    const progress = start()
     progress.done('Migrated 7 blocks.')
 
     progress.update('still going')
 
-    expect(getLocalMigrationMessage()).toBeNull()
+    expect(line()).toBeNull()
   })
 
   it('says something for a gesture that ended without reporting', () => {
-    const progress = reportMigrationProgress('…')
+    const progress = start()
 
     progress.settleUnreported()
 
@@ -76,7 +93,7 @@ describe('when it ends', () => {
   })
 
   it('leaves a reported outcome alone rather than overwriting it with the fallback', () => {
-    const progress = reportMigrationProgress('…')
+    const progress = start()
     progress.done('Migrated 7 blocks.')
 
     progress.settleUnreported()
@@ -89,7 +106,7 @@ describe('when it ends', () => {
     // The note says the workspace is still held, which the outcome message
     // cannot know — it is written before the release is attempted. Under the
     // same toast id, or the user reads two toasts as two events.
-    const progress = reportMigrationProgress('…')
+    const progress = start()
     progress.done('Migrated 7 blocks.')
     const id = (showInfo.mock.calls[0]?.[1] as {id: string}).id
 
@@ -102,7 +119,7 @@ describe('when it ends', () => {
   })
 
   it('has nothing to qualify while the run is still going', () => {
-    const progress = reportMigrationProgress('…')
+    const progress = start()
 
     progress.addNote('ignored')
 

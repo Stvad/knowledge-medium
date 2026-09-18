@@ -30,10 +30,7 @@ import {
   type GraphBackfillClaim,
 } from '@/data/internals/graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
-import {
-  getLocalMigrationMessage,
-  subscribeLocalMigrationMessage,
-} from './localRunMessage.ts'
+import { getLocalMigrationRun, subscribeLocalMigrationRun } from './localRunMessage.ts'
 import { MigrationGateDialog, type ReleaseOutcome } from './MigrationGateDialog.tsx'
 
 const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode => {
@@ -47,9 +44,10 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
   const claim = useHandle(claimBlock, {
     selector: row => claimHoldingGraph(row, workspaceId),
   })
-  const localMessage = useSyncExternalStore(
-    subscribeLocalMigrationMessage, getLocalMigrationMessage, getLocalMigrationMessage,
+  const localRun = useSyncExternalStore(
+    subscribeLocalMigrationRun, getLocalMigrationRun, getLocalMigrationRun,
   )
+  const localMessage = localRun?.workspaceId === workspaceId ? localRun.message : null
   const held = claim !== null
 
   useEffect(() => {
