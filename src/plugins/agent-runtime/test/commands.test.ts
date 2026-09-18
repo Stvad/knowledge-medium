@@ -224,6 +224,41 @@ describe('agent runtime commands', () => {
         ...extra,
       }, env.context) as Promise<InstallExtensionResult>
 
+    /** Make the stored override map unreadable, the way a malformed synced
+     *  prefs row does. */
+    const corruptOverrides = async (): Promise<void> => {
+      const prefsBlock = await getPluginPrefsBlock(
+        env.repo, WS, env.repo.user, extensionsPrefsType)
+      await env.repo.tx(async tx => {
+        const current = await tx.get(prefsBlock.id)
+        await tx.update(prefsBlock.id, {
+          properties: {...current!.properties, [extensionsOverridesProp.name]: 'not-a-map'},
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'corrupt stored overrides'})
+    }
+
+    /** The steady state the check is about: an extension installed, enabled and
+     *  APPROVED here, its `demo:rating` core live and attributed to its own
+     *  block, with one definition using it. The block attribution is what lets
+     *  the registry diff see which ids this block would stop claiming. */
+    const liveRatingExtension = async (commandId: string): Promise<string> => {
+      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
+      let id: string
+      try {
+        const installed = await install(`${commandId}-base`)
+        await executeCommand({
+          commandId: `${commandId}-enable`, type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
+      await getOrCreatePropertiesPage(env.repo, WS)
+      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
+      return id
+    }
+
     /** Install + enable, so the block is APPROVED on this device — the state in
      *  which the next install re-pins the new source and makes it live. */
     const installApproved = async (extension: unknown): Promise<string> => {
@@ -338,22 +373,7 @@ describe('agent runtime commands', () => {
       // The direction a scan of the candidate cannot see. The new source
       // declares nothing, and the id still changes codec — here to nothing at
       // all, so every definition using it publishes no schema.
-      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
-      let id: string
-      try {
-        const installed = await install('install-drop-base')
-        await executeCommand({
-          commandId: 'enable-drop', type: 'enable-extension', id: installed.id,
-        }, env.context)
-        id = installed.id
-      } finally {
-        restoreBase()
-      }
-      // The running extension's live contribution, sourced at its block — what
-      // the registry diff reads to know which ids it would stop claiming.
-      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
-      await getOrCreatePropertiesPage(env.repo, WS)
-      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
+      await liveRatingExtension('install-drop')
 
       const restore = compileTo([])
       try {
@@ -461,14 +481,7 @@ describe('agent runtime commands', () => {
       // where a core can hide.
       await registerNumberRatingWithDefinition()
       await installApproved(valuePresetCoresFacet.of(numberRating))
-      const prefsBlock = await getPluginPrefsBlock(
-        env.repo, WS, env.repo.user, extensionsPrefsType)
-      await env.repo.tx(async tx => {
-        const current = await tx.get(prefsBlock.id)
-        await tx.update(prefsBlock.id, {
-          properties: {...current!.properties, [extensionsOverridesProp.name]: 'not-a-map'},
-        })
-      }, {scope: ChangeScope.BlockDefault, description: 'corrupt stored overrides'})
+      await corruptOverrides()
 
       const restore = compileTo(valuePresetCoresFacet.of(stringRating))
       try {
@@ -510,14 +523,7 @@ describe('agent runtime commands', () => {
       // way past it.
       await registerNumberRatingWithDefinition()
       await installApproved(valuePresetCoresFacet.of(numberRating))
-      const prefsBlock = await getPluginPrefsBlock(
-        env.repo, WS, env.repo.user, extensionsPrefsType)
-      await env.repo.tx(async tx => {
-        const current = await tx.get(prefsBlock.id)
-        await tx.update(prefsBlock.id, {
-          properties: {...current!.properties, [extensionsOverridesProp.name]: 'not-a-map'},
-        })
-      }, {scope: ChangeScope.BlockDefault, description: 'corrupt stored overrides'})
+      await corruptOverrides()
 
       const restore = compileTo(valuePresetCoresFacet.of(stringRating))
       try {
@@ -584,24 +590,6 @@ describe('agent runtime commands', () => {
     /** An approved+enabled block already contributing `demo:rating`, with a
      *  definition using it — the state every "what does this update change"
      *  case starts from. */
-    const liveRatingExtension = async (commandId: string): Promise<string> => {
-      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
-      let id: string
-      try {
-        const installed = await install(`${commandId}-base`)
-        await executeCommand({
-          commandId: `${commandId}-enable`, type: 'enable-extension', id: installed.id,
-        }, env.context)
-        id = installed.id
-      } finally {
-        restoreBase()
-      }
-      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
-      await getOrCreatePropertiesPage(env.repo, WS)
-      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
-      return id
-    }
-
     it('does not diff a source that cannot be PINNED, and reports why', async () => {
       // A source that will not transpile leaves the previous pin — and the code
       // it already runs — in place, so the registry does not move. Diffing the
@@ -653,14 +641,7 @@ describe('agent runtime commands', () => {
       // all (see below), so it is the re-install that has something to report.
       await registerNumberRatingWithDefinition()
       await installApproved(valuePresetCoresFacet.of(numberRating))
-      const prefsBlock = await getPluginPrefsBlock(
-        env.repo, WS, env.repo.user, extensionsPrefsType)
-      await env.repo.tx(async tx => {
-        const current = await tx.get(prefsBlock.id)
-        await tx.update(prefsBlock.id, {
-          properties: {...current!.properties, [extensionsOverridesProp.name]: 'not-a-map'},
-        })
-      }, {scope: ChangeScope.BlockDefault, description: 'corrupt stored overrides'})
+      await corruptOverrides()
 
       const restore = compileTo(valuePresetCoresFacet.of(stringRating))
       try {
@@ -675,14 +656,7 @@ describe('agent runtime commands', () => {
       // A block this device has never seen is not running here, and no value
       // is stored under a core it has never registered — so the gates are not
       // read at all and a malformed prefs row cannot block a fresh install.
-      const prefsBlock = await getPluginPrefsBlock(
-        env.repo, WS, env.repo.user, extensionsPrefsType)
-      await env.repo.tx(async tx => {
-        const current = await tx.get(prefsBlock.id)
-        await tx.update(prefsBlock.id, {
-          properties: {...current!.properties, [extensionsOverridesProp.name]: 'not-a-map'},
-        })
-      }, {scope: ChangeScope.BlockDefault, description: 'corrupt stored overrides'})
+      await corruptOverrides()
 
       const restore = compileTo(valuePresetCoresFacet.of(stringRating))
       try {
@@ -788,22 +762,7 @@ describe('agent runtime commands', () => {
       // consequence alone sends the reader looking for a preset change that is
       // not there — and its `--allow-preset-change` way out pins a module that
       // does not run.
-      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
-      let id: string
-      try {
-        const installed = await install('install-throwing-base')
-        await executeCommand({
-          commandId: 'enable-throwing', type: 'enable-extension', id: installed.id,
-        }, env.context)
-        id = installed.id
-      } finally {
-        restoreBase()
-      }
-      // The running extension's live contribution, sourced at its block: the
-      // id the crashed candidate is read as dropping.
-      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
-      await getOrCreatePropertiesPage(env.repo, WS)
-      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
+      await liveRatingExtension('install-throwing')
 
       const restore = __setCompileImplForTest(async () => {
         throw new Error('boom in module top level')

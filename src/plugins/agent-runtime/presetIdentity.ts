@@ -97,7 +97,7 @@
 
 import type { AnyValuePresetCore } from '@/data/api'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { OBJECT_BAG } from '@/data/internals/propertyKeyScan'
+import { keyOf, OBJECT_BAG } from '@/data/internals/propertyKeyScan'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import {
   presetConfigProp,
@@ -115,7 +115,8 @@ export interface AffectedDefinition {
    *  the registry knows the row, the stored one otherwise (the fallback is for
    *  rows whose metadata does not parse, which the registry omits entirely). */
   name: string
-  /** Live blocks in this workspace carrying a cell under `name`. */
+  /** Cells under `name` on live blocks in this workspace — one per (block,
+   *  key), so a hand-crafted bag with a duplicated key counts twice. */
   cells: number
 }
 
@@ -149,11 +150,11 @@ export interface PresetIdentityConflict {
  *  metadata-only — no stored value changes interpretation. Comparing the
  *  message would refuse an update that only reworded a validation error, so
  *  `detail` exists for the refusal to print and is never compared. */
-export type PresetCodecOutcome =
+type PresetCodecOutcome =
   | {kind: 'codec'; type: string}
   | {kind: 'unavailable'; detail: string}
 
-export const presetCodecOutcome = (
+const presetCodecOutcome = (
   core: AnyValuePresetCore,
   storedConfig: unknown,
 ): PresetCodecOutcome => {
@@ -241,7 +242,7 @@ const configsToProbe = (
 }
 
 /** A seed's config on each side of the update, paired by `seedKey`. */
-export interface SeedConfigPair {
+interface SeedConfigPair {
   readonly seedKey: string
   readonly before: unknown
   readonly after: unknown
@@ -250,7 +251,7 @@ export interface SeedConfigPair {
 /** Every way the candidate core is not interchangeable with the registered
  *  one, as refusal lines. Empty means the two publish the same encoding for
  *  every config in use — see the module docblock for what that cannot prove. */
-export const presetIdentityDifferences = (
+const presetIdentityDifferences = (
   current: AnyValuePresetCore,
   candidate: AnyValuePresetCore,
   storedConfigs: readonly {config: unknown}[],
@@ -283,7 +284,7 @@ export const presetIdentityDifferences = (
 }
 
 /** One live `property-schema` row, read the way the projector reads it. */
-export interface DefinitionRow {
+interface DefinitionRow {
   fieldId: string
   presetId: string
   /** The row's decoded `property-schema:config` cell, or `undefined` when it
@@ -344,13 +345,12 @@ const readDefinitionRows = async (
   })
 }
 
-/** Live blocks carrying a cell under each of `names`.
+/** Cells under each of `names`, by name.
  *
  *  The names go in as ONE bound JSON array rather than a generated `IN` list,
  *  so the statement binds two parameters whatever the name count. Defence in
- *  depth, and unpinned: a generated list only raises `too many SQL variables`
- *  past this build's limit, which a measured 1,100 definitions on one preset
- *  does not come near. It is the shape that cannot have the problem, for the
+ *  depth, and unpinned — no reachable definition count comes near this build's
+ *  variable limit — but it is the shape that cannot have the problem, at the
  *  same cost. */
 const countCells = async (
   repo: Repo,
@@ -366,7 +366,7 @@ const countCells = async (
       GROUP BY j.key`,
     [workspaceId, JSON.stringify(names)],
   )
-  return new Map(rows.map(row => [String(row.property ?? ''), row.cells]))
+  return new Map(rows.map(row => [keyOf(row.property), row.cells]))
 }
 
 /** What this install would make of one AFFECTED preset id. */
@@ -463,18 +463,27 @@ export const findPresetIdentityConflicts = async (
   const definitionRows = await readDefinitionRows(repo, workspaceId)
   const syncGap = (await repo.workspaceViewGap(workspaceId))?.reason ?? null
 
-  const conflicts: PresetIdentityConflict[] = []
-  for (const {presetId, current, next, seeds, seedNames} of contested) {
+  // Decided first, and without awaiting: the cell scan below is one full pass
+  // over the workspace's live blocks, so it runs ONCE for every name across
+  // every conflict rather than once per conflict. It also leaves no suspension
+  // point between the conflicts, so their counts share one instant — which is
+  // what this scan claims to be.
+  const affected = contested.flatMap(({presetId, current, next, seeds, seedNames}) => {
     const rows = definitionRows.filter(row => row.presetId === presetId)
     const differences = next === undefined
       ? [`${describeOutcome(presetCodecOutcome(current, undefined))} -> no core registers this id `
           + '(every definition using it publishes no schema, so its cells read as unset)']
       : presetIdentityDifferences(current, next, rows, seeds)
-    if (differences.length === 0) continue
-
+    if (differences.length === 0) return []
     const names = rows.map(row =>
       registry?.definitionsByFieldId.get(row.fieldId)?.name ?? row.storedName)
-    const cellsByName = await countCells(repo, workspaceId, [...new Set(names)])
+    return [{presetId, rows, names, differences, seedNames}]
+  })
+
+  const cellsByName = await countCells(
+    repo, workspaceId, [...new Set(affected.flatMap(entry => entry.names))])
+
+  const conflicts = affected.map(({presetId, rows, names, differences, seedNames}) => {
     const definitions = rows
       .map((row, index) => ({
         fieldId: row.fieldId,
@@ -482,22 +491,18 @@ export const findPresetIdentityConflicts = async (
         cells: cellsByName.get(names[index]!) ?? 0,
       }))
       .sort((left, right) => right.cells - left.cells || left.name.localeCompare(right.name))
-
-    // Cells are counted per NAME, so two definitions competing for one name
-    // must not have it counted twice.
-    const cells = [...new Set(definitions.map(d => d.name))]
-      .reduce((total, name) => total + (cellsByName.get(name) ?? 0), 0)
-
-
-    conflicts.push({
+    return {
       presetId,
       differences,
       definitions,
-      cells,
+      // Cells are counted per NAME, so two definitions competing for one name
+      // must not have it counted twice.
+      cells: [...new Set(definitions.map(d => d.name))]
+        .reduce((total, name) => total + (cellsByName.get(name) ?? 0), 0),
       seedNames: [...seedNames].sort(),
       replacesKernelCore: Object.hasOwn(kernelValuePresetCoresById, presetId),
-    })
-  }
+    }
+  })
   return {conflicts, syncGap}
 }
 

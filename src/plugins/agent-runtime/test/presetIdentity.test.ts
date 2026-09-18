@@ -122,6 +122,22 @@ const readDefinitionCount = async (): Promise<number> => {
   return row?.n ?? 0
 }
 
+/** A config codec and a core whose BUILT codec depends on that config — the
+ *  only shape in which a config probe can tell two cores apart, or one core
+ *  apart from itself on a different config. */
+const modeCodec: Codec<{mode: string}> = {
+  type: 'demo:mode',
+  encode: value => ({mode: value.mode}),
+  decode: json => ({mode: String((json as {mode?: unknown}).mode ?? 'wide')}),
+}
+const modalCore = (whenNarrow: Codec<unknown>) => definePresetCore<unknown, {mode: string}>({
+  id: PRESET,
+  build: config => (config.mode === 'narrow' ? whenNarrow : codecs.string),
+  defaultValue: '',
+  defaultConfig: {mode: 'wide'},
+  configCodec: modeCodec,
+})
+
 describe('findPresetIdentityConflicts', () => {
   it('reports nothing for a preset id nothing is registered under', async () => {
     expect((await findPresetIdentityConflicts(repo, WS, registryAfter(numberRating))).conflicts).toEqual([])
@@ -272,17 +288,18 @@ describe('findPresetIdentityConflicts', () => {
         return json
       },
     }
-    const core = (narrowBuilds: Codec<unknown>) => definePresetCore<unknown, string>({
+    const scalarCore = (narrowBuilds: Codec<unknown>) => definePresetCore<unknown, string>({
       id: PRESET,
       build: mode => mode === 'narrow' ? narrowBuilds : codecs.string,
       defaultValue: '',
       defaultConfig: 'wide',
       configCodec: modeCodec,
     })
-    register(core(codecs.string))
+    register(scalarCore(codecs.string))
     await createDefinitionBlock('demo-rating', PRESET, 'narrow')
 
-    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, registryAfter(core(codecs.number)))
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(
+      repo, WS, registryAfter(scalarCore(codecs.number)))
     expect(conflict?.differences).toEqual([
       'codec type "string" -> codec type "number" (at stored config "narrow")',
     ])
@@ -298,21 +315,21 @@ describe('findPresetIdentityConflicts', () => {
       encode: value => value,
       decode: json => (json === null ? null : String(json)),
     }
-    const core = (whenNull: Codec<unknown>) => definePresetCore<unknown, string | null>({
+    const nullableCore = (whenNull: Codec<unknown>) => definePresetCore<unknown, string | null>({
       id: PRESET,
       build: mode => (mode === null ? whenNull : codecs.string),
       defaultValue: '',
       defaultConfig: 'wide',
       configCodec: modeCodec,
     })
-    register(core(codecs.string))
+    register(nullableCore(codecs.string))
     // Absent first, so a collapsed key would be claimed by it and the `null`
     // row — the one that actually separates the cores — never probed.
     await createDefinitionBlock('demo-absent', PRESET, undefined, true)
     await createDefinitionBlock('demo-null', PRESET, null)
 
     const {conflicts: [conflict]} = await findPresetIdentityConflicts(
-      repo, WS, registryAfter(core(codecs.number)))
+      repo, WS, registryAfter(nullableCore(codecs.number)))
     expect(conflict?.differences).toEqual([
       'codec type "string" -> codec type "number" (at stored config null)',
     ])
@@ -364,19 +381,7 @@ describe('findPresetIdentityConflicts', () => {
     // default and changes it at the seed's config must not pass.
     // `seedProperty` requires an encoded config to be a JSON object, so this
     // one is shaped the way a real seed's would be.
-    const modeCodec: Codec<{mode: string}> = {
-      type: 'demo:mode',
-      encode: value => ({mode: value.mode}),
-      decode: json => ({mode: String((json as {mode?: unknown}).mode ?? 'wide')}),
-    }
-    const core = (whenNarrow: Codec<unknown>) => definePresetCore<unknown, {mode: string}>({
-      id: PRESET,
-      build: config => (config.mode === 'narrow' ? whenNarrow : codecs.string),
-      defaultValue: '',
-      defaultConfig: {mode: 'wide'},
-      configCodec: modeCodec,
-    })
-    const registered = core(codecs.string)
+    const registered = modalCore(codecs.string)
     register(registered)
     const seed = seedProperty<unknown, {mode: string}>({
       seedKey: 'system:demo/property/narrow-rating',
@@ -393,7 +398,7 @@ describe('findPresetIdentityConflicts', () => {
     expect(await readDefinitionCount()).toBe(0)
 
     const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, new Map([
-      [PRESET, {core: core(codecs.number), seedConfigs:
+      [PRESET, {core: modalCore(codecs.number), seedConfigs:
         new Map([['system:demo/property/narrow-rating', {mode: 'narrow'}]])}],
     ]))
     expect(conflict?.differences).toEqual([
@@ -407,19 +412,7 @@ describe('findPresetIdentityConflicts', () => {
     // declare TODAY; an update that moves a seed onto a new config publishes it
     // from the declaration, so that config is in use the moment it loads and
     // nothing compared the core against it.
-    const modeCodec: Codec<{mode: string}> = {
-      type: 'demo:mode',
-      encode: value => ({mode: value.mode}),
-      decode: json => ({mode: String((json as {mode?: unknown}).mode ?? 'wide')}),
-    }
-    const core = (whenNarrow: Codec<unknown>) => definePresetCore<unknown, {mode: string}>({
-      id: PRESET,
-      build: config => (config.mode === 'narrow' ? whenNarrow : codecs.string),
-      defaultValue: '',
-      defaultConfig: {mode: 'wide'},
-      configCodec: modeCodec,
-    })
-    const registered = core(codecs.string)
+    const registered = modalCore(codecs.string)
     register(registered)
     // The seed live TODAY sits on `wide`, where both cores agree.
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-wide-seed', [
@@ -435,7 +428,7 @@ describe('findPresetIdentityConflicts', () => {
     ])
 
     const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, new Map([
-      [PRESET, {core: core(codecs.number), seedConfigs:
+      [PRESET, {core: modalCore(codecs.number), seedConfigs:
         new Map([['system:demo/property/wide-rating', {mode: 'narrow'}]])}],
     ]))
     expect(conflict?.differences).toEqual([
@@ -525,26 +518,14 @@ describe('findPresetIdentityConflicts', () => {
   it('ignores a TOMBSTONED definition, in both the probe set and the counts', async () => {
     // A deleted row is not a consumer: its stored config must not enter the
     // probe set, where a dead row could invent a refusal all by itself.
-    const modeCodec: Codec<{mode: string}> = {
-      type: 'demo:mode',
-      encode: value => ({mode: value.mode}),
-      decode: json => ({mode: String((json as {mode?: unknown}).mode ?? 'wide')}),
-    }
-    const core = (whenNarrow: Codec<unknown>) => definePresetCore<unknown, {mode: string}>({
-      id: PRESET,
-      build: config => (config.mode === 'narrow' ? whenNarrow : codecs.string),
-      defaultValue: '',
-      defaultConfig: {mode: 'wide'},
-      configCodec: modeCodec,
-    })
-    register(core(codecs.string))
+    register(modalCore(codecs.string))
     // The ONLY row on the contested config, and it is deleted. Nothing else
     // distinguishes the two cores, so a conflict here could only come from it.
     const deadId = await createDefinitionBlock('demo-dead', PRESET, {mode: 'narrow'})
     await repo.mutate.delete({id: deadId})
 
     const {conflicts} = await findPresetIdentityConflicts(
-      repo, WS, registryAfter(core(codecs.number)))
+      repo, WS, registryAfter(modalCore(codecs.number)))
     expect(conflicts).toEqual([])
   })
 

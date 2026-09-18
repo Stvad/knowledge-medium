@@ -376,12 +376,18 @@ const presetRegistryAfter = (
   // outrank it. Splicing at the first of this block's entries is where a
   // reload puts them back.
   const merged: FacetContribution<unknown>[] = []
+  // An id this block claims TODAY that the fold no longer holds at all stops
+  // resolving. An absent key cannot say that — it reads the same as an id
+  // nobody ever claimed — so the ids are collected here, on the one pass that
+  // already visits exactly those contributions, and recorded explicitly below.
+  const claimedToday = new Set<string>()
   let spliced = false
   for (const contribution of live) {
     if (!isExtensionContribution(contribution.source, blockId)) {
       merged.push(contribution)
       continue
     }
+    claimedToday.add((contribution.value as AnyValuePresetCore).id)
     if (!spliced) {
       merged.push(...candidate)
       spliced = true
@@ -415,14 +421,7 @@ const presetRegistryAfter = (
   // or added below; the ids a union would add are exactly the ones the fold
   // cannot see, where "no core registers this id" would be a false refusal
   // against a core that is still there (#1054).
-  const presetIds = new Set(folded.keys())
-  // An id this block claims today that the fold no longer holds at all stops
-  // resolving. An absent key cannot say that — it reads the same as an id
-  // nobody ever claimed — so it is recorded explicitly.
-  for (const contribution of live) {
-    if (!isExtensionContribution(contribution.source, blockId)) continue
-    presetIds.add((contribution.value as AnyValuePresetCore).id)
-  }
+  const presetIds = new Set([...folded.keys(), ...claimedToday])
   return new Map([...presetIds].map(presetId => [presetId, {
     core: folded.get(presetId),
     seedConfigs: candidateSeedConfigs.get(presetId) ?? new Map<string, unknown>(),
