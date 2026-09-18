@@ -1,0 +1,1 @@
+import{Ot as e}from"../../../chunks/app-DwJNkpkH.js";export{e as perfMonitorPlugin};

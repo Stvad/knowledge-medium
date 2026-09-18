@@ -1,0 +1,1 @@
+import{KM as e}from"../../chunks/app-DwJNkpkH.js";export{e as withMoveTransition};

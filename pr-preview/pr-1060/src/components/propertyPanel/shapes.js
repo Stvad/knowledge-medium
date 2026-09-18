@@ -1,0 +1,1 @@
+import{nP as e}from"../../../chunks/app-DwJNkpkH.js";export{e as propertyShapeLabel};
