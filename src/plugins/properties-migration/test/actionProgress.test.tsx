@@ -11,7 +11,7 @@ import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCell
 
 const openDialog = vi.fn(async () => true)
 const progressHandle = {
-  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(),
+  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(), claimed: vi.fn(),
   addNote: vi.fn(),
 }
 const showInfo = vi.fn()
@@ -174,7 +174,7 @@ describe('the migration progress path', () => {
 
   it('does not tell a device to re-run a migration a PEER holds', async () => {
     // Running again here is declined every time while a peer holds it, and the
-    // release command would delete a claim that device is still writing under.
+    // release would delete a claim that device is still writing under.
     claimHeldAfterRun = 'a-peer'
 
     await runReporting(progress())

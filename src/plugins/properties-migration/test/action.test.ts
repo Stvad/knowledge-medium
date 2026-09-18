@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const openDialog = vi.fn()
 const progressHandle = {
-  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(),
+  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(), claimed: vi.fn(),
   addNote: vi.fn(),
 }
 
@@ -66,6 +66,7 @@ const plan = (candidates = 0) => ({
 import type { OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
 import type { SynthesisResult } from '@/data/internals/propertyDefinitionSynthesis'
 import type { HistoryDrop } from '@/data/internals/undoManager'
+import { getClientId } from '@/utils/clientId'
 import { claimStub, type ClaimStubLog } from './claimStub.ts'
 import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
@@ -91,20 +92,30 @@ const STRANDED: ViewGap = {
 
 const makeRepo = (
   result: OperatorBackfillResult = RAN,
-  {flipped = false, owner = USER, refuseClaim, log}: {
+  {flipped = false, owner = USER, refuseClaim, log, claimedBy}: {
     flipped?: boolean
     owner?: string
     refuseClaim?: () => OperatorBackfillResult | null
     log?: ClaimStubLog
+    /** A live claim already on the workspace when the gesture starts. */
+    claimedBy?: string
   } = {},
 ) => {
   const runPass = vi.fn(async () => result)
   const getAll = vi.fn(async () => [{n: 7}])
   const workspaceViewGap = vi.fn(async (): Promise<ViewGap | null> => null)
   // Two readers of the `workspaces` row now — the flip state and the owner.
-  const getOptional = vi.fn(async (sql: string) => sql.includes('owner_user_id')
-    ? {owner_user_id: owner}
-    : {properties_migration: flipped ? 'children' : 'cell'})
+  const getOptional = vi.fn(async (sql: string) => {
+    if (sql.includes('owner_user_id')) return {owner_user_id: owner}
+    if (sql.includes('properties_json')) {
+      return claimedBy === undefined ? null : {
+        properties_json: JSON.stringify({
+          'migration:claimant': claimedBy, 'migration:claimed-at': 1,
+        }),
+      }
+    }
+    return {properties_migration: flipped ? 'children' : 'cell'}
+  })
   const repo = {
     activeWorkspaceId: 'ws-1',
     user: {id: USER},
@@ -133,6 +144,35 @@ const dialogThatSwitchesWorkspace = (repo: Repo) => async () => {
  *  blocks cleanly. Shared by every describe that renders an outcome. */
 const counts = (blocks: number) =>
   ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks, unmigrated: 0})
+
+describe('a workspace another client is already migrating', () => {
+  it('refuses before the consent screen, rather than after it', async () => {
+    // The confirmation asks consent for a one-way fleet-wide flip and says
+    // nothing about a run already under way — and the palette stays reachable
+    // through the gate's own modal, so this is how a user meets it. `tryClaim`
+    // would decline anyway; the point is the screen they are not asked to read.
+    const {repo, runPass} = makeRepo(RAN, {claimedBy: 'a-peer'})
+
+    await invoke(repo)
+
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringContaining('Another client is already migrating'))
+  })
+
+  it('lets OUR OWN claimant through, because that is what a resume is', async () => {
+    // An inherited claim is the state "run this again to resume it" starts
+    // from — the advice the gesture's own report gives after an interrupted
+    // run. Refusing it here would make that advice impossible to follow.
+    const {repo, runPass} = makeRepo(RAN, {claimedBy: getClientId()})
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalled()
+    expect(runPass).toHaveBeenCalled()
+  })
+})
 
 const invoke = (repo: Repo) =>
   migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)

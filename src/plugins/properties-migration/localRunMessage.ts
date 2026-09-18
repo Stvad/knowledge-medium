@@ -20,18 +20,25 @@ import { createWorkspaceSnapshotStore } from '@/utils/workspaceSnapshotStore.js'
 /** Identity only — never inspected, so nothing can forge or guess one. */
 export type RunOwner = symbol
 
-interface LocalRunSnapshot {
+export interface LocalRunSnapshot {
   readonly workspaceId: string
   readonly message: string
   readonly owner: RunOwner
+  /** Has this run taken the claim? The dialog cannot read that off the claim
+   *  row, because "no claim" is true at BOTH ends of a run — before `tryClaim`
+   *  writes it, and after it is released or completed. Without this, the tab
+   *  that is writing reads as one that has not started, and is told nothing has
+   *  been written. */
+  readonly claimed: boolean
 }
 
 const store = createWorkspaceSnapshotStore<LocalRunSnapshot>('properties-migration-local-run')
 
 export const subscribeLocalMigrationRun = store.subscribe
 
-export const localMigrationMessageFor = (workspaceId: string | null): string | null =>
-  store.getFor(workspaceId)?.message ?? null
+export const localMigrationRunFor = (
+  workspaceId: string | null,
+): LocalRunSnapshot | null => store.getFor(workspaceId)
 
 /** Take the slot for `workspaceId`, if it is free. The returned owner is what
  *  every later write has to present.
@@ -45,15 +52,27 @@ export const beginLocalMigrationRun = (
   workspaceId: string, message: string,
 ): RunOwner => {
   const owner: RunOwner = Symbol('properties-migration-run')
-  if (store.getFor(workspaceId) === null) store.publish({workspaceId, message, owner})
+  if (store.getFor(workspaceId) === null) {
+    store.publish({workspaceId, message, owner, claimed: false})
+  }
   return owner
 }
 
 export const updateLocalMigrationRun = (
   owner: RunOwner, workspaceId: string, message: string,
 ): void => {
-  if (store.getFor(workspaceId)?.owner !== owner) return
-  store.publish({workspaceId, message, owner})
+  const live = store.getFor(workspaceId)
+  if (live?.owner !== owner) return
+  store.publish({...live, message})
+}
+
+/** This run now holds the claim, and keeps saying so until it ends. */
+export const markLocalMigrationRunClaimed = (
+  owner: RunOwner, workspaceId: string,
+): void => {
+  const live = store.getFor(workspaceId)
+  if (live?.owner !== owner) return
+  store.publish({...live, claimed: true})
 }
 
 export const endLocalMigrationRun = (owner: RunOwner, workspaceId: string): void => {

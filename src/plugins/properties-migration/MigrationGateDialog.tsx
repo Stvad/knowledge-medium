@@ -43,7 +43,13 @@ import { useModalShadowing } from '@/shortcuts/useActionContext.js'
  *  releasing and would be shown exactly when the claimant is most likely dead. */
 const heldFor = (claimedAt: number, now: number): string => {
   const minutes = Math.floor((now - claimedAt) / 60_000)
-  if (minutes < 0) return 'at a time this device reads as the future — its clock is ahead'
+  // A MINUTE of tolerance, not zero: two devices' `Date.now()` are independent,
+  // so a fresh claim from one running a few seconds ahead is ordinary, and
+  // calling that a clock fault would fire on about half of all live claims.
+  if (now - claimedAt < -60_000) {
+    return 'at a time this device reads as the future — its clock is ahead'
+  }
+  if (minutes < 0) return 'less than a minute ago'
   if (minutes < 60) return `at least ${minutes} minute(s) ago`
   return `at least ${Math.floor(minutes / 60)} hour(s) ago`
 }
@@ -63,6 +69,10 @@ export type ReleaseOutcome = 'released' | 'not-held' | 'changed'
  *  is what stops the two from being read independently and disagreeing. */
 export type ClaimHolder =
   | {kind: 'starting'; message: string}
+  /** This tab WAS running the pass and no longer holds the claim — released
+   *  from somewhere, or completed. Distinct from `starting` because the two
+   *  look identical in the claim row and owe the user opposite things. */
+  | {kind: 'lost-claim'; message: string}
   | {kind: 'this-tab'; message: string; claim: GraphBackfillClaim}
   // The two arms that may release, and the two that carry a claim to release.
   // Same list by construction rather than by agreement between two props.
@@ -73,6 +83,22 @@ export type ClaimHolder =
 type ReleasableHolder = Extract<ClaimHolder, {kind: 'this-browser' | 'another-device'}>
 const releasable = (holder: ClaimHolder): ReleasableHolder | null =>
   holder.kind === 'this-browser' || holder.kind === 'another-device' ? holder : null
+
+/** True of exactly the arms that CARRY a claim, which is the same fact: the
+ *  history pause follows the claim, so this sentence is as true as
+ *  `'claim' in holder`. Rendered off that narrowing rather than pasted into each
+ *  arm, so a new arm gets it if and only if it carries a claim — the compiler
+ *  decides, not whoever writes the next arm's copy. */
+const UNDER_A_CLAIM = <>Every block&apos;s properties are being rewritten against
+  a plan fixed when the run started, so an edit made now may not be converted, and
+  undo is paused here until it finishes.{' '}</>
+
+/** What a device that only WATCHED the run is owed afterwards: its own
+ *  pre-migration entries are still replayable over rows the run rewrote.
+ *  Shared by the two arms whose exposure is identical — a sibling tab of this
+ *  browser keeps its stacks exactly as a peer does. */
+const STALE_UNDO = <>Reload this tab afterwards: undo entries from before the
+  migration are not cleared here, and replaying one can revert part of it.</>
 
 /** Every arm's copy in full, rather than one paragraph plus fragments that
  *  switch on the arm.
@@ -88,28 +114,26 @@ const COPY: Record<ClaimHolder['kind'], {status?: string; body: ReactNode}> = {
     body: <>Checking whether this workspace can be converted. Nothing has been
       written yet.</>,
   },
+  'lost-claim': {
+    body: <>This tab no longer holds the migration — it was released, or the run
+      finished. Anything still in flight here is no longer protected: undo is live
+      again on every device, and another device may start its own run.{' '}
+      <strong>Reload this tab.</strong></>,
+  },
   'this-tab': {
-    body: <>Every block&apos;s properties are being rewritten against a plan fixed
-      when the run started, so an edit made now may not be converted, and undo is
-      paused here until it finishes. Undo history for this workspace is being
-      cleared as the run commits. <strong>Leave this tab open.</strong> Closing it
-      stops the run without handing the workspace back.</>,
+    body: <>Undo history for this workspace will be cleared as soon as the run
+      writes anything. <strong>Leave this tab open.</strong> Closing it stops the
+      run without handing the workspace back.</>,
   },
   'this-browser': {
     status: 'This browser profile holds the migration.',
-    body: <>Every block&apos;s properties are being rewritten against a plan fixed
-      when the run started, so an edit made now may not be converted, and undo is
-      paused here until it finishes. If another tab of this browser is still
-      running it, let that tab finish. If a run here stopped without handing the
-      workspace back, release the claim below.</>,
+    body: <>If another tab of this browser is still running it, let that tab
+      finish; if a run here stopped without handing the workspace back, it needs
+      releasing. {STALE_UNDO}</>,
   },
   'another-device': {
     status: 'Another device is converting this workspace.',
-    body: <>Every block&apos;s properties are being rewritten against a plan fixed
-      when the run started, so an edit made now may not be converted, and undo is
-      paused here until it finishes. Reload this tab afterwards: undo entries from
-      before the migration are not cleared here, and replaying one can revert part
-      of it.</>,
+    body: <>{STALE_UNDO}</>,
   },
 }
 
@@ -131,10 +155,11 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
   // 3 hours" and clicking release is a human pause, and in it the run they were
   // told about can finish and a fresh one take the workspace; deleting THAT is
   // what the warning below says not to do.
-  const [confirming, setConfirming] =
-    useState<{claim: GraphBackfillClaim; askedAt: number} | null>(null)
+  const [pending, setPending] =
+    useState<{claim: GraphBackfillClaim; askedAt: number; of: string} | null>(null)
   const [releasing, setReleasing] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  const [dismissed, setDismissed] = useState(false)
 
   // The release is for a claim nobody will release. Neither the tab running the
   // pass nor one whose claim does not exist yet can be in that situation, and
@@ -142,13 +167,25 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
   // own writes continue.
   const canRelease = releasable(holder)
 
+  // The panel is about ONE claim and says how long that claim has been held, so
+  // a claim replaced underneath it would keep a stale age on screen — and a
+  // stale age is the argument FOR releasing. DERIVED rather than reset in an
+  // effect: the panel simply stops being current, with no frame showing the old
+  // one. Consent itself is already safe — the release re-checks inside its own
+  // transaction and answers `changed`; this is about not showing a reason that
+  // has stopped being true.
+  const current = canRelease === null
+    ? null
+    : `${canRelease.claim.claimantId}:${canRelease.claim.claimedAt}`
+  const confirming = pending !== null && pending.of === current ? pending : null
+
   // Unconditional, because this component only exists while the claim is held.
   // Radix already makes the app pointer-inert and traps focus; what it does NOT
   // do is stop the surface underneath claiming KEYS. Without this, bare Enter
   // still matches the editor's split binding and writes a block — through the
   // modal that exists to stop exactly that — and its `preventDefault` also eats
   // the Enter the button below was waiting for.
-  useModalShadowing(true)
+  useModalShadowing(!dismissed)
 
   const onRelease = (shown: GraphBackfillClaim) => {
     if (release === null) return
@@ -169,10 +206,11 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
         + `${err instanceof Error ? err.message : String(err)}`)
     }).finally(() => {
       setReleasing(false)
-      setConfirming(null)
+      setPending(null)
     })
   }
 
+  if (dismissed) return null
   return (
     // `open` is fixed and `onOpenChange` does nothing: Radix routes Escape,
     // outside-click and the corner button all through it and can close none of
@@ -193,7 +231,9 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
               {'message' in holder ? holder.message : COPY[holder.kind].status}
             </span>
           </div>
-          <DialogDescription>{COPY[holder.kind].body}</DialogDescription>
+          <DialogDescription>
+            {'claim' in holder && UNDER_A_CLAIM}{COPY[holder.kind].body}
+          </DialogDescription>
           {problem !== null && <p className="text-destructive" role="alert">{problem}</p>}
           {/* The way out for the tab that IS running, which is not offered the
               release below: a run whose promise never settles would otherwise
@@ -215,20 +255,35 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
               the same pass over the same blocks.
             </p>
           )}
-          {canRelease !== null && release === null && (
+          {release === null && (
             <p className="text-muted-foreground">
               This workspace is read-only here, so only someone who can write to it
               can release the claim.
             </p>
           )}
         </div>
+        {/* A device that may not write can neither release the claim nor be the
+            one holding it, so a modal it cannot dismiss is a workspace it cannot
+            use — and the gate mount is `essential`, so safe mode and the
+            settings toggle are no longer escapes either. Dismissing hides only
+            the DIALOG; the undo pause lives in the mount above and keeps
+            running, which is the half that protects rows. */}
+        {release === null && (
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => { setDismissed(true) }}>
+              Hide this
+            </Button>
+          </DialogFooter>
+        )}
         {canRelease !== null && release !== null && (
         <DialogFooter>
           {confirming === null
             ? (
               <Button
                 variant="ghost" size="sm"
-                onClick={() => { setConfirming({claim: canRelease.claim, askedAt: Date.now()}) }}
+                onClick={() => {
+                  setPending({claim: canRelease.claim, askedAt: Date.now(), of: current!})
+                }}
               >
                 Nothing is running?
               </Button>
@@ -237,7 +292,7 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
               <>
                 <Button
                   variant="ghost" size="sm" disabled={releasing}
-                  onClick={() => { setConfirming(null) }}
+                  onClick={() => { setPending(null) }}
                 >
                   Keep waiting
                 </Button>
@@ -255,3 +310,8 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
     </Dialog>
   )
 }
+
+/** Test-only: the age string is the one thing here a user acts on destructively,
+ *  and driving it through a claim row and a suspending render to assert on a
+ *  sentence would pin the harness rather than the arithmetic. */
+export const __heldForTest = heldFor

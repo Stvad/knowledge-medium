@@ -217,8 +217,8 @@ export const isGraphBackfillClaimActive = async (
  *  operator who reads them as different situations goes looking for a second
  *  thing to do. */
 export const STRANDED_CLAIM_RECOVERY =
-  'the dialog this workspace is blocked behind offers to release it — and where '
-  + `that dialog is turned off, the claim block is on the "${MIGRATIONS_PAGE_ALIAS}" page`
+  'the dialog this workspace is blocked behind offers to release it, and the '
+  + `claim block itself is on the "${MIGRATIONS_PAGE_ALIAS}" page`
 
 // ---------------------------------------------------------------------------
 // The seam implementation

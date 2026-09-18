@@ -69,6 +69,7 @@ import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill
 import { MigrationGate } from '../MigrationGate.tsx'
 import {
   beginLocalMigrationRun,
+  markLocalMigrationRunClaimed,
   __resetLocalMigrationRunForTests,
 } from '../localRunMessage.ts'
 
@@ -297,6 +298,38 @@ describe('while the migration holds this workspace', () => {
     expect(isShadowed()).toBe(true)
   })
 
+  it('tells a tab that LOST the claim, rather than that nothing has been written', async () => {
+    // "No claim" is true at both ends of a run. The release this dialog itself
+    // offers can take the claim from under a tab that is still writing, and
+    // that tab must not then read "Nothing has been written yet" — it is the
+    // one tab whose closing costs something, and the copy it would lose is
+    // "Leave this tab open."
+    await seedClaimInBlocks({claimantId: getClientId()})
+    renderGate()
+    await screen.findByRole('dialog')
+    await act(async () => {
+      const owner = beginLocalMigrationRun(WS, 'Converting block 120,000 of 650,000…')
+      markLocalMigrationRunClaimed(owner, WS)
+    })
+    expect(dialog()).toHaveTextContent(/Leave this tab open/)
+
+    await releaseClaimBySync()
+
+    await waitFor(() => {
+      expect(dialog()).toHaveTextContent(/This tab no longer holds the migration/)
+    })
+    expect(dialog()).toHaveTextContent(/Converting block 120,000/)
+    expect(dialog()).not.toHaveTextContent(/Nothing has been written yet/)
+  })
+
+  it('offers no close button — dismissing is not how this one ends', async () => {
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    expect(screen.queryByRole('button', {name: /^close$/i})).toBeNull()
+  })
+
   it('cannot be dismissed', async () => {
     await seedClaimInBlocks()
     renderGate()
@@ -493,6 +526,7 @@ describe('after a run that finished', () => {
     // dialog — its only instruction — unmounts at exactly the moment reloading
     // starts to matter. In a shared workspace this user never saw the
     // operator's confirmation either.
+    await recordAnUndoableEdit()
     await seedClaimInBlocks()
     renderGate()
     await screen.findByRole('dialog')
@@ -503,7 +537,23 @@ describe('after a run that finished', () => {
     expect(shownToasts.join(' ')).toMatch(/Reload this tab before using undo/)
   })
 
+  it('says nothing to a device with no entries left to replay', async () => {
+    // The tab that ran the pass cleared its own stack as it committed, and its
+    // outcome toast already says so — a second infinite toast telling it to
+    // reload before using undo would contradict the first.
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+    expect(repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo).toBe(0)
+
+    await deliverClaimBySync({completed: true})
+
+    await waitFor(() => { expect(dialog()).toBeNull() })
+    expect(shownToasts).toEqual([])
+  })
+
   it('says nothing when the claim was merely handed back', async () => {
+    await recordAnUndoableEdit()
     // A release, or a run that refused before writing, owes the user nothing —
     // and a reload notice after a migration that never happened is noise that
     // teaches them to ignore the next one.
@@ -563,6 +613,32 @@ describe('the way out of a claim nobody will release', () => {
     expect(dialog()).toHaveTextContent(/read-only here, so only someone who can write/i)
   })
 
+  it('lets a device that can do NOTHING about the claim out of the modal', async () => {
+    // The gate mount is `essential`, so safe mode and the settings toggle are
+    // no longer escapes. A viewer whose owner stranded a claim would otherwise
+    // be behind a non-dismissible modal with no button, on every reload,
+    // forever. Hiding it drops only the DIALOG — the undo pause lives above and
+    // keeps running, which is the half that protects rows.
+    repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, isReadOnly: true}).repo
+    repo.setActiveWorkspaceId(WS)
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    await userEvent.click(screen.getByRole('button', {name: /hide this/i}))
+
+    await waitFor(() => { expect(dialog()).toBeNull() })
+    expect(repo.undoManagerFor(WS).historyDropInProgress).toBe(true)
+  })
+
+  it('does not offer that escape where the claim CAN be acted on', async () => {
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    expect(screen.queryByRole('button', {name: /hide this/i})).toBeNull()
+  })
+
   it('is not offered where this device may not write, which names who can', async () => {
     // The release is a BlockDefault transaction like any other, so a viewer in
     // a shared workspace could only ever produce the read-only error from it —
@@ -598,18 +674,24 @@ describe('the way out of a claim nobody will release', () => {
     expect(await claimIsLive()).toBe(false)
   })
 
-  it('spends the consent on the claim it SHOWED, not on whatever is there at the click', async () => {
-    // The gap between reading "held for 3 hours" and clicking is a human pause.
-    // In it the run they were told about can finish and a fresh one take the
-    // workspace — and deleting that is what the warning says not to do.
+  it('withdraws the consent panel when the claim under it is replaced', async () => {
+    // The gap between reading "held at least 3 hour(s) ago" and clicking is a
+    // human pause, and in it the run they were told about can finish and a fresh
+    // one take the workspace. The age on screen would then be an argument for
+    // releasing a claim that is seconds old. The panel stops being current
+    // instead — and the release ITSELF still refuses a claim it was not given
+    // consent for, pinned directly in `propertiesMigrationClaim.test.ts`.
     await seedClaimInBlocks({claimantId: 'a-device-that-is-gone', claimedAt: 1})
     renderGate()
     await openTheRelease()
+    expect(screen.getByRole('button', {name: /release the claim/i})).toBeInTheDocument()
 
     await deliverClaimBySync({claimantId: 'someone-else', claimedAt: 900})
-    await userEvent.click(screen.getByRole('button', {name: /release the claim/i}))
 
-    expect(await screen.findByText(/no longer the one you were shown/i)).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByRole('button', {name: /release the claim/i})).toBeNull()
+    })
+    expect(screen.getByRole('button', {name: /nothing is running/i})).toBeInTheDocument()
     expect(await claimIsLive()).toBe(true)
   })
 })

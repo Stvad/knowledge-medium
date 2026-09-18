@@ -14,6 +14,7 @@ import { showError, showInfo } from '@/utils/toast.js'
 import {
   beginLocalMigrationRun,
   endLocalMigrationRun,
+  markLocalMigrationRunClaimed,
   updateLocalMigrationRun,
 } from './localRunMessage.ts'
 
@@ -34,6 +35,10 @@ export interface MigrationProgress {
   update: (message: string) => void
   done: (finalMessage?: string) => void
   fail: (message: string) => void
+  /** This run has taken the claim. Said explicitly because the claim row cannot
+   *  answer it: "no claim" is true both before a run takes one and after it
+   *  loses one, and those two states owe the user opposite things. */
+  claimed: () => void
   /** Terminal state for a gesture that ended without calling `done` or `fail`.
    *  Call from the gesture's `finally`; a no-op once an outcome was reported. */
   settleUnreported: () => void
@@ -61,6 +66,7 @@ export const reportMigrationProgress = (
     },
     done: finalMessage => { settle(finalMessage ?? 'Migration finished.', false) },
     fail: message => { settle(message, true) },
+    claimed: () => { markLocalMigrationRunClaimed(owner, workspaceId) },
     settleUnreported: () => { settle(UNREPORTED, true) },
     addNote: note => {
       if (outcome === null) return

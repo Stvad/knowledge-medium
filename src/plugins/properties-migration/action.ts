@@ -267,6 +267,10 @@ const migrateUnderClaim = async (
   {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}: ClaimedMigration,
   pass: OperatorBackfillPass,
 ): Promise<void> => {
+  // The claim is held from here to the end of this function — said out loud
+  // because the claim ROW cannot say it: it is absent both before this and
+  // after a release, and the dialog owes those two states opposite things.
+  banner.claimed()
   // BEFORE the flip, per the §9 runbook. A definition is an ordinary dormant
   // block at 'cell', so minting one early is free; minting one AFTER the flip
   // would leave a window in which the pass skips those keys and reports

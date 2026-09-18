@@ -13,12 +13,12 @@ vi.mock('@/utils/toast.js', () => ({
 }))
 
 const { reportMigrationProgress } = await import('../progressReport.ts')
-const { localMigrationMessageFor, __resetLocalMigrationRunForTests } =
+const { localMigrationRunFor, __resetLocalMigrationRunForTests } =
   await import('../localRunMessage.ts')
 
 const WS = 'ws-1'
 const start = (initial = '…') => reportMigrationProgress(WS, initial)
-const line = (): string | null => localMigrationMessageFor(WS)
+const line = (): string | null => localMigrationRunFor(WS)?.message ?? null
 
 beforeEach(() => { showInfo.mockClear(); showError.mockClear() })
 afterEach(() => { __resetLocalMigrationRunForTests() })
@@ -74,8 +74,8 @@ describe('a run on a workspace the user is not looking at', () => {
     // apart, and can only do that if the run says which one it is.
     reportMigrationProgress('ws-other', 'Switching that workspace over…')
 
-    expect(localMigrationMessageFor('ws-other')).toBe('Switching that workspace over…')
-    expect(localMigrationMessageFor(WS)).toBeNull()
+    expect(localMigrationRunFor('ws-other')?.message).toBe('Switching that workspace over…')
+    expect(localMigrationRunFor(WS)).toBeNull()
   })
 })
 

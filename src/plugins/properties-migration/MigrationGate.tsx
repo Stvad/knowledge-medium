@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useSyncExternalStore, type ReactNode } from 'react'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
+import { ChangeScope } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
 import { getClientId } from '@/utils/clientId'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
@@ -33,7 +34,11 @@ import {
 } from '@/data/internals/graphBackfillClaim'
 import { showInfo } from '@/utils/toast.js'
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
-import { localMigrationMessageFor, subscribeLocalMigrationRun } from './localRunMessage.ts'
+import {
+  localMigrationRunFor,
+  subscribeLocalMigrationRun,
+  type LocalRunSnapshot,
+} from './localRunMessage.ts'
 import {
   MigrationGateDialog,
   type ClaimHolder,
@@ -50,10 +55,8 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
   const claim = useHandle(claimBlock, {
     selector: row => claimHoldingGraph(row, workspaceId),
   })
-  const readLocal = useCallback(
-    () => localMigrationMessageFor(workspaceId), [workspaceId],
-  )
-  const localMessage = useSyncExternalStore(subscribeLocalMigrationRun, readLocal, readLocal)
+  const readLocal = useCallback(() => localMigrationRunFor(workspaceId), [workspaceId])
+  const localRun = useSyncExternalStore(subscribeLocalMigrationRun, readLocal, readLocal)
   const readOnly = useSyncExternalStore(
     useCallback((onChange: () => void) => repo.onReadOnlyChange(onChange), [repo]),
     () => repo.isReadOnly,
@@ -65,7 +68,8 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
 
   useEffect(() => {
     if (!held) return
-    const drop = repo.undoManagerFor(workspaceId).beginHistoryDrop()
+    const manager = repo.undoManagerFor(workspaceId)
+    const drop = manager.beginHistoryDrop()
     // ABANDON, never finish. The refusal is the whole job here and `abandon`
     // keeps all of it — `dropsInProgress` is decremented by either ending, so
     // replays are refused for exactly as long as the claim is held.
@@ -95,12 +99,22 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
       // the same object and its cache has the ending that just fired.
       // `claimHoldingGraph` filters a completed claim out by design, so
       // liveness alone cannot tell "the pass finished" from "the claim was
-      // handed back", and only the first owes the user a reload.
-      if (completedClaimFor(claimBlock.peek(), workspaceId) !== null) showReloadNotice()
+      // handed back", and only the first owes the user anything.
+      //
+      // AND only a device that still has entries to replay. The tab that ran
+      // the pass cleared its own as it committed, and telling it to reload
+      // before using an undo stack it no longer has put a second infinite toast
+      // on screen contradicting its own outcome ("Undo history was cleared").
+      // Asking the stack is truer than asking who the claimant was: a sibling
+      // tab of the same profile kept its entries and does need this.
+      if (completedClaimFor(claimBlock.peek(), workspaceId) !== null
+          && manager.depths(ChangeScope.BlockDefault).undo > 0) {
+        showReloadNotice()
+      }
     }
   }, [repo, workspaceId, held, claimBlock])
 
-  const holder = holderOf(claim, localMessage)
+  const holder = holderOf(claim, localRun)
   if (holder === null) return null
   return (
     // The dialog gets its OWN boundary, below the effect above. It reaches the
@@ -134,19 +148,27 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
  *  moments a PEER's claim can be what is on screen — and a message this device
  *  wrote would otherwise be reported as that peer's progress. */
 const holderOf = (
-  claim: GraphBackfillClaim | null, localMessage: string | null,
+  claim: GraphBackfillClaim | null, localRun: LocalRunSnapshot | null,
 ): ClaimHolder | null => {
-  // Our own gesture, before its claim exists. The claim is written after
-  // several preflight reads and a page-ensure, and nothing else renders in that
-  // window — so without this arm the operator confirms a one-way fleet-wide
-  // flip and the app simply goes back to normal for a few seconds.
+  // NO CLAIM is two situations, not one, and the row cannot tell them apart —
+  // it is equally absent before a run takes it and after a run loses it. Before
+  // is `starting`, and covers the window between the confirmation and the claim
+  // write, which holds two preflight reads and a page-ensure; without it the
+  // operator confirms a one-way fleet-wide flip and the app goes quiet. AFTER
+  // is a tab that was writing and is no longer protected, which must not be
+  // told that nothing has been written — it is the one tab whose closing costs
+  // something, and the released case reaches it from a click the dialog itself
+  // offers.
   if (claim === null) {
-    return localMessage === null ? null : {kind: 'starting', message: localMessage}
+    if (localRun === null) return null
+    return localRun.claimed
+      ? {kind: 'lost-claim', message: localRun.message}
+      : {kind: 'starting', message: localRun.message}
   }
   if (claim.claimantId !== getClientId()) return {kind: 'another-device', claim}
-  return localMessage === null
+  return localRun === null
     ? {kind: 'this-browser', claim}
-    : {kind: 'this-tab', message: localMessage, claim}
+    : {kind: 'this-tab', message: localRun.message, claim}
 }
 
 /** What is left on screen after the dialog goes. Sticky, because the user it is
