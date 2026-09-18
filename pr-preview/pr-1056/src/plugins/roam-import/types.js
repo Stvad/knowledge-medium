@@ -1,1 +1,1 @@
-import{yc as e}from"../../../chunks/app-BWh5hZGM.js";export{e as getExtraRoamProps};
+import{yc as e}from"../../../chunks/app-xnbRXk-1.js";export{e as getExtraRoamProps};
