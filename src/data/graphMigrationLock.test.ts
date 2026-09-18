@@ -536,6 +536,42 @@ describe('the migration itself, running under the lock it raised', () => {
     return JSON.parse(row.properties_json) as Record<string, unknown>
   }
 
+  it('takes no outer read while its own write lock is held', async () => {
+    // Same hazard as the lock's own (`never asks for a connection the
+    // transaction is already holding`), on the path that matters most: the
+    // migration's per-batch precondition. A read the pool cannot serve hangs
+    // the batch rather than failing it — behind a progress modal that has no
+    // exit while it reads as running, over a claim that locks every device.
+    const repo = makeOperatorRepo()
+    await seedFlippedWorkspaceWithOneCell(repo)
+    let inWrite = false
+    const realWriteTransaction = sharedDb.db.writeTransaction.bind(sharedDb.db)
+    const outer = {
+      get: sharedDb.db.get.bind(sharedDb.db),
+      getAll: sharedDb.db.getAll.bind(sharedDb.db),
+      getOptional: sharedDb.db.getOptional.bind(sharedDb.db),
+    }
+    const refuseWhileWriting = (name: keyof typeof outer) =>
+      (async (sql: string, params?: unknown[]) => {
+        if (inWrite) throw new Error(`[test] ${name} on the Repo handle under the write lock`)
+        return (outer[name] as (s: string, p?: unknown[]) => Promise<unknown>)(sql, params)
+      })
+    sharedDb.db.writeTransaction = (async (fn: never) => {
+      inWrite = true
+      try { return await realWriteTransaction(fn) } finally { inWrite = false }
+    }) as typeof sharedDb.db.writeTransaction
+    sharedDb.db.get = refuseWhileWriting('get') as typeof sharedDb.db.get
+    sharedDb.db.getAll = refuseWhileWriting('getAll') as typeof sharedDb.db.getAll
+    sharedDb.db.getOptional = refuseWhileWriting('getOptional') as typeof sharedDb.db.getOptional
+    try {
+      expect(await repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID))
+        .toMatchObject({outcome: 'ran'})
+    } finally {
+      sharedDb.db.writeTransaction = realWriteTransaction
+      Object.assign(sharedDb.db, outer)
+    }
+  })
+
   it('runs to completion, though its own claim is what stops everyone else', async () => {
     // The deadlock this exists to rule out: the claim row, the Migrations page
     // under it, the pass's batches and the completion stamp are all

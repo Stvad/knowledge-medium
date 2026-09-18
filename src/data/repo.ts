@@ -3513,10 +3513,11 @@ export class Repo {
     backfillId: string,
     generation: number,
   ): Promise<void> {
-    // Re-sampled per transaction while the write lock is held, so a drain
-    // cannot commit between this check and the write. Reading through
-    // `this.db` rather than the tx handle is deliberate: the drain is excluded
-    // by the lock, not by read isolation.
+    // Re-sampled per transaction, and deliberately NOT from inside one: it
+    // reads through `this.db`, and a read on that handle taken while a write
+    // transaction is open cannot be served on a single-connection pool. Callers
+    // run it immediately before opening their transaction and re-assert the
+    // synchronous half (`assertBackfillSessionUnchanged`) within.
     const gap = await this.workspaceViewGap(workspaceId)
     if (gap !== null) {
       throw Object.assign(new Error(
@@ -4070,8 +4071,22 @@ export class Repo {
           // callback's return value never arrives on that path. Release beats
           // the guarantee; the `catch` below is the other half.
           let drop: HistoryDrop | undefined
+          // OUTSIDE the transaction, though the gap it probes is re-sampled per
+          // batch and the comment on that method still wants the write lock
+          // held. It cannot have both: the probe reads through `this.db`, and a
+          // read on the Repo's handle taken while this transaction holds the
+          // write lock cannot be SERVED on a single-connection pool — which is
+          // every browser but the one PowerSync gives `additionalReaders` — so
+          // the batch would hang rather than refuse, behind a progress modal
+          // with no exit, over a claim that locks the whole graph.
+          //
+          // What moving it out costs is one batch's worth of window: a drain
+          // that commits between this probe and the write is seen by the NEXT
+          // batch's probe instead of this one. The synchronous half stays
+          // inside, at both ends, where it costs no connection.
+          await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
           const value = await this.tx(async t => {
-            await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+            this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
             const value = await fn(t)
             // AGAIN, now the body has returned — see the method. `fn` can span a
             // whole insert budget, so the entry check above is as stale by here
