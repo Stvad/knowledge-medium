@@ -51,7 +51,12 @@ import {
   UndoHistoryDroppedError,
 } from './api/errors'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
-import { isGraphBackfillClaimActive } from './internals/graphBackfillClaim'
+import {
+  claimFromProperties,
+  claimHoldsGraph,
+  graphBackfillClaimBlockId,
+  isGraphBackfillClaimActive,
+} from './internals/graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from './internals/propertyCellBackfill'
 
 import { onSyncSettled } from './internals/firstSync'
@@ -3585,12 +3590,23 @@ export class Repo {
   }
 
   /**
-   * Is a once-per-graph migration holding this workspace's claim?
+   * Was a once-per-graph migration holding this workspace's claim when this
+   * transaction started?
    *
    * The commit pipeline's migration lock asks this once per transaction that
    * wrote something under a scope whose `graphMigration` policy is `reject`,
-   * handing over the tx's own pinned workspace and its own db handle. An arrow
+   * handing over the tx's own pinned workspace, the tx's own db handle, and a
+   * lookup of what the tx found at a row before writing there. An arrow
    * property rather than a method so it can go to `runTx` unbound.
+   *
+   * The claim row gets the `priorRow` treatment and everything else the read,
+   * because the read is the TX's and therefore shows the tx its own writes: a
+   * transaction that deleted the claim, blanked it, or stamped a completion onto
+   * it would otherwise read itself as unlocked and commit whatever else it was
+   * carrying. Judging that row by what the tx FOUND there is what makes the
+   * lock's input something no transaction can move — and it costs no second
+   * connection, which an outer read taken under the write lock would, on every
+   * browser but the one PowerSync gives extra readers.
    *
    * One backfill because one backfill rewrites source-of-truth rows today.
    * Generalizing means a `WorkspaceBackfill` declaring that it locks the graph,
@@ -3600,8 +3616,25 @@ export class Repo {
   private readonly graphMigrationLocked = (
     db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
     workspaceId: string,
-  ): Promise<boolean> =>
-    isGraphBackfillClaimActive(db, workspaceId, GRAPH_LOCKING_BACKFILL_ID)
+    priorRow: (id: string) => BlockData | null | undefined,
+  ): Promise<boolean> => {
+    const before = priorRow(
+      graphBackfillClaimBlockId(workspaceId, GRAPH_LOCKING_BACKFILL_ID),
+    )
+    // `undefined` means untouched, which is when the tx's own view of that row
+    // and committed state are the same thing.
+    if (before === undefined) {
+      return isGraphBackfillClaimActive(db, workspaceId, GRAPH_LOCKING_BACKFILL_ID)
+    }
+    // A tombstone or an absent row was not holding anything, and neither is a
+    // row from another workspace — the same workspace scoping the read does.
+    return Promise.resolve(
+      before !== null
+      && !before.deleted
+      && before.workspaceId === workspaceId
+      && claimHoldsGraph(claimFromProperties(before.properties)),
+    )
+  }
 
   /**
    * Take the claim for one backfill, or say why this device may not.

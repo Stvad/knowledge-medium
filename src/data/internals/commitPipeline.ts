@@ -290,21 +290,34 @@ export interface RunTxParams<R> {
   opts: RepoTxOptions
   user: User
   isReadOnly: boolean
-  /** Is a once-per-graph migration holding this workspace's claim, as this
-   *  transaction's own view of `blocks` has it?
+  /** Was a once-per-graph migration holding this workspace's claim when this
+   *  transaction started?
    *
-   *  Asked with the tx's PINNED workspace and its own db handle, so the answer
-   *  is about the rows being written rather than about whatever workspace
-   *  happens to be on screen, and cannot go stale between the question and the
-   *  write. Only reached for a scope the lock refuses and a tx that wrote
-   *  something, so the pass's own transactions and every read-only one cost
-   *  nothing.
+   *  Asked with the tx's PINNED workspace, so the answer is about the rows being
+   *  written rather than about whatever workspace happens to be on screen. Only
+   *  reached for a scope the lock refuses and a tx that wrote something, so the
+   *  pass's own transactions and every read-only one cost nothing.
    *
-   *  Injected rather than read here: WHICH backfill locks the graph is the
-   *  Repo's to know. */
+   *  Handed the TX's OWN db handle and a lookup of what this tx found at a row
+   *  before it wrote there. Both halves are load-bearing:
+   *
+   *  - the handle must be the transaction's, because the pipeline calls this
+   *    while holding the write lock. On a single-connection pool — which is
+   *    every browser but one — an outer read cannot be served until that lock is
+   *    released, so asking the Repo's handle deadlocks the tab on any write.
+   *  - which makes the read see the tx's OWN uncommitted writes, so a tx that
+   *    deleted or completed the claim would read itself as unlocked. `priorRow`
+   *    is the answer: for a row this tx wrote, judge the state it found there.
+   *
+   *  `priorRow` returns `undefined` when the tx did not touch that row, which is
+   *  when the handle's view of it IS committed state.
+   *
+   *  Injected rather than read here: WHICH backfill locks the graph, and what a
+   *  claim row means, are the Repo's to know. */
   graphMigrationLocked: (
     db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
     workspaceId: string,
+    priorRow: (id: string) => BlockData | null | undefined,
   ) => Promise<boolean>
   newTxId: () => string
   /** Monotonically increasing INTEGER per `repo.tx`. Written into
@@ -573,13 +586,17 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // workspace's claim, the graph stops accepting writes rather than each
     // gesture guarding itself against the pass (#1057).
     //
-    // Asked of `db`, NOT of `txDb`: the transaction's own handle sees the
-    // transaction's own uncommitted writes, so a tx that deleted the claim row
-    // — or stamped a completion onto it — read itself as unlocked and committed
-    // that plus whatever else it was doing. The lock's input must not be
-    // something the transaction being judged can move. `db` here is committed
-    // state that nothing can change before we commit, because this
-    // writeTransaction holds the write lock, so it costs no staleness either.
+    // Read through `txDb`, never the Repo's handle: this runs while the write
+    // lock is held, and on a single-connection pool — every browser except the
+    // one that gets `additionalReaders` — an outer read cannot be served until
+    // that lock is released, so it would deadlock the tab on every write.
+    //
+    // Which means the read sees this transaction's OWN uncommitted writes, so a
+    // tx that deleted the claim row or stamped a completion onto it would read
+    // itself as unlocked and commit that plus whatever else it was doing.
+    // `priorRow` closes that: for a row this tx wrote, the predicate judges what
+    // the tx FOUND there. The lock's input is then something no transaction can
+    // move, without asking for a connection we are already holding.
     //
     // Over the tx's PINNED workspace, which is why it cannot be asked at entry:
     // `repo.tx` admits a write to a workspace that is not the active one, and a
@@ -602,7 +619,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     if (meta.workspaceId !== null
         && !opts.graphMigrationWrite
         && !scopeAllowedDuringGraphMigration(scope)
-        && await graphMigrationLocked(db, meta.workspaceId)) {
+        && await graphMigrationLocked(
+          txDb, meta.workspaceId, id => snapshots.get(id)?.before,
+        )) {
       throw new ProcessorRejection(
         GRAPH_MIGRATION_LOCKED_MESSAGE, GRAPH_MIGRATION_LOCKED,
         {scope, workspaceId: meta.workspaceId},

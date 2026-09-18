@@ -152,10 +152,15 @@ export const claimHoldsGraph = (
  *  view of `blocks` has it?
  *
  *  Asked by the commit pipeline's migration lock, once per transaction that
- *  wrote something under a scope the lock refuses, against that transaction's
- *  own workspace and db handle. The claim lives in SYNCED data, so a peer device
- *  that has received the claim row refuses too; one that has not yet is the same
- *  staleness every other reader of this row has. */
+ *  wrote something under a scope the lock refuses — and, because the caller is
+ *  holding the write lock, through that transaction's own handle. Which means
+ *  this answer is only committed state for a row the transaction has NOT
+ *  written; `Repo.graphMigrationLocked` is where the claim row's own case is
+ *  decided, and why.
+ *
+ *  The claim lives in SYNCED data, so a peer device that has received the claim
+ *  row refuses too; one that has not yet is the same staleness every other
+ *  reader of this row has. */
 export const isGraphBackfillClaimActive = async (
   db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
   workspaceId: string,

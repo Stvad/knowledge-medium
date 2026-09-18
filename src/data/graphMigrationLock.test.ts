@@ -276,6 +276,40 @@ describe('while a once-per-graph backfill holds this workspace\'s claim', () => 
     expect(await markOn(OTHER_TARGET)).toBe(ChangeScope.BlockDefault)
   })
 
+  it('never asks for a connection the transaction is already holding', async () => {
+    // The lock runs while the write lock is held. On a single-connection pool —
+    // every browser except the one PowerSync gives `additionalReaders` — a read
+    // taken on the Repo's own handle cannot be served until that write lock is
+    // released, so it would hang the tab on EVERY write, migration or not.
+    //
+    // Modelled by making the Repo's handle unserviceable for the duration of a
+    // write: a lock that reaches for it never resolves, and this test times out
+    // instead of passing. The test harness opens several read connections, so
+    // nothing else here can catch this.
+    const repo = makeRepo()
+    await seedTarget(repo)
+    await seedClaim()
+    let inWrite = false
+    const realWriteTransaction = sharedDb.db.writeTransaction.bind(sharedDb.db)
+    const realGetOptional = sharedDb.db.getOptional.bind(sharedDb.db)
+    sharedDb.db.writeTransaction = (async (fn: never) => {
+      inWrite = true
+      try { return await realWriteTransaction(fn) } finally { inWrite = false }
+    }) as typeof sharedDb.db.writeTransaction
+    sharedDb.db.getOptional = (async (sql: string, params?: unknown[]) => {
+      if (inWrite) throw new Error('[test] the write lock is held; this read would never be served')
+      return realGetOptional(sql, params)
+    }) as typeof sharedDb.db.getOptional
+    try {
+      await expect(write(repo, ChangeScope.BlockDefault)).rejects.toMatchObject({
+        code: GRAPH_MIGRATION_LOCKED,
+      })
+    } finally {
+      sharedDb.db.writeTransaction = realWriteTransaction
+      sharedDb.db.getOptional = realGetOptional
+    }
+  })
+
   it('cannot be unlocked by the transaction it is refusing', async () => {
     // The lock reads COMMITTED state, so a tx cannot clear the claim and then
     // ride its own clearance: deleting the claim row, blanking it into
