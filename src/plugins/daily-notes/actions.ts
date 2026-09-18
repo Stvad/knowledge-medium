@@ -18,12 +18,14 @@
  *
  * The prev/next actions need to figure out "what daily note is this
  * panel showing right now" so the offset is relative. We do that by
- * walking ancestors of the panel's top-level block and looking for a
- * page whose `aliases` list contains an ISO-shaped date — that's the
- * canonical alias for a daily note, written by `getOrCreateDailyNote`
- * via `dailyPageAliases`. Falling back to `todayIso()` when nothing in
- * the ancestor chain is a daily note keeps the shortcuts functional
- * from any view.
+ * walking ancestors of the panel's top-level block and asking
+ * `dailyNoteIso` about each — which reads the typed `daily-note:date`
+ * property and the ISO alias, and confirms either against the block's
+ * deterministic id. Not the alias alone: a day whose ISO name another
+ * page claims has yielded it, and would then anchor prev/next to TODAY
+ * rather than to the day on screen. Falling back to `todayIso()` when
+ * nothing in the ancestor chain is a daily note keeps the shortcuts
+ * functional from any view.
  *
  * Originally lived in `src/shortcuts/defaultShortcuts.ts` alongside
  * the rest of the kernel action set; extracted here so the daily-notes
@@ -35,7 +37,7 @@ import { ChangeScope } from '@/data/api'
 import { getLayoutSessionBlock } from '@/data/stateBlocks.js'
 import {
   activePanelIdProp,
-  aliasesProp,
+  getAliases,
   editorSelection,
   isEditingProp,
 } from '@/data/properties.js'
@@ -53,18 +55,34 @@ import {
 } from '@/utils/navigation.js'
 import {
   addDaysIso,
-  dailyNoteIsoFromAliases,
+  dailyNoteIso,
   getOrCreateDailyNote,
   todayIso,
 } from './dailyNotes.ts'
+import { dailyNoteDateProp } from './schema.ts'
 
 export const OPEN_TODAY_ACTION_ID = 'open_today'
 export const APPEND_TODAY_DAILY_BLOCK_ACTION_ID = 'append_today_daily_block'
 export const OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID = 'open_previous_daily_note'
 export const OPEN_NEXT_DAILY_NOTE_ACTION_ID = 'open_next_daily_note'
 
-const dailyNoteIsoFromBlock = (block: Block): string | null =>
-  dailyNoteIsoFromAliases(block.peekProperty(aliasesProp) ?? [])
+const dailyNoteIsoFromBlock = (block: Block): string | null => {
+  const data = block.peek()
+  if (!data) return null
+  let date: Date | undefined
+  // Tolerant, for the same reason the decorator is: the cell is user-editable
+  // and this runs mid-walk over a block's ancestors, so a throw here takes out
+  // the whole prev/next gesture.
+  try {
+    date = dailyNoteDateProp.codec.decode(data.properties[dailyNoteDateProp.name])
+  } catch { /* unreadable cell — fall through to the alias */ }
+  return dailyNoteIso({
+    id: data.id,
+    workspaceId: data.workspaceId,
+    date,
+    aliases: getAliases(data),
+  })
+}
 
 const findContainingDailyNoteIso = async (
   repo: Repo,
