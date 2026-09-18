@@ -41,9 +41,13 @@ const DialogContent = ({
   hideOverlay?: boolean
   /** Drop the corner close button, for a dialog the user must not dismiss —
    *  one reporting an operation that is still running and cannot be abandoned
-   *  halfway. Escape and outside-click are separate: prevent those on the
-   *  Content's own `onEscapeKeyDown` / `onInteractOutside`, or this only hides
-   *  one of three ways out. */
+   *  halfway.
+   *
+   *  This is the AFFORDANCE only. With a controlled `open`, Radix routes the
+   *  corner button, Escape and outside-click all through `onOpenChange` and can
+   *  close none of them itself, so refusing there is the whole block. An
+   *  UNCONTROLLED dialog closes itself on the other two, and needs
+   *  `onEscapeKeyDown` / `onInteractOutside` prevented as well. */
   hideClose?: boolean
 }) => (
   <DialogPortal>

@@ -7,6 +7,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { DialogContextProps } from '@/utils/dialogs.js'
+import { RELEASE_STRANDED_CLAIM_COMMAND } from '@/data/internals/graphBackfillClaim'
 import { agree, pluralize } from '@/utils/pluralize'
 
 export interface ConfirmMigrationDialogProps {
@@ -114,9 +115,12 @@ export const ConfirmMigrationDialog = ({
             workspace that has moved on, and that edit is lost. Nothing here can
             check that for you.{' '}</>}
           This runs on this device only — your other devices receive the result
-          through sync, so run it in one place. It can take several minutes.
-          Interrupting it is safe: reload or close the tab, then run it again
-          <em> on this device</em> and it picks up where it stopped.
+          through sync, so run it in one place. It can take several minutes, and
+          while it runs the workspace stops accepting edits on every device.
+          Interrupting it loses no data: run it again <em>on this device</em> and it
+          picks up where it stopped. But the workspace keeps refusing edits until you
+          do — an interrupted run does not hand it back, and clearing it by hand takes
+          the <em>{RELEASE_STRANDED_CLAIM_COMMAND}</em> command.
         </p>
         <p className="text-destructive">
           {!childBacked && <>The switch cannot be undone from the app — it only ever

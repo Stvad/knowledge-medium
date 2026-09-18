@@ -40,7 +40,11 @@ export const routeProcessorRejection = (
 ): void => {
   const contribution = contributions.get(error.code)
   if (!contribution) {
-    showError(error.message)
+    // Keyed by CODE, so a refusal the user meets repeatedly — every debounced
+    // edit against a workspace whose writes are refused — replaces its toast
+    // instead of stacking a fresh copy of the same sentence. A contribution
+    // that needs one toast per instance renders its own.
+    showError(error.message, {id: error.code})
     return
   }
   showCustom(

@@ -87,6 +87,14 @@ describe('once the migration reports an outcome', () => {
     expect(resolve).toHaveBeenCalledWith(true)
   })
 
+  it('shows the note under the outcome', async () => {
+    const {set} = renderDialog({kind: 'running', message: 'Migrating…'})
+
+    set({kind: 'done', message: 'Migrated 900 blocks.', note: 'Still not accepting edits.'})
+
+    expect(await screen.findByText('Still not accepting edits.')).toBeTruthy()
+  })
+
   it('is closable after a FAILURE too', async () => {
     const {set} = renderDialog({kind: 'running', message: 'Migrating…'})
 
@@ -130,6 +138,22 @@ describe('the handle the gesture reports through', () => {
     progress.settleUnreported()
 
     expect(state()).toMatchObject({kind: 'failed'})
+  })
+
+  it('adds a note under a reported outcome, and only once there is one', () => {
+    // What the outcome message cannot know: it is written before the gesture
+    // ends, and whether the workspace was handed back is decided after.
+    const progress = showBlockingMigrationProgress('Migrating…')
+
+    progress.addNote('still locked')
+    expect(state()).toEqual({kind: 'running', message: 'Migrating…'})
+
+    progress.done('Migrated 900 blocks.')
+    progress.addNote('still locked')
+
+    expect(state()).toEqual({
+      kind: 'done', message: 'Migrated 900 blocks.', note: 'still locked',
+    })
   })
 
   it('leaves a reported outcome alone when the gesture settles', () => {

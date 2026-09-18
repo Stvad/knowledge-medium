@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const openDialog = vi.fn()
 const progressHandle = {
   update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(),
+  addNote: vi.fn(),
 }
 
 vi.mock('@/utils/dialogs.js', () => ({openDialog: (...args: unknown[]) => openDialog(...args)}))
@@ -147,6 +148,7 @@ afterEach(() => {
   progressHandle.done.mockReset()
   progressHandle.fail.mockReset()
   progressHandle.settleUnreported.mockReset()
+  progressHandle.addNote.mockReset()
   planSynthesis.mockReset()
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockReset()

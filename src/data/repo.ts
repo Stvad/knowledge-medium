@@ -53,6 +53,16 @@ import {
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { isGraphBackfillClaimActive } from './internals/graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from './internals/propertyCellBackfill'
+
+/** The backfill whose claim stops the graph accepting writes, and therefore the
+ *  only one whose own transactions are exempt from that (#1057). ONE name for
+ *  both halves: a pass that locks but is not exempt deadlocks against itself,
+ *  and one that is exempt but does not lock is an unexplained hole.
+ *
+ *  A constant rather than a `WorkspaceBackfill` field because exactly one pass
+ *  rewrites source-of-truth rows today. A second would make it a declaration on
+ *  the seam, read here and by `Repo.graphMigrationLocked`. */
+const GRAPH_LOCKING_BACKFILL_ID = PROPERTY_CELL_BACKFILL_ID
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
@@ -2233,7 +2243,14 @@ export class Repo {
       if (parentDeleted !== null) {
         throw new ParentDeletedError(parentDeleted.parentId)
       }
-      if (err instanceof ProcessorRejection) this.userErrorListeners.notify(err)
+      // Not for a TELEMETRY tx: that flag means the app measuring itself, and a
+      // refusal of the app's own bookkeeping is not something the user did or
+      // can act on. It still throws — the caller decides what to do — but it
+      // does not become a toast. Under the migration lock this is the
+      // difference between one explained refusal and one per metrics sample.
+      if (err instanceof ProcessorRejection && opts.telemetry !== true) {
+        this.userErrorListeners.notify(err)
+      }
       throw err
     }
     // Track the slowest tx by description so cold-start metrics can
@@ -3592,7 +3609,7 @@ export class Repo {
     db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
     workspaceId: string,
   ): Promise<boolean> =>
-    isGraphBackfillClaimActive(db, workspaceId, PROPERTY_CELL_BACKFILL_ID)
+    isGraphBackfillClaimActive(db, workspaceId, GRAPH_LOCKING_BACKFILL_ID)
 
   /**
    * Take the claim for one backfill, or say why this device may not.
@@ -4046,9 +4063,13 @@ export class Repo {
             scope: ChangeScope.BlockDefault,
             description: opts.description,
             skipUndo: true,
-            // The batch is the migration, so the lock that keeps every other
-            // writer out of the graph cannot keep it out.
-            graphMigrationWrite: true,
+            // Only the pass whose claim RAISES the lock is exempt from it. Any
+            // other backfill writing during that pass is an ordinary
+            // program-authored write into a graph being converted, and the lock
+            // is what should stop it — a blanket exemption here would admit the
+            // next `workspace-open` backfill anyone registers, silently, since
+            // those are deep-idle scheduled and would routinely land mid-run.
+            graphMigrationWrite: backfill.id === GRAPH_LOCKING_BACKFILL_ID,
           }).catch((err: unknown) => {
             // Rolled back, so there is nothing for an entry to be replayed onto
             // and the history is not owed.

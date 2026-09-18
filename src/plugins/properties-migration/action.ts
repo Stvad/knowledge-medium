@@ -11,7 +11,10 @@ import {
   planPropertyDefinitionSynthesis,
   type PropertyDefinitionSynthesisPlan,
 } from '@/data/internals/propertyDefinitionSynthesis'
-import { STRANDED_CLAIM_RECOVERY } from '@/data/internals/graphBackfillClaim'
+import {
+  isGraphBackfillClaimActive,
+  STRANDED_CLAIM_RECOVERY,
+} from '@/data/internals/graphBackfillClaim'
 import { readIsChildBackedWorkspace, readWorkspaceOwnerId } from '@/data/workspaceSchema'
 import {
   flipRejectionProvesNoWrite,
@@ -549,63 +552,79 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // every edit. The data-layer lock is what actually refuses them, and it
     // reaches this user's other devices, where nothing of ours is mounted.
     const banner = showBlockingMigrationProgress('Migrating properties to blocks…')
-    // ABOVE the synthesis block, not below it: below, the "Nothing was changed"
-    // this prints is false the moment synthesis commits.
-    //
-    // Caught, because these are database reads: the banner has no duration and
-    // nothing else is watching this await, so a transient failure here would
-    // leave "Migrating properties to blocks…" spinning forever over a pass that
-    // never started.
-    let unfit: Unfitness | null
     try {
-      unfit = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
-    } catch (err) {
-      console.error('[properties-migration] could not re-check eligibility:', err)
-      // Retryable: a read that threw says nothing about whether the underlying
-      // precondition holds, and a transient DB failure is exactly the kind that
-      // clears on its own.
-      unfit = {
-        reason: `this device could not check whether the pass may run (${
-          err instanceof Error ? err.message : String(err)})`,
-        retryable: true,
+      // ABOVE the synthesis block, not below it: below, the "Nothing was changed"
+      // this prints is false the moment synthesis commits.
+      //
+      // Caught, because these are database reads: the banner has no duration and
+      // nothing else is watching this await, so a transient failure here would
+      // leave "Migrating properties to blocks…" spinning forever over a pass that
+      // never started.
+      let unfit: Unfitness | null
+      try {
+        unfit = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+      } catch (err) {
+        console.error('[properties-migration] could not re-check eligibility:', err)
+        // Retryable: a read that threw says nothing about whether the underlying
+        // precondition holds, and a transient DB failure is exactly the kind that
+        // clears on its own.
+        unfit = {
+          reason: `this device could not check whether the pass may run (${
+            err instanceof Error ? err.message : String(err)})`,
+          retryable: true,
+        }
       }
-    }
-    if (unfit !== null) {
-      banner.fail(notStarted(unfit.reason, unfit.retryable))
-      return
-    }
-    // The claim is taken HERE: after the last precondition, before SYNTHESIS
-    // (this gesture's first write), and not inside the pass (its last). What
-    // two unclaimed devices produce is a definition for the same orphan key at
-    // the same deterministic id carrying DIFFERENT presets — which presets a
-    // device can prove is a local fact — so sync picks one and the children
-    // the other migrated decode under a codec it does not declare. The seam
-    // says how far that window narrows, and what it still leaves open.
-    //
-    // After the dialog, though, never before: a claim held across a
-    // user-length pause blocks every other device while a dialog sits open,
-    // and a tab closed at the dialog strands it — over a flipped workspace,
-    // once the flip below has landed.
-    // `finally`, over everything that reports into the modal: the modal cannot
-    // be dismissed while it reads as running, so a path that returns or throws
-    // without reporting an outcome would leave the app needing a reload.
-    try {
-      const gesture = await repo.withOperatorBackfillClaim(
-        workspaceId, PROPERTY_CELL_BACKFILL_ID,
-        pass => migrateUnderClaim(
-          {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}, pass),
-      )
-      if (!gesture.claimed) {
-        // The same reporter the pass's own outcomes go through. Which step
-        // turned this device away is an implementation detail of where the
-        // claim sits; a second vocabulary for "another device owns this run"
-        // would drift from the first.
-        const {message, failed} = describeOutcome(gesture.result, NOTHING_MIGRATED)
-        if (failed) banner.fail(message)
-        else banner.done(message)
+      if (unfit !== null) {
+        banner.fail(notStarted(unfit.reason, unfit.retryable))
+        return
       }
+      // The claim is taken HERE: after the last precondition, before SYNTHESIS
+      // (this gesture's first write), and not inside the pass (its last). What
+      // two unclaimed devices produce is a definition for the same orphan key at
+      // the same deterministic id carrying DIFFERENT presets — which presets a
+      // device can prove is a local fact — so sync picks one and the children
+      // the other migrated decode under a codec it does not declare. The seam
+      // says how far that window narrows, and what it still leaves open.
+      //
+      // After the dialog, though, never before: a claim held across a
+      // user-length pause blocks every other device while a dialog sits open,
+      // and a tab closed at the dialog strands it — over a flipped workspace,
+      // once the flip below has landed.
+        const gesture = await repo.withOperatorBackfillClaim(
+          workspaceId, PROPERTY_CELL_BACKFILL_ID,
+          pass => migrateUnderClaim(
+            {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}, pass),
+        )
+        if (!gesture.claimed) {
+          // The same reporter the pass's own outcomes go through. Which step
+          // turned this device away is an implementation detail of where the
+          // claim sits; a second vocabulary for "another device owns this run"
+          // would drift from the first.
+          const {message, failed} = describeOutcome(gesture.result, NOTHING_MIGRATED)
+          if (failed) banner.fail(message)
+          else banner.done(message)
+        }
     } finally {
+      // The modal cannot be dismissed while it reads as running, so a path that
+      // returns or throws without reporting an outcome would leave the app
+      // needing a reload. Over EVERY exit from the moment it opened, which is
+      // why the `try` starts there rather than at the claim.
       banner.settleUnreported()
+      // And then say whether the graph was handed back. Nothing else can: an
+      // interrupted or declined run leaves the claim in flight — a run that
+      // only INHERITED one never releases it at all — and until it is finished
+      // or released the workspace refuses every edit on every device. The
+      // outcome messages are written before any of that is known, and "run it
+      // again" over a silently locked graph is the wrong thing to be told.
+      if (await isGraphBackfillClaimActive(
+        repo.db, workspaceId, PROPERTY_CELL_BACKFILL_ID,
+      )) {
+        banner.addNote(
+          'This workspace is still not accepting edits: the migration holds it '
+          + `until it finishes. Run this again on this device to resume it, or — ${
+            STRANDED_CLAIM_RECOVERY}.`,
+        )
+      }
     }
   },
 })

@@ -28,6 +28,11 @@ export interface MigrationProgress {
   /** Terminal state for a gesture that ended without calling `done` or `fail`.
    *  Call from the gesture's `finally`; a no-op once an outcome was reported. */
   settleUnreported: () => void
+  /** Add a line under the outcome. For what the outcome message cannot know
+   *  because it is written before the gesture ends — today, that the workspace
+   *  is still refusing edits. Ignored while the gesture is still running, where
+   *  there is no outcome to qualify. */
+  addNote: (note: string) => void
 }
 
 export const showBlockingMigrationProgress = (initial: string): MigrationProgress => {
@@ -50,5 +55,6 @@ export const showBlockingMigrationProgress = (initial: string): MigrationProgres
     settleUnreported: () => {
       if (state.kind === 'running') set({kind: 'failed', message: UNREPORTED})
     },
+    addNote: note => { if (state.kind !== 'running') set({...state, note}) },
   }
 }

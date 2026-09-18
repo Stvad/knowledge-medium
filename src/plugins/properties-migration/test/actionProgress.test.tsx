@@ -12,6 +12,7 @@ import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCell
 const openDialog = vi.fn(async () => true)
 const progressHandle = {
   update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(),
+  addNote: vi.fn(),
 }
 const showInfo = vi.fn()
 let emit: ((progress: PropertyCellBackfillProgress) => void) | null = null
@@ -61,6 +62,10 @@ const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCel
   valuesMaterializedTotal: 7, sweeps: 2, failures: [], failureCount: 0, ...over,
 })
 
+/** Is a claim still in flight when the gesture ends? Read from `blocks`, so the
+ *  stub answers the claim query the way a live one would. */
+let claimHeldAfterRun = false
+
 /** Emits `reported` from inside the run, the way the pass notifies. */
 const runReporting = async (reported: PropertyCellBackfillProgress) => {
   const repo = {
@@ -68,9 +73,17 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
     user: {id: 'user-1'},
     db: {
       getAll: async () => [{n: 7}],
-      getOptional: async (sql: string) => sql.includes('owner_user_id')
-        ? {owner_user_id: 'user-1'}
-        : {properties_migration: 'cell'},
+      getOptional: async (sql: string) => {
+        if (sql.includes('owner_user_id')) return {owner_user_id: 'user-1'}
+        if (sql.includes('properties_json')) {
+          return claimHeldAfterRun
+            ? {properties_json: JSON.stringify({
+                'migration:claimant': 'this-device', 'migration:claimed-at': 1,
+              })}
+            : null
+        }
+        return {properties_migration: 'cell'}
+      },
     },
     isReadOnly: false,
     workspaceViewGap: async () => null,
@@ -91,8 +104,10 @@ afterEach(() => {
   progressHandle.done.mockReset()
   progressHandle.fail.mockReset()
   progressHandle.settleUnreported.mockReset()
+  progressHandle.addNote.mockReset()
   showInfo.mockReset()
   emit = null
+  claimHeldAfterRun = false
 })
 
 describe('the migration progress path', () => {
@@ -106,6 +121,26 @@ describe('the migration progress path', () => {
       expect.stringContaining('3'),
       expect.objectContaining({id: expect.any(String)}),
     )
+  })
+
+  it('says the workspace is still locked when the run ends with the claim held', async () => {
+    // The outcome messages are written before it is known whether the graph was
+    // handed back, and an interrupted or INHERITED run never releases it. "Run
+    // it again" over a workspace that is silently refusing every edit is the
+    // wrong thing to be told.
+    claimHeldAfterRun = true
+
+    await runReporting(progress())
+
+    expect(progressHandle.addNote).toHaveBeenCalledWith(
+      expect.stringContaining('still not accepting edits'),
+    )
+  })
+
+  it('says nothing about a lock when the run handed the workspace back', async () => {
+    await runReporting(progress())
+
+    expect(progressHandle.addNote).not.toHaveBeenCalled()
   })
 
   it('shows the sweep number, so a second pass does not look like a restart', async () => {

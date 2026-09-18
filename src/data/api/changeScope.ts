@@ -56,11 +56,16 @@ export interface ChangeScopePolicy {
    *  Its own column, though it agrees with `readOnly` on three scopes.
    *  Read-only is about this device's ROLE and admits nothing that writes
    *  documents; the migration lock is about the graph being rewritten
-   *  underneath, so it admits the derivation that rewrite produces
-   *  (`References`) and refuses program-authored records the app can do
-   *  without (`Automation`) — the pass re-sweeps until a sweep materializes
-   *  nothing, so every row written while it runs is another sweep, and it
-   *  gives up after a bounded number of them.
+   *  underneath, so the two disagree where that difference bites:
+   *
+   *  - `References` is ADMITTED though read-only rejects it. The pass's own
+   *    writes fan out to the references processor, which re-derives in a
+   *    transaction of its own carrying no exemption — refusing it would leave
+   *    exactly the rows the migration wrote without their derived references.
+   *  - `Automation` is REFUSED though read-only allows it, because it is the
+   *    scope property and type SEED materialization writes under, and a
+   *    definition minted mid-run is one the resolver the pass froze at its
+   *    start will never see (#1050).
    *
    *  A migration's OWN writes are exempted per transaction rather than by
    *  scope (`RepoTxOptions.graphMigrationWrite`): the pass writes documents

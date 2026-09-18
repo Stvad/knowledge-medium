@@ -316,6 +316,14 @@ export const createGraphBackfillClaim = (
     // `inherited` rather than as a win: this claimant is a browser profile, so
     // the row may be a sibling TAB's live claim, and a caller that released it
     // would delete a claim somebody is still writing under.
+    // DEFENCE IN DEPTH, and labelled because deleting `graphMigrationWrite`
+    // here fails no test: every branch that reaches this write has already
+    // established the claim is absent, completed or undecodable, none of which
+    // the lock reads as active. It is load-bearing for one race — a peer's
+    // claim landing between the read above and this transaction — where with
+    // the flag `tx.get` sees it and returns `declined`, and without it the lock
+    // throws at a caller that reads a throw as a failure rather than as a peer
+    // winning.
     const won: ClaimAttempt = first === 'proceed' ? 'inherited' : await deps.tx(async tx => {
       // Re-checked inside the WRITING tx against this row: the read above
       // happened outside it, and a peer's claim can arrive in between.
