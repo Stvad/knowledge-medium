@@ -387,6 +387,27 @@ describe('while a once-per-graph backfill holds this workspace\'s claim', () => 
       .rejects.toMatchObject({code: GRAPH_MIGRATION_LOCKED})
   })
 
+  it('refuses a definition rename even under a scope the lock admits', async () => {
+    // `References` is admitted on purpose — the pass's own writes fan out to
+    // the references processor, which re-derives in transactions carrying no
+    // exemption. But that scope may touch a BlockDefault property (the two are
+    // policy-equivalent), so a definition rename can ride it straight into the
+    // fan-out the lock exists to keep out. The blanket rule does not cover
+    // this one, and master's narrower guard did.
+    const repo = makeRepo()
+    await seedTargetIn(repo, WS, TARGET)
+    await seedDefinitionIn(WS, 'field-ref', 'status')
+    await seedClaim()
+
+    await expect(repo.tx(async tx => {
+      const row = await tx.get('field-ref')
+      await tx.update('field-ref', {
+        properties: {...row!.properties, [propertyNameProp.name]: 'state'},
+      })
+    }, {scope: ChangeScope.References, description: 'rename under References'}))
+      .rejects.toMatchObject({code: 'property.definition-change.migration-running'})
+  })
+
   it('refuses the CLAIM HOLDER\'s own edits too, not only a peer\'s', async () => {
     // The exemption is for the migration's transactions, not for the device
     // running it — and that device is where someone is most likely to be

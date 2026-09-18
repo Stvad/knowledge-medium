@@ -64,10 +64,9 @@
  * The FAN-OUT is dormant until a definition has field rows — see
  * `consumingParentIds`, which is its gate. The unconvertible refusal is a fact
  * about values this pass actually READ, so it can only be reached through that
- * gate. A consumer with no field row yet is invisible to it — and that is why
- * nothing here guards the window while the cell-to-children backfill runs: the
- * commit pipeline's migration lock refuses the whole transaction before this
- * processor is reached (#1057).
+ * gate. {@link MIGRATION_RUNNING_REFUSAL} is the opposite: it exists because a
+ * consumer with no field row YET is invisible to that gate, which is the whole
+ * shape of a workspace the cell-to-children backfill has not finished.
  */
 
 import {
@@ -87,6 +86,11 @@ import {
   sameTxReferenceTargetLookups,
 } from './referenceTargetProcessor'
 import { tryBuildSchema } from '@/data/userSchemasService'
+import {
+  isGraphBackfillClaimActive,
+  STRANDED_CLAIM_RECOVERY,
+} from './graphBackfillClaim'
+import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
@@ -251,6 +255,38 @@ const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
       + 'changes in separate edits.',
   },
 }
+
+/** Refusing a definition rename or re-type while the cell-to-children backfill
+ *  holds this workspace's claim.
+ *
+ *  NARROWER than the commit pipeline's migration lock (#1057), and not made
+ *  redundant by it. That lock refuses whole transactions by SCOPE, and it
+ *  admits `References` deliberately — the pass's own writes fan out to the
+ *  references processor, which re-derives in transactions carrying no
+ *  exemption, so refusing that scope would leave exactly the rows the migration
+ *  wrote without their derived references. `References` and `BlockDefault` are
+ *  policy-equivalent, so a write admitted under it may touch a definition's
+ *  name, and a rename would reach the fan-out below with the pass still
+ *  running. This is what covers the gap the scope policy opens on purpose.
+ *
+ *  ACCEPTED, and the reason this is not also raised to the pipeline: asked
+ *  here, it reads the claim through the transaction's own handle, so a
+ *  transaction that deleted the claim row in the same breath would read itself
+ *  as unclaimed. Reaching that needs a `References`-scoped write that both
+ *  clears the claim and renames a definition, which nothing does. Closing it
+ *  properly is the pipeline lock's `priorRow` treatment, and the pipeline lock
+ *  is not asked for this scope.
+ *
+ *  The recovery half is {@link STRANDED_CLAIM_RECOVERY}, shared with every
+ *  other message that mentions a held claim. */
+const MIGRATION_RUNNING_REFUSAL = {
+  code: 'property.definition-change.migration-running',
+  message:
+    'The properties migration is running on this workspace, so a property '
+    + 'definition cannot be renamed or given a different type yet: blocks it has '
+    + 'not reached still hold this property under its current name, and it would '
+    + `never convert them. Wait for it to finish — ${STRANDED_CLAIM_RECOVERY}.`,
+} as const
 
 type CollectedChanges =
   | 'unjudgeable'
@@ -716,6 +752,21 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     }
     const {changes, unfanoutable} = collected
+    if (changes.length > 0 || unfanoutable.length > 0) {
+      // The TRANSACTION's own view, like every other read here.
+      if (await isGraphBackfillClaimActive(
+        ctx.db, event.workspaceId, PROPERTY_CELL_BACKFILL_ID,
+      )) {
+        throw new ProcessorRejection(
+          MIGRATION_RUNNING_REFUSAL.message, MIGRATION_RUNNING_REFUSAL.code,
+          {
+            workspaceId: event.workspaceId,
+            fieldIds: [...changes.map(change => change.fieldId),
+                       ...unfanoutable.map(held => held.fieldId)],
+          },
+        )
+      }
+    }
     if (unfanoutable.length > 0) {
       // Only a change with CONSUMERS strands anything; one on an unused
       // definition is the user's to make, and telling them to fix something
