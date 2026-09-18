@@ -1,1 +1,1 @@
-import{_v as e,ev as t,gv as n,tv as r}from"../../../chunks/app-D0xxRC6W.js";export{n as DEFAULT_THEME_ID_DARK,e as DEFAULT_THEME_ID_LIGHT,r as defaultThemeContributions,t as defaultThemesPlugin};
+import{_v as e,ev as t,gv as n,tv as r}from"../../../chunks/app-Dy-ndCby.js";export{n as DEFAULT_THEME_ID_DARK,e as DEFAULT_THEME_ID_LIGHT,r as defaultThemeContributions,t as defaultThemesPlugin};
