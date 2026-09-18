@@ -1,1 +1,1 @@
-import{FC as e,PC as t}from"../../chunks/app-BvsY-01J.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{MC as e,NC as t}from"../../chunks/app-nu8G-lc7.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

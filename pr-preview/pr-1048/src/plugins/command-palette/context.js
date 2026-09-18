@@ -1,1 +1,1 @@
-import{Bx as e,Lx as t,Rx as n,zx as r}from"../../../chunks/app-BvsY-01J.js";export{t as COMMAND_PALETTE_ACTION_ID,n as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,e as commandPaletteActionContext};
+import{Fx as e,Ix as t,Lx as n,Rx as r}from"../../../chunks/app-nu8G-lc7.js";export{e as COMMAND_PALETTE_ACTION_ID,t as COMMAND_PALETTE_CONTEXT,n as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,r as commandPaletteActionContext};

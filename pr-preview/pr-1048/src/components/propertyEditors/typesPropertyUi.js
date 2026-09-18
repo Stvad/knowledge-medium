@@ -1,1 +1,1 @@
-import{$S as e,QS as t,ZS as n}from"../../../chunks/app-BvsY-01J.js";export{n as kernelPropertyUiExtension,t as typesPropertyUi,e as typesPropertyUiExtension};
+import{XS as e,YS as t,ZS as n}from"../../../chunks/app-nu8G-lc7.js";export{t as kernelPropertyUiExtension,e as typesPropertyUi,n as typesPropertyUiExtension};
