@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { claimFromProperties, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
+import { claimFromProperties, claimHoldingGraph, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
 
 const ME = 'device-a'
 const THEM = 'device-b'
@@ -40,6 +40,42 @@ describe('a live row that is not a decodable claim', () => {
     expect(claimFromProperties({
       'migration:claimant': 'device-a', 'migration:claimed-at': 1000,
     })).toEqual({claimantId: 'device-a', claimedAt: 1000})
+  })
+})
+
+describe('claimHoldingGraph, over the row a subscription hands back', () => {
+  const live = {
+    deleted: false,
+    workspaceId: 'ws',
+    properties: {'migration:claimant': ME, 'migration:claimed-at': 1000},
+  }
+
+  it('reads a live claim for THIS workspace', () => {
+    expect(claimHoldingGraph(live, 'ws')).toEqual({claimantId: ME, claimedAt: 1000})
+  })
+
+  it('reads nothing from a TOMBSTONE — releasing a claim deletes the block', () => {
+    // Unreachable through the migration dialog, whose handle maps a tombstone
+    // to null before this sees it; pinned here because the parameter is a raw
+    // row and this is the clause that keeps a released claim from holding a
+    // modal over the workspace for good.
+    expect(claimHoldingGraph({...live, deleted: true}, 'ws')).toBeNull()
+  })
+
+  it('reads nothing from a row owned by ANOTHER workspace', () => {
+    // The id is derived from the workspace, but a row can still arrive at it
+    // owned by someone else — an import that keeps its ids is the realistic
+    // route — and this workspace would then be blocked by a stranger's run.
+    expect(claimHoldingGraph({...live, workspaceId: 'ws-other'}, 'ws')).toBeNull()
+  })
+
+  it('reads nothing from a COMPLETED claim, or from a bag that is not one', () => {
+    expect(claimHoldingGraph(
+      {...live, properties: {...live.properties, 'migration:completed-at': 2000}}, 'ws',
+    )).toBeNull()
+    expect(claimHoldingGraph({...live, properties: {}}, 'ws')).toBeNull()
+    expect(claimHoldingGraph(null, 'ws')).toBeNull()
+    expect(claimHoldingGraph(undefined, 'ws')).toBeNull()
   })
 })
 
@@ -230,6 +266,40 @@ describe('releasing a claim the pass already completed', () => {
   })
 })
 
+describe('completing a claim this run does not own', () => {
+  const markCompleteOver = (
+    properties: Record<string, unknown>,
+  ): Promise<void> => createGraphBackfillClaim({
+    db: {getOptional: async () => null},
+    tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+      get: async () => ({workspaceId: 'ws', deleted: false, properties}),
+      update: async () => { throw new Error('[test] stamped a claim it does not own') },
+      restore: async () => undefined,
+      create: async () => 'unused',
+      delete: async () => undefined,
+    } as never),
+    claimantId: 'device-a',
+    ensureHome: async () => undefined,
+  } as unknown as Parameters<typeof createGraphBackfillClaim>[0]).markComplete('ws', 'v1')
+
+  it('refuses — the row may be a LIVE claim a later run took', async () => {
+    // Reachable without anything exotic now that a peer can release a claim
+    // from the migration dialog: this run's claim is cleared, a third device
+    // takes a fresh one, and stamping THAT one completed tells every device the
+    // migration is over — dropping the blocking dialog and the undo pause while
+    // that run is still rewriting the graph.
+    await expect(markCompleteOver({
+      'migration:claimant': 'device-c', 'migration:claimed-at': 2000,
+    })).rejects.toThrow(/another client's claim/)
+  })
+
+  it('refuses a bag that carries no readable claim', async () => {
+    // Same reason the missing row is refused: stamping it records nothing any
+    // reader can see, and the operator is told the pass ran.
+    await expect(markCompleteOver({})).rejects.toThrow(/no readable claim/)
+  })
+})
+
 describe('a foreign block sitting at the claim id', () => {
   const foreignRow = {id: 'x', workspaceId: 'other-ws', deleted: false, properties: {}}
 
@@ -292,7 +362,13 @@ describe('completing a claim that was tombstoned underneath us', () => {
     const claim = createGraphBackfillClaim({
       db: {getOptional: async () => null},
       tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
-        get: async () => ({workspaceId: 'ws', deleted: true, properties: {}}),
+        // OUR claim, tombstoned. A bag with no claim in it would be refused
+        // now — a completion has to record a run somebody can read.
+        get: async () => ({
+          workspaceId: 'ws',
+          deleted: true,
+          properties: {'migration:claimant': 'device-a', 'migration:claimed-at': 1000},
+        }),
         restore: async () => { calls.push('restore') },
         update: async () => { calls.push('update') },
         create: async () => 'unused',

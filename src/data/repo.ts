@@ -51,6 +51,7 @@ import {
   UndoHistoryDroppedError,
 } from './api/errors'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { STRANDED_CLAIM_RECOVERY } from './internals/graphBackfillClaim'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
@@ -3486,10 +3487,11 @@ export class Repo {
     backfillId: string,
     generation: number,
   ): Promise<void> {
-    // Re-sampled per transaction while the write lock is held, so a drain
-    // cannot commit between this check and the write. Reading through
-    // `this.db` rather than the tx handle is deliberate: the drain is excluded
-    // by the lock, not by read isolation.
+    // Re-sampled per transaction, and deliberately NOT from inside one: it
+    // reads through `this.db`, and a read on that handle taken while a write
+    // transaction is open cannot be served on a single-connection pool. Callers
+    // run it immediately before opening their transaction and re-assert the
+    // synchronous half (`assertBackfillSessionUnchanged`) within.
     const gap = await this.workspaceViewGap(workspaceId)
     if (gap !== null) {
       throw Object.assign(new Error(
@@ -3780,8 +3782,8 @@ export class Repo {
         // already written. `releaseClaim` cannot tell that row from a SIBLING
         // TAB's live one: `claimantId` is per browser profile, so both name
         // this claimant and it would delete either. Trading a claim this
-        // device may have stranded — recoverable by deleting the block, which
-        // `held-by-peer` says — for freeing a second device to start an
+        // device may have stranded — recoverable from the dialog that blocks
+        // the workspace — for freeing a second device to start an
         // uploading pass while the first tab is still writing is the wrong
         // way round.
         const reason = err instanceof Error ? err.message : String(err)
@@ -3808,8 +3810,8 @@ export class Repo {
       } finally {
         // `finally`, because the body reports its own outcomes and returns
         // early from several of them. A claim left behind by a device that is
-        // no longer running anything blocks the pass for the whole graph until
-        // a human deletes the block.
+        // no longer running anything keeps every device's migration dialog up
+        // until it is released.
         //
         // Only one this call MINTED, though. An inherited claim already named
         // this claimant, and claimant ids are per browser PROFILE — so it may
@@ -3817,7 +3819,7 @@ export class Repo {
         // ownership by claimant and would delete it, freeing a third device to
         // start the same source-of-truth pass while the sibling writes. The
         // claim we then fail to hand back is the milder outcome: it strands,
-        // and deleting the block is the documented recovery.
+        // and the dialog that blocks the workspace is where it is released.
         //
         // Swallowed: the body has already told the operator what happened, and
         // a release that failed is a stranded claim with that same recovery —
@@ -3829,8 +3831,7 @@ export class Repo {
           await claim.releaseClaim(workspaceId, backfill.id).catch((err: unknown) => {
             console.error(
               `[workspaceBackfills] could not release the claim on "${backfill.id}" for ` +
-              `workspace ${workspaceId} — delete the claim block on the Migrations page to ` +
-              `let this pass run again:`, err,
+              `workspace ${workspaceId} — ${STRANDED_CLAIM_RECOVERY}:`, err,
             )
           })
         }
@@ -3997,8 +3998,16 @@ export class Repo {
           // callback's return value never arrives on that path. Release beats
           // the guarantee; the `catch` below is the other half.
           let drop: HistoryDrop | undefined
+          // OUTSIDE the transaction — see the method, which says why it cannot
+          // be read from inside one.
+          //
+          // What moving it out costs is one batch's worth of window: a drain
+          // that commits between this probe and the write is seen by the NEXT
+          // batch's probe instead of this one. The synchronous half stays
+          // inside, at both ends, where it costs no connection.
+          await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
           const value = await this.tx(async t => {
-            await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+            this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
             const value = await fn(t)
             // AGAIN, now the body has returned — see the method. `fn` can span a
             // whole insert budget, so the entry check above is as stale by here

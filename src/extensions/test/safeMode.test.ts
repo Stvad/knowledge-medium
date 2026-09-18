@@ -174,4 +174,36 @@ describe('resolveAppRuntime — safeMode', () => {
     expect(mountIds).toContain('command-palette.dialog')
     expect(actionIds).toContain(COMMAND_PALETTE_ACTION_ID)
   })
+
+  it('keeps the properties-migration gate while pruning its command', () => {
+    // The gate is the only thing telling every device to wait while the graph
+    // is converted, and it holds the undo pause that keeps a replay off rows
+    // the pass has rewritten. Pruning it leaves the app fully writable during
+    // exactly the event it exists for — and safe mode is a URL any user can
+    // reach. The COMMAND is ordinary upkeep and may go.
+    const runtime = resolveAppRuntimeSync(
+      staticAppExtensions({repo: {} as Repo}),
+      {overrides: empty, safeMode: true},
+    )
+
+    expect(runtime.read(appMountsFacet).map(mount => mount.id))
+      .toContain('properties-migration.gate')
+    expect(runtime.read(actionsFacet).map(action => action.id))
+      .not.toContain('migrate_properties_to_blocks')
+  })
+
+  it('keeps the gate even when the user turns it off', () => {
+    // `essential` outranks an override, which is what makes the guarantee above
+    // hold for a device that disabled the plugin before the migration started.
+    const runtime = resolveAppRuntimeSync(
+      staticAppExtensions({repo: {} as Repo}),
+      {
+        overrides: new Map([['system:properties-migration-gate', false]]),
+        safeMode: false,
+      },
+    )
+
+    expect(runtime.read(appMountsFacet).map(mount => mount.id))
+      .toContain('properties-migration.gate')
+  })
 })

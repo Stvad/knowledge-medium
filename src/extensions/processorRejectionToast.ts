@@ -40,7 +40,14 @@ export const routeProcessorRejection = (
 ): void => {
   const contribution = contributions.get(error.code)
   if (!contribution) {
-    showError(error.message)
+    // Keyed by the SENTENCE, so a refusal the user meets over and over — every
+    // retry of one edit the app keeps refusing — replaces its toast instead of
+    // stacking another identical copy, while two rejections that share a code
+    // and differ in what they name stay two toasts. Keying on the code alone
+    // destroyed the second of those: one transaction can report several
+    // properties whose values would not convert, each naming a different one,
+    // and the last would have been all the user saw.
+    showError(error.message, {id: `${error.code}:${error.message}`})
     return
   }
   showCustom(

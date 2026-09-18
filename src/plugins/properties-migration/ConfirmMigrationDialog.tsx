@@ -114,17 +114,20 @@ export const ConfirmMigrationDialog = ({
             workspace that has moved on, and that edit is lost. Nothing here can
             check that for you.{' '}</>}
           This runs on this device only — your other devices receive the result
-          through sync, so run it in one place. It can take several minutes.
-          Interrupting it is safe: reload or close the tab, then run it again
-          <em> on this device</em> and it picks up where it stopped.
+          through sync, so run it in one place. It can take several minutes, and
+          while it runs every device holds a dialog asking you to wait.
+          Interrupting it loses no data: run it again <em>on this device</em> and it
+          picks up where it stopped. But every device keeps waiting until you do —
+          an interrupted run does not hand the workspace back, and that dialog is
+          where you release it.
         </p>
         <p className="text-destructive">
           {!childBacked && <>The switch cannot be undone from the app — it only ever
             moves forward, and reversing it is a hand-run database migration.{' '}</>}
           Undo history for this workspace will be cleared on this device — undoing
-          an edit made before the migration would revert part of it. A device that
-          stays open while it runs keeps its own, so reload your other tabs and
-          devices afterwards.
+          an edit made before the migration would revert part of it. Undo is paused
+          everywhere while it runs, but a device that stays open keeps its own
+          history, so reload your other tabs and devices afterwards.
         </p>
       </div>
       <DialogFooter>
