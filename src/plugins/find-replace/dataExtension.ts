@@ -215,10 +215,11 @@ export const applyContentReplaceMutator = defineMutator<
       // drop the property key from the owner's cell, with no error
       // surfaced to the user who ran the replace.
       //
-      // Default: SKIP the write rather than write-then-report, matching the
-      // §9 precedent (`core.migratePropertyDefinition`) — it
-      // never writes a value it can't convert, preserving the original
-      // (still-valid) text. Writing the broken text would be "replace
+      // Default: SKIP the write rather than write-then-report. Same rule as
+      // `core.migratePropertyDefinition`, which refuses a definition change
+      // outright rather than committing one that drops a value (#1024); a
+      // replace is per-value, so skipping this one is the same answer at this
+      // grain. The original (still-valid) text is preserved either way. Writing the broken text would be "replace
       // succeeded, property silently detached". The skip is returned in
       // `retryableSkips` so the caller can offer "replace anyway"; on that
       // forced re-run the write goes through and the property reads unset

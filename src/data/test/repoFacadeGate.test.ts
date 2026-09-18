@@ -117,7 +117,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   workspaceUnappliedExactCount: 'read — one query; assigns no Repo fields',
   flushSyncObserver: 'reads this.syncObserver through the chain; never assigns it',
   onUserError: 'adds the caller listener to a shared CallbackSet; no this-capture',
-  reportUserError: 'notifies a shared CallbackSet; no this-capture',
   onReadOnlyChange: 'adds the caller listener to a shared CallbackSet; no this-capture',
   onMetricsReset: 'adds the caller listener to a shared CallbackSet; no this-capture',
   onPropertyEditorOverridesChange: 'delegates to constructor-bound facetBridge',
