@@ -409,10 +409,13 @@ const presetRegistryAfter = (
   // what the seeds live today declare; an update that moves a seed onto a new
   // config publishes it from the declaration, so it is in use before any row
   // exists to compare against.
+  // Keyed by the property NAME, which is what cells are stored under — see
+  // `SeedConfigPair`. A seed's `seedKey` is independent of its name and can be
+  // re-keyed without moving any data.
   const candidateSeedConfigs = new Map<string, Map<string, unknown>>()
   for (const seed of resolution.runtime.read(definitionSeedsFacet)) {
     const configs = candidateSeedConfigs.get(seed.presetId) ?? new Map<string, unknown>()
-    configs.set(seed.seedKey, seed.encodedConfig)
+    configs.set(seed.name, seed.encodedConfig)
     candidateSeedConfigs.set(seed.presetId, configs)
   }
 
@@ -510,12 +513,18 @@ const readExtensionOverrides = async (
  *  and keeps the re-pin, which is how a lost refusal becomes a re-typing at
  *  the next boot — the two must move together, so they read one answer.
  *
- *  `repin` is that pairing made explicit: the install may pin this device's
- *  approval to the new source only where the trust decision already exists
- *  AND this install could compare what the pin would make live. */
+ *  `repin` is that pairing made literal: the install pins this device's
+ *  approval to the new source ONLY on the `live` arm, the one arm where the
+ *  candidate was executed and its presets compared. Every `dormant` arm
+ *  declines, which is what makes "nothing this install does takes effect
+ *  here" true rather than a claim the re-pin quietly contradicts. It costs
+ *  the update flow nothing: `enable-extension` re-approves unconditionally,
+ *  so install-then-enable still ships an update, while the settings-UI enable
+ *  — which keeps an existing pin — now reports `update-available` instead of
+ *  silently adopting source nothing compared (narrowing #1046). */
 type InstallLiveness =
-  | {kind: 'live'; overrides: Overrides; repin: true}
-  | {kind: 'dormant'; overrides: Overrides; repin: boolean}
+  | {kind: 'live'; overrides: Overrides}
+  | {kind: 'dormant'; overrides: Overrides}
   | {kind: 'unreadable'; why: string}
 
 const resolveInstallLiveness = async (
@@ -523,12 +532,13 @@ const resolveInstallLiveness = async (
   workspaceId: string,
   existing: BlockData | null,
   safeMode: boolean,
+  verify: boolean,
 ): Promise<InstallLiveness> => {
   // A block this device has never seen is not running here, and no value is
   // stored under a core it has never registered. Answered before either gate's
   // store is touched, so a first install can never be `unreadable` — a fresh
   // graph with a malformed prefs row still installs.
-  if (existing === null) return {kind: 'dormant', overrides: new Map(), repin: false}
+  if (existing === null) return {kind: 'dormant', overrides: new Map()}
 
   // `lookupApproval`, not `readApproval`: the latter reports a transient store
   // failure as "no approval", which here would skip the check on an extension
@@ -537,6 +547,14 @@ const resolveInstallLiveness = async (
   const approval = await lookupApproval(existing.id)
   if (approval.status === 'unreadable') {
     return {kind: 'unreadable', why: 'this device\'s extension approval record could not be read'}
+  }
+  // Each gate is read only where its answer can change what happens. Without
+  // approval this install can neither run the source nor pin it, so the
+  // override map decides nothing and an unreadable one must not refuse —
+  // `--verify` is the exception, since the report it asks for resolves the
+  // candidate behind these very toggles.
+  if (approval.status !== 'approved' && !verify) {
+    return {kind: 'dormant', overrides: new Map()}
   }
 
   const overrides = await readExtensionOverrides(repo, workspaceId)
@@ -550,16 +568,12 @@ const resolveInstallLiveness = async (
   // Safe mode registers NO dynamic-extension contribution at all, whatever the
   // override state, so the live registry holds none of the cores this install
   // would replace and every id would read as unregistered — an all-clear that
-  // means only that nothing is loaded. Declining the re-pin is what makes
-  // `dormant` TRUE here rather than a second blind spot: unpinned source runs
-  // at no later boot either, so leaving safe mode cannot spring the change
-  // this install could not check.
-  if (safeMode) return {kind: 'dormant', overrides, repin: false}
+  // means only that nothing is loaded.
+  if (safeMode) return {kind: 'dormant', overrides}
 
-  const approvedHere = approval.status === 'approved'
-  return approvedHere && isEnabled(userExtensionToggle(existing), overrides)
-    ? {kind: 'live', overrides, repin: true}
-    : {kind: 'dormant', overrides, repin: approvedHere}
+  return approval.status === 'approved' && isEnabled(userExtensionToggle(existing), overrides)
+    ? {kind: 'live', overrides}
+    : {kind: 'dormant', overrides}
 }
 
 /** Will this extension actually run on this device, and if not, why not?
@@ -1300,7 +1314,8 @@ const installRuntimeExtension = async (
   // than leaving the extension silently dead until someone re-enables it. A
   // block this device never approved stays unapproved: install is not where
   // trust gets granted for the first time.
-  const liveness = await resolveInstallLiveness(repo, workspaceId, existing, context.safeMode)
+  const liveness = await resolveInstallLiveness(
+    repo, workspaceId, existing, context.safeMode, Boolean(input.verify))
   // Every gate this install reads answers TWO questions at once — does the new
   // source run here, and may the install re-pin the device's approval to it —
   // and an unread gate answers neither. Refusing is the only response that
@@ -1352,17 +1367,20 @@ const installRuntimeExtension = async (
   if (presetConflicts.length > 0 && goesLive && !input.allowPresetChange) {
     // A candidate that transpiled and then THREW contributes nothing, which
     // the diff correctly reads as dropping every id it used to register. The
-    // crash is the cause and the dropped id only its consequence, so a refusal
-    // that named the consequence alone would send the reader looking for a
-    // preset change that is not there — and its `--allow-preset-change` way
-    // out would pin a module that does not run.
+    // crash is then the CAUSE and the dropped id only its consequence, so the
+    // refusal has to carry it — naming the consequence alone sends the reader
+    // looking for a preset change that is not there. A candidate that errored
+    // and still registered everything is the other case: the errors are worth
+    // printing, but claiming they explain the conflict would be a guess.
+    const dropped = presetConflicts.some(conflict =>
+      conflict.differences.some(line => line.includes('no core registers this id')))
     const loadErrors = (resolution?.errors ?? [])
       .map(error => `  ${error.name ? `${error.name}: ` : ''}${error.message}`)
       .join('\n')
     throw new Error(
       presetIdentityRefusal(presetScan, label ? JSON.stringify(label) : targetId, workspaceId)
-      + (loadErrors === '' ? '' : `\nThe new source also failed to load, which is why it `
-        + `registers less than it used to:\n${loadErrors}`),
+      + (loadErrors === '' ? '' : `\nThe new source also failed to load${
+        dropped ? ', which is why it registers less than it used to' : ''}:\n${loadErrors}`),
     )
   }
   const presetChanges: {presetChanges?: PresetIdentityConflict[]} =
@@ -1388,12 +1406,12 @@ const installRuntimeExtension = async (
       await repo.addTypeInTx(tx, existing.id, EXTENSION_TYPE, {}, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
     // Both conditions say the same thing: never pin a source this install did
-    // not compare. `repin` covers the gates that could not be read or are not
-    // loaded (see `InstallLiveness`); `pinnable` covers a source that did not
-    // transpile — that conclusion is what let the scan skip the diff, and
-    // `approveExtension` transpiles a SECOND time, so a first failure that was
-    // transient would otherwise succeed here and take effect unrefused.
-    if (liveness.kind !== 'unreadable' && liveness.repin && resolution?.pinnable !== false) {
+    // not compare. `live` is the only arm that executed the candidate and
+    // diffed its presets (see `InstallLiveness`); `pinnable` covers a source
+    // that did not transpile — that conclusion is what let the scan skip the
+    // diff, and `approveExtension` transpiles a SECOND time, so a first
+    // failure that was transient would otherwise succeed here unrefused.
+    if (liveness.kind === 'live' && resolution?.pinnable !== false) {
       // Best-effort otherwise: a source that no longer transpiles can't be
       // pinned, and that failure belongs to verify/reload, not to the install.
       await approveExtension(existing.id, source).catch(() => undefined)

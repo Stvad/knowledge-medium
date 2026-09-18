@@ -722,6 +722,8 @@ describe('agent runtime commands', () => {
       ])
       await vi.waitFor(() =>
         expect(env.repo.propertyDefinitions?.seedsByKey.has(boundKey)).toBe(true))
+      // The candidate's seed is rebound to a DIFFERENT key than the live one
+      // only if the loader says so; either way the pairing is by name.
 
       const restore = compileTo([
         valuePresetCoresFacet.of(core),
@@ -729,7 +731,7 @@ describe('agent runtime commands', () => {
       ])
       try {
         await expect(install('install-seedcfg'))
-          .rejects.toThrow(/at the config seed "[^"]*\/property\/seedcfg" declares/)
+          .rejects.toThrow(/at the config seed "demo:seedcfg-rating" declares, moved from/)
       } finally {
         restore()
       }
@@ -769,7 +771,25 @@ describe('agent runtime commands', () => {
       })
       try {
         await expect(install('install-throwing-module'))
-          .rejects.toThrow(/boom in module top level/)
+          .rejects.toThrow(/failed to load, which is why it registers less than it used to/)
+      } finally {
+        restore()
+      }
+    })
+
+    it('prints a partial candidate\'s load errors without blaming the conflict on them', async () => {
+      // It registered every id it used to; the errors are worth printing, but
+      // claiming they explain the codec change would be a guess.
+      await liveRatingExtension('install-partial-cause')
+      const restore = __setCompileImplForTest(async () => ({
+        default: [
+          valuePresetCoresFacet.of(stringRating),
+          () => { throw new Error('sibling blew up') },
+        ],
+      }))
+      try {
+        await expect(install('install-partial-blame')).rejects.toThrow(
+          /failed to load:\n {2}.*sibling blew up/s)
       } finally {
         restore()
       }
@@ -792,6 +812,89 @@ describe('agent runtime commands', () => {
       } finally {
         restore.mockRestore()
         env.repo.setActiveWorkspaceId(WS)
+      }
+    })
+
+    it('does not re-pin an APPROVED but disabled extension it never compared', async () => {
+      // The other arm of the same rule as safe mode. Approval alone does not
+      // make the source run, so the candidate is never executed and nothing
+      // compares its presets — pinning it anyway would hand the next enable a
+      // core no check ever saw. `enable-extension` re-approves unconditionally,
+      // so install-then-enable still ships an update.
+      const id = await liveRatingExtension('install-disabled-repin')
+      await executeCommand({
+        commandId: 'disable-for-repin', type: 'disable-extension', id,
+      }, env.context)
+      const pinnedBefore = await readApproval(id)
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        const result = await install('install-disabled')
+        expect(result.presetChanges).toBeUndefined()
+        expect(await readApproval(id)).toEqual(pinnedBefore)
+      } finally {
+        restore()
+      }
+    })
+
+    it('leaves the previous pin in place when --allow-preset-change skips the check', async () => {
+      // The flag buys a SKIPPED check, and an unchecked source is not pinned:
+      // the install stores it, reports `running: false`, and the extension
+      // goes on running what it was running.
+      const id = await liveRatingExtension('install-allow-nopin')
+      await corruptOverrides()
+      const pinnedBefore = await readApproval(id)
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        const result = await install('install-allow-skip', {allowPresetChange: true})
+        expect(result.presetChanges).toBeUndefined()
+        expect(await readApproval(id)).toEqual(pinnedBefore)
+      } finally {
+        restore()
+      }
+    })
+
+    it('installs a re-install of a block this device never approved, prefs row or not', async () => {
+      // Without approval the install can neither run the source nor pin it,
+      // so the override map decides nothing and an unreadable one must not
+      // refuse — the same reasoning that exempts a first install.
+      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
+      try {
+        await install('install-unapproved-base')
+      } finally {
+        restoreBase()
+      }
+      await corruptOverrides()
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        const result = await install('install-unapproved-again')
+        expect(result.inserted).toBe(false)
+        expect(result.presetChanges).toBeUndefined()
+      } finally {
+        restore()
+      }
+    })
+
+    it('still refuses --verify on an unapproved block whose overrides are unreadable', async () => {
+      // The exception to the rule above: the report `--verify` asks for
+      // resolves the candidate behind these very toggles, so an unreadable
+      // map makes it a report from a pruned view whatever the approval says.
+      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
+      try {
+        await install('install-unapproved-verify-base')
+      } finally {
+        restoreBase()
+      }
+      await corruptOverrides()
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        await expect(install('install-unapproved-verify', {verify: true}))
+          .rejects.toThrow(/extension overrides could not be read/)
+      } finally {
+        restore()
       }
     })
 

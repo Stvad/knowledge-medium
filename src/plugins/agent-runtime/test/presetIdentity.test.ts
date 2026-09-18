@@ -399,11 +399,11 @@ describe('findPresetIdentityConflicts', () => {
 
     const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, new Map([
       [PRESET, {core: modalCore(codecs.number), seedConfigs:
-        new Map([['system:demo/property/narrow-rating', {mode: 'narrow'}]])}],
+        new Map([['demo:narrow-rating', {mode: 'narrow'}]])}],
     ]))
     expect(conflict?.differences).toEqual([
       'codec type "string" -> codec type "number" '
-      + '(at the config seed "system:demo/property/narrow-rating" declares)',
+      + '(at the config seed "demo:narrow-rating" declares)',
     ])
   })
 
@@ -429,11 +429,11 @@ describe('findPresetIdentityConflicts', () => {
 
     const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, new Map([
       [PRESET, {core: modalCore(codecs.number), seedConfigs:
-        new Map([['system:demo/property/wide-rating', {mode: 'narrow'}]])}],
+        new Map([['demo:wide-rating', {mode: 'narrow'}]])}],
     ]))
     expect(conflict?.differences).toEqual([
       'codec type "string" -> codec type "number" '
-      + '(at the config seed "system:demo/property/wide-rating" declares)',
+      + '(at the config seed "demo:wide-rating" declares, moved from {"mode":"wide"} to {"mode":"narrow"})',
     ])
   })
 
@@ -472,11 +472,11 @@ describe('findPresetIdentityConflicts', () => {
       // The SAME core object, which is also what makes the `current === next`
       // fast path unable to short-circuit here.
       [PRESET, {core: registered, seedConfigs:
-        new Map([['system:demo/property/moving-rating', {mode: 'narrow'}]])}],
+        new Map([['demo:moving-rating', {mode: 'narrow'}]])}],
     ]))
     expect(conflict?.differences).toEqual([
       'codec type "string" -> codec type "number" '
-      + '(at the config seed "system:demo/property/moving-rating" declares)',
+      + '(at the config seed "demo:moving-rating" declares, moved from {"mode":"wide"} to {"mode":"narrow"})',
     ])
   })
 
@@ -527,6 +527,43 @@ describe('findPresetIdentityConflicts', () => {
     const {conflicts} = await findPresetIdentityConflicts(
       repo, WS, registryAfter(modalCore(codecs.number)))
     expect(conflicts).toEqual([])
+  })
+
+  it('pairs a seed by NAME, so re-keying it does not hide a config move', async () => {
+    // A `seedKey` is author-chosen and independent of the property name; the
+    // name is what cells are stored under. Pairing by key reads a re-key as
+    // one seed removed and another added, and compares neither — so the whole
+    // move goes unseen while the core stays identical.
+    const registered = definePresetCore<unknown, {mode: string}>({
+      id: PRESET,
+      build: config => (config.mode === 'narrow' ? codecs.number : codecs.string),
+      defaultValue: '',
+      defaultConfig: {mode: 'wide'},
+      configCodec: modeCodec,
+    })
+    register(registered)
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-rekeyed-seed', [
+      seedProperty<unknown, {mode: string}>({
+        seedKey: 'system:demo/property/OLD-key',
+        revision: 1,
+        name: 'demo:rekeyed-rating',
+        preset: registered,
+        config: {mode: 'wide'},
+        defaultValue: '',
+        changeScope: ChangeScope.BlockDefault,
+      }),
+    ])
+
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, new Map([
+      // Same core, same NAME, different seedKey, and the config moved.
+      [PRESET, {core: registered, seedConfigs:
+        new Map([['demo:rekeyed-rating', {mode: 'narrow'}]])}],
+    ]))
+    expect(conflict?.differences).toEqual([
+      'codec type "string" -> codec type "number" '
+      + '(at the config seed "demo:rekeyed-rating" declares, '
+      + 'moved from {"mode":"wide"} to {"mode":"narrow"})',
+    ])
   })
 
   it('reports an id whose core goes away entirely', async () => {

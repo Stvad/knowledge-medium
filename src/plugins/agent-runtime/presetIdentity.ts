@@ -65,12 +65,12 @@
  * leaves is the ENABLE that later does make it run, which is #1046.
  *
  * Both sides are therefore answered from stores that can fail to read, and a
- * failed read is not a "no" — see `InstallLiveness` in `commands.ts`, which
- * keeps "does this run here" and "may the install re-pin to it" as one answer
- * so no path can skip the check and pin the source it skipped. Safe mode is
- * the case that makes this concrete: it registers no extension contribution,
- * so every id would read as unregistered, and the install declines to re-pin
- * rather than call that an all-clear.
+ * failed read is not a "no" — see `InstallLiveness` in `commands.ts`. An
+ * install pins this device's approval to the new source only on the arm that
+ * executed and compared it, so no path can skip the check and pin the source
+ * it skipped. Safe mode makes that concrete: it registers no extension
+ * contribution, so every id would read as unregistered, and declining the pin
+ * is what keeps "nothing this install does takes effect here" true.
  *
  * ACCEPTED — this is a POINT-IN-TIME comparison against what is LIVE, so
  * anything not yet live is outside it: definition rows inside a durable sync
@@ -235,15 +235,24 @@ const configsToProbe = (
     probes.push({
       before: seed.before,
       after: seed.after,
-      where: `at the config seed ${JSON.stringify(seed.seedKey)} declares`,
+      where: `at the config seed ${JSON.stringify(seed.name)} declares`
+        + (configKey(seed.before) === configKey(seed.after)
+          ? ''
+          : `, moved from ${JSON.stringify(seed.before)} to ${JSON.stringify(seed.after)}`),
     })
   }
   return probes
 }
 
-/** A seed's config on each side of the update, paired by `seedKey`. */
+/** A seed's config on each side of the update, paired by the property NAME.
+ *
+ *  Not by `seedKey`: the name is what cells are stored under, and the two are
+ *  independent — a dynamic extension's key is author-chosen and block-scoped,
+ *  so re-keying a seed while keeping its name is an ordinary refactor that
+ *  moves no data. Pairing by key would read that as one seed removed and
+ *  another added, and compare neither against the other. */
 interface SeedConfigPair {
-  readonly seedKey: string
+  readonly name: string
   readonly before: unknown
   readonly after: unknown
 }
@@ -375,12 +384,13 @@ export interface PresetAfter {
    *  would register any more. */
   readonly core: AnyValuePresetCore | undefined
   /** The encoded config each of the CANDIDATE's own seeds declares for this
-   *  preset, by `seedKey`. A seed publishes its schema from the declaration,
-   *  so a config an update introduces is in use the moment it loads,
-   *  materialized row or not — and the registry only carries what the seeds
-   *  declare TODAY. Keyed rather than listed so each seed is compared against
-   *  its own previous declaration: the config moves WITH the core across an
-   *  update, which a flat list of configs to try cannot express. */
+   *  preset, by the property NAME it claims. A seed publishes its schema from
+   *  the declaration, so a config an update introduces is in use the moment it
+   *  loads, materialized row or not — and the registry only carries what the
+   *  seeds declare TODAY. Keyed rather than listed so each seed is compared
+   *  against its own previous declaration: the config moves WITH the core
+   *  across an update, which a flat list of configs to try cannot express.
+   *  See {@link SeedConfigPair} for why the key is the name. */
   readonly seedConfigs: ReadonlyMap<string, unknown>
 }
 
@@ -438,11 +448,11 @@ export const findPresetIdentityConflicts = async (
       // Every live seed on this preset is at stake and is NAMED, whether or
       // not the candidate still declares it.
       seedNames.push(seed.name)
-      if (!seedConfigs.has(seed.seedKey)) continue
+      if (!seedConfigs.has(seed.name)) continue
       seeds.push({
-        seedKey: seed.seedKey,
+        name: seed.name,
         before: seed.encodedConfig,
-        after: seedConfigs.get(seed.seedKey),
+        after: seedConfigs.get(seed.name),
       })
     }
     // `current !== next` is a fast path, not a guard — comparing a core
