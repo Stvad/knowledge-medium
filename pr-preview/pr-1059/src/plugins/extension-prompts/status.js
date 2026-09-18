@@ -1,1 +1,1 @@
-import{mw as e,pw as t}from"../../../chunks/app-Bocar0-G.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};
+import{mw as e,pw as t}from"../../../chunks/app-C7oLdVum.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};
