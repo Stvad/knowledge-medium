@@ -13,6 +13,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   __setCompileImplForTest,
   __setTranspileImplForTest,
+  hashExtensionSource,
   readApproval,
 } from '@/extensions/compileExtensionModule'
 import { getCompiledModuleCache } from '@/extensions/compiledModuleCache'
@@ -22,9 +23,15 @@ import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getPluginPrefsBlock } from '@/data/stateBlocks'
 import { extensionsOverridesProp, extensionsPrefsType } from '@/plugins/extensions-settings/config'
 import { userToggle } from '@/facets/togglable'
+import { userExtensionToggle } from '@/extensions/extensionToggles'
 import { codecs, definePresetCore, type Codec } from '@/data/api'
 import { seedProperty } from '@/data/propertySeeds'
-import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds'
+import { seedType } from '@/data/typeSeeds'
+import { typeSeedsFacet } from '@/data/facets'
+import {
+  extensionPropertySeedKey,
+  extensionTypeSeedKey,
+} from '@/extensions/dynamicExtensionSeeds'
 import { ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
@@ -279,6 +286,7 @@ describe('agent runtime commands', () => {
     it('refuses an install that re-types values under a preset it re-registers', async () => {
       await registerNumberRatingWithDefinition()
       const id = await installApproved(valuePresetCoresFacet.of(numberRating))
+      const pinnedBefore = await readApproval(id)
       const before = (await env.repo.load(id))?.content
 
       const restore = compileTo(valuePresetCoresFacet.of(stringRating))
@@ -293,7 +301,7 @@ describe('agent runtime commands', () => {
       // new source would change the block's hash and un-pin the approved
       // version, stopping a working extension dead as a side effect of no.
       expect((await env.repo.load(id))?.content).toBe(before)
-      expect(await readApproval(id)).not.toBeNull()
+      expect(await readApproval(id)).toEqual(pinnedBefore)
     })
 
     it('installs anyway under allowPresetChange, and reports what it re-typed', async () => {
@@ -349,6 +357,7 @@ describe('agent runtime commands', () => {
       const advanced = userToggle({id: 'demo:advanced', name: 'Advanced ratings'})
       await registerNumberRatingWithDefinition()
       const id = await installApproved(advanced.of([valuePresetCoresFacet.of(numberRating)]))
+      const pinnedBefore = await readApproval(id)
 
       const prefsBlock = await getPluginPrefsBlock(
         env.repo, WS, env.repo.user, extensionsPrefsType)
@@ -366,7 +375,7 @@ describe('agent runtime commands', () => {
       } finally {
         restore()
       }
-      expect(await readApproval(id)).not.toBeNull()
+      expect(await readApproval(id)).toEqual(pinnedBefore)
     })
 
     it('refuses when the update DROPS an id it currently registers', async () => {
@@ -498,10 +507,11 @@ describe('agent runtime commands', () => {
       // nothing live, and must not evaluate its source to find that out.
       await registerNumberRatingWithDefinition()
       const id = await installApproved(valuePresetCoresFacet.of(numberRating))
+      const pinnedBefore = await readApproval(id)
       await executeCommand({
         commandId: 'disable-for-exec-gate', type: 'disable-extension', id,
       }, env.context)
-      expect(await readApproval(id)).not.toBeNull()
+      expect(await readApproval(id)).toEqual(pinnedBefore)
 
       let compiled = 0
       const restore = __setCompileImplForTest(async () => {
@@ -587,9 +597,6 @@ describe('agent runtime commands', () => {
       }
     })
 
-    /** An approved+enabled block already contributing `demo:rating`, with a
-     *  definition using it — the state every "what does this update change"
-     *  case starts from. */
     it('does not diff a source that cannot be PINNED, and reports why', async () => {
       // A source that will not transpile leaves the previous pin — and the code
       // it already runs — in place, so the registry does not move. Diffing the
@@ -722,8 +729,6 @@ describe('agent runtime commands', () => {
       ])
       await vi.waitFor(() =>
         expect(env.repo.propertyDefinitions?.seedsByKey.has(boundKey)).toBe(true))
-      // The candidate's seed is rebound to a DIFFERENT key than the live one
-      // only if the loader says so; either way the pairing is by name.
 
       const restore = compileTo([
         valuePresetCoresFacet.of(core),
@@ -893,6 +898,155 @@ describe('agent runtime commands', () => {
       try {
         await expect(install('install-unapproved-verify', {verify: true}))
           .rejects.toThrow(/extension overrides could not be read/)
+      } finally {
+        restore()
+      }
+    })
+
+    it('re-pins the device to the new source when the install does go live', async () => {
+      // The other side of every "does not re-pin" case: on the one arm that
+      // executed and compared the candidate, the pin MUST move, or the update
+      // the agent just shipped is not what runs.
+      const id = await liveRatingExtension('install-repins')
+      const pinnedBefore = await readApproval(id)
+
+      const restore = compileTo(valuePresetCoresFacet.of(numberRating))
+      try {
+        await install('install-repins-again')
+      } finally {
+        restore()
+      }
+      const pinnedAfter = await readApproval(id)
+      expect(pinnedAfter).toBeDefined()
+      expect(pinnedAfter?.sourceHash).not.toBe(pinnedBefore?.sourceHash)
+      expect(pinnedAfter?.sourceHash).toBe(await hashExtensionSource('STUBBED install-repins-again'))
+    })
+
+    it('does not treat an enabled-by-intent block this device never approved as live', async () => {
+      // Enable intent SYNCS; approval is device-local. A block enabled on
+      // another device and never approved here is not running here, so an
+      // install must neither refuse on its behalf nor grant it trust —
+      // install is not where trust is granted for the first time (#67).
+      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
+      let id: string
+      try {
+        id = (await install('install-intent-only-base')).id
+      } finally {
+        restoreBase()
+      }
+      await registerNumberRatingWithDefinition()
+      // Intent on, approval absent — the shape a synced enable leaves.
+      const prefsBlock = await getPluginPrefsBlock(
+        env.repo, WS, env.repo.user, extensionsPrefsType)
+      const overrides = prefsBlock.peekProperty(extensionsOverridesProp)
+        ?? new Map<string, boolean>()
+      const installedBlock = await env.repo.load(id)
+      await prefsBlock.set(extensionsOverridesProp,
+        new Map([...overrides, [userExtensionToggle(installedBlock!).id, true]]))
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        // Reported, because `--verify` asked and the conflict is a real fact
+        // about a future enable — but not REFUSED, and no trust granted.
+        const result = await install('install-intent-only', {verify: true})
+        expect(result.presetChanges?.[0]?.presetId).toBe(RATING)
+        expect(result.running).toBe(false)
+        expect(await readApproval(id)).toBeUndefined()
+      } finally {
+        restore()
+      }
+    })
+
+    it('reads the real override map on a FIRST install, not an empty stand-in', async () => {
+      // A first install reads no gate to DECIDE anything, but `--verify` still
+      // resolves the candidate behind this device's toggles: an empty map
+      // prunes every contribution behind one that is off by default and on by
+      // override, and reports "no conflicts" for a core that would shadow a
+      // live one.
+      const advanced = userToggle({id: 'demo:advanced-fresh', name: 'Advanced ratings'})
+      await registerNumberRatingWithDefinition()
+      const prefsBlock = await getPluginPrefsBlock(
+        env.repo, WS, env.repo.user, extensionsPrefsType)
+      const overrides = prefsBlock.peekProperty(extensionsOverridesProp)
+        ?? new Map<string, boolean>()
+      await prefsBlock.set(extensionsOverridesProp,
+        new Map([...overrides, [advanced.id, true]]))
+
+      const restore = compileTo(advanced.of([valuePresetCoresFacet.of(stringRating)]))
+      try {
+        const result = await install('install-fresh-toggle', {verify: true})
+        expect(result.presetChanges?.[0]?.differences).toEqual([
+          'codec type "number" -> codec type "string" (at the preset default config)',
+        ])
+      } finally {
+        restore()
+      }
+    })
+
+    it("sees a property seed declared INLINE in the extension's type seed", async () => {
+      // A property seed nested in a type seed reaches the registry through
+      // `harvestNestedPropertySeeds`, never through `definitionSeedsFacet`.
+      // Reading only the latter makes the candidate's copy invisible, and an
+      // unchanged core moving that seed onto a new config passes unnoticed.
+      const modeCodec: Codec<{mode: string}> = {
+        type: 'demo:mode',
+        encode: value => ({mode: value.mode}),
+        decode: json => ({mode: String((json as {mode?: unknown})?.mode ?? 'wide')}),
+      }
+      const core = definePresetCore<unknown, {mode: string}>({
+        id: RATING,
+        build: config => (config.mode === 'narrow' ? codecs.number : codecs.string),
+        defaultValue: '',
+        defaultConfig: {mode: 'wide'},
+        configCodec: modeCodec,
+      })
+      const nestedSeed = (mode: string) => seedProperty<unknown, {mode: string}>({
+        seedKey: extensionPropertySeedKey('nested'),
+        revision: 1,
+        name: 'demo:nested-rating',
+        preset: core,
+        config: {mode},
+        defaultValue: mode === 'narrow' ? 0 : '',
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const typeSeedWith = (mode: string) => typeSeedsFacet.of(seedType({
+        seedKey: extensionTypeSeedKey('rated'),
+        revision: 1,
+        id: 'demo:rated',
+        label: 'Rated thing',
+        properties: [nestedSeed(mode)],
+      }))
+
+      const restoreBase = compileTo([valuePresetCoresFacet.of(core), typeSeedWith('wide')])
+      let id: string
+      try {
+        const installed = await install('install-nested-base')
+        await executeCommand({
+          commandId: 'enable-nested', type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [core])
+      env.repo.setRuntimeContributions(definitionSeedsFacet, `block:${id}`, [
+        seedProperty<unknown, {mode: string}>({
+          seedKey: `${encodeURIComponent(id)}/property/nested`,
+          revision: 1,
+          name: 'demo:nested-rating',
+          preset: core,
+          config: {mode: 'wide'},
+          defaultValue: '',
+          changeScope: ChangeScope.BlockDefault,
+        }),
+      ])
+      await vi.waitFor(() => expect(
+        env.repo.propertyDefinitions?.seedsByName.has('demo:nested-rating')).toBe(true))
+
+      const restore = compileTo([valuePresetCoresFacet.of(core), typeSeedWith('narrow')])
+      try {
+        await expect(install('install-nested'))
+          .rejects.toThrow(/at the config seed "demo:nested-rating" declares, moved from/)
       } finally {
         restore()
       }

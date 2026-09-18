@@ -405,6 +405,10 @@ describe('findPresetIdentityConflicts', () => {
       'codec type "string" -> codec type "number" '
       + '(at the config seed "demo:narrow-rating" declares)',
     ])
+    // Zero materialized rows: the refusal says so rather than printing an
+    // empty list after "0 definition block(s)".
+    expect(presetIdentityRefusal({conflicts: [conflict!], syncGap: null}, '"R"', WS))
+      .toContain('No definition block in this workspace uses it')
   })
 
   it("probes a config the CANDIDATE's seed introduces", async () => {
@@ -564,6 +568,40 @@ describe('findPresetIdentityConflicts', () => {
       + '(at the config seed "demo:rekeyed-rating" declares, '
       + 'moved from {"mode":"wide"} to {"mode":"narrow"})',
     ])
+  })
+
+  it('prints the whole refusal: named definitions, the overflow, seeds and counts', async () => {
+    // The refusal IS the deliverable — every branch of it (the cap on named
+    // definitions and its "and N more", the cells-first ordering, the seed
+    // line, the totals) is what an operator acts on, and none of it is
+    // observable through the conflict fields alone.
+    register(numberRating)
+    // Ten thin definitions, then the busiest one LAST — so insertion order
+    // would bury it and only the cells-first sort can name it.
+    for (let i = 0; i < 10; i += 1) await addDefinitionWithCells(`demo-row-${i}`, PRESET, 1)
+    await addDefinitionWithCells('demo-busiest', PRESET, 5)
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-refusal-seed', [
+      seedProperty<number>({
+        seedKey: 'system:demo/property/refusal-rating',
+        revision: 1,
+        name: 'demo:seeded-refusal',
+        preset: numberRating,
+        defaultValue: 0,
+        changeScope: ChangeScope.BlockDefault,
+      }),
+    ])
+    await vi.waitFor(() => expect(
+      repo.propertyDefinitions?.seedsByName.has('demo:seeded-refusal')).toBe(true))
+
+    const scan = await findPresetIdentityConflicts(repo, WS, registryAfter(stringRating))
+    const refusal = presetIdentityRefusal(scan, '"Ratings"', WS)
+    expect(refusal).toContain('11 definition block(s), 15 cells')
+    // Most cells first, capped, with the remainder summarized.
+    // Named FIRST, ahead of the ten created before it.
+    expect(refusal).toMatch(/preset[\s\S]*?demo-busiest \(5 cells\)/)
+    expect(refusal.indexOf('demo-busiest')).toBeLessThan(refusal.indexOf('demo-row-'))
+    expect(refusal).toMatch(/and 1 more/)
+    expect(refusal).toContain('declared by seed(s): demo:seeded-refusal')
   })
 
   it('reports an id whose core goes away entirely', async () => {

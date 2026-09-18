@@ -182,8 +182,9 @@ const describeOutcome = (outcome: PresetCodecOutcome): string =>
 /** Identity of a preset config as an INPUT to `build`. A stored `null` and an
  *  ABSENT cell are different inputs, not one: `rawPresetConfig` passes `null`
  *  to the config codec and falls back to the preset default only for
- *  `undefined`. Keying both as `'null'` let either probe suppress the other,
- *  with no ordering guarantee over which won. */
+ *  `undefined`, so collapsing them lets either probe suppress the other with
+ *  no ordering guarantee over which won. Spelled out rather than left to
+ *  `JSON.stringify(undefined)` happening to interpolate as `"undefined"`. */
 const configKey = (config: unknown): string =>
   config === undefined ? 'absent' : `stored:${JSON.stringify(config)}`
 
@@ -314,6 +315,12 @@ const readDefinitionRows = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<DefinitionRow[]> => {
+  // Every guard below against a MALFORMED row — `OBJECT_BAG`, the `JSON.parse`
+  // catch, and the two typeof checks — is defence in depth and unpinned: the
+  // writers upstream cannot produce one, so no test drives it through this
+  // path. They stay because a row can also arrive by sync from an older or
+  // hand-edited client, where a throw here would fail the whole install.
+  //
   // The WHOLE bag, parsed in JS, rather than a cell at a time in SQL. A config
   // is an arbitrary JSON value — `presetConfigProp` stores it through
   // `unsafeIdentity` — and `json_each(...).value` flattens that: a string cell
@@ -475,9 +482,7 @@ export const findPresetIdentityConflicts = async (
 
   // Decided first, and without awaiting: the cell scan below is one full pass
   // over the workspace's live blocks, so it runs ONCE for every name across
-  // every conflict rather than once per conflict. It also leaves no suspension
-  // point between the conflicts, so their counts share one instant — which is
-  // what this scan claims to be.
+  // every conflict rather than once per conflict.
   const affected = contested.flatMap(({presetId, current, next, seeds, seedNames}) => {
     const rows = definitionRows.filter(row => row.presetId === presetId)
     const differences = next === undefined

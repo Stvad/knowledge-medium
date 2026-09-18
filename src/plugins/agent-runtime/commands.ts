@@ -53,7 +53,17 @@ import {
   revokeExtensionApproval,
 } from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
-import { definitionSeedsFacet, valuePresetCoresFacet } from '@/data/facets.js'
+import {
+  definitionSeedsFacet,
+  projectedTypeDefinitionsFacet,
+  typeSeedsFacet,
+  valuePresetCoresFacet,
+} from '@/data/facets.js'
+import { resolveSeedsByName } from '@/data/propertyDefinitionRegistry.js'
+import {
+  buildTypeDefinitionRegistry,
+  harvestNestedPropertySeeds,
+} from '@/data/typeDefinitionRegistry.js'
 import type { AnyValuePresetCore } from '@/data/api'
 import { v4 as uuidv4 } from 'uuid'
 import { lintExtensionSource } from './extensionLint.ts'
@@ -339,6 +349,48 @@ const resolveExtensionInIsolation = async (
   return {runtime: verificationRuntime, errors, pinnable}
 }
 
+/** The app's own contribution list for `facetId`, with this block's entries
+ *  REPLACED IN PLACE by the candidate's.
+ *
+ *  Both halves matter and neither is re-derived by the caller: the folds this
+ *  feeds sort by `precedence` and break ties by POSITION, so a candidate read
+ *  in isolation — or appended at the end — can name itself the winner over a
+ *  live contribution that would actually outrank it. Splicing at the first of
+ *  this block's entries is where a reload puts them back.
+ *
+ *  With no anchor — a first install, or a block contributing nothing to this
+ *  facet today — it appends. For a first install that is exactly where its
+ *  contributions land. For an existing block it is an APPROXIMATION of its
+ *  place in `findExtensionBlocks` order, and a deliberate one: it can only
+ *  make the candidate win a same-precedence tie it would really lose, which is
+ *  a spurious refusal (with `--allow-preset-change` to hand) and never a
+ *  missed one. Reconstructing the true position would mean asserting that
+ *  block order and resolver order agree, which nothing here can pin. */
+const mergeCandidateInto = (
+  facetId: string,
+  context: AgentRuntimeContext,
+  resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
+  blockId: string,
+  onReplaced?: (contribution: FacetContribution<unknown>) => void,
+): FacetContribution<unknown>[] => {
+  const candidate = resolution.runtime.contributionsById(facetId)
+  const merged: FacetContribution<unknown>[] = []
+  let spliced = false
+  for (const contribution of context.runtime.contributionsById(facetId)) {
+    if (!isExtensionContribution(contribution.source, blockId)) {
+      merged.push(contribution)
+      continue
+    }
+    onReplaced?.(contribution)
+    if (!spliced) {
+      merged.push(...candidate)
+      spliced = true
+    }
+  }
+  if (!spliced) merged.push(...candidate)
+  return merged
+}
+
 /** The effective value-preset registry this install would produce, for the
  *  preset ids it touches.
  *
@@ -365,58 +417,44 @@ const presetRegistryAfter = (
   // effect, and the resolution ran the same code the reload will — so what it
   // produced is what will be registered, absences included.
   if (!resolution.pinnable) return new Map()
-  const live = context.runtime.contributionsById(valuePresetCoresFacet.id)
-  const candidate = resolution.runtime.contributionsById(valuePresetCoresFacet.id)
 
-  // The app's own contribution list with this block's entries REPLACED IN
-  // PLACE, then folded by the facet. Both halves matter and neither is
-  // re-derived here: the fold sorts by `precedence`, and ties break by
-  // position, so a candidate core read in isolation — or appended at the end —
-  // can name itself the winner over a live contribution that would actually
-  // outrank it. Splicing at the first of this block's entries is where a
-  // reload puts them back.
-  const merged: FacetContribution<unknown>[] = []
-  // An id this block claims TODAY that the fold no longer holds at all stops
-  // resolving. An absent key cannot say that — it reads the same as an id
-  // nobody ever claimed — so the ids are collected here, on the one pass that
-  // already visits exactly those contributions, and recorded explicitly below.
   const claimedToday = new Set<string>()
-  let spliced = false
-  for (const contribution of live) {
-    if (!isExtensionContribution(contribution.source, blockId)) {
-      merged.push(contribution)
-      continue
-    }
-    claimedToday.add((contribution.value as AnyValuePresetCore).id)
-    if (!spliced) {
-      merged.push(...candidate)
-      spliced = true
-    }
-  }
-  // No anchor — a first install, or a block that contributes no preset core
-  // today — appends. For a first install that is exactly where its
-  // contributions land. For an existing block it is an APPROXIMATION of its
-  // place in `findExtensionBlocks` order, and a deliberate one: it can only
-  // make the candidate win a same-precedence tie it would really lose, and the
-  // core that would really win is the one live under that id today, so the
-  // error is a spurious refusal (with `--allow-preset-change` to hand) and
-  // never a missed one. Reconstructing the true position would mean asserting
-  // that block order and resolver order agree, which nothing here can pin.
-  if (!spliced) merged.push(...candidate)
-
+  const merged = mergeCandidateInto(
+    valuePresetCoresFacet.id, context, resolution, blockId,
+    // An id this block claims TODAY that the fold no longer holds at all stops
+    // resolving. An absent key cannot say that — it reads the same as an id
+    // nobody ever claimed — so it is collected on the pass that already visits
+    // exactly those contributions, and recorded explicitly below.
+    replaced => claimedToday.add((replaced.value as AnyValuePresetCore).id))
   const folded = combineFacetContributions(valuePresetCoresFacet, merged, {})
-  // Configs the candidate's OWN seeds declare, by preset. The registry carries
-  // what the seeds live today declare; an update that moves a seed onto a new
-  // config publishes it from the declaration, so it is in use before any row
-  // exists to compare against.
+
+  // The seeds the workspace would resolve after this install, assembled the
+  // way `facetBridge` assembles them and resolved by the registry's own
+  // owner-of-a-name rule. Re-deriving any part of this is what made three
+  // rounds of this check wrong: the harvest step is how a property seed
+  // declared INLINE in a type seed reaches the registry at all, and the
+  // first-wins collision rule is the opposite of the `Map.set` last-wins a
+  // local assembly gets for free.
+  const explicitSeeds = combineFacetContributions(definitionSeedsFacet,
+    mergeCandidateInto(definitionSeedsFacet.id, context, resolution, blockId), {})
+  const typeSeeds = combineFacetContributions(typeSeedsFacet,
+    mergeCandidateInto(typeSeedsFacet.id, context, resolution, blockId), {})
+  const harvested = harvestNestedPropertySeeds(
+    buildTypeDefinitionRegistry({
+      workspaceId: resolveWorkspaceId(context.repo),
+      projectedDefinitions: context.runtime.read(projectedTypeDefinitionsFacet),
+      seeds: typeSeeds,
+    }),
+    explicitSeeds,
+  )
   // Keyed by the property NAME, which is what cells are stored under — see
   // `SeedConfigPair`. A seed's `seedKey` is independent of its name and can be
   // re-keyed without moving any data.
-  const candidateSeedConfigs = new Map<string, Map<string, unknown>>()
-  for (const seed of resolution.runtime.read(definitionSeedsFacet)) {
-    const configs = candidateSeedConfigs.get(seed.presetId) ?? new Map<string, unknown>()
+  const seedConfigsByPreset = new Map<string, Map<string, unknown>>()
+  for (const seed of resolveSeedsByName([...explicitSeeds, ...harvested]).values()) {
+    const configs = seedConfigsByPreset.get(seed.presetId) ?? new Map<string, unknown>()
     configs.set(seed.name, seed.encodedConfig)
-    candidateSeedConfigs.set(seed.presetId, configs)
+    seedConfigsByPreset.set(seed.presetId, configs)
   }
 
   // Seed-declared ids are deliberately NOT unioned in here. For one to matter
@@ -427,7 +465,7 @@ const presetRegistryAfter = (
   const presetIds = new Set([...folded.keys(), ...claimedToday])
   return new Map([...presetIds].map(presetId => [presetId, {
     core: folded.get(presetId),
-    seedConfigs: candidateSeedConfigs.get(presetId) ?? new Map<string, unknown>(),
+    seedConfigs: seedConfigsByPreset.get(presetId) ?? new Map<string, unknown>(),
   }]))
 }
 
@@ -535,10 +573,15 @@ const resolveInstallLiveness = async (
   verify: boolean,
 ): Promise<InstallLiveness> => {
   // A block this device has never seen is not running here, and no value is
-  // stored under a core it has never registered. Answered before either gate's
-  // store is touched, so a first install can never be `unreadable` — a fresh
-  // graph with a malformed prefs row still installs.
-  if (existing === null) return {kind: 'dormant', overrides: new Map()}
+  // stored under a core it has never registered — so neither gate can make it
+  // `live`, and an unreadable one must not refuse: a fresh graph with a
+  // malformed prefs row still installs. The map is still READ, because
+  // `--verify` resolves the candidate behind these toggles and an empty stand-in
+  // prunes every contribution behind one that is off by default and on by
+  // override.
+  if (existing === null) {
+    return {kind: 'dormant', overrides: await readExtensionOverrides(repo, workspaceId) ?? new Map()}
+  }
 
   // `lookupApproval`, not `readApproval`: the latter reports a transient store
   // failure as "no approval", which here would skip the check on an extension
