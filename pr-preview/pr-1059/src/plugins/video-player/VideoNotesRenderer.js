@@ -1,1 +1,1 @@
-import{_m as e,gm as t,hm as n}from"../../../chunks/app-DMWTCprR.js";export{n as VideoNotesLayout,t as VideoNotesRenderer,e as videoNotesLayoutContribution};
+import{bm as e,vm as t,ym as n}from"../../../chunks/app-bs97xG3h.js";export{t as VideoNotesLayout,n as VideoNotesRenderer,e as videoNotesLayoutContribution};

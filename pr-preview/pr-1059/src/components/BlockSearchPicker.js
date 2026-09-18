@@ -1,1 +1,1 @@
-import{rf as e}from"../../chunks/app-DMWTCprR.js";export{e as BlockSearchPicker};
+import{of as e}from"../../chunks/app-bs97xG3h.js";export{e as BlockSearchPicker};

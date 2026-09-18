@@ -1,1 +1,1 @@
-import{Ng as e}from"../../../chunks/app-DMWTCprR.js";export{e as usePromotableBreadcrumb};
+import{Ig as e}from"../../../chunks/app-bs97xG3h.js";export{e as usePromotableBreadcrumb};

@@ -1,1 +1,1 @@
-import{Rc as e}from"../../../chunks/app-DMWTCprR.js";export{e as agentDispatchCompanionPlugin};
+import{Vc as e}from"../../../chunks/app-bs97xG3h.js";export{e as agentDispatchCompanionPlugin};

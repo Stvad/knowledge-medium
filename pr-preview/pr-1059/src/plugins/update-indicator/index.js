@@ -1,1 +1,1 @@
-import{hu as e}from"../../../chunks/app-DMWTCprR.js";export{e as updateIndicatorPlugin};
+import{vu as e}from"../../../chunks/app-bs97xG3h.js";export{e as updateIndicatorPlugin};
