@@ -1,1 +1,1 @@
-import{Fm as e,Jm as t,Xm as n,Ym as r,qm as i}from"../../../chunks/app-nu8G-lc7.js";export{t as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,n as TUTORIAL_VIM_TITLE,e as onboardingPlugin,i as seedTutorial};
+import{Fm as e,Jm as t,Xm as n,Ym as r,qm as i}from"../../../chunks/app-C5RbFnzP.js";export{t as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,n as TUTORIAL_VIM_TITLE,e as onboardingPlugin,i as seedTutorial};
