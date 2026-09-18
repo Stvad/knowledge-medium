@@ -41,8 +41,21 @@ describe('routeProcessorRejection', () => {
 
     routeProcessorRejection(error, repo, new Map())
 
-    expect(showError).toHaveBeenCalledWith('something failed')
+    // Keyed by CODE, so a refusal the user meets on every attempt — every
+    // debounced edit against a workspace whose writes are refused — replaces
+    // its toast instead of stacking another copy of the same sentence.
+    expect(showError).toHaveBeenCalledWith('something failed', {id: 'unknown.code'})
     expect(showCustom).not.toHaveBeenCalled()
+  })
+
+  it('gives two codes two toasts, so one refusal cannot hide another', () => {
+    routeProcessorRejection(
+      new ProcessorRejection('first failed', 'code.one'), repo, new Map())
+    routeProcessorRejection(
+      new ProcessorRejection('second failed', 'code.two'), repo, new Map())
+
+    expect(showError.mock.calls.map(([, opts]) => (opts as {id: string}).id))
+      .toEqual(['code.one', 'code.two'])
   })
 })
 
@@ -86,7 +99,7 @@ describe('surfaceProcessorRejection (resolved-runtime wiring)', () => {
       repoStub,
     )
 
-    expect(showError).toHaveBeenCalledWith('bootstrap collision')
+    expect(showError).toHaveBeenCalledWith('bootstrap collision', {id: 'alias.collision'})
     expect(showCustom).not.toHaveBeenCalled()
   })
 })
