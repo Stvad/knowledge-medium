@@ -1,1 +1,1 @@
-import{Ru as e,zu as t}from"../../../../chunks/app-BAYmS5pN.js";export{e as BACKLINKS_COUNT_FOR_BLOCK_QUERY,t as backlinksCountForBlockQuery};
+import{Ru as e,zu as t}from"../../../../chunks/app-D9wvEVWE.js";export{e as BACKLINKS_COUNT_FOR_BLOCK_QUERY,t as backlinksCountForBlockQuery};
