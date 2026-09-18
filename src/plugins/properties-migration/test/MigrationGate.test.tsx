@@ -178,6 +178,20 @@ describe('undo, which the dialog itself cannot cover', () => {
     }, {scope: ChangeScope.BlockDefault, description: 'seed'})
   }
 
+  it('is untouched while nothing holds the workspace', async () => {
+    // The mount is always there; only a held claim may take undo away.
+    await recordAnUndoableEdit()
+    renderGate()
+    await waitFor(() => { expect(dialog()).toBeNull() })
+
+    expect(await repo.undo()).toBe(true)
+
+    expect(repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo).toBe(0)
+    expect(await sharedDb.db.getOptional(
+      'SELECT content FROM blocks WHERE id = ? AND deleted = 0', ['target'],
+    )).toBeNull()
+  })
+
   it('is refused while the dialog is up, and the history is gone when it clears', async () => {
     await recordAnUndoableEdit()
     expect(repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo).toBe(1)
