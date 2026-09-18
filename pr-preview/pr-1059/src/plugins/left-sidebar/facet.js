@@ -1,1 +1,0 @@
-import{f_ as e,p_ as t}from"../../../chunks/app-cEB-m0Bs.js";export{e as isLeftSidebarSectionContribution,t as leftSidebarSectionsFacet};

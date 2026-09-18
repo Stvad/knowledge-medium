@@ -1,1 +1,0 @@
-import{Gu as e,Hu as t,Ku as n,Uu as r,Wu as i}from"../../../chunks/app-cEB-m0Bs.js";export{t as DEFAULT_BACKLINKS_VIEW_ID,r as FLAT_BACKLINKS_VIEW_ID,i as GROUPED_BACKLINKS_VIEW_ID,e as backlinksViewProp,n as defaultBacklinksViewIdForBlock};

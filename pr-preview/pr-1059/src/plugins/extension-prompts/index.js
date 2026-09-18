@@ -1,1 +1,0 @@
-import{lw as e,uw as t}from"../../../chunks/app-cEB-m0Bs.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

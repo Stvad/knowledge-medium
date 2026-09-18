@@ -1,1 +1,0 @@
-import{OA as e,kA as t}from"../../../chunks/app-cEB-m0Bs.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

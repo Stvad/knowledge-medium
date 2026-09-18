@@ -1,1 +1,0 @@
-import{_h as e,gh as t,hh as n}from"../../../chunks/app-cEB-m0Bs.js";export{n as COLEMAK_KEYBINDINGS_PLUGIN_ID,t as colemakKeybindingsPlugin,e as colemakMovementKeybindingOverrides};

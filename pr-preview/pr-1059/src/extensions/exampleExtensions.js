@@ -1,1 +1,0 @@
-import{BC as e,zC as t}from"../../chunks/app-cEB-m0Bs.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

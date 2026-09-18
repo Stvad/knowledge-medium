@@ -1,1 +1,0 @@
-import{Bw as e,Vw as t}from"../chunks/app-cEB-m0Bs.js";export{e as appUpdate,t as useAppUpdateAvailable};

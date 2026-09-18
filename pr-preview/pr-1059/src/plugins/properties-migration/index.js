@@ -1,1 +1,0 @@
-import{Dr as e,jr as t}from"../../../chunks/app-cEB-m0Bs.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

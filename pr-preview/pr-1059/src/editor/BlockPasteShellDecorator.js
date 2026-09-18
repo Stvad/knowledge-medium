@@ -1,1 +1,0 @@
-import{QC as e,ZC as t}from"../../chunks/app-cEB-m0Bs.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

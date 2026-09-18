@@ -1,1 +1,0 @@
-"use client";import{$k as e,Qk as t,Zk as n}from"../../../chunks/app-cEB-m0Bs.js";export{n as Collapsible,t as CollapsibleContent,e as CollapsibleTrigger};

@@ -1,1 +1,0 @@
-import{C4 as e,D4 as t,E4 as n,O4 as r,S4 as i,T4 as a,b4 as o,w4 as s,x4 as c}from"../../../chunks/app-cEB-m0Bs.js";export{o as CHANGE_SCOPE_POLICIES,c as ChangeScope,i as isChangeScope,e as policyForScope,s as scopeAllowedInReadOnly,a as scopeIsUndoable,n as scopePoliciesEquivalent,t as scopeUploadsToServer,r as sourceForScope};

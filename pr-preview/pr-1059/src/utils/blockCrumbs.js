@@ -1,1 +1,0 @@
-import{_y as e,gy as t,hy as n,my as r}from"../../chunks/app-cEB-m0Bs.js";export{r as CRUMB_MAX_CHARS,n as CRUMB_MAX_SEGMENTS,t as collapseCrumbs,e as crumbsFromAncestors};

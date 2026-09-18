@@ -1,1 +1,0 @@
-import{DT as e,ET as t,TT as n,wT as r}from"../../chunks/app-cEB-m0Bs.js";export{r as extensionDisplayName,n as extensionName,t as userExtensionShellToggle,e as userExtensionToggle};

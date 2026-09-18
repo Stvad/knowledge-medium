@@ -1,1 +1,0 @@
-import{oP as e,sP as t}from"../../../chunks/app-cEB-m0Bs.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

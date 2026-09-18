@@ -1,1 +1,0 @@
-import{HC as e,VC as t}from"../../chunks/app-cEB-m0Bs.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

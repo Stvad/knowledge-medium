@@ -1,1 +1,0 @@
-import{dm as e,um as t}from"../../../chunks/app-cEB-m0Bs.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};
