@@ -3628,8 +3628,15 @@ export class Repo {
     if (before === undefined) {
       return isGraphBackfillClaimActive(db, workspaceId, GRAPH_LOCKING_BACKFILL_ID)
     }
-    // A tombstone or an absent row was not holding anything, and neither is a
-    // row from another workspace — the same workspace scoping the read does.
+    // A tombstone or an absent row was not holding anything. `!before.deleted`
+    // is load-bearing in its own right: without it, RESTORING a tombstoned
+    // claim block — an ordinary write on an unlocked graph — reads as locked
+    // and the block becomes un-restorable.
+    //
+    // DEFENCE IN DEPTH, labelled: the workspace check cannot be reached by an
+    // ordinary write, because `checkWorkspace` makes a pinned tx
+    // single-workspace, so a snapshot at this id always carries this workspace.
+    // `applyRaw` pins without that check, which is the only theoretical route.
     return Promise.resolve(
       before !== null
       && !before.deleted
@@ -3883,8 +3890,8 @@ export class Repo {
       } finally {
         // `finally`, because the body reports its own outcomes and returns
         // early from several of them. A claim left behind by a device that is
-        // no longer running anything blocks the pass for the whole graph until
-        // a human deletes the block.
+        // no longer running anything blocks every WRITE in the graph, not just
+        // the pass, until the release command clears it.
         //
         // Only one this call MINTED, though. An inherited claim already named
         // this claimant, and claimant ids are per browser PROFILE — so it may

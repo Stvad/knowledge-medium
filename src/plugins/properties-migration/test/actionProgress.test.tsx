@@ -175,7 +175,9 @@ describe('the migration progress path', () => {
 
     const note = progressHandle.addNote.mock.calls[0]?.[0] as string | undefined
     expect(note).toContain('another device holds the migration')
-    expect(note).not.toContain('Run this again here')
+    // The discriminator: the self branch's sentence must not be here, or the
+    // device is told to re-run something it will be declined for every time.
+    expect(note).not.toContain('this device holds the migration')
   })
 
   it('leaves the modal closable when the gesture throws', async () => {

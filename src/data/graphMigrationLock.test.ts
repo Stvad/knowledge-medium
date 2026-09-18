@@ -25,6 +25,7 @@ import {
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
 import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
 import { ReadOnlyError } from '@/data/api/errors'
+import { getClientId } from '@/utils/clientId'
 import { MIGRATION_CLAIM_TYPE, PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import {
   addBlockTypeToProperties,
@@ -329,6 +330,21 @@ describe('while a once-per-graph backfill holds this workspace\'s claim', () => 
     }
   })
 
+  it('lets a tombstoned claim block be restored, which is an ordinary write', async () => {
+    // The claim row is judged by what the tx FOUND there, and a tombstone was
+    // holding nothing — so restoring one is admitted. Read the other way, the
+    // block a release deletes could never be brought back.
+    const repo = makeRepo()
+    await seedTarget(repo)
+    const claimId = await seedClaim()
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [claimId])
+
+    await repo.tx(async tx => { await tx.restore(claimId, {content: 'restored'}) },
+      {scope: ChangeScope.BlockDefault, description: 'restore the claim block'})
+
+    expect(await claimIsLive()).toBe(true)
+  })
+
   it('cannot be unlocked by the transaction it is refusing', async () => {
     // The lock reads COMMITTED state, so a tx cannot clear the claim and then
     // ride its own clearance: deleting the claim row, blanking it into
@@ -415,7 +431,7 @@ describe('while a once-per-graph backfill holds this workspace\'s claim', () => 
     // predicate reads the claimant, and this is what says that is deliberate.
     const repo = makeRepo()
     await seedTarget(repo)
-    await seedClaim({claimantId: 'this-device'})
+    await seedClaim({claimantId: getClientId()})
 
     await expect(write(repo, ChangeScope.BlockDefault)).rejects.toMatchObject({
       code: GRAPH_MIGRATION_LOCKED,

@@ -105,9 +105,9 @@ export const claimFromProperties = (
 }
 
 /** Read the claim as the local DB currently has it. `null` when no row
- *  exists, and also when the row is a tombstone — deleting the claim block
- *  IS the documented recovery for a device that died mid-pass, so a
- *  tombstone must read as "unclaimed", not as "claimed by a ghost". */
+ *  exists, and also when the row is a tombstone — releasing a claim deletes the
+ *  block, so a tombstone must read as "unclaimed", not as "claimed by a
+ *  ghost". */
 export const readGraphBackfillClaim = async (
   db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
   claimId: string,

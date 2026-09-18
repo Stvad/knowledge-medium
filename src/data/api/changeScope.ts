@@ -110,7 +110,7 @@ export const policyForScope = (scope: ChangeScope): ChangeScopePolicy =>
   CHANGE_SCOPE_POLICIES[scope]
 
 /** Two scopes are policy-equivalent when they share read-only behavior and
- *  undoability — the only axes a write is admitted and gated on. Scope IDENTITY
+ *  undoability — the only axes THIS predicate compares. Scope IDENTITY
  *  (undo bucket, semantic label) may still differ, and that difference is
  *  intentional (e.g. the references processor writing a BlockDefault property
  *  under its own References bucket). A write admitted under one scope may only
