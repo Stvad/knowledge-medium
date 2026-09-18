@@ -639,6 +639,26 @@ describe('codec change', () => {
     expect(await rowContent(valueRowId)).toBe('42')
   })
 
+  it('canonicalizes a tolerant spelling where the OLD codec normalizes', async () => {
+    // `date` is the kernel codec whose decode NORMALIZES, so it is the one
+    // preset where carrying the value rewrites the row text. The cell is what
+    // survives; the spelling a person typed does not, and is unrecoverable.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('date')
+    const {valueRowId} = await seedProperty(
+      repo, 'p', 'status', new Date('2024-01-02T00:00:00.000Z'))
+    // Raw, because a tolerant spelling is what a synced or hand-edited row
+    // carries — the local writer would have canonicalized it on the way in.
+    await setRawValueContent(valueRowId, '2024-01-02')
+    expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
+
+    await retype(repo, FIELD_ID, 'string')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
+    expect(await rowContent(valueRowId)).toBe('2024-01-02T00:00:00.000Z')
+  })
+
   it('re-stamps the reference columns when a ref value becomes plain text', async () => {
     // Retyping a ref property rewrites `((id))` into the bare id AFTER
     // `core.deriveReferenceTarget` ran, and this processor's writes are
@@ -1465,6 +1485,22 @@ describe('the multi-value boundary (#1010)', () => {
     expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('list')
   })
 
+  it('carries a scalar onto an identity target without re-reading it', async () => {
+    // `list` ("Options") is the only identity preset a person can pick, and
+    // `string` -> `list` is the only way to reach it from a scalar, so this is
+    // the gesture the contract is actually about. The cell held the STRING 42.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', '42')
+    expect(await cell('p')).toEqual({status: '42'})
+
+    await retype(repo, FIELD_ID, 'list')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: ['42']})
+    expect(await rowContent(valueRowId)).toBe('"42"')
+  })
+
   it('scalar -> list reads the one value child as a single member', async () => {
     await seedWorkspace('children')
     const repo = await setupDefinition()
@@ -1621,10 +1657,9 @@ describe('the multi-value boundary (#1010)', () => {
     // the string `x` either way, and only its spelling moves.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
-    // `42` is in the list because the TARGET is an identity codec, which can
-    // hold anything: the round trip passes, so the value is carried and the
-    // member stays the STRING it was. Re-reading the text would make it the
-    // number — the same spelling-beats-value error in the other direction.
+    // `42` is the only member here that the text route could also read, so it
+    // is the only one that pins the ROUTE (`spellingThatHolds`) rather than
+    // just the re-encode. It stays the STRING it was.
     const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y', '42'])
     const errors = collectUserErrors(repo)
     expect(await rowContent(ids[0]!)).toBe('x')
@@ -1639,26 +1674,6 @@ describe('the multi-value boundary (#1010)', () => {
     // out of the awaited `repo.tx` and would fail the test above it, so an
     // empty list here only rules out one leaking from an internal tx.
     expect(errors).toEqual([])
-  })
-
-  it('canonicalizes a tolerant spelling where the OLD codec normalizes', async () => {
-    // `date` is the kernel codec whose decode NORMALIZES, so it is the one
-    // preset where carrying the value rewrites the row text. The cell is what
-    // survives; the spelling a person typed does not, and is unrecoverable.
-    await seedWorkspace('children')
-    const repo = await setupDefinition('date')
-    const {valueRowId} = await seedProperty(
-      repo, 'p', 'status', new Date('2024-01-02T00:00:00.000Z'))
-    // Raw, because a tolerant spelling is what a synced or hand-edited row
-    // carries — the local writer would have canonicalized it on the way in.
-    await setRawValueContent(valueRowId, '2024-01-02')
-    expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
-
-    await retype(repo, FIELD_ID, 'string')
-    await repo.awaitProcessors()
-
-    expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
-    expect(await rowContent(valueRowId)).toBe('2024-01-02T00:00:00.000Z')
   })
 
   it('ESCAPES a member the target codec would otherwise store as a live span', async () => {

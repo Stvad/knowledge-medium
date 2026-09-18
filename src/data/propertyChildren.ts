@@ -197,11 +197,14 @@ const SPAN_OPENER_RE = /[[(]/
 /** Does this codec store a value as RAW content, so that the text in the row
  *  is the value itself rather than a formatting of it?
  *
- *  The one owner of a question three sites ask: only these codecs can have
- *  their value destroyed by the content being read back as something else, so
- *  only they escape ({@link needsEscape} / {@link escapeContent}) and only
- *  their decode can be looking at an envelope. The three must agree or a value
- *  is escaped on write and not unwrapped on read.
+ *  The one owner of a question every site that escapes or unwraps must answer
+ *  the same way: only these codecs can have their value destroyed by the
+ *  content being read back as something else, so only they escape
+ *  ({@link needsEscape} / {@link escapeContent}) and only their decode can be
+ *  looking at an envelope. Disagree on the write/read pair and a value is
+ *  escaped and never unwrapped; disagree in
+ *  {@link contentLosesPropertyValue} and find-replace writes the destroying
+ *  content instead of refusing it.
  *
  *  Answered by the discriminator rather than by running the codec, which the
  *  neighbouring {@link codecAcceptsNull} can do and this cannot: `date` also
@@ -525,13 +528,39 @@ export type ValueChildConversion =
   | {readonly outcome: 'converted'; readonly content: string}
   | {readonly outcome: 'unreadable'}
 
-/** THE VALUE ROUTE: the value `from` holds, re-spelled by `to`.
+/** How `to` would spell `held` such that it reads the same value back, or null
+ *  when it has no such spelling. Asked by RUNNING it, because only the codec
+ *  can say: a `to` that re-spells the value into text it reads back as
+ *  something else has moved the value rather than carrying it.
  *
- *  Only the codec that WROTE the text can say what it holds. Accepted only when
- *  the value survives the round trip, asked by running it: a `to` that re-spells
- *  the value into text it reads back as something else has moved the value
- *  rather than carrying it. Which route runs when is
- *  {@link convertValueChildContent}'s to state. */
+ *  This is the whole of "can the new type hold what the old one held", so it is
+ *  also what decides when a re-type re-reads the TEXT instead. A type change
+ *  has no such spelling — the number codec reads back 42 where the string `42`
+ *  went in — which is why coercions re-read. An IDENTITY codec has one for
+ *  ANY value, which is the same rule with the opposite result: re-typing onto
+ *  `list` carries the STRING `42` rather than re-reading it as a number. */
+const spellingThatHolds = (
+  to: AnyPropertySchema,
+  held: unknown,
+): string | null => {
+  try {
+    const respelled = encodedToValueChildContent(to, held)
+    return jsonValuesEqual(valueChildContentToEncoded(to, respelled), held)
+      ? respelled
+      : null
+  } catch {
+    // `to` cannot write this value, or cannot read back what it wrote.
+    return null
+  }
+}
+
+/** THE VALUE ROUTE: the value `from` holds, re-spelled by `to`. Only the codec
+ *  that WROTE the text can say what it holds.
+ *
+ *  Declines three ways, which together are every case the text route answers:
+ *  `from` cannot read this row's content, `to` has no
+ *  {@link spellingThatHolds} for the value it read, or re-spelling would mint
+ *  a reference. */
 const respellUnderTargetCodec = (
   from: AnyPropertySchema,
   to: AnyPropertySchema,
@@ -541,18 +570,12 @@ const respellUnderTargetCodec = (
   try {
     held = valueChildContentToEncoded(from, content)
   } catch {
+    // This ROW is stale under the codec that was publishing it — nothing here
+    // knows what it holds, whatever is true of the rest of the property.
     return {outcome: 'unreadable'}
   }
-  let respelled: string
-  try {
-    respelled = encodedToValueChildContent(to, held)
-    if (!jsonValuesEqual(valueChildContentToEncoded(to, respelled), held)) {
-      return {outcome: 'unreadable'}
-    }
-  } catch {
-    // `to` cannot write this value, or cannot read back what it wrote.
-    return {outcome: 'unreadable'}
-  }
+  const respelled = spellingThatHolds(to, held)
+  if (respelled === null) return {outcome: 'unreadable'}
   // DECLINED when re-spelling MINTS A REFERENCE the stored text did not carry:
   // `codecs.ref().decode` accepts any string, so the string `Mary` re-spells to
   // `((Mary))` — an identity nobody wrote, pointing at a seat that does not
@@ -599,24 +622,16 @@ const readTextUnderTargetCodec = (
  * THE VALUE FIRST ({@link respellUnderTargetCodec}), because what the property
  * HELD is what a re-type has to carry and the text alone cannot say what that
  * is: the JSON `"x"` and the three-character string `"x"` are the same text
- * under two codecs. Taking the text's own reading keeps the spelling and swaps
- * the value silently, and swaps the CELL with it — a `refList` cell of bare ids
- * becomes span-shaped strings (#1055).
+ * under two codecs (#1055). Taking the text's own reading keeps the spelling
+ * and swaps the value, and swaps the CELL with it.
  *
- * THE TEXT ({@link readTextUnderTargetCodec}) answers only where `to` cannot
- * hold the value `from` held, which the round trip decides. Two consequences
- * worth knowing, both of them the rule rather than exceptions to it:
- *  - a re-type that changes the value's TYPE re-reads the text, because the
- *    round trip fails — ` 1 ` becomes the number 1, `'true'` the boolean.
- *  - a re-type onto an IDENTITY codec never re-reads it, because such a codec
- *    holds anything the round trip can throw at it. A `string` holding the
- *    text `42` stays the STRING `42` under `list`; it does not become a
- *    number. The cell is what is being preserved, not the text's plausible
- *    reading.
+ * THE TEXT ({@link readTextUnderTargetCodec}) answers wherever the value route
+ * declines, and that route names the three ways rather than this listing them
+ * — so what a re-type preserves is the VALUE, never the spelling.
  *
- * `from` is null when the definition's previous preset does not build: nothing
- * then records what encoding the text is in, so there is no value to re-spell
- * and only the text route can answer.
+ * `from` is null when the definition's previous preset does not build: the
+ * whole-definition form of the first of those three, and the reason this takes
+ * a nullable schema at all.
  */
 export const convertValueChildContent = (
   from: AnyPropertySchema | null,

@@ -35,9 +35,11 @@
  *    definition row's preset id and preset config, NOT the built codec's type
  *    string, which cannot tell `optional-string` from `string`
  *    (`codecInputsChanged`). `convertValueChildContent` owns which reading of
- *    a value child wins, and states the rule; it is not restated here. A value
- *    NEITHER of its routes carries is one this edit would take
- *    away, and the transaction is REFUSED — §9's "N values can't convert" is
+ *    a value child wins, and states the rule; it is not restated here.
+ *    Whether the edit TAKES A VALUE AWAY is `valuesLostBy`'s, at cell grain,
+ *    and has two causes: a row neither route carries, and two rows that
+ *    re-spell to the same text and fold into one. Either way the transaction
+ *    is REFUSED — §9's "N values can't convert" is
  *    user-visible here as the reason the change did not happen, which is the
  *    only form of it that keeps the value. A value already unreadable before
  *    the edit blocks nothing: the cell never held it.
@@ -309,8 +311,8 @@ interface DefinitionChange {
    *  caller refuses it instead. */
   readonly schema: AnyPropertySchema
   /** The codec the definition was PUBLISHING, which is what says what a stored
-   *  value child HOLDS — the route `convertValueChildContent` tries FIRST, and
-   *  what tells a value this edit takes away from one that was already
+   *  value child HOLDS — the schema `convertValueChildContent` re-spells FROM,
+   *  and what tells a value this edit takes away from one that was already
    *  unreadable. `null` when the before row's preset does not build, where
    *  nothing records the stored encoding. */
   readonly beforeSchema: AnyPropertySchema | null
@@ -372,7 +374,7 @@ const collectChanges = (
     // definition whose broken preset has just been fixed already reports its
     // inputs as changed. The old codec is carried for the CONVERSION, as the
     // only record of what encoding the stored text is in, and `null` there
-    // costs the primary route rather than the change — the text route still
+    // costs the value route rather than the change — the text route still
     // answers.
     //
     // ACCEPTED: a bag edited while the row was UNPUBLISHED (a tombstone, or a
