@@ -12,9 +12,12 @@ import {
   type PropertyDefinitionSynthesisPlan,
 } from '@/data/internals/propertyDefinitionSynthesis'
 import {
-  isGraphBackfillClaimActive,
+  claimHoldsGraph,
+  graphBackfillClaimBlockId,
+  readGraphBackfillClaim,
   STRANDED_CLAIM_RECOVERY,
 } from '@/data/internals/graphBackfillClaim'
+import { getClientId } from '@/utils/clientId'
 import { readIsChildBackedWorkspace, readWorkspaceOwnerId } from '@/data/workspaceSchema'
 import {
   flipRejectionProvesNoWrite,
@@ -616,13 +619,35 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // or released the workspace refuses every edit on every device. The
       // outcome messages are written before any of that is known, and "run it
       // again" over a silently locked graph is the wrong thing to be told.
-      if (await isGraphBackfillClaimActive(
-        repo.db, workspaceId, PROPERTY_CELL_BACKFILL_ID,
-      )) {
+      //
+      // WHOSE claim decides what to advise, so the claimant is read and not
+      // just its liveness: telling a device that a PEER holds the workspace to
+      // "run this again here" sends it into a refusal it can never win, and
+      // pointing it at the release command points it at deleting a claim
+      // another device is still writing under.
+      //
+      // Caught, because this is a database read on a path that runs after the
+      // outcome is already painted: a throw here would replace the gesture's
+      // own exit with an unrelated one, and drop the note exactly when the read
+      // that produces it is failing.
+      const held = await readGraphBackfillClaim(
+        repo.db,
+        graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID),
+        workspaceId,
+      ).catch((err: unknown) => {
+        console.error('[properties-migration] could not re-read the claim:', err)
+        return null
+      })
+      if (claimHoldsGraph(held)) {
         banner.addNote(
-          'This workspace is still not accepting edits: the migration holds it '
-          + `until it finishes. Run this again on this device to resume it, or — ${
-            STRANDED_CLAIM_RECOVERY}.`,
+          held.claimantId === getClientId()
+            ? 'This workspace is still not accepting edits: this device holds the '
+              + 'migration until it finishes. Run this again here to resume it, or — '
+              + `${STRANDED_CLAIM_RECOVERY}.`
+            : 'This workspace is still not accepting edits: another device holds the '
+              + 'migration. It stays that way until that device finishes — running '
+              + `this here is declined while it does. If it never will, ${
+                STRANDED_CLAIM_RECOVERY}.`,
         )
       }
     }

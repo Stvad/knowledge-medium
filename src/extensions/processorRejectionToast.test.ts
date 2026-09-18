@@ -44,18 +44,43 @@ describe('routeProcessorRejection', () => {
     // Keyed by CODE, so a refusal the user meets on every attempt — every
     // debounced edit against a workspace whose writes are refused — replaces
     // its toast instead of stacking another copy of the same sentence.
-    expect(showError).toHaveBeenCalledWith('something failed', {id: 'unknown.code'})
+    expect(showError).toHaveBeenCalledWith(
+      'something failed', {id: 'unknown.code:something failed'})
     expect(showCustom).not.toHaveBeenCalled()
   })
 
-  it('gives two codes two toasts, so one refusal cannot hide another', () => {
+  it('keeps two rejections apart when they share a code and differ in what they say', () => {
+    // One transaction can report several properties whose values would not
+    // convert, one rejection each, all under the same code — and that toast is
+    // the only place the user is told. Keyed by code alone, the last would
+    // overwrite the rest.
     routeProcessorRejection(
-      new ProcessorRejection('first failed', 'code.one'), repo, new Map())
+      new ProcessorRejection('"status" lost 2 values', 'codec.unconvertible'),
+      repo, new Map())
     routeProcessorRejection(
-      new ProcessorRejection('second failed', 'code.two'), repo, new Map())
+      new ProcessorRejection('"owner" lost 1 value', 'codec.unconvertible'),
+      repo, new Map())
 
-    expect(showError).toHaveBeenNthCalledWith(1, 'first failed', {id: 'code.one'})
-    expect(showError).toHaveBeenNthCalledWith(2, 'second failed', {id: 'code.two'})
+    const ids = [
+      'codec.unconvertible:"status" lost 2 values',
+      'codec.unconvertible:"owner" lost 1 value',
+    ]
+    expect(showError).toHaveBeenNthCalledWith(1, '"status" lost 2 values', {id: ids[0]})
+    expect(showError).toHaveBeenNthCalledWith(2, '"owner" lost 1 value', {id: ids[1]})
+  })
+
+  it('reuses one slot for the SAME sentence met over and over', () => {
+    const repeated = () => routeProcessorRejection(
+      new ProcessorRejection('the migration is running', 'graph.migration-running'),
+      repo, new Map())
+
+    repeated()
+    repeated()
+
+    expect(showError).toHaveBeenNthCalledWith(1, 'the migration is running',
+      {id: 'graph.migration-running:the migration is running'})
+    expect(showError).toHaveBeenNthCalledWith(2, 'the migration is running',
+      {id: 'graph.migration-running:the migration is running'})
   })
 })
 
@@ -99,7 +124,8 @@ describe('surfaceProcessorRejection (resolved-runtime wiring)', () => {
       repoStub,
     )
 
-    expect(showError).toHaveBeenCalledWith('bootstrap collision', {id: 'alias.collision'})
+    expect(showError).toHaveBeenCalledWith(
+      'bootstrap collision', {id: 'alias.collision:bootstrap collision'})
     expect(showCustom).not.toHaveBeenCalled()
   })
 })

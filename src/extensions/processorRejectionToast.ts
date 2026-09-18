@@ -40,11 +40,15 @@ export const routeProcessorRejection = (
 ): void => {
   const contribution = contributions.get(error.code)
   if (!contribution) {
-    // Keyed by CODE, so a refusal the user meets repeatedly — every debounced
-    // edit against a workspace whose writes are refused — replaces its toast
-    // instead of stacking a fresh copy of the same sentence. A contribution
-    // that needs one toast per instance renders its own.
-    showError(error.message, {id: error.code})
+    // Keyed by the SENTENCE, so a refusal the user meets over and over — every
+    // debounced edit against a workspace whose writes are refused — replaces
+    // its toast instead of stacking another identical copy, while two
+    // rejections that share a code and differ in what they name stay two
+    // toasts. Keying on the code alone destroyed the first of those: one
+    // transaction can report several properties whose values would not convert,
+    // each naming a different one, and the last would have been all the user
+    // saw.
+    showError(error.message, {id: `${error.code}:${error.message}`})
     return
   }
   showCustom(
