@@ -43,6 +43,7 @@ import { vi } from 'vitest'
 const WS = 'ws-migration-lock'
 const OTHER_WS = 'ws-migration-lock-other'
 const TARGET = 'target-block'
+const OTHER_TARGET = 'target-block-other-ws'
 
 let sharedDb: TestDb
 
@@ -59,7 +60,7 @@ const seedClaim = async (
   {completed = false, workspaceId = WS, claimantId = 'peer-device'}:
     {completed?: boolean; workspaceId?: string; claimantId?: string} = {},
 ): Promise<string> => {
-  const id = graphBackfillClaimBlockId(WS, PROPERTY_CELL_BACKFILL_ID)
+  const id = graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID)
   const properties = addBlockTypeToProperties({
     [migrationClaimantProp.name]: claimantId,
     [migrationClaimedAtProp.name]: 1,
@@ -75,25 +76,53 @@ const seedClaim = async (
   return id
 }
 
-const seedTarget = async (repo: Repo): Promise<void> => {
+/** A row from some OTHER workspace sitting at the id THIS workspace derives
+ *  for its claim. */
+const seedForeignRowAtOurClaimId = async (): Promise<void> => {
+  const properties = addBlockTypeToProperties({
+    [migrationClaimantProp.name]: 'peer-device',
+    [migrationClaimedAtProp.name]: 1,
+  }, MIGRATION_CLAIM_TYPE)
+  await sharedDb.db.execute(
+    `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+       properties_json, deleted, created_at, updated_at, user_updated_at,
+       created_by, updated_by)
+     VALUES (?, ?, NULL, 'k-claim', ?, ?, 0, 1, 1, 1, 'user-1', 'user-1')`,
+    [graphBackfillClaimBlockId(WS, PROPERTY_CELL_BACKFILL_ID), OTHER_WS,
+     PROPERTY_CELL_BACKFILL_ID, JSON.stringify(properties)],
+  )
+}
+
+const seedTargetIn = async (
+  repo: Repo, workspaceId: string, blockId: string,
+): Promise<void> => {
   await repo.tx(async tx => {
     await tx.create({
-      id: TARGET, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'original',
+      id: blockId, workspaceId, parentId: null, orderKey: 'a0', content: 'original',
     })
   }, {scope: ChangeScope.BlockDefault, description: 'seed'})
 }
 
+const seedTarget = (repo: Repo): Promise<void> => seedTargetIn(repo, WS, TARGET)
+
 /** Write one property on the seeded block, under whichever scope is being
  *  admitted or refused. `graphMigrationWrite` is the exemption under test. */
-const write = (
+const writeTo = (
   repo: Repo,
+  blockId: string,
   scope: ChangeScope,
   opts: {graphMigrationWrite?: boolean} = {},
 ): Promise<void> =>
   repo.tx(async tx => {
-    const row = await tx.get(TARGET)
-    await tx.update(TARGET, {properties: {...row!.properties, 'probe:mark': scope}})
+    const row = await tx.get(blockId)
+    await tx.update(blockId, {properties: {...row!.properties, 'probe:mark': scope}})
   }, {scope, description: `probe ${scope}`, ...opts})
+
+const write = (
+  repo: Repo,
+  scope: ChangeScope,
+  opts: {graphMigrationWrite?: boolean} = {},
+): Promise<void> => writeTo(repo, TARGET, scope, opts)
 
 const claimIsLive = async (): Promise<boolean> =>
   (await sharedDb.db.getOptional<{deleted: number}>(
@@ -198,6 +227,34 @@ describe('while a once-per-graph backfill holds this workspace\'s claim', () => 
     expect(await markOn()).toBe(ChangeScope.BlockDefault)
   })
 
+  it('refuses a write to the LOCKED workspace while another one is on screen', async () => {
+    // `repo.tx` admits a write to a workspace that is not the active one, so a
+    // lock decided from the active workspace would let every such write past —
+    // the agent bridge naming a workspace, an import, a pass that captured an
+    // id before the user switched away.
+    const repo = makeRepo()
+    await seedTargetIn(repo, OTHER_WS, OTHER_TARGET)
+    await seedClaim({workspaceId: OTHER_WS})
+    repo.setActiveWorkspaceId(WS)
+
+    await expect(writeTo(repo, OTHER_TARGET, ChangeScope.BlockDefault))
+      .rejects.toMatchObject({code: GRAPH_MIGRATION_LOCKED})
+
+    expect(await markOn(OTHER_TARGET)).toBeUndefined()
+  })
+
+  it('admits a write to an UNLOCKED workspace while the open one is locked', async () => {
+    // The other direction of the same rule: the lock is per workspace, and the
+    // workspace on screen says nothing about the rows being written.
+    const repo = makeRepo()
+    await seedTargetIn(repo, OTHER_WS, OTHER_TARGET)
+    await seedClaim({workspaceId: WS})
+
+    await writeTo(repo, OTHER_TARGET, ChangeScope.BlockDefault)
+
+    expect(await markOn(OTHER_TARGET)).toBe(ChangeScope.BlockDefault)
+  })
+
   it('refuses the CLAIM HOLDER\'s own edits too, not only a peer\'s', async () => {
     // The exemption is for the migration's transactions, not for the device
     // running it — and that device is where someone is most likely to be
@@ -257,10 +314,12 @@ describe('when no pass owns the graph', () => {
     expect(await markOn()).toBe(ChangeScope.BlockDefault)
   })
 
-  it('ignores a claim row at this id owned by ANOTHER workspace', async () => {
+  it('ignores a row at OUR claim id that belongs to another workspace', async () => {
+    // An import that keeps its ids is the realistic route to one. Reading it
+    // unscoped would let a foreign block lock this workspace's writes.
     const repo = makeRepo()
     await seedTarget(repo)
-    await seedClaim({workspaceId: OTHER_WS})
+    await seedForeignRowAtOurClaimId()
 
     await write(repo, ChangeScope.BlockDefault)
 

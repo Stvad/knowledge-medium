@@ -3576,26 +3576,23 @@ export class Repo {
   }
 
   /**
-   * Is a once-per-graph migration holding the ACTIVE workspace's claim?
+   * Is a once-per-graph migration holding this workspace's claim?
    *
-   * The commit pipeline's migration lock asks this per transaction, for scopes
-   * whose `graphMigration` policy is `reject`. An arrow property rather than a
-   * method so it can be handed to `runTx` unbound.
-   *
-   * The ACTIVE workspace, matching `propertySchemaWorkspaceId` beside it: a tx
-   * pins its own workspace at its first write, which is after this is asked,
-   * and cross-workspace writes are refused elsewhere. No active workspace means
-   * nothing to lock.
+   * The commit pipeline's migration lock asks this once per transaction that
+   * wrote something under a scope whose `graphMigration` policy is `reject`,
+   * handing over the tx's own pinned workspace and its own db handle. An arrow
+   * property rather than a method so it can go to `runTx` unbound.
    *
    * One backfill because one backfill rewrites source-of-truth rows today.
    * Generalizing means a `WorkspaceBackfill` declaring that it locks the graph,
-   * and a scan of the Migrations page in place of this point lookup.
+   * and a scan of the Migrations page in place of this point lookup — which is
+   * also what would let the runner exempt only the pass that holds the claim.
    */
-  private readonly graphMigrationLocked = async (): Promise<boolean> => {
-    const workspaceId = this.client.activeWorkspaceId
-    if (workspaceId === null) return false
-    return isGraphBackfillClaimActive(this.db, workspaceId, PROPERTY_CELL_BACKFILL_ID)
-  }
+  private readonly graphMigrationLocked = (
+    db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+    workspaceId: string,
+  ): Promise<boolean> =>
+    isGraphBackfillClaimActive(db, workspaceId, PROPERTY_CELL_BACKFILL_ID)
 
   /**
    * Take the claim for one backfill, or say why this device may not.
