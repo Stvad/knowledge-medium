@@ -726,7 +726,7 @@ export const applyPropertyDefinitionSynthesis = async (
   // then throws can leave a freshly-created Properties page behind. Harmless
   // (bootstrap creates the same page at the same deterministic id) but it is
   // why the atomicity claim above is scoped to the definitions.
-  await getOrCreatePropertiesPage(repo, workspaceId)
+  await getOrCreatePropertiesPage(repo, workspaceId, {graphMigrationWrite: true})
   const parentId = propertiesPageBlockId(workspaceId)
 
   let created = 0

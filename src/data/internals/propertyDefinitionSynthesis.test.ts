@@ -22,6 +22,13 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { confirmPlaintextForSession } from '@/sync/keys/modePin'
 import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
+import { graphBackfillClaimBlockId } from './graphBackfillClaim'
+import { MIGRATION_CLAIM_TYPE } from '@/data/blockTypes'
+import {
+  addBlockTypeToProperties,
+  migrationClaimantProp,
+  migrationClaimedAtProp,
+} from '@/data/properties'
 import {
   applyPropertyDefinitionSynthesis,
   flipBlockedBySynthesis,
@@ -609,6 +616,30 @@ describe('applyPropertyDefinitionSynthesis', () => {
 
     // Synchronously, not after a subscription tick: the caller's very next
     // step is the backfill, which asks this same resolver to resolve the name.
+    expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
+  })
+
+  it('mints while the migration holds the claim — this runs inside that claim', async () => {
+    // The gesture takes the graph-wide claim BEFORE synthesizing, so these
+    // definitions are written under the lock that keeps everyone else out. An
+    // unexempted write here refuses the migration's own first step.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const claimProperties = addBlockTypeToProperties({
+      [migrationClaimantProp.name]: 'this-device',
+      [migrationClaimedAtProp.name]: 1,
+    }, MIGRATION_CLAIM_TYPE)
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+         properties_json, deleted, created_at, updated_at, user_updated_at,
+         created_by, updated_by)
+       VALUES (?, ?, NULL, 'k-claim', ?, ?, 0, 1, 1, 1, ?, ?)`,
+      [graphBackfillClaimBlockId(WS, PROPERTY_CELL_BACKFILL_ID), WS,
+       PROPERTY_CELL_BACKFILL_ID, JSON.stringify(claimProperties), USER, USER],
+    )
+
+    const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
+
+    expect(result.created).toBe(1)
     expect(repo.propertySchemaResolverFor(WS).resolve('demo:orphan').status).toBe('resolved')
   })
 

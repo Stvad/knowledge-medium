@@ -13,9 +13,17 @@ const PROPERTIES_ALIAS = 'Properties'
 export const propertiesPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, PROPERTIES_PAGE_NS)
 
-export const getOrCreatePropertiesPage = (repo: Repo, workspaceId: string): Promise<Block> =>
+export const getOrCreatePropertiesPage = (
+  repo: Repo,
+  workspaceId: string,
+  /** Set only by the migration's own definition synthesis, which runs with the
+   *  graph-wide claim already held — this page has to exist before its
+   *  definitions can be parented to it, and the lock would otherwise refuse the
+   *  migration's first step. Every other caller is ordinary bootstrap. */
+  opts: {graphMigrationWrite?: boolean} = {},
+): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: PROPERTIES_PAGE_NS,
     alias: PROPERTIES_ALIAS,
     markerType: PROPERTIES_PAGE_TYPE,
-  })
+  }, opts)
