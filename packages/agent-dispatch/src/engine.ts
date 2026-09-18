@@ -11,9 +11,10 @@ import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './co
 import { PROPS } from './config.js'
 import type { Graph } from './graph.js'
 import type { AgentRunOptions, AgentRunResult, RunEvent } from './runner.js'
-import { resumeOptionsForRun } from './resumeCommand.js'
+import { resumeOptionsForRun, type AgentResumeOptions } from './resumeCommand.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
+import { classifyRunFailure, classifyThrown, retryBackoffMs, type RunFailureClass } from './runFailure.js'
+import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts, type BlockView } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
@@ -41,6 +42,84 @@ export interface EngineDeps {
 
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
+
+/** Watches one run for proof the MODEL produced something — assistant text,
+ *  a tool call, or reasoning.
+ *
+ *  Deliberately NOT called "billed". That name asks who paid, which sends
+ *  you looking for output TEXT: a tool call with no textual preamble
+ *  produces none, and a run that made an MCP write and then hit a usage
+ *  limit would be replayed as though nothing had happened. It also smuggles
+ *  in a cost model that is not always true — for a local model nothing is
+ *  billed and a retry still repeats the work. The question the engine
+ *  actually asks is whether a retry would REPEAT something: tokens spent,
+ *  or worse, a graph write already made.
+ *
+ *  One definition because two paths ask it — answering it inline in each
+ *  risks the two drifting apart (e.g. one counting a tool call as a
+ *  response and the other not).
+ *
+ *  A session id is NOT proof: the runner emits it on the first line, before
+ *  any model call. Treating it as proof would park every out-of-credits run. */
+const createRunWatch = () => {
+  let responded = false
+  let text = ''
+  return {
+    observe: (event: RunEvent) => {
+      if (event.kind === 'text') {
+        responded = true
+        text = event.text
+      } else if (event.kind === 'activity') {
+        // A tool call or a reasoning step: the model produced it, and a tool
+        // call may already have written to the graph.
+        responded = true
+      }
+    },
+    /** The finished result counts too: a transcript whose events the parser
+     *  could not follow still proves the model answered if text came back. */
+    observeResult: (result: AgentRunResult) => {
+      if (result.resultText.trim()) responded = true
+    },
+    get modelResponded(): boolean { return responded },
+    /** Cumulative assistant text, for preserving a partial answer. */
+    get streamedText(): string { return text },
+  }
+}
+
+/** Which logical RUN this is — the answer to "is this the same work as
+ *  before, or new work?", which three places have to agree on.
+ *
+ *  Two components, because the two ways a task re-runs want opposite things:
+ *  `attempt` separates successive crashes, and a DEFERRAL rolls it back so a
+ *  retry counts as the SAME run — that is what lets it converge its ⏳ note
+ *  onto the real answer, and what lets a re-POSTed channel event be
+ *  recognised as the duplicate it is. `agent:asked-at` separates the runs a
+ *  PERSON asked for: an explicit Retry resets `agent:attempts` (that counter
+ *  is the crash budget), so `attempt` alone reports a deliberate rerun as a
+ *  repeat of the first one. asked-at is written only by the app's gestures
+ *  and never by the daemon, so a deferral leaves it untouched.
+ *
+ *  Getting that second component wrong corrupts a real answer (a retry
+ *  overwriting the reply it was meant to supersede) or drops a legitimate
+ *  rerun as a duplicate. Hence one derivation and three call sites, not
+ *  three derivations that could disagree. */
+const runIdentity = (sourceId: string, block: BlockView | undefined, attempt: number): string => {
+  // `agent:asked-at` separates runs a PERSON asked for — EXCEPT on a task
+  // still marked `queued`. That is a deferral the app expedited rather than
+  // re-ran, and it may have work in flight that was deferred only because an
+  // acknowledgement was lost; minting a fresh identity there walks past the
+  // receiver's dedup and dispatches a second billed run beside the first.
+  // Expediting deliberately leaves the status in place to say so.
+  const deferred = block?.properties?.[PROPS.status] === 'queued'
+  const askedAt = deferred ? undefined : block?.properties?.[PROPS.askedAt]
+  return `${sourceId}:${attempt}:${typeof askedAt === 'number' ? askedAt : 0}`
+}
+
+/** Identity of the reply subtree ONE run reconciles. Every write of that run
+ *  carries it, so the run converges its own blocks in place; a different run
+ *  gets a different key and therefore a fresh reply. */
+const replyKeyFor = (sourceId: string, block: BlockView | undefined, attempt: number): string =>
+  `reply:${runIdentity(sourceId, block, attempt)}`
 
 /** True for a character safe to write into a plain-text log line — i.e.
  *  not an ASCII/C1 control byte: C0 (0x00–0x1F), DEL (0x7F) and C1
@@ -130,6 +209,153 @@ export const createEngine = (deps: EngineDeps) => {
    *  trigger-loop the cap exists to stop. Seeded from disk on first tick. */
   let launchTimes: number[] = []
   let launchTimesLoaded = false
+
+  /** Infrastructure cooldown — the "don't chew the queue" half of the
+   *  retryable-failure handling. One run failing because the account is out
+   *  of credits says nothing about THAT task and everything about the next
+   *  ten, so the daemon stops launching until the cooldown lapses, then
+   *  lets exactly one probe through. Deliberately in-memory only: it's an
+   *  optimisation over the per-task `agent:retry-after` (which IS durable),
+   *  and a restart re-deriving it costs one extra doomed spawn.
+   *
+   *  Keyed by LANE rather than global. An outage belongs to one credential
+   *  or one transport: a spent Claude subscription says nothing about a
+   *  Codex watcher, and a dead channel listener says nothing about either.
+   *  A single global window both stalls healthy watchers and — the worse
+   *  half — lets a success on a healthy lane clear the failing lane's
+   *  window, so that lane resumes chewing its queue: the exact bug this
+   *  whole path exists to stop. */
+  interface Cooldown {
+    until: number
+    consecutiveFailures: number
+    reason: string
+    /** When the CURRENT window was armed. A task whose `agent:asked-at`
+     *  postdates it was re-queued by the user while we were cooling, which
+     *  is what earns it the probe (see `inInfraCooldown`). */
+    armedAt: number
+    /** The window we last logged, so a cooldown is announced once, not
+     *  once per watcher per tick. */
+    logged: number
+  }
+  const cooldowns = new Map<string, Cooldown>()
+  /** How many times each lane has been armed, ever. Kept OUTSIDE `cooldowns`
+   *  so it survives a clear, and monotonic so it can order two events that
+   *  overlap in time.
+   *
+   *  Runs on one lane overlap whenever `maxConcurrent > 1` (the default), and
+   *  they finish out of order: run B, launched first, can succeed AFTER run A
+   *  has failed and armed a window. B's success says nothing about the outage
+   *  A found, but an unconditional clear deleted it anyway and let the next
+   *  tick launch into the outage — the one-probe guarantee gone. So a run
+   *  records the generation it launched under and may only clear THAT one. */
+  const laneGeneration = new Map<string, number>()
+  const generationOf = (lane: string): number => laneGeneration.get(lane) ?? 0
+  /** Arm a new window on `lane`; returns the generation that arming owns.
+   *  Every holder of an older token — a pending clear, a probe release — is
+   *  refused from here on. */
+  const armLane = (lane: string): number => {
+    const generation = generationOf(lane) + 1
+    laneGeneration.set(lane, generation)
+    return generation
+  }
+
+  /** The failure domain a watcher shares with others: the credential its
+   *  spawned runs bill, or the channel its deliveries go to. */
+  const laneOf = (watcher: Watcher): string =>
+    watcher.delivery === 'channel' ? 'channel' : watcher.runner.executor
+
+  const cooldownFor = (lane: string): Cooldown => {
+    let state = cooldowns.get(lane)
+    if (!state) {
+      state = {until: 0, consecutiveFailures: 0, reason: '', armedAt: 0, logged: 0}
+      cooldowns.set(lane, state)
+    }
+    return state
+  }
+
+  const noteInfraFailure = (lane: string, failure: RunFailureClass, sourceLabel: string): number => {
+    armLane(lane)
+    const state = cooldownFor(lane)
+    state.consecutiveFailures += 1
+    const backoff = retryBackoffMs(state.consecutiveFailures)
+    state.until = now() + backoff
+    state.armedAt = now()
+    state.reason = failure.label
+    log(`[${sourceLabel}] ${failure.label} — nothing was attempted; pausing new ${lane} runs for ${Math.round(backoff / 1000)}s (infrastructure failure ${state.consecutiveFailures} in a row)`)
+    return state.until
+  }
+
+  /** Any run that reached the model proves this lane's infrastructure is
+   *  back — including one that failed on its own merits.
+   *
+   *  `seenGeneration` is the lane's generation when this run LAUNCHED. A
+   *  newer failure since then means this run's evidence is stale — it
+   *  describes infrastructure that has since gone down — so it must not
+   *  reopen the lane. */
+  const clearInfraCooldown = (lane: string, seenGeneration: number) => {
+    if (generationOf(lane) !== seenGeneration) return
+    cooldowns.delete(lane)
+  }
+
+  /** Reserve the post-cooldown probe, synchronously, at the launch
+   *  decision. `inInfraCooldown` opens for EVERY source in the scan the
+   *  instant a window lapses and nothing re-arms until a run's async
+   *  result lands — so with `maxConcurrent > 1` a lapsed window launches a
+   *  full concurrency-worth of doomed runs instead of the one probe.
+   *  Re-arming the SAME backoff here holds the rest back until the probe
+   *  answers: its outcome then either clears the lane (it reached the
+   *  model) or extends it (it failed again), and if the outcome touches
+   *  neither, the window still lapses on its own — so this can defer a
+   *  lane but never wedge one.
+   *
+   *  Also what bounds a bulk "Retry all failed": moving `armedAt` forward
+   *  spends the asked-at bypass below for every task but the first. */
+  const reserveProbe = (lane: string): (() => void) => {
+    const state = cooldowns.get(lane)
+    if (!state || state.consecutiveFailures === 0) return () => {}
+    const {until, armedAt} = state
+    const reserved = armLane(lane)
+    state.until = now() + retryBackoffMs(state.consecutiveFailures)
+    state.armedAt = now()
+    // Returned so a launch that never became a run can hand the window back.
+    // The reservation has to happen at the DECISION — that is what stops a
+    // second probe in the same scan — but the checks that can still bail
+    // (block gone, no longer pending, a Stop, a session already running)
+    // run afterwards, and a reservation left behind for one of those makes
+    // unrelated work on the lane wait out another backoff for a probe that
+    // never happened. Restores rather than clears: a real failure may have
+    // armed a newer window in between, and that one must stand — which is
+    // what the GENERATION decides. Comparing the window's own fields cannot:
+    // `state` is the live map entry, so a failure in between moves them both
+    // and the release still reads as its own, restoring an expired window
+    // over the outage that just re-armed it.
+    return () => {
+      if (generationOf(lane) !== reserved) return
+      const current = cooldowns.get(lane)
+      if (!current) return
+      current.until = until
+      current.armedAt = armedAt
+    }
+  }
+
+  const inInfraCooldown = (lane: string, source?: BlockView): boolean => {
+    const state = cooldowns.get(lane)
+    if (!state || now() >= state.until) return false
+    // An explicit user re-queue (Retry now / Retry all) stamped AFTER this
+    // window was armed is a deliberate probe: the user has just fixed the
+    // cause — topped up credits, re-ran `claude login` — and the durable
+    // `agent:retry-after` their gesture cleared is only half the clock.
+    // Without this, the in-memory half ignores the gesture for up to five
+    // minutes and "Retry now" silently does nothing. Exactly one gets
+    // through: reserveProbe moves `armedAt` past the rest.
+    const askedAt = source?.properties?.[PROPS.askedAt]
+    if (typeof askedAt === 'number' && askedAt > state.armedAt) return false
+    if (state.logged !== state.until) {
+      state.logged = state.until
+      log(`deferring new ${lane} runs until ${new Date(state.until).toISOString()} (${state.reason})`)
+    }
+    return true
+  }
 
   // Excluded so one --resume follow-up doesn't consume two of
   // maxConcurrent's slots.
@@ -231,22 +457,72 @@ export const createEngine = (deps: EngineDeps) => {
     const fresh = await graph.getBlock(sourceId)
     if (decidePending({source: fresh ?? {id: sourceId}, nowMs: now()}).reason !== 'attempts-exhausted') return
     const reason = `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
-    await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()})
-    await graph.createReply(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`).catch(() => {})
+    await graph.setTaskProps(sourceId, {status: 'error', error: reason, retryAfter: null, nowMs: now()})
+    await graph.createReply(sourceId, `⚠️ agent-dispatch: ${reason}. Use the chip's Retry action (or delete the agent:* properties) to re-run it.`).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
   }
 
   const processMention = async (
     watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
-    quietExempt: boolean,
+    quietExempt: boolean, releaseProbe: () => void = () => {},
   ) => {
+    /** Nothing spawned: give back the spend slot AND the probe reservation. */
+    const abandonLaunch = () => {
+      refundLaunch(launchStamp)
+      releaseProbe()
+    }
     const {runner} = watcher
-    // Pre-claim bails spawned nothing — refund the slot (refundLaunch).
-    const block = await graph.getBlock(sourceId)
-    if (!block) return refundLaunch(launchStamp)
-    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
-    if (!decision.pending) return refundLaunch(launchStamp)
-    const ancestorBlocks = await graph.ancestors(sourceId)
+    // Captured before anything can fail: a clear from this run is only valid
+    // while the lane has not been armed by a newer one (see clearInfraCooldown).
+    const laneAtLaunch = generationOf(laneOf(watcher))
+    // ONE failure boundary over every pre-claim step, and one refund site.
+    //
+    // The launch slot is charged at the decision, synchronously, so this
+    // stretch is already spending budget. A bridge call throwing straight
+    // past this into launch()'s catch (which only logs) would leave the
+    // slot spent, no lane cooled, and the still-pending source doing this
+    // again next tick until runsPerHour was exhausted — deferring real work
+    // for an hour, the very failure this path exists to prevent. A guard per
+    // call site would only cover the ones already found; a boundary covers
+    // whatever throws next.
+    //
+    // Nothing is registered in `running` before this returns, so unwinding
+    // is only: hand the slot back, and cool the lane if the cause warrants.
+    const prepared = await (async () => {
+      const found = await graph.getBlock(sourceId)
+      if (!found) return null
+      const pending = decidePending({
+        source: found, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt,
+        watcherName: watcher.name,
+      })
+      if (!pending.pending) return null
+      // A Stop on a DEFERRED task that landed after the scan's batched
+      // snapshot is invisible to the tick's stop branch but visible HERE, in
+      // the fresh read. Without this the daemon spawns the executor anyway
+      // and bills work the user explicitly stopped — the next sweep only
+      // aborts it mid-run. The tick's branch terminalizes it on the
+      // following pass, so refusing is enough.
+      //
+      // Scoped to `queued` deliberately. A cancel on a block with NO status
+      // is a stale flag no gesture can produce any more, and refusing to
+      // claim it would strand it forever: the tick clears an un-actionable
+      // cancel only for `running`, so nothing else would ever pick that
+      // block up. Claiming it, as before, clears the flag on the terminal
+      // write.
+      if (found.properties?.[PROPS.cancel] && found.properties?.[PROPS.status] === 'queued') {
+        log(`[${watcher.name}] not claiming ${sourceId} — a Stop is pending`)
+        return null
+      }
+      return {block: found, ancestorBlocks: await graph.ancestors(sourceId), decision: pending}
+    })().catch(error => {
+      const reason = truncate(errorMessage(error))
+      const failure = classifyThrown(error, reason)
+      if (failure.retryable) noteInfraFailure(laneOf(watcher), failure, watcher.name)
+      log(`[${watcher.name}] could not prepare ${sourceId}: ${reason}`)
+      return null
+    })
+    if (!prepared) return abandonLaunch()
+    const {block, ancestorBlocks, decision} = prepared
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
@@ -254,7 +530,7 @@ export const createEngine = (deps: EngineDeps) => {
       ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
       : null
     const sessionKey = session ? `session:${session}` : null
-    if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
+    if (sessionKey && running.has(sessionKey)) return abandonLaunch()
     if (sessionKey) running.set(sessionKey, Promise.resolve())
 
     // A fresh run's session id is unknown until mid-run. The instant it is
@@ -272,12 +548,25 @@ export const createEngine = (deps: EngineDeps) => {
     // Last cumulative text streamed into the reply — kept so a FAILED run
     // that had already streamed most of its (billed) answer keeps that
     // partial (collapsed to a single note block) instead of discarding it.
-    let lastStreamedText = ''
-    // Set once a TERMINAL reply (the ok answer, or the failure/partial note)
-    // has been written. The infra-catch checks it so a transient blip on the
-    // *terminal props write* — which lands AFTER a good reply — can't
-    // re-enter the reply write and clobber the answer.
+    const watch = createRunWatch()
+    // Set once a TERMINAL reply has been written (the ok answer, the
+    // failure/partial note, or the retry-deferral note). The infra-catch
+    // checks it so a transient blip on the *terminal props write* — which
+    // lands AFTER a good reply — can't re-enter the reply write and clobber
+    // the answer.
     let terminalReplyDelivered = false
+    // Whether runTask returned at all. Splits the catch's two very
+    // different worlds: a throw BEFORE it is "we never got to try"
+    // (retryable), a throw after is "the answer we already paid for failed
+    // to land" (terminal — re-running would re-bill it).
+    let runAttempted = false
+    // Set the moment we DECIDE to defer, before any of its writes. If one of
+    // them then fails, the catch below must not undo the decision by parking
+    // the task: a transient bridge blip would turn the outage back into the
+    // dead task this whole path exists to prevent. Leaving the block
+    // `running` instead hands it to the stale sweep, which re-queues it —
+    // the fallback the deferral has always documented.
+    let deferIntended = false
     // Per-run reply identity + shape, set once `attempt` is known (below).
     let replyKey = ''
     let replyShape: 'outline' | 'block' = 'block'
@@ -316,15 +605,141 @@ export const createEngine = (deps: EngineDeps) => {
       }
     }
 
+    const attempt = taskAttempts(block) + 1
+    // Fresh reply subtree per attempt (a rerun posts a new reply, never
+    // mutating the prior attempt's answer); split unless the watcher opted
+    // out. Reconciles within THIS attempt share the key → converge in place.
+    // `agent:asked-at` is folded into the key for the reason given at
+    // runIdentity above: `attempt` alone can't tell a deliberate Retry
+    // (which resets the crash counter) apart from the run it supersedes.
+    replyKey = replyKeyFor(sourceId, block, attempt)
+    replyShape = watcher.splitReply ? 'outline' : 'block'
+
+    /** Put the task BACK in the queue instead of parking it as failed:
+     *  hand the attempt and the spend slot back, leave a "waiting" trace
+     *  where the answer would go, and cool the whole daemon down. Shared by
+     *  the two ways a run can fail WITHOUT having been attempted — a
+     *  classified run result, and a throw around the spawn (executor not on
+     *  PATH, bridge down, channel listener down). */
+    const deferForRetry = async (
+      failure: RunFailureClass,
+      detail: string,
+      resume: {session?: string | null, resumeOptions?: AgentResumeOptions | null} = {},
+      /** The error this deferral came from, when there was one — read only
+       *  for whether the transport can vouch that nothing was dispatched. */
+      thrown?: unknown,
+    ) => {
+      deferIntended = true
+      // Did someone else FINISH this while we were failing to hear back?
+      // The channel path makes that real: the ambient session owns the run
+      // and writes `done` itself, so a lost acknowledgement — our 10s
+      // timeout on a POST that actually landed — arrives here with the work
+      // already complete. Deferring would overwrite `done` with `queued`,
+      // and the retry then carries the same event id, so the listener drops
+      // it as the duplicate it is and nobody completes the block again: it
+      // sits until the stale sweep re-runs work that was already done.
+      //
+      // Narrows rather than closes — the read and the write are separate
+      // bridge round-trips — but it removes the case that occurs, and an
+      // unreadable block falls through to deferring, which is the safe way
+      // to be wrong.
+      const finished = await graph.getBlock(sourceId).catch(() => null)
+      const finishedStatus = finished?.properties?.[PROPS.status]
+      if (finishedStatus === 'done' || finishedStatus === 'error') {
+        // The task got THROUGH — a lost acknowledgement, not a lost
+        // delivery. That is the probe succeeding, so reopen the lane:
+        // reserveProbe armed a window at launch, and leaving it armed
+        // throttles unrelated work for a whole backoff interval on the
+        // strength of a failure that did not happen.
+        clearInfraCooldown(laneOf(watcher), laneAtLaunch)
+        log(`[${watcher.name}] not deferring ${sourceId} — it finished as ${finishedStatus} while the delivery was failing`)
+        return
+      }
+      const retryAfter = noteInfraFailure(laneOf(watcher), failure, watcher.name)
+      // A run that never reached the model spent nothing, so the runsPerHour
+      // slot comes back — letting doomed attempts eat the budget would defer
+      // REAL work for an hour once the outage lifts.
+      //
+      // UNLESS the transport cannot say that. A channel listener starts the
+      // ambient session before it acknowledges, so a lost acknowledgement
+      // means work may be running right now; refunding there let a task
+      // whose acks keep timing out launch forever outside the spend cap. The
+      // sender reports `dispatched: 'no'` only for a connection that never
+      // opened, and anything it cannot vouch for keeps its slot.
+      if ((thrown as {dispatched?: string} | undefined)?.dispatched !== 'unknown') {
+        abandonLaunch()
+      }
+      // DURABLE STATE FIRST, note second. The note is keyed by the attempt
+      // number this write rolls back, so if the note lands and this does
+      // not, the task keeps its claimed attempt — and the stale sweep's
+      // re-run then computes a DIFFERENT key and can never replace the
+      // "retrying automatically" child, which stays on the block for good.
+      // Ordering removes that; a failed note afterwards is only cosmetic.
+      await graph.setTaskProps(sourceId, {
+        status: 'queued',
+        error: `${failure.label} — waiting to retry (${detail})`,
+        // Roll the attempt back. Attempts exist to cap a task that keeps
+        // CRASHING; counting an outage against them would park the queue
+        // after three ticks — the very bug this path fixes.
+        attempts: attempt - 1,
+        session: resume.session ?? undefined,
+        resumeOptions: resume.resumeOptions,
+        activity: null,
+        cancel: null,
+        retryAfter,
+        nowMs: now(),
+      })
+      const partial = watch.streamedText.trim()
+      const waitingNote = `⏳ agent-dispatch: ${failure.label} — nothing ran; retrying automatically. (${detail})`
+      // Replaces any streamed placeholder/partial in place (same replyKey,
+      // since the attempt number is rolled back too), so the retry's real
+      // answer converges onto this block rather than stacking under it.
+      //
+      // NOT for a channel watcher: there the ambient session owns the reply
+      // and posts its own blocks, so nothing ever reconciles this key away
+      // — the finished task would keep a child promising a retry that
+      // already happened. Its chip still reads "retry in 2m", which is the
+      // surface that carries a deferral for channel tasks.
+      if (watcher.delivery !== 'channel') {
+        await reconcileReplyWithRetry(
+          partial ? `${partial}\n\n${waitingNote}` : waitingNote,
+          {final: true, shape: 'block'},
+        ).catch(error => log(`[${watcher.name}] could not post the retry note for ${sourceId}: ${errorMessage(error)}`))
+      }
+      terminalReplyDelivered = true
+      log(`[${watcher.name}] DEFERRED ${sourceId}: ${failure.label} (${detail})`)
+    }
+
     try {
-      const attempt = taskAttempts(block) + 1
-      // Fresh reply subtree per attempt; split unless the watcher opted out.
-      replyKey = `reply:${sourceId}:${attempt}`
-      replyShape = watcher.splitReply ? 'outline' : 'block'
       const claimStamp = now()
+      // Re-read immediately before claiming. A channel task's lifecycle is
+      // finished by the ambient session, so a run accepted before an
+      // acknowledgement timed out can write `done` between the pre-claim read
+      // and this write — and claiming over it loses the completion, while the
+      // listener answers the retry `duplicate`, so nothing restores it and the
+      // stale sweep eventually runs the finished work again.
+      //
+      // NARROWS to one bridge round-trip; it cannot close, because the read
+      // and the write are separate requests. Closing needs an update
+      // conditional on the state this read saw, which the bridge does not
+      // expose (tracked with the deferred-stop twin of the same race).
+      const beforeClaim = await graph.getBlock(sourceId)
+      const beforeStatus = beforeClaim?.properties?.[PROPS.status]
+      if (beforeStatus === 'done' || beforeStatus === 'error') {
+        log(`[${watcher.name}] not claiming ${sourceId} — it finished as ${beforeStatus} first`)
+        return abandonLaunch()
+      }
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
-        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, nowMs: claimStamp,
+        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt,
+        // A deferral left its reason and its due time on the block; claiming
+        // it is when they stop being true. The spawn path would clear them
+        // on its terminal write anyway, but a CHANNEL task's lifecycle is
+        // finished by the ambient session, which only sets `agent:status` —
+        // so a retried one stayed `done` while still carrying "waiting to
+        // retry" and a retry-after for anything reading the graph.
+        error: null, retryAfter: null,
+        nowMs: claimStamp,
       })
 
       // Claim-verify: re-read and confirm OUR claim stuck. Defends only
@@ -337,7 +752,7 @@ export const createEngine = (deps: EngineDeps) => {
       const props = verified?.properties ?? {}
       if (props[PROPS.watcher] !== watcher.name || props[PROPS.updatedAt] !== claimStamp) {
         log(`[${watcher.name}] lost claim race on ${sourceId} — backing off`)
-        refundLaunch(launchStamp)
+        abandonLaunch()
         return
       }
 
@@ -374,8 +789,19 @@ export const createEngine = (deps: EngineDeps) => {
         // MAX_ATTEMPTS.
         await deliverToChannel({
           content: prompt,
-          meta: {watcher: watcher.name, block_id: sourceId, attempt: String(attempt)},
+          // Stable across retries of THIS logical delivery and different for
+          // genuinely new work — the deferral rolls `attempt` back, so a
+          // retried delivery carries the id the listener already saw. That is
+          // what lets the listener drop the duplicate (mcp.ts): it starts the
+          // ambient session working BEFORE it acknowledges, so a lost ack
+          // makes a failure indistinguishable from work already underway.
+          meta: {watcher: watcher.name, block_id: sourceId, attempt: String(attempt), event_id: runIdentity(sourceId, block, attempt)},
         })
+        // A delivery that lands proves the listener is back. This path
+        // returns before the spawn success branch, so without clearing here
+        // a recovered channel lane would stay throttled to one delivery per
+        // backoff window forever — nothing else ever reopens it.
+        clearInfraCooldown(laneOf(watcher), laneAtLaunch)
         log(`[${watcher.name}] delivered ${sourceId} to the ambient channel session (attempt ${attempt})`)
         return
       }
@@ -408,13 +834,15 @@ export const createEngine = (deps: EngineDeps) => {
           ? resumeOptionsForRun(runOptionsFor(watcher, prompt, sessionId, undefined, abortController.signal))
           : null
       const onEvent = (event: RunEvent) => {
+        watch.observe(event)
         if (event.kind === 'activity') {
           if (event.label === lastActivity) return
           lastActivity = event.label
           queueWrite(() => graph.setActivity(sourceId, event.label))
         } else if (event.kind === 'text') {
+          // The watch above already recorded it, whatever streamReply says:
+          // that flag controls PUBLISHING, not observing.
           if (!watcher.streamReply) return
-          lastStreamedText = event.text
           const nowMs = now()
           if (nowMs - lastTextWriteMs < 1_500) return
           lastTextWriteMs = nowMs
@@ -450,7 +878,26 @@ export const createEngine = (deps: EngineDeps) => {
 
       const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
       const result = await runTask(runOptions)
+      // The run happened (whatever its outcome). Past this line a throw is
+      // about DELIVERING a billed answer, not about failing to start one —
+      // which is what the catch keys its defer-vs-park decision off.
+      runAttempted = true
       await writes // ordering guarantee: no progress write races the final one below
+
+      // Why the run ended, for a failure the user did NOT ask for. A
+      // cancel is deliberate and terminal, so it's never classified.
+      const failure = result.ok || abortController.signal.aborted ? null : classifyRunFailure(result)
+      // A retryable CLASS only means "nothing ran" if nothing ran. A run can
+      // answer — or call a tool — and THEN die on a transport error
+      // (ECONNRESET mid-stream classifies as `network`); handing back the
+      // spend slot and the attempt would replay work that already happened.
+      //
+      // DEPENDS ON a runner contract: `resultText` is the ANSWER and is
+      // empty on a failed run, while the CLI's error goes to `failureText` —
+      // never both, or an out-of-credits failure reads as an answer and gets
+      // parked instead of deferred. Pinned by runner.test.ts's "fails when
+      // the envelope reports is_error even with exit 0".
+      watch.observeResult(result)
 
       if (result.ok) {
         // Deliberately NOT gated on signal.aborted: if the child completed
@@ -470,9 +917,31 @@ export const createEngine = (deps: EngineDeps) => {
           resumeOptions: resumeOptionsForSession(result.sessionId),
           activity: null,
           cancel: null,
+          // Cleared alongside retryAfter: a task that got here by way of a
+          // deferral still carries that deferral's `agent:error` ("out of
+          // credits — waiting to retry"), and a merged write leaves it
+          // there. `agent:error` is meaningful only for `error` and a
+          // deferred `queued`, so a `done` task holding one contradicts
+          // itself for every SQL/API consumer that reads it.
+          error: null,
+          retryAfter: null,
           nowMs: now(),
         })
+        clearInfraCooldown(laneOf(watcher), laneAtLaunch)
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
+      } else if (failure?.retryable && !watch.modelResponded) {
+        // NOT a task failure — the run never got to attempt it (out of
+        // credits, expired login, rate limited, network down). Parking it
+        // `error` here turns one credit outage into a queue of dead tasks,
+        // because the daemon keeps picking work up.
+        await deferForRetry(
+          failure,
+          truncate(result.stderr.trim() || result.failureText.trim() || `exit ${result.exitCode}`, 200),
+          {
+            session: storedSessionFor(runner.executor, result.sessionId),
+            resumeOptions: resumeOptionsForSession(result.sessionId),
+          },
+        )
       } else {
         // A user Stop aborts the run — signal.aborted distinguishes it from
         // a timeout/crash so the task parks `error: cancelled` (deliberate,
@@ -482,7 +951,7 @@ export const createEngine = (deps: EngineDeps) => {
           ? 'cancelled'
           : result.timedOut
             ? `timed out after ${Math.round(runner.timeoutMs / 1000)}s`
-            : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
+            : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.failureText.trim() || result.resultText.trim() || 'no output')}`
         const failureNote = cancelled
           ? '⏹️ agent-dispatch run cancelled'
           : `⚠️ agent-dispatch run failed — ${reason}`
@@ -490,7 +959,7 @@ export const createEngine = (deps: EngineDeps) => {
         // the success write so a retry recovers it in place. A run that died
         // after streaming most of its billed answer keeps that text with the
         // note appended, rather than losing it.
-        const partial = lastStreamedText.trim()
+        const partial = watch.streamedText.trim()
         await reconcileReplyWithRetry(
           partial ? `${partial}\n\n${failureNote}` : failureNote,
           {final: true, shape: 'block'},
@@ -503,8 +972,25 @@ export const createEngine = (deps: EngineDeps) => {
           resumeOptions: resumeOptionsForSession(result.sessionId),
           activity: null,
           cancel: null,
+          retryAfter: null,
           nowMs: now(),
         })
+        // "Do not replay this task" and "the lane is healthy" are DIFFERENT
+        // questions, and this branch answers the first. A run that reached
+        // the model and then died on a transport error keeps its attempt and
+        // its spend slot — replaying it would repeat work — but the
+        // transport is still broken. Calling that lane healthy would let a
+        // persistent disconnect terminally fail the whole queue without ever
+        // backing off.
+        //
+        // So: a retryable CAUSE cools the lane even when the task is
+        // terminal. Only a genuine task failure — the model answered and the
+        // run failed on its own merits — proves the infrastructure is fine.
+        // A cancel proves nothing either way and leaves the lane alone.
+        if (!cancelled) {
+          if (failure?.retryable) noteInfraFailure(laneOf(watcher), failure, watcher.name)
+          else clearInfraCooldown(laneOf(watcher), laneAtLaunch)
+        }
         log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {
@@ -515,6 +1001,30 @@ export const createEngine = (deps: EngineDeps) => {
       // Drain any queued progress writes first — a streamed-text write
       // landing after the note would silently replace it.
       await writes.catch(() => {})
+      // A deferral that started and did not finish stays a deferral. Parking
+      // here would convert the outage into exactly the dead task this path
+      // exists to prevent, on nothing worse than a transient write failure.
+      if (deferIntended) {
+        log(`[${watcher.name}] deferral for ${sourceId} did not land (${reason}) — leaving it running for the stale sweep to re-queue`)
+        throw error
+      }
+      // A throw BEFORE the run is the same "we couldn't try" case a
+      // classified run failure is: `claudeBin` missing from launchd's PATH,
+      // the bridge down, the channel listener not up. Parking here kills
+      // every task the daemon touches for the duration, so defer instead.
+      // Gated on runAttempted so a throw while delivering a BILLED answer
+      // still parks — a re-run would have to pay for it again.
+      const startupFailure = runAttempted || terminalReplyDelivered
+        ? null
+        : classifyThrown(error, reason)
+      if (startupFailure?.retryable) {
+        // Best-effort: if the defer itself can't be written the block stays
+        // `running` and the stale sweep re-queues it, which is the same
+        // fallback the parking path has always had.
+        await deferForRetry(startupFailure, reason, {}, error)
+          .catch(deferError => log(`[${watcher.name}] could not defer ${sourceId}: ${errorMessage(deferError)}`))
+        throw error
+      }
       // Only post the infra note if no terminal reply landed yet: when the
       // error came from the *props* write that follows a delivered answer,
       // reconciling again would overwrite that answer, so leave the reply
@@ -527,7 +1037,7 @@ export const createEngine = (deps: EngineDeps) => {
       // aborted, e.g. the reply write then failed). Left behind, the flag
       // survives askAgent's retry-reset and would abort the fresh run on
       // its very next tick.
-      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, cancel: null, nowMs: now()}).catch(() => {})
+      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, cancel: null, retryAfter: null, nowMs: now()}).catch(() => {})
       throw error
     } finally {
       if (sessionKey) running.delete(sessionKey)
@@ -595,9 +1105,65 @@ export const createEngine = (deps: EngineDeps) => {
         log(`[${watcher.name}] cleared an un-actionable agent:cancel on ${source.id}`)
         continue
       }
+      // Stop on a DEFERRED task: nothing is running to abort, so the flag
+      // means "stop waiting to retry". Honour it as the terminal cancel the
+      // running path writes — otherwise the only way out of an automatic
+      // retry loop would be deleting the block's agent:* properties.
+      //
+      // ACCEPTED LIMITATION: this only sees blocks still in the watcher's
+      // backlink scan. Delete the mention from a deferred block and its Stop
+      // is never observed (sweepCancellations can't help — a deferred task
+      // holds no abort controller), so the chip reads "retry in 2m" forever.
+      // Left as-is deliberately: the same deletion already stops the task
+      // re-firing, so nothing runs or bills either way, and the fixes cost
+      // more than the stale chip does — a watcher-independent cancel sweep
+      // needs a property query the daemon has nowhere else, and moving the
+      // terminal write into the app takes lifecycle ownership away from the
+      // daemon. Tracked separately.
+      if (
+        view.properties?.[PROPS.cancel]
+        && view.properties?.[PROPS.status] === 'queued'
+        && !running.has(source.id)
+      ) {
+        // Re-read before writing: `views` is a batched snapshot taken at the
+        // top of this scan, and a "Retry now" landing in that window clears
+        // the lifecycle props and asks for a fresh run. Parking off the stale
+        // snapshot would silently revert that gesture to `cancelled`. Same
+        // shape as parkExhausted's re-check.
+        //
+        // NARROWS the window rather than closing it: the read and the write
+        // are separate bridge round-trips, so a Retry committing between them
+        // is still reverted. Closing it needs a conditional update the bridge
+        // does not expose, and the residue is one recoverable click on a
+        // gesture the user just contradicted within a few milliseconds —
+        // not worth a new write primitive. Tracked separately.
+        const fresh = await graph.getBlock(source.id)
+        if (fresh?.properties?.[PROPS.cancel] === undefined
+          || !fresh.properties[PROPS.cancel]
+          || fresh.properties[PROPS.status] !== 'queued') continue
+        await graph.setTaskProps(source.id, {
+          status: 'error', error: 'cancelled', activity: null, cancel: null, retryAfter: null, nowMs: now(),
+        })
+        // Replace the deferral's "retrying automatically" note, which would
+        // otherwise outlive the task it describes. Same key deferForRetry
+        // used: it rolled `agent:attempts` back to attempt-1, so the note's
+        // attempt number is the stored count plus one. Channel watchers get
+        // no such note (the ambient session owns their replies), so
+        // reconciling one there would CREATE the block we are removing.
+        if (watcher.delivery !== 'channel') {
+          await graph.reconcileReplyTree(source.id, '⏹️ agent-dispatch: stopped retrying', {
+            replyKey: replyKeyFor(source.id, fresh, taskAttempts(fresh) + 1), shape: 'block', final: true,
+          }).catch(error => log(`[${watcher.name}] could not clear the retry note for ${source.id}: ${errorMessage(error)}`))
+        }
+        log(`[${watcher.name}] stopped retrying ${source.id} (Stop requested while deferred)`)
+        continue
+      }
       if (running.has(source.id)) continue
       const quietExempt = quietExemptBlockIds.has(source.id)
-      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
+      const preview = decidePending({
+        source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt,
+        watcherName: watcher.name,
+      })
 
       if (preview.reason === 'attempts-exhausted') {
         // Terminal write (once) so the pre-filter skips it forever.
@@ -606,14 +1172,29 @@ export const createEngine = (deps: EngineDeps) => {
       }
       if (!preview.pending) continue
       if (capacityLeft() <= 0) return
+      // Gated HERE rather than at the top of the tick so a cooldown never
+      // suppresses the non-launching work above (clearing an inert cancel,
+      // parking an exhausted task) — it only stops NEW runs. `view` rides
+      // along so a task the user explicitly re-queued gets to be the probe.
+      //
+      // `continue`, not `return`: the decision is PER SOURCE now that an
+      // explicit retry can pass a cooldown the source beside it cannot.
+      // Returning made that depend on scan order — a newer pending mention
+      // scanned first would end the sweep before an older, explicitly
+      // retried task was ever looked at. (The capacity and budget gates
+      // above still return: those are genuinely global.)
+      if (inInfraCooldown(laneOf(watcher), view)) continue
       if (!spendBudgetLeft()) {
         log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${source.id}`)
         return
       }
       // Budget is consumed at the launch DECISION (synchronously) — the
       // async task body would record too late to gate this same loop.
+      const releaseProbe = reserveProbe(laneOf(watcher))
       const launchStamp = recordLaunch()
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt))
+      launch(source.id, () => processMention(
+        watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt, releaseProbe,
+      ))
     }
   }
 
@@ -639,10 +1220,24 @@ export const createEngine = (deps: EngineDeps) => {
     }
     if (diff.newRows.length === 0) return
     if (capacityLeft() <= 0) return
+    // Query rows are especially costly to fire into an outage: the cursor
+    // advances before the run, so a doomed launch DROPS them (the rollback
+    // below is best-effort). Hold them instead — the cursor stays put and
+    // the same rows re-diff once the cooldown lapses.
+    if (inInfraCooldown(laneOf(watcher))) return
     if (!spendBudgetLeft()) {
       log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${diff.newRows.length} new row(s)`)
       return
     }
+    // One fire per lapsed window here too — this watcher is single-flight
+    // (`running.has(key)`), but a SECOND query watcher on the same lane
+    // would otherwise fire into the same outage in this very tick.
+    reserveProbe(laneOf(watcher))
+    // Captured AFTER the reservation, which arms a generation of its own:
+    // a clear from this run is only valid while nothing newer has armed the
+    // lane, and the window this run is the probe for is its own (see
+    // `armLane`).
+    const laneAtLaunch = generationOf(laneOf(watcher))
 
     const batch = diff.newRows.slice(0, watcher.maxRowsPerFire)
     const overflow = diff.newRows.length - batch.length
@@ -652,15 +1247,71 @@ export const createEngine = (deps: EngineDeps) => {
     })
 
     if (watcher.delivery === 'channel') {
-      // Deliver FIRST, cursor after: a cheap POST has no re-bill risk, and
-      // advancing the cursor before a failed delivery would lose these rows
-      // permanently (no graph-side state to sweep). The launch is counted
-      // only AFTER delivery succeeds — a failed POST bills nothing, and
-      // counting it would let a down listener drain the hourly budget and
-      // defer the rows even once it is back up.
-      await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
+      // Deliver FIRST, cursor after: a cheap POST has no re-bill risk,
+      // and advancing the cursor before a failed delivery would lose
+      // these rows permanently (no graph-side state to sweep). The
+      // launch is counted only AFTER delivery succeeds — a failed POST
+      // bills nothing, and counting it would let a down listener drain
+      // the hourly budget in ten polls and defer the rows even once
+      // it's back up.
+      try {
+        // Identity = this DELIVERY, not merely these rows: a retry rebuilds
+        // the same key from the same unadvanced cursor, while the generation
+        // keeps a LEGITIMATE recurrence from colliding with it — the cursor
+        // forgets ids past MAX_CURSOR_IDS, so the same rows can become new
+        // again long afterwards and would otherwise be answered `duplicate`.
+        const generation = await state.getDeliveryGeneration(watcher.name)
+        await deliverToChannel({
+          content: prompt,
+          // Sorted and JSON-encoded: the identity is WHICH rows these are,
+          // not the order the query returned them in, and ids are arbitrary
+          // text — a comma delimiter makes `['a,b','c']` and `['a','b,c']`
+          // one key. With `maxRowsPerFire` truncating an unordered query a
+          // retry can still pick a different SUBSET, which is different work
+          // and correctly gets a different id; such a watcher should ORDER BY.
+          meta: {watcher: watcher.name, event_id: `${watcher.name}:${generation}:${JSON.stringify(batch.map(row => row.id).sort())}`},
+        })
+      } catch (error) {
+        // Letting this reach the tick's per-watcher catch leaves the cursor
+        // unadvanced — correct — but arms nothing, so the same rows are
+        // re-POSTed at every poll (5s by default) for as long as the
+        // listener is down: a retry storm precisely where the backoff was
+        // supposed to apply. Classified like every other delivery failure;
+        // an unrecognised one still propagates and is merely logged.
+        const reason = truncate(errorMessage(error))
+        const failure = classifyThrown(error, reason)
+        // Back off for EITHER outcome. A retryable cause is the outage this
+        // was built for; a terminal one — the port answered, but by
+        // something that is not our listener — never recovers on its own,
+        // and it left the tightest loop of the two: the cursor stays put and
+        // nothing is charged (a launch is only recorded after a delivery
+        // lands), so the same rows went out every poll, forever, outside
+        // runsPerHour. The backoff bounds that to one attempt per window
+        // while the log says what is wrong.
+        noteInfraFailure(laneOf(watcher), failure, watcher.name)
+        // CHARGE an ambiguous one. A launch is normally recorded only after a
+        // delivery lands, but the listener starts the ambient session before
+        // it acknowledges — so `unknown` means work may be running now, and
+        // leaving it uncharged let a prolonged acknowledgement outage run
+        // query work outside runsPerHour entirely. A rejection the sender can
+        // vouch for (`no`) stays free, since nothing was dispatched.
+        //
+        // Charged per ATTEMPT, not once per logical event: the receiver's
+        // dedup makes a repeat harmless but it is best-effort and a restart
+        // forgets it, so over-counting during an outage is the direction that
+        // protects the budget rather than the throughput.
+        if ((error as {dispatched?: string} | null)?.dispatched === 'unknown') recordLaunch()
+        throw error
+      }
+      // A delivery that lands proves the listener is back, and this path
+      // returns before the spawn success branch that would otherwise clear it.
+      clearInfraCooldown(laneOf(watcher), laneAtLaunch)
       recordLaunch()
-      await state.setCursor(watcher.name, diff.seenIds)
+      // Acknowledged: the generation and the cursor move TOGETHER. Apart,
+      // a failure between them leaves a bumped generation over an old
+      // cursor, and the next tick re-delivers the same rows under a fresh
+      // id — straight past the receiver's dedup, repeating the work.
+      await state.commitDelivery(watcher.name, diff.seenIds)
       log(`[${watcher.name}] delivered ${batch.length} new row(s) to the ambient channel session`)
       return
     }
@@ -668,25 +1319,75 @@ export const createEngine = (deps: EngineDeps) => {
     // Spawn mode: claim-at-cursor BEFORE the run so a persistently
     // failing (billed) prompt can't re-fire every tick.
     await state.setCursor(watcher.name, diff.seenIds)
-    recordLaunch()
+    const launchStamp = recordLaunch()
     log(`[${watcher.name}] firing for ${batch.length} new row(s)${overflow > 0 ? ` (+${overflow} truncated)` : ''}`)
+    const lane = laneOf(watcher)
     launch(key, async () => {
+      // Nothing was attempted, so put the rows BACK: this watcher has no
+      // graph-side task state to sweep, and the cursor was advanced before
+      // the run — leaving it advanced would silently drop exactly the rows
+      // the outage prevented us from handling. Restoring `prev` also
+      // re-surfaces rows that appeared during the run, which is the right
+      // direction to be wrong in. Safe against a concurrent tick: the
+      // `running.has(key)` guard above keeps this watcher single-flight.
+      const deferRows = async (failure: RunFailureClass) => {
+        refundLaunch(launchStamp)
+        noteInfraFailure(lane, failure, watcher.name)
+        await state.setCursor(watcher.name, prev)
+          .then(() => log(`[${watcher.name}] DEFERRED ${batch.length} row(s): ${failure.label} — cursor rolled back, they re-fire after the cooldown`))
+          .catch(error => log(`[${watcher.name}] ${failure.label}, but the cursor rollback FAILED (${errorMessage(error)}) — ${batch.length} row(s) will not re-fire`))
+      }
+
       // Query runs aren't threaded, so there is no block to persist the
       // session id to — logging it as it streams is the only record, and
       // the only way to inspect a run while it is live.
       let loggedSession: string | null = null
-      const result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
-        if (event.kind === 'session' && !loggedSession) {
-          loggedSession = event.sessionId
-          log(`[${watcher.name}] session ${event.sessionId}`)
-        }
-      }))
+      const watch = createRunWatch()
+      let result: AgentRunResult
+      try {
+        result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
+          watch.observe(event)
+          if (event.kind === 'session' && !loggedSession) {
+            loggedSession = event.sessionId
+            log(`[${watcher.name}] session ${event.sessionId}`)
+          }
+        }))
+      } catch (error) {
+        // runTask REJECTED rather than returning a failed result — the
+        // executor binary is missing, the bridge is down. Classified from
+        // the throw exactly as the mention path's catch does, because the
+        // cursor is already advanced: without this the rows are dropped
+        // permanently by the very outage the rest of this path defers.
+        // An UNRECOGNISED throw stays terminal (cursor left advanced), so
+        // a prompt that crashes the runner every time can't re-fire and
+        // re-bill forever — the same degrade-to-today's-behaviour the
+        // classifier has everywhere else.
+        const reason = truncate(errorMessage(error))
+        const failure = classifyThrown(error, reason)
+        if (failure.retryable) await deferRows(failure)
+        throw error
+      }
       const session = result.sessionId ?? loggedSession
       if (result.ok) {
+        clearInfraCooldown(lane, laneAtLaunch)
         log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}: ${truncate(result.resultText.trim(), 200)}`)
-      } else {
-        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
+        return
       }
+      const failure = classifyRunFailure(result)
+      watch.observeResult(result)
+      // Same test the mention path applies: a run that answered — or called
+      // a tool — before dying is not an un-attempt, so it must not hand its
+      // spend slot back or re-fire its rows.
+      if (!failure.retryable || watch.modelResponded) {
+        // Same split as the mention path: these rows must not re-fire, but a
+        // retryable cause still means the transport is broken and the lane
+        // should back off.
+        if (failure.retryable) noteInfraFailure(lane, failure, watcher.name)
+        else clearInfraCooldown(lane, laneAtLaunch)
+        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
+        return
+      }
+      await deferRows(failure)
     })
   }
 

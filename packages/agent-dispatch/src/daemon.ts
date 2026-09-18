@@ -26,6 +26,7 @@ import { createEngine } from './engine.js'
 import { clearPushRegistration, createExemptionPool, startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
 import { runCodex } from './codexRunner.js'
+import { createChannelDelivery } from './channelDelivery.js'
 import { reportBillingPosture } from './billing.js'
 import { buildMcpServerDef } from './mcpServerDef.js'
 import { CHANNEL_PORT_ENV, CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
@@ -206,20 +207,12 @@ const main = async () => {
         mcpServer: mcpServerDef,
       })
       : runClaude(options),
-    deliverToChannel: async event => {
-      const response = await fetch(`http://127.0.0.1:${config.channelPort}/`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(channelSecret ? {[CHANNEL_SECRET_HEADER]: channelSecret} : {}),
-        },
-        body: JSON.stringify(event),
-        signal: AbortSignal.timeout(10_000),
-      })
-      if (!response.ok) {
-        throw new Error(`channel listener replied ${response.status} — is the ambient session running? (claude --dangerously-load-development-channels server:km, ${CHANNEL_PORT_ENV}=${config.channelPort})`)
-      }
-    },
+    deliverToChannel: createChannelDelivery({
+      port: config.channelPort,
+      secret: channelSecret,
+      secretHeader: CHANNEL_SECRET_HEADER,
+      hint: `is the ambient session running? (claude --dangerously-load-development-channels server:km, ${CHANNEL_PORT_ENV}=${config.channelPort})`,
+    }),
     mcpConfigPath,
     log,
   })

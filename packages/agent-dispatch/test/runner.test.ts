@@ -103,6 +103,34 @@ describe('createStreamJsonParser', () => {
     expect(events).toEqual([{kind: 'session', sessionId: 'sess-mid'}])
   })
 
+  it('reports a server-side tool as activity too', () => {
+    // WebSearch/WebFetch run server-side and can produce no text at all. A
+    // run that used one and then hit a usage limit still reached the model.
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+
+    parser.feed(line({
+      type: 'stream_event',
+      event: {type: 'content_block_start', content_block: {type: 'server_tool_use', name: 'web_search'}},
+    }))
+
+    expect(events.some(event => event.kind === 'activity')).toBe(true)
+  })
+
+  it('reports extended thinking as activity, so a thinking-only run is not "nothing"', () => {
+    // A run can spend its whole budget on thinking and emit no text. The
+    // engine decides whether to replay a failed run from these events, so a
+    // transcript that produced only thinking must not look empty — it would
+    // be replayed and the reasoning paid for twice.
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+
+    parser.feed(line({type: 'system', subtype: 'init', session_id: 'sess-1'}))
+    parser.feed(line({type: 'stream_event', event: {type: 'content_block_start', content_block: {type: 'thinking'}}}))
+
+    expect(events).toContainEqual({kind: 'activity', label: 'Thinking'})
+  })
+
   it('skips garbage and unknown lines without throwing', () => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event))
@@ -250,7 +278,12 @@ describe('runClaude', () => {
       streamResult({type: 'result', result: 'refused', session_id: null, is_error: true}),
     ))
     expect(result.ok).toBe(false)
-    expect(result.resultText).toBe('refused')
+    // A failed envelope's text is claude's ERROR, so it lands in failureText
+    // only. Leaving it in resultText too makes it indistinguishable from a
+    // billed reply, and the engine reads a non-empty resultText as proof the
+    // run reached the model — which would park every credits failure.
+    expect(result.failureText).toBe('refused')
+    expect(result.resultText).toBe('')
   })
 
   it('kills runs that exceed the timeout', async () => {
