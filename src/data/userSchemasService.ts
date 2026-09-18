@@ -80,6 +80,29 @@ const rawPresetConfig = (
   return preset.configCodec.encode(preset.defaultConfig)
 }
 
+/** The value `preset.build` is called with for a definition row's stored
+ *  `property-schema:config` — `undefined` for a preset declaring no
+ *  `configCodec`. Throws whatever that codec throws.
+ *
+ *  Exported for the install-time preset-identity check
+ *  (`@/plugins/agent-runtime/presetIdentity`), which has to build the codec a
+ *  definition would ACTUALLY get from a candidate preset core. A second
+ *  reading of the same two inputs beside this one is how the two would drift
+ *  into disagreeing about what a row's codec is.
+ *
+ *  `preset.build` deliberately stays at the call site: a config decode is
+ *  caught here (a stale config is a fixable row), while a throwing `build` is
+ *  extension code failing and each caller has its own answer for it — the
+ *  projector publishes metadata only, `buildSchemaOrNull` swallows it rather
+ *  than aborting the user's transaction, and the check below reports it. */
+export const decodePresetConfig = (
+  preset: AnyValuePresetCore,
+  storedConfig: unknown,
+): unknown =>
+  preset.configCodec
+    ? preset.configCodec.decode(rawPresetConfig(preset, storedConfig))
+    : undefined
+
 /** Decode the row's stored default with the built codec, falling back to the
  *  preset default when the stored value is incompatible. An incompatible stored
  *  default is a stale *value* (e.g. a `null` optional-string default left behind
@@ -136,18 +159,13 @@ export const tryBuildSchema = (
     return null
   }
   let config: unknown
-  if (preset.configCodec) {
-    try {
-      const raw = rawPresetConfig(preset, peekRowProperty(row, presetConfigProp))
-      config = preset.configCodec.decode(raw)
-    } catch (err) {
-      console.warn(
-        `[UserSchemasService] schema "${metadata.name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
-      )
-      return null
-    }
-  } else {
-    config = undefined
+  try {
+    config = decodePresetConfig(preset, peekRowProperty(row, presetConfigProp))
+  } catch (err) {
+    console.warn(
+      `[UserSchemasService] schema "${metadata.name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
+    )
+    return null
   }
   const codec = preset.build(config as never)
   return {

@@ -97,8 +97,20 @@ export interface InstallExtensionInput {
   parentId?: string
   id?: string
   reload?: boolean
+  /** Execute the source in isolation and report what it contributes. Also the
+   *  way to run the preset-identity check against a block this device has not
+   *  approved: an install that makes nothing live does not evaluate the source
+   *  on its own. */
   verify?: boolean
+  /** Install anyway when a value preset this extension registers would re-type
+   *  values already stored under its id. See `presetIdentity.ts` — the refusal
+   *  names what moved and how many cells are stored under it, and this is the
+   *  caller saying those values are disposable. */
+  allowPresetChange?: boolean
 }
+
+export type {PresetIdentityConflict} from './presetIdentity.ts'
+import type {PresetIdentityConflict} from './presetIdentity.ts'
 
 export interface ExtensionVerificationError {
   blockId: string
@@ -159,6 +171,20 @@ export interface InstallExtensionResult {
   running?: boolean
   /** What to do about `running: false`. */
   hint?: string
+  /** Value preset ids whose effective codec this install changes — one it
+   *  registers differently, or one it stops registering. Present when the
+   *  install went ahead anyway: either `allowPresetChange` let it through — so
+   *  the override records what it overrode — or the block does not pass both
+   *  loader gates here, so nothing it registers runs and the conflict is a fact
+   *  about a future enable rather than a re-typing this command performs.
+   *  Absent when no conflict was found, when the source was never executed to
+   *  look (see `verify`), and when it was executed but a gate's own store could
+   *  not be read — `--allow-preset-change` then buys a SKIPPED check, so absent
+   *  is not "no conflict" there. */
+  presetChanges?: PresetIdentityConflict[]
+  /** Present when `--verify` asked for it, and ALSO when the candidate was
+   *  resolved and failed to load — an install that stores source nothing can
+   *  run says so rather than reporting success. */
   verification?: ExtensionVerificationResult
 }
 

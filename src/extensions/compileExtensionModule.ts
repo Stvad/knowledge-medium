@@ -398,11 +398,29 @@ export async function loadApprovedExtension(
 }
 
 /**
+ * A source that could not be TRANSPILED, as opposed to one that transpiled and
+ * then failed to run.
+ *
+ * The difference is whether the source can be PINNED: `approveExtension` stores
+ * the transpiled output, so a transpile failure leaves the previous pin in
+ * place and the old code running, while anything later still pins and still
+ * takes effect at the next reload. A caller reasoning about what an install
+ * will change needs to tell those apart, and the thrown error otherwise cannot
+ * say which half it came from.
+ */
+export class ExtensionTranspileError extends Error {
+  constructor(blockId: string, override readonly cause: unknown) {
+    super(`Extension ${blockId} could not be transpiled: ${(cause as Error)?.message ?? cause}`)
+    this.name = 'ExtensionTranspileError'
+  }
+}
+
+/**
  * Compile LIVE source into a module WITHOUT persisting or requiring an
- * approval. Used only by the agent install `--verify` path, which resolves
- * a brand-new block's source in an isolated runtime to inspect its
- * contributions before any approval exists. Never used on the user-facing
- * load path — that one runs only approved, pinned output.
+ * approval. Used by the agent install path, which resolves a block's source in
+ * an isolated runtime to inspect its contributions before any approval exists.
+ * Never used on the user-facing load path — that one runs only approved,
+ * pinned output.
  */
 export async function compileForVerification(
   content: string,
@@ -411,7 +429,11 @@ export async function compileForVerification(
 ): Promise<CompileResult> {
   const contentHash = await hashExtensionSource(content)
   const module = await resolveCachedModule(cache, contentHash, blockId, () =>
-    compileImplOverride ? compileImplOverride(content) : transpileImpl(content, blockId).then(instantiateImpl),
+    compileImplOverride
+      ? compileImplOverride(content)
+      : transpileImpl(content, blockId)
+          .catch(error => { throw new ExtensionTranspileError(blockId, error) })
+          .then(instantiateImpl),
   )
   return {module, contentHash}
 }

@@ -40,7 +40,7 @@ import type { Repo } from '@/data/repo'
  *      compiles to a real jump over the second call.
  *  So hoisting this predicate into a `SELECT` list, or dropping the `CASE`
  *  to "simplify", silently reintroduces the abort this guard prevents. */
-export const IS_OBJECT_BAG =
+const IS_OBJECT_BAG =
   `json_valid(b.properties_json) AND json_type(b.properties_json) = 'object'`
 export const OBJECT_BAG =
   `CASE WHEN ${IS_OBJECT_BAG} THEN b.properties_json ELSE '{}' END`
@@ -109,6 +109,134 @@ interface HistogramRow {
 export const keyOf = (raw: string | null): string =>
   typeof raw === 'string' ? raw : String(raw ?? '')
 
+/** The live CELLS of a workspace: one row per (block, key), `b` the block and
+ *  `j` the cell — the same implicit aliases {@link OBJECT_BAG} assumes. Binds
+ *  `workspaceId` at its own position in the statement.
+ *
+ *  A clause, not a query, because each caller wants a different SELECT list
+ *  over the same rows — a count, a DISTINCT presence pair, a windowed
+ *  last-occurrence pick. What it keeps in one place is the pair of filters
+ *  that decide WHICH cells are data: `OBJECT_BAG`, without which `json_each`
+ *  over a non-object bag emits its indices as phantom keys, and `deleted = 0`,
+ *  since this reads `blocks` with no join to exclude a tombstone. */
+export const LIVE_CELLS = `
+      FROM blocks b, json_each(${OBJECT_BAG}) j
+     WHERE b.workspace_id = ? AND b.deleted = 0`
+
+/** {@link LIVE_CELLS} restricted to a set of property names, passed as ONE
+ *  bound JSON array so the bind count does not grow with the names. Binds
+ *  `workspaceId` then `JSON.stringify(names)`, in that order. */
+export const LIVE_CELLS_FOR_NAMES = `${LIVE_CELLS}
+       AND j.key IN (SELECT value FROM json_each(?))`
+
+/** Minimal read surface shared by `repo.db` and a transaction's `txDb`, so
+ *  the readers below serve an in-transaction caller too. */
+interface BagQuery {
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+}
+
+/** One live `property-schema` row with its property bag already parsed. */
+export interface PropertyDefinitionBag {
+  id: string
+  bag: Record<string, unknown>
+}
+
+/** Every live `property-schema` row in the workspace, bag parsed — the ONE
+ *  place this repo reads definition rows out of `blocks`.
+ *
+ *  Parsed in JS rather than picked apart in SQL, which is what makes the
+ *  duplicate-key rule automatic instead of hand-written at each call site. A
+ *  stored bag CAN repeat a key: `JSON.stringify` cannot produce one but a raw
+ *  SQL write can, and the types trigger sees only one row, so nothing rejects
+ *  it. SQLite and JavaScript then disagree about what the bag says —
+ *  `json_extract` yields the first occurrence, `JSON.parse` the last (verified
+ *  against sqlite3 3.51). Every caller here is reconstructing what the RUNTIME
+ *  reads, so `JSON.parse` is the definition, not an implementation choice.
+ *
+ *  It also keeps non-object cell values intact. A value read through
+ *  `json_each(...).value` comes back flattened — a string unquoted, a boolean
+ *  as 0/1, JSON null as NULL — so a caller that needs the stored value rather
+ *  than just its presence cannot use that column.
+ *
+ *  Never throws: a bag that is malformed, or valid but not an object, comes
+ *  back as `{}`, because a corrupt row must not abort a caller that is often
+ *  investigating corruption. Every guard behind that — `OBJECT_BAG`, the parse
+ *  catch, the object test — is defence in depth HERE and unpinned: the
+ *  `block_types` join already excludes such a row, since the types trigger
+ *  re-derives `block_types` from the bag and a non-object bag declares none
+ *  (#284's disk-level corruption is the only route past that). `OBJECT_BAG`
+ *  earns its place in {@link cellCountsByKey}, which has no join.
+ *
+ *  `b.deleted = 0` is defence in depth for the same reason — deleting a block
+ *  drops its `block_types` row. */
+export const readPropertyDefinitionBags = async (
+  db: BagQuery,
+  workspaceId: string,
+): Promise<PropertyDefinitionBag[]> => {
+  const rows = await db.getAll<{id: string; bag: string}>(
+    `SELECT b.id AS id, ${OBJECT_BAG} AS bag
+       FROM blocks b
+       JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
+      WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0`,
+    [PROPERTY_SCHEMA_TYPE, workspaceId],
+  )
+  return rows.map(row => {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(row.bag)
+    } catch {
+      parsed = {}
+    }
+    const bag = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+    return {id: row.id, bag}
+  })
+}
+
+/** The name a definition row claims, off its parsed bag — `undefined` when it
+ *  claims none, which includes a cell holding a non-string. Only a corrupt or
+ *  hand-written row has one, but every caller has to answer the same way about
+ *  it, so the rule is spelled once. */
+export const definitionNameOf = (
+  bag: Record<string, unknown>,
+): string | undefined => {
+  const name = bag[propertyNameProp.name]
+  return typeof name === 'string' ? name : undefined
+}
+
+/** Cells per property key on live blocks in the workspace — one row per
+ *  (block, key), so a bag with a duplicated key counts twice.
+ *
+ *  Omitting `names` is the WHOLE histogram: the uncapped pass this file's
+ *  header costs out, over every live block. Passing them restricts it, as ONE
+ *  bound JSON array rather than a generated `IN` list, so the bind count does
+ *  not grow with the names.
+ *
+ *  Both filters in {@link LIVE_CELLS} are load-bearing here, unlike in {@link
+ *  readPropertyDefinitionBags} where the `block_types` join already applies
+ *  them. */
+export const cellCountsByKey = async (
+  db: BagQuery,
+  workspaceId: string,
+  names?: readonly string[],
+): Promise<Map<string, number>> => {
+  // Not for correctness — `IN (SELECT … json_each('[]'))` already matches
+  // nothing — but to skip the full `blocks` x `json_each` expansion first.
+  if (names?.length === 0) return new Map()
+  // One decision, not two: the clause and its parameters must agree, and a
+  // wrong bind is a silently wrong answer rather than a type error.
+  const scan = names === undefined
+    ? {from: LIVE_CELLS, params: [workspaceId]}
+    : {from: LIVE_CELLS_FOR_NAMES, params: [workspaceId, JSON.stringify(names)]}
+  const rows = await db.getAll<HistogramRow>(
+    `SELECT j.key AS property, COUNT(*) AS cells ${scan.from}
+      GROUP BY j.key`,
+    scan.params,
+  )
+  return new Map(rows.map(row => [keyOf(row.property), row.cells]))
+}
+
 /** The registry must belong to `workspaceId`, or every key reads as
  *  unregistered — and a caller that WRITES on that reading mints definitions
  *  for keys that already have one. */
@@ -161,13 +289,7 @@ export const scanPropertyKeys = async (
   // scans reading rows this snapshot cannot classify.
   const resolver = repo.propertySchemaResolverFor(workspaceId)
 
-  const histogram = await repo.db.getAll<HistogramRow>(
-    `SELECT j.key AS property, COUNT(*) AS cells
-       FROM blocks b, json_each(${OBJECT_BAG}) j
-      WHERE b.workspace_id = ? AND b.deleted = 0
-      GROUP BY j.key`,
-    [workspaceId],
-  )
+  const histogram = await cellCountsByKey(repo.db, workspaceId)
 
   const unreadable = await repo.db.get<{n: number}>(
     `SELECT COUNT(*) AS n FROM blocks b
@@ -180,36 +302,11 @@ export const scanPropertyKeys = async (
   // parse (`parsePropertyDefinitionMetadata` returns null on a bad
   // change-scope, or any decode throw) contributes NO registry entry, so the
   // registry would report zero and send the caller to synthesis — creating a
-  // colliding second definition.
-  // Same object guard as the histogram — `json_extract` RAISES on malformed
-  // JSON (which would abort mid-investigation-of-corruption), so this must
-  // degrade into an incomplete result (`unreadableBlocks` non-zero) rather
-  // than die.
-  //
-  // Defence in depth for the malformed case, not a live path: the `blocks`
-  // update triggers already run `json_each` themselves (`clientSchema.ts`), so
-  // no SQL path can create such a row — only disk-level corruption (#284,
-  // which skips the triggers) can, and it can leave a stale `block_types`
-  // entry pointing at the corrupt row. The valid-but-non-object case IS
-  // reachable day to day; that's what the guard actually handles.
-  const definitionRows = await repo.db.getAll<{id: string; name: string | null}>(
-    // The LAST occurrence, not `json_extract`'s first. A stored bag can repeat
-    // a key — `JSON.stringify` cannot produce one but a raw SQL write can, and
-    // the types trigger sees only one row so nothing rejects it — and SQLite
-    // and JavaScript then disagree about what the bag says: `json_extract`
-    // yields the first, `JSON.parse` the last (verified against sqlite3 3.51).
-    // This fallback exists precisely for rows the RUNTIME could not parse, so
-    // it has to read them the way the runtime would, or it credits a broken
-    // definition to a name nothing uses and mis-buckets the orphan that shares
-    // the other spelling. `json_each.id` is document order.
-    `SELECT b.id AS id,
-            (SELECT j.value FROM json_each(${OBJECT_BAG}) j
-              WHERE j.key = ? ORDER BY j.id DESC LIMIT 1) AS name
-       FROM blocks b
-       JOIN block_types t ON t.block_id = b.id AND t.workspace_id = b.workspace_id
-      WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0`,
-    [propertyNameProp.name, PROPERTY_SCHEMA_TYPE, workspaceId],
-  )
+  // colliding second definition. This fallback exists precisely for rows the
+  // runtime could not parse, so it has to read them the way the runtime does
+  // (see `readPropertyDefinitionBags`), or it credits a broken definition to a
+  // name nothing uses and mis-buckets the orphan on the other spelling.
+  const definitionRows = await readPropertyDefinitionBags(repo.db, workspaceId)
   // Counted under each definition's EFFECTIVE name (the seed-rewrite rule —
   // see `effectiveDefinitionName` in propertyDefinitionSynthesis.ts), not the
   // stored one: crediting the raw column would point a genuinely orphaned key
@@ -219,7 +316,7 @@ export const scanPropertyKeys = async (
   const definitionBlocksByName = new Map<string, number>()
   for (const row of definitionRows) {
     const effectiveName = registry.definitionsByFieldId.get(row.id)?.name
-      ?? (typeof row.name === 'string' ? row.name : undefined)
+      ?? definitionNameOf(row.bag)
     if (effectiveName === undefined) continue
     definitionBlocksByName.set(effectiveName, (definitionBlocksByName.get(effectiveName) ?? 0) + 1)
   }
@@ -228,9 +325,8 @@ export const scanPropertyKeys = async (
   let registeredProperties = 0
   let propertyCells = 0
 
-  for (const row of histogram) {
-    const property = keyOf(row.property)
-    propertyCells += row.cells
+  for (const [property, cells] of histogram) {
+    propertyCells += cells
 
     const resolution = resolver.resolve(property)
     if (resolution.status === 'resolved') {
@@ -240,7 +336,7 @@ export const scanPropertyKeys = async (
 
     unresolved.push({
       property,
-      cells: row.cells,
+      cells,
       reason: resolution.reason,
       definitionBlocks: definitionBlocksByName.get(property) ?? 0,
     })
@@ -252,7 +348,7 @@ export const scanPropertyKeys = async (
   return {
     workspaceId,
     syncGap,
-    distinctProperties: histogram.length,
+    distinctProperties: histogram.size,
     propertyCells,
     registeredProperties,
     unresolved,

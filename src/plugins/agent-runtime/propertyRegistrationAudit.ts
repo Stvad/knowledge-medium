@@ -49,7 +49,7 @@
 import type { PropertySchemaIdentityUnavailableReason } from '@/data/api'
 import { keyCannotBeDefined } from '@/data/internals/propertyDefinitionSynthesis'
 import {
-  OBJECT_BAG, keyOf, scanPropertyKeys,
+  LIVE_CELLS_FOR_NAMES, keyOf, scanPropertyKeys,
   type PropertyKeyScan, type UnresolvedPropertyKey,
 } from '@/data/internals/propertyKeyScan'
 import type { Repo } from '@/data/repo'
@@ -282,16 +282,14 @@ const attachProvenance = async (
          SELECT property, blockId,
                 ROW_NUMBER() OVER (PARTITION BY property ORDER BY blockId) AS rn
            FROM (
-             -- DISTINCT because a stored bag CAN repeat a key: JSON.stringify
-             -- cannot produce one, but a raw SQL write can, and the types
-             -- trigger sees only one row so nothing rejects it. Without this,
+             -- DISTINCT because a stored bag can repeat a key (see
+             -- readPropertyDefinitionBags for why one can exist). This read
+             -- wants PRESENCE, not which occurrence wins: without DISTINCT,
              -- json_each emits a row per occurrence and one block could eat
              -- the whole per-key cap: repeating in sampleBlockIds, inflating
              -- sampledBlocks, and hiding the blocks that actually differ.
              SELECT DISTINCT j.key AS property, b.id AS blockId
-               FROM blocks b, json_each(${OBJECT_BAG}) j
-              WHERE b.workspace_id = ? AND b.deleted = 0
-                AND j.key IN (SELECT value FROM json_each(?))
+             ${LIVE_CELLS_FOR_NAMES}
            )
        ) ranked
       WHERE ranked.rn <= ?`,

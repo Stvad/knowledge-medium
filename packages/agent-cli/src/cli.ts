@@ -866,10 +866,18 @@ cli
   .command('install-extension <file> [...label]', wireDescription('install-extension'))
   .option('--verify', 'Verify the extension shape and report what it contributes')
   .option('--description <text>', 'Human-readable description')
+  .option(
+    '--allow-preset-change',
+    'Install even though a value preset it registers now builds a different codec '
+      + 'under the same id (re-types stored values — read the refusal first). Also '
+      + 'installs when a gate this device reads is unavailable, which SKIPS the check '
+      + 'rather than passing it — the source is stored but not pinned, so the extension '
+      + 'goes on running what it was running',
+  )
   .action(async (
     file: string,
     label: string[],
-    options: {verify?: boolean, description?: string},
+    options: {verify?: boolean, description?: string, allowPresetChange?: boolean},
   ) => {
     const source = await fs.readFile(file, 'utf8')
     const basename = path.basename(file).replace(/\.[^.]+$/, '')
@@ -879,6 +887,7 @@ cli
       source,
       label: labelText || basename,
       ...(options.verify ? {verify: true} : {}),
+      ...(options.allowPresetChange ? {allowPresetChange: true} : {}),
       ...(options.description !== undefined ? {description: options.description} : {}),
     })
   })
