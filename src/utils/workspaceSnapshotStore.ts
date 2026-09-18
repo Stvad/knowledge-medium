@@ -51,6 +51,8 @@ export const createWorkspaceSnapshotStore = <T extends { workspaceId: string }>(
       (workspaceId != null ? byWorkspace.get(workspaceId) : undefined) ?? null,
     subscribe: (listener) => listeners.add(listener),
     clearFor: (workspaceId) => {
+      // Only on an actual delete, unlike `clearSnapshots` — clearing a
+      // workspace that holds nothing changes no subscriber's answer.
       if (!byWorkspace.delete(workspaceId)) return
       listeners.notify()
     },

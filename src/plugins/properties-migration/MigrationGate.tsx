@@ -26,10 +26,12 @@ import { useHandle } from '@/hooks/block.js'
 import type { Repo } from '@/data/repo'
 import {
   claimHoldingGraph,
+  completedClaimFor,
   graphBackfillClaimBlockId,
   releaseStrandedGraphBackfillClaim,
   type GraphBackfillClaim,
 } from '@/data/internals/graphBackfillClaim'
+import { showInfo } from '@/utils/toast.js'
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
 import { localMigrationMessageFor, subscribeLocalMigrationRun } from './localRunMessage.ts'
 import {
@@ -52,6 +54,13 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
     () => localMigrationMessageFor(workspaceId), [workspaceId],
   )
   const localMessage = useSyncExternalStore(subscribeLocalMigrationRun, readLocal, readLocal)
+  const readOnly = useSyncExternalStore(
+    useCallback((onChange: () => void) => repo.onReadOnlyChange(onChange), [repo]),
+    () => repo.isReadOnly,
+  )
+  // The CLAIM's duration, which is not the dialog's: the pause exists to keep a
+  // replay off rows the pass has written, and the pass cannot have written
+  // before it claimed.
   const held = claim !== null
 
   useEffect(() => {
@@ -72,15 +81,27 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
     // So the clear stays with the writers that know they wrote: the gesture's
     // own drop around the flip, and the runner's per batch. A PEER therefore
     // keeps pre-migration entries a completed run has made stale — #684/#1007,
-    // where a watcher was declined. Its own dialog is what tells it to reload;
-    // the operator's confirmation cannot, since in a shared workspace the peer
-    // belongs to someone who never sees it. Giving the peer a sound clear needs
-    // the claim to record that the run WROTE, stamped in the same transaction
-    // as the first write; it cannot be inferred here.
-    return () => { drop.abandon() }
-  }, [repo, workspaceId, held])
+    // where a watcher was declined. A sound clear here needs the claim to
+    // record that the run WROTE, stamped in the same transaction as the first
+    // write; it cannot be inferred from the claim going away.
+    //
+    // Which is why the reload notice is a TOAST rather than a line in the
+    // dialog: the dialog unmounts at exactly the moment reloading starts to
+    // matter, and in a shared workspace the peer belongs to someone who never
+    // sees the operator's confirmation.
+    return () => {
+      drop.abandon()
+      // The row as it is NOW, not as it was when the drop began — the handle is
+      // the same object and its cache has the ending that just fired.
+      // `claimHoldingGraph` filters a completed claim out by design, so
+      // liveness alone cannot tell "the pass finished" from "the claim was
+      // handed back", and only the first owes the user a reload.
+      if (completedClaimFor(claimBlock.peek(), workspaceId) !== null) showReloadNotice()
+    }
+  }, [repo, workspaceId, held, claimBlock])
 
-  if (claim === null) return null
+  const holder = holderOf(claim, localMessage)
+  if (holder === null) return null
   return (
     // The dialog gets its OWN boundary, below the effect above. It reaches the
     // shortcut activation funnel, which suspends on the workspace's UI-state
@@ -92,9 +113,8 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
     // only talks.
     <ExtensionRenderBoundary>
       <MigrationGateDialog
-        holder={holderOf(claim, localMessage)}
-        claim={claim}
-        release={repo.isReadOnly ? null : releaseFor(repo, workspaceId)}
+        holder={holder}
+        release={readOnly ? null : releaseFor(repo, workspaceId)}
       />
     </ExtensionRenderBoundary>
   )
@@ -114,10 +134,30 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
  *  moments a PEER's claim can be what is on screen — and a message this device
  *  wrote would otherwise be reported as that peer's progress. */
 const holderOf = (
-  claim: GraphBackfillClaim, localMessage: string | null,
-): ClaimHolder => {
-  if (claim.claimantId !== getClientId()) return {kind: 'another-device'}
-  return localMessage === null ? {kind: 'this-browser'} : {kind: 'this-tab', message: localMessage}
+  claim: GraphBackfillClaim | null, localMessage: string | null,
+): ClaimHolder | null => {
+  // Our own gesture, before its claim exists. The claim is written after
+  // several preflight reads and a page-ensure, and nothing else renders in that
+  // window — so without this arm the operator confirms a one-way fleet-wide
+  // flip and the app simply goes back to normal for a few seconds.
+  if (claim === null) {
+    return localMessage === null ? null : {kind: 'starting', message: localMessage}
+  }
+  if (claim.claimantId !== getClientId()) return {kind: 'another-device', claim}
+  return localMessage === null
+    ? {kind: 'this-browser', claim}
+    : {kind: 'this-tab', message: localMessage, claim}
+}
+
+/** What is left on screen after the dialog goes. Sticky, because the user it is
+ *  for is a PEER — whose own device kept undo entries the run has made stale,
+ *  and who may have walked away for the several minutes the run took. */
+const showReloadNotice = (): void => {
+  showInfo(
+    'This workspace finished migrating. Reload this tab before using undo: entries from '
+    + 'before the migration can revert part of it.',
+    {id: 'properties-migration-reload', duration: Number.POSITIVE_INFINITY},
+  )
 }
 
 const releaseFor = (repo: Repo, workspaceId: string) =>

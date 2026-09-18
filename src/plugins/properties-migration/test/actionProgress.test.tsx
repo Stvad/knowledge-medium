@@ -66,8 +66,12 @@ const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCel
 })
 
 /** Is a claim still in flight when the gesture ends? Read from `blocks`, so the
- *  stub answers the claim query the way a live one would. */
+ *  stub answers the claim query the way a live one would — and only AFTER the
+ *  run, because that is when a claim this gesture did not mint appears. Answered
+ *  before it too, the gesture's own entry check would see a peer's claim and
+ *  decline without ever running. */
 let claimHeldAfterRun: false | 'this-device' | 'a-peer' = false
+let runHasHappened = false
 
 /** Emits `reported` from inside the run, the way the pass notifies. */
 const runReporting = async (reported: PropertyCellBackfillProgress) => {
@@ -79,7 +83,7 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
       getOptional: async (sql: string) => {
         if (sql.includes('owner_user_id')) return {owner_user_id: 'user-1'}
         if (sql.includes('properties_json')) {
-          return claimHeldAfterRun === false ? null : {
+          return claimHeldAfterRun === false || !runHasHappened ? null : {
             properties_json: JSON.stringify({
               'migration:claimant': claimHeldAfterRun === 'this-device'
                 ? THIS_DEVICE : 'some-other-device',
@@ -98,6 +102,7 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
     }),
     withOperatorBackfillClaim: claimStub(async () => {
       emit?.(reported)
+      runHasHappened = true
       return {outcome: 'ran' as const, undoHistoryCleared: false}
     }),
   } as unknown as Repo
@@ -137,6 +142,7 @@ afterEach(() => {
   showInfo.mockReset()
   emit = null
   claimHeldAfterRun = false
+  runHasHappened = false
 })
 
 describe('the migration progress path', () => {

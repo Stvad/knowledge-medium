@@ -7,7 +7,10 @@
  * and raising the dialog with nothing armed in advance, and a test that mocks
  * the subscription cannot tell whether that happens.
  */
-import { Suspense, type ReactNode } from 'react'
+import { Suspense, use, type ReactNode } from 'react'
+
+/** A promise that never settles, for the suspend-forever case. */
+const NEVER = new Promise<never>(() => {})
 import { vi } from 'vitest'
 
 // The shortcut funnel injects a UI-state block into every activation, so even a
@@ -15,15 +18,25 @@ import { vi } from 'vitest'
 // subject here is the modal's shadowing, not who is signed in.
 vi.mock('@/components/Login.tsx', () => ({useUser: () => ({id: 'user-1'})}))
 
+const shownToasts = vi.hoisted(() => [] as string[])
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showInfo: (message: string) => { shownToasts.push(message) },
+}))
+
 /** Stands in for the dialog's own render failing — its hooks reach the shortcut
  *  funnel, which suspends on a workspace read and throws when that read fails. */
-const dialogBreak = vi.hoisted(() => ({on: false}))
+const dialogBreak = vi.hoisted(() => ({on: false, hang: false}))
 vi.mock('../MigrationGateDialog.tsx', async importOriginal => {
   const actual = await importOriginal<typeof import('../MigrationGateDialog.tsx')>()
   return {
     ...actual,
     MigrationGateDialog: (props: Parameters<typeof actual.MigrationGateDialog>[0]) => {
       if (dialogBreak.on) throw new Error('[test] the dialog cannot render')
+      // Suspends and never settles, which is the SHAPE of the dialog's real
+      // first render: its shortcut activation reaches a workspace read through
+      // `use()`. That happens on every run, unlike the throw.
+      if (dialogBreak.hang) use(NEVER)
       return <actual.MigrationGateDialog {...props} />
     },
   }
@@ -192,7 +205,30 @@ afterEach(() => {
   cleanup()
   __resetLocalMigrationRunForTests()
   dialogBreak.on = false
+  dialogBreak.hang = false
+  shownToasts.length = 0
   vi.restoreAllMocks()
+})
+
+describe('before the claim exists', () => {
+  it('is already up for this device\'s own gesture', async () => {
+    // The claim is written after several preflight reads and a page-ensure.
+    // Without this the operator confirms a one-way fleet-wide flip and the app
+    // goes back to normal for a few seconds — master showed a progress toast
+    // here, and the split that moved progress into the dialog dropped it.
+    renderGate()
+    await claimHasBeenRead()
+
+    // ASYNC act: mounting the dialog suspends on the shortcut funnel's
+    // workspace read, and a synchronous act does not await that.
+    await act(async () => { beginLocalMigrationRun(WS, 'Migrating properties to blocks…') })
+
+    expect(await screen.findByRole('dialog'))
+      .toHaveTextContent(/Nothing has been written yet/)
+    // No claim yet, so nothing is owed a release and nothing is paused.
+    expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()
+    expect(repo.undoManagerFor(WS).historyDropInProgress).toBe(false)
+  })
 })
 
 describe('while the migration holds this workspace', () => {
@@ -288,13 +324,19 @@ describe('while the migration holds this workspace', () => {
     // The gesture publishes its first line before it takes the claim, so in
     // that window a peer's claim can be what is on screen. Reading the message
     // alone would caption someone else's run with what this device was doing.
-    act(() => { beginLocalMigrationRun(WS, 'Switching this workspace to property blocks…') })
-    await seedClaimInBlocks({claimantId: 'peer-device'})
-
     renderGate()
+    await claimHasBeenRead()
+    await act(async () => {
+      beginLocalMigrationRun(WS, 'Switching this workspace to property blocks…')
+    })
 
-    expect(await screen.findByRole('dialog'))
-      .toHaveTextContent(/Another device is converting this workspace/)
+    // The real sequence: our gesture publishes its first line, then a PEER's
+    // claim is what lands. The line is ours; the run is not.
+    await deliverClaimBySync({claimantId: 'peer-device'})
+
+    await waitFor(() => {
+      expect(dialog()).toHaveTextContent(/Another device is converting this workspace/)
+    })
     expect(dialog()).not.toHaveTextContent(/Switching this workspace to property blocks/)
   })
 
@@ -322,7 +364,7 @@ describe('while the migration holds this workspace', () => {
     renderGate()
 
     expect(await screen.findByRole('dialog'))
-      .toHaveTextContent(/This browser is running the migration, in another tab/)
+      .toHaveTextContent(/This browser profile holds the migration/)
     expect(dialog()).not.toHaveTextContent(/Another device/)
   })
 
@@ -403,6 +445,26 @@ describe('undo, which the dialog itself cannot cover', () => {
 })
 
 describe('when the dialog itself cannot render', () => {
+  it('still pauses undo while the dialog is merely SLOW to render', async () => {
+    // The common half, and the one the boundary's `Suspense` covers: the
+    // dialog's first render suspends on a workspace read every single run.
+    // Without an inner boundary that propagates to the shared app-mount one, so
+    // the effect holding the pause is never committed — and the pause is late
+    // by the whole length of that read, on the ordinary path rather than a
+    // rare one.
+    await recordAnUndoableEdit()
+    await seedClaimInBlocks()
+    dialogBreak.hang = true
+
+    renderGate()
+
+    await waitFor(() => {
+      expect(repo.undoManagerFor(WS).historyDropInProgress).toBe(true)
+    })
+    expect(dialog()).toBeNull()
+    expect(await repo.undo()).toBe(false)
+  })
+
   it('still pauses undo, rather than taking the pause down with it', async () => {
     // The dialog reaches the shortcut activation funnel, which suspends on the
     // workspace's UI-state block and throws if that read fails. App mounts share
@@ -422,6 +484,37 @@ describe('when the dialog itself cannot render', () => {
     })
     expect(dialog()).toBeNull()
     expect(await repo.undo()).toBe(false)
+  })
+})
+
+describe('after a run that finished', () => {
+  it('leaves the peer something telling it to reload, since the dialog goes', async () => {
+    // The peer keeps pre-migration entries the run has made stale, and the
+    // dialog — its only instruction — unmounts at exactly the moment reloading
+    // starts to matter. In a shared workspace this user never saw the
+    // operator's confirmation either.
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    await deliverClaimBySync({completed: true})
+
+    await waitFor(() => { expect(dialog()).toBeNull() })
+    expect(shownToasts.join(' ')).toMatch(/Reload this tab before using undo/)
+  })
+
+  it('says nothing when the claim was merely handed back', async () => {
+    // A release, or a run that refused before writing, owes the user nothing —
+    // and a reload notice after a migration that never happened is noise that
+    // teaches them to ignore the next one.
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    await releaseClaimBySync()
+
+    await waitFor(() => { expect(dialog()).toBeNull() })
+    expect(shownToasts).toEqual([])
   })
 })
 
@@ -449,6 +542,25 @@ describe('the way out of a claim nobody will release', () => {
 
     expect(dialog()).toHaveTextContent(/Leave this tab open/)
     expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()
+  })
+
+  it('goes away when this device is demoted mid-run', async () => {
+    // A membership row that has not synced reads as writable, and the next
+    // sync tick flips it — so a viewer can be looking at the release button
+    // when the demotion lands. Reading `isReadOnly` without subscribing left it
+    // there for the life of the dialog, producing the raw read-only error
+    // inside a modal that cannot be dismissed.
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+    expect(screen.getByRole('button', {name: /nothing is running/i})).toBeInTheDocument()
+
+    act(() => { repo.setReadOnly(true) })
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()
+    })
+    expect(dialog()).toHaveTextContent(/read-only here, so only someone who can write/i)
   })
 
   it('is not offered where this device may not write, which names who can', async () => {

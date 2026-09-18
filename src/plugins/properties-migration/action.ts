@@ -49,10 +49,10 @@ const undoNote = (cleared: boolean): string =>
  *  because which one fires is an implementation detail of where the check
  *  sits, not something the user can act on differently. */
 const notStarted = (reason: string | undefined, retryable = true): string =>
-  `Not started — ${withPeriod(reason)} Nothing was changed; `
+  `Not started — ${withPeriod(reason)} Nothing was changed. `
   + (retryable
-    ? 'try again shortly.'
-    : 'and nothing is working on it — retrying alone will not clear this.')
+    ? 'Try again shortly.'
+    : 'Nothing is working on it either — retrying alone will not clear this.')
 
 /** Why this device must not start the pass right now, and whether waiting is
  *  the remedy. */
@@ -489,6 +489,27 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     if (!childBacked && !isRemoteSyncActive()) {
       showInfo('This session is local-only, so the workspace cannot be switched to ' +
         'property blocks — that step needs remote sync.')
+      return
+    }
+    // ANOTHER CLIENT already owns this workspace's run. Refused here rather
+    // than at the claim, which is after the confirmation: that dialog asks
+    // consent for a one-way fleet-wide flip and says nothing about a migration
+    // already under way, so a user reaching the palette through the gate's own
+    // modal would be shown the whole irreversible-change screen for a gesture
+    // `tryClaim` is about to decline anyway. Not a guard — the claim is still
+    // the arbiter — just a screen they should not be asked to read.
+    //
+    // OUR OWN claimant is deliberately let through: an inherited claim is
+    // exactly the state a resume starts from, and "run this again to resume it"
+    // is what the gesture's own report tells the operator to do.
+    const owner = await readGraphBackfillClaim(
+      repo.db,
+      graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID),
+      workspaceId,
+    )
+    if (claimHoldsGraph(owner) && owner.claimantId !== getClientId()) {
+      showInfo('Another client is already migrating this workspace. Wait for it to finish; '
+        + 'the dialog it puts up on every device is where you can release its claim.')
       return
     }
     // Before the count and the confirmation: the dialog must not ask consent
