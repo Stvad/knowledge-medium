@@ -1,1 +1,1 @@
-import{fu as e}from"../../../chunks/app-Beqisrg-.js";export{e as UpdateIndicator};
+import{xu as e}from"../../../chunks/app-D4iZICBl.js";export{e as UpdateIndicator};

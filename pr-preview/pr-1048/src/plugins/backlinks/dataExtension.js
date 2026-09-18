@@ -1,1 +1,1 @@
-import{KR as e}from"../../../chunks/app-Beqisrg-.js";export{e as backlinksDataExtension};
+import{nz as e}from"../../../chunks/app-D4iZICBl.js";export{e as backlinksDataExtension};
