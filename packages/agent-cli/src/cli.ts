@@ -869,7 +869,9 @@ cli
   .option(
     '--allow-preset-change',
     'Install even though a value preset it registers now builds a different codec '
-      + 'under the same id (re-types stored values — read the refusal first)',
+      + 'under the same id (re-types stored values — read the refusal first). Also '
+      + 'installs when a gate this device reads is unavailable, which SKIPS the check '
+      + 'rather than passing it',
   )
   .action(async (
     file: string,

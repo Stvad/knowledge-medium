@@ -64,6 +64,14 @@
  * and it does not need to be, because nothing it stores runs. The gap that
  * leaves is the ENABLE that later does make it run, which is #1046.
  *
+ * Both sides are therefore answered from stores that can fail to read, and a
+ * failed read is not a "no" — see `InstallLiveness` in `commands.ts`, which
+ * keeps "does this run here" and "may the install re-pin to it" as one answer
+ * so no path can skip the check and pin the source it skipped. Safe mode is
+ * the case that makes this concrete: it registers no extension contribution,
+ * so every id would read as unregistered, and the install declines to re-pin
+ * rather than call that an all-clear.
+ *
  * ACCEPTED — this is a POINT-IN-TIME comparison against what is LIVE, so
  * anything not yet live is outside it: definition rows inside a durable sync
  * gap or landing after the scan (`syncGap` reports that basis rather than
@@ -170,32 +178,73 @@ const outcomeIdentity = (outcome: PresetCodecOutcome): string =>
 const describeOutcome = (outcome: PresetCodecOutcome): string =>
   outcome.kind === 'codec' ? `codec type ${JSON.stringify(outcome.type)}` : outcome.detail
 
-/** The stored configs a comparison must cover: every distinct one in use, plus
- *  `undefined` for the preset's own default. The default probe is what makes a
- *  workspace with no definitions yet still comparable — and it is the only
- *  probe when a preset's codec type does not vary with config, which is every
- *  preset in the tree today.
+/** Identity of a preset config as an INPUT to `build`. A stored `null` and an
+ *  ABSENT cell are different inputs, not one: `rawPresetConfig` passes `null`
+ *  to the config codec and falls back to the preset default only for
+ *  `undefined`. Keying both as `'null'` let either probe suppress the other,
+ *  with no ordering guarantee over which won. */
+const configKey = (config: unknown): string =>
+  config === undefined ? 'absent' : `stored:${JSON.stringify(config)}`
+
+/** One comparison: the config the values were WRITTEN under, and the config
+ *  they will be READ under. The two are usually the same input handed to two
+ *  cores — a definition row's config is not rewritten by an install — but they
+ *  are separate fields because for a SEED they genuinely differ: an update
+ *  ships a new declaration, so the config moves with the core. Flattening both
+ *  sides into one set of configs to try silently drops that case. */
+interface ConfigProbe {
+  readonly before: unknown
+  readonly after: unknown
+  /** Names the probe in a refusal line. */
+  readonly where: string
+}
+
+/** The probes a comparison must cover: the preset's own default, every
+ *  distinct config a definition row stores, and one per seed declaring this
+ *  preset.
  *
- *  "In use" is not only the definition ROWS. A code-owned seed declaring this
- *  preset already supplies the schema its cells are written under, whether or
- *  not its definition row has materialized yet, so its `encodedConfig` belongs
- *  here too — otherwise a candidate that preserves the codec at the default and
- *  changes it at the seed's config passes, and materialization reads those cells
- *  under the new one. */
+ *  The default probe is what makes a workspace with no definitions yet still
+ *  comparable — and it is the only probe when a preset's codec type does not
+ *  vary with config, which is every preset in the tree today.
+ *
+ *  A SEED is in use whether or not its definition row has materialized: it
+ *  supplies the schema its cells are written under from the declaration alone.
+ *  Its pair is the live declaration's config against the candidate's, so a
+ *  seed moved onto a different config is compared even when the core itself
+ *  did not change. */
 const configsToProbe = (
   definitions: readonly {config: unknown}[],
-): readonly unknown[] => {
-  const seen = new Map<string, unknown>()
+  seeds: readonly SeedConfigPair[],
+): readonly ConfigProbe[] => {
+  const probes: ConfigProbe[] = [{before: undefined, after: undefined, where: 'at the preset default config'}]
+  const seen = new Set<string>()
   for (const row of definitions) {
-    // A stored `null` and an ABSENT cell are different inputs, not one:
-    // `rawPresetConfig` passes `null` to the config codec and falls back to the
-    // preset default only for `undefined`. Keying both as `'null'` let either
-    // probe suppress the other, and the scan has no ordering guarantee over
-    // which one won.
-    const key = row.config === undefined ? 'absent' : `stored:${JSON.stringify(row.config)}`
-    if (!seen.has(key)) seen.set(key, row.config)
+    const key = configKey(row.config)
+    if (seen.has(key)) continue
+    seen.add(key)
+    probes.push({
+      before: row.config,
+      after: row.config,
+      where: row.config === undefined
+        ? 'at the preset default config'
+        : `at stored config ${JSON.stringify(row.config)}`,
+    })
   }
-  return [undefined, ...seen.values()]
+  for (const seed of seeds) {
+    probes.push({
+      before: seed.before,
+      after: seed.after,
+      where: `at the config seed ${JSON.stringify(seed.seedKey)} declares`,
+    })
+  }
+  return probes
+}
+
+/** A seed's config on each side of the update, paired by `seedKey`. */
+export interface SeedConfigPair {
+  readonly seedKey: string
+  readonly before: unknown
+  readonly after: unknown
 }
 
 /** Every way the candidate core is not interchangeable with the registered
@@ -205,6 +254,7 @@ export const presetIdentityDifferences = (
   current: AnyValuePresetCore,
   candidate: AnyValuePresetCore,
   storedConfigs: readonly {config: unknown}[],
+  seeds: readonly SeedConfigPair[] = [],
 ): string[] => {
   const differences: string[] = []
 
@@ -214,22 +264,19 @@ export const presetIdentityDifferences = (
     differences.push(`config codec ${currentConfigCodec} -> ${candidateConfigCodec}`)
   }
 
-  // One line per distinct (before, after) pair, not per config. A preset with
+  // One line per distinct (before, after) pair, not per probe. A preset with
   // no `configCodec` builds from `undefined` whatever the row stores, so every
   // probe yields the same answer and would otherwise repeat the same line once
   // per definition; the config named is the first that produced the pair.
   const reported = new Set<string>()
-  for (const config of configsToProbe(storedConfigs)) {
-    const before = presetCodecOutcome(current, config)
-    const after = presetCodecOutcome(candidate, config)
+  for (const probe of configsToProbe(storedConfigs, seeds)) {
+    const before = presetCodecOutcome(current, probe.before)
+    const after = presetCodecOutcome(candidate, probe.after)
     const pair = `${outcomeIdentity(before)} -> ${outcomeIdentity(after)}`
     if (outcomeIdentity(before) === outcomeIdentity(after)) continue
     if (reported.has(pair)) continue
     reported.add(pair)
-    const where = config === undefined
-      ? 'at the preset default config'
-      : `at stored config ${JSON.stringify(config)}`
-    differences.push(`${describeOutcome(before)} -> ${describeOutcome(after)} (${where})`)
+    differences.push(`${describeOutcome(before)} -> ${describeOutcome(after)} (${probe.where})`)
   }
 
   return differences
@@ -267,6 +314,10 @@ const readDefinitionRows = async (
   // free, since `JSON.parse` is what defines it. `OBJECT_BAG` is still the
   // guard: `json_valid`/`json_type` in a CASE short-circuit, so a malformed bag
   // degrades to `{}` rather than raising.
+  // `b.deleted = 0` is defence in depth, and unpinned: deleting a block drops
+  // its `block_types` row, so the join already excludes a tombstoned
+  // definition. The cell count below carries the load-bearing twin — it reads
+  // `blocks` with no join to exclude one.
   const rows = await repo.db.getAll<{id: string; bag: string}>(
     `SELECT b.id AS id, ${OBJECT_BAG} AS bag
        FROM blocks b
@@ -323,11 +374,14 @@ export interface PresetAfter {
   /** The core that would resolve under the id — `undefined` for one nothing
    *  would register any more. */
   readonly core: AnyValuePresetCore | undefined
-  /** Encoded configs the CANDIDATE's own seeds declare for this preset. A seed
-   *  publishes its schema from the declaration, so a config an update
-   *  introduces is in use the moment it loads, materialized row or not — and
-   *  the registry only carries the configs the seeds declare TODAY. */
-  readonly seedConfigs: readonly unknown[]
+  /** The encoded config each of the CANDIDATE's own seeds declares for this
+   *  preset, by `seedKey`. A seed publishes its schema from the declaration,
+   *  so a config an update introduces is in use the moment it loads,
+   *  materialized row or not — and the registry only carries what the seeds
+   *  declare TODAY. Keyed rather than listed so each seed is compared against
+   *  its own previous declaration: the config moves WITH the core across an
+   *  update, which a flat list of configs to try cannot express. */
+  readonly seedConfigs: ReadonlyMap<string, unknown>
 }
 
 /** The affected ids, both directions, which is why this is a REGISTRY DIFF and
@@ -359,24 +413,6 @@ export const findPresetIdentityConflicts = async (
   after: PresetRegistryAfter,
 ): Promise<PresetIdentityScan> => {
   const registered = repo.valuePresetCores
-  // `current !== next` is a fast path, not a guard — comparing a core against
-  // itself finds no differences anyway. It is here because an extension that
-  // re-exports the core it imported (from the kernel, or from a plugin through
-  // the page importmap) contributes the SAME object, and that is the common
-  // case: without it every such install pays the definition scan below to
-  // reach the same answer.
-  const contested = [...after].flatMap(([presetId, {core: next, seedConfigs}]) => {
-    const current = registered.get(presetId)
-    // Nothing resolves this id today, so nothing is stored under a codec this
-    // install could change.
-    if (current === undefined) return []
-    if (current === next) return []
-    return [{presetId, current, next, seedConfigs}]
-  })
-  if (contested.length === 0) return {conflicts: [], syncGap: null}
-
-  const definitionRows = await readDefinitionRows(repo, workspaceId)
-  const syncGap = (await repo.workspaceViewGap(workspaceId))?.reason ?? null
   // The workspace test is defence in depth; no test pins it. Install resolves
   // the ACTIVE workspace, which is the one the registry is loaded for — but
   // reading another workspace's registry here would rewrite every name through
@@ -386,22 +422,54 @@ export const findPresetIdentityConflicts = async (
     ? repo.propertyDefinitions
     : null
 
+  const contested = [...after].flatMap(([presetId, {core: next, seedConfigs}]) => {
+    const current = registered.get(presetId)
+    // Nothing resolves this id today, so nothing is stored under a codec this
+    // install could change.
+    if (current === undefined) return []
+    // Only a seed on BOTH sides has values written under the old declaration
+    // that the new one will read. A seed the update ADDS has none yet; one it
+    // REMOVES leaves a definition row that publishes its own stored config,
+    // which the row probes below already cover.
+    const seeds: SeedConfigPair[] = []
+    const seedNames: string[] = []
+    for (const seed of registry?.seedsByKey.values() ?? []) {
+      if (seed.presetId !== presetId) continue
+      // Every live seed on this preset is at stake and is NAMED, whether or
+      // not the candidate still declares it.
+      seedNames.push(seed.name)
+      if (!seedConfigs.has(seed.seedKey)) continue
+      seeds.push({
+        seedKey: seed.seedKey,
+        before: seed.encodedConfig,
+        after: seedConfigs.get(seed.seedKey),
+      })
+    }
+    // `current !== next` is a fast path, not a guard — comparing a core
+    // against itself finds no differences anyway. It is here because an
+    // extension that re-exports the core it imported (from the kernel, or from
+    // a plugin through the page importmap) contributes the SAME object, and
+    // that is the common case: without it every such install pays the
+    // definition scan below to reach the same answer. It holds only while the
+    // INPUTS are also unmoved: one unchanged core still re-types a seed's
+    // cells when the update ships that seed on a different config.
+    if (current === next && seeds.every(seed => configKey(seed.before) === configKey(seed.after))) {
+      return []
+    }
+    return [{presetId, current, next, seeds, seedNames}]
+  })
+  if (contested.length === 0) return {conflicts: [], syncGap: null}
+
+  const definitionRows = await readDefinitionRows(repo, workspaceId)
+  const syncGap = (await repo.workspaceViewGap(workspaceId))?.reason ?? null
+
   const conflicts: PresetIdentityConflict[] = []
-  for (const {presetId, current, next, seedConfigs} of contested) {
+  for (const {presetId, current, next, seeds, seedNames} of contested) {
     const rows = definitionRows.filter(row => row.presetId === presetId)
-    const seeds = [...(registry?.seedsByKey.values() ?? [])]
-      .filter(seed => seed.presetId === presetId)
     const differences = next === undefined
       ? [`${describeOutcome(presetCodecOutcome(current, undefined))} -> no core registers this id `
           + '(every definition using it publishes no schema, so its cells read as unset)']
-      : presetIdentityDifferences(current, next, [
-          ...rows,
-          // Declared configs count whether or not a row has materialized — see
-          // `configsToProbe`. Both sides of the update: the seeds live today,
-          // and the ones the candidate would publish.
-          ...seeds.map(seed => ({config: seed.encodedConfig})),
-          ...seedConfigs.map(config => ({config})),
-        ])
+      : presetIdentityDifferences(current, next, rows, seeds)
     if (differences.length === 0) continue
 
     const names = rows.map(row =>
@@ -420,14 +488,13 @@ export const findPresetIdentityConflicts = async (
     const cells = [...new Set(definitions.map(d => d.name))]
       .reduce((total, name) => total + (cellsByName.get(name) ?? 0), 0)
 
-    const seedNames = seeds.map(seed => seed.name).sort()
 
     conflicts.push({
       presetId,
       differences,
       definitions,
       cells,
-      seedNames,
+      seedNames: [...seedNames].sort(),
       replacesKernelCore: Object.hasOwn(kernelValuePresetCoresById, presetId),
     })
   }
@@ -488,7 +555,9 @@ export const presetIdentityRefusal = (
       + 'reinterpreted.',
     'Ways out: give the new codec a NEW preset id and repoint the definitions at it '
       + '(an edit to each definition row, which core.migratePropertyDefinition does '
-      + 'fan out); keep the registered codec\'s encoding; or re-run with '
-      + '--allow-preset-change if the stored values are disposable.',
+      + 'fan out — though a re-type is itself refused while the properties migration '
+      + 'holds this workspace, so finish that first); keep the registered codec\'s '
+      + 'encoding; or re-run with --allow-preset-change if the stored values are '
+      + 'disposable.',
   ].join('\n')
 }

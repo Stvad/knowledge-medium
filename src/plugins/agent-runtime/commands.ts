@@ -48,6 +48,7 @@ import {
   createCompileCache,
   ExtensionTranspileError,
   hashExtensionSource,
+  lookupApproval,
   readApproval,
   revokeExtensionApproval,
 } from '@/extensions/compileExtensionModule.js'
@@ -402,14 +403,19 @@ const presetRegistryAfter = (
   // what the seeds live today declare; an update that moves a seed onto a new
   // config publishes it from the declaration, so it is in use before any row
   // exists to compare against.
-  const candidateSeedConfigs = new Map<string, unknown[]>()
+  const candidateSeedConfigs = new Map<string, Map<string, unknown>>()
   for (const seed of resolution.runtime.read(definitionSeedsFacet)) {
-    const configs = candidateSeedConfigs.get(seed.presetId) ?? []
-    configs.push(seed.encodedConfig)
+    const configs = candidateSeedConfigs.get(seed.presetId) ?? new Map<string, unknown>()
+    configs.set(seed.seedKey, seed.encodedConfig)
     candidateSeedConfigs.set(seed.presetId, configs)
   }
 
-  const presetIds = new Set([...folded.keys(), ...candidateSeedConfigs.keys()])
+  // Seed-declared ids are deliberately NOT unioned in here. For one to matter
+  // it must already resolve to a core, and every such id is either in `folded`
+  // or added below; the ids a union would add are exactly the ones the fold
+  // cannot see, where "no core registers this id" would be a false refusal
+  // against a core that is still there (#1054).
+  const presetIds = new Set(folded.keys())
   // An id this block claims today that the fold no longer holds at all stops
   // resolving. An absent key cannot say that — it reads the same as an id
   // nobody ever claimed — so it is recorded explicitly.
@@ -419,7 +425,7 @@ const presetRegistryAfter = (
   }
   return new Map([...presetIds].map(presetId => [presetId, {
     core: folded.get(presetId),
-    seedConfigs: candidateSeedConfigs.get(presetId) ?? [],
+    seedConfigs: candidateSeedConfigs.get(presetId) ?? new Map<string, unknown>(),
   }]))
 }
 
@@ -487,6 +493,74 @@ const readExtensionOverrides = async (
   } catch {
     return null
   }
+}
+
+/** What an install does to the code running on THIS device.
+ *
+ *  - `live` — both loader gates pass here and the install re-pins, so the
+ *    candidate's preset cores replace the ones registered right now. The case
+ *    the preset check exists for.
+ *  - `dormant` — the install stores source nothing will run: a block this
+ *    device never approved, one disabled by intent, a first install, or safe
+ *    mode. No preset of its can re-type a value.
+ *  - `unreadable` — a gate's own store could not be read, so which of the two
+ *    this is cannot be known.
+ *
+ *  Three-valued because every gate is a store that can FAIL TO READ, and a
+ *  failed read is not a "no". Collapsing one into `dormant` skips the check
+ *  and keeps the re-pin, which is how a lost refusal becomes a re-typing at
+ *  the next boot — the two must move together, so they read one answer.
+ *
+ *  `repin` is that pairing made explicit: the install may pin this device's
+ *  approval to the new source only where the trust decision already exists
+ *  AND this install could compare what the pin would make live. */
+type InstallLiveness =
+  | {kind: 'live'; overrides: Overrides; repin: true}
+  | {kind: 'dormant'; overrides: Overrides; repin: boolean}
+  | {kind: 'unreadable'; why: string}
+
+const resolveInstallLiveness = async (
+  repo: Repo,
+  workspaceId: string,
+  existing: BlockData | null,
+  safeMode: boolean,
+): Promise<InstallLiveness> => {
+  // A block this device has never seen is not running here, and no value is
+  // stored under a core it has never registered. Answered before either gate's
+  // store is touched, so a first install can never be `unreadable` — a fresh
+  // graph with a malformed prefs row still installs.
+  if (existing === null) return {kind: 'dormant', overrides: new Map(), repin: false}
+
+  // `lookupApproval`, not `readApproval`: the latter reports a transient store
+  // failure as "no approval", which here would skip the check on an extension
+  // that IS approved and running. Its own docblock sends callers whose
+  // fallback re-pins live source to this one.
+  const approval = await lookupApproval(existing.id)
+  if (approval.status === 'unreadable') {
+    return {kind: 'unreadable', why: 'this device\'s extension approval record could not be read'}
+  }
+
+  const overrides = await readExtensionOverrides(repo, workspaceId)
+  // An empty map is not a safe stand-in for an unread one: it prunes every
+  // boundary that is off by default and on by override, hiding exactly the
+  // contributions the check exists to see.
+  if (overrides === null) {
+    return {kind: 'unreadable', why: 'this device\'s extension overrides could not be read'}
+  }
+
+  // Safe mode registers NO dynamic-extension contribution at all, whatever the
+  // override state, so the live registry holds none of the cores this install
+  // would replace and every id would read as unregistered — an all-clear that
+  // means only that nothing is loaded. Declining the re-pin is what makes
+  // `dormant` TRUE here rather than a second blind spot: unpinned source runs
+  // at no later boot either, so leaving safe mode cannot spring the change
+  // this install could not check.
+  if (safeMode) return {kind: 'dormant', overrides, repin: false}
+
+  const approvedHere = approval.status === 'approved'
+  return approvedHere && isEnabled(userExtensionToggle(existing), overrides)
+    ? {kind: 'live', overrides, repin: true}
+    : {kind: 'dormant', overrides, repin: approvedHere}
 }
 
 /** Will this extension actually run on this device, and if not, why not?
@@ -1227,63 +1301,48 @@ const installRuntimeExtension = async (
   // than leaving the extension silently dead until someone re-enables it. A
   // block this device never approved stays unapproved: install is not where
   // trust gets granted for the first time.
-  const wasApproved = existing
-    ? Boolean(await readApproval(existing.id).catch(() => null))
-    : false
+  const liveness = await resolveInstallLiveness(repo, workspaceId, existing, context.safeMode)
+  // Every gate this install reads answers TWO questions at once — does the new
+  // source run here, and may the install re-pin the device's approval to it —
+  // and an unread gate answers neither. Refusing is the only response that
+  // keeps them together; the alternative both skips the check and pins the
+  // source it skipped. Transient by nature, so the remedy is to retry.
+  if (liveness.kind === 'unreadable' && !input.allowPresetChange) {
+    throw new Error(
+      `install-extension: ${liveness.why}, so the value-preset check can tell neither whether `
+      + 'this install goes live nor which toggles the new source resolves behind, and would '
+      + 'judge it on a partial view. Refusing rather than installing on one; retry, or pass '
+      + '--allow-preset-change to install without the check.',
+    )
+  }
+  const goesLive = liveness.kind === 'live'
 
-  // Whether this install makes the source LIVE here is what decides whether the
-  // candidate is EXECUTED. Anything else stores source that nothing runs — no
-  // preset of its can re-type a value, and evaluating it to find that out would
-  // defeat the approval gate it never passed. `--verify` is the caller asking
-  // for that evaluation explicitly, which is what it has always meant.
-  //
-  // Live needs BOTH of the loader's gates, not just approval: `disable-extension`
-  // deliberately keeps the trust grant so a re-enable is frictionless, so an
-  // approved block can be sitting disabled, and re-installing it runs nothing.
+  // Executing the candidate is what reveals the codecs it registers, and #67
+  // says install is not where trust is granted — so it happens only when this
+  // install is itself what makes the source run, or when `--verify` asks for
+  // the evaluation explicitly, which is what it has always meant.
   let resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>> | undefined
   let presetScan: PresetIdentityScan = {conflicts: [], syncGap: null}
-  let goesLive = false
-  if (wasApproved || input.verify) {
-    const overrides = await readExtensionOverrides(repo, workspaceId)
-    // Unreadable overrides leave BOTH questions unanswerable — whether this
-    // install goes live, and which toggles the candidate resolves behind — and
-    // both default in the unsafe direction. That is as true of the REPORT
-    // `--verify` asks for as of the refusal: a preset behind a default-off
-    // nested toggle reads as absent, and "no conflicts" is then a finding the
-    // caller acts on and a later enable contradicts. Refuse either way unless
-    // the caller has already said the stored values are disposable.
-    if (overrides === null && !input.allowPresetChange) {
-      throw new Error(
-        'install-extension: cannot read this device\'s extension overrides, so the value-preset '
-        + 'check can tell neither whether this install goes live nor which toggles the new '
-        + 'source resolves behind, and would judge it on a partial view. Refusing rather than '
-        + 'installing on one; retry, or pass --allow-preset-change to install without the check.',
-      )
-    }
-    const effectiveOverrides = overrides ?? new Map<string, boolean>()
-    goesLive = wasApproved && existing !== null
-      && isEnabled(userExtensionToggle(existing), effectiveOverrides)
-    if (goesLive || input.verify) {
-      resolution = await resolveExtensionInIsolation(repo, candidate, effectiveOverrides)
-      // BEFORE the write, and before the re-pin + reload below: a refusal must
-      // leave nothing behind. Writing the source and then refusing would change
-      // the block's hash, which un-pins the approved version on this device and
-      // stops a working extension dead — a silent side effect of saying no.
-      //
-      if (overrides !== null) {
-        // The scan's inputs are split between the CAPTURED workspace (the
-        // definition rows) and the ACTIVE one (`repo.valuePresetCores` and
-        // `context.runtime`, both re-filtered on a workspace switch), and
-        // compiling the candidate is an await a switch can land inside.
-        // Comparing the two answers about neither: an extension-owned preset
-        // absent from the new workspace reads as "nothing registers this id",
-        // which skips the conflict. Re-checked in the writing tx too, where the
-        // same switch would re-pin this workspace's extension off a scan that
-        // never saw it.
-        assertActiveWorkspace(repo, 'install-extension', workspaceId)
-        presetScan = await findPresetIdentityConflicts(
-          repo, workspaceId, presetRegistryAfter(context, resolution, targetId))
-      }
+  if (goesLive || input.verify) {
+    // BEFORE the write, and before the re-pin + reload below: a refusal must
+    // leave nothing behind. Writing the source and then refusing would change
+    // the block's hash, which un-pins the approved version on this device and
+    // stops a working extension dead — a silent side effect of saying no.
+    resolution = await resolveExtensionInIsolation(
+      repo, candidate, liveness.kind === 'unreadable' ? new Map() : liveness.overrides)
+    if (liveness.kind !== 'unreadable') {
+      // The scan's inputs are split between the CAPTURED workspace (the
+      // definition rows) and the ACTIVE one (`repo.valuePresetCores` and
+      // `context.runtime`, both re-filtered on a workspace switch), and
+      // compiling the candidate is an await a switch can land inside.
+      // Comparing the two answers about neither: an extension-owned preset
+      // absent from the new workspace reads as "nothing registers this id",
+      // which skips the conflict. Re-checked in the writing tx too, where the
+      // same switch would re-pin this workspace's extension off a scan that
+      // never saw it.
+      assertActiveWorkspace(repo, 'install-extension', workspaceId)
+      presetScan = await findPresetIdentityConflicts(
+        repo, workspaceId, presetRegistryAfter(context, resolution, targetId))
     }
   }
   const presetConflicts = presetScan.conflicts
@@ -1292,11 +1351,20 @@ const installRuntimeExtension = async (
   // future enable, not a re-typing this command performs — it is REPORTED
   // (below) and the enable path is #1046.
   if (presetConflicts.length > 0 && goesLive && !input.allowPresetChange) {
-    throw new Error(presetIdentityRefusal(
-      presetScan,
-      label ? JSON.stringify(label) : targetId,
-      workspaceId,
-    ))
+    // A candidate that transpiled and then THREW contributes nothing, which
+    // the diff correctly reads as dropping every id it used to register. The
+    // crash is the cause and the dropped id only its consequence, so a refusal
+    // that named the consequence alone would send the reader looking for a
+    // preset change that is not there — and its `--allow-preset-change` way
+    // out would pin a module that does not run.
+    const loadErrors = (resolution?.errors ?? [])
+      .map(error => `  ${error.name ? `${error.name}: ` : ''}${error.message}`)
+      .join('\n')
+    throw new Error(
+      presetIdentityRefusal(presetScan, label ? JSON.stringify(label) : targetId, workspaceId)
+      + (loadErrors === '' ? '' : `\nThe new source also failed to load, which is why it `
+        + `registers less than it used to:\n${loadErrors}`),
+    )
   }
   const presetChanges: {presetChanges?: PresetIdentityConflict[]} =
     presetConflicts.length > 0 ? {presetChanges: presetConflicts} : {}
@@ -1320,12 +1388,13 @@ const installRuntimeExtension = async (
       })
       await repo.addTypeInTx(tx, existing.id, EXTENSION_TYPE, {}, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
-    // Not re-pinned when the scan concluded the source cannot be pinned: that
-    // conclusion is what let it skip the preset diff, so acting against it
-    // would pin — and make live — a core nothing compared. `approveExtension`
-    // transpiles the source a SECOND time, and a first failure that was
+    // Both conditions say the same thing: never pin a source this install did
+    // not compare. `repin` covers the gates that could not be read or are not
+    // loaded (see `InstallLiveness`); `pinnable` covers a source that did not
+    // transpile — that conclusion is what let the scan skip the diff, and
+    // `approveExtension` transpiles a SECOND time, so a first failure that was
     // transient would otherwise succeed here and take effect unrefused.
-    if (wasApproved && resolution?.pinnable !== false) {
+    if (liveness.kind !== 'unreadable' && liveness.repin && resolution?.pinnable !== false) {
       // Best-effort otherwise: a source that no longer transpiles can't be
       // pinned, and that failure belongs to verify/reload, not to the install.
       await approveExtension(existing.id, source).catch(() => undefined)
@@ -1357,6 +1426,11 @@ const installRuntimeExtension = async (
   const installedId = targetId
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
+    // As on the update path: the alias lookup above is an await a workspace
+    // switch can land inside, which would leave `typeSnapshot` read from one
+    // workspace while every `tx.create` below writes the extension root,
+    // container and block into another. Refuse rather than write that tree.
+    assertActiveWorkspace(repo, 'install-extension', workspaceId)
     let rootId = parentIdFromInput ?? defaultParent?.id ?? null
     if (!rootId) {
       const rootSiblings = await tx.childrenOf(null, workspaceId)

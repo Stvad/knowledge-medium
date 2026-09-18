@@ -177,8 +177,10 @@ export interface InstallExtensionResult {
    *  the override records what it overrode — or the block does not pass both
    *  loader gates here, so nothing it registers runs and the conflict is a fact
    *  about a future enable rather than a re-typing this command performs.
-   *  Absent when no conflict was found OR when the source was never executed to
-   *  look (see `verify`). */
+   *  Absent when no conflict was found, when the source was never executed to
+   *  look (see `verify`), and when it was executed but a gate's own store could
+   *  not be read — `--allow-preset-change` then buys a SKIPPED check, so absent
+   *  is not "no conflict" there. */
   presetChanges?: PresetIdentityConflict[]
   /** Present when `--verify` asked for it, and ALSO when the candidate was
    *  resolved and failed to load — an install that stores source nothing can

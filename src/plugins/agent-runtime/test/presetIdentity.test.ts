@@ -104,11 +104,11 @@ const createDefinitionBlock = async (
 /** The effective-registry map the install path builds, for the ordinary case
  *  where the candidate simply re-registers these ids. */
 const registryAfter = (...cores: AnyValuePresetCore[]): PresetRegistryAfter =>
-  new Map(cores.map(core => [core.id, {core, seedConfigs: []}]))
+  new Map(cores.map(core => [core.id, {core, seedConfigs: new Map()}]))
 
 /** The same, for an id the candidate stops registering entirely. */
 const registryDrops = (presetId: string, core?: AnyValuePresetCore): PresetRegistryAfter =>
-  new Map([[presetId, {core, seedConfigs: []}]])
+  new Map([[presetId, {core, seedConfigs: new Map()}]])
 
 /** Live `property-schema` rows in the workspace — the probe set's OTHER
  *  source, asserted at zero so a seed test cannot pass through a row. */
@@ -392,10 +392,13 @@ describe('findPresetIdentityConflicts', () => {
     // this config is in use.
     expect(await readDefinitionCount()).toBe(0)
 
-    const {conflicts: [conflict]} = await findPresetIdentityConflicts(
-      repo, WS, registryAfter(core(codecs.number)))
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, new Map([
+      [PRESET, {core: core(codecs.number), seedConfigs:
+        new Map([['system:demo/property/narrow-rating', {mode: 'narrow'}]])}],
+    ]))
     expect(conflict?.differences).toEqual([
-      'codec type "string" -> codec type "number" (at stored config {"mode":"narrow"})',
+      'codec type "string" -> codec type "number" '
+      + '(at the config seed "system:demo/property/narrow-rating" declares)',
     ])
   })
 
@@ -432,11 +435,117 @@ describe('findPresetIdentityConflicts', () => {
     ])
 
     const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, new Map([
-      [PRESET, {core: core(codecs.number), seedConfigs: [{mode: 'narrow'}]}],
+      [PRESET, {core: core(codecs.number), seedConfigs:
+        new Map([['system:demo/property/wide-rating', {mode: 'narrow'}]])}],
     ]))
     expect(conflict?.differences).toEqual([
-      'codec type "string" -> codec type "number" (at stored config {"mode":"narrow"})',
+      'codec type "string" -> codec type "number" '
+      + '(at the config seed "system:demo/property/wide-rating" declares)',
     ])
+  })
+
+  it("compares a seed's config against its OWN previous one, not the other core's", async () => {
+    // The core does not move at all — the update re-contributes the very same
+    // object — and the SEED moves onto a config where that one core builds a
+    // different codec. Probing a flat set of configs against the two cores
+    // cannot see this: at every config the two agree, because they are one
+    // core. The pair that matters is the seed's own before and after.
+    const modeCodec: Codec<{mode: string}> = {
+      type: 'demo:mode',
+      encode: value => ({mode: value.mode}),
+      decode: json => ({mode: String((json as {mode?: unknown}).mode ?? 'wide')}),
+    }
+    const registered = definePresetCore<unknown, {mode: string}>({
+      id: PRESET,
+      build: config => (config.mode === 'narrow' ? codecs.number : codecs.string),
+      defaultValue: '',
+      defaultConfig: {mode: 'wide'},
+      configCodec: modeCodec,
+    })
+    register(registered)
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-moving-seed', [
+      seedProperty<unknown, {mode: string}>({
+        seedKey: 'system:demo/property/moving-rating',
+        revision: 1,
+        name: 'demo:moving-rating',
+        preset: registered,
+        config: {mode: 'wide'},
+        defaultValue: '',
+        changeScope: ChangeScope.BlockDefault,
+      }),
+    ])
+
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(repo, WS, new Map([
+      // The SAME core object, which is also what makes the `current === next`
+      // fast path unable to short-circuit here.
+      [PRESET, {core: registered, seedConfigs:
+        new Map([['system:demo/property/moving-rating', {mode: 'narrow'}]])}],
+    ]))
+    expect(conflict?.differences).toEqual([
+      'codec type "string" -> codec type "number" '
+      + '(at the config seed "system:demo/property/moving-rating" declares)',
+    ])
+  })
+
+  it('says so in the refusal when this device\'s view of the workspace is short', async () => {
+    // The counts come from LOCAL rows, so a durable sync gap makes them an
+    // undercount. Reporting that basis is what makes the residual acceptable
+    // rather than a silent one — the refusal has to carry it.
+    register(numberRating)
+    await addDefinitionWithCells('demo-rating', PRESET, 2)
+    vi.spyOn(repo, 'workspaceViewGap').mockResolvedValue({
+      reason: '3 synced row(s) have not reached blocks on this device',
+      transient: false,
+    })
+
+    const scan = await findPresetIdentityConflicts(repo, WS, registryAfter(stringRating))
+    expect(scan.syncGap).toBe('3 synced row(s) have not reached blocks on this device')
+    expect(presetIdentityRefusal(scan, '"Ratings"', WS))
+      .toContain('This device\'s view is incomplete')
+  })
+
+  it('does not count cells on a TOMBSTONED consumer block', async () => {
+    // The refusal prints these counts and says outright that tombstones are
+    // not among them. The cell scan reads `blocks` directly, with no join to
+    // exclude a deleted one.
+    register(numberRating)
+    const name = await addDefinitionWithCells('demo-rating', PRESET, 3)
+    const [doomed] = await repo.db.getAll<{id: string}>(
+      `SELECT b.id FROM blocks b, json_each(b.properties_json) j
+        WHERE b.workspace_id = ? AND b.deleted = 0 AND j.key = ? LIMIT 1`,
+      [WS, name],
+    )
+    await repo.mutate.delete({id: doomed!.id})
+
+    const {conflicts: [conflict]} = await findPresetIdentityConflicts(
+      repo, WS, registryAfter(stringRating))
+    expect(conflict!.cells).toBe(2)
+  })
+
+  it('ignores a TOMBSTONED definition, in both the probe set and the counts', async () => {
+    // A deleted row is not a consumer: its stored config must not enter the
+    // probe set, where a dead row could invent a refusal all by itself.
+    const modeCodec: Codec<{mode: string}> = {
+      type: 'demo:mode',
+      encode: value => ({mode: value.mode}),
+      decode: json => ({mode: String((json as {mode?: unknown}).mode ?? 'wide')}),
+    }
+    const core = (whenNarrow: Codec<unknown>) => definePresetCore<unknown, {mode: string}>({
+      id: PRESET,
+      build: config => (config.mode === 'narrow' ? whenNarrow : codecs.string),
+      defaultValue: '',
+      defaultConfig: {mode: 'wide'},
+      configCodec: modeCodec,
+    })
+    register(core(codecs.string))
+    // The ONLY row on the contested config, and it is deleted. Nothing else
+    // distinguishes the two cores, so a conflict here could only come from it.
+    const deadId = await createDefinitionBlock('demo-dead', PRESET, {mode: 'narrow'})
+    await repo.mutate.delete({id: deadId})
+
+    const {conflicts} = await findPresetIdentityConflicts(
+      repo, WS, registryAfter(core(codecs.number)))
+    expect(conflicts).toEqual([])
   })
 
   it('reports an id whose core goes away entirely', async () => {

@@ -15,6 +15,7 @@ import {
   __setTranspileImplForTest,
   readApproval,
 } from '@/extensions/compileExtensionModule'
+import { getCompiledModuleCache } from '@/extensions/compiledModuleCache'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
 import { definitionSeedsFacet, valuePresetCoresFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -394,10 +395,40 @@ describe('agent runtime commands', () => {
       }
     })
 
+    it('does not re-pin in safe mode, where there is no live core to compare', async () => {
+      // Safe mode registers no dynamic-extension contribution at all, so the
+      // live registry holds none of the cores an install would replace and
+      // every id reads as unregistered. Declining the re-pin is what makes
+      // that an honest "nothing goes live" instead of a second blind spot:
+      // unpinned source runs at no later boot either.
+      await registerNumberRatingWithDefinition()
+      const id = await installApproved(valuePresetCoresFacet.of(numberRating))
+      const pinnedBefore = await readApproval(id)
+      const safeModeContext = createAgentRuntimeContext({
+        repo: env.repo, runtime: env.context.runtime, safeMode: true,
+      })
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        const result = await executeCommand({
+          commandId: 'install-preset-safemode',
+          type: 'install-extension',
+          source: 'STUBBED safemode',
+          label: 'Ratings',
+          reload: false,
+        }, safeModeContext) as InstallExtensionResult
+        expect(result.presetChanges).toBeUndefined()
+        // The source is stored, and the device still pins the OLD one.
+        expect(await readApproval(id)).toEqual(pinnedBefore)
+      } finally {
+        restore()
+      }
+    })
+
     it('resolves the candidate in NORMAL mode even while the app is in safe mode', async () => {
       // A function-valued extension reads `ctx.safeMode` itself. Handing it the
-      // app's value lets it omit the very core the check exists to see, while
-      // leaving safe mode registers that core unrefused.
+      // app's value lets it omit the very core the check exists to see. Driven
+      // through `--verify`, which is what asks for the evaluation when the
+      // install itself makes nothing live.
       await registerNumberRatingWithDefinition()
       await installApproved(valuePresetCoresFacet.of(numberRating))
       const safeModeContext = createAgentRuntimeContext({
@@ -408,13 +439,17 @@ describe('agent runtime commands', () => {
           ctx.safeMode ? [] : valuePresetCoresFacet.of(stringRating),
       }))
       try {
-        await expect(executeCommand({
-          commandId: 'install-preset-safemode',
+        const result = await executeCommand({
+          commandId: 'install-preset-safemode-verify',
           type: 'install-extension',
           source: 'STUBBED safemode',
           label: 'Ratings',
           reload: false,
-        }, safeModeContext)).rejects.toThrow(/codec type "number" -> codec type "string"/)
+          verify: true,
+        }, safeModeContext) as InstallExtensionResult
+        expect(result.presetChanges?.[0]?.differences).toEqual([
+          'codec type "number" -> codec type "string" (at the preset default config)',
+        ])
       } finally {
         restore()
       }
@@ -438,7 +473,7 @@ describe('agent runtime commands', () => {
       const restore = compileTo(valuePresetCoresFacet.of(stringRating))
       try {
         await expect(install('install-preset-badprefs'))
-          .rejects.toThrow(/cannot read this device's extension overrides/)
+          .rejects.toThrow(/extension overrides could not be read/)
       } finally {
         restore()
       }
@@ -614,7 +649,10 @@ describe('agent runtime commands', () => {
       // `--verify` asks for a REPORT, and a report built from an empty override
       // map calls a preset behind a default-off nested toggle absent. "No
       // conflicts" is then a finding the caller acts on and a later enable
-      // contradicts.
+      // contradicts. On an EXISTING block: a first install reads no gate at
+      // all (see below), so it is the re-install that has something to report.
+      await registerNumberRatingWithDefinition()
+      await installApproved(valuePresetCoresFacet.of(numberRating))
       const prefsBlock = await getPluginPrefsBlock(
         env.repo, WS, env.repo.user, extensionsPrefsType)
       await env.repo.tx(async tx => {
@@ -627,29 +665,72 @@ describe('agent runtime commands', () => {
       const restore = compileTo(valuePresetCoresFacet.of(stringRating))
       try {
         await expect(install('install-verify-badprefs', {verify: true}))
-          .rejects.toThrow(/cannot read this device's extension overrides/)
+          .rejects.toThrow(/extension overrides could not be read/)
       } finally {
         restore()
       }
     })
 
-    it('carries the candidate\'s own seed configs into the diff', async () => {
-      // End-to-end for the same rule: the configs come off the isolated
-      // resolution's seeds, not the registry's.
+    it('installs a FIRST install on an unreadable override map', async () => {
+      // A block this device has never seen is not running here, and no value
+      // is stored under a core it has never registered — so the gates are not
+      // read at all and a malformed prefs row cannot block a fresh install.
+      const prefsBlock = await getPluginPrefsBlock(
+        env.repo, WS, env.repo.user, extensionsPrefsType)
+      await env.repo.tx(async tx => {
+        const current = await tx.get(prefsBlock.id)
+        await tx.update(prefsBlock.id, {
+          properties: {...current!.properties, [extensionsOverridesProp.name]: 'not-a-map'},
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'corrupt stored overrides'})
+
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        const result = await install('install-fresh-badprefs', {verify: true})
+        expect(result.inserted).toBe(true)
+        expect(result.presetChanges).toBeUndefined()
+      } finally {
+        restore()
+      }
+    })
+
+    it("compares a seed against its own previous config, end to end", async () => {
+      // The core does not move — the update re-contributes an identical one —
+      // and the SEED moves onto a config where that core builds a different
+      // codec. The configs come off the isolated resolution's seeds, paired
+      // against the live declaration by seedKey.
       const modeCodec: Codec<{mode: string}> = {
         type: 'demo:mode',
         encode: value => ({mode: value.mode}),
         decode: json => ({mode: String((json as {mode?: unknown})?.mode ?? 'wide')}),
       }
-      const core = (whenNarrow: Codec<unknown>) => definePresetCore<unknown, {mode: string}>({
+      const core = definePresetCore<unknown, {mode: string}>({
         id: RATING,
-        build: config => (config.mode === 'narrow' ? whenNarrow : codecs.string),
+        build: config => (config.mode === 'narrow' ? codecs.number : codecs.string),
         defaultValue: '',
         defaultConfig: {mode: 'wide'},
         configCodec: modeCodec,
       })
-      const registered = core(codecs.string)
-      const restoreBase = compileTo(valuePresetCoresFacet.of(registered))
+      const seedOn = (seedKey: string, mode: string) =>
+        seedProperty<unknown, {mode: string}>({
+          seedKey,
+          revision: 1,
+          name: 'demo:seedcfg-rating',
+          preset: core,
+          config: {mode},
+          // The seed's default encodes through the codec its config selects.
+          defaultValue: mode === 'narrow' ? 0 : '',
+          changeScope: ChangeScope.BlockDefault,
+        })
+
+      // A dynamic extension's seeds carry a block-owned key; the loader
+      // rebinds the reserved prefix to the block id before the contribution
+      // reaches the runtime, so the live side is registered under that same
+      // bound form.
+      const restoreBase = compileTo([
+        valuePresetCoresFacet.of(core),
+        definitionSeedsFacet.of(seedOn(extensionPropertySeedKey('seedcfg'), 'wide')),
+      ])
       let id: string
       try {
         const installed = await install('install-seedcfg-base')
@@ -660,31 +741,98 @@ describe('agent runtime commands', () => {
       } finally {
         restoreBase()
       }
-      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [registered])
+      const boundKey = `${encodeURIComponent(id)}/property/seedcfg`
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [core])
+      env.repo.setRuntimeContributions(definitionSeedsFacet, `block:${id}`, [
+        seedOn(boundKey, 'wide'),
+      ])
+      await vi.waitFor(() =>
+        expect(env.repo.propertyDefinitions?.seedsByKey.has(boundKey)).toBe(true))
 
-      // The update keeps a core that agrees at the default config and parts at
-      // `narrow`, and moves its own seed onto `narrow`.
-      const changed = core(codecs.number)
       const restore = compileTo([
-        valuePresetCoresFacet.of(changed),
-        definitionSeedsFacet.of(seedProperty<unknown, {mode: string}>({
-          // A dynamic extension's seeds must carry a block-owned key; the
-          // loader rebinds it and rejects anything else.
-          seedKey: extensionPropertySeedKey('seedcfg'),
-          revision: 1,
-          name: 'demo:seedcfg-rating',
-          preset: changed,
-          config: {mode: 'narrow'},
-          // The seed's default encodes through the codec its config selects.
-          defaultValue: 0,
-          changeScope: ChangeScope.BlockDefault,
-        })),
+        valuePresetCoresFacet.of(core),
+        definitionSeedsFacet.of(seedOn(extensionPropertySeedKey('seedcfg'), 'narrow')),
       ])
       try {
         await expect(install('install-seedcfg'))
-          .rejects.toThrow(/at stored config \{"mode":"narrow"\}/)
+          .rejects.toThrow(/at the config seed "[^"]*\/property\/seedcfg" declares/)
       } finally {
         restore()
+      }
+    })
+
+    it('refuses when it cannot read whether this device approved the block', async () => {
+      // A transient approval-store failure is not a "no". Read as one it would
+      // skip the check AND skip the re-pin, so the install reports success and
+      // its hint sends the operator to `enable-extension`, which re-pins with
+      // no check of its own (#1046) — a refusal turned into a recommendation
+      // to do the dangerous thing.
+      await registerNumberRatingWithDefinition()
+      await installApproved(valuePresetCoresFacet.of(numberRating))
+      const readSpy = vi.spyOn(getCompiledModuleCache(), 'read')
+        .mockRejectedValue(new Error('IndexedDB transaction aborted'))
+      const restore = compileTo(valuePresetCoresFacet.of(stringRating))
+      try {
+        await expect(install('install-unreadable-approval'))
+          .rejects.toThrow(/approval record could not be read/)
+      } finally {
+        restore()
+        readSpy.mockRestore()
+      }
+    })
+
+    it('names the load failure that is why the candidate registers less', async () => {
+      // A candidate that transpiled and then THREW contributes nothing, which
+      // the diff reads as dropping every id it registered. The crash is the
+      // cause and the dropped id only its consequence, so a refusal naming the
+      // consequence alone sends the reader looking for a preset change that is
+      // not there — and its `--allow-preset-change` way out pins a module that
+      // does not run.
+      const restoreBase = compileTo(valuePresetCoresFacet.of(numberRating))
+      let id: string
+      try {
+        const installed = await install('install-throwing-base')
+        await executeCommand({
+          commandId: 'enable-throwing', type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      // The running extension's live contribution, sourced at its block: the
+      // id the crashed candidate is read as dropping.
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [numberRating])
+      await getOrCreatePropertiesPage(env.repo, WS)
+      await env.repo.userSchemas.addSchema({name: 'demo-rating', presetId: RATING})
+
+      const restore = __setCompileImplForTest(async () => {
+        throw new Error('boom in module top level')
+      })
+      try {
+        await expect(install('install-throwing-module'))
+          .rejects.toThrow(/boom in module top level/)
+      } finally {
+        restore()
+      }
+    })
+
+    it('refuses a FIRST install whose workspace moved before the write', async () => {
+      // The create path mints an extension root, a label container and the
+      // block itself, against type registries snapshotted outside the tx. A
+      // switch landing in the alias lookup between them would write that whole
+      // tree into one workspace off another's snapshot.
+      const real = env.repo.snapshotTypeRegistries.bind(env.repo)
+      const restore = vi.spyOn(env.repo, 'snapshotTypeRegistries').mockImplementation(() => {
+        // The switch lands between the snapshot and the tx that writes off it.
+        env.repo.setActiveWorkspaceId('ws-elsewhere')
+        return real()
+      })
+      try {
+        await expect(install('install-fresh-ws-switch'))
+          .rejects.toThrow(/not the active one/)
+      } finally {
+        restore.mockRestore()
+        env.repo.setActiveWorkspaceId(WS)
       }
     })
 
