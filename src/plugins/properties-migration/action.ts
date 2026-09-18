@@ -626,6 +626,12 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // pointing it at the release command points it at deleting a claim
       // another device is still writing under.
       //
+      // The claimant is per browser PROFILE, so "this device" can also be a
+      // sibling tab, or this gesture's own earlier invocation that the
+      // single-flight turned away. Hence the conditional wording rather than an
+      // instruction to re-run: a second concurrent pass is what that would
+      // start.
+      //
       // Caught, because this is a database read on a path that runs after the
       // outcome is already painted: a throw here would replace the gesture's
       // own exit with an unrelated one, and drop the note exactly when the read
@@ -642,8 +648,9 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         banner.addNote(
           held.claimantId === getClientId()
             ? 'This workspace is still not accepting edits: this device holds the '
-              + 'migration until it finishes. Run this again here to resume it, or — '
-              + `${STRANDED_CLAIM_RECOVERY}.`
+              + 'migration until a run here finishes it. If one is still going — in '
+              + 'this tab or another — let it; otherwise run this again to resume it, '
+              + `or ${STRANDED_CLAIM_RECOVERY}.`
             : 'This workspace is still not accepting edits: another device holds the '
               + 'migration. It stays that way until that device finishes — running '
               + `this here is declined while it does. If it never will, ${

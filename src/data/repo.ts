@@ -56,6 +56,7 @@ import {
   claimHoldsGraph,
   graphBackfillClaimBlockId,
   isGraphBackfillClaimActive,
+  STRANDED_CLAIM_RECOVERY,
 } from './internals/graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from './internals/propertyCellBackfill'
 
@@ -3853,8 +3854,8 @@ export class Repo {
         // already written. `releaseClaim` cannot tell that row from a SIBLING
         // TAB's live one: `claimantId` is per browser profile, so both name
         // this claimant and it would delete either. Trading a claim this
-        // device may have stranded — recoverable by deleting the block, which
-        // `held-by-peer` says — for freeing a second device to start an
+        // device may have stranded — recoverable through the release command,
+        // which `held-by-peer` names — for freeing a second device to start an
         // uploading pass while the first tab is still writing is the wrong
         // way round.
         const reason = err instanceof Error ? err.message : String(err)
@@ -3890,7 +3891,7 @@ export class Repo {
         // ownership by claimant and would delete it, freeing a third device to
         // start the same source-of-truth pass while the sibling writes. The
         // claim we then fail to hand back is the milder outcome: it strands,
-        // and deleting the block is the documented recovery.
+        // and the release command is the documented recovery.
         //
         // Swallowed: the body has already told the operator what happened, and
         // a release that failed is a stranded claim with that same recovery —
@@ -3902,8 +3903,7 @@ export class Repo {
           await claim.releaseClaim(workspaceId, backfill.id).catch((err: unknown) => {
             console.error(
               `[workspaceBackfills] could not release the claim on "${backfill.id}" for ` +
-              `workspace ${workspaceId} — delete the claim block on the Migrations page to ` +
-              `let this pass run again:`, err,
+              `workspace ${workspaceId} — ${STRANDED_CLAIM_RECOVERY}:`, err,
             )
           })
         }

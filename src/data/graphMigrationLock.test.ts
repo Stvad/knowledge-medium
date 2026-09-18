@@ -556,11 +556,11 @@ describe('the migration itself, running under the lock it raised', () => {
     // Without the release being exempt, a pass that throws leaves the claim it
     // took in flight and the delete that would clear it refused by that claim:
     // the graph locks itself, permanently, on a failure it could recover from.
-    const repo = makeOperatorRepo({
-      id: PROPERTY_CELL_BACKFILL_ID,
-      trigger: 'operator',
-      run: async () => { throw new Error('pass exploded') },
-    })
+    // No stub backfill: a same-id contribution does not displace the kernel's
+    // real one, so the pass that runs here is `propertyCellBackfill` — and it
+    // fails, because this fixture leaves the workspace un-flipped. A failure is
+    // all this test needs, and taking the real one keeps the setup honest.
+    const repo = makeOperatorRepo()
     await seedTarget(repo)
 
     expect((await repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)).outcome)

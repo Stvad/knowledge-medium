@@ -104,6 +104,30 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
   await migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
 }
 
+/** A gesture whose claimed region throws, rather than returning an outcome. */
+const runThrowing = async (error: Error) => {
+  const repo = {
+    activeWorkspaceId: 'ws-1',
+    user: {id: 'user-1'},
+    db: {
+      getAll: async () => [{n: 7}],
+      getOptional: async (sql: string) => {
+        if (sql.includes('owner_user_id')) return {owner_user_id: 'user-1'}
+        if (sql.includes('properties_json')) return null
+        return {properties_migration: 'cell'}
+      },
+    },
+    isReadOnly: false,
+    workspaceViewGap: async () => null,
+    undoManagerFor: () => ({
+      clear: () => {},
+      beginHistoryDrop: () => ({finish: () => {}, abandon: () => {}}),
+    }),
+    withOperatorBackfillClaim: () => Promise.reject(error),
+  } as unknown as Repo
+  return migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
+}
+
 afterEach(() => {
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
@@ -152,6 +176,15 @@ describe('the migration progress path', () => {
     const note = progressHandle.addNote.mock.calls[0]?.[0] as string | undefined
     expect(note).toContain('another device holds the migration')
     expect(note).not.toContain('Run this again here')
+  })
+
+  it('leaves the modal closable when the gesture throws', async () => {
+    // The modal has no close button while it reads as running, so a throw that
+    // escapes without reporting an outcome leaves the tab needing a reload.
+    // This is the only thing standing between that and the user.
+    await expect(runThrowing(new Error('claim write blew up'))).rejects.toThrow()
+
+    expect(progressHandle.settleUnreported).toHaveBeenCalled()
   })
 
   it('says nothing about a lock when the run handed the workspace back', async () => {

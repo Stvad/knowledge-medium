@@ -1586,7 +1586,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
     // SIBLING TAB's live one — `claimantId` is per browser profile, so both
     // name this claimant. Deleting a live claim frees a second device to start
     // an uploading pass while the first tab is still writing; a claim this
-    // device may have stranded is recoverable by deleting the block.
+    // device may have stranded is recoverable through the release command.
     expect(events).toEqual([])
     // `deferred`, not `failed`: nothing started, and "stopped partway" would
     // send an operator looking for half-migrated data.
