@@ -192,6 +192,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  `(x as any).field =` dynamic write would escape the inventory —
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
+  graphMigrationLocked: 'arrow field bound to the REAL repo at construction, so reaching it through the facade still reads the real `this` — and it only reads (the active workspace, then one indexed lookup). Handed to `runTx` per call and not stored anywhere that outlives it',
   inFlightOperatorBackfills: 'data field — a Set of in-flight keys; holds no reference to the Repo',
   requestedWrites: 'data field — a counter written only by _runAndDispatch on the real repo',
   _propertyDefinitionRegistry: 'data field',
