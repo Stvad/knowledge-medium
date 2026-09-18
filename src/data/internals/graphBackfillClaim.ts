@@ -164,9 +164,11 @@ export const isGraphBackfillClaimActive = async (
  *  another client, and the refusal of a definition edit while one is in flight —
  *  describe the SAME recovery, and an operator who reads them as two different
  *  situations goes looking for a second thing to do. */
+export const RELEASE_STRANDED_CLAIM_COMMAND = 'Release the migration claim'
+
 export const STRANDED_CLAIM_RECOVERY =
-  'if nothing is running, check the claim block on the '
-  + `"${MIGRATIONS_PAGE_ALIAS}" page and delete it to release the pass`
+  `the claim block is on the "${MIGRATIONS_PAGE_ALIAS}" page, and if nothing is `
+  + `running anywhere, the "${RELEASE_STRANDED_CLAIM_COMMAND}" command clears it`
 
 /** Code carried by the refusal `repo.tx` throws while a claim is in flight, so
  *  a toast contribution can claim it. */
@@ -225,6 +227,42 @@ const refuseForeignOccupant = (
 ): void => {
   if (classifyOccupant((row ?? null) as never, {workspaceId}).verdict !== 'foreign') return
   throw new DeterministicIdCrossWorkspaceError(claimId, row!.workspaceId, workspaceId)
+}
+
+/**
+ * Clear a claim nobody will release, from a device that does not hold it.
+ *
+ * The operator recovery for a claimant that died mid-pass. `releaseClaim`
+ * cannot serve: it decides ownership by claimant id, which is per browser
+ * PROFILE, so it does nothing for the case that actually strands a graph — the
+ * device that took the claim is gone. Deleting the block by hand used to be the
+ * answer and no longer is: the migration lock refuses that delete, so without
+ * this the graph has no way out of its own lock from inside the app.
+ *
+ * Exempt from the lock it clears, and unavoidably so. That is why it releases
+ * ONLY a claim that is actually holding the graph: a completed claim is the
+ * record that the migration ran and deleting it would read as never-migrated,
+ * and a row that does not decode as a claim locks nothing.
+ *
+ * It cannot tell a dead claimant from a live one — nothing can, over a
+ * last-write-wins layer with no arbitration. The caller confirms.
+ */
+export const releaseStrandedGraphBackfillClaim = async (
+  deps: Pick<GraphBackfillClaimDeps, 'tx'>,
+  workspaceId: string,
+  backfillId: string,
+): Promise<'released' | 'not-held'> => {
+  const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
+  return deps.tx(async tx => {
+    const row = await tx.get(claimId)
+    refuseForeignOccupant(row, workspaceId, claimId)
+    if (!row || row.deleted) return 'not-held'
+    const claim = claimFromProperties(row.properties)
+    if (claim === null || claim.completedAt !== undefined) return 'not-held'
+    await tx.delete(claimId)
+    return 'released'
+  }, {scope: ChangeScope.BlockDefault, skipUndo: true, graphMigrationWrite: true,
+      description: `release stranded backfill claim ${backfillId}`})
 }
 
 export const createGraphBackfillClaim = (
