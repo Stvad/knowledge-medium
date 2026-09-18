@@ -1052,6 +1052,68 @@ describe('agent runtime commands', () => {
       }
     })
 
+    it('lets an unanchored candidate seed WIN its name, so ordering cannot hide a move', async () => {
+      // A block contributing no seed today has no anchor to splice at, so
+      // where its seeds land is a guess. Seeds resolve FIRST-wins, so the
+      // guess must put the candidate first: placed last it would lose the
+      // name to the incumbent, the scan would compare the incumbent against
+      // itself, and a real re-typing would install clean.
+      const modeCodec: Codec<{mode: string}> = {
+        type: 'demo:mode',
+        encode: value => ({mode: value.mode}),
+        decode: json => ({mode: String((json as {mode?: unknown})?.mode ?? 'wide')}),
+      }
+      const core = definePresetCore<unknown, {mode: string}>({
+        id: RATING,
+        build: config => (config.mode === 'narrow' ? codecs.number : codecs.string),
+        defaultValue: '',
+        defaultConfig: {mode: 'wide'},
+        configCodec: modeCodec,
+      })
+      const seedNamed = (seedKey: string, mode: string) =>
+        seedProperty<unknown, {mode: string}>({
+          seedKey,
+          revision: 1,
+          name: 'demo:contested-rating',
+          preset: core,
+          config: {mode},
+          defaultValue: mode === 'narrow' ? 0 : '',
+          changeScope: ChangeScope.BlockDefault,
+        })
+
+      // The candidate block contributes the CORE today but no seed.
+      const restoreBase = compileTo(valuePresetCoresFacet.of(core))
+      let id: string
+      try {
+        const installed = await install('install-unanchored-base')
+        await executeCommand({
+          commandId: 'enable-unanchored', type: 'enable-extension', id: installed.id,
+        }, env.context)
+        id = installed.id
+      } finally {
+        restoreBase()
+      }
+      env.repo.setRuntimeContributions(valuePresetCoresFacet, `block:${id}`, [core])
+      // A RIVAL source already owns the name, on `wide`.
+      env.repo.setRuntimeContributions(definitionSeedsFacet, 'rival-plugin', [
+        seedNamed('system:rival/property/contested', 'wide'),
+      ])
+      await vi.waitFor(() => expect(
+        env.repo.propertyDefinitions?.seedsByName.has('demo:contested-rating')).toBe(true))
+
+      // The update declares the same name on `narrow` — a move, if it wins.
+      const restore = compileTo([
+        valuePresetCoresFacet.of(core),
+        definitionSeedsFacet.of(seedNamed(extensionPropertySeedKey('contested'), 'narrow')),
+      ])
+      try {
+        await expect(install('install-unanchored'))
+          .rejects.toThrow(/at the config seed "demo:contested-rating" declares, moved from/)
+      } finally {
+        restore()
+      }
+    })
+
     it('refuses when the active workspace moved while the candidate compiled', async () => {
       // The scan reads the CAPTURED workspace's definition rows against the
       // ACTIVE workspace's registry and runtime, both of which a switch

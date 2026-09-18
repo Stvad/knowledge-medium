@@ -390,14 +390,15 @@ export interface PresetAfter {
   /** The core that would resolve under the id — `undefined` for one nothing
    *  would register any more. */
   readonly core: AnyValuePresetCore | undefined
-  /** The encoded config each of the CANDIDATE's own seeds declares for this
-   *  preset, by the property NAME it claims. A seed publishes its schema from
-   *  the declaration, so a config an update introduces is in use the moment it
-   *  loads, materialized row or not — and the registry only carries what the
-   *  seeds declare TODAY. Keyed rather than listed so each seed is compared
-   *  against its own previous declaration: the config moves WITH the core
-   *  across an update, which a flat list of configs to try cannot express.
-   *  See {@link SeedConfigPair} for why the key is the name. */
+  /** The encoded config that would resolve for each property NAME on this
+   *  preset after the install — every winner in the merged seed set, not only
+   *  the candidate's own, so a kernel or sibling-plugin seed is probed against
+   *  a candidate core that shadows its preset. A seed publishes its schema
+   *  from the declaration, so a config an update introduces is in use the
+   *  moment it loads, materialized row or not. Keyed rather than listed so
+   *  each seed is compared against its own previous declaration: the config
+   *  moves WITH the core across an update, which a flat list of configs to try
+   *  cannot express. See {@link SeedConfigPair} for why the key is the name. */
   readonly seedConfigs: ReadonlyMap<string, unknown>
 }
 

@@ -359,18 +359,24 @@ const resolveExtensionInIsolation = async (
  *  this block's entries is where a reload puts them back.
  *
  *  With no anchor — a first install, or a block contributing nothing to this
- *  facet today — it appends. For a first install that is exactly where its
- *  contributions land. For an existing block it is an APPROXIMATION of its
- *  place in `findExtensionBlocks` order, and a deliberate one: it can only
- *  make the candidate win a same-precedence tie it would really lose, which is
- *  a spurious refusal (with `--allow-preset-change` to hand) and never a
- *  missed one. Reconstructing the true position would mean asserting that
- *  block order and resolver order agree, which nothing here can pin. */
+ *  facet today — the candidate goes wherever this facet's resolution makes it
+ *  WIN a same-precedence tie: last for a last-wins fold, first for a
+ *  first-wins one. That is an APPROXIMATION of its place in
+ *  `findExtensionBlocks` order and a deliberate one, but the direction is not
+ *  arbitrary: winning means the scan reads the CANDIDATE's value as the
+ *  after-state, so the error it can make is a spurious refusal (with
+ *  `--allow-preset-change` to hand) and never a missed one. Placing it where
+ *  it loses would make the scan compare the incumbent against itself and let a
+ *  real re-typing through. Reconstructing the true position would mean
+ *  asserting that block order and resolver order agree, which nothing here can
+ *  pin — so `unanchored` must be set from how the CALLER resolves this facet,
+ *  not from what reads naturally. */
 const mergeCandidateInto = (
   facetId: string,
   context: AgentRuntimeContext,
   resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
   blockId: string,
+  unanchored: 'wins-last' | 'wins-first',
   onReplaced?: (contribution: FacetContribution<unknown>) => void,
 ): FacetContribution<unknown>[] => {
   const candidate = resolution.runtime.contributionsById(facetId)
@@ -387,20 +393,21 @@ const mergeCandidateInto = (
       spliced = true
     }
   }
-  if (!spliced) merged.push(...candidate)
+  if (!spliced) {
+    if (unanchored === 'wins-first') merged.unshift(...candidate)
+    else merged.push(...candidate)
+  }
   return merged
 }
 
 /** The effective value-preset registry this install would produce, for the
  *  preset ids it touches.
  *
- *  The candidate's own cores are read off the RESOLVED facet map rather than
- *  its raw contributions: the map is last-wins by preset id, exactly as the
- *  app-wide one is, so it holds the core that would actually end up registered.
- *  An extension contributing two cores under one id has a loser that never
- *  reaches `repo.valuePresetCores` and must not raise a conflict that cannot
- *  happen. The isolated runtime holds only this extension's tree, so no filter
- *  by source is needed there.
+ *  Every id is resolved from the MERGED contribution list (see
+ *  {@link mergeCandidateInto}) and folded by the facet, so the core recorded is
+ *  the one that would actually end up registered: an extension contributing two
+ *  cores under one id has a loser that never reaches `repo.valuePresetCores`
+ *  and must not raise a conflict that cannot happen.
  *
  *  The second half is the direction a scan of the candidate cannot see: ids
  *  this block contributes TODAY that the new source drops. Nothing is declared
@@ -411,6 +418,7 @@ const presetRegistryAfter = (
   context: AgentRuntimeContext,
   resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
   blockId: string,
+  workspaceId: string,
 ): PresetRegistryAfter => {
   // An unpinnable source changes nothing: the previous pin keeps running, so
   // there is no after to diff. Every OTHER failure still pins and still takes
@@ -420,7 +428,7 @@ const presetRegistryAfter = (
 
   const claimedToday = new Set<string>()
   const merged = mergeCandidateInto(
-    valuePresetCoresFacet.id, context, resolution, blockId,
+    valuePresetCoresFacet.id, context, resolution, blockId, 'wins-last',
     // An id this block claims TODAY that the fold no longer holds at all stops
     // resolving. An absent key cannot say that — it reads the same as an id
     // nobody ever claimed — so it is collected on the pass that already visits
@@ -436,12 +444,12 @@ const presetRegistryAfter = (
   // first-wins collision rule is the opposite of the `Map.set` last-wins a
   // local assembly gets for free.
   const explicitSeeds = combineFacetContributions(definitionSeedsFacet,
-    mergeCandidateInto(definitionSeedsFacet.id, context, resolution, blockId), {})
+    mergeCandidateInto(definitionSeedsFacet.id, context, resolution, blockId, 'wins-first'), {})
   const typeSeeds = combineFacetContributions(typeSeedsFacet,
-    mergeCandidateInto(typeSeedsFacet.id, context, resolution, blockId), {})
+    mergeCandidateInto(typeSeedsFacet.id, context, resolution, blockId, 'wins-first'), {})
   const harvested = harvestNestedPropertySeeds(
     buildTypeDefinitionRegistry({
-      workspaceId: resolveWorkspaceId(context.repo),
+      workspaceId,
       projectedDefinitions: context.runtime.read(projectedTypeDefinitionsFacet),
       seeds: typeSeeds,
     }),
@@ -580,7 +588,13 @@ const resolveInstallLiveness = async (
   // prunes every contribution behind one that is off by default and on by
   // override.
   if (existing === null) {
-    return {kind: 'dormant', overrides: await readExtensionOverrides(repo, workspaceId) ?? new Map()}
+    // Read only for `--verify`, whose isolated resolution needs the real
+    // toggles: `getPluginPrefsBlock` CREATES the prefs subtree when absent, and
+    // a plain install has no use for the answer.
+    return {
+      kind: 'dormant',
+      overrides: verify ? await readExtensionOverrides(repo, workspaceId) ?? new Map() : new Map(),
+    }
   }
 
   // `lookupApproval`, not `readApproval`: the latter reports a transient store
@@ -1399,7 +1413,7 @@ const installRuntimeExtension = async (
       // never saw it.
       assertActiveWorkspace(repo, 'install-extension', workspaceId)
       presetScan = await findPresetIdentityConflicts(
-        repo, workspaceId, presetRegistryAfter(context, resolution, targetId))
+        repo, workspaceId, presetRegistryAfter(context, resolution, targetId, workspaceId))
     }
   }
   const presetConflicts = presetScan.conflicts
