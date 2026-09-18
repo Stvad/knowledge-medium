@@ -1,1 +1,1 @@
-import{Pg as e}from"../../../chunks/app-BCl9laNA.js";export{e as Breadcrumbs};
+import{Pg as e}from"../../../chunks/app-D0_-nBvP.js";export{e as Breadcrumbs};

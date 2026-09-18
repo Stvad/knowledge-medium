@@ -1,1 +1,1 @@
-import{aC as e,iC as t,rC as n}from"../../chunks/app-BCl9laNA.js";export{n as DEFAULT_TYPE_COLORS,t as defaultTypeColor,e as pickLeastUsedTypeColor};
+import{aC as e,iC as t,rC as n}from"../../chunks/app-D0_-nBvP.js";export{n as DEFAULT_TYPE_COLORS,t as defaultTypeColor,e as pickLeastUsedTypeColor};
