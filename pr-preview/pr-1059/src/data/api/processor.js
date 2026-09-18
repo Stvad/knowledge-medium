@@ -1,1 +1,1 @@
-import{B2 as e}from"../../../chunks/app-A9v10rGp.js";export{e as definePostCommitProcessor};
+import{B2 as e}from"../../../chunks/app-Bocar0-G.js";export{e as definePostCommitProcessor};

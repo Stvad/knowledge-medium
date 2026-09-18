@@ -1,1 +1,1 @@
-import{Sm as e,bm as t,xm as n}from"../../../chunks/app-A9v10rGp.js";export{t as VideoNotesLayout,n as VideoNotesRenderer,e as videoNotesLayoutContribution};
+import{Sm as e,bm as t,xm as n}from"../../../chunks/app-Bocar0-G.js";export{t as VideoNotesLayout,n as VideoNotesRenderer,e as videoNotesLayoutContribution};

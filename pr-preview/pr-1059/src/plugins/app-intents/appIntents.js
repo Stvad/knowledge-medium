@@ -1,1 +1,1 @@
-import{Bc as e,Hc as t,Vc as n}from"../../../chunks/app-A9v10rGp.js";export{e as __resetAppIntentForTesting,n as consumeAppIntent,t as formatSharedContent};
+import{Bc as e,Hc as t,Vc as n}from"../../../chunks/app-Bocar0-G.js";export{e as __resetAppIntentForTesting,n as consumeAppIntent,t as formatSharedContent};

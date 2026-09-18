@@ -1,1 +1,1 @@
-import{DT as e,ET as t,OT as n,kT as r}from"../../chunks/app-A9v10rGp.js";export{t as extensionDisplayName,e as extensionName,n as userExtensionShellToggle,r as userExtensionToggle};
+import{DT as e,ET as t,OT as n,kT as r}from"../../chunks/app-Bocar0-G.js";export{t as extensionDisplayName,e as extensionName,n as userExtensionShellToggle,r as userExtensionToggle};
