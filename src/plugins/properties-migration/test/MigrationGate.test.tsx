@@ -18,12 +18,6 @@ import { vi } from 'vitest'
 // subject here is the modal's shadowing, not who is signed in.
 vi.mock('@/components/Login.tsx', () => ({useUser: () => ({id: 'user-1'})}))
 
-const shownToasts = vi.hoisted(() => [] as string[])
-vi.mock('@/utils/toast.js', async importOriginal => ({
-  ...await importOriginal<typeof import('@/utils/toast.js')>(),
-  showInfo: (message: string) => { shownToasts.push(message) },
-}))
-
 /** Stands in for the dialog's own render failing — its hooks reach the shortcut
  *  funnel, which suspends on a workspace read and throws when that read fails. */
 const dialogBreak = vi.hoisted(() => ({on: false, hang: false}))
@@ -69,7 +63,6 @@ import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill
 import { MigrationGate } from '../MigrationGate.tsx'
 import {
   beginLocalMigrationRun,
-  markLocalMigrationRunClaimed,
   __resetLocalMigrationRunForTests,
 } from '../localRunMessage.ts'
 
@@ -166,13 +159,6 @@ const renderGate = (): void => {
 
 const dialog = (): HTMLElement | null => screen.queryByRole('dialog')
 
-/** This tab is the one RUNNING the pass — a published line AND the claim taken.
- *  Both halves, because a claimant id is a browser profile: the claim alone
- *  cannot tell this tab from a sibling that is running it. */
-const ourRunHoldsTheClaim = (message: string): void => {
-  markLocalMigrationRunClaimed(beginLocalMigrationRun(WS, message), WS)
-}
-
 /** The gate with a dialog that cannot render.
  *
  *  The break stays on for the whole test — the claim row loads asynchronously,
@@ -215,13 +201,14 @@ afterEach(() => {
   __resetLocalMigrationRunForTests()
   dialogBreak.on = false
   dialogBreak.hang = false
-  shownToasts.length = 0
   vi.restoreAllMocks()
 })
 
 describe('before the claim exists', () => {
-  it('is already up for this device\'s own gesture', async () => {
-    // Why this matters: see MigrationGate.tsx's holderOf comment.
+  it('is already up for this device\'s own gesture, and undo with it', async () => {
+    // The claim is written after several preflight reads. With nothing on
+    // screen for that window the operator has just confirmed a one-way flip
+    // into silence — and the pause follows the dialog, so it starts here too.
     renderGate()
     await claimHasBeenRead()
 
@@ -229,11 +216,10 @@ describe('before the claim exists', () => {
     // workspace read, and a synchronous act does not await that.
     await act(async () => { beginLocalMigrationRun(WS, 'Migrating properties to blocks…') })
 
-    expect(await screen.findByRole('dialog'))
-      .toHaveTextContent(/Nothing has been written yet/)
-    // No claim yet, so nothing is owed a release and nothing is paused.
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Leave this tab open/)
+    // No claim yet, so there is nothing to release — the pause is on regardless.
     expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()
-    expect(repo.undoManagerFor(WS).historyDropInProgress).toBe(false)
+    expect(repo.undoManagerFor(WS).historyDropInProgress).toBe(true)
   })
 })
 
@@ -296,65 +282,27 @@ describe('while the migration holds this workspace', () => {
     expect(isShadowed()).toBe(true)
   })
 
-  it('tells a tab that LOST the claim, rather than that nothing has been written', async () => {
-    // Why this matters: see MigrationGate.tsx's holderOf comment.
+  it('keeps the writing tab\'s own line when a PEER replaces its claim', async () => {
+    // Reachable from a click this dialog offers a peer: our claim is released
+    // mid-run and the peer starts its own. Nothing stops our pass writing —
+    // the per-batch guard checks the workspace and the view gap, never the
+    // claim — so reading the row first would drop this tab's progress line and
+    // hand it a button to delete that peer's live claim.
     await seedClaimInBlocks({claimantId: getClientId()})
     renderGate()
     await screen.findByRole('dialog')
     await act(async () => {
-      const owner = beginLocalMigrationRun(WS, 'Converting block 120,000 of 650,000…')
-      markLocalMigrationRunClaimed(owner, WS)
+      beginLocalMigrationRun(WS, 'Converting block 120,000 of 650,000…')
     })
-    expect(dialog()).toHaveTextContent(/Leave this tab open/)
-
-    await releaseClaimBySync()
-
-    await waitFor(() => {
-      expect(dialog()).toHaveTextContent(/This tab no longer holds the migration/)
-    })
-    expect(dialog()).toHaveTextContent(/Converting block 120,000/)
-    expect(dialog()).not.toHaveTextContent(/Nothing has been written yet/)
-  })
-
-  it('still tells a writing tab it lost the claim when a PEER has replaced it', async () => {
-    // Worse than the claim merely going away, and reachable from a click this
-    // dialog offers: a peer releases our claim mid-run, then starts its own.
-    // Nothing stops our pass writing — the per-batch guard checks the workspace
-    // and the view gap, never the claim — so reading the row first would tell
-    // the tab that is WRITING that a peer is converting, drop its progress
-    // line, and hand it a button to delete that peer's live claim.
-    await seedClaimInBlocks({claimantId: getClientId()})
-    renderGate()
-    await screen.findByRole('dialog')
-    await act(async () => { ourRunHoldsTheClaim('Converting block 120,000 of 650,000…') })
 
     await deliverClaimBySync({claimantId: 'a-peer', claimedAt: 900})
 
     await waitFor(() => {
-      expect(dialog()).toHaveTextContent(/Another client has taken over the migration/)
+      expect(repo.block(CLAIM_ID).peek()?.properties)
+        .toMatchObject({[migrationClaimantProp.name]: 'a-peer'})
     })
     expect(dialog()).toHaveTextContent(/Converting block 120,000/)
-    expect(dialog()).not.toHaveTextContent(/Another device is converting/)
     expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()
-    // A claim IS live, so undo is paused again and the shared sentence that
-    // says so must render — `lost-claim`'s copy asserts the opposite.
-    expect(dialog()).toHaveTextContent(/undo is paused here until it finishes/)
-    expect(dialog()).not.toHaveTextContent(/undo is live again/)
-    expect(repo.undoManagerFor(WS).historyDropInProgress).toBe(true)
-  })
-
-  it('reads a SIBLING tab\'s claim as this browser\'s, not as this tab\'s run', async () => {
-    // Our profile holds the claim but our own gesture has not taken one — it
-    // has only published its first line, and will be declined. Telling this tab
-    // that closing it stops the run would be false; the run is in the other tab.
-    await seedClaimInBlocks({claimantId: getClientId()})
-    renderGate()
-    await screen.findByRole('dialog')
-
-    act(() => { beginLocalMigrationRun(WS, 'Migrating properties to blocks…') })
-
-    expect(dialog()).toHaveTextContent(/This browser profile holds the migration/)
-    expect(dialog()).not.toHaveTextContent(/Leave this tab open/)
   })
 
   it('offers no close button — dismissing is not how this one ends', async () => {
@@ -380,28 +328,10 @@ describe('while the migration holds this workspace', () => {
     renderGate()
     await screen.findByRole('dialog')
 
-    act(() => { ourRunHoldsTheClaim('Switching this workspace to property blocks…') })
+    act(() => { beginLocalMigrationRun(WS, 'Switching this workspace to property blocks…') })
 
     expect(dialog()).toHaveTextContent(/Switching this workspace to property blocks/)
-    expect(dialog()).not.toHaveTextContent(/This browser profile holds the migration/)
-  })
-
-  it('does not report our own progress line as a PEER\'s progress', async () => {
-    // Why this matters: see MigrationGate.tsx's holderOf comment.
-    renderGate()
-    await claimHasBeenRead()
-    await act(async () => {
-      beginLocalMigrationRun(WS, 'Switching this workspace to property blocks…')
-    })
-
-    // The real sequence: our gesture publishes its first line, then a PEER's
-    // claim is what lands. The line is ours; the run is not.
-    await deliverClaimBySync({claimantId: 'peer-device'})
-
-    await waitFor(() => {
-      expect(dialog()).toHaveTextContent(/Another device is converting this workspace/)
-    })
-    expect(dialog()).not.toHaveTextContent(/Switching this workspace to property blocks/)
+    expect(dialog()).not.toHaveTextContent(/A migration is converting this workspace/)
   })
 
   it('tells the running tab how to get out if it looks stuck', async () => {
@@ -410,20 +340,9 @@ describe('while the migration holds this workspace', () => {
     renderGate()
     await screen.findByRole('dialog')
 
-    act(() => { ourRunHoldsTheClaim('Switching this workspace to property blocks…') })
+    act(() => { beginLocalMigrationRun(WS, 'Switching this workspace to property blocks…') })
 
-    expect(dialog()).toHaveTextContent(/If this tab looks stuck, reload it/)
-  })
-
-  it('names THIS BROWSER rather than another device when the claim is our own profile', async () => {
-    // Why this matters: see MigrationGateDialog.tsx's ClaimHolder comment.
-    await seedClaimInBlocks({claimantId: getClientId()})
-
-    renderGate()
-
-    expect(await screen.findByRole('dialog'))
-      .toHaveTextContent(/This browser profile holds the migration/)
-    expect(dialog()).not.toHaveTextContent(/Another device/)
+    expect(dialog()).toHaveTextContent(/If it looks stuck, reload it/)
   })
 
   it('does not report a run on a DIFFERENT workspace as this one\'s progress', async () => {
@@ -438,7 +357,7 @@ describe('while the migration holds this workspace', () => {
       beginLocalMigrationRun(OTHER_WS, 'Converting the other one…')
     })
 
-    expect(dialog()).toHaveTextContent(/Another device is converting this workspace/)
+    expect(dialog()).toHaveTextContent(/A migration is converting this workspace/)
     expect(dialog()).not.toHaveTextContent(/Converting the other one/)
   })
 })
@@ -531,86 +450,6 @@ describe('when the dialog itself cannot render', () => {
   })
 })
 
-describe('after a run that finished', () => {
-  it('leaves the peer something telling it to reload, since the dialog goes', async () => {
-    // Why this matters: see MigrationGate.tsx's showReloadNotice comment.
-    await recordAnUndoableEdit()
-    await seedClaimInBlocks()
-    renderGate()
-    await screen.findByRole('dialog')
-
-    await deliverClaimBySync({completed: true})
-
-    await waitFor(() => { expect(dialog()).toBeNull() })
-    expect(shownToasts.join(' ')).toMatch(/Reload this tab before using undo/)
-  })
-
-  it('still says it when the completion lands after the gate stopped watching', async () => {
-    // `markComplete` can restore a claim its own sibling tombstoned, so the
-    // release and the completion arrive in that order — and the drop's teardown
-    // has already run by then. Driven off the teardown, the device whose undo
-    // entries the run just invalidated was told nothing at all.
-    await recordAnUndoableEdit()
-    await seedClaimInBlocks()
-    renderGate()
-    await screen.findByRole('dialog')
-
-    await releaseClaimBySync()
-    await waitFor(() => { expect(dialog()).toBeNull() })
-    expect(shownToasts).toEqual([])
-
-    // Strictly newer than the tombstone, which is what `markComplete` writing
-    // over a released claim actually produces.
-    await deliverClaimBySync({completed: true, at: 20})
-
-    await waitFor(() => {
-      expect(shownToasts.join(' ')).toMatch(/Reload this tab before using undo/)
-    })
-  })
-
-  it('says nothing on a mount that never saw the claim live', async () => {
-    // A completion is not an event — `markComplete` stamps the row and it is
-    // never deleted, because it IS the record that the migration ran. Keyed on
-    // that alone, the notice fires on every mount for the rest of the
-    // workspace's life: over ordinary post-migration edits, which are safe, and
-    // which is how the one notice that matters gets trained away.
-    await seedClaimInBlocks({completed: true})
-    await recordAnUndoableEdit()
-
-    renderGate()
-    await claimHasBeenRead()
-
-    expect(dialog()).toBeNull()
-    expect(shownToasts).toEqual([])
-  })
-
-  it('says nothing to a device with no entries left to replay', async () => {
-    // Why this matters: see MigrationGate.tsx's history-drop teardown comment.
-    await seedClaimInBlocks()
-    renderGate()
-    await screen.findByRole('dialog')
-    expect(repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo).toBe(0)
-
-    await deliverClaimBySync({completed: true})
-
-    await waitFor(() => { expect(dialog()).toBeNull() })
-    expect(shownToasts).toEqual([])
-  })
-
-  it('says nothing when the claim was merely handed back', async () => {
-    await recordAnUndoableEdit()
-    // Why this matters: see MigrationGate.tsx's history-drop teardown comment.
-    await seedClaimInBlocks()
-    renderGate()
-    await screen.findByRole('dialog')
-
-    await releaseClaimBySync()
-
-    await waitFor(() => { expect(dialog()).toBeNull() })
-    expect(shownToasts).toEqual([])
-  })
-})
-
 describe('the way out of a claim nobody will release', () => {
   const claimIsLive = async (): Promise<boolean> =>
     (await sharedDb.db.getOptional<{deleted: number}>(
@@ -628,7 +467,7 @@ describe('the way out of a claim nobody will release', () => {
     renderGate()
     await screen.findByRole('dialog')
 
-    act(() => { ourRunHoldsTheClaim('Migrating properties to blocks…') })
+    act(() => { beginLocalMigrationRun(WS, 'Migrating properties to blocks…') })
 
     expect(dialog()).toHaveTextContent(/Leave this tab open/)
     expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()

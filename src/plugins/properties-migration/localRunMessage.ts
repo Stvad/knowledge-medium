@@ -24,12 +24,6 @@ export interface LocalRunSnapshot {
   readonly workspaceId: string
   readonly message: string
   readonly owner: RunOwner
-  /** Has this run taken the claim? The dialog cannot read that off the claim
-   *  row, because "no claim" is true at BOTH ends of a run — before `tryClaim`
-   *  writes it, and after it is released or completed. Without this, the tab
-   *  that is writing reads as one that has not started, and is told nothing has
-   *  been written. */
-  readonly claimed: boolean
 }
 
 const store = createWorkspaceSnapshotStore<LocalRunSnapshot>('properties-migration-local-run')
@@ -53,7 +47,7 @@ export const beginLocalMigrationRun = (
 ): RunOwner => {
   const owner: RunOwner = Symbol('properties-migration-run')
   if (store.getFor(workspaceId) === null) {
-    store.publish({workspaceId, message, owner, claimed: false})
+    store.publish({workspaceId, message, owner})
   }
   return owner
 }
@@ -64,15 +58,6 @@ export const updateLocalMigrationRun = (
   const live = store.getFor(workspaceId)
   if (live?.owner !== owner) return
   store.publish({...live, message})
-}
-
-/** This run now holds the claim, and keeps saying so until it ends. */
-export const markLocalMigrationRunClaimed = (
-  owner: RunOwner, workspaceId: string,
-): void => {
-  const live = store.getFor(workspaceId)
-  if (live?.owner !== owner) return
-  store.publish({...live, claimed: true})
 }
 
 export const endLocalMigrationRun = (owner: RunOwner, workspaceId: string): void => {

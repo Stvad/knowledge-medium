@@ -11,7 +11,7 @@ import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCell
 
 const openDialog = vi.fn(async () => true)
 const progressHandle = {
-  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(), claimed: vi.fn(),
+  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(),
   addNote: vi.fn(),
 }
 const showInfo = vi.fn()

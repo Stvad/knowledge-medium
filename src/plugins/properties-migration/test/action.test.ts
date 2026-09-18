@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const openDialog = vi.fn()
 const progressHandle = {
-  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(), claimed: vi.fn(),
+  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(),
   addNote: vi.fn(),
 }
 

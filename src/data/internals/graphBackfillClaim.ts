@@ -178,22 +178,6 @@ export const claimHoldingGraph = (
   return claimHoldsGraph(claim) ? claim : null
 }
 
-/** The claim this row carries when the run it records has FINISHED.
- *
- *  The complement of {@link claimHoldingGraph}, and needed because that one
- *  filters a completed claim out by design: liveness alone cannot tell a pass
- *  that ran to the end from a claim that was handed back, and those two endings
- *  owe the user different things. A completion is the only durable record that
- *  rows were rewritten. */
-export const completedClaimFor = (
-  row: Pick<BlockData, 'deleted' | 'workspaceId' | 'properties'> | null | undefined,
-  workspaceId: string,
-): GraphBackfillClaim | null => {
-  if (!row || row.deleted || row.workspaceId !== workspaceId) return null
-  const claim = claimFromProperties(row.properties)
-  return claim !== null && claim.completedAt !== undefined ? claim : null
-}
-
 /** Is a run of `backfillId` in flight for this workspace, as the caller's own
  *  view of `blocks` has it?
  *
