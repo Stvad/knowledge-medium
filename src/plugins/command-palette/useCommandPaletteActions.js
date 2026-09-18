@@ -1,1 +1,1 @@
-import{Ax as e}from"../../../chunks/app-D9wvEVWE.js";export{e as useCommandPaletteActions};
+import{zx as e}from"../../../chunks/app-CuDBYnHk.js";export{e as useCommandPaletteActions};

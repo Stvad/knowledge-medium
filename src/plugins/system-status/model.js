@@ -1,1 +1,1 @@
-import{pa as e}from"../../../chunks/app-D9wvEVWE.js";export{e as getSyncIndicatorView};
+import{Sa as e}from"../../../chunks/app-CuDBYnHk.js";export{e as getSyncIndicatorView};
