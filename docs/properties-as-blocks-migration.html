@@ -343,8 +343,9 @@
   &ldquo;Default-value vs. unset&rdquo; entries, each of which stated a
   SCALAR-only rule as the whole rule. A sixth, &ldquo;Codec / preset changes are
   migrations, not edits&rdquo;, carries an as-shipped correction: the
-  &ldquo;N values can't convert&rdquo; outcome is a REFUSAL (#1024).</strong>
-  <strong>Last verified against code: 2026-09-17 for the codec-change outcome;
+  &ldquo;N values can't convert&rdquo; outcome is a REFUSAL (#1024), and its
+  conversion carries the VALUE before re-reading the TEXT (#1055).</strong>
+  <strong>Last verified against code: 2026-09-18 for the codec-change outcome;
   2026-09-16 for the multi-value shape; 2026-08-21 for the rest, branch
   <code>claude/e2ee-synthesis-namespace</code>.</strong>
   That verification covers the entries marked <strong>landed</strong> below
@@ -2882,7 +2883,16 @@ supabase skill if it's kept.
     and a divergent row the projection never read does not.
     <code>convertValueChildContent</code> and
     <code>valuesLostBy</code> own the two halves; read them rather than this
-    paragraph.</p></dd>
+    paragraph.</p>
+    <p><strong>Route order (2026-09-18, #1055):</strong> the conversion carries
+    the VALUE the old codec holds and re-reads the TEXT only where it cannot —
+    the reverse of how it first shipped. Two presets that hold the same values
+    and disagree only about spelling BOTH read the text, so reading the text
+    first let the spelling win over the value: the generic list preset stores
+    the string x as the JSON text &ldquo;x&rdquo;, which a re-type to
+    string-list then read as the three-character string. The value route is
+    accepted only when the value survives a round trip under the new codec,
+    which is what leaves every coercion to the text route.</p></dd>
 
   <dt><strong>Field-row placement (decided: no special logic).</strong></dt>
   <dd>Owner decision (2026-07-19): there is <em>no placement policy for property
