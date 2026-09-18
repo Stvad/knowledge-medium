@@ -1,1 +1,1 @@
-import{vu as e}from"../../../chunks/app-CACOcgkQ.js";export{e as groupedBacklinksPlugin};
+import{bu as e}from"../../../chunks/app-BCl9laNA.js";export{e as groupedBacklinksPlugin};

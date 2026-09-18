@@ -1,1 +1,1 @@
-import{Nc as e}from"../../../chunks/app-CACOcgkQ.js";export{e as agentDispatchCompanionPlugin};
+import{Fc as e}from"../../../chunks/app-BCl9laNA.js";export{e as agentDispatchCompanionPlugin};

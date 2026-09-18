@@ -1,1 +1,1 @@
-import{M$ as e,j$ as t}from"../../chunks/app-CACOcgkQ.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};
+import{N$ as e,P$ as t}from"../../chunks/app-BCl9laNA.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
