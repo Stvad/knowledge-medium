@@ -1,1 +1,0 @@
-import{Mw as e,jw as t}from"../chunks/app-7G8J09_j.js";export{t as appUpdate,e as useAppUpdateAvailable};
