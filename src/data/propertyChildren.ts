@@ -515,18 +515,19 @@ export type ValueChildConversion =
   | {readonly outcome: 'converted'; readonly content: string}
   | {readonly outcome: 'unreadable'}
 
-/** ROUTE 2: the VALUE `from` holds, re-spelled by `to`.
+/** THE VALUE ROUTE: the value `from` holds, re-spelled by `to`.
  *
  *  Two presets can hold the same values and disagree only about how a member is
  *  SPELLED — a `string-list` member is stored verbatim (`x`) where a generic
- *  `list` member is stored as JSON (`"x"`) — which reading the TEXT under `to`
- *  cannot see: it reads `x` as JSON, fails, and the member is dropped from the
- *  cell at the next projection (#1024). The codec that WROTE the text is the
- *  one that can say what it holds.
+ *  `list` member is stored as JSON (`"x"`). Only the codec that WROTE the text
+ *  can say which of the two spellings it is.
  *
  *  Accepted only when the value survives the round trip, asked by running it: a
  *  `to` that re-spells the value into text it reads back as something else has
- *  moved the value rather than carrying it. */
+ *  moved the value rather than carrying it. That check is also what lets this
+ *  route go first ({@link convertValueChildContent}): a re-type that changes
+ *  the value's TYPE fails it, so coercions fall through to the text route by
+ *  construction instead of by an ordering rule. */
 const respellUnderTargetCodec = (
   from: AnyPropertySchema,
   to: AnyPropertySchema,
@@ -562,21 +563,9 @@ const respellUnderTargetCodec = (
   return {outcome: 'converted', content: respelled}
 }
 
-/**
- * Re-read ONE value child's text for a property whose codec changed, at
- * {@link valueChildCodec} grain.
- *
- * THE TEXT FIRST, read under `to`: a value child's content is editable, so a
- * re-type means "what does this text mean to the new type", which is what turns
- * ` 1 ` into the number 1. {@link respellUnderTargetCodec} is the fallback, and
- * why the order is this way round.
- *
- * `from` is null when the definition's previous preset does not build: nothing
- * then records what encoding the text is in, so there is no value to re-spell
- * and only the text route can answer.
- */
-export const convertValueChildContent = (
-  from: AnyPropertySchema | null,
+/** THE TEXT ROUTE: `content` re-read under `to`, as if it had just been typed
+ *  into the row. */
+const readTextUnderTargetCodec = (
   to: AnyPropertySchema,
   content: string,
 ): ValueChildConversion => {
@@ -584,9 +573,7 @@ export const convertValueChildContent = (
   try {
     encoded = valueChildContentToEncoded(to, content)
   } catch {
-    return from === null
-      ? {outcome: 'unreadable'}
-      : respellUnderTargetCodec(from, to, content)
+    return {outcome: 'unreadable'}
   }
   try {
     return {outcome: 'converted', content: encodedToValueChildContent(to, encoded)}
@@ -598,6 +585,37 @@ export const convertValueChildContent = (
     // the caller's whole transaction over a row that already projects correctly.
     return {outcome: 'converted', content}
   }
+}
+
+/**
+ * Re-read ONE value child's text for a property whose codec changed, at
+ * {@link valueChildCodec} grain.
+ *
+ * THE VALUE FIRST: what the property HELD is what a re-type has to carry, and
+ * the text alone cannot say what that is — the JSON `"x"` and the
+ * three-character string `"x"` are the same text under two codecs. Taking the
+ * text's own reading instead keeps the spelling and swaps the value silently,
+ * and swaps the CELL with it: a `refList` cell of bare ids becomes
+ * span-shaped strings (#1055).
+ *
+ * {@link readTextUnderTargetCodec} is the fallback, and takes every conversion
+ * that CHANGES the value — ` 1 ` to the number 1, and the rest — because those
+ * fail the value route's round trip rather than needing a rule of their own.
+ *
+ * `from` is null when the definition's previous preset does not build: nothing
+ * then records what encoding the text is in, so there is no value to re-spell
+ * and only the text route can answer.
+ */
+export const convertValueChildContent = (
+  from: AnyPropertySchema | null,
+  to: AnyPropertySchema,
+  content: string,
+): ValueChildConversion => {
+  if (from !== null) {
+    const respelled = respellUnderTargetCodec(from, to, content)
+    if (respelled.outcome === 'converted') return respelled
+  }
+  return readTextUnderTargetCodec(to, content)
 }
 
 /** How many VALUES a projected cell holds — the grain every "did this change

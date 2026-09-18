@@ -35,8 +35,9 @@
  *    definition row's preset id and preset config, NOT the built codec's type
  *    string, which cannot tell `optional-string` from `string`
  *    (`codecInputsChanged`). The conversion is `convertValueChildContent`:
- *    what the text means to the NEW codec, then what the OLD one holds,
- *    re-spelled. A value NEITHER route carries is one this edit would take
+ *    what the OLD codec holds, re-spelled by the new one, and failing that
+ *    what the text means to the NEW codec. A value NEITHER route carries is
+ *    one this edit would take
  *    away, and the transaction is REFUSED — §9's "N values can't convert" is
  *    user-visible here as the reason the change did not happen, which is the
  *    only form of it that keeps the value. A value already unreadable before
@@ -629,7 +630,8 @@ const applyToParent = async (
         // ONE member, and reading it against the whole-array grammar would
         // make every member unreadable.
         //
-        // Reading the TEXT costs one ambiguity: a bare `null` is a literal to
+        // The TEXT route, which takes over where the value route cannot
+        // carry the value, costs one ambiguity: a bare `null` is a literal to
         // a codec that rejects null and the unset sentinel to one that accepts
         // it (#1030).
         const conversion = convertValueChildContent(
@@ -646,12 +648,13 @@ const applyToParent = async (
         // Re-stamp the reference columns from the REWRITTEN content, the same
         // duty every same-tx processor that rewrites `content` after
         // `core.deriveReferenceTarget` already ran carries (merge retarget,
-        // deleted-block inlining). Retyping a ref property to a text one turns
-        // `((id))` into escaped plain text, and this processor's writes are
+        // deleted-block inlining). This processor's writes are
         // `settledWrites`, so the derive re-run will never revisit the row —
         // the column would keep naming a target the content no longer
-        // references. Always an update of an existing row, so an unresolvable
-        // alias clears the column rather than preserving a prior id.
+        // references. Retyping a ref property to a text one is the case:
+        // `((id))` becomes the bare id. Always an update of an existing row,
+        // so an unresolvable alias clears the column rather than preserving a
+        // prior id.
         const derived = await deriveReferenceColumns(
           canonical, parent.workspaceId, referenceLookups,
         )
