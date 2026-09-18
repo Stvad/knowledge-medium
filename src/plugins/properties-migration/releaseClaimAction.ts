@@ -16,6 +16,7 @@ import { Unlock } from 'lucide-react'
 import type { Repo } from '@/data/repo'
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
 import {
+  claimHoldsGraph,
   graphBackfillClaimBlockId,
   readGraphBackfillClaim,
   releaseStrandedGraphBackfillClaim,
@@ -51,9 +52,9 @@ export const releaseMigrationClaimAction = ({repo}: {repo: Repo}): ActionConfig 
       graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID),
       workspaceId,
     )
-    // A COMPLETED claim is the graph's record that the migration ran, not a
-    // lock — and deleting it would leave the graph reading as never-migrated.
-    if (claim === null || claim.completedAt !== undefined) {
+    // The same predicate the lock itself asks, so this can never say "nothing
+    // is held" about a claim that is refusing writes.
+    if (!claimHoldsGraph(claim)) {
       showInfo(NOTHING_HELD, TOAST)
       return
     }

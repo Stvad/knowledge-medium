@@ -9,7 +9,7 @@
  * sits — rather than about any gesture it happens to stop.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { workspaceBackfillsFacet, type WorkspaceBackfill } from '@/data/facets'
 import type { Repo } from '@/data/repo'
@@ -23,22 +23,18 @@ import {
   GRAPH_MIGRATION_LOCKED,
 } from '@/data/internals/graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
-import { MIGRATION_CLAIM_TYPE } from '@/data/blockTypes'
 import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
+import { ReadOnlyError } from '@/data/api/errors'
+import { MIGRATION_CLAIM_TYPE, PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import {
   addBlockTypeToProperties,
   migrationClaimantProp,
   migrationClaimedAtProp,
   migrationCompletedAtProp,
-} from '@/data/properties'
-import { ReadOnlyError } from '@/data/api/errors'
-import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import {
   presetIdProp,
   propertyChangeScopeProp,
   propertyNameProp,
 } from '@/data/properties'
-import { vi } from 'vitest'
 
 const WS = 'ws-migration-lock'
 const OTHER_WS = 'ws-migration-lock-other'
