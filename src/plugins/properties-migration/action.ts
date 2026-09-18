@@ -412,8 +412,8 @@ const migrateUnderClaim = async (
   }
   let materialized = 0
   // Subscribed for the whole run, not just started with it: the pass reports
-  // per committed batch, and a run of several minutes with a silent toast is
-  // indistinguishable from a hung one.
+  // per committed batch, and a run of several minutes with a status line that
+  // never moves is indistinguishable from a hung one.
   let unmigrated = 0
   let valuesMaterializedTotal = 0
   const unsubscribe = onPropertyCellBackfillProgress(progress => {
@@ -560,10 +560,9 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // ABOVE the synthesis block, not below it: below, the "Nothing was changed"
       // this prints is false the moment synthesis commits.
       //
-      // Caught, because these are database reads: the banner has no duration and
-      // nothing else is watching this await, so a transient failure here would
-      // leave "Migrating properties to blocks…" spinning forever over a pass that
-      // never started.
+      // Caught, because these are database reads and nothing else is watching
+      // this await: a transient failure here would leave the gesture with no
+      // outcome to report, over a pass that never started.
       let unfit: Unfitness | null
       try {
         unfit = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
@@ -625,8 +624,8 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // WHOSE claim decides what to advise, so the claimant is read and not
       // just its liveness: telling a device that a PEER holds the workspace to
       // "run this again here" sends it into a refusal it can never win, and
-      // pointing it at the release command points it at deleting a claim
-      // another device is still writing under.
+      // pointing it at the release points it at deleting a claim another
+      // device is still writing under.
       //
       // The claimant is per browser PROFILE, so "this device" can also be a
       // sibling tab, or this gesture's own earlier invocation that the

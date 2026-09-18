@@ -26,11 +26,13 @@ import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { GraphBackfillClaim } from '@/data/internals/graphBackfillClaim'
+import { useModalShadowing } from '@/shortcuts/useActionContext.js'
 
 /** Whole hours, then whole minutes: the operator is deciding whether a pass
  *  could still be running, and an exact duration says nothing they can use. */
@@ -42,7 +44,20 @@ const heldFor = (claimedAt: number, now: number): string => {
 
 export type ReleaseOutcome = 'released' | 'not-held' | 'changed'
 
+/** Who is running the pass, relative to the tab reading this — see `holderOf`.
+ *  `this-tab` is the one running it; `this-browser` is a sibling tab under the
+ *  same profile, which shares the claimant id and so cannot be told apart from
+ *  this tab by the claim alone. */
+export type ClaimHolder = 'this-tab' | 'this-browser' | 'another-device'
+
+const STATUS: Record<ClaimHolder, string> = {
+  'this-tab': '',
+  'this-browser': 'This browser is running the migration, in another tab.',
+  'another-device': 'Another device is converting this workspace.',
+}
+
 export interface MigrationGateDialogProps {
+  holder: ClaimHolder
   claim: GraphBackfillClaim
   /** What the pass is doing, when it is THIS device running it. `null` on every
    *  other device, which knows the workspace is being converted and not how far
@@ -54,7 +69,7 @@ export interface MigrationGateDialogProps {
 }
 
 export const MigrationGateDialog = ({
-  claim, localMessage, release,
+  holder, claim, localMessage, release,
 }: MigrationGateDialogProps) => {
   // The claim the user is being asked about, SNAPSHOT when they asked — with
   // the clock reading that produced its age. The gap between reading "held for
@@ -65,6 +80,14 @@ export const MigrationGateDialog = ({
     useState<{claim: GraphBackfillClaim; askedAt: number} | null>(null)
   const [releasing, setReleasing] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+
+  // Unconditional, because this component only exists while the claim is held.
+  // Radix already makes the app pointer-inert and traps focus; what it does NOT
+  // do is stop the surface underneath claiming KEYS. Without this, bare Enter
+  // still matches the editor's split binding and writes a block — through the
+  // modal that exists to stop exactly that — and its `preventDefault` also eats
+  // the Enter the button below was waiting for.
+  useModalShadowing(true)
 
   const onRelease = (shown: GraphBackfillClaim) => {
     setReleasing(true)
@@ -104,19 +127,18 @@ export const MigrationGateDialog = ({
               aria-hidden
               className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
             />
-            <span aria-live="polite">
-              {localMessage ?? 'Another device is converting this workspace.'}
-            </span>
+            <span aria-live="polite">{localMessage ?? STATUS[holder]}</span>
           </div>
-          <p className="text-muted-foreground">
+          <DialogDescription>
             Every block&apos;s properties are being rewritten against a plan fixed when
             the run started, so an edit made now may not be converted. This workspace is
-            waiting on every device until it finishes.
-            {localMessage !== null && (
+            waiting on every device until it finishes, and undo is paused here until it
+            does.
+            {holder === 'this-tab' && (
               <> <strong>Leave this tab open.</strong> Closing it stops the run without
               handing the workspace back.</>
             )}
-          </p>
+          </DialogDescription>
           {problem !== null && <p className="text-destructive">{problem}</p>}
           {confirming !== null && (
             <p className="text-destructive">
@@ -124,9 +146,19 @@ export const MigrationGateDialog = ({
               the run has not recorded finishing. Release it only if no device is still
               running the migration: releasing a live claim frees a second device to start
               the same pass over the same blocks.
+              {holder === 'this-browser' && (
+                <> The claim names <em>this browser</em>, so if another tab of it is
+                still running the migration, let that tab finish instead.</>
+              )}
             </p>
           )}
         </div>
+        {/* Withheld from the tab that IS running the pass: it cannot have been
+            stranded by a run it is still executing, and releasing there drops
+            the modal and the undo pause while its own writes continue. Reading
+            `holder` rather than re-deriving it is what keeps this and the
+            status line above from ever disagreeing. */}
+        {holder !== 'this-tab' && (
         <DialogFooter>
           {confirming === null
             ? (
@@ -154,6 +186,7 @@ export const MigrationGateDialog = ({
               </>
             )}
         </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   )

@@ -7,11 +7,24 @@
  * and raising the dialog with nothing armed in advance, and a test that mocks
  * the subscription cannot tell whether that happens.
  */
+import { Suspense, type ReactNode } from 'react'
+import { vi } from 'vitest'
+
+// The shortcut funnel injects a UI-state block into every activation, so even a
+// dependency-free one reaches `useUser`. Mocked rather than provided: the
+// subject here is the modal's shadowing, not who is signed in.
+vi.mock('@/components/Login.tsx', () => ({useUser: () => ({id: 'user-1'})}))
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { RepoContext } from '@/context/repo.js'
+import { ActiveContextsProvider, useActiveContextsState } from '@/shortcuts/ActiveContexts'
+import { ActionContextTypes } from '@/shortcuts/types'
+import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
+import { actionContextsFacet } from '@/extensions/core'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -24,9 +37,13 @@ import {
   migrationCompletedAtProp,
 } from '@/data/properties'
 import { graphBackfillClaimBlockId } from '@/data/internals/graphBackfillClaim'
+import { getClientId } from '@/utils/clientId'
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
 import { MigrationGate } from '../MigrationGate.tsx'
-import { setLocalMigrationRun } from '../localRunMessage.ts'
+import {
+  beginLocalMigrationRun,
+  __resetLocalMigrationRunForTests,
+} from '../localRunMessage.ts'
 
 const WS = 'ws-migration-gate'
 const OTHER_WS = 'ws-migration-gate-other'
@@ -74,8 +91,48 @@ const deliverClaimBySync = async (
   await act(async () => { await repo.startSyncObserver({throttleMs: 0}).flush() })
 }
 
+/** The claim being RELEASED, as that reaches a peer: a tombstone by sync. */
+const releaseClaimBySync = async (): Promise<void> => {
+  await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+    id: CLAIM_ID, workspaceId: WS, parentId: null, orderKey: 'k-claim',
+    content: PROPERTY_CELL_BACKFILL_ID, properties: claimProperties(), references: [],
+    createdAt: 1, updatedAt: 9, userUpdatedAt: 9, createdBy: 'user-1', updatedBy: 'user-1',
+    deleted: true,
+  }))
+  await sharedDb.db.execute(
+    'INSERT INTO blocks_synced_changes (id, op) VALUES (?, \'upsert\')', [CLAIM_ID],
+  )
+  await act(async () => { await repo.startSyncObserver({throttleMs: 0}).flush() })
+}
+
+/** Reads whether the surface underneath is being shadowed — the thing that
+ *  stops a bare Enter reaching the editor and splitting a block through the
+ *  modal. Only `ActionContextTypes.DIALOG` does that (`resolve.ts`). */
+const Shadowing = (): ReactNode => {
+  const active = useActiveContextsState()
+  return <div data-testid="shadowing">{String(active.has(ActionContextTypes.DIALOG))}</div>
+}
+const isShadowed = (): boolean => screen.getByTestId('shadowing').textContent === 'true'
+
+/** The providers the gate sits inside in production: it is an app mount, so the
+ *  shortcut runtime is always above it. Rendering it bare would let the modal
+ *  lose its keyboard shadowing without a test noticing. */
 const renderGate = (): void => {
-  render(<RepoContext.Provider value={repo}><MigrationGate /></RepoContext.Provider>)
+  const runtime = resolveFacetRuntimeSync(
+    defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
+  )
+  render(
+    <RepoContext.Provider value={repo}>
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+          <Suspense fallback={null}>
+            <MigrationGate />
+            <Shadowing />
+          </Suspense>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>
+    </RepoContext.Provider>,
+  )
 }
 
 const dialog = (): HTMLElement | null => screen.queryByRole('dialog')
@@ -91,13 +148,13 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  setLocalMigrationRun(null)
+  __resetLocalMigrationRunForTests()
   repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
   repo.setActiveWorkspaceId(WS)
 })
 afterEach(() => {
   cleanup()
-  setLocalMigrationRun(null)
+  __resetLocalMigrationRunForTests()
 })
 
 describe('while the migration holds this workspace', () => {
@@ -153,6 +210,29 @@ describe('while the migration holds this workspace', () => {
     expect(dialog()).toBeNull()
   })
 
+  it('shadows the surface underneath, so a bare key cannot write through it', async () => {
+    // Radix makes the app pointer-inert and traps focus; it does NOT stop the
+    // surface underneath claiming KEYS. Without the modal context, Enter still
+    // matches the editor's split binding — a structural write into a graph
+    // being converted, through the modal that exists to stop exactly that —
+    // and its preventDefault also eats the Enter the dialog's button wanted.
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    expect(isShadowed()).toBe(true)
+  })
+
+  it('stops shadowing once the workspace is handed back', async () => {
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    await deliverClaimBySync({completed: true})
+
+    await waitFor(() => { expect(isShadowed()).toBe(false) })
+  })
+
   it('cannot be dismissed', async () => {
     await seedClaimInBlocks()
     renderGate()
@@ -170,11 +250,25 @@ describe('while the migration holds this workspace', () => {
       .toHaveTextContent(/Another device is converting this workspace/)
 
     act(() => {
-      setLocalMigrationRun({workspaceId: WS, message: 'Switching this workspace to property blocks…'})
+      beginLocalMigrationRun(WS, 'Switching this workspace to property blocks…')
     })
 
     expect(dialog()).toHaveTextContent(/Switching this workspace to property blocks/)
     expect(dialog()).not.toHaveTextContent(/Another device is converting/)
+  })
+
+  it('names THIS BROWSER rather than another device when the claim is our own profile', async () => {
+    // `claimantId` is per browser PROFILE, so a sibling tab's live run carries
+    // our id. Telling the operator's second tab that another DEVICE holds the
+    // workspace sends them to release a claim their own first tab is writing
+    // under.
+    await seedClaimInBlocks({claimantId: getClientId()})
+
+    renderGate()
+
+    expect(await screen.findByRole('dialog'))
+      .toHaveTextContent(/This browser is running the migration, in another tab/)
+    expect(dialog()).not.toHaveTextContent(/Another device/)
   })
 
   it('does not report a run on a DIFFERENT workspace as this one\'s progress', async () => {
@@ -186,7 +280,7 @@ describe('while the migration holds this workspace', () => {
     await screen.findByRole('dialog')
 
     act(() => {
-      setLocalMigrationRun({workspaceId: OTHER_WS, message: 'Converting the other one…'})
+      beginLocalMigrationRun(OTHER_WS, 'Converting the other one…')
     })
 
     expect(dialog()).toHaveTextContent(/Another device is converting this workspace/)
@@ -222,7 +316,23 @@ describe('undo, which the dialog itself cannot cover', () => {
     )).toBeNull()
   })
 
-  it('is refused while the dialog is up, and the history is gone when it clears', async () => {
+  it('survives a claim that was taken and handed back without writing anything', async () => {
+    // A run refused after taking the claim — the flip declined for a non-owner,
+    // synthesis throwing, the workspace switched under it — writes NOTHING and
+    // releases. Charging every device its whole history for that is a cost with
+    // no cause, and the gesture invites a retry, so it would be charged again.
+    await recordAnUndoableEdit()
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    await releaseClaimBySync()
+
+    await waitFor(() => { expect(dialog()).toBeNull() })
+    expect(repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo).toBe(1)
+  })
+
+  it('is refused for exactly as long as the claim is held, and no longer', async () => {
     await recordAnUndoableEdit()
     expect(repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo).toBe(1)
     await seedClaimInBlocks()
@@ -237,9 +347,10 @@ describe('undo, which the dialog itself cannot cover', () => {
     await deliverClaimBySync({completed: true})
     await waitFor(() => { expect(dialog()).toBeNull() })
 
-    // Emptied, not handed back: those entries describe rows the migration has
-    // rewritten. Until now only the device that RAN the pass dropped its own.
-    expect(repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo).toBe(0)
+    // Handed back, not emptied. Emptying is the writers' call — the gesture's
+    // own drop and the runner's per batch — because only they know a write
+    // happened. This device may be a peer that received nothing at all.
+    expect(await repo.undo()).toBe(true)
   })
 })
 
@@ -253,6 +364,21 @@ describe('the way out of a claim nobody will release', () => {
     await screen.findByRole('dialog')
     await userEvent.click(screen.getByRole('button', {name: /nothing is running/i}))
   }
+
+  it('is not offered to the tab that is RUNNING the pass', async () => {
+    // "Leave this tab open" and "Nothing is running?" side by side is an
+    // invitation to release the claim this tab is writing under — which drops
+    // the modal and the undo pause on every device while the writes continue,
+    // and frees a peer to start the same uploading pass.
+    await seedClaimInBlocks({claimantId: getClientId()})
+    renderGate()
+    await screen.findByRole('dialog')
+
+    act(() => { beginLocalMigrationRun(WS, 'Migrating properties to blocks…') })
+
+    expect(dialog()).toHaveTextContent(/Leave this tab open/)
+    expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()
+  })
 
   it('does not release until the user confirms, and says what they are agreeing to', async () => {
     await seedClaimInBlocks()

@@ -9,7 +9,7 @@
  * again. Being a real block is the point rather than an accident: a device
  * that dies mid-pass leaves a claim nobody will release, and the recovery is to
  * look at it and clear it — through {@link releaseStrandedGraphBackfillClaim},
- * since the migration lock refuses a hand-delete along with every other write.
+ * which refuses the two rows a hand-delete cannot tell apart.
  *
  * This RECORDS a run; it does not arbitrate one. Exactly-once comes from the
  * pass being `trigger: 'operator'` — a human runs it, on one device,
@@ -266,15 +266,15 @@ const refuseForeignOccupant = (
  *
  * The operator recovery for a claimant that died mid-pass. `releaseClaim`
  * cannot serve: it decides ownership by claimant id, which is per browser
- * PROFILE, so it does nothing for the case that actually strands a graph — the
- * device that took the claim is gone. Deleting the block by hand used to be the
- * answer and no longer is: the migration lock refuses that delete, so without
- * this the graph has no way out of its own lock from inside the app.
+ * PROFILE, so it does nothing for the case that actually strands a workspace —
+ * the device that took the claim is gone. Deleting the block by hand can, and
+ * that is the problem: it deletes whatever is at the id, and two of the rows
+ * that can be there must survive.
  *
- * Exempt from the lock it clears, and unavoidably so. That is why it releases
- * ONLY a claim that is actually holding the graph: a completed claim is the
- * record that the migration ran and deleting it would read as never-migrated,
- * and a row that does not decode as a claim locks nothing.
+ * So this releases ONLY a claim that is actually holding the workspace: a
+ * COMPLETED claim is the record that the migration ran and deleting it would
+ * read as never-migrated, and a row that does not decode as a claim is holding
+ * nothing and belongs to something else.
  *
  * It cannot tell a dead claimant from a live one — nothing can, over a
  * last-write-wins layer with no arbitration. The caller confirms, and passes
@@ -315,11 +315,6 @@ export const createGraphBackfillClaim = (
     // Ensure our own parent rather than trusting bootstrap ordering: a claim
     // that silently fails to write reads as "unclaimed" on every device,
     // which is the one outcome that turns this into a duplicated pass.
-    //
-    // Exempt from the migration lock like the claim row itself: this runs
-    // before every `tryClaim`, including one a PEER's in-flight claim is about
-    // to decline, and a lock refusal here would report "could not claim" for a
-    // graph that is merely busy.
     await deps.ensureHome(workspaceId)
 
     const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId, workspaceId), deps.claimantId)

@@ -13,15 +13,15 @@ vi.mock('@/utils/toast.js', () => ({
 }))
 
 const { reportMigrationProgress } = await import('../progressReport.ts')
-const { getLocalMigrationRun, setLocalMigrationRun } =
+const { localMigrationMessageFor, __resetLocalMigrationRunForTests } =
   await import('../localRunMessage.ts')
 
 const WS = 'ws-1'
 const start = (initial = '…') => reportMigrationProgress(WS, initial)
-const line = (): string | null => getLocalMigrationRun()?.message ?? null
+const line = (): string | null => localMigrationMessageFor(WS)
 
 beforeEach(() => { showInfo.mockClear(); showError.mockClear() })
-afterEach(() => { setLocalMigrationRun(null) })
+afterEach(() => { __resetLocalMigrationRunForTests() })
 
 describe('while the pass is running', () => {
   it('drives the dialog\'s status line and raises no toast', () => {
@@ -36,6 +36,37 @@ describe('while the pass is running', () => {
   })
 })
 
+describe('a second invocation while a run is live', () => {
+  it('cannot clear the running line out from under the run that owns it', () => {
+    // The palette stays reachable while the dialog is up, so a re-run can start
+    // and be turned away by the claim. Its failure report must not blank the
+    // live run's status — which is what carries "leave this tab open", at the
+    // moment the operator is most likely to close the tab.
+    const live = start('Migrating properties to blocks…')
+
+    const turnedAway = start('Migrating properties to blocks…')
+    turnedAway.fail('The migration is already running on this device.')
+
+    expect(line()).toBe('Migrating properties to blocks…')
+
+    live.update('Converting block 40,000 of 650,000…')
+    expect(line()).toBe('Converting block 40,000 of 650,000…')
+  })
+
+  it('leaves the slot with the run that took it, not the newest caller', () => {
+    const first = start('first')
+    const second = start('second')
+
+    expect(line()).toBe('first')
+
+    second.update('second again')
+    expect(line()).toBe('first')
+
+    first.update('first again')
+    expect(line()).toBe('first again')
+  })
+})
+
 describe('a run on a workspace the user is not looking at', () => {
   it('is reported as ITS workspace\'s, not as whatever dialog happens to be up', () => {
     // A run started on one workspace and a dialog raised by a PEER's claim on
@@ -43,9 +74,8 @@ describe('a run on a workspace the user is not looking at', () => {
     // apart, and can only do that if the run says which one it is.
     reportMigrationProgress('ws-other', 'Switching that workspace over…')
 
-    expect(getLocalMigrationRun()).toEqual({
-      workspaceId: 'ws-other', message: 'Switching that workspace over…',
-    })
+    expect(localMigrationMessageFor('ws-other')).toBe('Switching that workspace over…')
+    expect(localMigrationMessageFor(WS)).toBeNull()
   })
 })
 

@@ -103,6 +103,30 @@ export function useActionContext(
   useActionContextActivations(activations)
 }
 
+/** The context carries no actions, so it needs nothing beyond what
+ *  `useActionContext` supplies itself. Hoisted for a stable identity. */
+const NO_DEPS = {}
+
+/**
+ * Shadow the surface underneath a modal, for as long as `open`.
+ *
+ * ONE owner because there are two kinds of caller and only one of them is
+ * obvious. `DialogHost` covers everything opened through `openDialog`; a
+ * component that renders `Dialog` itself — because what puts it on screen is
+ * not a call but a piece of state — covers nothing until it says so here, and
+ * a modal that forgets looks completely correct: Radix makes the app
+ * pointer-inert and traps focus, so only the KEYBOARD leaks, and it leaks into
+ * whatever context was active when the modal appeared. An editor is usually
+ * what that is, and its Enter binding both writes a block and swallows the key
+ * the dialog's own button was waiting for.
+ *
+ * Claim/release is per REGISTRATION (see `useActionContextActivations`), so two
+ * modals at once is the ordinary case and neither tears down the other's.
+ */
+export function useModalShadowing(open: boolean): void {
+  useActionContext(ActionContextTypes.DIALOG, NO_DEPS, open)
+}
+
 /**
  * Hook for normal mode shortcuts
  */

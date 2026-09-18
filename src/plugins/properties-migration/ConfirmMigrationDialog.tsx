@@ -124,9 +124,10 @@ export const ConfirmMigrationDialog = ({
         <p className="text-destructive">
           {!childBacked && <>The switch cannot be undone from the app — it only ever
             moves forward, and reversing it is a hand-run database migration.{' '}</>}
-          Undo history for this workspace will be cleared — undoing an edit made
-          before the migration would revert part of it. On every device that is open
-          while it runs, not only this one.
+          Undo history for this workspace will be cleared on this device — undoing
+          an edit made before the migration would revert part of it. Undo is paused
+          everywhere while it runs, but a device that stays open keeps its own
+          history, so reload your other tabs and devices afterwards.
         </p>
       </div>
       <DialogFooter>

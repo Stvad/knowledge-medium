@@ -3782,8 +3782,8 @@ export class Repo {
         // already written. `releaseClaim` cannot tell that row from a SIBLING
         // TAB's live one: `claimantId` is per browser profile, so both name
         // this claimant and it would delete either. Trading a claim this
-        // device may have stranded — recoverable through the release command,
-        // which `held-by-peer` names — for freeing a second device to start an
+        // device may have stranded — recoverable from the dialog that blocks
+        // the workspace — for freeing a second device to start an
         // uploading pass while the first tab is still writing is the wrong
         // way round.
         const reason = err instanceof Error ? err.message : String(err)
@@ -3819,7 +3819,7 @@ export class Repo {
         // ownership by claimant and would delete it, freeing a third device to
         // start the same source-of-truth pass while the sibling writes. The
         // claim we then fail to hand back is the milder outcome: it strands,
-        // and the release command is the documented recovery.
+        // and the dialog that blocks the workspace is where it is released.
         //
         // Swallowed: the body has already told the operator what happened, and
         // a release that failed is a stranded claim with that same recovery —
@@ -3998,14 +3998,8 @@ export class Repo {
           // callback's return value never arrives on that path. Release beats
           // the guarantee; the `catch` below is the other half.
           let drop: HistoryDrop | undefined
-          // OUTSIDE the transaction, though the gap it probes is re-sampled per
-          // batch and the comment on that method still wants the write lock
-          // held. It cannot have both: the probe reads through `this.db`, and a
-          // read on the Repo's handle taken while this transaction holds the
-          // write lock cannot be SERVED on a single-connection pool — which is
-          // every browser but the one PowerSync gives `additionalReaders` — so
-          // the batch would hang rather than refuse, behind a modal that stays
-          // up for as long as the claim it hangs under does.
+          // OUTSIDE the transaction — see the method, which says why it cannot
+          // be read from inside one.
           //
           // What moving it out costs is one batch's worth of window: a drain
           // that commits between this probe and the write is seen by the NEXT
