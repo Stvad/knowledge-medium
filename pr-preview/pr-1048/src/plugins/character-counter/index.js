@@ -1,1 +1,0 @@
-import{$R as e,A as t,M as n,N as r,P as i,ZR as a,ez as o,tz as s}from"../../../chunks/app-D4iZICBl.js";export{a as CHAR_COUNTER_TYPE,n as RAW_CHARACTER_COUNT_PROFILE_ID,i as charCountDisplay,e as charLimitProp,o as charProfileProp,s as charScopeProp,r as characterCountProfilesFacet,t as characterCounterPlugin};

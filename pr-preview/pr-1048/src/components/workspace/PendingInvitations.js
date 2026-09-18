@@ -1,1 +1,0 @@
-import{G_ as e}from"../../../chunks/app-D4iZICBl.js";export{e as PendingInvitations};

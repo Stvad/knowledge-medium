@@ -1,1 +1,0 @@
-import{A4 as e,F4 as t,I4 as n,L4 as r,M4 as i,N4 as a,P4 as o,R4 as s,j4 as c}from"../../../chunks/app-D4iZICBl.js";export{e as CHANGE_SCOPE_POLICIES,c as ChangeScope,i as isChangeScope,a as policyForScope,o as scopeAllowedInReadOnly,t as scopeIsUndoable,n as scopePoliciesEquivalent,r as scopeUploadsToServer,s as sourceForScope};
