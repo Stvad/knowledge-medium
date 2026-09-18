@@ -10,7 +10,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type BlockData, type Tx } from '@/data/api'
 import { workspaceBackfillsFacet, type WorkspaceBackfill } from '@/data/facets'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -249,6 +249,40 @@ describe('while a once-per-graph backfill holds this workspace\'s claim', () => 
     await writeTo(repo, OTHER_TARGET, ChangeScope.BlockDefault)
 
     expect(await markOn(OTHER_TARGET)).toBe(ChangeScope.BlockDefault)
+  })
+
+  it('cannot be unlocked by the transaction it is refusing', async () => {
+    // The lock reads COMMITTED state, so a tx cannot clear the claim and then
+    // ride its own clearance: deleting the claim row, blanking it into
+    // something undecodable, or stamping a completion onto it are all just
+    // writes, and a write is what is being refused. Asking the transaction's
+    // own handle instead makes all three escape hatches for anything that can
+    // reach the claim block — and the third records the migration as finished
+    // over a pass that never ran.
+    const repo = makeRepo()
+    await seedTarget(repo)
+    const claimId = await seedClaim()
+
+    const escape = (mutate: (tx: Tx, row: BlockData) => Promise<void>): Promise<void> =>
+      repo.tx(async tx => {
+        const claim = await tx.get(claimId)
+        await mutate(tx, claim!)
+        const row = await tx.get(TARGET)
+        await tx.update(TARGET, {properties: {...row!.properties, 'probe:mark': 'escaped'}})
+      }, {scope: ChangeScope.BlockDefault, description: 'self-unlock attempt'})
+
+    await expect(escape(async (tx) => { await tx.delete(claimId) }))
+      .rejects.toMatchObject({code: GRAPH_MIGRATION_LOCKED})
+    await expect(escape(async (tx) => { await tx.update(claimId, {properties: {}}) }))
+      .rejects.toMatchObject({code: GRAPH_MIGRATION_LOCKED})
+    await expect(escape(async (tx, row) => {
+      await tx.update(claimId, {
+        properties: {...row.properties, [migrationCompletedAtProp.name]: 2},
+      })
+    })).rejects.toMatchObject({code: GRAPH_MIGRATION_LOCKED})
+
+    expect(await markOn()).toBeUndefined()
+    expect(await claimIsLive()).toBe(true)
   })
 
   it('refuses the CLAIM HOLDER\'s own edits too, not only a peer\'s', async () => {

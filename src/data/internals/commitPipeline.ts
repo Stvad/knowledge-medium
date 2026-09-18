@@ -569,6 +569,46 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // every mutator the tx actually ran.
     const result = await fn(tx)
 
+    // Step 3.4: the migration lock — while a once-per-graph pass holds this
+    // workspace's claim, the graph stops accepting writes rather than each
+    // gesture guarding itself against the pass (#1057).
+    //
+    // Asked of `db`, NOT of `txDb`: the transaction's own handle sees the
+    // transaction's own uncommitted writes, so a tx that deleted the claim row
+    // — or stamped a completion onto it — read itself as unlocked and committed
+    // that plus whatever else it was doing. The lock's input must not be
+    // something the transaction being judged can move. `db` here is committed
+    // state that nothing can change before we commit, because this
+    // writeTransaction holds the write lock, so it costs no staleness either.
+    //
+    // Over the tx's PINNED workspace, which is why it cannot be asked at entry:
+    // `repo.tx` admits a write to a workspace that is not the active one, and a
+    // lock decided from the active one lets every such write past. A zero-write
+    // tx pins nothing and is admitted — it has nothing to strand.
+    //
+    // Before the same-tx pass below, so a refusal costs neither the fan-out's
+    // work nor its error message: a rejection raised in that pass would reach
+    // the user in place of this one, telling them about a registry when the
+    // answer is that a migration is running.
+    //
+    // NOT exempted for replay, unlike the seed guard further down: undo and
+    // redo are exactly what no same-tx refusal can reach, since replay skips
+    // that pass by design (#1052), and restoring a pre-pass row over migrated
+    // children is the hazard.
+    //
+    // A `ProcessorRejection` though no processor raised it: that is the type
+    // `repo.tx` fans out to `onUserError`, and a refusal the user cannot see is
+    // a gesture that silently does nothing.
+    if (meta.workspaceId !== null
+        && !opts.graphMigrationWrite
+        && !scopeAllowedDuringGraphMigration(scope)
+        && await graphMigrationLocked(db, meta.workspaceId)) {
+      throw new ProcessorRejection(
+        GRAPH_MIGRATION_LOCKED_MESSAGE, GRAPH_MIGRATION_LOCKED,
+        {scope, workspaceId: meta.workspaceId},
+      )
+    }
+
     // Step 3.5: same-tx processor pass. Runs after `fn` returns but
     // before the command_events insert — inside the writeTransaction,
     // so throws (e.g. ProcessorRejection) propagate to SQLite's abort
@@ -722,34 +762,6 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         await applyProcessor(processor, changedRows, [], collectMs)
       }
       timing.sameTxMs = performance.now() - sameTxStartedAt
-    }
-
-    // Step 3.5: the migration lock — while a once-per-graph pass holds this
-    // workspace's claim, the graph stops accepting writes rather than each
-    // gesture guarding itself against the pass (#1057).
-    //
-    // HERE, over the tx's PINNED workspace and inside its writeTransaction,
-    // because both facts are load-bearing and neither is available at entry:
-    // `repo.tx` admits a write to a workspace that is not the active one, and
-    // an entry-time answer can be stale by the time the rows land. A zero-write
-    // tx pins nothing and is admitted — it has nothing to strand.
-    //
-    // NOT exempted for replay, unlike the seed guard below: undo and redo are
-    // exactly what no same-tx refusal can reach, since replay skips that pass
-    // by design (#1052), and restoring a pre-pass row over migrated children is
-    // the hazard.
-    //
-    // A `ProcessorRejection` though no processor raised it: that is the type
-    // `repo.tx` fans out to `onUserError`, and a refusal the user cannot see is
-    // a gesture that silently does nothing.
-    if (meta.workspaceId !== null
-        && !opts.graphMigrationWrite
-        && !scopeAllowedDuringGraphMigration(scope)
-        && await graphMigrationLocked(txDb, meta.workspaceId)) {
-      throw new ProcessorRejection(
-        GRAPH_MIGRATION_LOCKED_MESSAGE, GRAPH_MIGRATION_LOCKED,
-        {scope, workspaceId: meta.workspaceId},
-      )
     }
 
     // Step 3.6: seed-definition write guard — one choke point over
