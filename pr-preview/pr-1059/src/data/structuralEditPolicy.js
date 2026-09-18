@@ -1,1 +1,1 @@
-import{FC as e,IC as t}from"../../chunks/app-BX-Nq-uf.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
+import{FC as e,IC as t}from"../../chunks/app-BO_9D4pq.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

@@ -1,1 +1,1 @@
-import{dg as e,fg as t,pg as n}from"../../../chunks/app-BX-Nq-uf.js";export{e as INSERT_BLOCK_REF_TRIGGER_ACTION_ID,t as INSERT_PAGE_REF_TRIGGER_ACTION_ID,n as mobileKeyboardToolbarActions};
+import{dg as e,fg as t,pg as n}from"../../../chunks/app-BO_9D4pq.js";export{e as INSERT_BLOCK_REF_TRIGGER_ACTION_ID,t as INSERT_PAGE_REF_TRIGGER_ACTION_ID,n as mobileKeyboardToolbarActions};
