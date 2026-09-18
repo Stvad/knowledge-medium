@@ -2649,15 +2649,6 @@ export class Repo {
     return this.userErrorListeners.add(listener)
   }
 
-  /** Surface a user-visible finding that must NOT roll the tx back. Every other
-   *  `ProcessorRejection` reaches `onUserError` by being THROWN, which is right
-   *  when the finding is a refusal; a codec change that stranded some values
-   *  still did what the user asked, so its report rides a post-commit processor
-   *  and lands here instead. */
-  reportUserError(error: ProcessorRejection): void {
-    this.userErrorListeners.notify(error)
-  }
-
   /** Translate a parsed alias-collision RAISE into a fully-populated
    *  `ProcessorRejection`. Runs after the user tx has already rolled
    *  back, so `block_aliases` is back to the pre-tx state — the

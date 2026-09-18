@@ -34,11 +34,13 @@
  * 3. Value children are re-encoded when the codec's INPUTS changed — the
  *    definition row's preset id and preset config, NOT the built codec's type
  *    string, which cannot tell `optional-string` from `string`
- *    (`codecInputsChanged`). Their content is read under the NEW codec: the
- *    conversion IS "what does this text mean to the new type". What will not
- *    parse is counted and REPORTED
- *    (§9: "N values can't convert" must be user-visible, never a silent unset)
- *    and never deleted; the rows stay in the tree, fixable by hand.
+ *    (`codecInputsChanged`). The conversion is `convertValueChildContent`:
+ *    what the text means to the NEW codec, then what the OLD one holds,
+ *    re-spelled. A value NEITHER route carries is one this edit would take
+ *    away, and the transaction is REFUSED — §9's "N values can't convert" is
+ *    user-visible here as the reason the change did not happen, which is the
+ *    only form of it that keeps the value. A value already unreadable before
+ *    the edit blocks nothing: the cell never held it.
  *
  * ── The accepted residuals ──
  *
@@ -60,14 +62,14 @@
  *    so its own per-key report is the surface for this one.
  *
  * The FAN-OUT is dormant until a definition has field rows — see
- * `consumingParentIds`, which is its gate. The REFUSALS are not: one of them
- * exists precisely because a consumer with no field row yet is invisible to that
- * gate (see `MIGRATION_RUNNING_REFUSAL`).
+ * `consumingParentIds`, which is its gate. The refusals split on that gate and
+ * the split is deliberate: `MIGRATION_RUNNING_REFUSAL` exists precisely because
+ * a consumer with no field row YET is invisible to it, while the unconvertible
+ * refusal is a fact about values this pass actually read and so can only be
+ * reached through it.
  */
 
-import { z } from 'zod'
 import {
-  definePostCommitProcessor,
   defineSameTxProcessor,
   ProcessorRejection,
   type AnyPropertySchema,
@@ -91,11 +93,11 @@ import {
 import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
   childContentsToEncodedPropertyValue,
-  encodedToValueChildContent,
+  convertValueChildContent,
   fieldRowValues,
+  projectedValueCount,
   propertiesEqual,
   unionValuesAcrossFieldRows,
-  valueChildContentToEncoded,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 
@@ -128,8 +130,8 @@ const definitionAsOfBefore = (
  *
  *  Deliberately wider than it needs to be: a config edit that did not move the
  *  encoding re-parses the value children, which writes nothing
- *  (`value.content !== canonical` guards it) and reports nothing (a codec that
- *  reads leniently across the edit decodes successfully and is never counted). */
+ *  (`value.content !== canonical` guards it) and refuses nothing (a codec that
+ *  reads leniently across the edit converts every value it already held). */
 const codecInputsChanged = (before: BlockData, after: BlockData): boolean =>
   peekRowProperty(before, presetIdProp) !== peekRowProperty(after, presetIdProp)
   || !jsonValuesEqual(
@@ -154,8 +156,6 @@ const buildSchemaOrNull = (
     return null
   }
 }
-
-export const REPORT_UNCONVERTIBLE_VALUES_PROCESSOR = 'core.reportPropertyCodecUnconvertible'
 
 /**
  * Changes whose destination, or whose vacated name, is not this definition's to
@@ -232,6 +232,11 @@ export const contestedChanges = <T extends {
  *  differ only in what the user is told to do about it. */
 type RefusalReason = 'unbuildable' | 'contested'
 
+/** ONE refusal per transaction, whichever cause is found first — the user
+ *  fixes one at a time either way, and a combined message would describe a
+ *  state that no longer exists after the first fix. The unconvertible-values
+ *  refusal in `apply` follows the same rule; its message is not here only
+ *  because it is parameterized by a count. */
 const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
   unbuildable: {
     code: 'property.definition-change.unbuildable',
@@ -299,10 +304,15 @@ interface DefinitionChange {
    *  change whose after-row builds no codec never becomes a candidate — the
    *  caller refuses it instead. */
   readonly schema: AnyPropertySchema
-  /** The stored ENCODING may now differ, so value-child content is rewritten
-   *  and anything that will not parse is REPORTED. False for a pure rename,
-   *  where the encoding is untouched and an unparseable value is pre-existing
-   *  staleness rather than a consequence of this edit. */
+  /** The codec the definition was PUBLISHING, which is what says what a stored
+   *  value child HOLDS when the new codec cannot read its text — the second
+   *  route in `convertValueChildContent`, and what tells a value this edit
+   *  takes away from one that was already unreadable. `null` when the before
+   *  row's preset does not build, where nothing records the stored encoding. */
+  readonly beforeSchema: AnyPropertySchema | null
+  /** The stored ENCODING may now differ, so value-child content is rewritten.
+   *  False for a pure rename, where the encoding is untouched and the stored
+   *  text is already what this codec writes. */
   readonly encodingChanged: boolean
 }
 
@@ -351,13 +361,14 @@ const collectChanges = (
     // NOT be skipped.
     // Off the block's own rows, never the registry, whose tx-start snapshot is
     // at-or-older than `before` — a change an earlier tx already fanned out
-    // would read as this one's and be re-encoded (and re-reported) again.
+    // would read as this one's and be re-encoded against the wrong before-state.
     //
-    // Nothing asks whether the BEFORE row built a codec, because that is itself
-    // a function of the two properties compared here: a definition whose broken
-    // preset has just been fixed already reports its inputs as changed. The old
-    // codec DETECTS a change and never performs one — the conversion parses the
-    // child's TEXT under the new codec either way.
+    // Nothing asks whether the BEFORE row built a codec to DETECT a change,
+    // because detection is a function of the two properties compared here: a
+    // definition whose broken preset has just been fixed already reports its
+    // inputs as changed. The old codec is carried for the CONVERSION, as the
+    // only record of what encoding the stored text is in, and `null` there
+    // costs the fallback route rather than the change.
     //
     // ACCEPTED: a bag edited while the row was UNPUBLISHED (a tombstone, or a
     // row stripped of its metadata) is judged against the MOVED bag, and
@@ -394,6 +405,7 @@ const collectChanges = (
       oldName: beforeMeta.name,
       newName: afterMeta.name,
       schema: afterSchema,
+      beforeSchema: buildSchemaOrNull(before, ctx.valuePresets, beforeMeta),
       encodingChanged,
     })
   }
@@ -509,6 +521,49 @@ export const consumingParentIds = async (
   return [...set]
 }
 
+/** How many values this change takes away from ONE parent, comparing what the
+ *  definition WAS publishing against what it will publish now.
+ *
+ *  AT CELL GRAIN, which is the grain the question is about. Asking it per value
+ *  row instead — "could the old codec read this text where the new one cannot"
+ *  — is a proxy for "was it in the cell", and it is wrong in both directions: a
+ *  divergent peer row under a scalar was never projected and would refuse for
+ *  nothing, while narrowing a LIST to a scalar loses every member past the
+ *  first with every row individually converting fine.
+ *
+ *  THE BEFORE SIDE IS THE CHILDREN, not the stored cell: the cell is derived,
+ *  and one that disagrees with its children is stale by definition — the next
+ *  projection drops the difference whether or not this edit happens. The one
+ *  exception is a definition whose previous preset does not BUILD: nothing can
+ *  read its children, PROJECT skips the key for want of a schema, and the cell
+ *  it last published is the only surviving record of what the consumer holds.
+ *  Reading the children there answers "no values" about a cell plainly holding
+ *  one, and committing on that answer empties it. */
+const valuesLostBy = (
+  change: DefinitionChange,
+  parent: BlockData,
+  perFieldRow: readonly (readonly BlockData[])[],
+  projected: unknown,
+): number => {
+  // A SHORT-CIRCUIT, not a guard: deleting it changes no outcome, because a
+  // rename re-spells nothing and both sides then project identically. It saves
+  // rebuilding the before-projection over every value of every consumer on the
+  // commonest edit there is.
+  if (!change.encodingChanged) return 0
+  const after = projectedValueCount(change.schema, projected)
+  if (change.beforeSchema === null) {
+    // One value or none: without the old codec nothing can count a list's
+    // members, and an undercount still refuses while anything is lost.
+    return parent.properties[change.oldName] === undefined || after > 0 ? 0 : 1
+  }
+  const held = childContentsToEncodedPropertyValue(
+    change.beforeSchema,
+    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
+      .map(value => value.content),
+  )
+  return Math.max(0, projectedValueCount(change.beforeSchema, held) - after)
+}
+
 /** Apply every change that owns a field row under ONE parent, in one cell write.
  *
  *  SWAP-SAFE, and that is why the drops and the assignments are collected for
@@ -526,7 +581,8 @@ const applyToParent = async (
   parentId: string,
   changes: readonly DefinitionChange[],
   isFieldDefinition: IsPropertyFieldDefinition,
-  unconvertibleByField: Map<string, number>,
+  lostByField: Map<string, number>,
+  lostParents: Set<string>,
 ): Promise<void> => {
   const parent = await ctx.tx.get(parentId)
   // A soft-deleted parent can still own live field rows, so the query that
@@ -551,29 +607,36 @@ const applyToParent = async (
       ctx.tx, siblings, change.fieldId, isFieldDefinition,
     )
     if (perFieldRow === null) continue
-    let unconvertible = 0
     const canonicalized: Array<Array<Pick<BlockData, 'id' | 'content'>>> = []
     for (const values of perFieldRow) {
       const group: Array<Pick<BlockData, 'id' | 'content'>> = []
       for (const value of values) {
-        let encoded: unknown
-        try {
-          // At value-child GRAIN, both ways: under a list codec this row holds
-          // ONE member, and reading it against the whole-array grammar would
-          // make every member unconvertible.
-          encoded = valueChildContentToEncoded(change.schema, value.content)
-        } catch {
-          unconvertible += 1
+        // A RENAME touches no encoding, so there is nothing to convert: the
+        // stored text is already what this codec writes, and re-spelling it
+        // would edit text a person chose. Every row goes through unchanged and
+        // the aggregate drops whatever it cannot read, exactly as the
+        // projection does — which is what makes "a rename can lose nothing"
+        // true by construction rather than by argument.
+        if (!change.encodingChanged) {
+          group.push({id: value.id, content: value.content})
           continue
         }
-        // Canonicalize the stored text under the new codec so it reads back as
-        // what `setProperty` would have written. Re-parsing the TEXT is what
-        // makes a cross-type conversion possible at all, and it costs one
-        // ambiguity: a bare `null` is a literal to a codec that rejects null
-        // and the unset sentinel to one that accepts it (#1030).
-        const canonical = change.encodingChanged
-          ? encodedToValueChildContent(change.schema, encoded)
-          : value.content
+        // At value-child GRAIN, both ways: under a list codec this row holds
+        // ONE member, and reading it against the whole-array grammar would
+        // make every member unreadable.
+        //
+        // Reading the TEXT costs one ambiguity: a bare `null` is a literal to
+        // a codec that rejects null and the unset sentinel to one that accepts
+        // it (#1030).
+        const conversion = convertValueChildContent(
+          change.beforeSchema, change.schema, value.content,
+        )
+        // Left exactly as stored and out of the projection — the same thing
+        // the projection itself does with text it cannot read. Whether that
+        // COSTS anything is not a per-row question and is not asked here;
+        // `valuesLostBy` asks it of the aggregate.
+        if (conversion.outcome === 'unreadable') continue
+        const canonical = conversion.content
         group.push({id: value.id, content: canonical})
         if (value.content === canonical) continue
         // Re-stamp the reference columns from the REWRITTEN content, the same
@@ -613,30 +676,24 @@ const applyToParent = async (
     // MATERIALIZE reap the rest.
     const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
       .map(value => value.content)
-    if (change.encodingChanged && unconvertible > 0) {
-      unconvertibleByField.set(
-        change.fieldId,
-        (unconvertibleByField.get(change.fieldId) ?? 0) + unconvertible,
-      )
+    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
+    const lost = valuesLostBy(change, parent, perFieldRow, projected)
+    if (lost > 0) {
+      lostByField.set(change.fieldId, (lostByField.get(change.fieldId) ?? 0) + lost)
+      lostParents.add(parentId)
     }
     if (change.oldName !== change.newName) oldNames.push(change.oldName)
-    // PUBLISH NOTHING WHEN ANYTHING FAILED TO CONVERT. The cell write below is
-    // `skipMetadata` but not settled against MATERIALIZE's own reconcile in a
-    // later tx, which compares the children against what was published — over
-    // the very rows this pass reports as preserved unchanged. One rule for both
-    // grains, because the promise is the same for both: a partial LIST would
-    // have its unconvertible member tombstoned, and a list migrated to a SCALAR
-    // would have the unconvertible row overwritten and the converted one folded
-    // away.
+    // ALWAYS publish. The cell is projected FROM the children, so publishing
+    // what they now read as is the only write that leaves the two agreeing; a
+    // skipped publish leaves the cell holding what an EARLIER codec projected,
+    // which the next reprojection silently replaces — the deferred emptying
+    // #1024 is about. It is also what a rename needs: the old key is dropped
+    // just below, so declining to write the new one drops the property
+    // outright, every readable member of it included.
     //
-    // The cell is then either unchanged (nothing was canonicalized, so no child
-    // write and no reprojection) or the PARTIAL projection under the
-    // definition's current name — §9's contract, since the cell derives from
-    // the children. What the guard buys is the ROWS, not the cell: this pass
-    // never writes a value over children it promised to preserve and never
-    // deletes a value row. The unconvertible COUNT is reported after commit.
-    if (unconvertible > 0) continue
-    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
+    // Nothing is ever published over a value this change takes away, because
+    // `valuesLostBy` counted it and the caller refuses the whole transaction
+    // before any of this commits.
     assignments.push({
       name: change.newName, value: projected, unset: projected === undefined,
     })
@@ -744,9 +801,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
       )
       if (stranded.length > 0) {
-        // One refusal per transaction, named for the first reason held. The
-        // user fixes one cause at a time either way, and a combined message
-        // would describe a state that no longer exists after the first fix.
+        // Named for the first reason held, per `REFUSALS`.
         const {code, message} = REFUSALS[unfanoutable[0]!.reason]
         throw new ProcessorRejection(
           message, code, {fieldIds: unfanoutable.map(held => held.fieldId)},
@@ -769,61 +824,44 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       || isResolvableFieldDefinition(
         ctx.resolvePropertySchemaField(event.workspaceId, fieldId),
       )
-    const unconvertibleByField = new Map<string, number>()
+    const lostByField = new Map<string, number>()
+    const lostParents = new Set<string>()
     for (const parentId of parentIds) {
-      await applyToParent(ctx, parentId, changes, isFieldDefinition, unconvertibleByField)
+      await applyToParent(
+        ctx, parentId, changes, isFieldDefinition, lostByField, lostParents,
+      )
     }
-    // Reported per definition, after commit: one edit can re-type several, and a
-    // tx that rolls back stranded nothing. `afterCommit` is the only channel a
-    // same-tx processor has to say something non-fatal — a throw would revert
-    // the user's own edit.
+    // REFUSE rather than commit a change that takes a value away. Every write
+    // above rolls back with the definition row, so the graph is left exactly as
+    // it was and the user can fix the values or pick a type that holds them.
+    //
+    // This is the third face of the one rule the other two refusals state: a
+    // change must not leave a consumer holding a value in an encoding the
+    // registry will not be reading it with. Reporting it after the fact instead
+    // cannot keep that promise — the cell goes on holding what the old codec
+    // projected until something reprojects it, and then the value is gone with
+    // no record of what it was, which is #1024.
+    //
+    // One refusal per transaction, per `REFUSALS`. The property is named by the
+    // name it STILL ANSWERS TO after the rollback, never the one this tx tried
+    // to give it, and the blocks ride on `meta` so a surface can offer them:
+    // "fix those values" is not actionable without them.
     for (const change of changes) {
-      const count = unconvertibleByField.get(change.fieldId) ?? 0
+      const count = lostByField.get(change.fieldId) ?? 0
       if (count === 0) continue
-      ctx.tx.afterCommit(REPORT_UNCONVERTIBLE_VALUES_PROCESSOR, {
-        fieldId: change.fieldId, name: change.newName, count,
-      })
+      throw new ProcessorRejection(
+        `cannot change the type of property "${change.oldName}": ${count} `
+        + `stored value${count === 1 ? '' : 's'} cannot be read as the new `
+        + 'type, and the blocks holding them would lose them. Fix or remove '
+        + 'those values first, or choose a type that can hold them.',
+        'property.definition-change.unconvertible',
+        {
+          fieldId: change.fieldId,
+          name: change.oldName,
+          count,
+          blockIds: [...lostParents],
+        },
+      )
     }
-  },
-})
-
-interface UnconvertibleArgs {
-  fieldId: string
-  name: string
-  count: number
-}
-
-const unconvertibleArgsSchema = z.object({
-  fieldId: z.string(),
-  name: z.string(),
-  count: z.number(),
-})
-
-declare module '@/data/api' {
-  interface PostCommitProcessorRegistry {
-    [REPORT_UNCONVERTIBLE_VALUES_PROCESSOR]: UnconvertibleArgs
-  }
-}
-
-export const REPORT_UNCONVERTIBLE_VALUES = definePostCommitProcessor<UnconvertibleArgs>({
-  name: REPORT_UNCONVERTIBLE_VALUES_PROCESSOR,
-  watches: {kind: 'explicit'},
-  scheduledArgsSchema: unconvertibleArgsSchema,
-  apply: async (event, ctx) => {
-    const args = event.scheduledArgs
-    if (!args || args.count <= 0) return
-    // Claim only what's true: this pass never deletes a value row, so the text
-    // is preserved verbatim. It does NOT promise a surface — value children sit
-    // under a field row, and the visible view prunes field rows (§9), so they
-    // are reachable through the property rows, not by scrolling the outline.
-    const message =
-      `${args.count} value${args.count === 1 ? '' : 's'} for property `
-      + `"${args.name}" could not convert to the new type; their original `
-      + `text is preserved unchanged`
-    console.warn(`[propertyDefinitionChange] ${message}`)
-    ctx.repo.reportUserError(new ProcessorRejection(
-      message, 'property.codec-change.unconvertible',
-      {fieldId: args.fieldId, name: args.name, count: args.count},
-    ))
   },
 })

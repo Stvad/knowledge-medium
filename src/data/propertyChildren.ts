@@ -504,6 +504,121 @@ export const valueChildContentToEncoded = (
   }
 }
 
+/** What a value child's stored text is worth under a DIFFERENT codec:
+ *  the text to store, or nothing this codec can read.
+ *
+ *  Deliberately NOT a verdict on whether anything was LOST. One unreadable row
+ *  is not a loss — the projection may never have read it, or a sibling may
+ *  carry the same member — and only the aggregate can say. That question has
+ *  one owner, {@link projectedValueCount}, at the grain it is asked about. */
+export type ValueChildConversion =
+  | {readonly outcome: 'converted'; readonly content: string}
+  | {readonly outcome: 'unreadable'}
+
+/** ROUTE 2: the VALUE `from` holds, re-spelled by `to`.
+ *
+ *  Two presets can hold the same values and disagree only about how a member is
+ *  SPELLED — a `string-list` member is stored verbatim (`x`) where a generic
+ *  `list` member is stored as JSON (`"x"`) — which reading the TEXT under `to`
+ *  cannot see: it reads `x` as JSON, fails, and the member is dropped from the
+ *  cell at the next projection (#1024). The codec that WROTE the text is the
+ *  one that can say what it holds.
+ *
+ *  Accepted only when the value survives the round trip, asked by running it: a
+ *  `to` that re-spells the value into text it reads back as something else has
+ *  moved the value rather than carrying it. */
+const respellUnderTargetCodec = (
+  from: AnyPropertySchema,
+  to: AnyPropertySchema,
+  content: string,
+): ValueChildConversion => {
+  let held: unknown
+  try {
+    held = valueChildContentToEncoded(from, content)
+  } catch {
+    return {outcome: 'unreadable'}
+  }
+  let respelled: string
+  try {
+    respelled = encodedToValueChildContent(to, held)
+    if (!jsonValuesEqual(valueChildContentToEncoded(to, respelled), held)) {
+      return {outcome: 'unreadable'}
+    }
+  } catch {
+    // `to` cannot write this value at all.
+    return {outcome: 'unreadable'}
+  }
+  // DECLINED when re-spelling MINTS A REFERENCE the stored text did not carry:
+  // `codecs.ref().decode` accepts any string, so the string `Mary` re-spells to
+  // `((Mary))` — an identity nobody wrote, pointing at a seat that does not
+  // exist. Only the text route may produce a reference, because the `((id))`
+  // grammar in the TEXT is what says the person wrote one. Asked of the
+  // re-spelled text rather than of `to.codec.type`, which is an open string a
+  // plugin picks: any codec that spells a value as a reference span mints the
+  // same identity, whatever it calls itself.
+  if (isWholeContentReference(respelled) && !isWholeContentReference(content)) {
+    return {outcome: 'unreadable'}
+  }
+  return {outcome: 'converted', content: respelled}
+}
+
+/**
+ * Re-read ONE value child's text for a property whose codec changed, at
+ * {@link valueChildCodec} grain.
+ *
+ * THE TEXT FIRST, read under `to`: a value child's content is editable, so a
+ * re-type means "what does this text mean to the new type", which is what turns
+ * ` 1 ` into the number 1. {@link respellUnderTargetCodec} is the fallback, and
+ * why the order is this way round.
+ *
+ * `from` is null when the definition's previous preset does not build: nothing
+ * then records what encoding the text is in, so there is no value to re-spell
+ * and only the text route can answer.
+ */
+export const convertValueChildContent = (
+  from: AnyPropertySchema | null,
+  to: AnyPropertySchema,
+  content: string,
+): ValueChildConversion => {
+  let encoded: unknown
+  try {
+    encoded = valueChildContentToEncoded(to, content)
+  } catch {
+    return from === null
+      ? {outcome: 'unreadable'}
+      : respellUnderTargetCodec(from, to, content)
+  }
+  try {
+    return {outcome: 'converted', content: encodedToValueChildContent(to, encoded)}
+  } catch {
+    // DEFENCE IN DEPTH, and unreachable through any caller today: `to` just
+    // produced `encoded` from this text, and the only writer that throws
+    // (`referenceBlockContentForId`) is fed an id the same parser canonicalized.
+    // Keeping the stored text rather than throwing, because a throw here aborts
+    // the caller's whole transaction over a row that already projects correctly.
+    return {outcome: 'converted', content}
+  }
+}
+
+/** How many VALUES a projected cell holds — the grain every "did this change
+ *  take something away" question is asked at.
+ *
+ *  A multi-valued property's count is its member count; a scalar holds one
+ *  value or none. `null` is NOT a value where the codec accepts one: that is
+ *  the encoded form of CLEARED (`optionalRef`/`optionalNumber` encode `unset`
+ *  as `null`), so narrowing such a property to its required twin drops a
+ *  sentinel rather than losing anything a person typed. */
+export const projectedValueCount = (
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): number => {
+  if (encoded === undefined) return 0
+  if (encoded === null && codecAcceptsNull(valueChildCodec(schema))) return 0
+  return memberCodecOf(schema.codec) === undefined
+    ? 1
+    : (encoded as readonly unknown[]).length
+}
+
 /**
  * The content of EVERY value child backing one encoded property value, in
  * sibling order — one for a single-valued property, one PER MEMBER for a
