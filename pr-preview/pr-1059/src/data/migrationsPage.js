@@ -1,1 +1,1 @@
-import{bQ as e,vQ as t,yQ as n}from"../../chunks/app-C-axaMRe.js";export{t as MIGRATIONS_PAGE_ALIAS,n as getOrCreateMigrationsPage,e as migrationsPageBlockId};
+import{bQ as e,vQ as t,yQ as n}from"../../chunks/app-A9v10rGp.js";export{t as MIGRATIONS_PAGE_ALIAS,n as getOrCreateMigrationsPage,e as migrationsPageBlockId};

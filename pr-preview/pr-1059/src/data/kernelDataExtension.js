@@ -1,1 +1,1 @@
-import{LG as e}from"../../chunks/app-C-axaMRe.js";export{e as kernelDataExtension};
+import{LG as e}from"../../chunks/app-A9v10rGp.js";export{e as kernelDataExtension};

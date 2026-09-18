@@ -1,1 +1,1 @@
-import{gw as e,hw as t}from"../../../chunks/app-C-axaMRe.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
+import{gw as e,hw as t}from"../../../chunks/app-A9v10rGp.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

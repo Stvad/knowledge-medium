@@ -1,1 +1,1 @@
-import{C0 as e,S0 as t,b0 as n,x0 as r,y0 as i}from"../../chunks/app-C-axaMRe.js";export{i as backlinkRenderScopeId,n as breadcrumbRenderScopeId,r as embedRenderScopeId,t as outlineRenderScopeId,e as panelRenderScopeId};
+import{C0 as e,S0 as t,b0 as n,x0 as r,y0 as i}from"../../chunks/app-A9v10rGp.js";export{i as backlinkRenderScopeId,n as breadcrumbRenderScopeId,r as embedRenderScopeId,t as outlineRenderScopeId,e as panelRenderScopeId};

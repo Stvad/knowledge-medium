@@ -1,1 +1,1 @@
-import{XT as e,ZT as t}from"../../chunks/app-C-axaMRe.js";export{e as BlockChildren,t as BlockComponent};
+import{XT as e,ZT as t}from"../../chunks/app-A9v10rGp.js";export{e as BlockChildren,t as BlockComponent};
