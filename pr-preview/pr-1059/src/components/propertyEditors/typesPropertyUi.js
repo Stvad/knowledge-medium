@@ -1,1 +1,1 @@
-import{iC as e,nC as t,rC as n}from"../../../chunks/app-BQ8IlI22.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};
+import{aC as e,iC as t,oC as n}from"../../../chunks/app-C-axaMRe.js";export{t as kernelPropertyUiExtension,e as typesPropertyUi,n as typesPropertyUiExtension};

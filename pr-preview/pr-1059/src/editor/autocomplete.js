@@ -1,1 +1,1 @@
-import{ow as e}from"../../chunks/app-BQ8IlI22.js";export{e as editorAutocompleteExtension};
+import{cw as e}from"../../chunks/app-C-axaMRe.js";export{e as editorAutocompleteExtension};
