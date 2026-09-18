@@ -194,6 +194,31 @@ describe('while a once-per-graph backfill holds this workspace\'s claim', () => 
     expect(await markOn()).toBe(ChangeScope.References)
   })
 
+  it('refuses a TELEMETRY write without raising a toast for it', async () => {
+    // A transaction the app makes to measure itself is refused like any other
+    // Automation write, but the user did not make it and cannot act on it —
+    // under a lock that lasts minutes, surfacing each one buries the refusal
+    // they can act on under refusals they cannot.
+    const repo = makeRepo()
+    await seedTarget(repo)
+    await seedClaim()
+    const seen: string[] = []
+    repo.onUserError(err => { seen.push(err.code) })
+
+    await expect(repo.tx(async tx => {
+      await tx.update(TARGET, {properties: {'probe:mark': 'telemetry'}})
+    }, {scope: ChangeScope.Automation, telemetry: true, description: 'probe telemetry'}))
+      .rejects.toMatchObject({code: GRAPH_MIGRATION_LOCKED})
+
+    expect(seen).toEqual([])
+    expect(await markOn()).toBeUndefined()
+
+    // The positive control, so the empty list above is not green for want of a
+    // working listener.
+    await expect(write(repo, ChangeScope.Automation)).rejects.toThrow()
+    expect(seen).toEqual([GRAPH_MIGRATION_LOCKED])
+  })
+
   it('refuses program-authored records (Automation), which read-only allows', async () => {
     // Not a document edit, so read-only lets it through — but it is a durable
     // row with a property bag, and the pass converges by re-sweeping until a
@@ -467,6 +492,33 @@ describe('the migration itself, running under the lock it raised', () => {
     expect(await claimRow()).toBeNull()
     await write(repo, ChangeScope.BlockDefault)
     expect(await markOn()).toBe(ChangeScope.BlockDefault)
+  })
+
+  it('refuses a DIFFERENT backfill that writes while the migration holds the graph', async () => {
+    // The exemption is for the pass whose claim raises the lock, not for the
+    // seam it runs through. Another backfill writing during that pass is an
+    // ordinary program-authored write into a graph being converted, and it
+    // would be deep-idle scheduled — landing mid-run is its normal case.
+    const ran: string[] = []
+    const repo = makeOperatorRepo({
+      id: 'other-backfill-v1',
+      trigger: 'operator',
+      run: async ({tx}) => {
+        await tx(async t => {
+          const row = await t.get(TARGET)
+          await t.update(TARGET, {properties: {...row!.properties, 'probe:mark': 'other'}})
+        }, {description: 'other backfill write'}).catch((err: unknown) => {
+          ran.push((err as {code?: string}).code ?? 'threw')
+        })
+      },
+    })
+    await seedTarget(repo)
+    await seedClaim()
+
+    await repo.runWorkspaceBackfillNow(WS, 'other-backfill-v1')
+
+    expect(ran).toEqual([GRAPH_MIGRATION_LOCKED])
+    expect(await markOn()).toBeUndefined()
   })
 
   it('turns a second device away without mistaking the lock for a failure', async () => {
