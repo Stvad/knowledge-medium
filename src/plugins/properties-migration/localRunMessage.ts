@@ -33,8 +33,6 @@ export const subscribeLocalMigrationRun = store.subscribe
 export const localMigrationMessageFor = (workspaceId: string | null): string | null =>
   store.getFor(workspaceId)?.message ?? null
 
-export const getLocalMigrationRun = store.getFor
-
 /** Take the slot for `workspaceId`, if it is free. The returned owner is what
  *  every later write has to present.
  *
@@ -60,7 +58,7 @@ export const updateLocalMigrationRun = (
 
 export const endLocalMigrationRun = (owner: RunOwner, workspaceId: string): void => {
   if (store.getFor(workspaceId)?.owner !== owner) return
-  store.clearSnapshots()
+  store.clearFor(workspaceId)
 }
 
 /** Test helper — drops the listeners too, which no production caller may do. */

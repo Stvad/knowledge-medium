@@ -79,6 +79,25 @@ describe('a run on a workspace the user is not looking at', () => {
   })
 })
 
+describe('a run ending on ANOTHER workspace', () => {
+  it('does not take the live run\'s slot down with it', () => {
+    // The browser's Back button switches workspaces even while the gate is up
+    // (App.tsx says so), and the palette is global — so a second workspace's
+    // run can start and end while the first is still going. Ending one by
+    // clearing every slot leaves the live run unable to publish for the rest of
+    // its life: it no longer owns what it is writing to. The gate then reads no
+    // local message, degrades to "another device", and offers the tab that is
+    // WRITING a button to release its own claim.
+    const live = reportMigrationProgress(WS, 'Migrating properties to blocks…')
+
+    reportMigrationProgress('ws-other', 'Migrating…').done('Migrated 3 blocks.')
+
+    expect(line()).toBe('Migrating properties to blocks…')
+    live.update('Converting block 40,000 of 650,000…')
+    expect(line()).toBe('Converting block 40,000 of 650,000…')
+  })
+})
+
 describe('when it ends', () => {
   it('reports the outcome where the dialog closing cannot take it', () => {
     // The dialog is the CLAIM's, and the claim is handed back before the

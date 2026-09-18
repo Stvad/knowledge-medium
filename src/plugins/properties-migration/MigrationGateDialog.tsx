@@ -45,13 +45,18 @@ const heldFor = (claimedAt: number, now: number): string => {
 export type ReleaseOutcome = 'released' | 'not-held' | 'changed'
 
 /** Who is running the pass, relative to the tab reading this — see `holderOf`.
- *  `this-tab` is the one running it; `this-browser` is a sibling tab under the
- *  same profile, which shares the claimant id and so cannot be told apart from
- *  this tab by the claim alone. */
-export type ClaimHolder = 'this-tab' | 'this-browser' | 'another-device'
+ *
+ *  `this-tab` carries the progress line because only that arm HAS one: a
+ *  claimant id is a browser profile, so a sibling tab's run is indistinguishable
+ *  from this one by the claim alone, and what separates them is whether this tab
+ *  is the one reporting. Carrying the message in the arm rather than beside it
+ *  is what stops the two from being read independently and disagreeing. */
+export type ClaimHolder =
+  | {kind: 'this-tab'; message: string}
+  | {kind: 'this-browser'}
+  | {kind: 'another-device'}
 
-const STATUS: Record<ClaimHolder, string> = {
-  'this-tab': '',
+const STATUS: Record<Exclude<ClaimHolder, {kind: 'this-tab'}>['kind'], string> = {
   'this-browser': 'This browser is running the migration, in another tab.',
   'another-device': 'Another device is converting this workspace.',
 }
@@ -59,17 +64,18 @@ const STATUS: Record<ClaimHolder, string> = {
 export interface MigrationGateDialogProps {
   holder: ClaimHolder
   claim: GraphBackfillClaim
-  /** What the pass is doing, when it is THIS device running it. `null` on every
-   *  other device, which knows the workspace is being converted and not how far
-   *  along it is. */
-  localMessage: string | null
   /** Clear the claim the user was shown. Resolves `changed` when it is no
-   *  longer the claim they consented about. */
-  release: (shown: GraphBackfillClaim) => Promise<ReleaseOutcome>
+   *  longer the claim they consented about.
+   *
+   *  `null` where this device may not write at all: the release is a
+   *  `BlockDefault` transaction like any other, so on a read-only workspace the
+   *  button could only ever produce the read-only error. Saying who CAN release
+   *  is the useful thing to do with that space. */
+  release: ((shown: GraphBackfillClaim) => Promise<ReleaseOutcome>) | null
 }
 
 export const MigrationGateDialog = ({
-  holder, claim, localMessage, release,
+  holder, claim, release,
 }: MigrationGateDialogProps) => {
   // The claim the user is being asked about, SNAPSHOT when they asked — with
   // the clock reading that produced its age. The gap between reading "held for
@@ -90,6 +96,7 @@ export const MigrationGateDialog = ({
   useModalShadowing(true)
 
   const onRelease = (shown: GraphBackfillClaim) => {
+    if (release === null) return
     setReleasing(true)
     setProblem(null)
     release(shown).then(outcome => {
@@ -127,38 +134,59 @@ export const MigrationGateDialog = ({
               aria-hidden
               className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
             />
-            <span aria-live="polite">{localMessage ?? STATUS[holder]}</span>
+            <span aria-live="polite">
+              {holder.kind === 'this-tab' ? holder.message : STATUS[holder.kind]}
+            </span>
           </div>
           <DialogDescription>
             Every block&apos;s properties are being rewritten against a plan fixed when
             the run started, so an edit made now may not be converted. This workspace is
-            waiting on every device until it finishes, and undo is paused here until it
-            does.
-            {holder === 'this-tab' && (
+            waiting on every device until it finishes, and undo is paused here until
+            it does. Reload this tab afterwards: undo entries from before the
+            migration are not cleared here, and replaying one can revert part of it.
+            {holder.kind === 'this-tab' && (
               <> <strong>Leave this tab open.</strong> Closing it stops the run without
               handing the workspace back.</>
             )}
           </DialogDescription>
           {problem !== null && <p className="text-destructive">{problem}</p>}
-          {confirming !== null && (
+          {/* The way out for the tab that IS running, which is not offered the
+              release below: a run whose promise never settles would otherwise
+              leave this tab behind a modal with no exit at all, reading copy
+              that tells it not to close. Reloading makes it an ordinary tab
+              again, and the release comes back with it. */}
+          {holder.kind === 'this-tab' && (
+            <p className="text-muted-foreground">
+              If this tab looks stuck, reload it. The migration resumes where it
+              stopped when you run it again, and a reloaded tab is offered the
+              option to release the claim.
+            </p>
+          )}
+          {holder.kind !== 'this-tab' && confirming !== null && (
             <p className="text-destructive">
               This workspace was claimed {heldFor(confirming.claim.claimedAt, confirming.askedAt)} ago and
               the run has not recorded finishing. Release it only if no device is still
               running the migration: releasing a live claim frees a second device to start
               the same pass over the same blocks.
-              {holder === 'this-browser' && (
+              {holder.kind === 'this-browser' && (
                 <> The claim names <em>this browser</em>, so if another tab of it is
                 still running the migration, let that tab finish instead.</>
               )}
+            </p>
+          )}
+          {holder.kind !== 'this-tab' && release === null && (
+            <p className="text-muted-foreground">
+              This workspace is read-only here, so only someone who can write to it
+              can release the claim.
             </p>
           )}
         </div>
         {/* Withheld from the tab that IS running the pass: it cannot have been
             stranded by a run it is still executing, and releasing there drops
             the modal and the undo pause while its own writes continue. Reading
-            `holder` rather than re-deriving it is what keeps this and the
-            status line above from ever disagreeing. */}
-        {holder !== 'this-tab' && (
+            `holder` rather than re-deriving it is what keeps this, the status
+            line and the warning above from ever disagreeing. */}
+        {holder.kind !== 'this-tab' && release !== null && (
         <DialogFooter>
           {confirming === null
             ? (

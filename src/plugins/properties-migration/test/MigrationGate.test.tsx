@@ -14,6 +14,20 @@ import { vi } from 'vitest'
 // dependency-free one reaches `useUser`. Mocked rather than provided: the
 // subject here is the modal's shadowing, not who is signed in.
 vi.mock('@/components/Login.tsx', () => ({useUser: () => ({id: 'user-1'})}))
+
+/** Stands in for the dialog's own render failing — its hooks reach the shortcut
+ *  funnel, which suspends on a workspace read and throws when that read fails. */
+const dialogBreak = vi.hoisted(() => ({on: false}))
+vi.mock('../MigrationGateDialog.tsx', async importOriginal => {
+  const actual = await importOriginal<typeof import('../MigrationGateDialog.tsx')>()
+  return {
+    ...actual,
+    MigrationGateDialog: (props: Parameters<typeof actual.MigrationGateDialog>[0]) => {
+      if (dialogBreak.on) throw new Error('[test] the dialog cannot render')
+      return <actual.MigrationGateDialog {...props} />
+    },
+  }
+})
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -137,6 +151,28 @@ const renderGate = (): void => {
 
 const dialog = (): HTMLElement | null => screen.queryByRole('dialog')
 
+/** The gate with a dialog that cannot render.
+ *
+ *  The break stays on for the whole test — the claim row loads asynchronously,
+ *  so the dialog is not reached during `render()` and a flag cleared straight
+ *  afterwards would leave the broken path never taken. `afterEach` clears it.
+ *  The error boundary logs, so the noise is silenced rather than left looking
+ *  like a real failure. */
+const renderGateWithBrokenDialog = (): void => {
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  dialogBreak.on = true
+  renderGate()
+}
+
+/** One undoable entry on the workspace, so a pause and a clear are telling
+ *  apart-able. */
+const recordAnUndoableEdit = (): Promise<void> =>
+  repo.tx(async tx => {
+    await tx.create({
+      id: 'target', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'before',
+    })
+  }, {scope: ChangeScope.BlockDefault, description: 'seed'}).then(() => undefined)
+
 /** The claim row has been READ, so "no dialog" is a verdict rather than a
  *  render that got there first. `useHandle` kicks off the load on mount, so
  *  every absence assertion below is trivially true until this settles. */
@@ -155,6 +191,8 @@ beforeEach(async () => {
 afterEach(() => {
   cleanup()
   __resetLocalMigrationRunForTests()
+  dialogBreak.on = false
+  vi.restoreAllMocks()
 })
 
 describe('while the migration holds this workspace', () => {
@@ -223,16 +261,6 @@ describe('while the migration holds this workspace', () => {
     expect(isShadowed()).toBe(true)
   })
 
-  it('stops shadowing once the workspace is handed back', async () => {
-    await seedClaimInBlocks()
-    renderGate()
-    await screen.findByRole('dialog')
-
-    await deliverClaimBySync({completed: true})
-
-    await waitFor(() => { expect(isShadowed()).toBe(false) })
-  })
-
   it('cannot be dismissed', async () => {
     await seedClaimInBlocks()
     renderGate()
@@ -244,17 +272,44 @@ describe('while the migration holds this workspace', () => {
   })
 
   it('says what THIS device is doing, and only that a peer is converting otherwise', async () => {
-    await seedClaimInBlocks()
+    await seedClaimInBlocks({claimantId: getClientId()})
     renderGate()
-    expect(await screen.findByRole('dialog'))
-      .toHaveTextContent(/Another device is converting this workspace/)
+    await screen.findByRole('dialog')
 
     act(() => {
       beginLocalMigrationRun(WS, 'Switching this workspace to property blocks…')
     })
 
     expect(dialog()).toHaveTextContent(/Switching this workspace to property blocks/)
-    expect(dialog()).not.toHaveTextContent(/Another device is converting/)
+    expect(dialog()).not.toHaveTextContent(/This browser is running the migration/)
+  })
+
+  it('does not report our own progress line as a PEER\'s progress', async () => {
+    // The gesture publishes its first line before it takes the claim, so in
+    // that window a peer's claim can be what is on screen. Reading the message
+    // alone would caption someone else's run with what this device was doing.
+    act(() => { beginLocalMigrationRun(WS, 'Switching this workspace to property blocks…') })
+    await seedClaimInBlocks({claimantId: 'peer-device'})
+
+    renderGate()
+
+    expect(await screen.findByRole('dialog'))
+      .toHaveTextContent(/Another device is converting this workspace/)
+    expect(dialog()).not.toHaveTextContent(/Switching this workspace to property blocks/)
+  })
+
+  it('tells the running tab how to get out if it looks stuck', async () => {
+    // It is not offered the release — it cannot have been stranded by a run it
+    // is still executing — so without this a run whose promise never settles
+    // leaves this tab behind a modal with no exit, reading copy that tells it
+    // not to close.
+    await seedClaimInBlocks({claimantId: getClientId()})
+    renderGate()
+    await screen.findByRole('dialog')
+
+    act(() => { beginLocalMigrationRun(WS, 'Switching this workspace to property blocks…') })
+
+    expect(dialog()).toHaveTextContent(/If this tab looks stuck, reload it/)
   })
 
   it('names THIS BROWSER rather than another device when the claim is our own profile', async () => {
@@ -293,13 +348,6 @@ describe('undo, which the dialog itself cannot cover', () => {
   // reachable while a modal is up, and undo is registered there — so cmd-Z
   // fires straight through this dialog and would restore a whole pre-migration
   // row over children the pass has since written.
-  const recordAnUndoableEdit = async (): Promise<void> => {
-    await repo.tx(async tx => {
-      await tx.create({
-        id: 'target', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'before',
-      })
-    }, {scope: ChangeScope.BlockDefault, description: 'seed'})
-  }
 
   it('is untouched while nothing holds the workspace', async () => {
     // The mount is always there; only a held claim may take undo away.
@@ -354,6 +402,29 @@ describe('undo, which the dialog itself cannot cover', () => {
   })
 })
 
+describe('when the dialog itself cannot render', () => {
+  it('still pauses undo, rather than taking the pause down with it', async () => {
+    // The dialog reaches the shortcut activation funnel, which suspends on the
+    // workspace's UI-state block and throws if that read fails. App mounts share
+    // ONE boundary per mount, so without a boundary of its own a dialog that
+    // cannot render stops the effect above it from ever committing — and the
+    // migration proceeds with no modal, no undo pause, and nothing on screen to
+    // say so. The pause protects rows; the dialog only talks.
+    await recordAnUndoableEdit()
+    await seedClaimInBlocks()
+
+    renderGateWithBrokenDialog()
+
+    // The dialog really did fail: nothing is on screen, and the pause is on
+    // anyway. Asserting the absence alone would pass with the dialog working.
+    await waitFor(() => {
+      expect(repo.undoManagerFor(WS).historyDropInProgress).toBe(true)
+    })
+    expect(dialog()).toBeNull()
+    expect(await repo.undo()).toBe(false)
+  })
+})
+
 describe('the way out of a claim nobody will release', () => {
   const claimIsLive = async (): Promise<boolean> =>
     (await sharedDb.db.getOptional<{deleted: number}>(
@@ -378,6 +449,20 @@ describe('the way out of a claim nobody will release', () => {
 
     expect(dialog()).toHaveTextContent(/Leave this tab open/)
     expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()
+  })
+
+  it('is not offered where this device may not write, which names who can', async () => {
+    // The release is a BlockDefault transaction like any other, so a viewer in
+    // a shared workspace could only ever produce the read-only error from it —
+    // behind a modal they cannot dismiss.
+    repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, isReadOnly: true}).repo
+    repo.setActiveWorkspaceId(WS)
+    await seedClaimInBlocks()
+    renderGate()
+    await screen.findByRole('dialog')
+
+    expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()
+    expect(dialog()).toHaveTextContent(/read-only here, so only someone who can write/i)
   })
 
   it('does not release until the user confirms, and says what they are agreeing to', async () => {

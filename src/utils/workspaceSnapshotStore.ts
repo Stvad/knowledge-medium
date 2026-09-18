@@ -19,6 +19,12 @@ export interface WorkspaceSnapshotStore<T> {
    *  workspace publishes again — or null. */
   getFor: (workspaceId: string | null | undefined) => T | null
   subscribe: (listener: () => void) => () => void
+  /** Drop ONE workspace's snapshot. The counterpart to `publish`, and what a
+   *  caller ending a per-workspace episode wants: `clearSnapshots` is a
+   *  whole-store operation and reaching for it here silently takes down every
+   *  other workspace's entry, which is the one thing this store exists to
+   *  prevent. */
+  clearFor: (workspaceId: string) => void
   /** Drop every snapshot and tell subscribers to re-read — for when the
    *  snapshots describe a world that no longer exists (a Repo swap) but the
    *  subscribers are the same components and must keep receiving updates.
@@ -44,6 +50,10 @@ export const createWorkspaceSnapshotStore = <T extends { workspaceId: string }>(
     getFor: (workspaceId) =>
       (workspaceId != null ? byWorkspace.get(workspaceId) : undefined) ?? null,
     subscribe: (listener) => listeners.add(listener),
+    clearFor: (workspaceId) => {
+      if (!byWorkspace.delete(workspaceId)) return
+      listeners.notify()
+    },
     clearSnapshots: () => {
       byWorkspace.clear()
       listeners.notify()

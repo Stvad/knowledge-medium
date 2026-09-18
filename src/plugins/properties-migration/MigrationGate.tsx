@@ -8,17 +8,17 @@
  * claim it already has and puts the dialog straight back up.
  *
  * Two things happen while the claim is held, and they are a pair:
- *  - {@link MigrationGateDialog} says to wait, and offers the only way out of a
+ *  - {@link MigrationGateDialog} says to wait, and carries the way out of a
  *    claim nobody will release;
  *  - a history drop refuses undo/redo for the duration. The dialog cannot cover
  *    cmd-Z (see the dialog's own header), and a replay restores a whole
  *    pre-migration row over children the pass has already written.
  *
- * Ending the drop clears this device's stacks, which is the point on a PEER:
- * its pre-migration entries describe rows the migration has since rewritten,
- * and until now only the device that ran the pass dropped its own (#684, #1007).
+ * The drop is ABANDONED rather than finished — see the teardown below, which
+ * says why this is not the place that can decide to empty a user's stacks.
  */
-import { useCallback, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useSyncExternalStore, type ReactNode } from 'react'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import { useRepo } from '@/context/repo.js'
 import { getClientId } from '@/utils/clientId'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
@@ -40,10 +40,9 @@ import {
 
 const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode => {
   const repo = useRepo()
-  const claimBlock = useMemo(
-    () => repo.block(graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID)),
-    [repo, workspaceId],
-  )
+  // Not memoized: `repo.block` is a per-id identity map, so this is already the
+  // same handle every render.
+  const claimBlock = repo.block(graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID))
   // Selected down to the claim, not the row: this re-renders on the claim
   // APPEARING and CLEARING, and on nothing else the block happens to carry.
   const claim = useHandle(claimBlock, {
@@ -73,20 +72,31 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
     // So the clear stays with the writers that know they wrote: the gesture's
     // own drop around the flip, and the runner's per batch. A PEER therefore
     // keeps pre-migration entries a completed run has made stale — #684/#1007,
-    // where a watcher was declined, and the dialog says to reload. Giving the
-    // peer a sound clear needs the claim to record that the run WROTE, stamped
-    // in the same transaction as the first write; it cannot be inferred here.
+    // where a watcher was declined. Its own dialog is what tells it to reload;
+    // the operator's confirmation cannot, since in a shared workspace the peer
+    // belongs to someone who never sees it. Giving the peer a sound clear needs
+    // the claim to record that the run WROTE, stamped in the same transaction
+    // as the first write; it cannot be inferred here.
     return () => { drop.abandon() }
   }, [repo, workspaceId, held])
 
   if (claim === null) return null
   return (
-    <MigrationGateDialog
-      holder={holderOf(claim, localMessage)}
-      claim={claim}
-      localMessage={localMessage}
-      release={releaseFor(repo, workspaceId)}
-    />
+    // The dialog gets its OWN boundary, below the effect above. It reaches the
+    // shortcut activation funnel, which suspends on the workspace's UI-state
+    // block and throws if that read fails — and app mounts share one boundary
+    // per mount, so without this a dialog that cannot render takes the undo
+    // pause down with it: the effect above never commits, and the run proceeds
+    // with no modal, no pause and nothing on screen to say so. The pause is the
+    // half that protects rows, so it must not be downstream of the half that
+    // only talks.
+    <ExtensionRenderBoundary>
+      <MigrationGateDialog
+        holder={holderOf(claim, localMessage)}
+        claim={claim}
+        release={repo.isReadOnly ? null : releaseFor(repo, workspaceId)}
+      />
+    </ExtensionRenderBoundary>
   )
 }
 
@@ -94,20 +104,21 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
  *
  *  One value rather than two booleans at the point of use, because the two
  *  questions the dialog asks — what to tell the user, and whether to offer the
- *  release — have to be answered from the same reading. A claimant id is a
- *  browser PROFILE (`getClientId`), so it is shared by every tab: a sibling
- *  tab's live run reads as "this browser", never as another device, and the
- *  tab actually running the pass is the one holding a local message.
+ *  release — have to be answered from the same reading. Answering them
+ *  separately is what produced a dialog that told the operator's second tab
+ *  another DEVICE held the workspace, and offered the running tab itself a
+ *  button to release the claim it was writing under.
  *
- *  Answering them separately is what produced a dialog that told the operator's
- *  second tab another DEVICE held the workspace, and offered the running tab
- *  itself a button to release the claim it was writing under. */
+ *  BOTH halves for `this-tab`, not the local message alone. The gesture
+ *  publishes its first line before it takes the claim, so between those two
+ *  moments a PEER's claim can be what is on screen — and a message this device
+ *  wrote would otherwise be reported as that peer's progress. */
 const holderOf = (
   claim: GraphBackfillClaim, localMessage: string | null,
-): ClaimHolder =>
-  localMessage !== null
-    ? 'this-tab'
-    : claim.claimantId === getClientId() ? 'this-browser' : 'another-device'
+): ClaimHolder => {
+  if (claim.claimantId !== getClientId()) return {kind: 'another-device'}
+  return localMessage === null ? {kind: 'this-browser'} : {kind: 'this-tab', message: localMessage}
+}
 
 const releaseFor = (repo: Repo, workspaceId: string) =>
   (shown: GraphBackfillClaim): Promise<ReleaseOutcome> =>

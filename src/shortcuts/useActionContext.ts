@@ -120,6 +120,15 @@ const NO_DEPS = {}
  * what that is, and its Enter binding both writes a block and swallows the key
  * the dialog's own button was waiting for.
  *
+ * Today the second kind has one caller here and three that have not been
+ * audited (km-qdc2): quick-find, find-replace and the shortcut-help overlay are
+ * all toggle-driven app mounts rendering `Dialog` directly.
+ *
+ * Costs a suspend: the funnel below resolves the workspace's UI-state block
+ * even for a context that carries no dependencies (km-bli8). A caller that must
+ * keep working when that read fails needs its own boundary — see
+ * `MigrationGate`.
+ *
  * Claim/release is per REGISTRATION (see `useActionContextActivations`), so two
  * modals at once is the ordinary case and neither tears down the other's.
  */
