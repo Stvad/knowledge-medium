@@ -1,1 +1,1 @@
-import{tP as e}from"../../chunks/app-Dy-ndCby.js";export{e as usePropertySchemas};
+import{tP as e}from"../../chunks/app-Beqisrg-.js";export{e as usePropertySchemas};

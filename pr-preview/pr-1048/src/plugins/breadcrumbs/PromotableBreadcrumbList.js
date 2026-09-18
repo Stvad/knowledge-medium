@@ -1,1 +1,1 @@
-import{Ag as e}from"../../../chunks/app-Dy-ndCby.js";export{e as PromotableBreadcrumbList};
+import{Ag as e}from"../../../chunks/app-Beqisrg-.js";export{e as PromotableBreadcrumbList};

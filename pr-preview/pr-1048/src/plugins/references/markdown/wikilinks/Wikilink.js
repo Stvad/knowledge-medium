@@ -1,1 +1,1 @@
-import{Td as e}from"../../../../../chunks/app-Dy-ndCby.js";export{e as Wikilink};
+import{Td as e}from"../../../../../chunks/app-Beqisrg-.js";export{e as Wikilink};

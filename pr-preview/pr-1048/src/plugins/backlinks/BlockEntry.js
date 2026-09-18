@@ -1,1 +1,1 @@
-import{Gu as e}from"../../../chunks/app-Dy-ndCby.js";export{e as LazyBlockEntry};
+import{Gu as e}from"../../../chunks/app-Beqisrg-.js";export{e as LazyBlockEntry};

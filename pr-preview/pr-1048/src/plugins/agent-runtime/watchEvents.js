@@ -1,1 +1,1 @@
-import{Kl as e,ql as t}from"../../../chunks/app-Dy-ndCby.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};
+import{Kl as e,ql as t}from"../../../chunks/app-Beqisrg-.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

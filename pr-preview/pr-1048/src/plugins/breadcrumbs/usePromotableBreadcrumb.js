@@ -1,1 +1,1 @@
-import{kg as e}from"../../../chunks/app-Dy-ndCby.js";export{e as usePromotableBreadcrumb};
+import{kg as e}from"../../../chunks/app-Beqisrg-.js";export{e as usePromotableBreadcrumb};

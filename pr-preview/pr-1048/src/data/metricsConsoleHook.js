@@ -1,1 +1,1 @@
-import{vC as e}from"../../chunks/app-Dy-ndCby.js";export{e as ensureMetricsConsoleHook};
+import{vC as e}from"../../chunks/app-Beqisrg-.js";export{e as ensureMetricsConsoleHook};
