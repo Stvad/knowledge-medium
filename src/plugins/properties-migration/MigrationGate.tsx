@@ -17,7 +17,7 @@
  * The drop is ABANDONED rather than finished — see the teardown below, which
  * says why this is not the place that can decide to empty a user's stacks.
  */
-import { useCallback, useEffect, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import { ChangeScope } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
@@ -72,8 +72,14 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
   // before it claimed.
   const held = claim !== null
 
+  // Set in the effect, never during render: this is the mount's own memory of
+  // having seen the claim live, which is what separates "the run just finished"
+  // from "this workspace was migrated at some point in the past".
+  const watchedTheClaim = useRef(false)
+
   useEffect(() => {
     if (!held) return
+    watchedTheClaim.current = true
     const drop = repo.undoManagerFor(workspaceId).beginHistoryDrop()
     // ABANDON, never finish. The refusal is the whole job here and `abandon`
     // keeps all of it — `dropsInProgress` is decremented by either ending, so
@@ -91,24 +97,35 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
     return () => { drop.abandon() }
   }, [repo, workspaceId, held])
 
-  // Driven by the COMPLETION, not by the drop's teardown. The teardown fires on
-  // the way out of `held`, and a completion can arrive after that — `markComplete`
-  // restores a claim its own sibling tombstoned, and a workspace switch or a
-  // reload unmounts the gate before the run ends. Every one of those left the
-  // notice silent for a device that had just had its undo entries invalidated.
+  // Driven by the COMPLETION, and gated on this mount having WATCHED the claim.
   //
-  // `completedAt` says the pass RAN TO THE END, not that it wrote (km-5ccs), and
-  // the depth check is the proxy that covers most of the gap: a device with
-  // nothing on its stack has nothing to be warned about, and the tab that ran
-  // the pass cleared its own as it committed — which is what stopped this
-  // sitting beside that tab's own "undo history was cleared" outcome. The case
-  // the proxy still gets wrong is a re-run that commits nothing on a workspace
-  // already migrated: entries survive, are perfectly safe, and get warned about.
+  // The completion is not an event: `markComplete` stamps `completedAt` and that
+  // row is never deleted, because it IS the graph's record that the migration
+  // ran. So "completed" is a permanent property of the workspace, and an effect
+  // keyed on it alone fires on every mount for the rest of the workspace's life
+  // — over post-migration edits it warns about for no reason, which is how the
+  // one notice that matters gets trained away.
+  //
+  // Not the drop's teardown either, which is what this replaced: that fires only
+  // on the way out of `held`, and a completion can arrive after it — a release
+  // whose `markComplete` restores the row it tombstoned, a workspace switch, a
+  // reload mid-run. Those left the notice silent for exactly the device whose
+  // entries had just been invalidated.
+  //
+  // `completedAt` says the pass RAN TO THE END, not that it WROTE (km-5ccs). The
+  // depth check covers most of that gap — a device with nothing on its stack has
+  // nothing to be warned about, and the tab that ran the pass cleared its own as
+  // it committed. What it still gets wrong is a re-run that commits nothing.
+  //
+  // WHAT THE `watchedTheClaim` GATE GIVES UP: a device that was offline for the
+  // whole run and receives only the completed row is told nothing, and its
+  // entries are genuinely stale. That enlarges the accepted offline residual,
+  // and is the trade against warning every user on every workspace forever.
   //
   // Why a toast, and why sticky: see `showReloadNotice`.
   const completedAt = completed?.completedAt ?? null
   useEffect(() => {
-    if (completedAt === null) return
+    if (completedAt === null || !watchedTheClaim.current) return
     if (repo.undoManagerFor(workspaceId).depths(ChangeScope.BlockDefault).undo === 0) return
     showReloadNotice()
   }, [repo, workspaceId, completedAt])
@@ -160,7 +177,13 @@ const holderOf = (
   // simply gone (released, or completed) and one that has been REPLACED, which
   // reads identically from here: either way this tab's writes are unprotected.
   if (localRun?.claimed === true && !ours) {
-    return {kind: 'lost-claim', message: localRun.message}
+    // GONE versus REPLACED. Both mean this tab's writes are unprotected, and
+    // the row cannot tell them apart from the claimant alone — but a claim that
+    // is live means undo is paused again and someone else is rewriting the
+    // graph right now, which is the opposite of what the gone case says.
+    return claim === null
+      ? {kind: 'lost-claim', message: localRun.message}
+      : {kind: 'superseded', message: localRun.message, claim}
   }
   // No claim and our run has not taken one: the window between the confirmation
   // and the claim write, which holds two preflight reads and a page-ensure.

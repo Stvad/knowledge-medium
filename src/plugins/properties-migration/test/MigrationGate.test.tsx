@@ -331,11 +331,16 @@ describe('while the migration holds this workspace', () => {
     await deliverClaimBySync({claimantId: 'a-peer', claimedAt: 900})
 
     await waitFor(() => {
-      expect(dialog()).toHaveTextContent(/This tab no longer holds the migration/)
+      expect(dialog()).toHaveTextContent(/Another client has taken over the migration/)
     })
     expect(dialog()).toHaveTextContent(/Converting block 120,000/)
     expect(dialog()).not.toHaveTextContent(/Another device is converting/)
     expect(screen.queryByRole('button', {name: /nothing is running/i})).toBeNull()
+    // A claim IS live, so undo is paused again and the shared sentence that
+    // says so must render — `lost-claim`'s copy asserts the opposite.
+    expect(dialog()).toHaveTextContent(/undo is paused here until it finishes/)
+    expect(dialog()).not.toHaveTextContent(/undo is live again/)
+    expect(repo.undoManagerFor(WS).historyDropInProgress).toBe(true)
   })
 
   it('reads a SIBLING tab\'s claim as this browser\'s, not as this tab\'s run', async () => {
@@ -561,6 +566,22 @@ describe('after a run that finished', () => {
     await waitFor(() => {
       expect(shownToasts.join(' ')).toMatch(/Reload this tab before using undo/)
     })
+  })
+
+  it('says nothing on a mount that never saw the claim live', async () => {
+    // A completion is not an event — `markComplete` stamps the row and it is
+    // never deleted, because it IS the record that the migration ran. Keyed on
+    // that alone, the notice fires on every mount for the rest of the
+    // workspace's life: over ordinary post-migration edits, which are safe, and
+    // which is how the one notice that matters gets trained away.
+    await seedClaimInBlocks({completed: true})
+    await recordAnUndoableEdit()
+
+    renderGate()
+    await claimHasBeenRead()
+
+    expect(dialog()).toBeNull()
+    expect(shownToasts).toEqual([])
   })
 
   it('says nothing to a device with no entries left to replay', async () => {

@@ -98,6 +98,11 @@ export const claimFromProperties = (
   const claimantId = props[migrationClaimantProp.name]
   const claimedAt = props[migrationClaimedAtProp.name]
   if (typeof claimantId !== 'string' || typeof claimedAt !== 'number') return null
+  // A `completedAt` of some OTHER type reads as still running, which holds the
+  // migration dialog up on every device until someone releases the claim. That
+  // is the permissive direction on purpose — the same one the whole decoder
+  // takes — and it costs a modal rather than a lost record. Only a hand-edit or
+  // a foreign writer can produce it; `markComplete` writes `Date.now()`.
   const completedAt = props[migrationCompletedAtProp.name]
   return typeof completedAt === 'number'
     ? {claimantId, claimedAt, completedAt}
@@ -217,8 +222,9 @@ export const isGraphBackfillClaimActive = async (
  *  operator who reads them as different situations goes looking for a second
  *  thing to do. */
 export const STRANDED_CLAIM_RECOVERY =
-  'the dialog this workspace is blocked behind offers to release it, and the '
-  + `claim block itself is on the "${MIGRATIONS_PAGE_ALIAS}" page`
+  'open the workspace and release it from the dialog it puts up there — the '
+  + `claim block is on the "${MIGRATIONS_PAGE_ALIAS}" page, but deleting it by `
+  + 'hand can destroy the record that the migration ran'
 
 // ---------------------------------------------------------------------------
 // The seam implementation
@@ -311,6 +317,10 @@ export const releaseStrandedGraphBackfillClaim = async (
   const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
   return claimTx(deps, `release stranded backfill claim ${backfillId}`, async tx => {
     const row = await tx.get(claimId)
+    // DEFENCE IN DEPTH here specifically: this is only ever reached from the
+    // migration dialog, which `claimHoldingGraph` never raises over a foreign
+    // row in the first place. Kept because the id is deterministic and the
+    // throw is what stops a delete landing in another workspace's data.
     refuseForeignOccupant(row, workspaceId, claimId)
     if (!row || row.deleted) return 'not-held'
     const live = claimFromProperties(row.properties)
@@ -449,6 +459,29 @@ export const createGraphBackfillClaim = (
           `[graphBackfillClaim] cannot record completion of "${backfillId}": its claim ` +
           `block is gone. The pass ran but nothing records it, so the next operator ` +
           `would repeat it.`,
+        )
+      }
+      // OUR run's record, not whatever holds the row now. The two are not the
+      // same once a claim can be RELEASED from the migration dialog: a peer
+      // clears this run's claim, a third device takes a fresh one, and stamping
+      // that one completed tells every device the migration is over — ending
+      // the modal AND the undo pause while that run is still rewriting the
+      // graph. That is the hazard the pause exists for, reached by recording a
+      // completion rather than by a write.
+      //
+      // A bag that does not decode is refused for the same reason the missing
+      // row above is: stamping it records nothing any reader can see, and the
+      // operator is told the pass ran.
+      //
+      // CLAIMANT-level, so two TABS of one browser still cannot be told apart —
+      // that needs the claim's identity to travel with the run (km-ij26), and
+      // duplicate runs from one profile are an accepted residual already.
+      const live = claimFromProperties(row.properties)
+      if (live === null || live.claimantId !== deps.claimantId) {
+        throw new Error(
+          `[graphBackfillClaim] cannot record completion of "${backfillId}": the claim ` +
+          `block holds ${live === null ? 'no readable claim' : 'another client\'s claim'}, ` +
+          `so this run is not the one it records. The pass ran; nothing was stamped.`,
         )
       }
       // A TOMBSTONE has to be restored, not stamped. Two operators can run

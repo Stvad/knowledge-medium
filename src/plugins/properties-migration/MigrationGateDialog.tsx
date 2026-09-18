@@ -68,10 +68,17 @@ export type ReleaseOutcome = 'released' | 'not-held' | 'changed'
  *  is what stops the two from being read independently and disagreeing. */
 export type ClaimHolder =
   | {kind: 'starting'; message: string}
-  /** This tab WAS running the pass and no longer holds the claim — released
-   *  from somewhere, or completed. Distinct from `starting` because the two
-   *  look identical in the claim row and owe the user opposite things. */
+  /** This tab WAS running the pass and the claim is now GONE — released from
+   *  somewhere, or completed. Distinct from `starting` because the two look
+   *  identical in the claim row and owe the user opposite things. */
   | {kind: 'lost-claim'; message: string}
+  /** This tab WAS running the pass and another client's claim is live in its
+   *  place. Separate from `lost-claim` because a claim IS held: undo is paused
+   *  again, the graph is being rewritten by someone else right now, and telling
+   *  this tab that undo is live and another device "may" start a run would be
+   *  false on both counts. Carries the claim so the shared "a claim is held"
+   *  sentence renders. */
+  | {kind: 'superseded'; message: string; claim: GraphBackfillClaim}
   | {kind: 'this-tab'; message: string; claim: GraphBackfillClaim}
   // The two arms that may release, and the two that carry a claim to release.
   // Same list by construction rather than by agreement between two props.
@@ -83,6 +90,12 @@ export type ClaimHolder =
  *  release is a different situation with the same claimant. */
 const claimKey = (claim: GraphBackfillClaim): string =>
   `${claim.claimantId}:${claim.claimedAt}`
+
+/** What the spinner line says: this tab's own progress where it has some, and
+ *  what the claim says otherwise. The two are exclusive by construction — see
+ *  `ArmCopy`. */
+const statusLine = (holder: ClaimHolder): string =>
+  'message' in holder ? holder.message : (COPY[holder.kind] as {status: string}).status
 
 /** The arms a stranded claim can be released from. */
 type ReleasableHolder = Extract<ClaimHolder, {kind: 'this-browser' | 'another-device'}>
@@ -105,13 +118,21 @@ const UNDER_A_CLAIM = <>Every block&apos;s properties are being rewritten agains
 const STALE_UNDO = <>Reload this tab afterwards: undo entries from before the
   migration are not cleared here, and replaying one can revert part of it.</>
 
+/** An arm that carries a `message` shows it in the status line, so a `status`
+ *  on such an arm could never be read — the type says which arms may have one
+ *  rather than leaving it to whoever adds the next. */
+type ArmCopy<K extends ClaimHolder['kind']> =
+  Extract<ClaimHolder, {kind: K}> extends {message: string}
+    ? {body: ReactNode}
+    : {status: string; body: ReactNode}
+
 /** Every arm's copy in full, rather than one paragraph plus fragments that
  *  switch on the arm.
  *
  *  TOTAL on purpose. A shared sentence is a sentence somebody has to check
  *  against every state. Written out per arm, a sentence can only be wrong
  *  about the one state it is under. */
-const COPY: Record<ClaimHolder['kind'], {status?: string; body: ReactNode}> = {
+const COPY: {[K in ClaimHolder['kind']]: ArmCopy<K>} = {
   'starting': {
     body: <>Checking whether this workspace can be converted. Nothing has been
       written yet.</>,
@@ -119,8 +140,14 @@ const COPY: Record<ClaimHolder['kind'], {status?: string; body: ReactNode}> = {
   'lost-claim': {
     body: <>This tab no longer holds the migration — it was released, or the run
       finished. Anything still in flight here is no longer protected: undo is live
-      again on every device, and another device may start its own run.{' '}
+      again on every device, and another device is free to start its own run.{' '}
       <strong>Reload this tab.</strong></>,
+  },
+  'superseded': {
+    body: <>Another client has taken over the migration — this tab was running it
+      and no longer holds the claim. Anything it wrote after losing the claim is
+      outside both runs&apos; plans, and the run that holds the workspace now did
+      not start from where this one stopped. <strong>Reload this tab.</strong></>,
   },
   'this-tab': {
     body: <>Undo history for this workspace will be cleared as soon as the run
@@ -237,9 +264,7 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
               aria-hidden
               className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
             />
-            <span aria-live="polite">
-              {'message' in holder ? holder.message : COPY[holder.kind].status}
-            </span>
+            <span aria-live="polite">{statusLine(holder)}</span>
           </div>
           <DialogDescription>
             {'claim' in holder && UNDER_A_CLAIM}{COPY[holder.kind].body}
@@ -250,7 +275,7 @@ export const MigrationGateDialog = ({holder, release}: MigrationGateDialogProps)
               leave this tab behind a modal with no exit at all, reading copy
               that tells it not to close. Reloading makes it an ordinary tab
               again, and the release comes back with it. */}
-          {'message' in holder && holder.kind !== 'lost-claim' && (
+          {holder.kind === 'this-tab' && (
             <p className="text-muted-foreground">
               If this tab looks stuck, reload it. The migration resumes where it
               stopped when you run it again, and a reloaded tab is offered the
