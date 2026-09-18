@@ -1,1 +1,1 @@
-import{Ly as e}from"../../../chunks/app-BO_9D4pq.js";export{e as Label};
+import{By as e}from"../../../chunks/app-DMWTCprR.js";export{e as Label};
