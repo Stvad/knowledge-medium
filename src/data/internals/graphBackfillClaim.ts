@@ -279,19 +279,31 @@ const refuseForeignOccupant = (
  * and a row that does not decode as a claim locks nothing.
  *
  * It cannot tell a dead claimant from a live one — nothing can, over a
- * last-write-wins layer with no arbitration. The caller confirms.
+ * last-write-wins layer with no arbitration. The caller confirms, and passes
+ * back the claim they confirmed AGAINST, so consent cannot be spent on a
+ * different one.
  */
 export const releaseStrandedGraphBackfillClaim = async (
   deps: Pick<GraphBackfillClaimDeps, 'tx'>,
   workspaceId: string,
   backfillId: string,
-): Promise<'released' | 'not-held'> => {
+  /** The claim the caller showed the user and got consent for. A different one
+   *  in the row means the situation they agreed to is gone — the original
+   *  finished, or someone released it and a fresh run took the graph — so this
+   *  refuses rather than deleting a claim nobody consented to deleting. The
+   *  gap is a human pause, which is as long as gaps get. */
+  expected: Pick<GraphBackfillClaim, 'claimantId' | 'claimedAt'>,
+): Promise<'released' | 'not-held' | 'changed'> => {
   const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
   return claimTx(deps, `release stranded backfill claim ${backfillId}`, async tx => {
     const row = await tx.get(claimId)
     refuseForeignOccupant(row, workspaceId, claimId)
     if (!row || row.deleted) return 'not-held'
-    if (!claimHoldsGraph(claimFromProperties(row.properties))) return 'not-held'
+    const live = claimFromProperties(row.properties)
+    if (!claimHoldsGraph(live)) return 'not-held'
+    if (live.claimantId !== expected.claimantId || live.claimedAt !== expected.claimedAt) {
+      return 'changed'
+    }
     await tx.delete(claimId)
     return 'released'
   })

@@ -60,14 +60,22 @@ export const releaseMigrationClaimAction = ({repo}: {repo: Repo}): ActionConfig 
     }
     const release = async (): Promise<void> => {
       try {
+        // Against the claim the user was SHOWN. Their consent was for that
+        // situation; between the toast and the click the original can finish,
+        // or someone else can release it and a fresh run take the graph, and
+        // deleting that one is what the warning above says not to do.
         const outcome = await releaseStrandedGraphBackfillClaim(
-          repo, workspaceId, PROPERTY_CELL_BACKFILL_ID,
+          repo, workspaceId, PROPERTY_CELL_BACKFILL_ID, claim,
         )
         showInfo(
           outcome === 'released'
             ? 'Claim released. This workspace accepts edits again, and the migration can be '
               + 'run once more.'
-            : NOTHING_HELD,
+            : outcome === 'changed'
+              ? 'Not released: the claim changed while this was open, so the migration '
+                + 'holding this workspace is no longer the one you were shown. Run this '
+                + 'again to see what holds it now.'
+              : NOTHING_HELD,
           TOAST,
         )
       } catch (err) {

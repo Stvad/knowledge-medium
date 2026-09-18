@@ -619,8 +619,12 @@ describe('the way out of the lock', () => {
    *  claimant id, so the stranded case is exactly the one it declines. */
   const strand = (): Promise<string> => seedClaim({claimantId: 'a-device-that-is-gone'})
 
-  const release = (repo: Repo): Promise<'released' | 'not-held'> =>
-    releaseStrandedGraphBackfillClaim(repo, WS, PROPERTY_CELL_BACKFILL_ID)
+  const HELD_BY = {claimantId: 'a-device-that-is-gone', claimedAt: 1}
+
+  const release = (
+    repo: Repo, expected = HELD_BY,
+  ): Promise<'released' | 'not-held' | 'changed'> =>
+    releaseStrandedGraphBackfillClaim(repo, WS, PROPERTY_CELL_BACKFILL_ID, expected)
 
   it('clears a stranded claim, though clearing it is a write the lock refuses', async () => {
     // Without the release being exempt from the lock it lifts, a claimant that
@@ -646,6 +650,21 @@ describe('the way out of the lock', () => {
     await seedClaim({completed: true})
 
     expect(await release(repo)).toBe('not-held')
+
+    expect(await claimIsLive()).toBe(true)
+  })
+
+  it('refuses to spend the user\'s consent on a claim they were not shown', async () => {
+    // The gap between "this workspace has been held for 3 hours" and the click
+    // is a human pause. In it, the run they were told about can finish and a
+    // fresh one can take the graph — and deleting THAT is what the warning on
+    // the confirmation says not to do.
+    const repo = makeRepo()
+    await seedTarget(repo)
+    await strand()
+
+    expect(await release(repo, {claimantId: 'a-device-that-is-gone', claimedAt: 999}))
+      .toBe('changed')
 
     expect(await claimIsLive()).toBe(true)
   })
