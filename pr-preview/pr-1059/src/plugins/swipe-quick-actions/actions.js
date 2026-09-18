@@ -1,0 +1,1 @@
+import{AS as e,MS as t,jS as n,kS as r}from"../../../chunks/app-CACOcgkQ.js";export{r as DEFAULT_QUICK_ACTION_ITEMS,e as SWIPE_RIGHT_BLOCK_ACTION_ID,n as isQuickActionItem,t as quickActionItemsFacet};

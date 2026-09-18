@@ -1,0 +1,1 @@
+import{k2 as e}from"../../../chunks/app-CACOcgkQ.js";export{e as definePostCommitProcessor};

@@ -1,0 +1,1 @@
+import{dS as e,fS as t,uS as n}from"../../../chunks/app-CACOcgkQ.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,e as SWIPE_TRIGGER_PX,t as swipeRecognizer};

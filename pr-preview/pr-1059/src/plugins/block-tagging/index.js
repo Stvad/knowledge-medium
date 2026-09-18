@@ -1,0 +1,1 @@
+import{$o as e,Qo as t,as as n,es as r,is as i,ps as a}from"../../../chunks/app-CACOcgkQ.js";export{e as ADD_TAG_ACTION_ID,r as ADD_TAG_BLOCKS_ACTION_ID,i as appendTagToBlocks,n as appendTagToContent,t as blockTaggingPlugin,a as blockTagsConfigProp};

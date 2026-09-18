@@ -1,0 +1,1 @@
+import{GZ as e,JZ as t,KZ as n,WZ as r,YZ as i,qZ as a}from"../../chunks/app-CACOcgkQ.js";export{r as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,e as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,n as __resetLayoutSessionIdForTesting,a as getLayoutSessionId,t as isInstalledAppDisplayMode,i as readOrCreateLayoutSessionId};

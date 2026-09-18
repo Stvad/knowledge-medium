@@ -1,0 +1,1 @@
+import{_4 as e,b4 as t,f4 as n,g4 as r,h4 as i,m4 as a,p4 as o,v4 as s,x4 as c,y4 as l}from"../../../chunks/app-CACOcgkQ.js";export{n as CHANGE_SCOPE_POLICIES,o as ChangeScope,a as isChangeScope,i as policyForScope,r as scopeAllowedDuringGraphMigration,e as scopeAllowedInReadOnly,s as scopeIsUndoable,l as scopePoliciesEquivalent,t as scopeUploadsToServer,c as sourceForScope};

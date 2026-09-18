@@ -1,0 +1,1 @@
+import{Aw as e,jw as t}from"../chunks/app-CACOcgkQ.js";export{e as checkForAppUpdate,t as registerServiceWorker};

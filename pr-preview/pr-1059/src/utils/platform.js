@@ -1,0 +1,1 @@
+import{BM as e,VM as t}from"../../chunks/app-CACOcgkQ.js";export{e as isIOS,t as isMacPlatform};

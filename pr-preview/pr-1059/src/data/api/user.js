@@ -1,0 +1,1 @@
+import{_2 as e,g2 as t,h2 as n}from"../../../chunks/app-CACOcgkQ.js";export{n as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,e as systemAuthor};

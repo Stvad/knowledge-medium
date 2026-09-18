@@ -1,0 +1,1 @@
+import{$x as e}from"../../../chunks/app-CACOcgkQ.js";export{e as CommandPaletteHeaderItem};

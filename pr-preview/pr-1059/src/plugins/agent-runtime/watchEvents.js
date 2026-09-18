@@ -1,0 +1,1 @@
+import{Gl as e,Kl as t}from"../../../chunks/app-CACOcgkQ.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

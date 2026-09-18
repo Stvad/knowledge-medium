@@ -1,0 +1,1 @@
+import{$_ as e,ev as t,gv as n,hv as r}from"../../../chunks/app-CACOcgkQ.js";export{r as DEFAULT_THEME_ID_DARK,n as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,e as defaultThemesPlugin};

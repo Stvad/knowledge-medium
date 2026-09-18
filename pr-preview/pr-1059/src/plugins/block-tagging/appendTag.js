@@ -1,0 +1,1 @@
+import{as as e,is as t}from"../../../chunks/app-CACOcgkQ.js";export{t as appendTagToBlocks,e as appendTagToContent};

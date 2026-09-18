@@ -1,0 +1,1 @@
+import{_L as e,vL as t}from"../../../chunks/app-CACOcgkQ.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};

@@ -1,0 +1,1 @@
+import{Bg as e,Hg as t,Vg as n,zg as r}from"../../../chunks/app-CACOcgkQ.js";export{r as WorkspaceSwitcherSidebarSection,e as pendingInvitationsHeaderItem,n as workspaceHeaderPlugin,t as workspaceSwitcherSidebarSection};

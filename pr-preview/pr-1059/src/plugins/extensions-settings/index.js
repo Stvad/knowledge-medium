@@ -1,0 +1,1 @@
+import{cw as e,gt as t,lw as n}from"../../../chunks/app-CACOcgkQ.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

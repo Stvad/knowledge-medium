@@ -1,0 +1,1 @@
+import{Al as e,Dl as t,Ml as n,Nl as r,Ol as i,Pl as a,jl as o,kl as s}from"../../../chunks/app-CACOcgkQ.js";export{t as PROVE_DISTINCT_VALUE_LIMIT,i as applyPropertyDefinitionSynthesis,s as flipBlockedBySynthesis,e as keyCannotBeDefined,o as planPropertyDefinitionSynthesis,n as provePresetId,r as resolveSynthesisNamespace,a as synthesizedPropertyDefinitionBlockId};

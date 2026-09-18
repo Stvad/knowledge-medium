@@ -1,0 +1,1 @@
+import{ls as e}from"../../../chunks/app-CACOcgkQ.js";export{e as blockTaggingDataExtension};

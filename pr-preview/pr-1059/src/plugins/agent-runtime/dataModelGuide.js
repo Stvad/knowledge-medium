@@ -1,0 +1,1 @@
+import{$l as e}from"../../../chunks/app-CACOcgkQ.js";export{e as DATA_MODEL_GUIDE};

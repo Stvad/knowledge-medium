@@ -1,0 +1,1 @@
+import{cw as e,lw as t,sw as n,uw as r}from"../../../chunks/app-CACOcgkQ.js";export{n as extensionsOverridesPresetCore,e as extensionsOverridesProp,t as extensionsPrefsType,r as overridesCodec};

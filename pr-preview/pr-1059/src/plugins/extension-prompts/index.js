@@ -1,0 +1,1 @@
+import{nw as e,tw as t}from"../../../chunks/app-CACOcgkQ.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

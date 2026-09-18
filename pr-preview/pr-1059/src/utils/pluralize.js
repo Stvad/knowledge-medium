@@ -1,0 +1,1 @@
+import{FE as e,PE as t}from"../../chunks/app-CACOcgkQ.js";export{t as agree,e as pluralize};

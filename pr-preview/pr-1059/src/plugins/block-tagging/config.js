@@ -1,0 +1,1 @@
+import{_s as e,ds as t,fs as n,gs as r,hs as i,ms as a,ps as o,us as s}from"../../../chunks/app-CACOcgkQ.js";export{s as blockTaggingPrefsType,t as blockTagsConfigCodec,n as blockTagsConfigPresetCore,o as blockTagsConfigProp,a as isValidTagName,i as normalizeBlockTagsConfig,r as selectableTagNames,e as tagNameIssue};
