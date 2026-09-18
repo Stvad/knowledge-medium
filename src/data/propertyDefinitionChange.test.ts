@@ -1633,6 +1633,23 @@ describe('the multi-value boundary (#1010)', () => {
     expect(await cell('p')).toEqual({status: ['((a-id))']})
   })
 
+  it('keeps quotes the person typed, which the text route would strip', async () => {
+    // A string member can legitimately BE a quoted string: `"quoted"` is
+    // stored verbatim and the cell holds it WITH its quotes. Re-reading that
+    // text as JSON unwraps it, so the text route answers with a different,
+    // shorter value nobody wrote — and unlike the list case, nothing about the
+    // spelling looks wrong afterwards.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    await seedListProperty(repo, 'p', 'status', ['"quoted"'])
+    expect(await cell('p')).toEqual({status: ['"quoted"']})
+
+    await retype(repo, FIELD_ID, 'list')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: ['"quoted"']})
+  })
+
   it('SURVIVES the return trip, both spellings intact (#1055)', async () => {
     // Coming back, the JSON text `"x"` READS under the string member codec —
     // which accepts anything — so reading the TEXT would make the member the
