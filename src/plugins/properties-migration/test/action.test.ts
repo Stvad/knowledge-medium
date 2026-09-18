@@ -7,15 +7,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const openDialog = vi.fn()
-const progressHandle = {update: vi.fn(), done: vi.fn(), fail: vi.fn()}
+const progressHandle = {
+  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(),
+}
 
 vi.mock('@/utils/dialogs.js', () => ({openDialog: (...args: unknown[]) => openDialog(...args)}))
 const showInfo = vi.fn()
 const dismissToast = vi.fn()
 vi.mock('@/utils/toast.js', () => ({
-  showProgress: () => progressHandle,
   showInfo: (...args: unknown[]) => showInfo(...args),
   dismissToast: (...args: unknown[]) => dismissToast(...args),
+}))
+vi.mock('../blockingProgress.ts', () => ({
+  showBlockingMigrationProgress: () => progressHandle,
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 const flipWorkspace = vi.fn<(repo: unknown, workspaceId: string) => Promise<{localApplied: boolean}>>()
@@ -142,6 +146,7 @@ afterEach(() => {
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
   progressHandle.fail.mockReset()
+  progressHandle.settleUnreported.mockReset()
   planSynthesis.mockReset()
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockReset()

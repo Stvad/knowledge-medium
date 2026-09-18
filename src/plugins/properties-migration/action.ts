@@ -20,7 +20,8 @@ import {
 import { isRemoteSyncActive } from '@/data/repoProvider'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { dismissToast, showInfo, showProgress, type ProgressToast } from '@/utils/toast.js'
+import { dismissToast, showInfo } from '@/utils/toast.js'
+import { showBlockingMigrationProgress, type MigrationProgress } from './blockingProgress.ts'
 import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
 
 /** The runner's reasons come from several places and only some end in a
@@ -248,7 +249,7 @@ interface ClaimedMigration {
    *  refused plan, whose keys stay cell-only. */
   readonly willSynthesize: number
   readonly blockCount: number
-  readonly banner: ProgressToast
+  readonly banner: MigrationProgress
 }
 
 /** What the gesture WRITES, plus the report that follows it — everything that
@@ -544,7 +545,10 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // before anything refused.
     if (repo.activeWorkspaceId !== workspaceId) return
 
-    const banner = showProgress('Migrating properties to blocks…')
+    // A modal, so the operator is not left typing into an app that refuses
+    // every edit. The data-layer lock is what actually refuses them, and it
+    // reaches this user's other devices, where nothing of ours is mounted.
+    const banner = showBlockingMigrationProgress('Migrating properties to blocks…')
     // ABOVE the synthesis block, not below it: below, the "Nothing was changed"
     // this prints is false the moment synthesis commits.
     //
@@ -582,19 +586,26 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // user-length pause blocks every other device while a dialog sits open,
     // and a tab closed at the dialog strands it — over a flipped workspace,
     // once the flip below has landed.
-    const gesture = await repo.withOperatorBackfillClaim(
-      workspaceId, PROPERTY_CELL_BACKFILL_ID,
-      pass => migrateUnderClaim(
-        {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}, pass),
-    )
-    if (!gesture.claimed) {
-      // The same reporter the pass's own outcomes go through. Which step
-      // turned this device away is an implementation detail of where the
-      // claim sits; a second vocabulary for "another device owns this run"
-      // would drift from the first.
-      const {message, failed} = describeOutcome(gesture.result, NOTHING_MIGRATED)
-      if (failed) banner.fail(message)
-      else banner.done(message)
+    // `finally`, over everything that reports into the modal: the modal cannot
+    // be dismissed while it reads as running, so a path that returns or throws
+    // without reporting an outcome would leave the app needing a reload.
+    try {
+      const gesture = await repo.withOperatorBackfillClaim(
+        workspaceId, PROPERTY_CELL_BACKFILL_ID,
+        pass => migrateUnderClaim(
+          {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}, pass),
+      )
+      if (!gesture.claimed) {
+        // The same reporter the pass's own outcomes go through. Which step
+        // turned this device away is an implementation detail of where the
+        // claim sits; a second vocabulary for "another device owns this run"
+        // would drift from the first.
+        const {message, failed} = describeOutcome(gesture.result, NOTHING_MIGRATED)
+        if (failed) banner.fail(message)
+        else banner.done(message)
+      }
+    } finally {
+      banner.settleUnreported()
     }
   },
 })

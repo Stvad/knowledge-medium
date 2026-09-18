@@ -32,12 +32,19 @@ const DialogContent = ({
   className,
   children,
   hideOverlay = false,
+  hideClose = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   /** Skip the dimming overlay so the dialog can float over a still-interactive
    *  app (e.g. a non-modal dialog whose actions open content in a side panel the
    *  user should keep seeing). Defaults to the standard modal overlay. */
   hideOverlay?: boolean
+  /** Drop the corner close button, for a dialog the user must not dismiss —
+   *  one reporting an operation that is still running and cannot be abandoned
+   *  halfway. Escape and outside-click are separate: prevent those on the
+   *  Content's own `onEscapeKeyDown` / `onInteractOutside`, or this only hides
+   *  one of three ways out. */
+  hideClose?: boolean
 }) => (
   <DialogPortal>
     {!hideOverlay && <DialogOverlay />}
@@ -49,10 +56,10 @@ const DialogContent = ({
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+      {!hideClose && <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
-      </DialogPrimitive.Close>
+      </DialogPrimitive.Close>}
     </DialogPrimitive.Content>
   </DialogPortal>
 )

@@ -10,15 +10,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
 
 const openDialog = vi.fn(async () => true)
-const progressHandle = {update: vi.fn(), done: vi.fn(), fail: vi.fn()}
+const progressHandle = {
+  update: vi.fn(), done: vi.fn(), fail: vi.fn(), settleUnreported: vi.fn(),
+}
 const showInfo = vi.fn()
 let emit: ((progress: PropertyCellBackfillProgress) => void) | null = null
 
 vi.mock('@/utils/dialogs.js', () => ({openDialog: () => openDialog()}))
 vi.mock('@/utils/toast.js', () => ({
-  showProgress: () => progressHandle,
   showInfo: (message: string, opts?: unknown) => showInfo(message, opts),
   dismissToast: vi.fn(),
+}))
+vi.mock('../blockingProgress.ts', () => ({
+  showBlockingMigrationProgress: () => progressHandle,
 }))
 vi.mock('../ConfirmMigrationDialog.tsx', () => ({ConfirmMigrationDialog: () => null}))
 // The gesture flips before it backfills, and the fixture below starts at
@@ -86,6 +90,7 @@ afterEach(() => {
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
   progressHandle.fail.mockReset()
+  progressHandle.settleUnreported.mockReset()
   showInfo.mockReset()
   emit = null
 })
