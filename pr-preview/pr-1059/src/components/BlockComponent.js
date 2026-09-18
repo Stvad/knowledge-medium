@@ -1,1 +1,1 @@
-import{XT as e,ZT as t}from"../../chunks/app-C7oLdVum.js";export{e as BlockChildren,t as BlockComponent};
+import{JT as e,YT as t}from"../../chunks/app-cEB-m0Bs.js";export{e as BlockChildren,t as BlockComponent};

@@ -1,1 +1,1 @@
-import{HC as e,VC as t}from"../../chunks/app-C7oLdVum.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{BC as e,zC as t}from"../../chunks/app-cEB-m0Bs.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

@@ -1,1 +1,1 @@
-import{Rg as e}from"../../../chunks/app-C7oLdVum.js";export{e as usePromotableBreadcrumb};
+import{Ig as e}from"../../../chunks/app-cEB-m0Bs.js";export{e as usePromotableBreadcrumb};

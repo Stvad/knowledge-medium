@@ -1,1 +1,1 @@
-import{JW as e}from"../../../../chunks/app-C7oLdVum.js";export{e as applySyncInvalidation};
+import{KW as e}from"../../../../chunks/app-cEB-m0Bs.js";export{e as applySyncInvalidation};
