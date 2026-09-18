@@ -18,6 +18,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   createGraphBackfillClaim,
   graphBackfillClaimBlockId,
+  type GraphBackfillClaimDeps,
   GRAPH_MIGRATION_LOCKED,
 } from '@/data/internals/graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
@@ -269,12 +270,13 @@ describe('the migration itself, running under the lock it raised', () => {
     // does can read it: the seam holds a Repo the Repo has to be built with.
     // eslint-disable-next-line prefer-const -- destructuring assignment below
     let repo!: Repo
-    const claim = createGraphBackfillClaim({
+    const deps: GraphBackfillClaimDeps = {
       get db() { return repo.db },
       tx: (fn, opts) => repo.tx(fn, opts),
       claimantId: 'this-device',
       ensureHome: (workspaceId: string) => getOrCreateMigrationsPage(repo, workspaceId),
-    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+    }
+    const claim = createGraphBackfillClaim(deps)
     ;({repo} = createTestRepo({
       db: sharedDb.db, user: {id: 'user-1'}, backfillCompletionClaim: claim,
     }))
