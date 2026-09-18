@@ -1,1 +1,1 @@
-import{M as e,N as t}from"../../../chunks/app-bs97xG3h.js";export{e as RAW_CHARACTER_COUNT_PROFILE_ID,t as characterCountProfilesFacet};
+import{M as e,N as t}from"../../../chunks/app-BQ8IlI22.js";export{e as RAW_CHARACTER_COUNT_PROFILE_ID,t as characterCountProfilesFacet};

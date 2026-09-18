@@ -1,1 +1,1 @@
-import{eK as e,nK as t,rK as n,tK as r}from"../../chunks/app-bs97xG3h.js";export{e as buildFilterPrefixes,r as rankCandidates,t as scoreCandidate,n as tokenize};
+import{eK as e,nK as t,rK as n,tK as r}from"../../chunks/app-BQ8IlI22.js";export{e as buildFilterPrefixes,r as rankCandidates,t as scoreCandidate,n as tokenize};
