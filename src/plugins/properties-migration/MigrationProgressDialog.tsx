@@ -45,18 +45,13 @@ export const MigrationProgressDialog = ({
   const state = useSyncExternalStore(subscribe, getState)
   const running = state.kind === 'running'
   return (
+    // `open` is fixed, so `onOpenChange` is the ONLY exit — Radix reports
+    // Escape, outside-click and the corner button all through it, and none of
+    // them can close a controlled dialog on their own. Refusing it while the
+    // run has no outcome is therefore the whole block; `hideClose` is about the
+    // affordance, so the terminal state offers one way out rather than two.
     <Dialog open onOpenChange={next => { if (!next && !running) resolve(true) }}>
-      <DialogContent
-        className="max-w-md"
-        // ONE way out, and only once there is an outcome to read: the footer
-        // button. The corner X would be a second affordance for the same thing
-        // in the terminal state, and Escape and outside-click are prevented
-        // while running — hiding the button and leaving those would read as
-        // blocking without being it.
-        hideClose
-        onEscapeKeyDown={event => { if (running) event.preventDefault() }}
-        onInteractOutside={event => { if (running) event.preventDefault() }}
-      >
+      <DialogContent className="max-w-md" hideClose>
         <DialogHeader>
           <DialogTitle>
             {state.kind === 'failed' ? 'Migration stopped' : 'Migrating properties to blocks'}
