@@ -205,6 +205,34 @@ const setupDefinition = async (
 
 const UNLOADABLE_PRESET = 'test-unloadable-preset'
 
+/** A LIST-valued definition whose preset no longer builds — the case where
+ *  the cell it last published is the only record of how many values the
+ *  consumer holds. {@link withPresetUnloaded} is the scalar twin, and carries
+ *  why this is the long way round. */
+const withListPresetUnloaded = async (
+  value: readonly string[],
+): Promise<Repo> => {
+  const preset = {
+    id: UNLOADABLE_PRESET,
+    build: () => codecs.list(codecs.string),
+    defaultValue: [],
+  } as unknown as AnyValuePresetCore
+  const authoring = await setupDefinition(UNLOADABLE_PRESET, [preset], 'list')
+  await createHost(authoring, 'p')
+  await authoring.tx(tx => tx.setProperty('p', schemaFor(authoring, 'status'), value),
+    {scope: ChangeScope.BlockDefault})
+  const repo = makeRepo()
+  await vi.waitFor(() => {
+    if (repo.propertyDefinitions?.definitionsByName.get('status') === undefined) {
+      throw new Error('[test] status definition not published yet')
+    }
+    if (repo.propertySchemas.get('status') !== undefined) {
+      throw new Error('[test] status still has behaviour in the registry')
+    }
+  }, {timeout: 3000})
+  return repo
+}
+
 /** A `status` definition on an EXTENSION's preset with one consumer holding
  *  `value`, reopened in a repo where that preset no longer builds — so the row
  *  is still published as metadata while carrying no codec.
@@ -243,6 +271,8 @@ const withPresetUnloaded = async (
 const rename = (repo: Repo, fieldId: string, newName: string): Promise<void> =>
   repo.tx(tx => tx.setProperty(fieldId, propertyNameProp, newName),
     {scope: ChangeScope.BlockDefault})
+
+
 
 const retype = (repo: Repo, fieldId: string, presetId: string): Promise<void> =>
   repo.tx(tx => tx.setProperty(fieldId, presetIdProp, presetId),
@@ -639,8 +669,43 @@ describe('codec change', () => {
     expect(await rowContent(valueRowId)).toBe('42')
   })
 
+  it('canonicalizes a tolerant spelling where the OLD codec normalizes', async () => {
+    // `date` decode CANONICALIZES a tolerant instant, so carrying the value
+    // rewrites the row text: the cell survives, and the spelling a person
+    // typed does not — here, unrecoverably.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('date')
+    const {valueRowId} = await seedProperty(
+      repo, 'p', 'status', new Date('2024-01-02T00:00:00.000Z'))
+    // Raw, because a tolerant spelling is what a synced or hand-edited row
+    // carries — the local writer would have canonicalized it on the way in.
+    await setRawValueContent(valueRowId, '2024-01-02')
+    expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
+
+    await retype(repo, FIELD_ID, 'string')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
+    expect(await rowContent(valueRowId)).toBe('2024-01-02T00:00:00.000Z')
+  })
+
+  it('REFUSES a narrowing with no old codec, counting the CELL it published', async () => {
+    // Repairing a broken definition is the one moment a list can be narrowed
+    // with nothing able to read its children. The cell is still a faithful
+    // record of how many values the consumer holds, and counting it as one
+    // value let every member but the first go in silence.
+    await seedWorkspace('children')
+    const repo = await withListPresetUnloaded(['1', '2', '3'])
+    expect(await cell('p')).toEqual({status: ['1', '2', '3']})
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+    })
+    expect(await cell('p')).toEqual({status: ['1', '2', '3']})
+  })
+
   it('re-stamps the reference columns when a ref value becomes plain text', async () => {
-    // Retyping a ref property rewrites `((id))` into escaped text AFTER
+    // Retyping a ref property rewrites `((id))` into the bare id AFTER
     // `core.deriveReferenceTarget` ran, and this processor's writes are
     // settled, so the derive re-run never revisits the row. Without an inline
     // re-stamp the column keeps naming a target the content no longer
@@ -653,7 +718,7 @@ describe('codec change', () => {
 
     await retype(repo, FIELD_ID, 'string')
 
-    expect(await rowContent(valueRowId)).not.toBe('((target))')
+    expect(await rowContent(valueRowId)).toBe('target')
     expect(await referenceTargetOf(valueRowId)).toBeNull()
   })
 
@@ -1388,21 +1453,23 @@ describe('the multi-value boundary (#1010)', () => {
 
   it('re-encodes EVERY member, not just the first', async () => {
     // The scalar rule — take the first value child that parses — truncates a
-    // list to one member. The SECOND member is the whole point here: under
-    // `refList` each is a bare `((id))` span, and the string member codec has
-    // to ESCAPE it, or a later rename or merge rewrites it as a reference.
+    // list to one member, which is why the SECOND member is asserted. A
+    // refList cell holds BARE IDS: the `((id))` span is how the child SPELLS
+    // one, not what the property holds, so carrying the values across leaves
+    // the cell untouched and leaves no span for a later rename or merge to
+    // rewrite.
     await seedWorkspace('children')
     const repo = await setupDefinition('refList')
     await createHost(repo, 'a-id')
     await createHost(repo, 'b-id')
     const ids = await seedListProperty(repo, 'p', 'status', ['a-id', 'b-id'])
     expect(await rowContent(ids[0]!)).toBe('((a-id))')
+    expect(await cell('p')).toEqual({status: ['a-id', 'b-id']})
 
     await retype(repo, FIELD_ID, 'string-list')
 
-    expect(await cell('p')).toEqual({status: ['((a-id))', '((b-id))']})
-    expect(await rowContent(ids[1]!)).not.toBe('((b-id))')
-    expect(await rowContent(ids[1]!)).not.toMatch(/[[(]/)
+    expect(await cell('p')).toEqual({status: ['a-id', 'b-id']})
+    expect(await rowContent(ids[1]!)).toBe('b-id')
   })
 
   it('UNIONS across duplicate field rows, as the projection does', async () => {
@@ -1419,7 +1486,7 @@ describe('the multi-value boundary (#1010)', () => {
 
     await retype(repo, FIELD_ID, 'string-list')
 
-    expect(await cell('p')).toEqual({status: ['((a-id))']})
+    expect(await cell('p')).toEqual({status: ['a-id']})
     // The duplicate ROW survives, and should: this pass is `settledWrites`, so
     // no materializer follows it, and folding the two rows is the collapse's
     // job rather than this one's. What must not happen is the DOUBLED cell —
@@ -1440,6 +1507,60 @@ describe('the multi-value boundary (#1010)', () => {
     await rename(repo, FIELD_ID, 'state')
 
     expect(await cell('p')).toEqual({state: ['alpha']})
+  })
+
+  it('REFUSES when duplicate field rows CONVERGE on one member', async () => {
+    // A loss with nothing unreadable in it: two rows holding DIFFERENT values
+    // (the string `42` and the number 42) re-spell to the same text, so the
+    // union that the projection takes folds them into one member. Nothing is
+    // unconvertible; the cell still stops holding a value, so the same
+    // refusal applies.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('list')
+    await seedListProperty(repo, 'p', 'status', ['42'])
+    // Raw, so the cell is not reprojected — the duplicate is visible only to
+    // the union this pass takes, which is where the two values meet.
+    await addDuplicateFieldRow('p', ['42'])
+    expect(await cell('p')).toEqual({status: ['42']})
+
+    await expect(retype(repo, FIELD_ID, 'string-list')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+    })
+    expect(await cell('p')).toEqual({status: ['42']})
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('list')
+  })
+
+  it('carries a scalar onto an identity target without re-reading it', async () => {
+    // `list` ("Options") is the only identity preset a person can pick, so
+    // this is the gesture the contract is actually about. The cell held the
+    // STRING 42, and a re-type is not a parse.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', '42')
+    expect(await cell('p')).toEqual({status: '42'})
+
+    await retype(repo, FIELD_ID, 'list')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: ['42']})
+    expect(await rowContent(valueRowId)).toBe('"42"')
+  })
+
+  it('keeps a value that is literally the word `null` (#1030)', async () => {
+    // Picker-visible both ends ("Plain text" -> "Options"), and the ambiguity
+    // #1030 names: the old codec REJECTS null, so the row held the literal
+    // word, and reading the text under a codec that accepts null would turn
+    // it into a JSON null instead.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 'null')
+    expect(await cell('p')).toEqual({status: 'null'})
+
+    await retype(repo, FIELD_ID, 'list')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: ['null']})
+    expect(await rowContent(valueRowId)).toBe('"null"')
   })
 
   it('scalar -> list reads the one value child as a single member', async () => {
@@ -1598,7 +1719,10 @@ describe('the multi-value boundary (#1010)', () => {
     // the string `x` either way, and only its spelling moves.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
-    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
+    // `42` is the only member here that the text route could also read, so it
+    // is the only one that pins the ROUTE (`spellingThatHolds`) rather than
+    // just the re-encode. It stays the STRING it was.
+    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y', '42'])
     const errors = collectUserErrors(repo)
     expect(await rowContent(ids[0]!)).toBe('x')
 
@@ -1607,34 +1731,65 @@ describe('the multi-value boundary (#1010)', () => {
 
     expect(await rowContent(ids[0]!)).toBe('"x"')
     expect(await rowContent(ids[1]!)).toBe('"y"')
-    expect(await cell('p')).toEqual({status: ['x', 'y']})
+    expect(await cell('p')).toEqual({status: ['x', 'y', '42']})
     // The one place this channel is still worth asserting on: a refusal throws
     // out of the awaited `repo.tx` and would fail the test above it, so an
     // empty list here only rules out one leaking from an internal tx.
     expect(errors).toEqual([])
   })
 
-  it('does NOT survive the return trip — the other direction mangles (#1055)', async () => {
-    // ASYMMETRY, pinned so a change to the route order fails here rather than
-    // silently. Coming back, the JSON text `"x"` READS under the string member
-    // codec — which accepts anything — so the value route never runs and the
-    // member becomes the three-character string `"x"`.
-    //
-    // Not fixed with #1024 because the rule that would fix it (prefer the value
-    // route wherever both read) also moves `refList` -> `string-list` off the
-    // escaped `((a-id))` span the test above deliberately pins, and the two
-    // cases want opposite answers.
+  it('ESCAPES a member the target codec would otherwise store as a live span', async () => {
+    // The value route re-spells under the TARGET codec, so escaping is its
+    // duty too: a generic `list` stores the string `((a-id))` as JSON with the
+    // parens intact, and written verbatim into a `string-list` row the inline
+    // reference reader takes it as a pointer — a later rename or merge then
+    // edits the value.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('list')
+    const ids = await seedListProperty(repo, 'p', 'status', ['((a-id))'])
+
+    await retype(repo, FIELD_ID, 'string-list')
+    await repo.awaitProcessors()
+
+    expect(await rowContent(ids[0]!)).not.toMatch(/[[(]/)
+    expect(await cell('p')).toEqual({status: ['((a-id))']})
+  })
+
+  it('keeps quotes the person typed, which the text route would strip', async () => {
+    // A string member can legitimately BE a quoted string: `"quoted"` is
+    // stored verbatim and the cell holds it WITH its quotes. Re-reading that
+    // text as JSON unwraps it, so the text route answers with a different,
+    // shorter value nobody wrote — and unlike the list case, nothing about the
+    // spelling looks wrong afterwards.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('string-list', undefined, 'list')
+    await seedListProperty(repo, 'p', 'status', ['"quoted"'])
+    expect(await cell('p')).toEqual({status: ['"quoted"']})
+
+    await retype(repo, FIELD_ID, 'list')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: ['"quoted"']})
+  })
+
+  it('returns the same members after a round trip through the other list preset (#1055)', async () => {
+    // Coming back, the JSON text `"x"` READS under the string member codec —
+    // which accepts anything — so reading the TEXT would make the member the
+    // three-character string `"x"`. Reading the VALUE first is what keeps the
+    // pair symmetric: the codec that WROTE the text settles what it spells.
     await seedWorkspace('children')
     const repo = await setupDefinition('string-list', undefined, 'list')
     const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
 
     await retype(repo, FIELD_ID, 'list')
     await awaitDefinition(repo, 'status', 'list')
+    expect(await rowContent(ids[0]!)).toBe('"x"')
+
     await retype(repo, FIELD_ID, 'string-list')
     await repo.awaitProcessors()
 
-    expect(await rowContent(ids[0]!)).toBe('"x"')
-    expect(await cell('p')).toEqual({status: ['"x"', '"y"']})
+    expect(await rowContent(ids[0]!)).toBe('x')
+    expect(await cell('p')).toEqual({status: ['x', 'y']})
   })
 
   it('re-keys the members it CAN read past one it cannot, on a rename', async () => {

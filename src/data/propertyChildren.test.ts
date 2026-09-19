@@ -16,8 +16,10 @@ import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
+  convertValueChildContent,
   encodedToValueChildContent,
   valueChildContentToEncoded,
+  type ValueChildConversion,
 } from './propertyChildren'
 import { propertyDefinitionBlockId } from './definitionSeeds'
 import { addBlockTypeToProperties, aliasesProp, blockTypeLabelProp, typesProp } from './properties'
@@ -3914,5 +3916,81 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
         .toEqual(['shared', 'mine', 'theirs'])
       expect((await bagOf('into')).tags).toEqual(['shared', 'mine', 'theirs'])
     })
+  })
+})
+
+describe('convertValueChildContent: which reading of a value child wins (#1055)', () => {
+  // Direct, because the route decisions are pure: no workspace seed, no
+  // processor round, and the exact respelled text rather than its effect.
+  type PresetId = keyof typeof kernelValuePresetCoresById
+  const schemaOf = (presetId: PresetId): AnyPropertySchema => {
+    const core = kernelValuePresetCoresById[presetId]
+    return {
+      name: 'p',
+      codec: core.build(core.defaultConfig as never),
+      defaultValue: core.defaultValue,
+      changeScope: ChangeScope.BlockDefault,
+    } as AnyPropertySchema
+  }
+  const convert = (
+    from: PresetId | null, to: PresetId, content: string,
+  ): ValueChildConversion =>
+    convertValueChildContent(from === null ? null : schemaOf(from), schemaOf(to), content)
+
+  it('carries the VALUE across a pure spelling disagreement, both directions', () => {
+    expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
+    expect(convert('list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
+  })
+
+  it('re-reads the TEXT where the target cannot hold the value', () => {
+    // The round trip fails on a type change, which is what routes every
+    // coercion here without an ordering rule of its own. Asserted on the
+    // canonicalized content: carrying the value would have kept the spacing.
+    expect(convert('string', 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
+    expect(convert('string', 'boolean', ' true ')).toEqual({outcome: 'converted', content: 'true'})
+  })
+
+  it('does NOT re-read the text for an IDENTITY target, which holds anything', () => {
+    expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"'})
+    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
+  })
+
+  it('re-reads the text for a row the OLD codec cannot read', () => {
+    // A decline that has nothing to do with the target: within ONE `number`
+    // property re-typed to `list`, the readable row keeps its number while
+    // this stale one is re-read as JSON.
+    expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
+  })
+
+  it('re-spells a reference the stored text ALREADY carried', () => {
+    // The mint decline is gated on the stored text, not on the target: an
+    // alias the person wrote is an identity they wrote. Nothing else can
+    // answer here — the text route cannot read the alias form under `ref` at
+    // all, so declining would refuse the re-type rather than answer it
+    // differently.
+    expect(convert('string', 'ref', '[[Page]]'))
+      .toEqual({outcome: 'converted', content: '(([[Page]]))'})
+    expect(convert('string', 'ref', 'Mary')).toEqual({outcome: 'unreadable'})
+  })
+
+  it('treats the EMPTY spelling as a spelling', () => {
+    // `''` is what `string` spells the empty string as, so a route that tested
+    // the spelling for truthiness rather than for null would fall through to
+    // the text route and keep the JSON `""` verbatim — #1055 again, at the one
+    // value where it is invisible.
+    expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
+  })
+
+  it('keeps a bare `null` the OLD codec read as the literal word (#1030)', () => {
+    // `null` is the unset SENTINEL to a codec that accepts it and the literal
+    // word to one that does not. `string` rejects null, so the row held the
+    // word and the value route carries it. Settled only where a spelling
+    // holds: `list` -> `string` has none, and the text route decides it the
+    // other way.
+    expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
+  })
+
+  it('falls to the text route when no old codec records the encoding', () => {
+    expect(convert(null, 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
   })
 })
