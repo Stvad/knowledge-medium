@@ -1,1 +1,1 @@
-import{v_ as e}from"../../../chunks/app-CTBw4QNQ.js";export{e as WorkspaceSettingsDialog};
+import{v_ as e}from"../../../chunks/app-CL8bMrqD.js";export{e as WorkspaceSettingsDialog};
