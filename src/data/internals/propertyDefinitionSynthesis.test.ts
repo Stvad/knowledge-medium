@@ -19,6 +19,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { withOuterReadsRefused } from '@/data/test/refuseOuterReads'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { confirmPlaintextForSession } from '@/sync/keys/modePin'
 import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
@@ -601,6 +602,117 @@ describe('planPropertyDefinitionSynthesis', () => {
 })
 
 describe('applyPropertyDefinitionSynthesis', () => {
+  it('takes no outer read while its own write lock is held', async () => {
+    // Same hazard as the backfill's per-batch precondition
+    // (`propertiesMigrationClaim.test.ts`, same test name), on the step that
+    // runs BEFORE it in the same operator gesture. A read the pool cannot serve
+    // hangs the gesture rather than failing it, holding the graph claim with
+    // the migration gate up on every device and no exit.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    await withOuterReadsRefused(sharedDb.db, async () => {
+      expect(await applyPropertyDefinitionSynthesis(repo, plan)).toMatchObject({created: 1})
+    })
+  })
+
+  it('refuses a DEFERRED delivery that lands between the probe and the write lock', async () => {
+    // The arm an earlier revision left outside the lock, and the reason the
+    // whole gap is asked here rather than a chosen subset: the drain moves a
+    // row OUT of the queue and INTO the unapplied population in one pass, so a
+    // row that was queued when the pre-lock probe ran is durable-only by the
+    // time we hold the writer. Staged in that shape — `needs_apply = 1`, no
+    // queue entry — which the queue arm alone cannot see.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    const realProbe = repo.workspaceViewGap.bind(repo)
+    let probes = 0
+    // `reads` forwarded, not swallowed: the in-lock call passes the
+    // transaction, and a one-parameter mock would drop it and send the probe
+    // back through the Repo's handle — the shape this whole change removes.
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(
+      async (workspaceId: string, reads?: Parameters<Repo['workspaceViewGap']>[1]) => {
+      const answer = await realProbe(workspaceId, reads)
+      probes += 1
+      if (probes === 1) {
+        await sharedDb.db.execute(
+          `INSERT INTO blocks_synced (id, workspace_id, parent_id, order_key, content,
+             properties_json, references_json, created_at, updated_at, created_by,
+             updated_by, deleted, needs_apply)
+           VALUES ('deferred-def', ?, NULL, 'z9', 'deferred', '{}', '[]', 1, 1, 'u', 'u', 0, 1)`,
+          [WS])
+        // The drain consumed the queue entry without applying the row: that is
+        // what "deferred" means here, and it is what empties the queue arm.
+        await sharedDb.db.execute(
+          `DELETE FROM blocks_synced_changes WHERE id = 'deferred-def'`)
+      }
+      return answer
+    })
+    try {
+      const reachedMintPath = vi.spyOn(repo, 'propertySchemaResolverFor')
+      await expect(applyPropertyDefinitionSynthesis(repo, plan))
+        .rejects.toThrow(/have not reached/)
+      expect(probes).toBe(2)
+      // On the CAUSE, not on the absence of a block: `repo.tx` rolls back, so
+      // "no definition exists" holds wherever in the transaction the guard
+      // sits — including after the mint. This does not.
+      expect(reachedMintPath).not.toHaveBeenCalled()
+    } finally {
+      await sharedDb.db.execute(`DELETE FROM blocks_synced WHERE id = 'deferred-def'`)
+      await sharedDb.db.execute(`DELETE FROM blocks_synced_changes WHERE id = 'deferred-def'`)
+    }
+    expect(await countDefinitionsNamed('demo:orphan')).toBe(0)
+  })
+
+  it('refuses a checkpoint that lands between the probe and the write lock', async () => {
+    // The window no pre-lock probe can see: the drain takes the SAME write lock
+    // this transaction is queued for, so a definition delivered while we wait
+    // sits in `blocks_synced`, unapplied, and a `blocks` read calls its key
+    // orphaned. Minting then publishes a rival at our deterministic id that no
+    // later run can undo — every one of them reports the name as contested.
+    //
+    // Staged after the LAST pre-lock probe resolves, which is precisely where
+    // such a delivery lands. Staging it any earlier is the vacuous version of
+    // this test: the probe catches it and the in-lock check can be deleted
+    // without the test noticing.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    const realProbe = repo.workspaceViewGap.bind(repo)
+    let probes = 0
+    // `reads` forwarded, not swallowed: the in-lock call passes the
+    // transaction, and a one-parameter mock would drop it and send the probe
+    // back through the Repo's handle — the shape this whole change removes.
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(
+      async (workspaceId: string, reads?: Parameters<Repo['workspaceViewGap']>[1]) => {
+      const answer = await realProbe(workspaceId, reads)
+      probes += 1
+      // The FIRST is the pre-lock one; staging after it and before the
+      // transaction acquires the writer is exactly the window. (It must also
+      // be the pre-lock one because this stages by WRITING: from inside the
+      // in-lock probe the insert would block on the writer its own
+      // transaction holds, and the file would hang rather than report.)
+      if (probes === 1) {
+        await sharedDb.db.execute(
+          `INSERT INTO blocks_synced_changes (id, op) VALUES ('rival-def', 'upsert')`)
+      }
+      return answer
+    })
+    try {
+      const reachedMintPath = vi.spyOn(repo, 'propertySchemaResolverFor')
+      await expect(applyPropertyDefinitionSynthesis(repo, plan))
+        .rejects.toThrow(/draining into/)
+      // Two probes, or the staging no longer lands in the lock window and this
+      // test has stopped covering it.
+      expect(probes).toBe(2)
+      // See the sibling above: a rolled-back mint is indistinguishable from no
+      // mint, so the guard's POSITION is pinned on what it stopped us reaching.
+      expect(reachedMintPath).not.toHaveBeenCalled()
+    } finally {
+      await sharedDb.db.execute(`DELETE FROM blocks_synced_changes WHERE id = 'rival-def'`)
+    }
+    // Nothing was minted: the refusal has to beat the write, not report after it.
+    expect(await countDefinitionsNamed('demo:orphan')).toBe(0)
+  })
+
   it('mints a definition the registry resolves before the caller does anything else', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
 

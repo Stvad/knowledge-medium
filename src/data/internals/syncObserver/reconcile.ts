@@ -229,14 +229,74 @@ export const STAGED_VIEW_GAP_SQL = `
 
 /** How many staged rows the benign-echo probe examines per call.
  *
- *  The probe runs inside a write transaction, and its own success case is
- *  the one where no row qualifies — so `LIMIT 1` never short-circuits, and
- *  an unbounded scan of a large queue would sit inside the write lock.
- *  Past the bound we report a gap rather than scanning on: that much
- *  undrained backlog IS a real gap, and the pass resumes on the next
+ *  {@link stagedViewGapReason} is asked from inside a write transaction, and
+ *  its own success case is the one where no row qualifies — so `LIMIT 1` never
+ *  short-circuits, and an unbounded scan of a large queue would sit inside the
+ *  write lock. Past the bound we report a gap rather than scanning on: that
+ *  much undrained backlog IS a real gap, and the pass resumes on the next
  *  attempt. Re-measure before changing it; wa-sqlite/OPFS (the browser
  *  substrate) is what matters, not native SQLite. */
 export const STAGED_SCAN_LIMIT = 10_000
+
+/**
+ * The two reads a view gap needs from a database, as METHODS rather than as a
+ * handle — so a caller holding the write lock can supply its own transaction
+ * without `Tx` growing a raw-SQL escape hatch. `Repo.workspaceViewGap` builds
+ * the default over the Repo's own connection.
+ *
+ * BOTH, never one. The two queries look independent and are not: the drain
+ * turns a QUEUED row into an UNAPPLIED one in a single pass — it writes
+ * nothing for a row it cannot apply, then deletes the queue entry separately —
+ * so whichever arm a caller skips is the one the drain has just moved the row
+ * into. They are a pair for that reason, not for convenience.
+ *
+ * `Tx` restates these two signatures rather than extending this interface:
+ * `data/api` imports nothing from `data/internals`, and that edge is not worth
+ * opening for a dedupe.
+ */
+export interface ViewGapReads {
+  stagedSyncViewGap(): Promise<string | null>
+  workspaceUnappliedCount(workspaceId: string): Promise<number>
+}
+
+/** Serves {@link ViewGapReads} from any reader — the Repo's handle outside a
+ *  transaction, a transaction's own handle inside one. */
+export const viewGapReadsOver = (reader: {
+  get<T>(sql: string, params?: unknown[]): Promise<T>
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+}): ViewGapReads => ({
+  stagedSyncViewGap: () => stagedViewGapReason(reader),
+  workspaceUnappliedCount: async workspaceId => {
+    const {behind} = await reader.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    return behind
+  },
+})
+
+/**
+ * Is synced data still on its way into `blocks`, and why — the IN-FLIGHT half
+ * of a view gap, as {@link STAGED_VIEW_GAP_SQL} sees it. Null when nothing is
+ * staged.
+ *
+ * Takes its reader rather than a handle, because it is asked from both sides
+ * of the write lock: `Repo.syncViewGap` asks it on the Repo's connection, and
+ * `Tx.stagedSyncViewGap` asks it on the transaction's own. One owner for the
+ * query AND its wording — the two callers must not be able to disagree about
+ * what counts as draining.
+ */
+export const stagedViewGapReason = async (
+  reader: {getOptional: <T>(sql: string, params?: unknown[]) => Promise<T | null>},
+): Promise<string | null> => {
+  const staged = await reader.getOptional<{why: string}>(
+    STAGED_VIEW_GAP_SQL, [STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT],
+  )
+  if (staged?.why === 'deep') {
+    return `more than ${STAGED_SCAN_LIMIT.toLocaleString()} synced rows are staged, `
+      + 'so this device is behind on materializing them into `blocks`'
+  }
+  return staged !== null ? 'synced rows are still draining into `blocks`' : null
+}
 
 /**
  * How many of a workspace's downloaded rows has the drain not applied?

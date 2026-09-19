@@ -93,11 +93,10 @@ import {
   type RematerializeScope,
 } from '@/data/internals/syncObserver/observer'
 import {
-  STAGED_SCAN_LIMIT,
-  STAGED_VIEW_GAP_SQL,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
   WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,
-  WORKSPACE_UNAPPLIED_SQL,
+  viewGapReadsOver,
+  type ViewGapReads,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -3295,15 +3294,9 @@ export class Repo {
    * all. {@link workspaceViewGap} answers both, and every caller that has a
    * workspace in hand takes that instead (km-fsxp).
    */
-  async syncViewGap(): Promise<string | null> {
-    const staged = await this.db.getOptional<{why: string}>(
-      STAGED_VIEW_GAP_SQL, [STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT],
-    )
-    if (staged?.why === 'deep') {
-      return `more than ${STAGED_SCAN_LIMIT.toLocaleString()} synced rows are staged, `
-        + 'so this device is behind on materializing them into `blocks`'
-    }
-    if (staged !== null) return 'synced rows are still draining into `blocks`'
+  async syncViewGap(reads: ViewGapReads = viewGapReadsOver(this.db)): Promise<string | null> {
+    const staged = await reads.stagedSyncViewGap()
+    if (staged !== null) return staged
     if (!this.backfillSyncSettledNow()) {
       return 'this device is not caught up with the server '
         + '(still downloading, disconnected, or a download error)'
@@ -3334,8 +3327,14 @@ export class Repo {
    * carries {@link ViewGap.transient} rather than just its text: a caller that
    * re-arms itself must not re-arm on the durable one.
    */
-  async workspaceViewGap(workspaceId: string): Promise<ViewGap | null> {
-    const inFlight = await this.syncViewGap()
+  async workspaceViewGap(
+    workspaceId: string,
+    /** Serves the two SQL arms — see `ViewGapReads`, which owns why they are a
+     *  pair. A caller already holding the write lock passes its own
+     *  transaction (`Repo.assertBackfillMayWrite` states why it must). */
+    reads: ViewGapReads = viewGapReadsOver(this.db),
+  ): Promise<ViewGap | null> {
+    const inFlight = await this.syncViewGap(reads)
     if (inFlight !== null) return {reason: inFlight, transient: true}
     // The queue cannot see this one: `observer.materializeWorkspace` rewrites
     // `blocks` straight from `blocks_synced` and stages nothing, so the arms
@@ -3351,7 +3350,7 @@ export class Repo {
         transient: true,
       }
     }
-    const behind = await this.workspaceUnappliedCount(workspaceId)
+    const behind = await this.workspaceUnappliedCount(workspaceId, reads)
     if (behind === 0) return null
     const count = behind >= WORKSPACE_UNAPPLIED_COUNT_CAP
       ? `at least ${WORKSPACE_UNAPPLIED_COUNT_CAP.toLocaleString()}`
@@ -3437,11 +3436,11 @@ export class Repo {
   /** How many of `workspaceId`'s downloaded rows the drain has not applied —
    *  the number {@link workspaceViewGap}'s durable arm reports, capped the same
    *  way (so `>= WORKSPACE_UNAPPLIED_COUNT_CAP` reads as a floor, not a total). */
-  private async workspaceUnappliedCount(workspaceId: string): Promise<number> {
-    const {behind} = await this.db.get<{behind: number}>(
-      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
-    )
-    return behind
+  private workspaceUnappliedCount(
+    workspaceId: string,
+    reads: ViewGapReads = viewGapReadsOver(this.db),
+  ): Promise<number> {
+    return reads.workspaceUnappliedCount(workspaceId)
   }
 
   /** The same population, counted to the end.
@@ -3487,11 +3486,15 @@ export class Repo {
     backfillId: string,
     generation: number,
   ): Promise<void> {
-    // Re-sampled per transaction, and deliberately NOT from inside one: it
-    // reads through `this.db`, and a read on that handle taken while a write
-    // transaction is open cannot be served on a single-connection pool. Callers
-    // run it immediately before opening their transaction and re-assert the
-    // synchronous half (`assertBackfillSessionUnchanged`) within.
+    // Re-sampled per transaction, and NOT from inside one. That is now a
+    // CHOICE rather than a constraint: `workspaceViewGap` takes a
+    // `ViewGapReads`, so a caller holding the lock can pass its transaction
+    // and ask under it (the properties-migration synthesis does). This pass
+    // does not, because it re-probes before every batch and its writes are
+    // idempotent per row — so a gap opening mid-batch costs one batch's window
+    // rather than an un-undoable write. Callers run it immediately before
+    // opening their transaction and re-assert the synchronous half
+    // (`assertBackfillSessionUnchanged`) within.
     const gap = await this.workspaceViewGap(workspaceId)
     if (gap !== null) {
       throw Object.assign(new Error(
