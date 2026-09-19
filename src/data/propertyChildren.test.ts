@@ -3920,9 +3920,8 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
 })
 
 describe('convertValueChildContent: which reading of a value child wins (#1055)', () => {
-  // Direct, because the route decisions are pure and every other test reaches
-  // them through a workspace seed plus a processor round, which can only
-  // assert the CELL.
+  // Direct, because the route decisions are pure: no workspace seed, no
+  // processor round, and the exact respelled text rather than its effect.
   type PresetId = keyof typeof kernelValuePresetCoresById
   const schemaOf = (presetId: PresetId): AnyPropertySchema => {
     const core = kernelValuePresetCoresById[presetId]
@@ -3956,12 +3955,26 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
   })
 
-  it('re-reads the text for a row the OLD codec cannot read, whatever the target', () => {
-    // The second of the value route's three declines, and the one the identity
-    // target makes visible: within ONE `number` property re-typed to `list`, a
-    // readable row keeps its number and a stale row is re-read as JSON.
-    expect(convert('number', 'list', '42')).toEqual({outcome: 'converted', content: '42'})
+  it('re-reads the text for a row the OLD codec cannot read', () => {
+    // A decline that has nothing to do with the target: within ONE `number`
+    // property re-typed to `list`, the readable row keeps its number while
+    // this stale one is re-read as JSON.
     expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
+  })
+
+  it('treats the EMPTY spelling as a spelling', () => {
+    // `''` is what `string` spells the empty string as, so a route that tested
+    // the spelling for truthiness rather than for null would fall through to
+    // the text route and keep the JSON `""` verbatim — #1055 again, at the one
+    // value where it is invisible.
+    expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
+  })
+
+  it('lets the OLD codec settle what a bare `null` meant (#1030)', () => {
+    // `null` is the unset SENTINEL to a codec that accepts it and the literal
+    // word to one that does not. The codec that wrote the row is the one that
+    // knows which, so the string survives instead of becoming a JSON null.
+    expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
   })
 
   it('falls to the text route when no old codec records the encoding', () => {

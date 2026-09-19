@@ -1465,11 +1465,11 @@ describe('the multi-value boundary (#1010)', () => {
   })
 
   it('REFUSES when duplicate field rows CONVERGE on one member', async () => {
-    // A loss with nothing unreadable in it, and the only shape that produces
-    // one: two rows holding DIFFERENT values (the string `42` and the number
-    // 42) re-spell to the same text, so the union that the projection takes
-    // folds them into one member. Nothing is unconvertible; the cell still
-    // stops holding a value, so the same refusal applies.
+    // A loss with nothing unreadable in it: two rows holding DIFFERENT values
+    // (the string `42` and the number 42) re-spell to the same text, so the
+    // union that the projection takes folds them into one member. Nothing is
+    // unconvertible; the cell still stops holding a value, so the same
+    // refusal applies.
     await seedWorkspace('children')
     const repo = await setupDefinition('list')
     await seedListProperty(repo, 'p', 'status', ['42'])
@@ -1486,9 +1486,9 @@ describe('the multi-value boundary (#1010)', () => {
   })
 
   it('carries a scalar onto an identity target without re-reading it', async () => {
-    // `list` ("Options") is the only identity preset a person can pick, and
-    // `string` -> `list` is the only way to reach it from a scalar, so this is
-    // the gesture the contract is actually about. The cell held the STRING 42.
+    // `list` ("Options") is the only identity preset a person can pick, so
+    // this is the gesture the contract is actually about. The cell held the
+    // STRING 42, and a re-type is not a parse.
     await seedWorkspace('children')
     const repo = await setupDefinition()
     const {valueRowId} = await seedProperty(repo, 'p', 'status', '42')
@@ -1499,6 +1499,23 @@ describe('the multi-value boundary (#1010)', () => {
 
     expect(await cell('p')).toEqual({status: ['42']})
     expect(await rowContent(valueRowId)).toBe('"42"')
+  })
+
+  it('keeps a value that is literally the word `null` (#1030)', async () => {
+    // Picker-visible both ends ("Plain text" -> "Options"), and the ambiguity
+    // #1030 names: the old codec REJECTS null, so the row held the literal
+    // word, and reading the text under a codec that accepts null would turn
+    // it into a JSON null instead.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 'null')
+    expect(await cell('p')).toEqual({status: 'null'})
+
+    await retype(repo, FIELD_ID, 'list')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: ['null']})
+    expect(await rowContent(valueRowId)).toBe('"null"')
   })
 
   it('scalar -> list reads the one value child as a single member', async () => {
@@ -1710,7 +1727,7 @@ describe('the multi-value boundary (#1010)', () => {
     expect(await cell('p')).toEqual({status: ['"quoted"']})
   })
 
-  it('SURVIVES the return trip, both spellings intact (#1055)', async () => {
+  it('returns the same members after a round trip through the other list preset (#1055)', async () => {
     // Coming back, the JSON text `"x"` READS under the string member codec —
     // which accepts anything — so reading the TEXT would make the member the
     // three-character string `"x"`. Reading the VALUE first is what keeps the
