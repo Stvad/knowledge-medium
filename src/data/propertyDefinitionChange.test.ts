@@ -205,6 +205,34 @@ const setupDefinition = async (
 
 const UNLOADABLE_PRESET = 'test-unloadable-preset'
 
+/** A LIST-valued definition whose preset no longer builds — the case where
+ *  the cell it last published is the only record of how many values the
+ *  consumer holds. {@link withPresetUnloaded} is the scalar twin, and carries
+ *  why this is the long way round. */
+const withListPresetUnloaded = async (
+  value: readonly string[],
+): Promise<Repo> => {
+  const preset = {
+    id: UNLOADABLE_PRESET,
+    build: () => codecs.list(codecs.string),
+    defaultValue: [],
+  } as unknown as AnyValuePresetCore
+  const authoring = await setupDefinition(UNLOADABLE_PRESET, [preset], 'list')
+  await createHost(authoring, 'p')
+  await authoring.tx(tx => tx.setProperty('p', schemaFor(authoring, 'status'), value),
+    {scope: ChangeScope.BlockDefault})
+  const repo = makeRepo()
+  await vi.waitFor(() => {
+    if (repo.propertyDefinitions?.definitionsByName.get('status') === undefined) {
+      throw new Error('[test] status definition not published yet')
+    }
+    if (repo.propertySchemas.get('status') !== undefined) {
+      throw new Error('[test] status still has behaviour in the registry')
+    }
+  }, {timeout: 3000})
+  return repo
+}
+
 /** A `status` definition on an EXTENSION's preset with one consumer holding
  *  `value`, reopened in a repo where that preset no longer builds — so the row
  *  is still published as metadata while carrying no codec.
@@ -243,6 +271,8 @@ const withPresetUnloaded = async (
 const rename = (repo: Repo, fieldId: string, newName: string): Promise<void> =>
   repo.tx(tx => tx.setProperty(fieldId, propertyNameProp, newName),
     {scope: ChangeScope.BlockDefault})
+
+
 
 const retype = (repo: Repo, fieldId: string, presetId: string): Promise<void> =>
   repo.tx(tx => tx.setProperty(fieldId, presetIdProp, presetId),
@@ -640,9 +670,9 @@ describe('codec change', () => {
   })
 
   it('canonicalizes a tolerant spelling where the OLD codec normalizes', async () => {
-    // `date` is the kernel codec whose decode NORMALIZES, so it is the one
-    // preset where carrying the value rewrites the row text. The cell is what
-    // survives; the spelling a person typed does not, and is unrecoverable.
+    // `date` decode CANONICALIZES a tolerant instant, so carrying the value
+    // rewrites the row text: the cell survives, and the spelling a person
+    // typed does not — here, unrecoverably.
     await seedWorkspace('children')
     const repo = await setupDefinition('date')
     const {valueRowId} = await seedProperty(
@@ -657,6 +687,21 @@ describe('codec change', () => {
 
     expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
     expect(await rowContent(valueRowId)).toBe('2024-01-02T00:00:00.000Z')
+  })
+
+  it('REFUSES a narrowing with no old codec, counting the CELL it published', async () => {
+    // Repairing a broken definition is the one moment a list can be narrowed
+    // with nothing able to read its children. The cell is still a faithful
+    // record of how many values the consumer holds, and counting it as one
+    // value let every member but the first go in silence.
+    await seedWorkspace('children')
+    const repo = await withListPresetUnloaded(['1', '2', '3'])
+    expect(await cell('p')).toEqual({status: ['1', '2', '3']})
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+    })
+    expect(await cell('p')).toEqual({status: ['1', '2', '3']})
   })
 
   it('re-stamps the reference columns when a ref value becomes plain text', async () => {
