@@ -331,14 +331,14 @@ const resolveSynthesisMode = async (
  *    already treats such a record as LOCKED, so this is the shape of a bug, not
  *    of a workspace the operator is looking at — and quietly publishing
  *    name-derived ids is the one outcome worse than a refusal.
+ *
+ * PRE-LOCK ONLY: it reads the key store, which must never run under the write
+ * lock, so its own reads go through the Repo's handle.
  */
 export const resolveSynthesisNamespace = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<SynthesisNamespace> => {
-  // Outside any transaction — `resolveSynthesisNamespace` also reads the key
-  // store, which must never happen under the write lock, so this whole
-  // function is a pre-lock one and reads on the Repo's handle are right here.
   const resolved = await resolveSynthesisMode(
     repo, workspaceId, () => readWorkspaceEncryptionMode(repo.db, workspaceId))
   if (resolved.kind === 'refused') return resolved
@@ -721,11 +721,13 @@ export const applyPropertyDefinitionSynthesis = async (
   // ORPHANED to the scan, and this pass answers an orphan by MINTING — so
   // "nothing is in flight" is not the question {@link Repo.workspaceViewGap}
   // is asked here.
-  const refuseOnViewGap = async () => {
-    const gap = await repo.workspaceViewGap(workspaceId)
-    if (gap !== null) throw new Error(`[propertyDefinitionSynthesis] ${gap.reason}`)
-  }
-  await refuseOnViewGap()
+  // Asked here as well as under the lock below, and not because one of them is
+  // redundant: this one refuses BEFORE the key-store read and the
+  // Properties-page bootstrap, so a device that is merely behind on sync is
+  // told that rather than being handed the namespace resolver's "no local row
+  // for the workspace yet", which is the wrong diagnosis for the same state.
+  const gap = await repo.workspaceViewGap(workspaceId)
+  if (gap !== null) throw new Error(`[propertyDefinitionSynthesis] ${gap.reason}`)
   // Re-read for the same reason, and because the plan may have been built
   // before this device received the workspace row that says it is encrypted.
   const preflight = await resolveSynthesisNamespace(repo, workspaceId)
@@ -749,40 +751,26 @@ export const applyPropertyDefinitionSynthesis = async (
   const registrations: Array<{schema: AnyPropertySchema; blockId: string}> = []
   let lastOrderKey: string | null = null
 
-  // Asked a SECOND time, and the pair is deliberate: the one above refuses
-  // before the Properties-page bootstrap writes anything, this one covers that
-  // write and everything since. Neither may move inside the transaction —
-  // `workspaceViewGap` reads the Repo's handle, which is the connection the
-  // transaction holds, and on a single-connection pool that read is never
-  // served (`Repo.assertBackfillMayWrite` states the rule; #1069).
-  //
-  // Its own residual is closed under the lock instead — see `stagedSyncViewGap`
-  // below — so what is left here is the arms that cannot turn over in a lock
-  // wait: a download still running, a whole-workspace re-materialization, and
-  // rows the drain has already given up on.
-  await refuseOnViewGap()
   await repo.tx(async tx => {
-    // ACCEPTED RESIDUAL, closed: a sync checkpoint can commit between the probe
-    // above and this transaction acquiring the writer, and the drain applies it
-    // through the same lock — so a definition for a key we are about to call
-    // ORPHANED can be sitting in `blocks_synced`, invisible to a `blocks` read.
-    // Minting then publishes a rival at our own deterministic id, which no
-    // later run can undo: every one of them reports the name as contested and
-    // skips it, and field rows strand on whichever copy loses.
+    // The WHOLE view gap, re-asked here and served by this transaction's own
+    // handle. Under the lock because that is the only place the answer cannot
+    // go stale under us: the probe above is separated from this point by the
+    // Properties-page bootstrap and by the wait for the writer, and the drain
+    // takes the same writer — so a definition for a key we are about to call
+    // ORPHANED can arrive in that window, and minting over it publishes a
+    // rival at our deterministic id that no later run can undo (every one of
+    // them reports the name as contested and skips it, stranding field rows on
+    // whichever copy loses).
     //
-    // This is the one arm that turns over on that timescale, which is why it is
-    // the only one re-asked here, and it is servable because it reads the
-    // TRANSACTION's handle.
-    const draining = await tx.stagedSyncViewGap()
-    if (draining !== null) {
-      throw new Error(`[propertyDefinitionSynthesis] ${draining}`)
-    }
-    // INSIDE the write lock, immediately before the first write, because that
-    // is the only place the answer cannot go stale under us: the checks above
-    // are separated from this transaction by the Properties-page bootstrap and
-    // by the lock wait, and the workspace's real row can arrive from sync in
-    // between. Minting under the wrong namespace is not undoable — deleting the
-    // block afterwards does not unpublish the id.
+    // In FULL, never a subset: the drain turns a queued row into an unapplied
+    // one in one pass, so any arm left outside is the one it has just moved the
+    // row into. An earlier revision asked only the queue arm here and a
+    // deferred row walked straight through it (#1069).
+    const gap = await repo.workspaceViewGap(workspaceId, tx)
+    if (gap !== null) throw new Error(`[propertyDefinitionSynthesis] ${gap.reason}`)
+    // The mode, immediately before the first write. Minting under the wrong
+    // namespace is not undoable — deleting the block afterwards does not
+    // unpublish the id.
     //
     // Of the NAMESPACE inputs only the MODE is re-asked, and that is the whole
     // trick: `K_id` cannot change under us (it is HKDF of the workspace key,

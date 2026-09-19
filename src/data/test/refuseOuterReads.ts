@@ -2,11 +2,8 @@
  * Run `body` with reads on the REPO's database handle refused for as long as a
  * write transaction is open.
  *
- * What it models: PowerSync opens a second connection only for
- * `OPFSWriteAheadVFS` (`@/data/localDbVfs`), so on every other browser the pool
- * has ONE connection and a read taken on the Repo's handle from inside a write
- * transaction is never served — the tab hangs, holding the writer, and every
- * later write queues behind it. `Repo.assertBackfillMayWrite` states the rule.
+ * The rule is `Repo.assertBackfillMayWrite`'s; the mechanism is
+ * `@/data/localDbVfs`'s.
  *
  * A THROW rather than a hang, deliberately: "never served" is not expressible
  * in a suite that has to terminate, and the node test harness cannot produce it
@@ -34,9 +31,10 @@ export const withOuterReadsRefused = async <T>(
     execute: db.execute.bind(db),
   }
   const realWriteTransaction = db.writeTransaction.bind(db)
-  // A DEPTH counter, not a flag: a nested or overlapping write transaction
-  // would otherwise clear the flag on its own exit and silently disarm the
-  // refusal for the rest of the outer one.
+  // A DEPTH counter, not a flag. DEFENCE IN DEPTH — no caller nests write
+  // transactions today, so nothing fails if this is a boolean; it is here
+  // because the failure it prevents (an inner transaction's exit disarming the
+  // refusal for the rest of the outer one) is silent.
   let depth = 0
   const refuseWhileWriting = (name: keyof typeof outer) =>
     (async (sql: string, params?: unknown[]) => {
@@ -54,6 +52,9 @@ export const withOuterReadsRefused = async <T>(
     return await body()
   } finally {
     db.writeTransaction = realWriteTransaction as typeof db.writeTransaction
-    Object.assign(db, outer)
+    // DELETED rather than assigned back: these are prototype methods, so
+    // restoring by assignment would leave own bound copies shadowing them on a
+    // shared db for every later test in the file.
+    for (const name of Object.keys(outer)) delete (db as Record<string, unknown>)[name]
   }
 }

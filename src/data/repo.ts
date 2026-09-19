@@ -95,8 +95,8 @@ import {
 import {
   WORKSPACE_UNAPPLIED_COUNT_CAP,
   WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,
-  WORKSPACE_UNAPPLIED_SQL,
-  stagedViewGapReason,
+  viewGapReadsOver,
+  type ViewGapReads,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -3294,8 +3294,8 @@ export class Repo {
    * all. {@link workspaceViewGap} answers both, and every caller that has a
    * workspace in hand takes that instead (km-fsxp).
    */
-  async syncViewGap(): Promise<string | null> {
-    const staged = await stagedViewGapReason(this.db)
+  async syncViewGap(reads: ViewGapReads = viewGapReadsOver(this.db)): Promise<string | null> {
+    const staged = await reads.stagedSyncViewGap()
     if (staged !== null) return staged
     if (!this.backfillSyncSettledNow()) {
       return 'this device is not caught up with the server '
@@ -3327,8 +3327,18 @@ export class Repo {
    * carries {@link ViewGap.transient} rather than just its text: a caller that
    * re-arms itself must not re-arm on the durable one.
    */
-  async workspaceViewGap(workspaceId: string): Promise<ViewGap | null> {
-    const inFlight = await this.syncViewGap()
+  async workspaceViewGap(
+    workspaceId: string,
+    /** Serves the two SQL arms. A caller already holding the write lock passes
+     *  its own transaction, because on a single-connection pool this Repo's
+     *  handle cannot answer while that lock is held — and the whole question
+     *  has to be asked there, not a chosen subset of it: the arms are not
+     *  ranked by how fast they move. The drain turns a QUEUED row into an
+     *  UNAPPLIED one in a single pass, so the two SQL arms hand work to each
+     *  other exactly when this is being asked (#1069). */
+    reads: ViewGapReads = viewGapReadsOver(this.db),
+  ): Promise<ViewGap | null> {
+    const inFlight = await this.syncViewGap(reads)
     if (inFlight !== null) return {reason: inFlight, transient: true}
     // The queue cannot see this one: `observer.materializeWorkspace` rewrites
     // `blocks` straight from `blocks_synced` and stages nothing, so the arms
@@ -3344,7 +3354,7 @@ export class Repo {
         transient: true,
       }
     }
-    const behind = await this.workspaceUnappliedCount(workspaceId)
+    const behind = await this.workspaceUnappliedCount(workspaceId, reads)
     if (behind === 0) return null
     const count = behind >= WORKSPACE_UNAPPLIED_COUNT_CAP
       ? `at least ${WORKSPACE_UNAPPLIED_COUNT_CAP.toLocaleString()}`
@@ -3430,11 +3440,11 @@ export class Repo {
   /** How many of `workspaceId`'s downloaded rows the drain has not applied —
    *  the number {@link workspaceViewGap}'s durable arm reports, capped the same
    *  way (so `>= WORKSPACE_UNAPPLIED_COUNT_CAP` reads as a floor, not a total). */
-  private async workspaceUnappliedCount(workspaceId: string): Promise<number> {
-    const {behind} = await this.db.get<{behind: number}>(
-      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
-    )
-    return behind
+  private workspaceUnappliedCount(
+    workspaceId: string,
+    reads: ViewGapReads = viewGapReadsOver(this.db),
+  ): Promise<number> {
+    return reads.workspaceUnappliedCount(workspaceId)
   }
 
   /** The same population, counted to the end.

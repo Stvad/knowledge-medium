@@ -239,6 +239,32 @@ export const STAGED_VIEW_GAP_SQL = `
 export const STAGED_SCAN_LIMIT = 10_000
 
 /**
+ * The two reads a view gap needs from a database, as METHODS rather than as a
+ * handle — so a caller holding the write lock can supply its own transaction
+ * without `Tx` growing a raw-SQL escape hatch. `Repo.workspaceViewGap` builds
+ * the default over the Repo's own connection.
+ */
+export interface ViewGapReads {
+  stagedSyncViewGap(): Promise<string | null>
+  workspaceUnappliedCount(workspaceId: string): Promise<number>
+}
+
+/** Serves {@link ViewGapReads} from any reader — the Repo's handle outside a
+ *  transaction, a transaction's own handle inside one. */
+export const viewGapReadsOver = (reader: {
+  get<T>(sql: string, params?: unknown[]): Promise<T>
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+}): ViewGapReads => ({
+  stagedSyncViewGap: () => stagedViewGapReason(reader),
+  workspaceUnappliedCount: async workspaceId => {
+    const {behind} = await reader.get<{behind: number}>(
+      WORKSPACE_UNAPPLIED_SQL, [workspaceId, WORKSPACE_UNAPPLIED_COUNT_CAP],
+    )
+    return behind
+  },
+})
+
+/**
  * Is synced data still on its way into `blocks`, and why — the IN-FLIGHT half
  * of a view gap, as {@link STAGED_VIEW_GAP_SQL} sees it. Null when nothing is
  * staged.

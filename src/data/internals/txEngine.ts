@@ -87,7 +87,7 @@ import {
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
 import { readIsChildBackedWorkspace, readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
-import { stagedViewGapReason } from '@/data/internals/syncObserver/reconcile'
+import { viewGapReadsOver, type ViewGapReads } from '@/data/internals/syncObserver/reconcile'
 import {
   definitionNameOf,
   readPropertyDefinitionBags,
@@ -358,12 +358,6 @@ export class TxImpl implements Tx {
    *  (never written through this engine), so within-tx staleness cannot
    *  occur. */
   private readonly childBackedWorkspaceCache = new Map<string, boolean>()
-  /** Same lifetime and the same soundness argument as the cache above, with
-   *  one difference worth stating: `encryption_mode` IS written locally
-   *  (`primeLocalWorkspace`), just never through this engine and never inside
-   *  a `repo.tx` — so it is the write lock, not the absence of a writer, that
-   *  keeps a cached value from going stale within a transaction. */
-  private readonly encryptionModeCache = new Map<string, string | null>()
 
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
@@ -422,16 +416,20 @@ export class TxImpl implements Tx {
     return flipped
   }
 
-  async workspaceEncryptionMode(workspaceId: string): Promise<string | null> {
-    const cached = this.encryptionModeCache.get(workspaceId)
-    if (cached !== undefined) return cached
-    const mode = await readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
-    this.encryptionModeCache.set(workspaceId, mode)
-    return mode
+  workspaceEncryptionMode(workspaceId: string): Promise<string | null> {
+    return readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
   }
 
+  /** Uncached, unlike the two above: `Repo.workspaceViewGap` asks these
+   *  precisely because the answer can have changed since it last did. */
+  private get viewGapReads(): ViewGapReads { return viewGapReadsOver(this.ctx.txDb) }
+
   stagedSyncViewGap(): Promise<string | null> {
-    return stagedViewGapReason(this.ctx.txDb)
+    return this.viewGapReads.stagedSyncViewGap()
+  }
+
+  workspaceUnappliedCount(workspaceId: string): Promise<number> {
+    return this.viewGapReads.workspaceUnappliedCount(workspaceId)
   }
 
   async tombstonedPropertyFieldRows(

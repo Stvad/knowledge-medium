@@ -256,7 +256,7 @@ export interface Tx {
   isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
 
   /** The workspace's `encryption_mode`, read through THIS transaction's
-   *  handle, or null when this device has no local row for it. Cached per tx.
+   *  handle, or null when this device has no local row for it.
    *
    *  On Tx, not read from the Repo, because a caller re-checking the mode
    *  immediately before it mints under a mode-derived namespace has to read it
@@ -265,17 +265,17 @@ export interface Tx {
    *  `@/data/localDbVfs` has the mechanism). */
   workspaceEncryptionMode(workspaceId: string): Promise<string | null>
 
-  /** Why synced data has not finished reaching `blocks`, or null — the
-   *  IN-FLIGHT half of `Repo.workspaceViewGap`, asked under THIS transaction's
-   *  lock and served by its own handle.
+  /** The two database reads behind `Repo.workspaceViewGap`, served by THIS
+   *  transaction's handle so the whole question can be asked under the lock
+   *  the answer has to hold for. Pass the transaction to
+   *  `repo.workspaceViewGap(workspaceId, tx)` rather than calling these.
    *
-   *  Deliberately only that half. The other arms move on the scale of a
-   *  download or a device's whole re-materialization, so a caller's pre-lock
-   *  probe still speaks for them; the drain queue is the one that turns over
-   *  while a transaction waits for the writer, and it is the one that hides a
-   *  row this transaction would otherwise treat as absent. NOT cached, for the
-   *  same reason. */
+   *  Both, never one: the drain turns a QUEUED row into an UNAPPLIED one in a
+   *  single pass, so whichever arm is skipped is the one it has just moved the
+   *  row into. Uncached for the same reason — they are asked precisely because
+   *  the answer can have changed. */
   stagedSyncViewGap(): Promise<string | null>
+  workspaceUnappliedCount(workspaceId: string): Promise<number>
 
   /** The fieldIds `parentId` holds a TOMBSTONED field row for.
    *
