@@ -278,6 +278,13 @@ export type SynthesisNamespace =
 const resolveSynthesisMode = async (
   repo: Repo,
   workspaceId: string,
+  /** Who serves the row read. The default is the Repo's handle, which is right
+   *  everywhere except inside a write transaction: that connection is the one
+   *  the transaction is holding, and on a single-connection pool (every VFS but
+   *  `OPFSWriteAheadVFS`) the read waits on it forever. A caller re-asking under
+   *  its own lock passes `tx.workspaceEncryptionMode`. */
+  readMode: () => Promise<string | null>
+    = () => readWorkspaceEncryptionMode(repo.db, workspaceId),
 ): Promise<{kind: 'refused'; reason: string} | {kind: 'ready'; mode: ModePin}> => {
   const pin = getModePin(repo.user.id, workspaceId)
   if (pin === null) {
@@ -285,7 +292,7 @@ const resolveSynthesisMode = async (
       'this device has not resolved whether the workspace is end-to-end encrypted; open ' +
       'the workspace once so the first-encounter gate settles that, then run this again'}
   }
-  const mode = await readWorkspaceEncryptionMode(repo.db, workspaceId)
+  const mode = await readMode()
   if (mode === null) {
     return {kind: 'refused', reason:
       'this device has no local row for the workspace yet, so its encryption mode cannot ' +
@@ -738,6 +745,23 @@ export const applyPropertyDefinitionSynthesis = async (
   const registrations: Array<{schema: AnyPropertySchema; blockId: string}> = []
   let lastOrderKey: string | null = null
 
+  // The LAST thing asked before the transaction opens, not the first thing
+  // inside it, and the position is forced rather than chosen: this reads
+  // through the Repo's handle, and that handle is the connection the
+  // transaction holds. PowerSync opens a second one only for
+  // `OPFSWriteAheadVFS`, so on every other browser the read waits on the very
+  // lock it is blocking and the gesture hangs — holding the graph claim, with
+  // the migration gate up on every device and no exit. `assertBackfillMayWrite`
+  // sits outside its transaction for exactly this reason (#1059); this call
+  // cited that as precedent for the opposite and was the same bug (#1069).
+  //
+  // What the move costs is the window between this probe and the lock: a
+  // delivery that lands in it is seen by the next run rather than this one.
+  // The alternative is a check that cannot run at all.
+  const lateGap = await repo.workspaceViewGap(workspaceId)
+  if (lateGap !== null) {
+    throw new Error(`[propertyDefinitionSynthesis] ${lateGap.reason}`)
+  }
   await repo.tx(async tx => {
     // INSIDE the write lock, immediately before the first write, because that
     // is the only place the answer cannot go stale under us: the checks above
@@ -745,13 +769,6 @@ export const applyPropertyDefinitionSynthesis = async (
     // by the lock wait, and the workspace's real row can arrive from sync in
     // between. Minting under the wrong namespace is not undoable — deleting the
     // block afterwards does not unpublish the id.
-    //
-    // The view gap is re-asked in full, the same discipline
-    // `assertBackfillMayWrite` follows: a delivery that cannot be applied can
-    // land between the preflight and the lock, and a key whose real definition
-    // is the one left unapplied still reads as ORPHANED to the plan we are
-    // about to write from. Affordable here only because the durable half is a
-    // partial-index lookup now rather than a scan.
     //
     // Of the NAMESPACE inputs only the MODE is re-asked, and that is the whole
     // trick: `K_id` cannot change under us (it is HKDF of the workspace key,
@@ -762,14 +779,10 @@ export const applyPropertyDefinitionSynthesis = async (
     // wedged store would hold the app's single writer indefinitely rather than
     // failing.
     //
-    // Read through `repo.db` rather than a tx handle, deliberately and for the
-    // same reason `assertBackfillMayWrite` does: a concurrent drain is excluded
-    // by the write lock, not by read isolation.
-    const lateGap = await repo.workspaceViewGap(workspaceId)
-    if (lateGap !== null) {
-      throw new Error(`[propertyDefinitionSynthesis] ${lateGap.reason}`)
-    }
-    const late = await resolveSynthesisMode(repo, workspaceId)
+    // Served by the TRANSACTION's handle, which is what lets it keep this
+    // position — see `Tx.workspaceEncryptionMode`.
+    const late = await resolveSynthesisMode(
+      repo, workspaceId, () => tx.workspaceEncryptionMode(workspaceId))
     if (late.kind === 'refused') {
       throw new Error(`[propertyDefinitionSynthesis] ${late.reason}`)
     }

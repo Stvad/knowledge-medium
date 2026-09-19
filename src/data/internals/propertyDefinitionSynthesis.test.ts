@@ -601,6 +601,46 @@ describe('planPropertyDefinitionSynthesis', () => {
 })
 
 describe('applyPropertyDefinitionSynthesis', () => {
+  it('takes no outer read while its own write lock is held', async () => {
+    // The same hazard the backfill's per-batch precondition had
+    // (`graphMigrationLock.test.ts`: "takes no outer read while its own write
+    // lock is held"), on the step that runs BEFORE it in the same operator
+    // gesture. PowerSync opens a second connection only for
+    // `OPFSWriteAheadVFS`, so everywhere else — every non-Chromium browser —
+    // a read on the Repo's handle waits for the write lock that read is
+    // blocking, forever. The gesture then hangs holding the graph claim, with
+    // the migration gate up on every device and no exit.
+    //
+    // A throw models "never served" without hanging the suite.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    let inWrite = false
+    const realWriteTransaction = sharedDb.db.writeTransaction.bind(sharedDb.db)
+    const outer = {
+      get: sharedDb.db.get.bind(sharedDb.db),
+      getAll: sharedDb.db.getAll.bind(sharedDb.db),
+      getOptional: sharedDb.db.getOptional.bind(sharedDb.db),
+    }
+    const refuseWhileWriting = (name: keyof typeof outer) =>
+      (async (sql: string, params?: unknown[]) => {
+        if (inWrite) throw new Error(`[test] ${name} on the Repo handle under the write lock`)
+        return (outer[name] as (s: string, p?: unknown[]) => Promise<unknown>)(sql, params)
+      })
+    sharedDb.db.writeTransaction = (async (fn: never) => {
+      inWrite = true
+      try { return await realWriteTransaction(fn) } finally { inWrite = false }
+    }) as typeof sharedDb.db.writeTransaction
+    sharedDb.db.get = refuseWhileWriting('get') as typeof sharedDb.db.get
+    sharedDb.db.getAll = refuseWhileWriting('getAll') as typeof sharedDb.db.getAll
+    sharedDb.db.getOptional = refuseWhileWriting('getOptional') as typeof sharedDb.db.getOptional
+    try {
+      expect(await applyPropertyDefinitionSynthesis(repo, plan)).toMatchObject({created: 1})
+    } finally {
+      sharedDb.db.writeTransaction = realWriteTransaction
+      Object.assign(sharedDb.db, outer)
+    }
+  })
+
   it('mints a definition the registry resolves before the caller does anything else', async () => {
     await rawCell('b1', {'demo:orphan': 'hello'})
 

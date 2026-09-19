@@ -255,6 +255,19 @@ export interface Tx {
    *  reads as un-flipped ('cell'). */
   isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
 
+  /** The workspace's `encryption_mode`, read through THIS transaction's
+   *  handle, or null when this device has no local row for it.
+   *
+   *  On Tx for the same reason as the sibling above, and it is not a
+   *  convenience: a caller that must re-check the mode immediately before it
+   *  mints under a mode-derived namespace has to read it under the write lock
+   *  it already holds, and a read on the REPO's handle cannot be served there
+   *  at all. PowerSync opens a second connection only for `OPFSWriteAheadVFS`,
+   *  so on every other browser that read waits on the lock that is blocking it
+   *  and the tab hangs (see `Repo.workspaceViewGap`'s callers). Cached per tx.
+   */
+  workspaceEncryptionMode(workspaceId: string): Promise<string | null>
+
   /** The fieldIds `parentId` holds a TOMBSTONED field row for.
    *
    *  The one thing that separates "a cell key was never materialized" from "the

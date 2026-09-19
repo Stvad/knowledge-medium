@@ -86,7 +86,7 @@ import {
   requireWritablePropertySchema,
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { readIsChildBackedWorkspace, readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { IS_OBJECT_BAG } from '@/data/internals/propertyKeyScan'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertyNameProp } from '@/data/properties'
@@ -356,6 +356,7 @@ export class TxImpl implements Tx {
    *  (never written through this engine), so within-tx staleness cannot
    *  occur. */
   private readonly childBackedWorkspaceCache = new Map<string, boolean>()
+  private readonly encryptionModeCache = new Map<string, string | null>()
 
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
@@ -412,6 +413,14 @@ export class TxImpl implements Tx {
     const flipped = await readIsChildBackedWorkspace(this.ctx.txDb, workspaceId)
     this.childBackedWorkspaceCache.set(workspaceId, flipped)
     return flipped
+  }
+
+  async workspaceEncryptionMode(workspaceId: string): Promise<string | null> {
+    const cached = this.encryptionModeCache.get(workspaceId)
+    if (cached !== undefined) return cached
+    const mode = await readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+    this.encryptionModeCache.set(workspaceId, mode)
+    return mode
   }
 
   async tombstonedPropertyFieldRows(
