@@ -206,36 +206,6 @@ const setupDefinition = async (
 
 const UNLOADABLE_PRESET = 'test-unloadable-preset'
 
-/** A LIST-valued definition whose preset no longer builds — the case where
- *  the cell it last published is the only record of how many values the
- *  consumer holds. {@link withPresetUnloaded} is the scalar twin, and carries
- *  why this is the long way round. */
-const withListPresetUnloaded = async (
-  value: unknown,
-  build: () => AnyCodec = () => codecs.list(codecs.string),
-  codecType = 'list',
-): Promise<Repo> => {
-  const preset = {
-    id: UNLOADABLE_PRESET,
-    build,
-    defaultValue: [],
-  } as unknown as AnyValuePresetCore
-  const authoring = await setupDefinition(UNLOADABLE_PRESET, [preset], codecType)
-  await createHost(authoring, 'p')
-  await authoring.tx(tx => tx.setProperty('p', schemaFor(authoring, 'status'), value),
-    {scope: ChangeScope.BlockDefault})
-  const repo = makeRepo()
-  await vi.waitFor(() => {
-    if (repo.propertyDefinitions?.definitionsByName.get('status') === undefined) {
-      throw new Error('[test] status definition not published yet')
-    }
-    if (repo.propertySchemas.get('status') !== undefined) {
-      throw new Error('[test] status still has behaviour in the registry')
-    }
-  }, {timeout: 3000})
-  return repo
-}
-
 /** A `status` definition on an EXTENSION's preset with one consumer holding
  *  `value`, reopened in a repo where that preset no longer builds — so the row
  *  is still published as metadata while carrying no codec.
@@ -243,20 +213,24 @@ const withListPresetUnloaded = async (
  *  The long way round on purpose. Re-typing a definition ONTO a preset that
  *  does not build is refused once it has consumers, so the only route left into
  *  the no-codec state is the one that has always been its real cause: the
- *  preset going missing UNDER a definition that was already using it. `reloadAs`
- *  chooses how — absent by default, or present but throwing. */
+ *  preset going missing UNDER a definition that was already using it. `was`
+ *  chooses what the preset used to BE, which is what decides how many values
+ *  the cell it left behind holds. */
 const withPresetUnloaded = async (
   value: unknown = 'done',
-  reloadAs?: readonly AnyValuePresetCore[],
+  {was}: {
+    readonly was?: {build: () => AnyCodec; codecType: string; defaultValue: unknown}
+  } = {},
 ): Promise<{repo: Repo; valueRowId: string}> => {
   const preset = {
     id: UNLOADABLE_PRESET,
-    build: () => codecs.string,
-    defaultValue: '',
+    build: was?.build ?? (() => codecs.string),
+    defaultValue: was?.defaultValue ?? '',
   } as unknown as AnyValuePresetCore
-  const authoring = await setupDefinition(UNLOADABLE_PRESET, [preset], 'string')
+  const authoring = await setupDefinition(
+    UNLOADABLE_PRESET, [preset], was?.codecType ?? 'string')
   const {valueRowId} = await seedProperty(authoring, 'p', 'status', value)
-  const repo = makeRepo(reloadAs)
+  const repo = makeRepo()
   await vi.waitFor(() => {
     // BOTH halves are the precondition: a registry that is LIVE for this
     // workspace — otherwise an edit refuses as unjudgeable and a test would
@@ -274,8 +248,6 @@ const withPresetUnloaded = async (
 const rename = (repo: Repo, fieldId: string, newName: string): Promise<void> =>
   repo.tx(tx => tx.setProperty(fieldId, propertyNameProp, newName),
     {scope: ChangeScope.BlockDefault})
-
-
 
 const retype = (repo: Repo, fieldId: string, presetId: string): Promise<void> =>
   repo.tx(tx => tx.setProperty(fieldId, presetIdProp, presetId),
@@ -699,8 +671,9 @@ describe('codec change', () => {
     // the same data with the old codec available commits, which is the
     // contradiction that gives it away.
     await seedWorkspace('children')
-    const repo = await withListPresetUnloaded(
-      [1, 2, 3], () => codecs.unsafeIdentity<unknown>(), 'object')
+    const {repo} = await withPresetUnloaded([1, 2, 3], {was: {
+      build: () => codecs.unsafeIdentity<unknown>(), codecType: 'object', defaultValue: null,
+    }})
     expect(await cell('p')).toEqual({status: [1, 2, 3]})
 
     await retype(repo, FIELD_ID, 'json')
@@ -714,8 +687,9 @@ describe('codec change', () => {
     // nothing away — and refusing here would block the one gesture that fixes
     // a definition whose preset stopped building.
     await seedWorkspace('children')
-    const repo = await withListPresetUnloaded(
-      null, () => codecs.optionalIdentity<unknown>(), 'object')
+    const {repo} = await withPresetUnloaded(null, {was: {
+      build: () => codecs.optionalIdentity<unknown>(), codecType: 'object', defaultValue: null,
+    }})
     expect(await cell('p')).toEqual({status: null})
 
     await retype(repo, FIELD_ID, 'number')
@@ -730,7 +704,9 @@ describe('codec change', () => {
     // record of how many values the consumer holds, and counting it as one
     // value let every member but the first go in silence.
     await seedWorkspace('children')
-    const repo = await withListPresetUnloaded(['1', '2', '3'])
+    const {repo} = await withPresetUnloaded(['1', '2', '3'], {was: {
+      build: () => codecs.list(codecs.string), codecType: 'list', defaultValue: [],
+    }})
     expect(await cell('p')).toEqual({status: ['1', '2', '3']})
 
     await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
@@ -1565,27 +1541,13 @@ describe('the multi-value boundary (#1010)', () => {
     expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('list')
   })
 
-  it('carries a scalar onto an identity target without re-reading it', async () => {
-    // `list` ("Options") is the only identity preset a person can pick, so
-    // this is the gesture the contract is actually about. The cell held the
-    // STRING 42, and a re-type is not a parse.
-    await seedWorkspace('children')
-    const repo = await setupDefinition()
-    const {valueRowId} = await seedProperty(repo, 'p', 'status', '42')
-    expect(await cell('p')).toEqual({status: '42'})
-
-    await retype(repo, FIELD_ID, 'list')
-    await repo.awaitProcessors()
-
-    expect(await cell('p')).toEqual({status: ['42']})
-    expect(await rowContent(valueRowId)).toBe('"42"')
-  })
-
   it('keeps a value that is literally the word `null` (#1030)', async () => {
-    // Picker-visible both ends ("Plain text" -> "Options"), and the ambiguity
-    // #1030 names: the old codec REJECTS null, so the row held the literal
-    // word, and reading the text under a codec that accepts null would turn
-    // it into a JSON null instead.
+    // The one end-to-end witness that `string` -> `list` carries the value
+    // rather than parsing it — `list` ("Options") being the only identity
+    // preset a person can pick. This value is chosen because getting it wrong
+    // changes the cell's TYPE and not just its spelling: the old codec
+    // REJECTS null, so the row held the literal word, and reading the text
+    // under a codec that accepts null makes it a JSON null (#1030).
     await seedWorkspace('children')
     const repo = await setupDefinition()
     const {valueRowId} = await seedProperty(repo, 'p', 'status', 'null')

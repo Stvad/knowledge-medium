@@ -205,10 +205,10 @@ const SPAN_OPENER_RE = /[[(]/
  *  value-destroying content instead of refusing it. (A JSON-spelled value can
  *  be destroyed the same way and is NOT escaped — km-24hg.)
  *
- *  Answered by the discriminator rather than by running the codec, which the
- *  neighbouring {@link codecAcceptsNull} can do and this cannot: `date` also
- *  returns a string unchanged, and is deliberately NOT in this set — its text
- *  is a canonical instant, not raw content. */
+ *  A discriminator and not a probe, unlike the neighbouring
+ *  {@link codecAcceptsNull}: `date` also returns a string unchanged, so
+ *  running the codec cannot tell it apart, and it is deliberately NOT in this
+ *  set — its text is a canonical instant, not raw content. */
 const storesContentVerbatim = (codec: AnyCodec): boolean =>
   codec.type === 'string' || codec.type === 'url'
 
@@ -534,9 +534,8 @@ export type ValueChildConversion =
  *  rather than carrying it.
  *
  *  Null is the answer wherever the two types disagree about the VALUE — the
- *  number codec reads back 42 where the string `42` went in. An identity codec
- *  disagrees with nothing, so it has a spelling for anything: re-typing onto
- *  `list` carries the STRING `42` instead of re-reading it as a number.
+ *  number codec reads back 42 where the string `42` went in, so a coercion
+ *  has no spelling that holds and an identity codec has one for anything.
  *
  *  `''` is a legal spelling, which is why callers test `=== null`. */
 const spellingThatHolds = (
@@ -554,14 +553,11 @@ const spellingThatHolds = (
   }
 }
 
-/** THE VALUE ROUTE: the value `from` holds, re-spelled by `to`. Only the codec
- *  that WROTE the text can say what it holds.
+/** The value `from` holds, re-spelled by `to`. Only the codec that WROTE the
+ *  text can say what it holds.
  *
- *  Declines three ways, which together are every case the text route answers:
- *  `from` cannot read this row's content, `to` has no
- *  {@link spellingThatHolds} for the value it read, or re-spelling would mint
- *  a reference. */
-const respellUnderTargetCodec = (
+ *  Every decline here is a case the text route then answers. */
+const valueRoute = (
   from: AnyPropertySchema,
   to: AnyPropertySchema,
   content: string,
@@ -597,9 +593,8 @@ const respellUnderTargetCodec = (
   return {outcome: 'converted', content: respelled}
 }
 
-/** THE TEXT ROUTE: `content` re-read under `to`, as if it had just been typed
- *  into the row. */
-const readTextUnderTargetCodec = (
+/** `content` re-read under `to`, as if it had just been typed into the row. */
+const textRoute = (
   to: AnyPropertySchema,
   content: string,
 ): ValueChildConversion => {
@@ -625,14 +620,13 @@ const readTextUnderTargetCodec = (
  * Re-read ONE value child's text for a property whose codec changed, at
  * {@link valueChildCodec} grain. The owner of which reading wins.
  *
- * THE VALUE FIRST ({@link respellUnderTargetCodec}), because what the property
- * HELD is what a re-type has to carry and the text alone cannot say what that
+ * THE VALUE FIRST, because what the property HELD is what a re-type has to
+ * carry and the text alone cannot say what that
  * is: the JSON `"x"` and the three-character string `"x"` are the same text
  * under two codecs (#1055). Taking the text's own reading keeps the spelling
  * and swaps the value, and swaps the CELL with it.
  *
- * THE TEXT ({@link readTextUnderTargetCodec}) answers wherever that route
- * declines; it lists its declines itself.
+ * The {@link textRoute} answers wherever the {@link valueRoute} declines.
  *
  * `from` is null when the definition's previous preset does not build — the
  * whole-definition form of the first of them, and why this takes a nullable
@@ -644,10 +638,10 @@ export const convertValueChildContent = (
   content: string,
 ): ValueChildConversion => {
   if (from !== null) {
-    const respelled = respellUnderTargetCodec(from, to, content)
+    const respelled = valueRoute(from, to, content)
     if (respelled.outcome === 'converted') return respelled
   }
-  return readTextUnderTargetCodec(to, content)
+  return textRoute(to, content)
 }
 
 /** How many VALUES a projected cell holds — the grain every "did this change
