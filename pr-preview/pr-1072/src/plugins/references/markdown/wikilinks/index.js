@@ -1,0 +1,1 @@
+import{Nd as e}from"../../../../../chunks/app-CP3wnNuU.js";export{e as wikilinkMarkdownExtension};

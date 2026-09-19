@@ -1,0 +1,1 @@
+import{Vg as e}from"../../../chunks/app-CP3wnNuU.js";export{e as getBreadcrumbContentPreview};

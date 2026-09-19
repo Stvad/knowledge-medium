@@ -1,0 +1,1 @@
+import{Du as e}from"../../../chunks/app-CP3wnNuU.js";export{e as backlinksViewPlugin};

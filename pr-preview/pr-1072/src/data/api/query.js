@@ -1,0 +1,1 @@
+import{z2 as e}from"../../../chunks/app-CP3wnNuU.js";export{e as defineQuery};

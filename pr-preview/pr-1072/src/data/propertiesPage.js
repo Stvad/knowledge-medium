@@ -1,0 +1,1 @@
+import{X$ as e,Y$ as t}from"../../chunks/app-CP3wnNuU.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};
