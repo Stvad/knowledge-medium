@@ -1,1 +1,1 @@
-import{gt as e,vw as t,yw as n}from"../../../chunks/app-BBYaRcge.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};
+import{gt as e,vw as t,yw as n}from"../../../chunks/app-Cmts3gf5.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};
