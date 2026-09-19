@@ -229,14 +229,38 @@ export const STAGED_VIEW_GAP_SQL = `
 
 /** How many staged rows the benign-echo probe examines per call.
  *
- *  The probe runs inside a write transaction, and its own success case is
- *  the one where no row qualifies — so `LIMIT 1` never short-circuits, and
- *  an unbounded scan of a large queue would sit inside the write lock.
- *  Past the bound we report a gap rather than scanning on: that much
- *  undrained backlog IS a real gap, and the pass resumes on the next
+ *  {@link stagedViewGapReason} is asked from inside a write transaction, and
+ *  its own success case is the one where no row qualifies — so `LIMIT 1` never
+ *  short-circuits, and an unbounded scan of a large queue would sit inside the
+ *  write lock. Past the bound we report a gap rather than scanning on: that
+ *  much undrained backlog IS a real gap, and the pass resumes on the next
  *  attempt. Re-measure before changing it; wa-sqlite/OPFS (the browser
  *  substrate) is what matters, not native SQLite. */
 export const STAGED_SCAN_LIMIT = 10_000
+
+/**
+ * Is synced data still on its way into `blocks`, and why — the IN-FLIGHT half
+ * of a view gap, as {@link STAGED_VIEW_GAP_SQL} sees it. Null when nothing is
+ * staged.
+ *
+ * Takes its reader rather than a handle, because it is asked from both sides
+ * of the write lock: `Repo.syncViewGap` asks it on the Repo's connection, and
+ * `Tx.stagedSyncViewGap` asks it on the transaction's own. One owner for the
+ * query AND its wording — the two callers must not be able to disagree about
+ * what counts as draining.
+ */
+export const stagedViewGapReason = async (
+  reader: {getOptional: <T>(sql: string, params?: unknown[]) => Promise<T | null>},
+): Promise<string | null> => {
+  const staged = await reader.getOptional<{why: string}>(
+    STAGED_VIEW_GAP_SQL, [STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT],
+  )
+  if (staged?.why === 'deep') {
+    return `more than ${STAGED_SCAN_LIMIT.toLocaleString()} synced rows are staged, `
+      + 'so this device is behind on materializing them into `blocks`'
+  }
+  return staged !== null ? 'synced rows are still draining into `blocks`' : null
+}
 
 /**
  * How many of a workspace's downloaded rows has the drain not applied?

@@ -87,6 +87,7 @@ import {
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
 import { readIsChildBackedWorkspace, readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
+import { stagedViewGapReason } from '@/data/internals/syncObserver/reconcile'
 import {
   definitionNameOf,
   readPropertyDefinitionBags,
@@ -357,6 +358,11 @@ export class TxImpl implements Tx {
    *  (never written through this engine), so within-tx staleness cannot
    *  occur. */
   private readonly childBackedWorkspaceCache = new Map<string, boolean>()
+  /** Same lifetime and the same soundness argument as the cache above, with
+   *  one difference worth stating: `encryption_mode` IS written locally
+   *  (`primeLocalWorkspace`), just never through this engine and never inside
+   *  a `repo.tx` — so it is the write lock, not the absence of a writer, that
+   *  keeps a cached value from going stale within a transaction. */
   private readonly encryptionModeCache = new Map<string, string | null>()
 
   constructor(ctx: TxImplContext) {
@@ -422,6 +428,10 @@ export class TxImpl implements Tx {
     const mode = await readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
     this.encryptionModeCache.set(workspaceId, mode)
     return mode
+  }
+
+  stagedSyncViewGap(): Promise<string | null> {
+    return stagedViewGapReason(this.ctx.txDb)
   }
 
   async tombstonedPropertyFieldRows(

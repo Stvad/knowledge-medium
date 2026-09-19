@@ -256,17 +256,26 @@ export interface Tx {
   isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
 
   /** The workspace's `encryption_mode`, read through THIS transaction's
-   *  handle, or null when this device has no local row for it.
+   *  handle, or null when this device has no local row for it. Cached per tx.
    *
-   *  On Tx for the same reason as the sibling above, and it is not a
-   *  convenience: a caller that must re-check the mode immediately before it
-   *  mints under a mode-derived namespace has to read it under the write lock
-   *  it already holds, and a read on the REPO's handle cannot be served there
-   *  at all. PowerSync opens a second connection only for `OPFSWriteAheadVFS`,
-   *  so on every other browser that read waits on the lock that is blocking it
-   *  and the tab hangs (see `Repo.workspaceViewGap`'s callers). Cached per tx.
-   */
+   *  On Tx, not read from the Repo, because a caller re-checking the mode
+   *  immediately before it mints under a mode-derived namespace has to read it
+   *  under the write lock it already holds — and that read cannot be served on
+   *  the Repo's handle at all (`Repo.assertBackfillMayWrite` states the rule;
+   *  `@/data/localDbVfs` has the mechanism). */
   workspaceEncryptionMode(workspaceId: string): Promise<string | null>
+
+  /** Why synced data has not finished reaching `blocks`, or null — the
+   *  IN-FLIGHT half of `Repo.workspaceViewGap`, asked under THIS transaction's
+   *  lock and served by its own handle.
+   *
+   *  Deliberately only that half. The other arms move on the scale of a
+   *  download or a device's whole re-materialization, so a caller's pre-lock
+   *  probe still speaks for them; the drain queue is the one that turns over
+   *  while a transaction waits for the writer, and it is the one that hides a
+   *  row this transaction would otherwise treat as absent. NOT cached, for the
+   *  same reason. */
+  stagedSyncViewGap(): Promise<string | null>
 
   /** The fieldIds `parentId` holds a TOMBSTONED field row for.
    *

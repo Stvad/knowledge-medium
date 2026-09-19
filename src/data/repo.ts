@@ -93,11 +93,10 @@ import {
   type RematerializeScope,
 } from '@/data/internals/syncObserver/observer'
 import {
-  STAGED_SCAN_LIMIT,
-  STAGED_VIEW_GAP_SQL,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
   WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,
   WORKSPACE_UNAPPLIED_SQL,
+  stagedViewGapReason,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -3296,14 +3295,8 @@ export class Repo {
    * workspace in hand takes that instead (km-fsxp).
    */
   async syncViewGap(): Promise<string | null> {
-    const staged = await this.db.getOptional<{why: string}>(
-      STAGED_VIEW_GAP_SQL, [STAGED_SCAN_LIMIT, STAGED_SCAN_LIMIT],
-    )
-    if (staged?.why === 'deep') {
-      return `more than ${STAGED_SCAN_LIMIT.toLocaleString()} synced rows are staged, `
-        + 'so this device is behind on materializing them into `blocks`'
-    }
-    if (staged !== null) return 'synced rows are still draining into `blocks`'
+    const staged = await stagedViewGapReason(this.db)
+    if (staged !== null) return staged
     if (!this.backfillSyncSettledNow()) {
       return 'this device is not caught up with the server '
         + '(still downloading, disconnected, or a download error)'

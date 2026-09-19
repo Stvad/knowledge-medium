@@ -278,13 +278,12 @@ export type SynthesisNamespace =
 const resolveSynthesisMode = async (
   repo: Repo,
   workspaceId: string,
-  /** Who serves the row read. The default is the Repo's handle, which is right
-   *  everywhere except inside a write transaction: that connection is the one
-   *  the transaction is holding, and on a single-connection pool (every VFS but
-   *  `OPFSWriteAheadVFS`) the read waits on it forever. A caller re-asking under
-   *  its own lock passes `tx.workspaceEncryptionMode`. */
-  readMode: () => Promise<string | null>
-    = () => readWorkspaceEncryptionMode(repo.db, workspaceId),
+  /** Who serves the row read. REQUIRED, with no default, because the two
+   *  callers need different answers and the wrong one does not fail — it
+   *  hangs: inside a write transaction the Repo's handle is the connection
+   *  that transaction holds (`Repo.assertBackfillMayWrite` states the rule),
+   *  so a caller under its own lock must pass `tx.workspaceEncryptionMode`. */
+  readMode: () => Promise<string | null>,
 ): Promise<{kind: 'refused'; reason: string} | {kind: 'ready'; mode: ModePin}> => {
   const pin = getModePin(repo.user.id, workspaceId)
   if (pin === null) {
@@ -337,7 +336,11 @@ export const resolveSynthesisNamespace = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<SynthesisNamespace> => {
-  const resolved = await resolveSynthesisMode(repo, workspaceId)
+  // Outside any transaction — `resolveSynthesisNamespace` also reads the key
+  // store, which must never happen under the write lock, so this whole
+  // function is a pre-lock one and reads on the Repo's handle are right here.
+  const resolved = await resolveSynthesisMode(
+    repo, workspaceId, () => readWorkspaceEncryptionMode(repo.db, workspaceId))
   if (resolved.kind === 'refused') return resolved
   if (resolved.mode === 'plaintext') {
     return {kind: 'ready', mode: 'plaintext', namespace: PLAINTEXT_SYNTHESIZED_DEFINITION_NS}
@@ -718,10 +721,11 @@ export const applyPropertyDefinitionSynthesis = async (
   // ORPHANED to the scan, and this pass answers an orphan by MINTING — so
   // "nothing is in flight" is not the question {@link Repo.workspaceViewGap}
   // is asked here.
-  const syncGap = await repo.workspaceViewGap(workspaceId)
-  if (syncGap !== null) {
-    throw new Error(`[propertyDefinitionSynthesis] ${syncGap.reason}`)
+  const refuseOnViewGap = async () => {
+    const gap = await repo.workspaceViewGap(workspaceId)
+    if (gap !== null) throw new Error(`[propertyDefinitionSynthesis] ${gap.reason}`)
   }
+  await refuseOnViewGap()
   // Re-read for the same reason, and because the plan may have been built
   // before this device received the workspace row that says it is encrypted.
   const preflight = await resolveSynthesisNamespace(repo, workspaceId)
@@ -745,24 +749,34 @@ export const applyPropertyDefinitionSynthesis = async (
   const registrations: Array<{schema: AnyPropertySchema; blockId: string}> = []
   let lastOrderKey: string | null = null
 
-  // The LAST thing asked before the transaction opens, not the first thing
-  // inside it, and the position is forced rather than chosen: this reads
-  // through the Repo's handle, and that handle is the connection the
-  // transaction holds. PowerSync opens a second one only for
-  // `OPFSWriteAheadVFS`, so on every other browser the read waits on the very
-  // lock it is blocking and the gesture hangs — holding the graph claim, with
-  // the migration gate up on every device and no exit. `assertBackfillMayWrite`
-  // sits outside its transaction for exactly this reason (#1059); this call
-  // cited that as precedent for the opposite and was the same bug (#1069).
+  // Asked a SECOND time, and the pair is deliberate: the one above refuses
+  // before the Properties-page bootstrap writes anything, this one covers that
+  // write and everything since. Neither may move inside the transaction —
+  // `workspaceViewGap` reads the Repo's handle, which is the connection the
+  // transaction holds, and on a single-connection pool that read is never
+  // served (`Repo.assertBackfillMayWrite` states the rule; #1069).
   //
-  // What the move costs is the window between this probe and the lock: a
-  // delivery that lands in it is seen by the next run rather than this one.
-  // The alternative is a check that cannot run at all.
-  const lateGap = await repo.workspaceViewGap(workspaceId)
-  if (lateGap !== null) {
-    throw new Error(`[propertyDefinitionSynthesis] ${lateGap.reason}`)
-  }
+  // Its own residual is closed under the lock instead — see `stagedSyncViewGap`
+  // below — so what is left here is the arms that cannot turn over in a lock
+  // wait: a download still running, a whole-workspace re-materialization, and
+  // rows the drain has already given up on.
+  await refuseOnViewGap()
   await repo.tx(async tx => {
+    // ACCEPTED RESIDUAL, closed: a sync checkpoint can commit between the probe
+    // above and this transaction acquiring the writer, and the drain applies it
+    // through the same lock — so a definition for a key we are about to call
+    // ORPHANED can be sitting in `blocks_synced`, invisible to a `blocks` read.
+    // Minting then publishes a rival at our own deterministic id, which no
+    // later run can undo: every one of them reports the name as contested and
+    // skips it, and field rows strand on whichever copy loses.
+    //
+    // This is the one arm that turns over on that timescale, which is why it is
+    // the only one re-asked here, and it is servable because it reads the
+    // TRANSACTION's handle.
+    const draining = await tx.stagedSyncViewGap()
+    if (draining !== null) {
+      throw new Error(`[propertyDefinitionSynthesis] ${draining}`)
+    }
     // INSIDE the write lock, immediately before the first write, because that
     // is the only place the answer cannot go stale under us: the checks above
     // are separated from this transaction by the Properties-page bootstrap and

@@ -19,6 +19,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { withOuterReadsRefused } from '@/data/test/refuseOuterReads'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { confirmPlaintextForSession } from '@/sync/keys/modePin'
 import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
@@ -602,43 +603,53 @@ describe('planPropertyDefinitionSynthesis', () => {
 
 describe('applyPropertyDefinitionSynthesis', () => {
   it('takes no outer read while its own write lock is held', async () => {
-    // The same hazard the backfill's per-batch precondition had
-    // (`graphMigrationLock.test.ts`: "takes no outer read while its own write
-    // lock is held"), on the step that runs BEFORE it in the same operator
-    // gesture. PowerSync opens a second connection only for
-    // `OPFSWriteAheadVFS`, so everywhere else — every non-Chromium browser —
-    // a read on the Repo's handle waits for the write lock that read is
-    // blocking, forever. The gesture then hangs holding the graph claim, with
+    // Same hazard as the backfill's per-batch precondition
+    // (`propertiesMigrationClaim.test.ts`, same test name), on the step that
+    // runs BEFORE it in the same operator gesture. A read the pool cannot serve
+    // hangs the gesture rather than failing it, holding the graph claim with
     // the migration gate up on every device and no exit.
-    //
-    // A throw models "never served" without hanging the suite.
     await rawCell('b1', {'demo:orphan': 'hello'})
     const plan = await planFor()
-    let inWrite = false
-    const realWriteTransaction = sharedDb.db.writeTransaction.bind(sharedDb.db)
-    const outer = {
-      get: sharedDb.db.get.bind(sharedDb.db),
-      getAll: sharedDb.db.getAll.bind(sharedDb.db),
-      getOptional: sharedDb.db.getOptional.bind(sharedDb.db),
-    }
-    const refuseWhileWriting = (name: keyof typeof outer) =>
-      (async (sql: string, params?: unknown[]) => {
-        if (inWrite) throw new Error(`[test] ${name} on the Repo handle under the write lock`)
-        return (outer[name] as (s: string, p?: unknown[]) => Promise<unknown>)(sql, params)
-      })
-    sharedDb.db.writeTransaction = (async (fn: never) => {
-      inWrite = true
-      try { return await realWriteTransaction(fn) } finally { inWrite = false }
-    }) as typeof sharedDb.db.writeTransaction
-    sharedDb.db.get = refuseWhileWriting('get') as typeof sharedDb.db.get
-    sharedDb.db.getAll = refuseWhileWriting('getAll') as typeof sharedDb.db.getAll
-    sharedDb.db.getOptional = refuseWhileWriting('getOptional') as typeof sharedDb.db.getOptional
-    try {
+    await withOuterReadsRefused(sharedDb.db, async () => {
       expect(await applyPropertyDefinitionSynthesis(repo, plan)).toMatchObject({created: 1})
+    })
+  })
+
+  it('refuses a checkpoint that lands between the probe and the write lock', async () => {
+    // The window no pre-lock probe can see: the drain takes the SAME write lock
+    // this transaction is queued for, so a definition delivered while we wait
+    // sits in `blocks_synced`, unapplied, and a `blocks` read calls its key
+    // orphaned. Minting then publishes a rival at our deterministic id that no
+    // later run can undo — every one of them reports the name as contested.
+    //
+    // Staged after the LAST pre-lock probe resolves, which is precisely where
+    // such a delivery lands. Staging it any earlier is the vacuous version of
+    // this test: the probe catches it and the in-lock check can be deleted
+    // without the test noticing.
+    await rawCell('b1', {'demo:orphan': 'hello'})
+    const plan = await planFor()
+    const realProbe = repo.workspaceViewGap.bind(repo)
+    let probes = 0
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async (workspaceId: string) => {
+      const answer = await realProbe(workspaceId)
+      probes += 1
+      // The second is the one immediately before `repo.tx`; see the two
+      // `refuseOnViewGap()` calls in `applyPropertyDefinitionSynthesis`.
+      if (probes === 2) {
+        await sharedDb.db.execute(
+          `INSERT INTO blocks_synced_changes (id, op) VALUES ('rival-def', 'upsert')`)
+      }
+      return answer
+    })
+    try {
+      await expect(applyPropertyDefinitionSynthesis(repo, plan))
+        .rejects.toThrow(/draining into/)
+      expect(probes).toBe(2)
     } finally {
-      sharedDb.db.writeTransaction = realWriteTransaction
-      Object.assign(sharedDb.db, outer)
+      await sharedDb.db.execute(`DELETE FROM blocks_synced_changes WHERE id = 'rival-def'`)
     }
+    // Nothing was minted: the refusal has to beat the write, not report after it.
+    expect(await countDefinitionsNamed('demo:orphan')).toBe(0)
   })
 
   it('mints a definition the registry resolves before the caller does anything else', async () => {
