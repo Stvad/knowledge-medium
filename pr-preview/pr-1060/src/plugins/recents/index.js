@@ -1,1 +1,1 @@
-import{Av as e,Ov as t,jv as n,kv as r}from"../../../chunks/app-Cmts3gf5.js";export{t as OPEN_RECENTS_ACTION_ID,r as openRecentsAction,e as recentsHeaderItem,n as recentsPlugin};
+import{Av as e,Ov as t,jv as n,kv as r}from"../../../chunks/app-B_jL6AxB.js";export{t as OPEN_RECENTS_ACTION_ID,r as openRecentsAction,e as recentsHeaderItem,n as recentsPlugin};
