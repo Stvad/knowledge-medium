@@ -197,14 +197,13 @@ const SPAN_OPENER_RE = /[[(]/
 /** Does this codec store a value as RAW content, so that the text in the row
  *  is the value itself rather than a formatting of it?
  *
- *  The one owner of a question every site that escapes or unwraps must answer
- *  the same way: only these codecs can have their value destroyed by the
- *  content being read back as something else, so only they escape
- *  ({@link needsEscape} / {@link escapeContent}) and only their decode can be
- *  looking at an envelope. Disagree on the write/read pair and a value is
- *  escaped and never unwrapped; disagree in
- *  {@link contentLosesPropertyValue} and find-replace writes the destroying
- *  content instead of refusing it.
+ *  These are the codecs that escape ({@link needsEscape} /
+ *  {@link escapeContent}) and whose decode can therefore be looking at an
+ *  envelope. One owner because the sites must agree: disagree on the
+ *  write/read pair and a value is escaped and never unwrapped; disagree in
+ *  {@link contentLosesPropertyValue} and find-replace writes a
+ *  value-destroying content instead of refusing it. (A JSON-spelled value can
+ *  be destroyed the same way and is NOT escaped — km-24hg.)
  *
  *  Answered by the discriminator rather than by running the codec, which the
  *  neighbouring {@link codecAcceptsNull} can do and this cannot: `date` also
@@ -528,17 +527,18 @@ export type ValueChildConversion =
   | {readonly outcome: 'converted'; readonly content: string}
   | {readonly outcome: 'unreadable'}
 
-/** How `to` would spell `held` such that it reads the same value back, or null
- *  when it has no such spelling. Asked by RUNNING it, because only the codec
- *  can say: a `to` that re-spells the value into text it reads back as
- *  something else has moved the value rather than carrying it.
+/** How `to` would spell `held` so that it reads the same value back, at
+ *  {@link valueChildCodec} grain — or null when it has no such spelling.
+ *  Asked by RUNNING it, because only the codec can say: a `to` that re-spells
+ *  the value into text it reads back as something else has moved the value
+ *  rather than carrying it.
  *
- *  This is the whole of "can the new type hold what the old one held", so it is
- *  also what decides when a re-type re-reads the TEXT instead. A type change
- *  has no such spelling — the number codec reads back 42 where the string `42`
- *  went in — which is why coercions re-read. An IDENTITY codec has one for
- *  ANY value, which is the same rule with the opposite result: re-typing onto
- *  `list` carries the STRING `42` rather than re-reading it as a number. */
+ *  Null is the answer wherever the two types disagree about the VALUE — the
+ *  number codec reads back 42 where the string `42` went in. An identity codec
+ *  disagrees with nothing, so it has a spelling for anything: re-typing onto
+ *  `list` carries the STRING `42` instead of re-reading it as a number.
+ *
+ *  `''` is a legal spelling, which is why callers test `=== null`. */
 const spellingThatHolds = (
   to: AnyPropertySchema,
   held: unknown,
@@ -584,6 +584,10 @@ const respellUnderTargetCodec = (
   // re-spelled text rather than of `to.codec.type`, which is an open string a
   // plugin picks: any codec that spells a value as a reference span mints the
   // same identity, whatever it calls itself.
+  // The second conjunct is DEFENCE IN DEPTH — deleting it fails nothing,
+  // because every kernel codec that re-spells a reference into a reference
+  // has a text route producing the identical content. It is here for the
+  // plugin codec the paragraph above anticipates.
   if (isWholeContentReference(respelled) && !isWholeContentReference(content)) {
     return {outcome: 'unreadable'}
   }
@@ -616,8 +620,7 @@ const readTextUnderTargetCodec = (
 
 /**
  * Re-read ONE value child's text for a property whose codec changed, at
- * {@link valueChildCodec} grain. THE ONE OWNER of which reading wins; every
- * other site points here rather than restating it.
+ * {@link valueChildCodec} grain. The owner of which reading wins.
  *
  * THE VALUE FIRST ({@link respellUnderTargetCodec}), because what the property
  * HELD is what a re-type has to carry and the text alone cannot say what that
@@ -625,13 +628,12 @@ const readTextUnderTargetCodec = (
  * under two codecs (#1055). Taking the text's own reading keeps the spelling
  * and swaps the value, and swaps the CELL with it.
  *
- * THE TEXT ({@link readTextUnderTargetCodec}) answers wherever the value route
- * declines, and that route names the three ways rather than this listing them
- * — so what a re-type preserves is the VALUE, never the spelling.
+ * THE TEXT ({@link readTextUnderTargetCodec}) answers wherever that route
+ * declines; it lists its declines itself.
  *
- * `from` is null when the definition's previous preset does not build: the
- * whole-definition form of the first of those three, and the reason this takes
- * a nullable schema at all.
+ * `from` is null when the definition's previous preset does not build — the
+ * whole-definition form of the first of them, and why this takes a nullable
+ * schema at all.
  */
 export const convertValueChildContent = (
   from: AnyPropertySchema | null,

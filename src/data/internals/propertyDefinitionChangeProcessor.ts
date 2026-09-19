@@ -37,9 +37,9 @@
  *    (`codecInputsChanged`). `convertValueChildContent` owns which reading of
  *    a value child wins, and states the rule; it is not restated here.
  *    Whether the edit TAKES A VALUE AWAY is `valuesLostBy`'s, at cell grain,
- *    and has two causes: a row neither route carries, and two rows that
- *    re-spell to the same text and fold into one. Either way the transaction
- *    is REFUSED — §9's "N values can't convert" is
+ *    and is not the same question as whether a row converts: rows that
+ *    re-spell to the same text fold into one, and a narrowing to a scalar
+ *    keeps only the first. Either way the transaction is REFUSED — §9's "N values can't convert" is
  *    user-visible here as the reason the change did not happen, which is the
  *    only form of it that keeps the value. A value already unreadable before
  *    the edit blocks nothing: the cell never held it.
@@ -633,9 +633,10 @@ const applyToParent = async (
         // ONE member, and reading it against the whole-array grammar would
         // make every member unreadable.
         //
-        // Whichever route answers, a bare `null` stays ambiguous: it is a
-        // literal to a codec that rejects null and the unset sentinel to one
-        // that accepts it (#1030).
+        // A bare `null` is ambiguous — a literal to a codec that rejects
+        // null, the unset sentinel to one that accepts it (#1030) — and the
+        // OLD codec settles it wherever it can be read, because it is the one
+        // that wrote the row. The ambiguity survives only on the text route.
         const conversion = convertValueChildContent(
           change.beforeSchema, change.schema, value.content,
         )
