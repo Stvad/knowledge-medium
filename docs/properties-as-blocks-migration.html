@@ -2885,14 +2885,17 @@ supabase skill if it's kept.
     <code>valuesLostBy</code> own the two halves; read them rather than this
     paragraph.</p>
     <p><strong>Route order (2026-09-18, #1055):</strong> the conversion carries
-    the VALUE the old codec holds, and re-reads the TEXT only where it cannot —
-    the reverse of how it first shipped, because two presets that disagree only
+    the VALUE the old codec holds, and re-reads the TEXT where it cannot — the
+    reverse of how it first shipped, because two presets that disagree only
     about SPELLING both read the text, so reading the text first let the
-    spelling win over the value. What a re-type preserves is therefore the
-    value and never the spelling, which is visible in both directions: a string
-    property holding 42 stays the string 42 under a list preset instead of
-    becoming the number, and a date row keeps its instant while losing the
-    shorthand someone typed.</p></dd>
+    spelling win over the value. Where the two disagree the value now wins and
+    the spelling is rewritten to however the new preset spells that value: a
+    string property holding 42 stays the string 42 under a list preset instead
+    of becoming the number, and a date row keeps its instant while losing the
+    shorthand someone typed. Where no spelling holds, the text is re-read and
+    its own reading wins. <code>convertValueChildContent</code> and
+    <code>respellUnderTargetCodec</code> own the full list of
+    when.</p></dd>
 
   <dt><strong>Field-row placement (decided: no special logic).</strong></dt>
   <dd>Owner decision (2026-07-19): there is <em>no placement policy for property

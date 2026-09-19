@@ -3962,6 +3962,17 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
   })
 
+  it('re-spells a reference the stored text ALREADY carried', () => {
+    // The mint decline is gated on the stored text, not on the target: an
+    // alias the person wrote is an identity they wrote. Nothing else can
+    // answer here — the text route cannot read the alias form under `ref` at
+    // all, so declining would refuse the re-type rather than answer it
+    // differently.
+    expect(convert('string', 'ref', '[[Page]]'))
+      .toEqual({outcome: 'converted', content: '(([[Page]]))'})
+    expect(convert('string', 'ref', 'Mary')).toEqual({outcome: 'unreadable'})
+  })
+
   it('treats the EMPTY spelling as a spelling', () => {
     // `''` is what `string` spells the empty string as, so a route that tested
     // the spelling for truthiness rather than for null would fall through to
@@ -3970,10 +3981,12 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
   })
 
-  it('lets the OLD codec settle what a bare `null` meant (#1030)', () => {
+  it('keeps a bare `null` the OLD codec read as the literal word (#1030)', () => {
     // `null` is the unset SENTINEL to a codec that accepts it and the literal
-    // word to one that does not. The codec that wrote the row is the one that
-    // knows which, so the string survives instead of becoming a JSON null.
+    // word to one that does not. `string` rejects null, so the row held the
+    // word and the value route carries it. Settled only where a spelling
+    // holds: `list` -> `string` has none, and the text route decides it the
+    // other way.
     expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
   })
 

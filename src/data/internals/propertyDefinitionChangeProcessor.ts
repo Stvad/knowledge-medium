@@ -35,11 +35,11 @@
  *    definition row's preset id and preset config, NOT the built codec's type
  *    string, which cannot tell `optional-string` from `string`
  *    (`codecInputsChanged`). `convertValueChildContent` owns which reading of
- *    a value child wins, and states the rule; it is not restated here.
- *    Whether the edit TAKES A VALUE AWAY is `valuesLostBy`'s, at cell grain,
- *    and is not the same question as whether a row converts: rows that
- *    re-spell to the same text fold into one, and a narrowing to a scalar
- *    keeps only the first. Either way the transaction is REFUSED — §9's "N values can't convert" is
+ *    a value child wins. Whether the edit TAKES A VALUE AWAY is a separate
+ *    question, `valuesLostBy`'s, at cell grain — rows that re-spell to the
+ *    same text fold into one, and a narrowing to a scalar keeps only the
+ *    first that parses, neither of which is a row failing to convert. Either
+ *    way the transaction is REFUSED — §9's "N values can't convert" is
  *    user-visible here as the reason the change did not happen, which is the
  *    only form of it that keeps the value. A value already unreadable before
  *    the edit blocks nothing: the cell never held it.
@@ -556,9 +556,15 @@ const valuesLostBy = (
   if (!change.encodingChanged) return 0
   const after = projectedValueCount(change.schema, projected)
   if (change.beforeSchema === null) {
-    // One value or none: without the old codec nothing can count a list's
-    // members, and an undercount still refuses while anything is lost.
-    return parent.properties[change.oldName] === undefined || after > 0 ? 0 : 1
+    // No old codec to read the children with, so the CELL it last published
+    // is the record of what the consumer holds — and it is a faithful one at
+    // this grain: an array holds its members, and `null` is the cleared
+    // sentinel rather than a value, which is the shape a repair of a broken
+    // definition arrives in. Counting it as one value either way let a
+    // narrowing drop every member but the first in silence.
+    const held = parent.properties[change.oldName]
+    if (held === undefined || held === null) return 0
+    return Math.max(0, (Array.isArray(held) ? held.length : 1) - after)
   }
   const held = childContentsToEncodedPropertyValue(
     change.beforeSchema,
@@ -630,9 +636,11 @@ const applyToParent = async (
         // make every member unreadable.
         //
         // A bare `null` is ambiguous — a literal to a codec that rejects
-        // null, the unset sentinel to one that accepts it (#1030) — and the
-        // OLD codec settles it wherever it can be read, because it is the one
-        // that wrote the row. The ambiguity survives only on the text route.
+        // null, the unset sentinel to one that accepts it (#1030). The value
+        // route settles it with the codec that WROTE the row, wherever the
+        // new one has a spelling for what that read; where it has none the
+        // text route re-reads `null` and the ambiguity decides the other way
+        // (`string` -> `date`, `list` -> `string`).
         const conversion = convertValueChildContent(
           change.beforeSchema, change.schema, value.content,
         )

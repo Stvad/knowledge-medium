@@ -584,10 +584,12 @@ const respellUnderTargetCodec = (
   // re-spelled text rather than of `to.codec.type`, which is an open string a
   // plugin picks: any codec that spells a value as a reference span mints the
   // same identity, whatever it calls itself.
-  // The second conjunct is DEFENCE IN DEPTH — deleting it fails nothing,
-  // because every kernel codec that re-spells a reference into a reference
-  // has a text route producing the identical content. It is here for the
-  // plugin codec the paragraph above anticipates.
+  // Gated on the STORED text already carrying a reference, because only then
+  // is the identity one the person wrote. Load-bearing, not a formality:
+  // `[[Page]]` under a verbatim codec re-spells to `(([[Page]]))`, which the
+  // text route cannot produce at all (`ref` rejects the alias form), so
+  // dropping this conjunct refuses that re-type rather than answering it
+  // differently.
   if (isWholeContentReference(respelled) && !isWholeContentReference(content)) {
     return {outcome: 'unreadable'}
   }
