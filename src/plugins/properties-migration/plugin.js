@@ -1,1 +1,1 @@
-import{Dr as e}from"../../../chunks/app-ZELLiH1d.js";export{e as propertiesMigrationPlugin};
+import{Dr as e}from"../../../chunks/app-BFhEgXwA.js";export{e as propertiesMigrationPlugin};
