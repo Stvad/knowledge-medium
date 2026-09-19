@@ -317,9 +317,9 @@ export interface Tx {
    *  field row bound to its fieldId. Inside the write lock no other writer can
    *  commit, so this answer holds for the rest of the transaction.
    *
-   *  Reads the LAST occurrence of the name key, matching `JSON.parse` rather
-   *  than `json_extract` — a raw write can produce a bag with a repeated key,
-   *  and SQLite and JavaScript disagree about which one wins. */
+   *  A bag with a repeated name key resolves to its LAST occurrence, which is
+   *  the one the runtime reads — `readPropertyDefinitionBags` owns that rule
+   *  and this goes through it. */
   livePropertyDefinitionNames(
     workspaceId: string,
     names: readonly string[],

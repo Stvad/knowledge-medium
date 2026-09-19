@@ -97,18 +97,29 @@ const indexSeeds = (seeds: readonly AnyPropertySeedDeclaration[]) => {
   return {byKey, byName}
 }
 
+/** The ONE seed each property NAME resolves to — the single owner of that
+ *  rule, for callers that need the winner rather than the schema it publishes.
+ *
+ *  Not a detail a caller may re-derive: two seeds sharing a name is an
+ *  inherent conflict (they fight over one stored cell) and `indexSeeds` keeps
+ *  the FIRST and drops the rest. A caller assembling its own map with
+ *  `set(name, seed)` gets last-wins and silently disagrees with the registry
+ *  about which declaration is live. */
+export const resolveSeedsByName = (
+  seeds: readonly AnyPropertySeedDeclaration[],
+): ReadonlyMap<string, AnyPropertySeedDeclaration> => {
+  const resolved = new Map<string, AnyPropertySeedDeclaration>()
+  for (const namedSeeds of indexSeeds(seeds).byName.values()) {
+    if (namedSeeds.length === 1) resolved.set(namedSeeds[0]!.name, namedSeeds[0]!)
+  }
+  return resolved
+}
+
 /** Stage-0 behavioral registry used before a workspace is pinned. It exposes
  * declarations as plain entries but cannot produce identity-bearing values. */
 export const buildUnboundPropertySchemas = (
   seeds: readonly AnyPropertySeedDeclaration[],
-): ReadonlyMap<string, AnyPropertySchema> => {
-  const schemas = new Map<string, AnyPropertySchema>()
-  const {byName} = indexSeeds(seeds)
-  for (const namedSeeds of byName.values()) {
-    if (namedSeeds.length === 1) schemas.set(namedSeeds[0]!.name, namedSeeds[0]!)
-  }
-  return schemas
-}
+): ReadonlyMap<string, AnyPropertySchema> => resolveSeedsByName(seeds)
 
 /**
  * The name a definition row answers to — the ONE spelling of this rule.

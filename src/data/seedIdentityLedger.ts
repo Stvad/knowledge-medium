@@ -61,7 +61,12 @@
  * the payload at all — its shape is a TypeScript interface out of reach here.
  *
  * Seeds declared by DB-stored runtime extensions (`agent-extensions/`) never
- * pass through this build, so their authors carry the rule themselves.
+ * pass through this build, so their authors carry the rule themselves. The one
+ * half that is machine-checked for them is the preset core: an install whose
+ * core builds a different codec under an id already registered on that device
+ * is refused (`@/plugins/agent-runtime/presetIdentity`, #1022), with the same
+ * blind spot noted above — a codec that changes what it parses under an
+ * unchanged `type` is invisible to both.
  *
  * A new seed adds a line. Any other edit is a decision about stored data: leave
  * a comment above the line saying what happened to the values, since nothing
