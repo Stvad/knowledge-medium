@@ -255,6 +255,27 @@ export interface Tx {
    *  reads as un-flipped ('cell'). */
   isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
 
+  /** The workspace's `encryption_mode`, read through THIS transaction's
+   *  handle, or null when this device has no local row for it.
+   *
+   *  On Tx, not read from the Repo, because a caller re-checking the mode
+   *  immediately before it mints under a mode-derived namespace has to read it
+   *  under the write lock it already holds — and that read cannot be served on
+   *  the Repo's handle at all (`Repo.assertBackfillMayWrite` states the rule;
+   *  `@/data/localDbVfs` has the mechanism). */
+  workspaceEncryptionMode(workspaceId: string): Promise<string | null>
+
+  /** The two database reads behind `Repo.workspaceViewGap` (`ViewGapReads`,
+   *  which owns why they go together), served by THIS transaction's handle so
+   *  the whole question can be asked under the lock the answer has to hold
+   *  for. Pass the transaction to `repo.workspaceViewGap(workspaceId, tx)`
+   *  rather than calling these.
+   *
+   *  Both REFUSE once this transaction has written: they would then be
+   *  answering about its own uncommitted rows. Ask before the first write. */
+  stagedSyncViewGap(): Promise<string | null>
+  workspaceUnappliedCount(workspaceId: string): Promise<number>
+
   /** The fieldIds `parentId` holds a TOMBSTONED field row for.
    *
    *  The one thing that separates "a cell key was never materialized" from "the

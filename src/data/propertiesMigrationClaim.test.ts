@@ -15,6 +15,7 @@ import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { withOuterReadsRefused } from '@/data/test/refuseOuterReads'
 import {
   createGraphBackfillClaim,
   graphBackfillClaimBlockId,
@@ -159,32 +160,10 @@ describe('the migration running under its own claim', {timeout: 30_000}, () => {
     // as the claim does, which is until this batch it is waiting on returns.
     const repo = makeOperatorRepo()
     await seedFlippedWorkspaceWithOneCell(repo)
-    let inWrite = false
-    const realWriteTransaction = sharedDb.db.writeTransaction.bind(sharedDb.db)
-    const outer = {
-      get: sharedDb.db.get.bind(sharedDb.db),
-      getAll: sharedDb.db.getAll.bind(sharedDb.db),
-      getOptional: sharedDb.db.getOptional.bind(sharedDb.db),
-    }
-    const refuseWhileWriting = (name: keyof typeof outer) =>
-      (async (sql: string, params?: unknown[]) => {
-        if (inWrite) throw new Error(`[test] ${name} on the Repo handle under the write lock`)
-        return (outer[name] as (s: string, p?: unknown[]) => Promise<unknown>)(sql, params)
-      })
-    sharedDb.db.writeTransaction = (async (fn: never) => {
-      inWrite = true
-      try { return await realWriteTransaction(fn) } finally { inWrite = false }
-    }) as typeof sharedDb.db.writeTransaction
-    sharedDb.db.get = refuseWhileWriting('get') as typeof sharedDb.db.get
-    sharedDb.db.getAll = refuseWhileWriting('getAll') as typeof sharedDb.db.getAll
-    sharedDb.db.getOptional = refuseWhileWriting('getOptional') as typeof sharedDb.db.getOptional
-    try {
+    await withOuterReadsRefused(sharedDb.db, async () => {
       expect(await repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID))
         .toMatchObject({outcome: 'ran'})
-    } finally {
-      sharedDb.db.writeTransaction = realWriteTransaction
-      Object.assign(sharedDb.db, outer)
-    }
+    })
   })
 
   it('records its completion on the claim it took', async () => {

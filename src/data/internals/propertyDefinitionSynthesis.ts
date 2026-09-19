@@ -278,6 +278,11 @@ export type SynthesisNamespace =
 const resolveSynthesisMode = async (
   repo: Repo,
   workspaceId: string,
+  /** Who serves the row read: `tx.workspaceEncryptionMode` under a write lock,
+   *  `readWorkspaceEncryptionMode(repo.db, …)` outside one. No default,
+   *  because the wrong one does not fail, it hangs
+   *  (`Repo.assertBackfillMayWrite`). */
+  readMode: () => Promise<string | null>,
 ): Promise<{kind: 'refused'; reason: string} | {kind: 'ready'; mode: ModePin}> => {
   const pin = getModePin(repo.user.id, workspaceId)
   if (pin === null) {
@@ -285,7 +290,7 @@ const resolveSynthesisMode = async (
       'this device has not resolved whether the workspace is end-to-end encrypted; open ' +
       'the workspace once so the first-encounter gate settles that, then run this again'}
   }
-  const mode = await readWorkspaceEncryptionMode(repo.db, workspaceId)
+  const mode = await readMode()
   if (mode === null) {
     return {kind: 'refused', reason:
       'this device has no local row for the workspace yet, so its encryption mode cannot ' +
@@ -325,12 +330,16 @@ const resolveSynthesisMode = async (
  *    already treats such a record as LOCKED, so this is the shape of a bug, not
  *    of a workspace the operator is looking at — and quietly publishing
  *    name-derived ids is the one outcome worse than a refusal.
+ *
+ * PRE-LOCK ONLY: it reads the key store, which must never run under the write
+ * lock, so its own reads go through the Repo's handle.
  */
 export const resolveSynthesisNamespace = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<SynthesisNamespace> => {
-  const resolved = await resolveSynthesisMode(repo, workspaceId)
+  const resolved = await resolveSynthesisMode(
+    repo, workspaceId, () => readWorkspaceEncryptionMode(repo.db, workspaceId))
   if (resolved.kind === 'refused') return resolved
   if (resolved.mode === 'plaintext') {
     return {kind: 'ready', mode: 'plaintext', namespace: PLAINTEXT_SYNTHESIZED_DEFINITION_NS}
@@ -711,10 +720,13 @@ export const applyPropertyDefinitionSynthesis = async (
   // ORPHANED to the scan, and this pass answers an orphan by MINTING — so
   // "nothing is in flight" is not the question {@link Repo.workspaceViewGap}
   // is asked here.
-  const syncGap = await repo.workspaceViewGap(workspaceId)
-  if (syncGap !== null) {
-    throw new Error(`[propertyDefinitionSynthesis] ${syncGap.reason}`)
-  }
+  // Asked here as well as under the lock below, and not because one of them is
+  // redundant: this one refuses BEFORE the key-store read and the
+  // Properties-page bootstrap, so a device that is merely behind on sync is
+  // told that rather than being handed the namespace resolver's "no local row
+  // for the workspace yet", which is the wrong diagnosis for the same state.
+  const gap = await repo.workspaceViewGap(workspaceId)
+  if (gap !== null) throw new Error(`[propertyDefinitionSynthesis] ${gap.reason}`)
   // Re-read for the same reason, and because the plan may have been built
   // before this device received the workspace row that says it is encrypted.
   const preflight = await resolveSynthesisNamespace(repo, workspaceId)
@@ -739,19 +751,20 @@ export const applyPropertyDefinitionSynthesis = async (
   let lastOrderKey: string | null = null
 
   await repo.tx(async tx => {
-    // INSIDE the write lock, immediately before the first write, because that
-    // is the only place the answer cannot go stale under us: the checks above
-    // are separated from this transaction by the Properties-page bootstrap and
-    // by the lock wait, and the workspace's real row can arrive from sync in
-    // between. Minting under the wrong namespace is not undoable — deleting the
-    // block afterwards does not unpublish the id.
+    // Under the lock, because that is the only place the answer cannot go
+    // stale under us: the probe above is separated from this point by the
+    // Properties-page bootstrap and by the wait for the writer, and the drain
+    // takes that same writer — so a definition for a key we are about to call
+    // ORPHANED can arrive in the window, and minting over it publishes a rival
+    // at our deterministic id that no later run can undo.
     //
-    // The view gap is re-asked in full, the same discipline
-    // `assertBackfillMayWrite` follows: a delivery that cannot be applied can
-    // land between the preflight and the lock, and a key whose real definition
-    // is the one left unapplied still reads as ORPHANED to the plan we are
-    // about to write from. Affordable here only because the durable half is a
-    // partial-index lookup now rather than a scan.
+    // FIRST, before any write in this transaction — `Tx.stagedSyncViewGap`
+    // refuses later, and says why.
+    const gap = await repo.workspaceViewGap(workspaceId, tx)
+    if (gap !== null) throw new Error(`[propertyDefinitionSynthesis] ${gap.reason}`)
+    // The mode, immediately before the first write. Minting under the wrong
+    // namespace is not undoable — deleting the block afterwards does not
+    // unpublish the id.
     //
     // Of the NAMESPACE inputs only the MODE is re-asked, and that is the whole
     // trick: `K_id` cannot change under us (it is HKDF of the workspace key,
@@ -762,14 +775,10 @@ export const applyPropertyDefinitionSynthesis = async (
     // wedged store would hold the app's single writer indefinitely rather than
     // failing.
     //
-    // Read through `repo.db` rather than a tx handle, deliberately and for the
-    // same reason `assertBackfillMayWrite` does: a concurrent drain is excluded
-    // by the write lock, not by read isolation.
-    const lateGap = await repo.workspaceViewGap(workspaceId)
-    if (lateGap !== null) {
-      throw new Error(`[propertyDefinitionSynthesis] ${lateGap.reason}`)
-    }
-    const late = await resolveSynthesisMode(repo, workspaceId)
+    // Served by the TRANSACTION's handle, which is what lets it keep this
+    // position — see `Tx.workspaceEncryptionMode`.
+    const late = await resolveSynthesisMode(
+      repo, workspaceId, () => tx.workspaceEncryptionMode(workspaceId))
     if (late.kind === 'refused') {
       throw new Error(`[propertyDefinitionSynthesis] ${late.reason}`)
     }

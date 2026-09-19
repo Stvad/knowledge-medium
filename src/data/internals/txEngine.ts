@@ -86,7 +86,8 @@ import {
   requireWritablePropertySchema,
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { readIsChildBackedWorkspace, readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
+import { viewGapReadsOver, type ViewGapReads } from '@/data/internals/syncObserver/reconcile'
 import {
   definitionNameOf,
   readPropertyDefinitionBags,
@@ -413,6 +414,41 @@ export class TxImpl implements Tx {
     const flipped = await readIsChildBackedWorkspace(this.ctx.txDb, workspaceId)
     this.childBackedWorkspaceCache.set(workspaceId, flipped)
     return flipped
+  }
+
+  workspaceEncryptionMode(workspaceId: string): Promise<string | null> {
+    return readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+  }
+
+  /** REFUSED once this transaction has written, and that is the whole reason
+   *  it is a method rather than a handle. `STAGED_VIEW_GAP_SQL` joins `blocks`
+   *  and fires on `b.updated_at <> s.updated_at`, so on the transaction's own
+   *  connection this transaction's uncommitted edits are part of the answer —
+   *  a row it just touched reads as still draining. The read through the
+   *  Repo's handle that this replaced saw committed state and could not do
+   *  that, so the hazard is new and structural rather than a caller's mistake.
+   *
+   *  Asked BEFORE the first write the answer is about committed state, which
+   *  is what a precondition means. Asked after, a caller that re-arms on the
+   *  `transient: true` refusal re-arms on its own writes, forever. */
+  private viewGapReadsBeforeAnyWrite(asked: string): ViewGapReads {
+    if (this.ctx.snapshots.size > 0) {
+      throw new Error(
+        `tx.${asked}: asked after this transaction has written. It reads this ` +
+        "transaction's own uncommitted rows, so the answer would describe this " +
+        'transaction rather than the sync drain. Ask it before the first write.',
+      )
+    }
+    return viewGapReadsOver(this.ctx.txDb)
+  }
+
+  stagedSyncViewGap(): Promise<string | null> {
+    return this.viewGapReadsBeforeAnyWrite('stagedSyncViewGap').stagedSyncViewGap()
+  }
+
+  workspaceUnappliedCount(workspaceId: string): Promise<number> {
+    return this.viewGapReadsBeforeAnyWrite('workspaceUnappliedCount')
+      .workspaceUnappliedCount(workspaceId)
   }
 
   async tombstonedPropertyFieldRows(
