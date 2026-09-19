@@ -626,8 +626,12 @@ describe('applyPropertyDefinitionSynthesis', () => {
     const plan = await planFor()
     const realProbe = repo.workspaceViewGap.bind(repo)
     let probes = 0
-    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async (workspaceId: string) => {
-      const answer = await realProbe(workspaceId)
+    // `reads` forwarded, not swallowed: the in-lock call passes the
+    // transaction, and a one-parameter mock would drop it and send the probe
+    // back through the Repo's handle — the shape this whole change removes.
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(
+      async (workspaceId: string, reads?: Parameters<Repo['workspaceViewGap']>[1]) => {
+      const answer = await realProbe(workspaceId, reads)
       probes += 1
       if (probes === 1) {
         await sharedDb.db.execute(
@@ -674,8 +678,12 @@ describe('applyPropertyDefinitionSynthesis', () => {
     const plan = await planFor()
     const realProbe = repo.workspaceViewGap.bind(repo)
     let probes = 0
-    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async (workspaceId: string) => {
-      const answer = await realProbe(workspaceId)
+    // `reads` forwarded, not swallowed: the in-lock call passes the
+    // transaction, and a one-parameter mock would drop it and send the probe
+    // back through the Repo's handle — the shape this whole change removes.
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(
+      async (workspaceId: string, reads?: Parameters<Repo['workspaceViewGap']>[1]) => {
+      const answer = await realProbe(workspaceId, reads)
       probes += 1
       // The FIRST is the pre-lock one; staging after it and before the
       // transaction acquires the writer is exactly the window. (It must also

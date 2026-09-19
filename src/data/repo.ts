@@ -3329,13 +3329,9 @@ export class Repo {
    */
   async workspaceViewGap(
     workspaceId: string,
-    /** Serves the two SQL arms. A caller already holding the write lock passes
-     *  its own transaction, because on a single-connection pool this Repo's
-     *  handle cannot answer while that lock is held — and the whole question
-     *  has to be asked there, not a chosen subset of it: the arms are not
-     *  ranked by how fast they move. The drain turns a QUEUED row into an
-     *  UNAPPLIED one in a single pass, so the two SQL arms hand work to each
-     *  other exactly when this is being asked (#1069). */
+    /** Serves the two SQL arms — see `ViewGapReads`, which owns why they are a
+     *  pair. A caller already holding the write lock passes its own
+     *  transaction (`Repo.assertBackfillMayWrite` states why it must). */
     reads: ViewGapReads = viewGapReadsOver(this.db),
   ): Promise<ViewGap | null> {
     const inFlight = await this.syncViewGap(reads)
@@ -3490,11 +3486,15 @@ export class Repo {
     backfillId: string,
     generation: number,
   ): Promise<void> {
-    // Re-sampled per transaction, and deliberately NOT from inside one: it
-    // reads through `this.db`, and a read on that handle taken while a write
-    // transaction is open cannot be served on a single-connection pool. Callers
-    // run it immediately before opening their transaction and re-assert the
-    // synchronous half (`assertBackfillSessionUnchanged`) within.
+    // Re-sampled per transaction, and NOT from inside one. That is now a
+    // CHOICE rather than a constraint: `workspaceViewGap` takes a
+    // `ViewGapReads`, so a caller holding the lock can pass its transaction
+    // and ask under it (the properties-migration synthesis does). This pass
+    // does not, because it re-probes before every batch and its writes are
+    // idempotent per row — so a gap opening mid-batch costs one batch's window
+    // rather than an un-undoable write. Callers run it immediately before
+    // opening their transaction and re-assert the synchronous half
+    // (`assertBackfillSessionUnchanged`) within.
     const gap = await this.workspaceViewGap(workspaceId)
     if (gap !== null) {
       throw Object.assign(new Error(

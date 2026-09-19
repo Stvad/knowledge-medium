@@ -278,11 +278,10 @@ export type SynthesisNamespace =
 const resolveSynthesisMode = async (
   repo: Repo,
   workspaceId: string,
-  /** Who serves the row read. REQUIRED, with no default, because the two
-   *  callers need different answers and the wrong one does not fail — it
-   *  hangs: inside a write transaction the Repo's handle is the connection
-   *  that transaction holds (`Repo.assertBackfillMayWrite` states the rule),
-   *  so a caller under its own lock must pass `tx.workspaceEncryptionMode`. */
+  /** Who serves the row read: `tx.workspaceEncryptionMode` under a write lock,
+   *  `readWorkspaceEncryptionMode(repo.db, …)` outside one. No default,
+   *  because the wrong one does not fail, it hangs
+   *  (`Repo.assertBackfillMayWrite`). */
   readMode: () => Promise<string | null>,
 ): Promise<{kind: 'refused'; reason: string} | {kind: 'ready'; mode: ModePin}> => {
   const pin = getModePin(repo.user.id, workspaceId)
@@ -752,20 +751,15 @@ export const applyPropertyDefinitionSynthesis = async (
   let lastOrderKey: string | null = null
 
   await repo.tx(async tx => {
-    // The WHOLE view gap, re-asked here and served by this transaction's own
-    // handle. Under the lock because that is the only place the answer cannot
-    // go stale under us: the probe above is separated from this point by the
+    // Under the lock, because that is the only place the answer cannot go
+    // stale under us: the probe above is separated from this point by the
     // Properties-page bootstrap and by the wait for the writer, and the drain
-    // takes the same writer — so a definition for a key we are about to call
-    // ORPHANED can arrive in that window, and minting over it publishes a
-    // rival at our deterministic id that no later run can undo (every one of
-    // them reports the name as contested and skips it, stranding field rows on
-    // whichever copy loses).
+    // takes that same writer — so a definition for a key we are about to call
+    // ORPHANED can arrive in the window, and minting over it publishes a rival
+    // at our deterministic id that no later run can undo.
     //
-    // In FULL, never a subset: the drain turns a queued row into an unapplied
-    // one in one pass, so any arm left outside is the one it has just moved the
-    // row into. An earlier revision asked only the queue arm here and a
-    // deferred row walked straight through it (#1069).
+    // FIRST, before any write in this transaction — `Tx.stagedSyncViewGap`
+    // refuses later, and says why.
     const gap = await repo.workspaceViewGap(workspaceId, tx)
     if (gap !== null) throw new Error(`[propertyDefinitionSynthesis] ${gap.reason}`)
     // The mode, immediately before the first write. Minting under the wrong

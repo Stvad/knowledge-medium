@@ -243,6 +243,16 @@ export const STAGED_SCAN_LIMIT = 10_000
  * handle — so a caller holding the write lock can supply its own transaction
  * without `Tx` growing a raw-SQL escape hatch. `Repo.workspaceViewGap` builds
  * the default over the Repo's own connection.
+ *
+ * BOTH, never one. The two queries look independent and are not: the drain
+ * turns a QUEUED row into an UNAPPLIED one in a single pass — it writes
+ * nothing for a row it cannot apply, then deletes the queue entry separately —
+ * so whichever arm a caller skips is the one the drain has just moved the row
+ * into. They are a pair for that reason, not for convenience.
+ *
+ * `Tx` restates these two signatures rather than extending this interface:
+ * `data/api` imports nothing from `data/internals`, and that edge is not worth
+ * opening for a dedupe.
  */
 export interface ViewGapReads {
   stagedSyncViewGap(): Promise<string | null>

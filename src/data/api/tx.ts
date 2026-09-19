@@ -265,15 +265,14 @@ export interface Tx {
    *  `@/data/localDbVfs` has the mechanism). */
   workspaceEncryptionMode(workspaceId: string): Promise<string | null>
 
-  /** The two database reads behind `Repo.workspaceViewGap`, served by THIS
-   *  transaction's handle so the whole question can be asked under the lock
-   *  the answer has to hold for. Pass the transaction to
-   *  `repo.workspaceViewGap(workspaceId, tx)` rather than calling these.
+  /** The two database reads behind `Repo.workspaceViewGap` (`ViewGapReads`,
+   *  which owns why they go together), served by THIS transaction's handle so
+   *  the whole question can be asked under the lock the answer has to hold
+   *  for. Pass the transaction to `repo.workspaceViewGap(workspaceId, tx)`
+   *  rather than calling these.
    *
-   *  Both, never one: the drain turns a QUEUED row into an UNAPPLIED one in a
-   *  single pass, so whichever arm is skipped is the one it has just moved the
-   *  row into. Uncached for the same reason — they are asked precisely because
-   *  the answer can have changed. */
+   *  Both REFUSE once this transaction has written: they would then be
+   *  answering about its own uncommitted rows. Ask before the first write. */
   stagedSyncViewGap(): Promise<string | null>
   workspaceUnappliedCount(workspaceId: string): Promise<number>
 

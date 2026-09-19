@@ -10,9 +10,7 @@
  * anyway (`@powersync/node` always opens separate read connections). The throw
  * turns a would-be hang into a named failure at the offending call site.
  *
- * `execute` is refused alongside the three read methods — it takes the write
- * lock and deadlocks identically, and an ad-hoc statement on the Repo handle is
- * the likelier shape of a future regression than a read.
+ * `execute` is refused too: it takes the write lock and deadlocks identically.
  */
 export const withOuterReadsRefused = async <T>(
   db: {
@@ -51,10 +49,11 @@ export const withOuterReadsRefused = async <T>(
   try {
     return await body()
   } finally {
-    db.writeTransaction = realWriteTransaction as typeof db.writeTransaction
-    // DELETED rather than assigned back: these are prototype methods, so
+    // DELETED rather than assigned back: all five are prototype methods, so
     // restoring by assignment would leave own bound copies shadowing them on a
     // shared db for every later test in the file.
-    for (const name of Object.keys(outer)) delete (db as Record<string, unknown>)[name]
+    for (const name of [...Object.keys(outer), 'writeTransaction']) {
+      delete (db as Record<string, unknown>)[name]
+    }
   }
 }
