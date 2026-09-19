@@ -558,24 +558,41 @@ const valuesLostBy = (
   // rebuilding the before-projection over every value of every consumer on the
   // commonest edit there is.
   if (!change.encodingChanged) return 0
-  const after = projectedValueCount(change.schema, projected)
-  if (change.beforeSchema === null) {
-    // No old codec to read the children with, so the CELL it last published
-    // is the record of what the consumer holds — and it is a faithful one at
-    // this grain: an array holds its members, and `null` is the cleared
-    // sentinel rather than a value, which is the shape a repair of a broken
-    // definition arrives in. Counting it as one value either way let a
-    // narrowing drop every member but the first in silence.
-    const held = parent.properties[change.oldName]
-    if (held === undefined || held === null) return 0
-    return Math.max(0, (Array.isArray(held) ? held.length : 1) - after)
-  }
-  const held = childContentsToEncodedPropertyValue(
-    change.beforeSchema,
-    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
-      .map(value => value.content),
+  return Math.max(
+    0, heldValueCount(change, parent, perFieldRow) - projectedValueCount(change.schema, projected),
   )
-  return Math.max(0, projectedValueCount(change.beforeSchema, held) - after)
+}
+
+/** How many values the property held BEFORE this change, at the same grain
+ *  {@link projectedValueCount} answers in. */
+const heldValueCount = (
+  change: DefinitionChange,
+  parent: BlockData,
+  perFieldRow: readonly (readonly BlockData[])[],
+): number => {
+  if (change.beforeSchema !== null) {
+    return projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
+      change.beforeSchema,
+      unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
+        .map(value => value.content),
+    ))
+  }
+  // No old codec, so neither record is sufficient alone and each BOUNDS the
+  // other. The CELL cannot say the property's arity — an array cell is N
+  // members of a list, or ONE value of a scalar holding an array — so its
+  // length over-counts the second. The ROWS cannot say what was published —
+  // one holds at most one value whatever the cell's shape, but a divergent or
+  // unreadable row was never in the cell — so their count over-counts the
+  // first. Take the tighter: over-counting here refuses the repair, which is
+  // the only gesture that can fix a definition whose preset stopped building.
+  const held = parent.properties[change.oldName]
+  // `null` is the cleared sentinel, not a value — the shape an optional
+  // property that was never filled in arrives in.
+  if (held === undefined || held === null) return 0
+  return Math.min(
+    Array.isArray(held) ? held.length : 1,
+    perFieldRow.reduce((rows, group) => rows + group.length, 0),
+  )
 }
 
 /** Apply every change that owns a field row under ONE parent, in one cell write.
@@ -644,7 +661,7 @@ const applyToParent = async (
         // route settles it with the codec that WROTE the row, wherever the
         // new one has a spelling for what that read; where it has none the
         // text route re-reads `null` and the ambiguity decides the other way
-        // (`string` -> `date`, `list` -> `string`).
+        // (`list` -> `string`).
         const conversion = convertValueChildContent(
           change.beforeSchema, change.schema, value.content,
         )

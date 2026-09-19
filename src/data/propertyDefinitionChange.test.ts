@@ -22,6 +22,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   ChangeScope,
   codecs,
+  type AnyCodec,
   type AnyPropertySchema,
   type AnyValuePresetCore,
   type ProcessorRejection,
@@ -210,14 +211,16 @@ const UNLOADABLE_PRESET = 'test-unloadable-preset'
  *  consumer holds. {@link withPresetUnloaded} is the scalar twin, and carries
  *  why this is the long way round. */
 const withListPresetUnloaded = async (
-  value: readonly string[],
+  value: unknown,
+  build: () => AnyCodec = () => codecs.list(codecs.string),
+  codecType = 'list',
 ): Promise<Repo> => {
   const preset = {
     id: UNLOADABLE_PRESET,
-    build: () => codecs.list(codecs.string),
+    build,
     defaultValue: [],
   } as unknown as AnyValuePresetCore
-  const authoring = await setupDefinition(UNLOADABLE_PRESET, [preset], 'list')
+  const authoring = await setupDefinition(UNLOADABLE_PRESET, [preset], codecType)
   await createHost(authoring, 'p')
   await authoring.tx(tx => tx.setProperty('p', schemaFor(authoring, 'status'), value),
     {scope: ChangeScope.BlockDefault})
@@ -687,6 +690,38 @@ describe('codec change', () => {
 
     expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
     expect(await rowContent(valueRowId)).toBe('2024-01-02T00:00:00.000Z')
+  })
+
+  it('does NOT refuse a repair over a SCALAR cell that happens to hold an array', async () => {
+    // The cell cannot say the property's arity. An identity codec holds an
+    // array as ONE value in ONE row, so reading the cell's length as a member
+    // count refused a repair that republishes the cell byte-identical — and
+    // the same data with the old codec available commits, which is the
+    // contradiction that gives it away.
+    await seedWorkspace('children')
+    const repo = await withListPresetUnloaded(
+      [1, 2, 3], () => codecs.unsafeIdentity<unknown>(), 'object')
+    expect(await cell('p')).toEqual({status: [1, 2, 3]})
+
+    await retype(repo, FIELD_ID, 'json')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: [1, 2, 3]})
+  })
+
+  it('does NOT refuse a repair over a CLEARED value with no old codec', async () => {
+    // `null` in the cell is the unset sentinel, not a value, so a repair takes
+    // nothing away — and refusing here would block the one gesture that fixes
+    // a definition whose preset stopped building.
+    await seedWorkspace('children')
+    const repo = await withListPresetUnloaded(
+      null, () => codecs.optionalIdentity<unknown>(), 'object')
+    expect(await cell('p')).toEqual({status: null})
+
+    await retype(repo, FIELD_ID, 'number')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({})
   })
 
   it('REFUSES a narrowing with no old codec, counting the CELL it published', async () => {

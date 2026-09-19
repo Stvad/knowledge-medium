@@ -584,12 +584,13 @@ const respellUnderTargetCodec = (
   // re-spelled text rather than of `to.codec.type`, which is an open string a
   // plugin picks: any codec that spells a value as a reference span mints the
   // same identity, whatever it calls itself.
-  // Gated on the STORED text already carrying a reference, because only then
-  // is the identity one the person wrote. Load-bearing, not a formality:
-  // `[[Page]]` under a verbatim codec re-spells to `(([[Page]]))`, which the
-  // text route cannot produce at all (`ref` rejects the alias form), so
-  // dropping this conjunct refuses that re-type rather than answering it
-  // differently.
+  // Gated on the STORED text already carrying a reference. ACCEPTED, not
+  // right: the alias form passes the gate and re-spells to `(([[Page]]))`, a
+  // span whose id is the eight characters `[[Page]]` rather than the block
+  // the alias resolves to — an identity nobody wrote, which is what the
+  // paragraph above exists to stop. Resolving it needs a lookup this pure
+  // function does not have, and declining instead refuses the re-type
+  // outright. #1073 decides which.
   if (isWholeContentReference(respelled) && !isWholeContentReference(content)) {
     return {outcome: 'unreadable'}
   }
