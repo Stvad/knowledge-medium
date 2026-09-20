@@ -23,7 +23,6 @@ import {
   dateValuePresetCore,
   enumValuePresetCore,
   listValuePresetCore,
-  jsonListValuePresetCore,
   jsonValuePresetCore,
   numberValuePresetCore,
   optionalJsonValuePresetCore,
@@ -93,25 +92,13 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     Editor: asEditor<boolean>(BooleanPropertyEditor),
   }),
   kernelPresetPresentation(listValuePresetCore, {
-    // "Text list", not "Options": this holds free-form strings a person types,
-    // which is what its members have always been. Picking FROM a configured
-    // set is `enum` below, sitting two entries away and reading as the same
-    // thing under the old name.
+    // "List", not "Options": this is a container of values a person types,
+    // and picking FROM a configured set is `enum` below — which read as the
+    // same thing under the old name, two entries apart in the same picker.
     id: 'list',
-    label: 'Text list',
-    Glyph: List,
-    Editor: asEditor<readonly string[]>(ListPropertyEditor),
-  }),
-  kernelPresetPresentation(jsonListValuePresetCore, {
-    // Arbitrary-JSON members (`snapshot-history`). Hidden from the picker:
-    // "Options" is the list a user creates, and this editor renders a member
-    // it cannot show as text as `String(member)`. Registered so a materialized
-    // seed definition renders as a list instead of "json-list (unknown)".
-    id: 'json-list',
-    label: 'List (any JSON)',
+    label: 'List',
     Glyph: List,
     Editor: asEditor<unknown[]>(ListPropertyEditor),
-    hideFromPicker: true,
   }),
   kernelPresetPresentation(dateValuePresetCore, {
     id: 'date',

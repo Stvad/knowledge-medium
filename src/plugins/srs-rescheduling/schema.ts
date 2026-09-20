@@ -75,13 +75,10 @@ export const srsSnapshotHistoryProp = seedProperty({
   seedKey: 'system:srs-rescheduling/property/snapshot-history',
   revision: 1,
   name: 'snapshot-history',
-  // `json-list`, not `list`: Options narrowed to a list of STRINGS so its
-  // value children spell plainly, and these members are objects. The codec is
-  // the one `list` used to build, so nothing stored is reinterpreted.
-  preset: 'json-list',
+  preset: 'list',
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-// The shared json-list core is runtime-equivalent to the historical
+// The shared list core is runtime-equivalent to the historical
 // list(unsafeIdentity<SrsReviewSnapshot>()) codec. Keep the typed handle local.
 }) as PropertySeedDeclaration<SrsReviewSnapshot[]>
 

@@ -180,19 +180,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:srs-rescheduling/property/interval', 'interval', 'number', 'number'],
   ['system:srs-rescheduling/property/next-review-date', 'next-review-date', 'ref', 'ref'],
   ['system:srs-rescheduling/property/review-count', 'review-count', 'number', 'number'],
-  // Moved off `list` when that preset narrowed to a list of STRINGS, so the
-  // user-facing Options property could spell its value children plainly
-  // (#1080). `json-list` builds the codec `list` used to build, so nothing
-  // stored under this seed changes meaning. What the columns here CANNOT see,
-  // and the reason this note exists: `list`'s own codec changed under an
-  // unchanged id, and no shipped seed is left on it to record that. The user
-  // definitions still on it hold string members only; #1080 has the evidence.
-  //
-  // Materialization never repairs a live row's bag, so an existing device
-  // keeps `property-schema:preset = "list"` on this definition for good. Inert:
-  // a seed-backed row resolves through its DECLARATION, in `schemas` and in
-  // `resolveField` alike. It shows in the definition block's own preset label.
-  ['system:srs-rescheduling/property/snapshot-history', 'snapshot-history', 'json-list', 'list'],
+  ['system:srs-rescheduling/property/snapshot-history', 'snapshot-history', 'list', 'list'],
   ['system:srs-review/property/daily-note-decks', 'srs-review:daily-note-decks', 'json', 'object'],
   ['system:srs-review/property/deck-started', 'srs-review:deck-started', 'boolean', 'boolean'],
   ['system:srs-review/property/deck-tag', 'srs-review:deck-tag', 'string', 'string'],

@@ -4098,12 +4098,8 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     convertValueChildContent(from === null ? null : schemaOf(from), schemaOf(to), content)
 
   it('carries the VALUE across a pure spelling disagreement, both directions', () => {
-    expect(convert('string-list', 'json-list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
-    expect(convert('json-list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
-    // `list` is the property a user picks as "Options", and it spells members
-    // the way `string-list` does — narrowing it to a list of STRINGS (#1080)
-    // is what moved it to this side of the disagreement.
-    expect(convert('json-list', 'list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
+    expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
+    expect(convert('list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
   })
 
   it('re-reads the TEXT where the target cannot hold the value', () => {
@@ -4115,15 +4111,15 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
   })
 
   it('does NOT re-read the text for an IDENTITY target, which holds anything', () => {
-    expect(convert('string', 'json-list', '42')).toEqual({outcome: 'converted', content: '"42"'})
-    expect(convert('string', 'json-list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
+    expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"'})
+    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
   })
 
   it('re-reads the text for a row the OLD codec cannot read', () => {
     // A decline that has nothing to do with the target: within ONE `number`
     // property re-typed to `list`, the readable row keeps its number while
     // this stale one is re-read as JSON.
-    expect(convert('number', 'json-list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
+    expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
   })
 
   it('re-spells a reference the stored text ALREADY carried', () => {
@@ -4142,16 +4138,16 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     // the spelling for truthiness rather than for null would fall through to
     // the text route and keep the JSON `""` verbatim — #1055 again, at the one
     // value where it is invisible.
-    expect(convert('json-list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
+    expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
   })
 
   it('keeps a bare `null` the OLD codec read as the literal word (#1030)', () => {
     // `null` is the unset SENTINEL to a codec that accepts it and the literal
     // word to one that does not. `string` rejects null, so the row held the
     // word and the value route carries it. Settled only where a spelling
-    // holds: `json-list` -> `string` has none, and the text route decides it
-    // the other way.
-    expect(convert('string', 'json-list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
+    // holds: `list` -> `string` has none, and the text route decides it the
+    // other way.
+    expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
   })
 
   it('falls to the text route when no old codec records the encoding', () => {
