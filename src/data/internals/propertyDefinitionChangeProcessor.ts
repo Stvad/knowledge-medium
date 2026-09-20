@@ -34,24 +34,27 @@
  * 3. Value children are re-encoded when the codec's INPUTS changed — the
  *    definition row's preset id and preset config, NOT the built codec's type
  *    string, which cannot tell `optional-string` from `string`
- *    (`codecInputsChanged`). The conversion is `convertValueChildContent`:
- *    what the text means to the NEW codec, then what the OLD one holds,
- *    re-spelled. A value NEITHER route carries is one this edit would take
- *    away, and the transaction is REFUSED — §9's "N values can't convert" is
+ *    (`codecInputsChanged`). `convertValueChildContent` owns which reading of
+ *    a value child wins. Whether the edit TAKES A VALUE AWAY is a separate
+ *    question, `valuesLostBy`'s, at cell grain — rows that re-spell to the
+ *    same text fold into one, and a narrowing to a scalar keeps only the
+ *    first that parses, neither of which is a row failing to convert. Either
+ *    way the transaction is REFUSED — §9's "N values can't convert" is
  *    user-visible here as the reason the change did not happen, which is the
  *    only form of it that keeps the value. A value already unreadable before
  *    the edit blocks nothing: the cell never held it.
  *
  * ── The accepted residuals ──
  *
- * Three ways a consumer is left in the old encoding, all of them the same shape
- * — a change this processor is not present for — and all repaired by the
- * content-driven reconcile that compares a cell against its field rows (#389
- * item 8), the only thing that can see such a row:
+ * Ways a consumer is left in the old encoding, all of them the same shape — a
+ * change this processor is not present for. The first three are repaired by
+ * the content-driven reconcile that compares a cell against its field rows
+ * (#389 item 8), the only thing that can see such a row; the fourth is not,
+ * and says why:
  *
- *  - a device offline across the change, holding a block it created under the
- *    old codec. This runs on the initiating client only, which is already the
- *    answer for renames.
+ *  - a device offline across the change, holding a block whose value row it
+ *    edited under the old codec. This runs on the initiating client only,
+ *    which is already the answer for renames.
  *  - a value preset whose `build` starts returning a different codec under the
  *    same preset id: no row edit at all, so nothing fires. Already a
  *    frozen-identity violation (`seedIdentityLedger.ts`, #797). Caught where it
@@ -64,6 +67,15 @@
  *    and is remembered by nothing for after the flip. The flip skips any key
  *    whose cell will not decode under the current codec and reports the block,
  *    so its own per-key report is the surface for this one.
+ *  - a duplicate field row ARRIVING after the change, carrying a value row the
+ *    other device wrote under the old codec. The rows this pass converted and
+ *    the one that arrives now spell the same value differently, so the union
+ *    that folds duplicates no longer folds them and the cell gains a member.
+ *    Not reachable by the reconcile above, which compares a cell against its
+ *    field rows and finds them in agreement. Arrival order is not the
+ *    initiator's to control, so this is accepted rather than guarded: the
+ *    alternative is keeping the arriving row's spelling, which is the #1055
+ *    bug this pass exists to fix.
  *
  * The FAN-OUT is dormant until a definition has field rows — see
  * `consumingParentIds`, which is its gate. The refusals split on that gate and
@@ -309,10 +321,10 @@ interface DefinitionChange {
    *  caller refuses it instead. */
   readonly schema: AnyPropertySchema
   /** The codec the definition was PUBLISHING, which is what says what a stored
-   *  value child HOLDS when the new codec cannot read its text — the second
-   *  route in `convertValueChildContent`, and what tells a value this edit
-   *  takes away from one that was already unreadable. `null` when the before
-   *  row's preset does not build, where nothing records the stored encoding. */
+   *  value child HOLDS — the schema `convertValueChildContent` re-spells FROM,
+   *  and what tells a value this edit takes away from one that was already
+   *  unreadable. `null` when the before row's preset does not build, where
+   *  nothing records the stored encoding. */
   readonly beforeSchema: AnyPropertySchema | null
   /** The stored ENCODING may now differ, so value-child content is rewritten.
    *  False for a pure rename, where the encoding is untouched and the stored
@@ -372,7 +384,8 @@ const collectChanges = (
     // definition whose broken preset has just been fixed already reports its
     // inputs as changed. The old codec is carried for the CONVERSION, as the
     // only record of what encoding the stored text is in, and `null` there
-    // costs the fallback route rather than the change.
+    // costs the value route rather than the change — the text route still
+    // answers.
     //
     // ACCEPTED: a bag edited while the row was UNPUBLISHED (a tombstone, or a
     // row stripped of its metadata) is judged against the MOVED bag, and
@@ -397,8 +410,9 @@ const collectChanges = (
       // re-encoded. Held for the caller, which refuses if it has consumers.
       //
       // Repairing a broken definition is unaffected: a preset that BUILDS is
-      // not this branch, and re-encoding reads the child's text, not the old
-      // codec. What is refused is trading one unavailable preset for another.
+      // not this branch, and with no old codec to read the value with,
+      // re-encoding falls to the child's TEXT. What is refused is trading one
+      // unavailable preset for another.
       unfanoutable.push({fieldId: after.id, reason: 'unbuildable'})
       probeName ??= afterMeta.name
       continue
@@ -538,11 +552,9 @@ export const consumingParentIds = async (
  *  THE BEFORE SIDE IS THE CHILDREN, not the stored cell: the cell is derived,
  *  and one that disagrees with its children is stale by definition — the next
  *  projection drops the difference whether or not this edit happens. The one
- *  exception is a definition whose previous preset does not BUILD: nothing can
- *  read its children, PROJECT skips the key for want of a schema, and the cell
- *  it last published is the only surviving record of what the consumer holds.
- *  Reading the children there answers "no values" about a cell plainly holding
- *  one, and committing on that answer empties it. */
+ *  exception is a definition whose previous preset does not BUILD, where
+ *  nothing can read the children at all; {@link heldValueCount} owns what is
+ *  countable there and why it is deliberately weak. */
 const valuesLostBy = (
   change: DefinitionChange,
   parent: BlockData,
@@ -555,17 +567,46 @@ const valuesLostBy = (
   // commonest edit there is.
   if (!change.encodingChanged) return 0
   const after = projectedValueCount(change.schema, projected)
-  if (change.beforeSchema === null) {
-    // One value or none: without the old codec nothing can count a list's
-    // members, and an undercount still refuses while anything is lost.
-    return parent.properties[change.oldName] === undefined || after > 0 ? 0 : 1
+  return Math.max(0, heldValueCount(change, parent, perFieldRow, after) - after)
+}
+
+/** How many values the property held BEFORE this change, at the same grain
+ *  {@link projectedValueCount} answers in — or, where nothing can read the
+ *  children, the most this can claim it held without inventing a loss. */
+const heldValueCount = (
+  change: DefinitionChange,
+  parent: BlockData,
+  perFieldRow: readonly (readonly BlockData[])[],
+  after: number,
+): number => {
+  if (change.beforeSchema !== null) {
+    return projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
+      change.beforeSchema,
+      unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
+        .map(value => value.content),
+    ))
   }
-  const held = childContentsToEncodedPropertyValue(
-    change.beforeSchema,
-    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
-      .map(value => value.content),
-  )
-  return Math.max(0, projectedValueCount(change.beforeSchema, held) - after)
+  // No old codec, so this number has to be a LOWER bound on what was held or
+  // its slack becomes a phantom loss, and nothing available here measures one
+  // tightly. The cell's LENGTH is an upper bound, because the cell cannot say
+  // arity — an array is N members of a list, or ONE value of a scalar holding
+  // an array. The ROW COUNT is another, because a peer or a duplicate field
+  // row was never in the cell while a row this device has not received is
+  // missing from it. Combining two upper bounds does not make a lower one.
+  //
+  // `null` is likewise unreadable at this grain: the cleared sentinel and a
+  // real JSON null are the same bytes, and only the codec that wrote them
+  // could say which. Counted as a value, because over-refusing costs a
+  // repair while under-counting deletes one.
+  //
+  // So the claim is the weakest sound one: a loss only where the projection
+  // comes out EMPTY over a cell that held anything. It misses a narrowing
+  // that keeps one member (#1090) and it refuses a repair over a genuinely
+  // cleared value (#1077), and both are the same gap — counting this needs
+  // the children rebuilt FROM the cell rather than guessed at.
+  const held = parent.properties[change.oldName]
+  if (held === undefined) return 0
+  return after > 0 ? 0 : 1
 }
 
 /** Apply every change that owns a field row under ONE parent, in one cell write.
@@ -629,9 +670,12 @@ const applyToParent = async (
         // ONE member, and reading it against the whole-array grammar would
         // make every member unreadable.
         //
-        // Reading the TEXT costs one ambiguity: a bare `null` is a literal to
-        // a codec that rejects null and the unset sentinel to one that accepts
-        // it (#1030).
+        // A bare `null` is ambiguous — a literal to a codec that rejects
+        // null, the unset sentinel to one that accepts it (#1030). The value
+        // route settles it with the codec that WROTE the row, wherever the
+        // new one has a spelling for what that read; where it has none the
+        // text route re-reads `null` and the ambiguity decides the other way
+        // (`list` -> `string`).
         const conversion = convertValueChildContent(
           change.beforeSchema, change.schema, value.content,
         )
@@ -646,12 +690,13 @@ const applyToParent = async (
         // Re-stamp the reference columns from the REWRITTEN content, the same
         // duty every same-tx processor that rewrites `content` after
         // `core.deriveReferenceTarget` already ran carries (merge retarget,
-        // deleted-block inlining). Retyping a ref property to a text one turns
-        // `((id))` into escaped plain text, and this processor's writes are
+        // deleted-block inlining). This processor's writes are
         // `settledWrites`, so the derive re-run will never revisit the row —
         // the column would keep naming a target the content no longer
-        // references. Always an update of an existing row, so an unresolvable
-        // alias clears the column rather than preserving a prior id.
+        // references. Retyping a ref property to a text one is the case:
+        // `((id))` becomes the bare id. Always an update of an existing row,
+        // so an unresolvable alias clears the column rather than preserving a
+        // prior id.
         const derived = await deriveReferenceColumns(
           canonical, parent.workspaceId, referenceLookups,
         )
@@ -854,10 +899,14 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       const count = lostByField.get(change.fieldId) ?? 0
       if (count === 0) continue
       throw new ProcessorRejection(
-        `cannot change the type of property "${change.oldName}": ${count} `
-        + `stored value${count === 1 ? '' : 's'} cannot be read as the new `
-        + 'type, and the blocks holding them would lose them. Fix or remove '
-        + 'those values first, or choose a type that can hold them.',
+        // Not "cannot be read": `valuesLostBy` counts what the cell would
+        // STOP holding, and two readable values that re-spell to the same
+        // text converge into one, which is a loss with nothing unreadable in
+        // it.
+        `cannot change the type of property "${change.oldName}": the blocks `
+        + `using it would lose ${count} stored `
+        + `value${count === 1 ? '' : 's'}. Fix or remove those values first, `
+        + 'or choose a type that can hold them.',
         'property.definition-change.unconvertible',
         {
           fieldId: change.fieldId,
