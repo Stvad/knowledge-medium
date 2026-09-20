@@ -1,0 +1,1 @@
+import{HC as e,VC as t}from"../../chunks/app-DvwXddUr.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

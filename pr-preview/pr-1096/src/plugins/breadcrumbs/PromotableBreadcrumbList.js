@@ -1,0 +1,1 @@
+import{zg as e}from"../../../chunks/app-DvwXddUr.js";export{e as PromotableBreadcrumbList};

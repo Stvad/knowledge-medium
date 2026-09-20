@@ -1,0 +1,1 @@
+import{Uv as e}from"../../../chunks/app-DvwXddUr.js";export{e as openRecentsPage};
