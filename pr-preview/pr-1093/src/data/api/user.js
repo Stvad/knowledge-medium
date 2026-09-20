@@ -1,1 +1,1 @@
-import{L2 as e,R2 as t,z2 as n}from"../../../chunks/app-Bb6-9_lf.js";export{e as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,n as systemAuthor};
+import{B2 as e,R2 as t,z2 as n}from"../../../chunks/app-CtdlHEXz.js";export{t as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,e as systemAuthor};

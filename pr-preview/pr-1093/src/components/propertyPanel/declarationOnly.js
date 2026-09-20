@@ -1,1 +1,1 @@
-import{MA as e,jA as t}from"../../../chunks/app-Bb6-9_lf.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
+import{MA as e,jA as t}from"../../../chunks/app-CtdlHEXz.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

@@ -1,1 +1,1 @@
-import{aE as e,iE as t,rE as n}from"../../chunks/app-Bb6-9_lf.js";export{e as defaultRegistry,n as refreshRendererRegistry,t as useRenderer};
+import{aE as e,iE as t,rE as n}from"../../chunks/app-CtdlHEXz.js";export{e as defaultRegistry,n as refreshRendererRegistry,t as useRenderer};

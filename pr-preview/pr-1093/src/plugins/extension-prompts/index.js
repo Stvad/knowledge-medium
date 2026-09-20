@@ -1,1 +1,1 @@
-import{dw as e,fw as t}from"../../../chunks/app-Bb6-9_lf.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{dw as e,fw as t}from"../../../chunks/app-CtdlHEXz.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
