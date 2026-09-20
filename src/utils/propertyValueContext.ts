@@ -61,11 +61,7 @@ export const propertyNameResolverFor = (
  *  belongs to the winner. A caller falls back to whatever it does for a row
  *  it cannot place.
  *
- *  One owner because both consumers — the picker's context line and the
- *  crumb line — ask exactly this, and a site that restates the predicate
- *  drops a clause: the crumb line restated the marker bit alone and would
- *  have labelled a root marker's descendants with a property they are not
- *  under. */
+ *  Call this rather than restating it; a restatement drops a clause. */
 export interface RecognizedPropertyField {
   /** The definition this field row points at. */
   readonly fieldId: string

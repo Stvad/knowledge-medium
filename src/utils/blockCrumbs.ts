@@ -90,19 +90,13 @@ const crumbLabel = (data: BlockData): string => {
 
 /** A property FIELD ROW's crumb: the name of the property it is.
  *
- *  Its content is literally `::((fieldId))`, which names no place a person
- *  could go — so before there was a resolver these rows were dropped, and a
- *  value row's crumbs read as its owner's title alone. That is the owner's
- *  own label repeated, which is exactly the ambiguity crumbs exist to
- *  resolve: a page's `alias` value row carries the page's title as its own
- *  content too, so `Tutorial` labelled `Tutorial` says nothing while
- *  `Tutorial › alias` places it.
+ *  A value row's content can repeat its owner's label exactly — a page's
+ *  `alias` row does — so the property is what tells the two apart:
+ *  `Tutorial › alias` places a row that `Tutorial › Tutorial` would not.
  *
- *  `''` — i.e. the old drop — whenever `recognizePropertyField` does not
- *  answer: no resolver bound, or any of the cases it lists (a root marker, an
- *  unresolvable target, a shadowed definition). Raw `::((…))` is never a
- *  crumb, so an unrecognized marked row drops rather than falling back to
- *  its content — which is what the unconditional drop used to guarantee.
+ *  `''` whenever `recognizePropertyField` does not answer, which includes
+ *  having no resolver bound. Raw `::((…))` is never a crumb, so an
+ *  unrecognized marked row drops rather than falling back to its content.
  *
  *  Ellipsised from the middle, like an aliased block: a property name is a
  *  NAME, and names are told apart by their tails. */
@@ -149,9 +143,8 @@ export const crumbsFromAncestors = (
     workspaceId: string
     stoppedAtParentId: string | null
     /** Names a property field row in this workspace. Optional because
-     *  omitting it degrades correctly rather than silently: with nothing able
-     *  to name a field row, every one of them drops, which is what crumbs did
-     *  before any of them could be named. */
+     *  omitting it degrades to dropping every field row, which is the safe
+     *  direction — never raw `::((…))` in a crumb. */
     propertyName?: PropertyNameResolver
   },
 ): string[] => {
