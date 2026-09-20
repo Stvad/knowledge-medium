@@ -1,0 +1,1 @@
+import{V2 as e}from"../../../chunks/app-Dqei50Rx.js";export{e as defineQuery};

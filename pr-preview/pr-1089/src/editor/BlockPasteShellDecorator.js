@@ -1,0 +1,1 @@
+import{$C as e,ew as t}from"../../chunks/app-Dqei50Rx.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

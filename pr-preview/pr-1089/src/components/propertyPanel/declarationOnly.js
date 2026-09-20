@@ -1,0 +1,1 @@
+import{MA as e,jA as t}from"../../../chunks/app-Dqei50Rx.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

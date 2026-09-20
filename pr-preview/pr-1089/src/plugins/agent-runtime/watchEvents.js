@@ -1,0 +1,1 @@
+import{nu as e,tu as t}from"../../../chunks/app-Dqei50Rx.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};
