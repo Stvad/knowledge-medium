@@ -566,7 +566,7 @@ export const valueChildContentToEncoded = (
   // validates on the READ side, which the `decode` here already runs.
   //
   // What it costs, accepted: an option REMOVED from a live property stops
-  // projecting until it is re-added or the row re-typed (bd km-weh0).
+  // projecting until it is re-added or the row re-typed (#1097).
   return codec.encode(codec.decode(encoded))
 }
 
