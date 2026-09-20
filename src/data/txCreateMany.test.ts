@@ -1,0 +1,120 @@
+// @vitest-environment node
+/**
+ * `tx.createMany` — the batched door onto the same insert `tx.create` makes.
+ *
+ * The point of the method is what it does NOT repeat (one parent lookup per
+ * distinct parent, one INSERT per chunk), so the tests here are about the
+ * guarantees that must survive the batching: the two parent refusals, a parent
+ * minted inside the same call, and the per-row `record` the same-tx processors
+ * and the snapshot cache read.
+ */
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { ChangeScope } from '@/data/api'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import { Repo } from '@/data/repo'
+
+const WS = 'ws-bulk'
+const OTHER_WS = 'ws-other'
+
+let sharedDb: TestDb
+let repo: Repo
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+beforeEach(async () => {
+  await resetTestDb(sharedDb.db)
+  repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
+})
+
+const seedRoot = async (id: string, workspaceId = WS): Promise<void> => {
+  await repo.tx(async tx => {
+    await tx.create({id, workspaceId, parentId: null, orderKey: 'a0', content: id})
+  }, {scope: ChangeScope.BlockDefault})
+}
+
+const rowsOf = (parentId: string) =>
+  sharedDb.db.getAll<{id: string; parent_id: string; content: string}>(
+    'SELECT id, parent_id, content FROM blocks WHERE parent_id = ? ORDER BY id', [parentId],
+  )
+
+describe('tx.createMany', () => {
+  it('inserts every row under an existing parent', async () => {
+    await seedRoot('root')
+    const ids = await repo.tx(tx => tx.createMany(
+      [0, 1, 2].map(i => ({
+        id: `c${i}`, workspaceId: WS, parentId: 'root', orderKey: `a${i}`, content: `child ${i}`,
+      })),
+    ), {scope: ChangeScope.BlockDefault})
+
+    expect(ids).toEqual(['c0', 'c1', 'c2'])
+    expect((await rowsOf('root')).map(r => r.content)).toEqual(['child 0', 'child 1', 'child 2'])
+  })
+
+  it('accepts a parent minted earlier in the SAME call', async () => {
+    await seedRoot('root')
+    await repo.tx(tx => tx.createMany([
+      {id: 'mid', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'mid'},
+      {id: 'leaf', workspaceId: WS, parentId: 'mid', orderKey: 'a0', content: 'leaf'},
+    ]), {scope: ChangeScope.BlockDefault})
+
+    expect((await rowsOf('mid')).map(r => r.id)).toEqual(['leaf'])
+  })
+
+  it('refuses a parent that does not exist, writing nothing', async () => {
+    await seedRoot('root')
+    await expect(repo.tx(tx => tx.createMany([
+      {id: 'ok', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'ok'},
+      {id: 'orphan', workspaceId: WS, parentId: 'nobody', orderKey: 'a0', content: 'orphan'},
+    ]), {scope: ChangeScope.BlockDefault})).rejects.toThrow(/nobody/)
+
+    expect(await rowsOf('root')).toEqual([])
+  })
+
+  it('refuses a parent in another workspace', async () => {
+    await seedRoot('root')
+    await seedRoot('foreign', OTHER_WS)
+    await expect(repo.tx(tx => tx.createMany([
+      {id: 'x', workspaceId: WS, parentId: 'foreign', orderKey: 'a0', content: 'x'},
+    ]), {scope: ChangeScope.BlockDefault})).rejects.toThrow(/foreign/)
+  })
+
+  it('a forward reference to a parent later in the same call is refused', async () => {
+    await seedRoot('root')
+    // `leaf` names `mid`, which this call has not built yet at that point.
+    await expect(repo.tx(tx => tx.createMany([
+      {id: 'leaf', workspaceId: WS, parentId: 'mid', orderKey: 'a0', content: 'leaf'},
+      {id: 'mid', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'mid'},
+    ]), {scope: ChangeScope.BlockDefault})).rejects.toThrow(/mid/)
+  })
+
+  it('names the colliding id rather than the chunk', async () => {
+    await seedRoot('root')
+    await repo.tx(tx => tx.create(
+      {id: 'taken', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'first'},
+    ), {scope: ChangeScope.BlockDefault})
+
+    await expect(repo.tx(tx => tx.createMany([
+      {id: 'fresh', workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'fresh'},
+      {id: 'taken', workspaceId: WS, parentId: 'root', orderKey: 'a2', content: 'again'},
+    ]), {scope: ChangeScope.BlockDefault})).rejects.toThrow(/taken/)
+  })
+
+  it('records each row, so a same-tx read sees it like a per-row create', async () => {
+    await seedRoot('root')
+    const peeked = await repo.tx(async tx => {
+      await tx.createMany([
+        {id: 'p1', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'one'},
+        {id: 'p2', workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'two'},
+      ])
+      return [tx.peek('p1')?.content, tx.peek('p2')?.content]
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(peeked).toEqual(['one', 'two'])
+  })
+
+  it('is a no-op for an empty list', async () => {
+    await seedRoot('root')
+    expect(await repo.tx(tx => tx.createMany([]), {scope: ChangeScope.BlockDefault})).toEqual([])
+  })
+})

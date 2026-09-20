@@ -333,6 +333,23 @@ const SELECT_PARENT_WORKSPACE_SQL =
   `SELECT workspace_id, deleted FROM blocks WHERE id = ?`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
 
+/** Rows per multi-row INSERT in {@link TxImpl.createMany}, and ids per parent
+ *  lookup. Both keep the bound-parameter count well inside SQLite's
+ *  SQLITE_MAX_VARIABLE_NUMBER (32766 on the shipped build) — 200 rows x 15
+ *  columns is 3000. */
+const BULK_INSERT_ROWS_PER_STATEMENT = 200
+const BULK_PARENT_LOOKUP_IDS = 400
+
+const chunked = <T>(items: readonly T[], size: number): T[][] => {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+const bulkInsertSql = (rowCount: number): string =>
+  `INSERT INTO blocks (${COLUMN_LIST}) VALUES `
+  + new Array(rowCount).fill(`(${COLUMN_PLACEHOLDERS})`).join(', ')
+
 export class TxImpl implements Tx {
   readonly meta: TxMeta
 
@@ -547,6 +564,100 @@ export class TxImpl implements Tx {
     this.pinWorkspace(data.workspaceId)
     this.record(id, null, row)
     return id
+  }
+
+  /**
+   * Create many rows with one batched parent check and one INSERT per chunk,
+   * where {@link create} pays a SELECT and an INSERT per row.
+   *
+   * Every guarantee `create` makes is kept — each row is workspace-checked,
+   * each parent is proven to exist in the same workspace, each id goes through
+   * the same shape policy, and each row is `record`ed so the same-tx
+   * processors and the snapshot cache see it exactly as they would one at a
+   * time. What goes away is the REPETITION: a parent named by two hundred rows
+   * is read once, and two hundred inserts become one statement. `create`
+   * remains the door for a single row; this one is for a caller that already
+   * knows its whole write set, which today means the properties cell->children
+   * pass (~761k rows on a large graph, where the per-row parent SELECT was a
+   * third of the pass's reads).
+   *
+   * ORDER IS PART OF THE CONTRACT: a row may name a parent created earlier in
+   * the SAME call — a value child under the field row above it — so parents
+   * are resolved against the ids built here before the database is asked.
+   * Rows are inserted in the order given, so a forward reference is a
+   * `ParentNotFoundError` rather than a row whose parent lands after it.
+   */
+  async createMany(rows: readonly NewBlockData[], opts?: TxInsertOpts): Promise<string[]> {
+    if (rows.length === 0) return []
+    const built: {id: string; row: BlockData; checkParent: boolean}[] = []
+    const mintedBefore = new Set<string>()
+    const parentsToCheck = new Set<string>()
+    for (const data of rows) {
+      this.checkWorkspace(data.workspaceId)
+      const id = data.id ?? this.ctx.newId()
+      // Decided HERE, against the ids minted BEFORE this row, and carried on
+      // the entry. Re-deriving it after the loop would ask a completed set,
+      // which answers yes for a parent that comes LATER — the row would skip
+      // this check and fail on the storage trigger instead, with a message
+      // that names neither the row nor its parent.
+      const checkParent = data.parentId !== null && !mintedBefore.has(data.parentId)
+      if (checkParent) parentsToCheck.add(data.parentId!)
+      mintedBefore.add(id)
+      built.push({id, row: this.buildNewBlockRow(id, data, opts, 'tx.createMany'), checkParent})
+    }
+
+    // One lookup for every distinct parent not minted in this call. The same
+    // two refusals `requireParentInWorkspace` raises, raised on the same rows.
+    const seen = new Map<string, {workspace_id: string}>()
+    for (const chunk of chunked([...parentsToCheck], BULK_PARENT_LOOKUP_IDS)) {
+      const found = await this.ctx.txDb.getAll<{id: string; workspace_id: string}>(
+        `SELECT id, workspace_id FROM blocks WHERE id IN (${chunk.map(() => '?').join(', ')})`,
+        chunk,
+      )
+      for (const row of found) seen.set(row.id, row)
+    }
+    for (const {row, checkParent} of built) {
+      if (!checkParent || row.parentId === null) continue
+      const parent = seen.get(row.parentId)
+      if (parent === undefined) throw new ParentNotFoundError(row.parentId)
+      if (parent.workspace_id !== row.workspaceId) {
+        throw new ParentWorkspaceMismatchError(
+          row.parentId, parent.workspace_id, row.workspaceId,
+        )
+      }
+    }
+
+    for (const chunk of chunked(built, BULK_INSERT_ROWS_PER_STATEMENT)) {
+      try {
+        await this.ctx.txDb.execute(
+          bulkInsertSql(chunk.length),
+          chunk.flatMap(({row}) => blockToRowParams(row)),
+        )
+      } catch (e) {
+        // A multi-row INSERT cannot say WHICH row collided, and
+        // `DuplicateIdError` names one. Re-run the chunk a row at a time so
+        // the caller gets the same error it would have got from `create`;
+        // the transaction is being rolled back either way, so the cost is
+        // paid only on the failing path.
+        if (!isUniqueConstraint(e, 'blocks.id')) throw e
+        for (const {id, row} of chunk) {
+          try {
+            await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
+          } catch (inner) {
+            if (isUniqueConstraint(inner, 'blocks.id')) throw new DuplicateIdError(id)
+            throw inner
+          }
+        }
+        throw e
+      }
+    }
+
+    for (const {id, row} of built) {
+      this.markSystemMint(id, opts)
+      this.pinWorkspace(row.workspaceId)
+      this.record(id, null, row)
+    }
+    return built.map(({id}) => id)
   }
 
   async createOrGet(

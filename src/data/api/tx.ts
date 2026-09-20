@@ -98,6 +98,17 @@ export interface Tx {
    *  raw `tx.create` — see §4.7 Layer 1 (v4.30). */
   create(data: NewBlockData, opts?: TxInsertOpts): Promise<string>
 
+  /** `create` for a caller that already knows its whole write set: one
+   *  batched parent check and one multi-row INSERT per chunk in place of a
+   *  SELECT and an INSERT per row. Same refusals, same id policy, same
+   *  `record` per row, so the same-tx processors see exactly what they would
+   *  see one at a time.
+   *
+   *  A row may name a parent created earlier in the SAME call, so rows are
+   *  inserted in the order given and a forward reference is a
+   *  `ParentNotFoundError`. Returns the ids in that order. */
+  createMany(rows: readonly NewBlockData[], opts?: TxInsertOpts): Promise<string[]>
+
   /** Insert OR fetch the live row at a deterministic id. **No tombstone
    *  resurrection in the primitive** — see §10.4. Throws
    *  `DeterministicIdCrossWorkspaceError` if the existing row is in a
