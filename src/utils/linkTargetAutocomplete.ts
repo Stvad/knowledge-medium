@@ -895,8 +895,7 @@ const describePropertyValueContext = (context: PropertyValueContext): string => 
   return ownerLabel ? `${context.propertyName} of ${ownerLabel}` : context.propertyName
 }
 
-/** Order every candidate after the block it is a property row OF, when that
- *  block is in the list too.
+/** Put every block that owns a property row in this list ahead of that row.
  *
  *  A page and its own `alias` value row match the same query text with the
  *  same content, so nothing in the text ranking can separate them and the
@@ -905,39 +904,37 @@ const describePropertyValueContext = (context: PropertyValueContext): string => 
  *  stores a property row's id as the reference. The owner is the thing a
  *  picker is for; its machinery goes under it.
  *
- *  Stable otherwise: a row whose owner is absent from the list keeps its
- *  rank, because there is nothing to rank it against. The final sweep is
- *  what makes this total — an ownership cycle cannot arise from a tree, but a
- *  candidate held for an owner that never emits must still reach the list. */
+ *  Moves the OWNER UP rather than pushing the property row down, and that
+ *  direction is the load-bearing part: a caller may FILTER this result
+ *  afterwards — the ref editor drops candidates failing the property's
+ *  `targetTypes` — and dropping an owner this moved leaves every other row in
+ *  the order it already had. Pushing the row down instead stranded it behind
+ *  blocks it had outranked, on behalf of an owner no longer on screen.
+ *
+ *  A row whose owner is absent keeps its rank; there is nothing to rank it
+ *  against. Marking a candidate before recursing is what keeps the walk
+ *  total — ownership is a tree so it cannot cycle, but a cycle would
+ *  otherwise recur forever rather than merely ordering two rows oddly. */
 const ownersBeforeTheirPropertyRows = (
   candidates: readonly LinkTargetIdCandidate[],
   contexts: ReadonlyMap<string, PropertyValueContext>,
 ): LinkTargetIdCandidate[] => {
-  const present = new Set(candidates.map(candidate => candidate.id))
-  const heldByOwner = new Map<string, LinkTargetIdCandidate[]>()
+  const byId = new Map(candidates.map(candidate => [candidate.id, candidate]))
   const ordered: LinkTargetIdCandidate[] = []
-  const roots: LinkTargetIdCandidate[] = []
+  // By identity, not by id: two rows for one block would be a bug upstream,
+  // but dropping one here would turn it into a missing candidate.
+  const emitted = new Set<LinkTargetIdCandidate>()
 
-  for (const candidate of candidates) {
-    const ownerId = contexts.get(candidate.id)?.ownerId
-    if (ownerId !== undefined && present.has(ownerId)) {
-      const held = heldByOwner.get(ownerId)
-      if (held) held.push(candidate)
-      else heldByOwner.set(ownerId, [candidate])
-    } else {
-      roots.push(candidate)
-    }
-  }
-
-  const emitted = new Set<string>()
   const emit = (candidate: LinkTargetIdCandidate): void => {
-    if (emitted.has(candidate.id)) return
-    emitted.add(candidate.id)
+    if (emitted.has(candidate)) return
+    emitted.add(candidate)
+    const ownerId = contexts.get(candidate.id)?.ownerId
+    const owner = ownerId === undefined ? undefined : byId.get(ownerId)
+    if (owner) emit(owner)
     ordered.push(candidate)
-    for (const held of heldByOwner.get(candidate.id) ?? []) emit(held)
   }
-  roots.forEach(emit)
-  for (const candidate of candidates) emit(candidate)
+
+  candidates.forEach(candidate => emit(candidate))
   return ordered
 }
 

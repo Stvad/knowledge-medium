@@ -143,6 +143,23 @@ describe('searchLinkTargetIdCandidates — a block and its own property rows', (
       .toEqual([undefined, 'alias of Reading List'])
   })
 
+  it('moves only the OWNER, so a caller that then drops it leaves the rest in place', async () => {
+    // The ref editor filters this list by the property's `targetTypes` AFTER
+    // asking for it, and an ineligible owner is dropped there. Pushing the
+    // property row down instead of pulling the owner up would strand the row
+    // behind blocks it had outranked, for an owner no longer on screen.
+    await create({id: 'owner', content: 'Reading List'})
+    await create({id: 'owner-field', parentId: 'owner', fieldId: fieldIdOf(aliasesProp.seedKey)})
+    await create({id: 'unrelated', content: 'Reading List'})
+    await create({id: 'value', parentId: 'owner-field', content: 'Reading List'})
+
+    const ordered = (await candidates('Reading List')).map(candidate => candidate.id)
+
+    expect(ordered).toEqual(['owner', 'value', 'unrelated'])
+    // The property row still outranks `unrelated`, as it did before the pass.
+    expect(ordered.filter(id => id !== 'owner')).toEqual(['value', 'unrelated'])
+  })
+
   it('keeps a property row where it ranked when its owner is not in the list', async () => {
     // Demotion is relative to the OWNER, not a blanket "machinery last": with
     // nothing to sit under, a property row competes on its own merits.
