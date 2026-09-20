@@ -18,6 +18,7 @@ import type { Repo } from './repo'
 import {
   convertValueChildContent,
   encodedToValueChildContent,
+  propertyCellValueRejection,
   valueChildContentToEncoded,
   type ValueChildConversion,
 } from './propertyChildren'
@@ -2651,6 +2652,30 @@ describe('content <-> value codecs: an enum value child names a DECLARED option'
       changeScope: ChangeScope.BlockDefault,
     })
     expect(() => valueChildContentToEncoded(numberSchema, 'not-a-number')).toThrow()
+  })
+})
+
+describe('propertyCellValueRejection asks what the projection will ask', () => {
+  // The cell -> children direction and the children -> cell direction have to
+  // agree about whether a codec's write side is enforced. When they did not,
+  // a raw `tx.update({properties})` of an off-menu Choice value was ACCEPTED
+  // here, its value child written, and the owner's key then dropped by the
+  // projection that read the child back — with the writing tx long committed
+  // and nothing reported. Refused at the write instead, so the tx rolls back.
+  const choiceSchema = defineProperty<string>('status', {
+    codec: codecs.enum(['open', 'done']),
+    defaultValue: 'open',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('refuses an off-menu enum cell, which its own decode would have accepted', () => {
+    // The leniency that made this reachable: decode says yes.
+    expect(choiceSchema.codec.decode('bananas')).toBe('bananas')
+    expect(propertyCellValueRejection(choiceSchema, 'bananas')).toMatchObject({reason: 'decode'})
+  })
+
+  it('accepts a declared option', () => {
+    expect(propertyCellValueRejection(choiceSchema, 'done')).toBeNull()
   })
 })
 
