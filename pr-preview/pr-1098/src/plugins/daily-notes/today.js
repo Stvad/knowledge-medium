@@ -1,1 +1,1 @@
-import{go as e,ho as t,mo as n}from"../../../chunks/app-CXYRk9wh.js";export{n as localDayKey,t as useStartOfToday,e as useTodayKey};
+import{go as e,ho as t,mo as n}from"../../../chunks/app-YiBWGxIg.js";export{n as localDayKey,t as useStartOfToday,e as useTodayKey};
