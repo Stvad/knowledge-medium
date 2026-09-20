@@ -11,6 +11,11 @@ import {
   type SearchSourceOutcome,
 } from '@/data/facets.js'
 import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
+import {
+  propertyValueContexts,
+  type PropertyValueContext,
+} from '@/utils/propertyValueContext.js'
+import { firstLine, truncate } from '@/utils/string.js'
 
 /** How many candidate rows to pull from SQL before JS ranking. The pre-
  *  filter is permissive (token-prefix LIKE), so over-fetching gives the
@@ -97,7 +102,24 @@ export interface LinkTargetIdCandidate {
   id: string
   label: string
   detail: string
+  /** For a row that lives under a property FIELD ROW, where it belongs —
+   *  `alias of Tutorial`. Absent for an ordinary block.
+   *
+   *  A picker without it presents a page and that page's own `alias` value
+   *  row as two rows with the SAME label and nothing to choose between them
+   *  (km-1iia). Property rows are ordinary blocks and belong in search — the
+   *  answer is to say which is which, not to hide one. */
+  context?: string
 }
+
+/** The muted secondary text a picker shows beside a candidate's label.
+ *  A property row's CONTEXT wins over its content, because that content is
+ *  exactly what makes the row ambiguous — a page's `alias` value row repeats
+ *  the page's own label, so echoing it says nothing while "alias of <page>"
+ *  says which row this is. One owner, because every picker over these
+ *  candidates asks the same question. */
+export const linkTargetCandidateDetail = (candidate: LinkTargetIdCandidate): string =>
+  candidate.context ?? candidate.detail
 
 export interface LinkTargetValueCandidate {
   key: string
@@ -855,6 +877,70 @@ export const searchLinkTargetsProgressively = async (
   return result
 }
 
+/** Longest owner name a context line carries before it is ellipsised. The
+ *  owner is there to identify the row, and a whole paragraph of body text
+ *  identifies nothing a phrase doesn't — while the line shares its width with
+ *  the label the user actually searched for. */
+const CONTEXT_OWNER_MAX_CHARS = 40
+
+/** The context line for a row under a property field row: the property, and
+ *  the block it is on. Falls back to the property alone when the owner has
+ *  nothing to show — a nameless owner is still better identified by "alias"
+ *  than by a blank. */
+const describePropertyValueContext = (context: PropertyValueContext): string => {
+  const ownerLabel = truncate(
+    firstLine(labelForBlockData(context.owner, '')).replace(/\s+/g, ' ').trim(),
+    CONTEXT_OWNER_MAX_CHARS,
+  )
+  return ownerLabel ? `${context.propertyName} of ${ownerLabel}` : context.propertyName
+}
+
+/** Order every candidate after the block it is a property row OF, when that
+ *  block is in the list too.
+ *
+ *  A page and its own `alias` value row match the same query text with the
+ *  same content, so nothing in the text ranking can separate them and the
+ *  winner falls out of SQL order — which the migration that minted the value
+ *  row leaves pointing at the machinery. Picking the preselected default then
+ *  stores a property row's id as the reference. The owner is the thing a
+ *  picker is for; its machinery goes under it.
+ *
+ *  Stable otherwise: a row whose owner is absent from the list keeps its
+ *  rank, because there is nothing to rank it against. The final sweep is
+ *  what makes this total — an ownership cycle cannot arise from a tree, but a
+ *  candidate held for an owner that never emits must still reach the list. */
+const ownersBeforeTheirPropertyRows = (
+  candidates: readonly LinkTargetIdCandidate[],
+  contexts: ReadonlyMap<string, PropertyValueContext>,
+): LinkTargetIdCandidate[] => {
+  const present = new Set(candidates.map(candidate => candidate.id))
+  const heldByOwner = new Map<string, LinkTargetIdCandidate[]>()
+  const ordered: LinkTargetIdCandidate[] = []
+  const roots: LinkTargetIdCandidate[] = []
+
+  for (const candidate of candidates) {
+    const ownerId = contexts.get(candidate.id)?.ownerId
+    if (ownerId !== undefined && present.has(ownerId)) {
+      const held = heldByOwner.get(ownerId)
+      if (held) held.push(candidate)
+      else heldByOwner.set(ownerId, [candidate])
+    } else {
+      roots.push(candidate)
+    }
+  }
+
+  const emitted = new Set<string>()
+  const emit = (candidate: LinkTargetIdCandidate): void => {
+    if (emitted.has(candidate.id)) return
+    emitted.add(candidate.id)
+    ordered.push(candidate)
+    for (const held of heldByOwner.get(candidate.id) ?? []) emit(held)
+  }
+  roots.forEach(emit)
+  for (const candidate of candidates) emit(candidate)
+  return ordered
+}
+
 export const searchLinkTargetIdCandidates = async (
   repo: Repo,
   args: {
@@ -871,7 +957,7 @@ export const searchLinkTargetIdCandidates = async (
     excludeBlockIds: args.excludeIds,
   })
 
-  return [
+  const candidates = [
     ...matches.aliases.map((row): LinkTargetIdCandidate => ({
       id: row.blockId,
       label: row.alias,
@@ -883,6 +969,22 @@ export const searchLinkTargetIdCandidates = async (
       detail: block.content,
     })),
   ].slice(0, args.limit)
+
+  // Resolved on the sliced list, not the whole result: this annotates the rows
+  // that will be shown, and a row past the cut has neither a label to carry
+  // nor an owner to sit under.
+  const contexts = await propertyValueContexts(
+    repo,
+    args.workspaceId,
+    candidates.map(candidate => candidate.id),
+  )
+  return ownersBeforeTheirPropertyRows(
+    candidates.map(candidate => {
+      const context = contexts.get(candidate.id)
+      return context ? {...candidate, context: describePropertyValueContext(context)} : candidate
+    }),
+    contexts,
+  )
 }
 
 export const searchLinkTargetValueCandidates = async (

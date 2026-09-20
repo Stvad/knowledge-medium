@@ -15,6 +15,7 @@ import { BlockEmbed } from '@/components/references/BlockEmbed.js'
 import { BlockRefAncestorsProvider } from '@/components/references/cycleGuard.js'
 import {
   labelForBlockData,
+  linkTargetCandidateDetail,
   searchLinkTargetIdCandidates,
   type LinkTargetIdCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
@@ -47,7 +48,7 @@ const candidateLabel = (candidate: LinkTargetIdCandidate): string =>
   compactDetail(candidate.label) || candidate.id
 
 const candidateDetail = (candidate: LinkTargetIdCandidate): string =>
-  compactDetail(candidate.detail)
+  compactDetail(linkTargetCandidateDetail(candidate))
 
 const blockMatchesTargetTypes = async (
   repo: Repo,
