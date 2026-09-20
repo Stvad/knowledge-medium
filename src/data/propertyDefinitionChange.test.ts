@@ -1005,6 +1005,29 @@ describe('codec change', () => {
       expect(await cell('p')).toEqual({status: 'low'})
     })
 
+    it('writes no value row when ADDING an option to rows in the LEGACY spelling', async () => {
+      // The case the test below cannot reach, because it seeds through the
+      // current writer. A child written before #1080 holds `"high"`, which the
+      // new codec still reads — so canonicalizing it would rewrite every
+      // consuming row for an edit that changes no value, in the user's own tx
+      // and straight up to sync. The value route keeps text that already reads
+      // back as the value it holds.
+      const repo = await setupChoice('low', 'high')
+      const {valueRowId} = await seedProperty(repo, 'p', 'status', 'high')
+      await setRawValueContent(valueRowId, '"high"')
+      await sharedDb.db.execute('UPDATE blocks SET updated_at = 0 WHERE id = ?', [valueRowId])
+
+      await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options('low', 'high', 'urgent')),
+        {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+
+      const after = await sharedDb.db.get<{updated_at: number}>(
+        'SELECT updated_at FROM blocks WHERE id = ?', [valueRowId])
+      expect(after.updated_at).toBe(0)
+      expect(await rowContent(valueRowId)).toBe('"high"')
+      expect(await cell('p')).toEqual({status: 'high'})
+    })
+
     it('writes no value row when ADDING an option, since no spelling moves', async () => {
       // Widening is a codec-inputs change too, so the fan-out runs over every
       // consuming parent. It must not turn into a write per block: the

@@ -2700,6 +2700,20 @@ describe('propertyCellValueRejection asks what the projection will ask', () => {
     expect(propertyCellValueRejection(choiceListSchema, ['a', 'b'])).toBeNull()
   })
 
+  it('refuses a NESTED off-menu member, rather than deriving an empty list', () => {
+    // One level further down, and the reason the grains are each ASKED rather
+    // than the predicate modelling the nesting: the whole cell is offered to
+    // an outer codec that does not enforce, but the member it would
+    // materialize is a `list(enum)` that does.
+    const nestedSchema = defineProperty<unknown>('tags', {
+      codec: codecs.list(codecs.list(codecs.enum(['a', 'b']))) as AnyPropertySchema['codec'],
+      defaultValue: [],
+      changeScope: ChangeScope.BlockDefault,
+    })
+    expect(propertyCellValueRejection(nestedSchema, [['a', 'retired']])).not.toBeNull()
+    expect(propertyCellValueRejection(nestedSchema, [['a', 'b']])).toBeNull()
+  })
+
   it('and the projection agrees, rather than quietly returning a shorter list', () => {
     // The symptom the disagreement produced: this is what the cell would have
     // become if the write above had been accepted.

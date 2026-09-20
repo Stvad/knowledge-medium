@@ -557,17 +557,17 @@ export const encodedToValueChildContent = (
  *  for the same reason `enum` does, where re-canonicalizing through a stricter
  *  write side would drop a value the codec means to preserve.
  *
- *  THROUGH THE MEMBER, because the two directions are asked at different
- *  grains and have to agree: a cell is offered whole (`list(enum)`), while the
- *  projection reads it back one value child at a time under
- *  {@link valueChildCodec}. Asking only the outer codec let `list(enum)` take
- *  an off-menu member at the write — the list's `decode` is as lenient as its
- *  member's — and then had the projection drop that member, deriving a list
- *  one shorter with nothing reported.
+ *  THROUGH THE MEMBER, because a value child is read at member grain: a
+ *  `list(enum)` child holds one option, so the question a scalar `enum` asks
+ *  has to be asked of the list that contains it too.
  *
- *  One level, which is all the storage model has: value children are flat, so
- *  a member is the deepest grain anything reads at, and a codec nested deeper
- *  is reached by this same question being asked again at that grain. */
+ *  ONE level, and it does not need more. What keeps the two directions in
+ *  agreement is that each STORAGE GRAIN is asked — `propertyCellValueRejection`
+ *  runs this over the whole cell and again over every member it would
+ *  materialize — not this predicate modelling arbitrary nesting. Deeper than
+ *  one level the answer is uniformly "not enforced" on BOTH sides, so such a
+ *  value is kept rather than accepted-then-dropped, which is the failure mode
+ *  that matters. */
 const enforcesWriteSide = (codec: AnyCodec): boolean =>
   codec.type === 'enum' || memberCodecOf(codec)?.type === 'enum'
 
@@ -712,6 +712,21 @@ const spellingThatHolds = (
   }
 }
 
+/** Does `content`, left exactly as stored, already read back as `held` under
+ *  `to`? Asked by RUNNING it, like {@link spellingThatHolds}, because only the
+ *  codec can say. */
+const holdsUnder = (
+  to: AnyPropertySchema,
+  content: string,
+  held: unknown,
+): boolean => {
+  try {
+    return jsonValuesEqual(valueChildContentToEncoded(to, content), held)
+  } catch {
+    return false
+  }
+}
+
 /** The value `from` holds, re-spelled by `to`. Only the codec that WROTE the
  *  text can say what it holds.
  *
@@ -729,6 +744,15 @@ const valueRoute = (
     // knows what it holds, whatever is true of the rest of the property.
     return {outcome: 'unreadable'}
   }
+  // ALREADY RIGHT: the stored text reads back as this value under `to` as it
+  // stands, so re-spelling it would rewrite the row to say the same thing.
+  // Checked before canonicalizing because this pass writes every consuming
+  // row in the user's own tx: an `enum` whose children still hold the JSON
+  // spelling would otherwise have every one of them rewritten by an option
+  // being ADDED, an edit that changes no value and that a person reads as
+  // harmless. Those rows drift to the plain spelling when their value is next
+  // written, which is the only time the text needs to move.
+  if (holdsUnder(to, content, held)) return {outcome: 'converted', content}
   const respelled = spellingThatHolds(to, held)
   if (respelled === null) return {outcome: 'unreadable'}
   // DECLINED when re-spelling MINTS A REFERENCE the stored text did not carry:
@@ -884,7 +908,14 @@ export const encodedPropertyValueToChildContents = (
   for (const [i, content] of contents.entries()) {
     let readBack: unknown
     try {
-      readBack = contentToEncodedValue(member, content)
+      // {@link storedFormOf} as well as the read, because that is the whole
+      // call the projection makes on this content (`valueChildContentToEncoded`
+      // at member grain). Asking less here is how a `list(enum)` cell took an
+      // off-menu member, had its child written, and then had the projection
+      // drop it — and one level further down, how `list(list(enum))` derived
+      // `[]` from a cell that was accepted. The grains agree because each one
+      // is ASKED, not because a predicate models the nesting.
+      readBack = storedFormOf(member, contentToEncodedValue(member, content))
     } catch {
       throw new CodecError('a list member that reads back from its content', members[i])
     }
