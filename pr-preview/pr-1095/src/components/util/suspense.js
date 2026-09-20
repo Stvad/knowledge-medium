@@ -1,0 +1,1 @@
+import{GP as e}from"../../../chunks/app-DkywwqkX.js";export{e as SuspenseFallback};
