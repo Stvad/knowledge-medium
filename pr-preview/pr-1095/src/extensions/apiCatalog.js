@@ -1,1 +1,0 @@
-import{Al as e,kl as t}from"../../chunks/app-6rJVRpWM.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

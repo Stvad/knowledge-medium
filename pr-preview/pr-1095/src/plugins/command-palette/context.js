@@ -1,1 +1,0 @@
-import{Gx as e,Kx as t,Wx as n,qx as r}from"../../../chunks/app-6rJVRpWM.js";export{n as COMMAND_PALETTE_ACTION_ID,e as COMMAND_PALETTE_CONTEXT,t as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,r as commandPaletteActionContext};

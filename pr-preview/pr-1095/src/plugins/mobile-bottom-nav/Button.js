@@ -1,1 +1,0 @@
-import{Mg as e}from"../../../chunks/app-6rJVRpWM.js";export{e as MobileBottomNavButton};

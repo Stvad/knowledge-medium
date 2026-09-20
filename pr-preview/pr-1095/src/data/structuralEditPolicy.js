@@ -1,1 +1,0 @@
-import{UC as e,WC as t}from"../../chunks/app-6rJVRpWM.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
