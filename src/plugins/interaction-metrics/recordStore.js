@@ -1,1 +1,1 @@
-import{ar as e,ir as t,or as n,sr as r}from"../../../chunks/app-B_f21sBD.js";export{t as appendClientRecord,e as clientGroupId,n as clientSeriesQuery,r as updateClientRecord};
+import{ar as e,ir as t,or as n,sr as r}from"../../../chunks/app-QXP80SzR.js";export{t as appendClientRecord,e as clientGroupId,n as clientSeriesQuery,r as updateClientRecord};
