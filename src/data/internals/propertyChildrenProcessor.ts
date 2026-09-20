@@ -160,12 +160,12 @@ const addAffectedProjection = (
   fields.set(fieldId, schema)
 }
 
-/** Reads a parent row at most once per collection pass. Every caller of
- *  {@link collectAffectedProjection} feeds it several row states that share a
- *  parent — at minimum the before and after of one change, and for a
- *  multi-row tx the siblings of one paste or fan-out — so without this the
- *  same point read is issued once per state. Only sound while nothing writes:
- *  see the memo's construction in {@link reprojectOwnersForRowStates}. */
+/** Reads a parent row at most once per collection pass. The processor path
+ *  feeds the pass the before AND after of every changed row, and both sides of
+ *  one change share a parent, so the repeat is that path's ordinary case rather
+ *  than an edge one; a caller that passes a single row state (the stamp repair)
+ *  simply never hits the memo. Only sound while nothing writes — see its
+ *  construction in {@link reprojectOwnersForRowStates}. */
 type ParentReader = (id: string) => Promise<BlockData | null>
 
 /** Walk up at most two levels from a changed row to the (parent, fieldId)
