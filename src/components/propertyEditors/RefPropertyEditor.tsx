@@ -25,6 +25,7 @@ import {
   dismissOnFieldEscape,
   usePropertyEditingActivation,
 } from '@/components/propertyPanel/usePropertyEditingActivation.js'
+import { collapseWhitespace } from '@/utils/string.js'
 
 const SEARCH_LIMIT = 12
 const EMPTY_REFS: readonly string[] = Object.freeze([])
@@ -41,14 +42,11 @@ const targetTypesForSchema = (schema?: PropertySchema<unknown>): readonly string
   return EMPTY_REFS
 }
 
-const compactDetail = (text: string): string =>
-  text.replace(/\s+/g, ' ').trim()
-
 const candidateLabel = (candidate: LinkTargetIdCandidate): string =>
-  compactDetail(candidate.label) || candidate.id
+  collapseWhitespace(candidate.label) || candidate.id
 
 const candidateDetail = (candidate: LinkTargetIdCandidate): string =>
-  compactDetail(linkTargetCandidateDetail(candidate))
+  collapseWhitespace(linkTargetCandidateDetail(candidate))
 
 const blockMatchesTargetTypes = async (
   repo: Repo,

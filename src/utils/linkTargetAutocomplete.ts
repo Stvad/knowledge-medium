@@ -15,7 +15,7 @@ import {
   propertyValueContexts,
   type PropertyValueContext,
 } from '@/utils/propertyValueContext.js'
-import { firstLine, truncate } from '@/utils/string.js'
+import { collapseWhitespace, firstLine, truncate } from '@/utils/string.js'
 
 /** How many candidate rows to pull from SQL before JS ranking. The pre-
  *  filter is permissive (token-prefix LIKE), so over-fetching gives the
@@ -889,7 +889,7 @@ const CONTEXT_OWNER_MAX_CHARS = 40
  *  than by a blank. */
 const describePropertyValueContext = (context: PropertyValueContext): string => {
   const ownerLabel = truncate(
-    firstLine(labelForBlockData(context.owner, '')).replace(/\s+/g, ' ').trim(),
+    collapseWhitespace(firstLine(labelForBlockData(context.owner, ''))),
     CONTEXT_OWNER_MAX_CHARS,
   )
   return ownerLabel ? `${context.propertyName} of ${ownerLabel}` : context.propertyName

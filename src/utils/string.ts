@@ -33,6 +33,14 @@ export const truncate = (value: string, max: number): string => {
  *  content has to render as a single line without wrapping. */
 export const firstLine = (value: string): string => value.match(/^[^\r\n]*/)?.[0] ?? ''
 
+/** Runs of whitespace — line breaks included — flattened to single spaces,
+ *  ends trimmed. What every one-line PREVIEW of block content needs so that
+ *  authored indentation and blank lines don't render as gaps. One owner
+ *  because the regex is the whole rule, and three surfaces were spelling it
+ *  out. */
+export const collapseWhitespace = (value: string): string =>
+  value.replace(/\s+/g, ' ').trim()
+
 /** Truncate from the MIDDLE, keeping both ends (`Quarterly Plan…2026`).
  *  Result is always ≤ `max` chars, like {@link truncate}.
  *
