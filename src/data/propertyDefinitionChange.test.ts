@@ -215,20 +215,17 @@ const UNLOADABLE_PRESET = 'test-unloadable-preset'
  *  the no-codec state is the one that has always been its real cause: the
  *  preset going missing UNDER a definition that was already using it. `was`
  *  chooses what the preset used to BE, which is what decides how many values
- *  the cell it left behind holds. */
+ *  the cell it left behind holds. Its `defaultValue` is per-case because
+ *  `normalizePresetDefault` round-trips it through the codec — `''` under a
+ *  list codec throws and collapses the schema to metadata-only. */
 const withPresetUnloaded = async (
   value: unknown = 'done',
-  {was}: {
-    readonly was?: {build: () => AnyCodec; codecType: string; defaultValue: unknown}
-  } = {},
+  was: {build: () => AnyCodec; defaultValue: unknown} =
+    {build: () => codecs.string, defaultValue: ''},
 ): Promise<{repo: Repo; valueRowId: string}> => {
-  const preset = {
-    id: UNLOADABLE_PRESET,
-    build: was?.build ?? (() => codecs.string),
-    defaultValue: was?.defaultValue ?? '',
-  } as unknown as AnyValuePresetCore
+  const preset = {id: UNLOADABLE_PRESET, ...was} as unknown as AnyValuePresetCore
   const authoring = await setupDefinition(
-    UNLOADABLE_PRESET, [preset], was?.codecType ?? 'string')
+    UNLOADABLE_PRESET, [preset], was.build().type)
   const {valueRowId} = await seedProperty(authoring, 'p', 'status', value)
   const repo = makeRepo()
   await vi.waitFor(() => {
@@ -671,9 +668,8 @@ describe('codec change', () => {
     // the same data with the old codec available commits, which is the
     // contradiction that gives it away.
     await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded([1, 2, 3], {was: {
-      build: () => codecs.unsafeIdentity<unknown>(), codecType: 'object', defaultValue: null,
-    }})
+    const {repo} = await withPresetUnloaded(
+      [1, 2, 3], {build: () => codecs.unsafeIdentity<unknown>(), defaultValue: null})
     expect(await cell('p')).toEqual({status: [1, 2, 3]})
 
     await retype(repo, FIELD_ID, 'json')
@@ -687,9 +683,8 @@ describe('codec change', () => {
     // nothing away — and refusing here would block the one gesture that fixes
     // a definition whose preset stopped building.
     await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded(null, {was: {
-      build: () => codecs.optionalIdentity<unknown>(), codecType: 'object', defaultValue: null,
-    }})
+    const {repo} = await withPresetUnloaded(
+      null, {build: () => codecs.optionalIdentity<unknown>(), defaultValue: null})
     expect(await cell('p')).toEqual({status: null})
 
     await retype(repo, FIELD_ID, 'number')
@@ -698,21 +693,37 @@ describe('codec change', () => {
     expect(await cell('p')).toEqual({})
   })
 
-  it('REFUSES a narrowing with no old codec, counting the CELL it published', async () => {
-    // Repairing a broken definition is the one moment a list can be narrowed
-    // with nothing able to read its children. The cell is still a faithful
-    // record of how many values the consumer holds, and counting it as one
-    // value let every member but the first go in silence.
+  it('ACCEPTS a narrowing with no old codec, losing members silently (#1090)', async () => {
+    // Pinned as an accepted weakness, not as a good answer. With no codec the
+    // only records of what the property held — the cell's length and the row
+    // count — are both UPPER bounds, and a loss count built from those refuses
+    // repairs that lose nothing. So a loss is claimed only where the
+    // projection comes out EMPTY, which misses this one. #1077 is the fix:
+    // rebuild the children FROM the cell, and the counting problem goes away.
     await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded(['1', '2', '3'], {was: {
-      build: () => codecs.list(codecs.string), codecType: 'list', defaultValue: [],
-    }})
+    const {repo} = await withPresetUnloaded(
+      ['1', '2', '3'], {build: () => codecs.list(codecs.string), defaultValue: []})
     expect(await cell('p')).toEqual({status: ['1', '2', '3']})
+
+    await retype(repo, FIELD_ID, 'number')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: 1})
+  })
+
+  it('REFUSES when the projection comes out empty over a cell that held a value', async () => {
+    // The one loss the no-codec branch can still see, and the reason it is not
+    // simply `return 0`: the row is unreadable under the new codec, so the
+    // projection is empty while the cell plainly holds something. Committing
+    // on that answer unsets a populated key, and nothing follows this pass to
+    // notice.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded('prose value')
 
     await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
       code: 'property.definition-change.unconvertible',
     })
-    expect(await cell('p')).toEqual({status: ['1', '2', '3']})
+    expect(await cell('p')).toEqual({status: 'prose value'})
   })
 
   it('re-stamps the reference columns when a ref value becomes plain text', async () => {

@@ -46,14 +46,15 @@
  *
  * ── The accepted residuals ──
  *
- * Three ways a consumer is left in the old encoding, all of them the same shape
- * — a change this processor is not present for — and all repaired by the
- * content-driven reconcile that compares a cell against its field rows (#389
- * item 8), the only thing that can see such a row:
+ * Ways a consumer is left in the old encoding, all of them the same shape — a
+ * change this processor is not present for. The first three are repaired by
+ * the content-driven reconcile that compares a cell against its field rows
+ * (#389 item 8), the only thing that can see such a row; the fourth is not,
+ * and says why:
  *
- *  - a device offline across the change, holding a block it created under the
- *    old codec. This runs on the initiating client only, which is already the
- *    answer for renames.
+ *  - a device offline across the change, holding a block whose value row it
+ *    edited under the old codec. This runs on the initiating client only,
+ *    which is already the answer for renames.
  *  - a value preset whose `build` starts returning a different codec under the
  *    same preset id: no row edit at all, so nothing fires. Already a
  *    frozen-identity violation (`seedIdentityLedger.ts`, #797). Caught where it
@@ -66,6 +67,15 @@
  *    and is remembered by nothing for after the flip. The flip skips any key
  *    whose cell will not decode under the current codec and reports the block,
  *    so its own per-key report is the surface for this one.
+ *  - a duplicate field row ARRIVING after the change, carrying a value row the
+ *    other device wrote under the old codec. The rows this pass converted and
+ *    the one that arrives now spell the same value differently, so the union
+ *    that folds duplicates no longer folds them and the cell gains a member.
+ *    Not reachable by the reconcile above, which compares a cell against its
+ *    field rows and finds them in agreement. Arrival order is not the
+ *    initiator's to control, so this is accepted rather than guarded: the
+ *    alternative is keeping the arriving row's spelling, which is the #1055
+ *    bug this pass exists to fix.
  *
  * The FAN-OUT is dormant until a definition has field rows — see
  * `consumingParentIds`, which is its gate. The refusals split on that gate and
@@ -542,11 +552,9 @@ export const consumingParentIds = async (
  *  THE BEFORE SIDE IS THE CHILDREN, not the stored cell: the cell is derived,
  *  and one that disagrees with its children is stale by definition — the next
  *  projection drops the difference whether or not this edit happens. The one
- *  exception is a definition whose previous preset does not BUILD: nothing can
- *  read its children, PROJECT skips the key for want of a schema, and the cell
- *  it last published is the only surviving record of what the consumer holds.
- *  Reading the children there answers "no values" about a cell plainly holding
- *  one, and committing on that answer empties it. */
+ *  exception is a definition whose previous preset does not BUILD, where
+ *  nothing can read the children at all; {@link heldValueCount} owns what is
+ *  countable there and why it is deliberately weak. */
 const valuesLostBy = (
   change: DefinitionChange,
   parent: BlockData,
@@ -558,17 +566,18 @@ const valuesLostBy = (
   // rebuilding the before-projection over every value of every consumer on the
   // commonest edit there is.
   if (!change.encodingChanged) return 0
-  return Math.max(
-    0, heldValueCount(change, parent, perFieldRow) - projectedValueCount(change.schema, projected),
-  )
+  const after = projectedValueCount(change.schema, projected)
+  return Math.max(0, heldValueCount(change, parent, perFieldRow, after) - after)
 }
 
 /** How many values the property held BEFORE this change, at the same grain
- *  {@link projectedValueCount} answers in. */
+ *  {@link projectedValueCount} answers in — or, where nothing can read the
+ *  children, the most this can claim it held without inventing a loss. */
 const heldValueCount = (
   change: DefinitionChange,
   parent: BlockData,
   perFieldRow: readonly (readonly BlockData[])[],
+  after: number,
 ): number => {
   if (change.beforeSchema !== null) {
     return projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
@@ -577,22 +586,27 @@ const heldValueCount = (
         .map(value => value.content),
     ))
   }
-  // No old codec, so neither record is sufficient alone and each BOUNDS the
-  // other. The CELL cannot say the property's arity — an array cell is N
-  // members of a list, or ONE value of a scalar holding an array — so its
-  // length over-counts the second. The ROWS cannot say what was published —
-  // one holds at most one value whatever the cell's shape, but a divergent or
-  // unreadable row was never in the cell — so their count over-counts the
-  // first. Take the tighter: over-counting here refuses the repair, which is
-  // the only gesture that can fix a definition whose preset stopped building.
+  // No old codec, so this number has to be a LOWER bound or its slack becomes
+  // a phantom loss — and nothing here can measure one tightly. The cell's
+  // length is an upper bound (an array cell is N members of a list, or ONE
+  // value of a scalar holding an array); the row count is another (a peer or
+  // a duplicate field row was never in the cell, and a row this device has
+  // not received, or one stamped out of the value set, is missing from it).
+  // Combining two upper bounds does not make a lower one, which is how three
+  // successive attempts here each shipped either a phantom refusal or a
+  // silent unset.
+  //
+  // So: claim a loss only where the projection comes out EMPTY over a cell
+  // that held something. Weak — a narrowing that keeps one member still drops
+  // the rest in silence (#1090) — but sound, and the alternative is refusing
+  // the only gesture that repairs a definition whose preset stopped building.
+  // Counting this properly means rebuilding the children FROM the cell rather
+  // than guessing at them, which is #1077.
   const held = parent.properties[change.oldName]
-  // `null` is the cleared sentinel, not a value — the shape an optional
-  // property that was never filled in arrives in.
+  // `null` is the cleared sentinel and not a value, so a repair over one
+  // takes nothing away.
   if (held === undefined || held === null) return 0
-  return Math.min(
-    Array.isArray(held) ? held.length : 1,
-    perFieldRow.reduce((rows, group) => rows + group.length, 0),
-  )
+  return after > 0 ? 0 : 1
 }
 
 /** Apply every change that owns a field row under ONE parent, in one cell write.

@@ -621,16 +621,16 @@ const textRoute = (
  * {@link valueChildCodec} grain. The owner of which reading wins.
  *
  * THE VALUE FIRST, because what the property HELD is what a re-type has to
- * carry and the text alone cannot say what that
- * is: the JSON `"x"` and the three-character string `"x"` are the same text
+ * carry and the text alone cannot say what that is: the JSON `"x"` and the
+ * three-character string `"x"` are the same text
  * under two codecs (#1055). Taking the text's own reading keeps the spelling
  * and swaps the value, and swaps the CELL with it.
  *
  * The {@link textRoute} answers wherever the {@link valueRoute} declines.
  *
- * `from` is null when the definition's previous preset does not build — the
- * whole-definition form of the first of them, and why this takes a nullable
- * schema at all.
+ * `from` is null when the definition's previous preset does not build, which
+ * is why this takes a nullable schema at all: nothing can read the row under
+ * the codec that wrote it, so the text route is the only answer.
  */
 export const convertValueChildContent = (
   from: AnyPropertySchema | null,
@@ -638,8 +638,8 @@ export const convertValueChildContent = (
   content: string,
 ): ValueChildConversion => {
   if (from !== null) {
-    const respelled = valueRoute(from, to, content)
-    if (respelled.outcome === 'converted') return respelled
+    const carried = valueRoute(from, to, content)
+    if (carried.outcome === 'converted') return carried
   }
   return textRoute(to, content)
 }
