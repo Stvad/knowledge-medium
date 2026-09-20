@@ -1,1 +1,0 @@
-import{Q$ as e,Z$ as t}from"../../chunks/app-iwtWTOwN.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

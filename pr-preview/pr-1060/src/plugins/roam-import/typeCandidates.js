@@ -1,1 +1,0 @@
-import{Fs as e,Ps as t}from"../../../chunks/app-iwtWTOwN.js";export{t as collectTypeCandidates,e as formatTypeCandidateReport};
