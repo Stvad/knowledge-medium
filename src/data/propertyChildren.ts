@@ -547,29 +547,6 @@ export const encodedToValueChildContent = (
   encoded: unknown,
 ): string => encodedValueToContent(valueChildCodec(schema), encoded)
 
-/** Why the materialize direction cannot carry `encoded` as a value of
- *  `schema`, or null when it can.
- *
- *  ONE owner for the question `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR`
- *  rejects a write over, so a producer that wants to refuse a value BEFORE
- *  the write asks exactly what the processor will ask rather than a
- *  hand-rolled decode that drifts from it. Content promotion is one such
- *  producer.
- *
- *  TWO legs, because the processor takes two steps on a cell value that can
- *  fail. The second is not redundant: `codecs.ref().decode` accepts any
- *  string, while `referenceBlockContentForId` refuses one that cannot be read
- *  back as `((id))` — so a ref-typed key meeting `Some Person` passes the
- *  decode and throws at the render. It asks for EVERY value child the value
- *  implies, so a refList naming one unrenderable member is refused rather than
- *  silently losing that member at materialize time.
- *
- *  Note what that does NOT cover: `Mary` is refused by neither leg, so a
- *  ref-typed key can still take a one-word value and store it as a block id
- *  nothing resolves. This asks exactly what the processor asks, and the
- *  processor accepts that — a stricter rule belongs in a producer's own
- *  acceptance check, never here, or the two would disagree about what a write
- *  may contain. */
 /** The form `encoded` is STORED as under `codec`, or a throw saying it cannot
  *  be stored at all. `encode(decode(v))`, so tolerant text ("1" for a number,
  *  a date string) lands in the canonical shape `tx.setProperty` would write.
@@ -598,6 +575,34 @@ const storedFormOf = (codec: AnyCodec, encoded: unknown): unknown => {
   }
 }
 
+/** Why the materialize direction cannot carry `encoded` as a value of
+ *  `schema`, or null when it can.
+ *
+ *  ONE owner for the question `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR`
+ *  rejects a write over, so a producer that wants to refuse a value BEFORE
+ *  the write asks exactly what the processor will ask rather than a
+ *  hand-rolled decode that drifts from it. Content promotion is one such
+ *  producer.
+ *
+ *  TWO legs, because the processor takes two steps on a cell value that can
+ *  fail. The first is {@link storedFormOf} and not a bare `decode`, so this
+ *  asks of a cell exactly what the projection will ask of the children
+ *  materialized from it — the two drifting is how an off-menu `enum` value
+ *  raw-written here was accepted and then dropped by that projection, the
+ *  writing tx long since committed. The second is not redundant:
+ *  `codecs.ref().decode` accepts any
+ *  string, while `referenceBlockContentForId` refuses one that cannot be read
+ *  back as `((id))` — so a ref-typed key meeting `Some Person` passes the
+ *  decode and throws at the render. It asks for EVERY value child the value
+ *  implies, so a refList naming one unrenderable member is refused rather than
+ *  silently losing that member at materialize time.
+ *
+ *  Note what that does NOT cover: `Mary` is refused by neither leg, so a
+ *  ref-typed key can still take a one-word value and store it as a block id
+ *  nothing resolves. This asks exactly what the processor asks, and the
+ *  processor accepts that — a stricter rule belongs in a producer's own
+ *  acceptance check, never here, or the two would disagree about what a write
+ *  may contain. */
 export interface PropertyCellValueRejection {
   readonly reason: 'decode' | 'content'
   readonly cause: unknown
