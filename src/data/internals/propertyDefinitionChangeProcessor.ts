@@ -586,26 +586,26 @@ const heldValueCount = (
         .map(value => value.content),
     ))
   }
-  // No old codec, so this number has to be a LOWER bound or its slack becomes
-  // a phantom loss — and nothing here can measure one tightly. The cell's
-  // length is an upper bound (an array cell is N members of a list, or ONE
-  // value of a scalar holding an array); the row count is another (a peer or
-  // a duplicate field row was never in the cell, and a row this device has
-  // not received, or one stamped out of the value set, is missing from it).
-  // Combining two upper bounds does not make a lower one, which is how three
-  // successive attempts here each shipped either a phantom refusal or a
-  // silent unset.
+  // No old codec, so this number has to be a LOWER bound on what was held or
+  // its slack becomes a phantom loss, and nothing available here measures one
+  // tightly. The cell's LENGTH is an upper bound, because the cell cannot say
+  // arity — an array is N members of a list, or ONE value of a scalar holding
+  // an array. The ROW COUNT is another, because a peer or a duplicate field
+  // row was never in the cell while a row this device has not received is
+  // missing from it. Combining two upper bounds does not make a lower one.
   //
-  // So: claim a loss only where the projection comes out EMPTY over a cell
-  // that held something. Weak — a narrowing that keeps one member still drops
-  // the rest in silence (#1090) — but sound, and the alternative is refusing
-  // the only gesture that repairs a definition whose preset stopped building.
-  // Counting this properly means rebuilding the children FROM the cell rather
-  // than guessing at them, which is #1077.
+  // `null` is likewise unreadable at this grain: the cleared sentinel and a
+  // real JSON null are the same bytes, and only the codec that wrote them
+  // could say which. Counted as a value, because over-refusing costs a
+  // repair while under-counting deletes one.
+  //
+  // So the claim is the weakest sound one: a loss only where the projection
+  // comes out EMPTY over a cell that held anything. It misses a narrowing
+  // that keeps one member (#1090) and it refuses a repair over a genuinely
+  // cleared value (#1077), and both are the same gap — counting this needs
+  // the children rebuilt FROM the cell rather than guessed at.
   const held = parent.properties[change.oldName]
-  // `null` is the cleared sentinel and not a value, so a repair over one
-  // takes nothing away.
-  if (held === undefined || held === null) return 0
+  if (held === undefined) return 0
   return after > 0 ? 0 : 1
 }
 

@@ -678,19 +678,20 @@ describe('codec change', () => {
     expect(await cell('p')).toEqual({status: [1, 2, 3]})
   })
 
-  it('does NOT refuse a repair over a CLEARED value with no old codec', async () => {
-    // `null` in the cell is the unset sentinel, not a value, so a repair takes
-    // nothing away — and refusing here would block the one gesture that fixes
-    // a definition whose preset stopped building.
+  it('KEEPS a bare `null` a repair cannot classify, refusing rather than deleting it', async () => {
+    // The cleared sentinel and a real JSON null are the same bytes, and with
+    // the preset gone nothing can say which this is. Counted as a value: the
+    // cost is refusing a repair over a genuinely cleared one (#1077), and the
+    // alternative cost is deleting a real one.
     await seedWorkspace('children')
     const {repo} = await withPresetUnloaded(
-      null, {build: () => codecs.optionalIdentity<unknown>(), defaultValue: null})
+      null, {build: () => codecs.unsafeIdentity<unknown>(), defaultValue: null})
     expect(await cell('p')).toEqual({status: null})
 
-    await retype(repo, FIELD_ID, 'number')
-    await repo.awaitProcessors()
-
-    expect(await cell('p')).toEqual({})
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+    })
+    expect(await cell('p')).toEqual({status: null})
   })
 
   it('ACCEPTS a narrowing with no old codec, losing members silently (#1090)', async () => {
