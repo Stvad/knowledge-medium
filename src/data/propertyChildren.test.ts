@@ -2713,6 +2713,25 @@ describe('content <-> value codecs: an enum value child is spelled plainly', () 
     }
   })
 
+  it('refuses a reference-shaped option typed in BARE, and reads its escaped form', () => {
+    // The encoder escapes such an option, so bare content in that shape was
+    // written by a hand-edit or a find-replace, not by the encoder. Accepting
+    // it would decode as the option while leaving a LIVE span in the row: a
+    // rename then rewrites the content, and the same row is off-menu
+    // afterwards with the owner's key gone.
+    const linkSchema = defineProperty<string>('status', {
+      codec: codecs.enum(['[[Page]]', 'plain']),
+      defaultValue: 'plain',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    expect(() => valueChildContentToEncoded(linkSchema, '[[Page]]')).toThrow(CodecError)
+    // The spelling the encoder actually writes still round-trips, and the
+    // legacy JSON one still reads — neither is bare reference-shaped.
+    const escaped = propertyValueToChildContent(linkSchema, '[[Page]]')
+    expect(valueChildContentToEncoded(linkSchema, escaped)).toBe('[[Page]]')
+    expect(valueChildContentToEncoded(linkSchema, JSON.stringify('[[Page]]'))).toBe('[[Page]]')
+  })
+
   it("the user-facing preset's unset sentinel round-trips as empty content", () => {
     // '' is the Choice preset's unset/default sentinel and is deliberately not
     // a configured option — the same spelling a cleared `ref` uses, which is

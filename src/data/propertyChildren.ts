@@ -497,6 +497,23 @@ const contentToEncodedValue = (
     case 'url':
       return content
     case 'enum':
+      // BARE content the encoder would have ESCAPED was not written by the
+      // encoder. `verbatimContentLosesValue` is the encoder's own reason for
+      // escaping ({@link needsEscape}), so an option value in one of those
+      // shapes is only ever stored enveloped — and reading the bare form back
+      // as that option accepts a row the grammar will edit out from under it.
+      // A reference-shaped option typed straight into a value child is the
+      // case: it decodes as the option, and then a rename rewrites the live
+      // span, after which the same row is off-menu and the key is gone.
+      //
+      // Refusing the shape rather than each spelling of it, so a shape added
+      // to `verbatimContentLosesValue` later is covered here without an edit.
+      // The envelope forms are unaffected: an escaped value carries no span
+      // opener by construction, and the legacy JSON spelling of one is
+      // quote-wrapped, so neither is whole-content reference-shaped.
+      if (verbatimContentLosesValue(content)) {
+        throw new CodecError('an escaped enum value', content)
+      }
       // No membership check here, and deliberately: `valueChildContentToEncoded`
       // runs the codec's `encode`, which IS `requireMember`, over whatever this
       // returns — and it is the only route by which a value child reaches a
