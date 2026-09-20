@@ -1,8 +1,8 @@
 import type {
   AnyPropertySchema,
+  PropertyBoundaryIdentityUnavailableReason,
   PropertyHandle,
   PropertySchema,
-  PropertySchemaIdentityUnavailableReason,
   PropertySchemaResolution,
   ResolvedPropertySchema,
 } from '@/data/api'
@@ -16,7 +16,7 @@ export type PropertyBoundaryResolution<T> =
   | {readonly status: 'available'; readonly schema: PropertySchema<T>}
   | {
       readonly status: 'identity-unavailable'
-      readonly reason: PropertySchemaIdentityUnavailableReason
+      readonly reason: PropertyBoundaryIdentityUnavailableReason
     }
 
 const isPropertyHandle = <T>(schema: PropertySchema<T>): schema is PropertyHandle<T> =>
@@ -361,7 +361,17 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
         return {status: 'identity-unavailable', reason: 'definition-unavailable'}
       }
       if (winnerBehavior !== schema) {
-        return {status: 'identity-unavailable', reason: 'shadowed'}
+        // A plain schema carries no identity, so all the snapshot can say is
+        // that this object is not the entry it publishes for the name. WHO
+        // owns the name says which fact that is. A seed's declaration is a
+        // module constant, and handles never reach here, so a plain object at
+        // a seed-owned name never was the entry — genuinely shadowed. A
+        // block-built entry is a fresh object per projection, so the same
+        // mismatch there is staleness, not a rival definition.
+        return {
+          status: 'identity-unavailable',
+          reason: isPropertyHandle(winnerBehavior) ? 'shadowed' : 'stale-schema',
+        }
       }
       return this.asBoundaryResolution(
         resolved<T>(this.snapshot.workspaceId, winner.fieldId, winnerBehavior, winner),

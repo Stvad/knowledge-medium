@@ -49,6 +49,22 @@ export type PropertySchemaIdentityUnavailableReason =
   | 'shadowed'
   | 'ambiguous'
 
+/** Why a WRITE/READ boundary refused the schema object a caller passed —
+ *  `PropertySchemaIdentityUnavailableReason` plus the one failure only the
+ *  boundary can have, since only it is handed an object rather than a name or
+ *  a field id.
+ *
+ *  `stale-schema`: the plain schema passed is not the entry this workspace
+ *  publishes under that name. A block-built entry is a fresh object per
+ *  projection, so a legitimately-obtained copy stops being it at the next
+ *  rebuild; a lookalike that never was it lands here too, because a plain
+ *  schema carries no identity to tell the two apart. Kept distinct from
+ *  `shadowed` — a DIFFERENT definition owning the name — which sends the
+ *  reader hunting a duplicate definition that need not exist. */
+export type PropertyBoundaryIdentityUnavailableReason =
+  | PropertySchemaIdentityUnavailableReason
+  | 'stale-schema'
+
 /** Result of the workspace-bound identity resolver. Unbound/stage-0 callers
  * and definitions without locally-buildable behavior report identity as
  * unavailable; no synthetic ambient-workspace fallback is permitted. */
@@ -200,6 +216,14 @@ export const isPropertyEditorOverride = (
  *  The `any` escape mirrors `AnyMutator` / `AnyPostCommitProcessor`. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyPropertySchema = PropertySchema<any>
+
+/** Variance-erased resolved schema, for the same reason and with the same
+ *  `any` escape as `AnyPropertySchema`. A return type of this rather than
+ *  `AnyPropertySchema` is a promise that the value carries durable identity:
+ *  it keeps resolving by field id across registry rebuilds, where a plain
+ *  schema object stops being the entry its name publishes. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyResolvedPropertySchema = ResolvedPropertySchema<any>
 
 /** Variance-erased editor-override type for storage in
  *  `propertyEditorOverridesFacet`'s contributions. `PropertyEditor<T>` is

@@ -134,7 +134,10 @@ describe('UserSchemasService.addSchema', () => {
     expect(schema.name).toBe('homepage')
     expect(schema.codec.type).toBe('url')
     // Synchronous: visible in repo.propertySchemas before any subscription tick.
-    expect(env.repo.propertySchemas.get('homepage')).toBe(schema)
+    // The ambient entry is the plain schema that was published; the return is
+    // that same registration RESOLVED, so they share the built codec.
+    expect(env.repo.propertySchemas.get('homepage')?.codec).toBe(schema.codec)
+    expect(schema.fieldId).toBe(env.service.getSchemaBlockId('homepage'))
     expect(env.repo.propertySchemaResolverFor(WS).resolve('homepage')).toEqual({
       status: 'resolved',
       schema: expect.objectContaining({
@@ -472,10 +475,50 @@ describe('UserSchemasService subscription', () => {
     })
     // Synchronously, the schema is registered. A write through the
     // schema before the subscription tick should encode correctly.
-    expect(env.repo.propertySchemas.get('site')).toBe(schema)
+    expect(env.repo.propertySchemas.get('site')?.codec).toBe(schema.codec)
     // Encoding through the registered schema works (the preset's codec
     // is the URL codec — passes string through).
     expect(schema.codec.encode('https://example.com')).toBe('https://example.com')
+  })
+
+  it('keeps every returned schema writable after later addSchema calls', async () => {
+    env = await setup()
+    // The registering-then-writing rhythm an importer or an extension setup has.
+    // Each projector tick rebuilds the earlier definitions' behavior objects, so
+    // a returned schema that stayed plain would stop being the entry its name
+    // publishes and the write would be refused (#1079).
+    const names = ['batch-a', 'batch-b', 'batch-c']
+    const schemas = []
+    for (const name of names) {
+      schemas.push(await env.service.addSchema({name, presetId: 'string'}))
+    }
+    const targetId = await env.repo.mutate.createChild({parentId: env.repo.propertiesPageId!})
+    for (const [index, schema] of schemas.entries()) {
+      await env.repo.block(targetId).set(schema, `value-${index}`)
+    }
+    const stored = env.repo.block(targetId).peek()!.properties
+    expect(names.map(name => stored[name])).toEqual(['value-0', 'value-1', 'value-2'])
+  })
+
+  it('refuses a superseded ambient entry as stale-schema, not shadowed', async () => {
+    env = await setup()
+    // The ambient registry still hands out the plain built schema, which a
+    // rebuild replaces. Writing through the superseded object is refused — but
+    // the reason must name the staleness rather than claim a rival definition
+    // owns the name, which is what sent readers hunting a duplicate (#1079).
+    await env.service.addSchema({name: 'ambient-copy', presetId: 'string'})
+    const captured = env.repo.propertySchemas.get('ambient-copy')!
+    await env.service.addSchema({name: 'unrelated', presetId: 'string'})
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('ambient-copy')).not.toBe(captured)
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+
+    const targetId = await env.repo.mutate.createChild({parentId: env.repo.propertiesPageId!})
+    await expect(env.repo.block(targetId).set(captured, 'refused')).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'stale-schema',
+    })
+    expect(env.repo.block(targetId).peek()!.properties['ambient-copy']).toBeUndefined()
   })
 
   it('rejects ref config that breaks configCodec.decode contract (null targetTypes element)', async () => {
@@ -803,7 +846,7 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
       kernelValuePresetsExtension,
     ]))
     const schema = await addPromise
-    expect(env.repo.propertySchemas.get('siteUrl')).toBe(schema)
+    expect(env.repo.propertySchemas.get('siteUrl')?.codec).toBe(schema.codec)
   })
 })
 
