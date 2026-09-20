@@ -17,6 +17,10 @@
 import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/properties.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
+import {
+  recognizePropertyField,
+  type PropertyNameResolver,
+} from '@/utils/propertyValueContext.js'
 import { collapseWhitespace, firstLine, truncate, truncateMiddle } from '@/utils/string.js'
 
 /** Longest a single crumb renders before it is ellipsised. Small on
@@ -84,6 +88,26 @@ const crumbLabel = (data: BlockData): string => {
     : truncate(label, CRUMB_MAX_CHARS)
 }
 
+/** A property FIELD ROW's crumb: the name of the property it is.
+ *
+ *  A value row's content can repeat its owner's label exactly — a page's
+ *  `alias` row does — so the property is what tells the two apart:
+ *  `Tutorial › alias` places a row that `Tutorial › Tutorial` would not.
+ *
+ *  `''` whenever `recognizePropertyField` does not answer, which includes
+ *  having no resolver bound. Raw `::((…))` is never a crumb, so an
+ *  unrecognized marked row drops rather than falling back to its content.
+ *
+ *  Ellipsised from the middle, like an aliased block: a property name is a
+ *  NAME, and names are told apart by their tails. */
+const propertyCrumbLabel = (
+  data: BlockData,
+  propertyName: PropertyNameResolver | undefined,
+): string => {
+  const name = propertyName && recognizePropertyField(data, propertyName)?.name
+  return name ? truncateMiddle(collapseWhitespace(name), CRUMB_MAX_CHARS) : ''
+}
+
 /** Root→immediate-parent crumbs for one `core.ancestors` chain, ready to
  *  render.
  *
@@ -94,11 +118,9 @@ const crumbLabel = (data: BlockData): string => {
  *   - blank ones. The crumb line is a locator hint, and
  *     `Project Alpha › › Notes` locates nothing `Project Alpha › Notes`
  *     doesn't.
- *   - property field rows (`isFieldForm`). Their content is literally
- *     `::((fieldId))`, and the rest of the app treats them as invisible
- *     machinery (see `VISIBLE_CHILD_PREDICATE_SQL`) — a crumb reading
- *     `Task Board › ::((field-def-status-00…` names no place a person
- *     could go. Their owner is further up the same chain and still shows.
+ *   - property field rows (`isFieldForm`) that `propertyName` cannot name.
+ *     A NAMED one renders as its property (`Task Board › status`); see
+ *     {@link propertyCrumbLabel} for why, and for what "cannot name" covers.
  *
  *  A chain that does NOT reach a root is marked with a leading `…`
  *  instead of being presented as if its topmost surviving ancestor were
@@ -117,7 +139,14 @@ const crumbLabel = (data: BlockData): string => {
  *  another workspace's content rather than trusting that invariant. */
 export const crumbsFromAncestors = (
   ancestors: readonly BlockData[],
-  {workspaceId, stoppedAtParentId}: {workspaceId: string; stoppedAtParentId: string | null},
+  {workspaceId, stoppedAtParentId, propertyName}: {
+    workspaceId: string
+    stoppedAtParentId: string | null
+    /** Names a property field row in this workspace. Optional because
+     *  omitting it degrades to dropping every field row, which is the safe
+     *  direction — never raw `::((…))` in a crumb. */
+    propertyName?: PropertyNameResolver
+  },
 ): string[] => {
   const chain: BlockData[] = []
   for (const ancestor of ancestors) {
@@ -127,8 +156,9 @@ export const crumbsFromAncestors = (
 
   const crumbs: string[] = []
   for (let i = chain.length - 1; i >= 0; i--) {
-    if (chain[i].isFieldForm) continue
-    const label = crumbLabel(chain[i])
+    const label = chain[i].isFieldForm
+      ? propertyCrumbLabel(chain[i], propertyName)
+      : crumbLabel(chain[i])
     if (label) crumbs.push(label)
   }
 

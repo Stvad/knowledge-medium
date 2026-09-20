@@ -9,7 +9,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { searchLinkTargetIdCandidates } from '@/utils/linkTargetAutocomplete'
-import { propertyValueContexts } from '@/utils/propertyValueContext'
+import { propertyValueContexts, recognizePropertyField } from '@/utils/propertyValueContext'
 
 const WS = 'ws-1'
 
@@ -64,6 +64,35 @@ const createWithPropertyRow = async (args: {
     content: args.valueContent,
   })
 }
+
+describe('recognizePropertyField', () => {
+  const NAMES: Record<string, string> = {'def-alias': 'alias'}
+  const nameOf = (fieldId: string) => NAMES[fieldId]
+  const marked = (parentId: string | null, fieldId = 'def-alias') =>
+    ({isFieldForm: true, referenceTargetId: fieldId, parentId})
+
+  it('names a marked row under an owner whose target resolves', () => {
+    expect(recognizePropertyField(marked('owner'), nameOf))
+      .toEqual({fieldId: 'def-alias', name: 'alias'})
+  })
+
+  it('refuses a marked row at the workspace ROOT, which owns no property', () => {
+    // §9: no parent means no block to be a field OF, so the marker is
+    // ordinary content. Restating the marker bit alone drops this clause.
+    expect(recognizePropertyField(marked(null), nameOf)).toBeUndefined()
+  })
+
+  it('refuses a target the workspace cannot name', () => {
+    expect(recognizePropertyField(marked('owner', 'def-unknown'), nameOf)).toBeUndefined()
+  })
+
+  it('refuses an unmarked row, whatever it points at', () => {
+    expect(recognizePropertyField(
+      {isFieldForm: false, referenceTargetId: 'def-alias', parentId: 'owner'},
+      nameOf,
+    )).toBeUndefined()
+  })
+})
 
 describe('propertyValueContexts', () => {
   it('names the property a row holds a value for, and the block it is on', async () => {

@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useRepo } from '@/context/repo.js'
 import { useHandles, useStableJson } from '@/hooks/block.js'
 import { crumbsFromAncestors } from '@/utils/blockCrumbs.js'
+import { propertyNameResolverFor } from '@/utils/propertyValueContext.js'
 
 const EMPTY_CRUMBS: ReadonlyMap<string, readonly string[]> = new Map()
 
@@ -53,6 +54,12 @@ export const useAncestorCrumbs = (
 
   return useMemo(() => {
     if (!workspaceId) return EMPTY_CRUMBS
+    // Read fresh on each recompute rather than held across renders: the
+    // registry this binds is replaced when definitions change, and crumbs
+    // recompute whenever the walks do. Not reactive to a rename ALONE — a
+    // property renamed while the dialog sits open keeps its old crumb until
+    // the next keystroke, which is not worth a subscription here.
+    const propertyName = propertyNameResolverFor(repo, workspaceId)
     const out = new Map<string, readonly string[]>()
     ids.forEach((id, index) => {
       const walk = walks[index]
@@ -60,8 +67,9 @@ export const useAncestorCrumbs = (
       out.set(id, crumbsFromAncestors(walk.ancestors, {
         workspaceId,
         stoppedAtParentId: walk.stoppedAtParentId,
+        propertyName,
       }))
     })
     return out.size === 0 ? EMPTY_CRUMBS : out
-  }, [ids, walks, workspaceId])
+  }, [ids, repo, walks, workspaceId])
 }

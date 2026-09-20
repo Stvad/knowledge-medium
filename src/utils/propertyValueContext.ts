@@ -21,8 +21,64 @@
 
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { getPropertyFieldTargetId, isPropertyFieldInstance } from '@/data/propertyChildren'
-import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
+import {
+  getPropertyFieldTargetId,
+  isPropertyFieldInstance,
+  type IsPropertyFieldDefinition,
+} from '@/data/propertyChildren'
+
+/** fieldId → what a person calls that property, or `undefined` when this
+ *  workspace's registry cannot answer for the id. */
+export type PropertyNameResolver = (fieldId: string) => string | undefined
+
+/** Names for a workspace's property definitions, bound once.
+ *
+ *  Deliberately NARROWER than §9 recognition, which is shadow-tolerant so a
+ *  shadowed definition's field rows keep classifying. A shadowed definition
+ *  has no name of its own to show, and showing the WINNER's name would label
+ *  a row with a property it is not — so it answers `undefined` and the
+ *  surface falls back to whatever it does for a row it cannot place. */
+export const propertyNameResolverFor = (
+  repo: Repo,
+  workspaceId: string,
+): PropertyNameResolver => {
+  const resolver = repo.propertySchemaResolverFor(workspaceId)
+  return fieldId => {
+    const resolution = resolver.resolveField(fieldId)
+    return resolution.status === 'resolved' ? resolution.schema.name : undefined
+  }
+}
+
+/** The property a row IS, when it is a field row this workspace recognizes and
+ *  can name — §9 recognition composed with the name resolver, which is the
+ *  only form either consumer wants.
+ *
+ *  `undefined` for everything else, and the cases are worth naming because
+ *  they read alike and are not: an unmarked row; a marked row at the
+ *  workspace ROOT, which has no owner to be a field OF, so its marker is
+ *  ordinary content (§9); a target that resolves to no definition, which is
+ *  a `::` block someone typed by hand; and a shadowed definition, whose name
+ *  belongs to the winner. A caller falls back to whatever it does for a row
+ *  it cannot place.
+ *
+ *  Call this rather than restating it; a restatement drops a clause. */
+export interface RecognizedPropertyField {
+  /** The definition this field row points at. */
+  readonly fieldId: string
+  /** What a person calls that property. */
+  readonly name: string
+}
+
+export const recognizePropertyField = (
+  data: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm'>,
+  propertyName: PropertyNameResolver,
+): RecognizedPropertyField | undefined => {
+  const fieldId = getPropertyFieldTargetId(data)
+  const name = fieldId === undefined ? undefined : propertyName(fieldId)
+  if (fieldId === undefined || name === undefined) return undefined
+  const isNamedDefinition: IsPropertyFieldDefinition = id => propertyName(id) !== undefined
+  return isPropertyFieldInstance(data, isNamedDefinition) ? {fieldId, name} : undefined
+}
 
 export interface PropertyValueContext {
   /** The definition the owning field row points at. */
@@ -57,7 +113,7 @@ export const propertyValueContexts = async (
   const ids = [...new Set(blockIds)]
   if (!workspaceId || ids.length === 0) return out
 
-  const resolver = repo.propertySchemaResolverFor(workspaceId)
+  const propertyName = propertyNameResolverFor(repo, workspaceId)
   const walks = await Promise.all(ids.map(id =>
     repo.query.ancestors({id}).load().catch(() => null),
   ))
@@ -69,20 +125,14 @@ export const propertyValueContexts = async (
     // and sync applies `parent_id` verbatim — so a cross-workspace edge is
     // refused here rather than trusted, same rule as `crumbsFromAncestors`.
     if (!field || field.workspaceId !== workspaceId) return
-    const fieldId = getPropertyFieldTargetId(field)
-    if (fieldId === undefined) return
-    const resolution = resolver.resolveField(fieldId)
-    if (!isPropertyFieldInstance(field, () => isResolvableFieldDefinition(resolution))) return
-    // Recognition is shadow-tolerant; a NAME is not. A shadowed definition's
-    // rows keep the bare content they show today rather than gaining a label
-    // that names the winner's property.
-    if (resolution.status !== 'resolved') return
+    const recognized = recognizePropertyField(field, propertyName)
+    // `parentId` is non-null whenever recognition passed; read for the type.
     const ownerId = field.parentId
-    if (ownerId === null) return
+    if (recognized === undefined || ownerId === null) return
     const owner = ancestors[1]
     out.set(id, {
-      fieldId,
-      propertyName: resolution.schema.name,
+      fieldId: recognized.fieldId,
+      propertyName: recognized.name,
       ownerId,
       owner: owner && owner.workspaceId === workspaceId ? owner : null,
     })
