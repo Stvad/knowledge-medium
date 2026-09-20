@@ -16,7 +16,9 @@ import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
+  childContentsToEncodedPropertyValue,
   convertValueChildContent,
+  encodedPropertyValueToChildContents,
   encodedToValueChildContent,
   propertyCellValueRejection,
   valueChildContentToEncoded,
@@ -2676,6 +2678,33 @@ describe('propertyCellValueRejection asks what the projection will ask', () => {
 
   it('accepts a declared option', () => {
     expect(propertyCellValueRejection(choiceSchema, 'done')).toBeNull()
+  })
+
+  // At MEMBER grain too. A cell is offered whole, but the projection reads it
+  // back one value child at a time, so asking only the outer codec let a
+  // `list(enum)` take an off-menu member — the list's decode is exactly as
+  // lenient as its member's — and then dropped that member on the way back,
+  // deriving a list one shorter with nothing reported.
+  const choiceListSchema = defineProperty<readonly string[]>('tags', {
+    codec: codecs.list(codecs.enum(['a', 'b'])) as AnyPropertySchema['codec'],
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('refuses an off-menu MEMBER of a list of options', () => {
+    expect(propertyCellValueRejection(choiceListSchema, ['a', 'bananas']))
+      .toMatchObject({reason: 'decode'})
+  })
+
+  it('accepts a list whose members are all declared', () => {
+    expect(propertyCellValueRejection(choiceListSchema, ['a', 'b'])).toBeNull()
+  })
+
+  it('and the projection agrees, rather than quietly returning a shorter list', () => {
+    // The symptom the disagreement produced: this is what the cell would have
+    // become if the write above had been accepted.
+    const contents = encodedPropertyValueToChildContents(choiceListSchema, ['a', 'b'])
+    expect(childContentsToEncodedPropertyValue(choiceListSchema, contents)).toEqual(['a', 'b'])
   })
 })
 

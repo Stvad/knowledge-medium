@@ -547,6 +547,30 @@ export const encodedToValueChildContent = (
   encoded: unknown,
 ): string => encodedValueToContent(valueChildCodec(schema), encoded)
 
+/** Does a failed `encode` mean this value cannot be STORED, or only that it
+ *  cannot be canonicalized?
+ *
+ *  `enum` alone: its option set is a promise to every consumer that switches
+ *  on it, and nothing else on this path asks the write side (#1088). Every
+ *  other codec keeps its stored encoding — it decoded, so it is readable, and
+ *  a codec a runtime extension registers may use the same lenient-read design
+ *  for the same reason `enum` does, where re-canonicalizing through a stricter
+ *  write side would drop a value the codec means to preserve.
+ *
+ *  THROUGH THE MEMBER, because the two directions are asked at different
+ *  grains and have to agree: a cell is offered whole (`list(enum)`), while the
+ *  projection reads it back one value child at a time under
+ *  {@link valueChildCodec}. Asking only the outer codec let `list(enum)` take
+ *  an off-menu member at the write — the list's `decode` is as lenient as its
+ *  member's — and then had the projection drop that member, deriving a list
+ *  one shorter with nothing reported.
+ *
+ *  One level, which is all the storage model has: value children are flat, so
+ *  a member is the deepest grain anything reads at, and a codec nested deeper
+ *  is reached by this same question being asked again at that grain. */
+const enforcesWriteSide = (codec: AnyCodec): boolean =>
+  codec.type === 'enum' || memberCodecOf(codec)?.type === 'enum'
+
 /** The form `encoded` is STORED as under `codec`, or a throw saying it cannot
  *  be stored at all. `encode(decode(v))`, so tolerant text ("1" for a number,
  *  a date string) lands in the canonical shape `tx.setProperty` would write.
@@ -559,18 +583,13 @@ export const encodedToValueChildContent = (
  *  how a raw write is accepted and then silently dropped by the projection
  *  that follows it.
  *
- *  ENFORCED for `enum` alone, whose option set is a promise to every consumer
- *  that switches on it and which nothing else on this path asks about (#1088).
- *  Every other codec keeps its stored encoding: it decoded, so it is readable,
- *  and a codec a runtime extension registers may use the same lenient-read
- *  design for the same reason `enum` does. Re-canonicalizing those through a
- *  stricter write side would drop a value the codec means to preserve. */
+ *  {@link enforcesWriteSide} says which codecs those are. */
 const storedFormOf = (codec: AnyCodec, encoded: unknown): unknown => {
   const decoded = codec.decode(encoded)
   try {
     return codec.encode(decoded)
   } catch (cause) {
-    if (codec.type === 'enum') throw cause
+    if (enforcesWriteSide(codec)) throw cause
     return encoded
   }
 }
