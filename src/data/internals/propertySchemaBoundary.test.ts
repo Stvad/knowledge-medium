@@ -420,6 +420,73 @@ describe('typed property identity boundary', () => {
     expect(repo.block('rebuilt-target').peek()!.properties[metadata.name]).toBe('changed')
   })
 
+  it('keeps shadowed when a second block definition claims the name', async () => {
+    // The rival arriving by sync/import: the caller's definition stops winning
+    // its name through no act of its own. That IS a duplicate to resolve, so it
+    // must not be softened to staleness — and the caller's object is no help in
+    // telling them apart, since the same tick rebuilds it either way.
+    const name = 'contested'
+    const entryFor = (fieldId: string, createdAt: number) => ({
+      metadata: {
+        fieldId,
+        workspaceId: WS,
+        createdAt,
+        name,
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        origin: 'user' as const,
+      },
+      schema: defineProperty(name, {
+        codec: codecs.string,
+        defaultValue: '',
+        changeScope: ChangeScope.BlockDefault,
+      }),
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    const held = entryFor('field-contested-late', 2)
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-contested-definitions',
+      [held],
+      {workspaceId: WS},
+    )
+    await repo.tx(
+      tx => tx.create({id: 'contested-target', workspaceId: WS, parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await repo.tx(
+      tx => tx.setProperty('contested-target', held.schema, 'before'),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    // A rival with an earlier createdAt syncs in and takes the name.
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-contested-definitions',
+      [held, entryFor('field-contested-early', 1)],
+      {workspaceId: WS},
+    )
+
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(held.schema)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'shadowed',
+    })
+    await expect(repo.tx(
+      tx => tx.setProperty('contested-target', held.schema, 'changed'),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'shadowed',
+    })
+    expect(repo.block('contested-target').peek()!.properties[name]).toBe('before')
+  })
+
   it('rejects a write whose resolved change-scope differs from the tx scope', async () => {
     // A stale-schema caller can open the tx under one scope while the resolved
     // definition carries another (its change-scope was edited after capture).

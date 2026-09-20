@@ -55,12 +55,13 @@ export type PropertySchemaIdentityUnavailableReason =
  *  a field id.
  *
  *  `stale-schema`: the plain schema passed is not the entry this workspace
- *  publishes under that name. A block-built entry is a fresh object per
- *  projection, so a legitimately-obtained copy stops being it at the next
- *  rebuild; a lookalike that never was it lands here too, because a plain
- *  schema carries no identity to tell the two apart. Kept distinct from
- *  `shadowed` — a DIFFERENT definition owning the name — which sends the
- *  reader hunting a duplicate definition that need not exist. */
+ *  publishes under that name, and nothing else claims that name. A block-built
+ *  entry is a fresh object per projection, so a legitimately-obtained copy
+ *  stops being it at the next rebuild; a lookalike that never was it lands
+ *  here too, because a plain schema carries no identity to tell the two apart.
+ *  A contested name keeps reporting `shadowed` — that one says a duplicate
+ *  definition is there to resolve, and sending a reader after one that does
+ *  not exist is what this reason exists to stop. */
 export type PropertyBoundaryIdentityUnavailableReason =
   | PropertySchemaIdentityUnavailableReason
   | 'stale-schema'

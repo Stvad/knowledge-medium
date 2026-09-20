@@ -352,7 +352,8 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
 
     if (exactSelected) return {status: 'available', schema}
 
-    const winner = this.snapshot.definitionsByName.get(schema.name)?.[0]
+    const claimants = this.snapshot.definitionsByName.get(schema.name) ?? []
+    const winner = claimants[0]
     if (winner) {
       const winnerBehavior = winner.seedKey
         ? this.snapshot.seedsByKey.get(winner.seedKey)
@@ -362,15 +363,18 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
       }
       if (winnerBehavior !== schema) {
         // A plain schema carries no identity, so all the snapshot can say is
-        // that this object is not the entry it publishes for the name. WHO
-        // owns the name says which fact that is. A seed's declaration is a
-        // module constant, and handles never reach here, so a plain object at
-        // a seed-owned name never was the entry — genuinely shadowed. A
-        // block-built entry is a fresh object per projection, so the same
-        // mismatch there is staleness, not a rival definition.
+        // that this object is not the entry it publishes for the name. What
+        // CLAIMS the name says which fact that is, and neither clause reads
+        // the caller's object — a rebuild leaves it unrecognizable either way.
+        // A seed declaration is a module constant, and handles never reach
+        // here, so a plain object at a seed-owned name never was the entry; a
+        // second block definition means one really does shadow the other,
+        // whichever of them the caller held. With a lone block claimant
+        // nothing rivals it and the mismatch is its per-projection rebuild.
+        const contested = isPropertyHandle(winnerBehavior) || claimants.length > 1
         return {
           status: 'identity-unavailable',
-          reason: isPropertyHandle(winnerBehavior) ? 'shadowed' : 'stale-schema',
+          reason: contested ? 'shadowed' : 'stale-schema',
         }
       }
       return this.asBoundaryResolution(
