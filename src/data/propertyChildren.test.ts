@@ -19,6 +19,10 @@ import {
   encodedToValueChildContent,
   valueChildContentToEncoded,
 } from './propertyChildren'
+import {
+  reprojectOwnersForRowStates,
+  type ProjectableRow,
+} from './internals/propertyChildrenProcessor'
 import { propertyDefinitionBlockId } from './definitionSeeds'
 import { addBlockTypeToProperties, aliasesProp, blockTypeLabelProp, typesProp } from './properties'
 import { BLOCK_TYPE_TYPE } from './blockTypes'
@@ -289,6 +293,53 @@ describe('flipped workspace (properties_migration = children)', () => {
 
     await repo.tx(tx => tx.delete(field!.id), {scope: ChangeScope.BlockDefault})
     expect(await cellValue('p')).toBeUndefined()
+  })
+
+  /** #1083: the projection pass is fed the BEFORE and AFTER of every changed
+   *  row, and both sides of one change share a parent — so a pass that reads
+   *  the parent per row state pays for the same point read twice on a single
+   *  edit, and 2N times for an N-row tx whose rows are siblings. The read is
+   *  what classifies the row (value child of a field row, or not), so it
+   *  cannot be skipped from row-local data; reading it once per parent is the
+   *  whole of the saving. Asserted per parent id, not as a total, so an
+   *  unrelated read added elsewhere in the pass does not redden this. */
+  it('reads each parent once per pass, however many row states share it', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'draft'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+
+    const reads: string[] = []
+    await repo.tx(async tx => {
+      const counting = new Proxy(tx, {
+        get: (target, prop, receiver) => {
+          const member = Reflect.get(target, prop, receiver)
+          if (prop !== 'get') {
+            return typeof member === 'function' ? member.bind(target) : member
+          }
+          return (id: string) => { reads.push(id); return tx.get(id) }
+        },
+      })
+      const rowState: ProjectableRow = {
+        id: value!.id, parentId: field!.id, workspaceId: WS,
+        referenceTargetId: null, isFieldForm: false,
+      }
+      // The shape one content edit produces: the same row, twice.
+      await reprojectOwnersForRowStates(
+        counting, [rowState, rowState],
+        {resolveFieldSchema: fieldId => fieldId === STATUS_FIELD_ID ? statusSchema : undefined},
+        'full',
+      )
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(reads.filter(id => id === field!.id)).toEqual([field!.id])
+    // The memoized row is the one the classification actually used: had it
+    // come back wrong, the value child would not have been recognized and the
+    // owner's cell would never have been re-projected.
+    expect(await cellValue('p')).toBe('draft')
   })
 })
 

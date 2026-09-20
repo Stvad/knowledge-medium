@@ -160,15 +160,23 @@ const addAffectedProjection = (
   fields.set(fieldId, schema)
 }
 
+/** Reads a parent row at most once per collection pass. Every caller of
+ *  {@link collectAffectedProjection} feeds it several row states that share a
+ *  parent — at minimum the before and after of one change, and for a
+ *  multi-row tx the siblings of one paste or fan-out — so without this the
+ *  same point read is issued once per state. Only sound while nothing writes:
+ *  see the memo's construction in {@link reprojectOwnersForRowStates}. */
+type ParentReader = (id: string) => Promise<BlockData | null>
+
 /** Walk up at most two levels from a changed row to the (parent, fieldId)
  *  pairs it can affect: the row as a field row (parent = owning block), and
  *  the row as a value child (parent = field row → owning block). Both the
  *  before and after sides of a move are collected by the caller. */
 const collectAffectedProjection = async (
-  tx: Tx,
   out: AffectedOwners,
   row: ProjectableRow | null,
   lookups: ProjectionLookups,
+  readParent: ParentReader,
 ): Promise<void> => {
   if (row === null) return
   // The row as a FIELD ROW (parent = owning block): §9 selection keys on
@@ -180,7 +188,7 @@ const collectAffectedProjection = async (
   }
 
   if (row.parentId === null) return
-  const parent = await tx.get(row.parentId)
+  const parent = await readParent(row.parentId)
   if (parent === null || parent.parentId === null) return
   // The row as a VALUE child (parent = field row → owning block): only a
   // marked parent is a field row, and only a non-marked row is its value.
@@ -313,8 +321,19 @@ export const reprojectOwnersForRowStates = async (
   mode: ProjectionMode,
 ): Promise<void> => {
   const affected: AffectedOwners = new Map()
+  // Collection reads; re-projection writes. Keeping them as two loops is what
+  // lets the parent memo be a plain cache — no write can land between the
+  // read that fills it and a later hit on it.
+  const parents = new Map<string, BlockData | null>()
+  const readParent: ParentReader = async (id) => {
+    const cached = parents.get(id)
+    if (cached !== undefined) return cached
+    const parent = await tx.get(id)
+    parents.set(id, parent)
+    return parent
+  }
   for (const row of rowStates) {
-    await collectAffectedProjection(tx, affected, row, lookups)
+    await collectAffectedProjection(affected, row, lookups, readParent)
   }
   for (const [parentId, fields] of affected) {
     await reprojectOwner(tx, parentId, fields, mode)
