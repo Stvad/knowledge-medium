@@ -505,7 +505,7 @@ describe('UserSchemasService subscription', () => {
     // The ambient registry still hands out the plain built schema, which a
     // rebuild replaces. Writing through the superseded object is refused — but
     // the reason must name the staleness rather than claim a rival definition
-    // owns the name, which is what sent readers hunting a duplicate (#1079).
+    // owns the name (#1079).
     await env.service.addSchema({name: 'ambient-copy', presetId: 'string'})
     const captured = env.repo.propertySchemas.get('ambient-copy')!
     await env.service.addSchema({name: 'unrelated', presetId: 'string'})

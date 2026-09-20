@@ -269,9 +269,8 @@ export class UserSchemasService {
    *  so it keeps resolving by field id through later registry rebuilds. The
    *  plain schema this publishes into the ambient registry would not: the
    *  projector rebuilds each definition's behavior object per tick, and the
-   *  boundary admits a plain schema only as the object it currently publishes
-   *  — so registering several properties before writing any of them left every
-   *  handle but the last refused (#1079). */
+   *  boundary admits a plain schema only as the object it currently
+   *  publishes. */
   async addSchema(args: AddSchemaArgs): Promise<AnyResolvedPropertySchema> {
     const name = args.name.trim()
     const rejection = propertySchemaNameRejection(name)
