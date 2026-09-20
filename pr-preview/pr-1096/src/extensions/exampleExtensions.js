@@ -1,1 +1,0 @@
-import{HC as e,VC as t}from"../../chunks/app-DQf1WsRX.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

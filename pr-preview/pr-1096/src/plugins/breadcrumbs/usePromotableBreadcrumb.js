@@ -1,1 +1,0 @@
-import{Rg as e}from"../../../chunks/app-DQf1WsRX.js";export{e as usePromotableBreadcrumb};
