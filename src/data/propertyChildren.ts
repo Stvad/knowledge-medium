@@ -232,54 +232,6 @@ const storesContentVerbatim = (codec: AnyCodec): boolean =>
 const verbatimContentLosesValue = (content: string): boolean =>
   isWholeContentReference(content) || hasLoneSurrogate(content)
 
-/** Would writing this text into a value row DESTROY the property's value?
- *  For write paths that set `content` directly rather than encoding a typed
- *  value — find-replace is the one caller. They bypass
- *  `encodedValueToContent`, so they cannot escape, and must refuse instead.
- *
- *  NARROWER than {@link verbatimContentLosesValue} on purpose: only a MARKED
- *  span destroys anything — it stamps `is_field_form`, `isFieldValueChild`
- *  drops the row from the value set, and the owner's key goes with it,
- *  silently (#688). An UNMARKED span stays in the value set and decodes
- *  right back, so `Roadmap` → `[[Roadmap]]` must keep working.
- *
- *  The null SENTINEL is the third destroyer: bare `null` content IS the
- *  unset value to a codec that accepts one.
- *
- *  Scoped to the codecs that store content verbatim: everything else either
- *  emits machine-formatted text that cannot take these shapes, or (`ref`) is
- *  span-shaped by design and already refused by its own decode. */
-export const contentLosesPropertyValue = (
-  schema: AnyPropertySchema,
-  content: string,
-): boolean => {
-  // At GRAIN (`valueChildCodec`): the row being rewritten is ONE value child,
-  // so a `string-list` member is governed by the string rules its own content
-  // was written under, not by the list codec's.
-  const codec = valueChildCodec(schema)
-  if (!storesContentVerbatim(codec)) return false
-  if (content.trim() === 'null' && codecAcceptsNull(codec)) return true
-  return parseExactReferenceBlockContent(content)?.fieldForm === true
-    || hasLoneSurrogate(content)
-}
-
-/** Store `s` as content that reads back as exactly `s` and as nothing else.
- *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII
- *  escapes); the extra opener escaping neutralizes the reference grammar.
- *  `JSON.parse` undoes both, so the decode needs no counterpart — only
- *  {@link isEscapedEnvelope} to know it is looking at one. */
-const escapeContent = (s: string): string =>
-  JSON.stringify(s).replace(SPAN_OPENERS_RE,
-    c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
-
-/** Could `trimmed` have come out of {@link escapeContent}? A JSON string
- *  literal carrying no literal span opener — the two properties escapeContent
- *  guarantees, and the second is what makes the shape self-identifying rather
- *  than merely quote-shaped. Necessary, not sufficient: the caller still
- *  confirms it parses and that the payload was worth escaping. */
-const isEscapedEnvelope = (trimmed: string): boolean =>
-  trimmed.startsWith('"') && trimmed.endsWith('"') && !SPAN_OPENER_RE.test(trimmed)
-
 /** The option value an ENUM value child's content names. The ONE reader, so
  *  that {@link needsEscape}'s enum clause can be stated as its exact negation
  *  and the write/read pair cannot drift.
@@ -353,6 +305,65 @@ const needsEscape = (codec: AnyCodec, s: string): boolean => {
   }
   return false
 }
+
+/** Would writing this text into a value row DESTROY the property's value?
+ *  For write paths that set `content` directly rather than encoding a typed
+ *  value — find-replace is the one caller. They bypass
+ *  `encodedValueToContent`, so they cannot escape, and must refuse instead.
+ *
+ *  NARROWER than {@link verbatimContentLosesValue} on purpose: only a MARKED
+ *  span destroys anything — it stamps `is_field_form`, `isFieldValueChild`
+ *  drops the row from the value set, and the owner's key goes with it,
+ *  silently (#688). An UNMARKED span stays in the value set and decodes
+ *  right back, so `Roadmap` → `[[Roadmap]]` must keep working.
+ *
+ *  The null SENTINEL is the third destroyer: bare `null` content IS the
+ *  unset value to a codec that accepts one.
+ *
+ *  Scoped to the codecs that store content verbatim: everything else either
+ *  emits machine-formatted text that cannot take these shapes, or (`ref`) is
+ *  span-shaped by design and already refused by its own decode. */
+export const contentLosesPropertyValue = (
+  schema: AnyPropertySchema,
+  content: string,
+): boolean => {
+  // At GRAIN (`valueChildCodec`): the row being rewritten is ONE value child,
+  // so a `string-list` member is governed by the string rules its own content
+  // was written under, not by the list codec's.
+  const codec = valueChildCodec(schema)
+  if (!storesContentVerbatim(codec)) return false
+  // `enum` is the one codec in this set whose text is not simply its own
+  // value: its reader unwraps the quoted form, so content carrying NONE of the
+  // shapes below can still land the owner on a DIFFERENT declared option than
+  // the text names. The encoder avoids that by escaping, so the question for a
+  // writer that cannot escape is the encoder's own — refuse whatever it would
+  // have escaped.
+  //
+  // Only that half. Content naming no option at all is already refused by the
+  // caller's decode, which throws on it (`valueChildContentToEncoded`); a copy
+  // here would refuse nothing extra.
+  if (codec.type === 'enum') return needsEscape(codec, content)
+  if (content.trim() === 'null' && codecAcceptsNull(codec)) return true
+  return parseExactReferenceBlockContent(content)?.fieldForm === true
+    || hasLoneSurrogate(content)
+}
+
+/** Store `s` as content that reads back as exactly `s` and as nothing else.
+ *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII
+ *  escapes); the extra opener escaping neutralizes the reference grammar.
+ *  `JSON.parse` undoes both, so the decode needs no counterpart — only
+ *  {@link isEscapedEnvelope} to know it is looking at one. */
+const escapeContent = (s: string): string =>
+  JSON.stringify(s).replace(SPAN_OPENERS_RE,
+    c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
+/** Could `trimmed` have come out of {@link escapeContent}? A JSON string
+ *  literal carrying no literal span opener — the two properties escapeContent
+ *  guarantees, and the second is what makes the shape self-identifying rather
+ *  than merely quote-shaped. Necessary, not sufficient: the caller still
+ *  confirms it parses and that the payload was worth escaping. */
+const isEscapedEnvelope = (trimmed: string): boolean =>
+  trimmed.startsWith('"') && trimmed.endsWith('"') && !SPAN_OPENER_RE.test(trimmed)
 
 const encodedValueToContent = (codec: AnyCodec, encoded: unknown): string => {
   if (encoded === undefined) return ''

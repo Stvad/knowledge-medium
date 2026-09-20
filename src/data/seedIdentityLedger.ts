@@ -182,11 +182,11 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:srs-rescheduling/property/review-count', 'review-count', 'number', 'number'],
   // Moved off `list` when that preset narrowed to a list of STRINGS, so the
   // user-facing Options property could spell its value children plainly
-  // (#1080). `json-list` builds the codec `list` used to build, so no stored
-  // value changes meaning. What the columns here CANNOT see, and the reason
-  // this note exists: `list`'s own codec changed under an unchanged id, and no
-  // shipped seed is left on it to record that. The user definitions that are
-  // (84 of them) hold string members only — measured before the change.
+  // (#1080). `json-list` builds the codec `list` used to build, so nothing
+  // stored under this seed changes meaning. What the columns here CANNOT see,
+  // and the reason this note exists: `list`'s own codec changed under an
+  // unchanged id, and no shipped seed is left on it to record that. The user
+  // definitions still on it hold string members only; #1080 has the evidence.
   //
   // Materialization never repairs a live row's bag, so an existing device
   // keeps `property-schema:preset = "list"` on this definition for good. Inert:

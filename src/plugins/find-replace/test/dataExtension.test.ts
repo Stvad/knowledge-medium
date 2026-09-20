@@ -581,6 +581,86 @@ describe('findReplaceDataExtension', () => {
     })
   })
 
+  /** `enum` joined the verbatim-storing family in #1080, and brought a
+   *  destroyer the other two do not have. Its reader unwraps the JSON
+   *  spelling, which value children were written with before that change and
+   *  which therefore stays reserved — so text carrying none of the shapes
+   *  above can still land the owner on a DIFFERENT declared option than the
+   *  text names. Not the key vanishing, a wrong value, which no later read
+   *  can tell from a correct one. */
+  describe('#1080 — enum value guard, where the text is not simply the value', () => {
+    const ENUM_DEF = '77777777-7777-4777-8777-777777777777'
+    // The pathological option set this needs: one option is the quoted
+    // spelling of the other, so `"open"` is BOTH a legal value and the old
+    // spelling of a different legal value.
+    const statusSchema = defineProperty<string>('status', {
+      codec: codecs.enum(['open', '"open"']),
+      defaultValue: 'open',
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const seedStatus = (value: string): Promise<{valueId: string}> =>
+      seedFlippedWorkspaceWithProperty({fieldId: ENUM_DEF, schema: statusSchema, value})
+
+    it('skips a replacement whose result the reader would unwrap to another option', async () => {
+      // Stored ESCAPED, because the encoder knows the plain spelling of this
+      // option would be read as the other one.
+      const {valueId} = await seedStatus('"open"')
+      const stored = (await load(valueId))?.content
+      expect(stored).not.toBe('"open"')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: stored!,
+          replace: '"open"',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: stored!}],
+        },
+      )
+
+      // Decoding alone never refuses this — `"open"` reads as the option
+      // `open`, which is perfectly valid. Only the escape question catches it.
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect(result.unparseableProperties).toEqual([statusSchema.name])
+      expect((await load(valueId))?.content).toBe(stored)
+      expect((await load('owner'))?.properties[statusSchema.name]).toBe('"open"')
+    })
+
+    it('allows an ordinary replacement between two plainly spelled options', async () => {
+      // The common case has to keep working, or the clause above is a bulk
+      // edit that has silently stopped touching Choice rows. An ORDINARY
+      // option set, because the one above has no pair of options that are
+      // plain spellings of each other.
+      const plainSchema = defineProperty<string>('state', {
+        codec: codecs.enum(['open', 'done']),
+        defaultValue: 'open',
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const {valueId} = await seedFlippedWorkspaceWithProperty({
+        fieldId: ENUM_DEF, schema: plainSchema, value: 'open',
+      })
+      expect((await load(valueId))?.content).toBe('open')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'open',
+          replace: 'done',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'open'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe('done')
+      expect((await load('owner'))?.properties[plainSchema.name]).toBe('done')
+    })
+  })
+
   /** The same guard for the codec family that had none (#688). `codecs.string`
    *  and `codecs.url` accept ANY string, so the decode-only guard above could
    *  never fire for them — a replace could turn a value row into a field row

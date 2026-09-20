@@ -89,16 +89,17 @@ export const numberValuePresetCore = definePresetCore<number>({
 export const booleanValuePresetCore = definePresetCore<boolean>({
     id: 'boolean', build: () => codecs.boolean, defaultValue: false,
   })
-/** The user-pickable "Options" property. A list of STRINGS: its members are
- *  what a person types into a row, and every one of them in live data is a
- *  string (measured 2026-09-20 — 32,907 members across 84 definitions, all
- *  text). Narrowing it from the arbitrary-JSON member it used to carry is what
- *  gives its value children a plain, retypeable spelling, through the same
- *  member path `alias` and `types` already use rather than new spelling code.
+/** The user-pickable "Options" property: a list of STRINGS, because its
+ *  members are what a person types into a row and its editor has never been
+ *  able to write anything else. That is what gives its value children a plain,
+ *  retypeable spelling — through the member path `alias` and `types` already
+ *  use, rather than spelling code of its own.
  *
- *  Nothing migrates, and nothing needs to: the stored cells are already
- *  string arrays, and the one property that stored objects under this id
- *  ({@link jsonListValuePresetCore}) moved off it in the same change. */
+ *  NARROWED IN PLACE, rather than minted as a new preset id that the existing
+ *  definitions would then have to be repointed to: the values already stored
+ *  under this id are string arrays, and the one property that stored objects
+ *  moved to {@link jsonListValuePresetCore} in the same change. That premise
+ *  is a measurement, so the measurement is in #1080 and not here. */
 export const listValuePresetCore = definePresetCore<readonly string[]>({
     id: 'list', build: () => readonlyStringListCodec, defaultValue: [],
   })
