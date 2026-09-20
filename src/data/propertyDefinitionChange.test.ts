@@ -1012,16 +1012,22 @@ describe('codec change', () => {
       // content equals its current content.
       const repo = await setupChoice('low', 'high')
       const {valueRowId} = await seedProperty(repo, 'p', 'status', 'high')
-      const before = await sharedDb.db.get<{user_updated_at: number}>(
-        'SELECT user_updated_at FROM blocks WHERE id = ?', [valueRowId])
+      // `updated_at`, stamped to a SENTINEL, and not `user_updated_at`: the
+      // fan-out writes with `{skipMetadata: true}`, which deliberately leaves
+      // the user-facing stamp alone, so a redundant same-content rewrite is
+      // invisible there. `metadataPatch` still returns a fresh `updatedAt` on
+      // that path, so any write at all replaces the sentinel — and a sentinel
+      // rather than a captured value because a fast test stamps both in the
+      // same millisecond.
+      await sharedDb.db.execute('UPDATE blocks SET updated_at = 0 WHERE id = ?', [valueRowId])
 
       await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options('low', 'high', 'urgent')),
         {scope: ChangeScope.BlockDefault})
       await repo.awaitProcessors()
 
-      const after = await sharedDb.db.get<{user_updated_at: number}>(
-        'SELECT user_updated_at FROM blocks WHERE id = ?', [valueRowId])
-      expect(after.user_updated_at).toBe(before.user_updated_at)
+      const after = await sharedDb.db.get<{updated_at: number}>(
+        'SELECT updated_at FROM blocks WHERE id = ?', [valueRowId])
+      expect(after.updated_at).toBe(0)
       expect(await rowContent(valueRowId)).toBe('high')
       expect(await cell('p')).toEqual({status: 'high'})
     })

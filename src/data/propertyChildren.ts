@@ -247,13 +247,9 @@ const verbatimContentLosesValue = (content: string): boolean =>
  *  whose own value carries edge whitespace is escaped instead, so the round
  *  trip stays total.
  *
- *  One-way across app versions, accepted: a client from before #1080 reads
- *  enum content as JSON and unsets the key on the plain form, so a workspace
- *  that was child-backed while two clients straddled this change would churn.
- *  Declined rather than versioned — no workspace is child-backed yet (#671
- *  ships the flip), and the alternative is a spelling older clients decode,
- *  which is the JSON one this exists to stop writing. Re-check if the flip
- *  ever lands first. */
+ *  One-way across app versions: a client from before #1080 reads only the JSON
+ *  spelling. Accepted rather than versioned, because the only spelling such a
+ *  client decodes is the one this exists to stop writing (#671). */
 const enumValueFromContent = (content: string): string => {
   const trimmed = content.trim()
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
@@ -574,6 +570,34 @@ export const encodedToValueChildContent = (
  *  processor accepts that — a stricter rule belongs in a producer's own
  *  acceptance check, never here, or the two would disagree about what a write
  *  may contain. */
+/** The form `encoded` is STORED as under `codec`, or a throw saying it cannot
+ *  be stored at all. `encode(decode(v))`, so tolerant text ("1" for a number,
+ *  a date string) lands in the canonical shape `tx.setProperty` would write.
+ *
+ *  A codec may READ more than it WRITES: `codecs.enum`'s `decode` requires
+ *  only a string, so a value whose option was removed stays editable, while
+ *  its `encode` rejects that value. Whether the write side is ENFORCED is
+ *  decided HERE for every caller and not at each of them — the cell → children
+ *  direction and the children → cell direction disagreeing about it is exactly
+ *  how a raw write is accepted and then silently dropped by the projection
+ *  that follows it.
+ *
+ *  ENFORCED for `enum` alone, whose option set is a promise to every consumer
+ *  that switches on it and which nothing else on this path asks about (#1088).
+ *  Every other codec keeps its stored encoding: it decoded, so it is readable,
+ *  and a codec a runtime extension registers may use the same lenient-read
+ *  design for the same reason `enum` does. Re-canonicalizing those through a
+ *  stricter write side would drop a value the codec means to preserve. */
+const storedFormOf = (codec: AnyCodec, encoded: unknown): unknown => {
+  const decoded = codec.decode(encoded)
+  try {
+    return codec.encode(decoded)
+  } catch (cause) {
+    if (codec.type === 'enum') throw cause
+    return encoded
+  }
+}
+
 export interface PropertyCellValueRejection {
   readonly reason: 'decode' | 'content'
   readonly cause: unknown
@@ -584,7 +608,12 @@ export const propertyCellValueRejection = (
   encoded: unknown,
 ): PropertyCellValueRejection | null => {
   try {
-    schema.codec.decode(encoded)
+    // {@link storedFormOf}, not a bare `decode`: the projection that reads
+    // these children back runs the write side for `enum`, so asking less here
+    // accepts a raw `tx.update({properties})` of an off-menu value, writes its
+    // child, and then has the projection drop the key — the original tx long
+    // since committed. The two directions ask one question.
+    storedFormOf(schema.codec, encoded)
   } catch (cause) {
     return {reason: 'decode', cause}
   }
@@ -610,36 +639,16 @@ export const valueChildContentToEncoded = (
   content: string,
 ): unknown => {
   const codec = valueChildCodec(schema)
-  const encoded = contentToEncodedValue(codec, content)
-  // Decode and re-encode so tolerant user text ("1" for number,
-  // date strings, etc.) lands in the same canonical JSON shape as
-  // tx.setProperty would have stored directly.
+  // {@link storedFormOf} owns the canonicalization AND, for `enum`, the
+  // membership check that keeps an off-menu value child out of the owner's
+  // cell (#1088). Refusing is §9's graceful path: the key reads unset and the
+  // row keeps its text.
   //
-  // UNGUARDED, and that is the membership check for `enum`. `codecs.enum` puts
-  // its `requireMember` in `encode` and leaves `decode` requiring only a
-  // string, so this line is the only thing between an off-menu value child and
-  // the owner's cell — before, a `catch` here kept exactly that value instead
-  // of canonicalizing it, and a status outside its own two-option set reached
-  // source-of-truth data with no error (#1088). Do not reintroduce one: throwing
-  // is §9's graceful path, where the key reads unset and the row keeps its text.
-  //
-  // Nothing else needs it. `enum` is the only codec in the tree whose `encode`
-  // is stricter than its `decode`; every other one validates symmetrically or
-  // validates on the READ side, which the `decode` here already runs.
-  //
-  // What it costs is NOT "a removed option unsets every block using it". A
-  // config edit is a codec-INPUTS change, so it fans out in the editing tx,
-  // and the fan-out REFUSES when a value will not convert — removing an option
-  // blocks still hold rolls the whole edit back with "the blocks using it
-  // would lose N stored values", which is the outcome that keeps them. Adding
-  // one writes nothing at all: the spelling does not move, and the fan-out
-  // skips a row whose converted content equals its current content. Both
-  // pinned in `propertyDefinitionChange.test.ts`.
-  //
-  // It costs where no row edit fires to be refused: an option set that moves
-  // in CODE (a `strict-enum` declaration), which materialization never writes
-  // back to a live definition row. #1097.
-  return codec.encode(codec.decode(encoded))
+  // What that costs is NOT "a removed option unsets every block using it" — a
+  // config edit fans out in the editing tx and the fan-out REFUSES rather than
+  // writing, so the removal is rejected and the values stay. It costs where no
+  // row edit fires to be refused: an option set that moves in CODE. #1097.
+  return storedFormOf(codec, contentToEncodedValue(codec, content))
 }
 
 /** What a value child's stored text is worth under a DIFFERENT codec:
