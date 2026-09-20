@@ -1025,6 +1025,69 @@ describe('workspace backfill runner — undo', () => {
     expect((await repo.load('target'))?.content).toBe('original')
   })
 
+  it('leaves it alone for a pass whose batches COMMIT and write nothing', async () => {
+    // The re-run of a finished migration, which is the shape the drop used to
+    // over-approximate into: the scan still selects every candidate and every
+    // batch still opens a transaction, so clearing per committed batch charged
+    // the operator their whole stack for a pass that changed nothing — and the
+    // banner then announced the cost.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      // READS, in a real transaction, which is what a re-run's batches do:
+      // every candidate is visited and found to owe nothing.
+      run: async ({tx}) => {
+        await tx(async t => { await t.get('target') }, {description: 'batch one'})
+        await tx(async t => { await t.get('target') }, {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+
+    // Both halves: the history is still there, and the run does not claim to
+    // have taken it. The operator reads the claim, not the stack.
+    expect(result.undoHistoryCleared).toBe(false)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBeGreaterThan(0)
+    await repo.undo(ChangeScope.BlockDefault)
+    expect((await repo.load('target'))?.content).toBe('original')
+    expect(warn.mock.calls.filter(([msg]) =>
+      typeof msg === 'string' && msg.includes('undo history was cleared'))).toHaveLength(0)
+    warn.mockRestore()
+  })
+
+  it('still clears once a later batch DOES write, after empty ones', async () => {
+    // The emptiness test is per batch, so a pass that reads its way through the
+    // first half of the graph must still pay for the first batch that writes —
+    // the entries at risk are the ones recorded before it.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        await tx(async t => { await t.get('target') }, {description: 'batch one'})
+        await tx(async t => { await t.update('target', {content: 'migrated'}) },
+          {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+
+    expect(result.undoHistoryCleared).toBe(true)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
+    await repo.undo(ChangeScope.BlockDefault)
+    expect((await repo.load('target'))?.content).toBe('migrated')
+    warn.mockRestore()
+  })
+
   it('still uploads — suppressing undo must not make it a local-only write', async () => {
     // The whole point of a WorkspaceBackfill over a raw db.execute is that its
     // writes reach the server (the daily-note:date bug).

@@ -154,12 +154,32 @@ const describePassOutcome = (
       // all the other keys. And on the RUN's total, not the last sweep's — the
       // converging sweep is by definition the one that found nothing left
       // pending, so a per-sweep zero is how every successful run ends.
-      if (valuesMaterializedTotal === 0 && unmigrated > 0) {
+      //
+      // Both "wrote no values" endings answered together, so a third cannot
+      // slip between them: which one it is turns entirely on whether the values
+      // were REFUSED or were never there.
+      if (valuesMaterializedTotal === 0) {
+        if (unmigrated > 0) {
+          return {
+            message: `Nothing was migrated — all ${unmigrated.toLocaleString()} property ` +
+              'value(s) failed. That is a systematic problem, not a handful of bad values; ' +
+              'see the console before running this again.',
+            failed: true,
+          }
+        }
+        // The runbook's stop condition, and the only report that can carry it.
+        // `blocksMaterialized` counts blocks the pass ACCEPTED, so a re-run over
+        // a finished workspace reports the whole candidate set and reads exactly
+        // like the first run — which is how a completed migration became
+        // indistinguishable from one starting over.
+        //
+        // NOT "nothing was written": synthesis may have minted definitions on
+        // this same run, and the flip may have landed. This says only what it
+        // knows, which is that no VALUE needed moving.
         return {
-          message: `Nothing was migrated — all ${unmigrated.toLocaleString()} property ` +
-            'value(s) failed. That is a systematic problem, not a handful of bad values; ' +
-            'see the console before running this again.',
-          failed: true,
+          message: 'Nothing left to migrate — every property value this pass can move ' +
+            'already has its blocks.',
+          failed: false,
         }
       }
       return {
