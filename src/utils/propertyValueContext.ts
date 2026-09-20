@@ -21,8 +21,33 @@
 
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { getPropertyFieldTargetId, isPropertyFieldInstance } from '@/data/propertyChildren'
-import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
+import {
+  getPropertyFieldTargetId,
+  isPropertyFieldInstance,
+  type IsPropertyFieldDefinition,
+} from '@/data/propertyChildren'
+
+/** fieldId → what a person calls that property, or `undefined` when this
+ *  workspace's registry cannot answer for the id. */
+export type PropertyNameResolver = (fieldId: string) => string | undefined
+
+/** Names for a workspace's property definitions, bound once.
+ *
+ *  Deliberately NARROWER than §9 recognition, which is shadow-tolerant so a
+ *  shadowed definition's field rows keep classifying. A shadowed definition
+ *  has no name of its own to show, and showing the WINNER's name would label
+ *  a row with a property it is not — so it answers `undefined` and the
+ *  surface falls back to whatever it does for a row it cannot place. */
+export const propertyNameResolverFor = (
+  repo: Repo,
+  workspaceId: string,
+): PropertyNameResolver => {
+  const resolver = repo.propertySchemaResolverFor(workspaceId)
+  return fieldId => {
+    const resolution = resolver.resolveField(fieldId)
+    return resolution.status === 'resolved' ? resolution.schema.name : undefined
+  }
+}
 
 export interface PropertyValueContext {
   /** The definition the owning field row points at. */
@@ -57,7 +82,9 @@ export const propertyValueContexts = async (
   const ids = [...new Set(blockIds)]
   if (!workspaceId || ids.length === 0) return out
 
-  const resolver = repo.propertySchemaResolverFor(workspaceId)
+  const propertyName = propertyNameResolverFor(repo, workspaceId)
+  const isNamedDefinition: IsPropertyFieldDefinition = fieldId =>
+    propertyName(fieldId) !== undefined
   const walks = await Promise.all(ids.map(id =>
     repo.query.ancestors({id}).load().catch(() => null),
   ))
@@ -71,18 +98,19 @@ export const propertyValueContexts = async (
     if (!field || field.workspaceId !== workspaceId) return
     const fieldId = getPropertyFieldTargetId(field)
     if (fieldId === undefined) return
-    const resolution = resolver.resolveField(fieldId)
-    if (!isPropertyFieldInstance(field, () => isResolvableFieldDefinition(resolution))) return
-    // Recognition is shadow-tolerant; a NAME is not. A shadowed definition's
-    // rows keep the bare content they show today rather than gaining a label
-    // that names the winner's property.
-    if (resolution.status !== 'resolved') return
+    // A context exists to NAME the property, so "has a name" IS the
+    // definition half of §9 recognition here — narrower than the
+    // shadow-tolerant rule, see `propertyNameResolverFor`. The predicate
+    // still owns the bit-and-parent half rather than this site restating it.
+    const name = propertyName(fieldId)
+    if (name === undefined) return
+    if (!isPropertyFieldInstance(field, isNamedDefinition)) return
     const ownerId = field.parentId
     if (ownerId === null) return
     const owner = ancestors[1]
     out.set(id, {
       fieldId,
-      propertyName: resolution.schema.name,
+      propertyName: name,
       ownerId,
       owner: owner && owner.workspaceId === workspaceId ? owner : null,
     })

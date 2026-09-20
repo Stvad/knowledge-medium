@@ -17,6 +17,7 @@
 import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/properties.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
+import type { PropertyNameResolver } from '@/utils/propertyValueContext.js'
 import { collapseWhitespace, firstLine, truncate, truncateMiddle } from '@/utils/string.js'
 
 /** Longest a single crumb renders before it is ellipsised. Small on
@@ -84,6 +85,32 @@ const crumbLabel = (data: BlockData): string => {
     : truncate(label, CRUMB_MAX_CHARS)
 }
 
+/** A property FIELD ROW's crumb: the name of the property it is.
+ *
+ *  Its content is literally `::((fieldId))`, which names no place a person
+ *  could go — so before there was a resolver these rows were dropped, and a
+ *  value row's crumbs read as its owner's title alone. That is the owner's
+ *  own label repeated, which is exactly the ambiguity crumbs exist to
+ *  resolve: a page's `alias` value row carries the page's title as its own
+ *  content too, so `Tutorial` labelled `Tutorial` says nothing while
+ *  `Tutorial › alias` places it.
+ *
+ *  `''` — i.e. the old drop — whenever the row cannot be NAMED: no resolver
+ *  bound, a target that resolves to no definition (a `::` block someone
+ *  typed by hand is not machinery), or a shadowed definition, whose name
+ *  belongs to the winner. Raw `::((…))` is never a crumb.
+ *
+ *  Ellipsised from the middle, like an aliased block: a property name is a
+ *  NAME, and names are told apart by their tails. */
+const propertyCrumbLabel = (
+  data: BlockData,
+  propertyName: PropertyNameResolver | undefined,
+): string => {
+  const fieldId = data.referenceTargetId
+  const name = fieldId == null ? undefined : propertyName?.(fieldId)
+  return name ? truncateMiddle(collapseWhitespace(name), CRUMB_MAX_CHARS) : ''
+}
+
 /** Root→immediate-parent crumbs for one `core.ancestors` chain, ready to
  *  render.
  *
@@ -94,11 +121,9 @@ const crumbLabel = (data: BlockData): string => {
  *   - blank ones. The crumb line is a locator hint, and
  *     `Project Alpha › › Notes` locates nothing `Project Alpha › Notes`
  *     doesn't.
- *   - property field rows (`isFieldForm`). Their content is literally
- *     `::((fieldId))`, and the rest of the app treats them as invisible
- *     machinery (see `VISIBLE_CHILD_PREDICATE_SQL`) — a crumb reading
- *     `Task Board › ::((field-def-status-00…` names no place a person
- *     could go. Their owner is further up the same chain and still shows.
+ *   - property field rows (`isFieldForm`) that `propertyName` cannot name.
+ *     A NAMED one renders as its property (`Task Board › status`); see
+ *     {@link propertyCrumbLabel} for why, and for what "cannot name" covers.
  *
  *  A chain that does NOT reach a root is marked with a leading `…`
  *  instead of being presented as if its topmost surviving ancestor were
@@ -117,7 +142,15 @@ const crumbLabel = (data: BlockData): string => {
  *  another workspace's content rather than trusting that invariant. */
 export const crumbsFromAncestors = (
   ancestors: readonly BlockData[],
-  {workspaceId, stoppedAtParentId}: {workspaceId: string; stoppedAtParentId: string | null},
+  {workspaceId, stoppedAtParentId, propertyName}: {
+    workspaceId: string
+    stoppedAtParentId: string | null
+    /** Names a property field row in this workspace. Optional because
+     *  omitting it degrades correctly rather than silently: with nothing able
+     *  to name a field row, every one of them drops, which is what crumbs did
+     *  before any of them could be named. */
+    propertyName?: PropertyNameResolver
+  },
 ): string[] => {
   const chain: BlockData[] = []
   for (const ancestor of ancestors) {
@@ -127,8 +160,9 @@ export const crumbsFromAncestors = (
 
   const crumbs: string[] = []
   for (let i = chain.length - 1; i >= 0; i--) {
-    if (chain[i].isFieldForm) continue
-    const label = crumbLabel(chain[i])
+    const label = chain[i].isFieldForm
+      ? propertyCrumbLabel(chain[i], propertyName)
+      : crumbLabel(chain[i])
     if (label) crumbs.push(label)
   }
 

@@ -61,6 +61,15 @@ class FakeHandle<T> implements Handle<T> {
 const row = (id: string, content: string, parentId: string | null): BlockData =>
   makeBlockData({id, workspaceId: 'ws-1', content, parentId})
 
+/** A property field row, as the migration mints it. */
+const fieldRow = (id: string, fieldId: string, parentId: string): BlockData =>
+  makeBlockData({
+    id, workspaceId: 'ws-1', parentId,
+    content: `::((${fieldId}))`,
+    isFieldForm: true,
+    referenceTargetId: fieldId,
+  })
+
 /** What `core.ancestors` resolves to: the chain, plus the parent the walk
  *  stopped at. */
 const walk = (
@@ -72,6 +81,9 @@ const walk = (
  *  the assertion rather than hidden behind a matching count. */
 const chainFor = (id: string): AncestorsResult =>
   walk([row(`${id}-parent`, `${id} parent`, null)])
+
+/** fieldId → property name, as the workspace's definition registry answers. */
+const propertyNames: Record<string, string> = {}
 
 const ancestorHandles = new Map<string, FakeHandle<AncestorsResult>>()
 /** Every `repo.query.ancestors({id})` lookup, in order — how the test
@@ -87,6 +99,12 @@ const chainResolvers = new Map<string, () => Promise<AncestorsResult>>()
 // re-asked" into "the harness did".
 const repo = {
   activeWorkspaceId: 'ws-1' as string | null,
+  // Crumbs name a property field row through this.
+  propertySchemaResolverFor: () => ({
+    resolveField: (fieldId: string) => (fieldId in propertyNames
+      ? {status: 'resolved', schema: {name: propertyNames[fieldId]}}
+      : {status: 'identity-unavailable', reason: 'missing'}),
+  }),
   query: {
     ancestors: ({id}: {id: string}) => {
       acquired.push(id)
@@ -111,10 +129,27 @@ beforeEach(() => {
   ancestorHandles.clear()
   chainResolvers.clear()
   acquired.length = 0
+  for (const key of Object.keys(propertyNames)) delete propertyNames[key]
 })
 
 
 describe('useAncestorCrumbs', () => {
+  it('names the property a row is a value of, through the workspace registry', () => {
+    // The crumb TEXT is `blockCrumbs.test.ts`'s contract; what this owns is
+    // that the resolver reaches it at all. Without the wiring the field row
+    // drops and the line reads as the owner's title alone — which for an
+    // alias row is the label the row already carries.
+    propertyNames['field-def-alias-0000'] = 'alias'
+    chainResolvers.set('a', async () => walk([
+      fieldRow('field', 'field-def-alias-0000', 'page'),
+      row('page', 'Tutorial', null),
+    ]))
+
+    const {result} = renderHook(() => useAncestorCrumbs(['a']))
+
+    return waitFor(() => expect(result.current.get('a')).toEqual(['Tutorial', 'alias']))
+  })
+
   it('maps each chain onto the block it belongs to', async () => {
     const {result} = renderHook(() => useAncestorCrumbs(['a', 'b']))
 
