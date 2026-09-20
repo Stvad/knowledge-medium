@@ -397,27 +397,6 @@ const contentToEncodedValue = (
   codec: AnyCodec,
   content: string,
 ): unknown => {
-  // `enum` FIRST, above every other return in this function — the membership
-  // check below is only a guard if nothing can reach an encoded value without
-  // passing it, and the envelope unwrap that follows would hand one back for
-  // an escaped quote-shaped option. Position is load-bearing; the tests mutate
-  // it.
-  //
-  // The check itself is the codec's own `requireMember`, reached through
-  // `encode` because that is where `codecs.enum` puts it — `decode` only
-  // requires a string, deliberately, so that a value whose option was removed
-  // still reads (codecs.ts). Nothing downstream asks the write side anything,
-  // so before this an off-menu string typed into a value child was published
-  // to the owner's cell verbatim: a status outside its own two-option set,
-  // in source-of-truth data, with no error (#1088).
-  //
-  // Refusing takes §9's graceful path — the key reads unset, the row keeps its
-  // text and stays visible and fixable. Same shape as the `ref` case below and
-  // the `null` branch: round-trip through the codec rather than trusting the
-  // parse, and throw `CodecError` rather than coercing.
-  if (codec.type === 'enum') {
-    return codec.encode(codec.decode(enumValueFromContent(content)))
-  }
   // Unwrap ONLY what `escapeContent` could have produced. Quote-wrapping alone
   // is not that signature: a person can type `"[[Page]]"` into a value row, and
   // find-replace can turn the inside of an ordinary quoted value into a span —
@@ -480,6 +459,18 @@ const contentToEncodedValue = (
     case 'string':
     case 'url':
       return content
+    case 'enum':
+      // No membership check here, and deliberately: `valueChildContentToEncoded`
+      // runs the codec's `encode`, which IS `requireMember`, over whatever this
+      // returns — and it is the only route by which a value child reaches a
+      // cell. A second copy here refused nothing the first did not (#1088).
+      //
+      // The unwrap above already answers the ESCAPED subset of what this
+      // reads, and answers it identically — an escaped envelope is a JSON
+      // string literal, so `enumValueFromContent` parses the same payload out
+      // of it. This case is what additionally reads the bare JSON spelling
+      // every value child was written with before #1080.
+      return enumValueFromContent(content)
     case 'date':
       return content.trim() === '' ? null : content.trim()
     case 'number':
@@ -562,15 +553,20 @@ export const valueChildContentToEncoded = (
   // date strings, etc.) lands in the same canonical JSON shape as
   // tx.setProperty would have stored directly.
   //
-  // Unguarded. The `catch` that used to sit here kept an off-menu `enum` value
-  // instead of canonicalizing it — the same value #1088 says must be refused —
-  // and `enum` is the only codec in the tree whose `encode` is stricter than
-  // its `decode`, so with the membership check moved into
-  // `contentToEncodedValue` there is nothing left for it to catch. Every other
-  // codec validates symmetrically or validates on the READ side, which the
-  // `decode` here already runs. What that costs, accepted: an option REMOVED
-  // from a live property stops projecting, until it is re-added or the row is
-  // re-typed (bd km-weh0).
+  // UNGUARDED, and that is the membership check for `enum`. `codecs.enum` puts
+  // its `requireMember` in `encode` and leaves `decode` requiring only a
+  // string, so this line is the only thing between an off-menu value child and
+  // the owner's cell — before, a `catch` here kept exactly that value instead
+  // of canonicalizing it, and a status outside its own two-option set reached
+  // source-of-truth data with no error (#1088). Do not reintroduce one: throwing
+  // is §9's graceful path, where the key reads unset and the row keeps its text.
+  //
+  // Nothing else needs it. `enum` is the only codec in the tree whose `encode`
+  // is stricter than its `decode`; every other one validates symmetrically or
+  // validates on the READ side, which the `decode` here already runs.
+  //
+  // What it costs, accepted: an option REMOVED from a live property stops
+  // projecting until it is re-added or the row re-typed (bd km-weh0).
   return codec.encode(codec.decode(encoded))
 }
 

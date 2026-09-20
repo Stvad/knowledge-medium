@@ -2611,10 +2611,11 @@ describe('content <-> value codecs: an enum value child names a DECLARED option'
       .toThrow(CodecError)
   })
 
-  it('refuses it through an ESCAPED envelope, which the unwrap above returns early for', () => {
-    // Pins the POSITION of the membership check, not just its presence: the
-    // escaped-envelope unwrap at the top of `contentToEncodedValue` hands back
-    // a decoded string of its own, so a check placed after it never sees this.
+  it('refuses it through an ESCAPED envelope, the third route into the reader', () => {
+    // A quote-shaped off-menu value escapes on the way out, so it comes back
+    // through `contentToEncodedValue`'s envelope unwrap rather than through
+    // the enum case. Asserted because that is a different return, and the
+    // check has to sit downstream of every one of them.
     const content = encodedToValueChildContent(currentOptionsSchema, '"bananas"')
     expect(content).not.toBe('"bananas"') // it escaped, so the unwrap will fire
     expect(() => valueChildContentToEncoded(currentOptionsSchema, content))
