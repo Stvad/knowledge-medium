@@ -1,1 +1,1 @@
-import{JG as e,YG as t}from"../../chunks/app-DvwXddUr.js";export{e as propertyNameResolverFor,t as propertyValueContexts};
+import{JG as e,XG as t,YG as n}from"../../chunks/app-Dt8KaEVQ.js";export{e as propertyNameResolverFor,n as propertyValueContexts,t as recognizePropertyField};
