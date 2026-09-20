@@ -956,12 +956,25 @@ describe('codec change', () => {
     const options = (...values: readonly string[]) =>
       ({options: values.map(value => ({value, label: value}))})
 
+    /** Fence on the OPTION SET, not on the codec type. The definition is
+     *  created with preset `enum` and the default empty config, so
+     *  `awaitDefinition(..., 'enum')` is already satisfied before the config
+     *  write projects — under load the seed below then encodes against
+     *  `enum()` and throws, which is how this first reached CI. Ask the
+     *  registry the question the test depends on: does this codec accept the
+     *  value we are about to store? */
+    const awaitOptions = (repo: Repo, ...values: readonly string[]) =>
+      vi.waitFor(() => {
+        const codec = schemaFor(repo, 'status').codec
+        for (const value of values) codec.encode(value)
+      }, {timeout: 3000})
+
     const setupChoice = async (...values: readonly string[]) => {
       await seedWorkspace('children')
       const repo = await setupDefinition('enum', undefined, 'enum')
       await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options(...values)),
         {scope: ChangeScope.BlockDefault})
-      await awaitDefinition(repo, 'status', 'enum')
+      await awaitOptions(repo, ...values)
       return repo
     }
 
