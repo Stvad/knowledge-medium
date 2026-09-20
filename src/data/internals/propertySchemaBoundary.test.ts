@@ -487,6 +487,63 @@ describe('typed property identity boundary', () => {
     expect(repo.block('contested-target').peek()!.properties[name]).toBe('before')
   })
 
+  it('orders the plain-schema refusal: owner, then buildability, then the object', async () => {
+    // One fact per refusal, and the first two come from the snapshot alone.
+    // A metadata-only winner is `definition-unavailable` only while nothing
+    // rivals it — once a second definition claims the name, the duplicate is
+    // the fact to report, exactly as it would be for a buildable winner.
+    const name = 'ordered'
+    const metadataFor = (fieldId: string, createdAt: number) => ({
+      fieldId,
+      workspaceId: WS,
+      createdAt,
+      name,
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'user' as const,
+    })
+    const held = defineProperty(name, {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    // A lone winner whose behavior could not be built here (its preset's
+    // plugin is not loaded), so the registry publishes metadata only.
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-ordered-definitions',
+      [{metadata: metadataFor('field-ordered-metadata-only', 1)}],
+      {workspaceId: WS},
+    )
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(held)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'definition-unavailable',
+    })
+
+    // A rival claims the same name. The winner is still unbuildable, but the
+    // contest outranks that.
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-ordered-definitions',
+      [
+        {metadata: metadataFor('field-ordered-metadata-only', 1)},
+        {metadata: metadataFor('field-ordered-rival', 2), schema: held},
+      ],
+      {workspaceId: WS},
+    )
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(held)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'shadowed',
+    })
+  })
+
   it('rejects a write whose resolved change-scope differs from the tx scope', async () => {
     // A stale-schema caller can open the tx under one scope while the resolved
     // definition carries another (its change-scope was edited after capture).

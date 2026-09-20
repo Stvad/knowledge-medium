@@ -358,28 +358,29 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
       const winnerBehavior = winner.seedKey
         ? this.snapshot.seedsByKey.get(winner.seedKey)
         : this.snapshot.schemasByFieldId.get(winner.fieldId)
+      if (winnerBehavior && winnerBehavior === schema) {
+        return this.asBoundaryResolution(
+          resolved<T>(this.snapshot.workspaceId, winner.fieldId, winnerBehavior, winner),
+        )
+      }
+      // Refusing a plain schema states ONE fact, so they are ordered: who owns
+      // the name, then whether that owner can be built, then the object. A
+      // plain schema carries no identity, so the first two read the snapshot
+      // alone — a rebuild leaves the caller's object unrecognizable either way,
+      // and ordering ownership first is what `resolveField` already does.
+      // Contested means a rival really does shadow whichever of them the
+      // caller held: a second definition claiming the name, or a seed
+      // declaration owning it (handles never reach here, and a declaration is
+      // a module constant, so a plain object never was one). With a lone
+      // claimant nothing rivals it, and what is left is its own state — a
+      // winner that cannot be built here, else its per-projection rebuild.
+      const contested = claimants.length > 1
+        || (winnerBehavior !== undefined && isPropertyHandle(winnerBehavior))
+      if (contested) return {status: 'identity-unavailable', reason: 'shadowed'}
       if (!winnerBehavior) {
         return {status: 'identity-unavailable', reason: 'definition-unavailable'}
       }
-      if (winnerBehavior !== schema) {
-        // A plain schema carries no identity, so all the snapshot can say is
-        // that this object is not the entry it publishes for the name. What
-        // CLAIMS the name says which fact that is, and neither clause reads
-        // the caller's object — a rebuild leaves it unrecognizable either way.
-        // A seed declaration is a module constant, and handles never reach
-        // here, so a plain object at a seed-owned name never was the entry; a
-        // second block definition means one really does shadow the other,
-        // whichever of them the caller held. With a lone block claimant
-        // nothing rivals it and the mismatch is its per-projection rebuild.
-        const contested = isPropertyHandle(winnerBehavior) || claimants.length > 1
-        return {
-          status: 'identity-unavailable',
-          reason: contested ? 'shadowed' : 'stale-schema',
-        }
-      }
-      return this.asBoundaryResolution(
-        resolved<T>(this.snapshot.workspaceId, winner.fieldId, winnerBehavior, winner),
-      )
+      return {status: 'identity-unavailable', reason: 'stale-schema'}
     }
 
     const synthesized = this.snapshot.seedsByName.get(schema.name) ?? []
