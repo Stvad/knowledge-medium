@@ -628,6 +628,44 @@ describe('findReplaceDataExtension', () => {
       expect((await load('owner'))?.properties[statusSchema.name]).toBe('"open"')
     })
 
+    it('allows a safe edit inside a row still in the LEGACY JSON spelling', async () => {
+      // The common case until those rows drift, and the one an
+      // escape-shaped rule gets wrong: a value child written before #1080
+      // holds `"open"`, and replacing open with done leaves `"done"` — which
+      // reads as the option `done` and is exactly right. The text `"done"` is
+      // not itself an option, so there is no second reading to be wrong about.
+      const plainSchema = defineProperty<string>('legacy', {
+        codec: codecs.enum(['open', 'done']),
+        defaultValue: 'open',
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const {valueId} = await seedFlippedWorkspaceWithProperty({
+        fieldId: ENUM_DEF, schema: plainSchema, value: 'open',
+      })
+      // Put the row back into the spelling it would have had before the
+      // change. RAW, so no processor reprojects the owner from it on the way
+      // in — which is also the shape a row synced from an older client has.
+      await env.h.db.execute('UPDATE blocks SET content = ? WHERE id = ?',
+        ['"open"', valueId])
+      expect((await load(valueId))?.content).toBe('"open"')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'open',
+          replace: 'done',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: '"open"'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe('"done"')
+      expect((await load('owner'))?.properties[plainSchema.name]).toBe('done')
+    })
+
     it('allows an ordinary replacement between two plainly spelled options', async () => {
       // The common case has to keep working, or the clause above is a bulk
       // edit that has silently stopped touching Choice rows. An ORDINARY

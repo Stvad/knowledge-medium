@@ -306,6 +306,31 @@ const needsEscape = (codec: AnyCodec, s: string): boolean => {
   return false
 }
 
+/** Does this content name one declared option at FACE VALUE and READ as a
+ *  different one? The enum-only destroyer, and the whole of it.
+ *
+ *  Both halves are needed. Without the first, every legacy JSON-spelled row is
+ *  refused a safe edit — replacing `open` with `done` inside the stored
+ *  `"open"` yields `"done"`, which reads as `done` and is exactly right, and
+ *  no other reading of that text is an option at all. Without the second there
+ *  is no ambiguity to resolve, so nothing to refuse.
+ *
+ *  Asked of the CODEC both times, which is the only thing that knows the
+ *  option set — `encode` is where `codecs.enum` keeps its membership check. */
+const enumReadingIsAmbiguous = (codec: AnyCodec, content: string): boolean => {
+  const read = enumValueFromContent(content)
+  if (read === content) return false
+  const names = (value: string): boolean => {
+    try {
+      codec.encode(codec.decode(value))
+      return true
+    } catch {
+      return false
+    }
+  }
+  return names(content) && names(read)
+}
+
 /** Would writing this text into a value row DESTROY the property's value?
  *  For write paths that set `content` directly rather than encoding a typed
  *  value — find-replace is the one caller. They bypass
@@ -332,18 +357,19 @@ export const contentLosesPropertyValue = (
   // was written under, not by the list codec's.
   const codec = valueChildCodec(schema)
   if (!storesContentVerbatim(codec)) return false
-  // `enum` is the one codec in this set whose text is not simply its own
-  // value: its reader unwraps the quoted form, so content carrying NONE of the
-  // shapes below can still land the owner on a DIFFERENT declared option than
-  // the text names. The encoder avoids that by escaping, so the question for a
-  // writer that cannot escape is the encoder's own — refuse whatever it would
-  // have escaped.
-  //
-  // Only that half. Content naming no option at all is already refused by the
-  // caller's decode, which throws on it (`valueChildContentToEncoded`); a copy
-  // here would refuse nothing extra.
-  if (codec.type === 'enum') return needsEscape(codec, content)
   if (content.trim() === 'null' && codecAcceptsNull(codec)) return true
+  // `enum` is the one codec in this set whose text is not simply its own
+  // value, so it has one destroyer the others do not: its reader unwraps the
+  // quoted form, and content carrying none of the shapes below can therefore
+  // land the owner on a DIFFERENT declared option than the text names. Not a
+  // key vanishing — a wrong value, which no later read can tell from a right
+  // one. Narrower than "whatever the encoder would have escaped": that also
+  // refuses a SAFE edit inside a legacy-spelled row, which has only one
+  // reading and is the common case until those rows drift.
+  //
+  // Content naming no option at all needs nothing here — the caller's own
+  // decode throws on it (`valueChildContentToEncoded`).
+  if (codec.type === 'enum' && enumReadingIsAmbiguous(codec, content)) return true
   return parseExactReferenceBlockContent(content)?.fieldForm === true
     || hasLoneSurrogate(content)
 }
