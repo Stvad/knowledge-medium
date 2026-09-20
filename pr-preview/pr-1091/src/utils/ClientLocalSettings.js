@@ -1,1 +1,1 @@
-import{_T as e,gT as t}from"../../chunks/app-K9l-w8uL.js";export{t as ClientLocalSettings,e as clientLocalSettings};
+import{_T as e,gT as t}from"../../chunks/app-COZZPFUl.js";export{t as ClientLocalSettings,e as clientLocalSettings};
