@@ -1,1 +1,0 @@
-import{yf as e}from"../../../chunks/app-DNePFpSy.js";export{e as attachmentsPlugin};

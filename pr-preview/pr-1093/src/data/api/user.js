@@ -1,1 +1,0 @@
-import{B2 as e,R2 as t,z2 as n}from"../../../chunks/app-DNePFpSy.js";export{t as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,e as systemAuthor};

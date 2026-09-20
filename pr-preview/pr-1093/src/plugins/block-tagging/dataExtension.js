@@ -1,1 +1,0 @@
-import{_s as e}from"../../../chunks/app-DNePFpSy.js";export{e as blockTaggingDataExtension};

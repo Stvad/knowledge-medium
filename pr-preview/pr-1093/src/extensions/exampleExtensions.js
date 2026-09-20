@@ -1,1 +1,0 @@
-import{HC as e,VC as t}from"../../chunks/app-DNePFpSy.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

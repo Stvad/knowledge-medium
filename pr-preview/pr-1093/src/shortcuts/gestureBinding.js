@@ -1,1 +1,0 @@
-import{Xw as e,Yw as t}from"../../chunks/app-DNePFpSy.js";export{t as gestureBindingDescriptor,e as matchesGestureEvent};

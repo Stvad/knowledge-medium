@@ -1,1 +1,0 @@
-import{dw as e,fw as t}from"../../../chunks/app-DNePFpSy.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
