@@ -17,7 +17,7 @@
 import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/properties.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
-import { firstLine, truncate, truncateMiddle } from '@/utils/string.js'
+import { collapseWhitespace, firstLine, truncate, truncateMiddle } from '@/utils/string.js'
 
 /** Longest a single crumb renders before it is ellipsised. Small on
  *  purpose: the whole chain shares one line, and a page title long enough
@@ -77,7 +77,7 @@ const hasAlias = (data: BlockData): boolean => {
  *  to be, so splicing them on reads as damage ("Fold a block…llet below.")
  *  and cutting the end is both honest and easier to read. */
 const crumbLabel = (data: BlockData): string => {
-  const label = firstLine(labelForBlockData(data, '')).replace(/\s+/g, ' ').trim()
+  const label = collapseWhitespace(firstLine(labelForBlockData(data, '')))
   if (!label) return ''
   return hasAlias(data)
     ? truncateMiddle(label, CRUMB_MAX_CHARS)
