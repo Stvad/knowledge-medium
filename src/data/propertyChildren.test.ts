@@ -311,6 +311,13 @@ describe('flipped workspace (properties_migration = children)', () => {
       {scope: ChangeScope.BlockDefault})
     const [field] = await liveFieldRows('p')
     const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    // Move the value child out from under the cell with a RAW write, which
+    // fires no processor — so the pass below is the only thing that can bring
+    // the cell to 'shipped', and an assertion on it observes a change instead
+    // of re-reading what `setProperty` already left there.
+    await sharedDb.db.execute('UPDATE blocks SET content = ? WHERE id = ?',
+      [propertyValueToChildContent(statusSchema, 'shipped'), value!.id])
+    expect(await cellValue('p')).toBe('draft')
 
     const reads: string[] = []
     await repo.tx(async tx => {
@@ -336,10 +343,10 @@ describe('flipped workspace (properties_migration = children)', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     expect(reads.filter(id => id === field!.id)).toEqual([field!.id])
-    // The memoized row is the one the classification actually used: had it
-    // come back wrong, the value child would not have been recognized and the
-    // owner's cell would never have been re-projected.
-    expect(await cellValue('p')).toBe('draft')
+    // The memoized row is the one the classification actually used: had it come
+    // back wrong, the value child would not have been recognized as one and the
+    // cell would still hold the pre-pass value.
+    expect(await cellValue('p')).toBe('shipped')
   })
 })
 
