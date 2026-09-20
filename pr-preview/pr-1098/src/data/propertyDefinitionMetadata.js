@@ -1,1 +1,1 @@
-import{mY as e,pY as t}from"../../chunks/app-Nw-dY1Ln.js";export{t as parsePropertyDefinitionMetadata,e as propertySchemaOriginForSeedKey};
+import{gY as e,hY as t}from"../../chunks/app-CWp3J9DI.js";export{t as parsePropertyDefinitionMetadata,e as propertySchemaOriginForSeedKey};
