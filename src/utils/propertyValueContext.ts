@@ -49,6 +49,41 @@ export const propertyNameResolverFor = (
   }
 }
 
+/** The property a row IS, when it is a field row this workspace recognizes and
+ *  can name — §9 recognition composed with the name resolver, which is the
+ *  only form either consumer wants.
+ *
+ *  `undefined` for everything else, and the cases are worth naming because
+ *  they read alike and are not: an unmarked row; a marked row at the
+ *  workspace ROOT, which has no owner to be a field OF, so its marker is
+ *  ordinary content (§9); a target that resolves to no definition, which is
+ *  a `::` block someone typed by hand; and a shadowed definition, whose name
+ *  belongs to the winner. A caller falls back to whatever it does for a row
+ *  it cannot place.
+ *
+ *  One owner because both consumers — the picker's context line and the
+ *  crumb line — ask exactly this, and a site that restates the predicate
+ *  drops a clause: the crumb line restated the marker bit alone and would
+ *  have labelled a root marker's descendants with a property they are not
+ *  under. */
+export interface RecognizedPropertyField {
+  /** The definition this field row points at. */
+  readonly fieldId: string
+  /** What a person calls that property. */
+  readonly name: string
+}
+
+export const recognizePropertyField = (
+  data: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm'>,
+  propertyName: PropertyNameResolver,
+): RecognizedPropertyField | undefined => {
+  const fieldId = getPropertyFieldTargetId(data)
+  const name = fieldId === undefined ? undefined : propertyName(fieldId)
+  if (fieldId === undefined || name === undefined) return undefined
+  const isNamedDefinition: IsPropertyFieldDefinition = id => propertyName(id) !== undefined
+  return isPropertyFieldInstance(data, isNamedDefinition) ? {fieldId, name} : undefined
+}
+
 export interface PropertyValueContext {
   /** The definition the owning field row points at. */
   readonly fieldId: string
@@ -83,8 +118,6 @@ export const propertyValueContexts = async (
   if (!workspaceId || ids.length === 0) return out
 
   const propertyName = propertyNameResolverFor(repo, workspaceId)
-  const isNamedDefinition: IsPropertyFieldDefinition = fieldId =>
-    propertyName(fieldId) !== undefined
   const walks = await Promise.all(ids.map(id =>
     repo.query.ancestors({id}).load().catch(() => null),
   ))
@@ -96,21 +129,14 @@ export const propertyValueContexts = async (
     // and sync applies `parent_id` verbatim — so a cross-workspace edge is
     // refused here rather than trusted, same rule as `crumbsFromAncestors`.
     if (!field || field.workspaceId !== workspaceId) return
-    const fieldId = getPropertyFieldTargetId(field)
-    if (fieldId === undefined) return
-    // A context exists to NAME the property, so "has a name" IS the
-    // definition half of §9 recognition here — narrower than the
-    // shadow-tolerant rule, see `propertyNameResolverFor`. The predicate
-    // still owns the bit-and-parent half rather than this site restating it.
-    const name = propertyName(fieldId)
-    if (name === undefined) return
-    if (!isPropertyFieldInstance(field, isNamedDefinition)) return
+    const recognized = recognizePropertyField(field, propertyName)
+    // `parentId` is non-null whenever recognition passed; read for the type.
     const ownerId = field.parentId
-    if (ownerId === null) return
+    if (recognized === undefined || ownerId === null) return
     const owner = ancestors[1]
     out.set(id, {
-      fieldId,
-      propertyName: name,
+      fieldId: recognized.fieldId,
+      propertyName: recognized.name,
       ownerId,
       owner: owner && owner.workspaceId === workspaceId ? owner : null,
     })

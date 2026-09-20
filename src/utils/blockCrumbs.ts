@@ -17,7 +17,10 @@
 import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/properties.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
-import type { PropertyNameResolver } from '@/utils/propertyValueContext.js'
+import {
+  recognizePropertyField,
+  type PropertyNameResolver,
+} from '@/utils/propertyValueContext.js'
 import { collapseWhitespace, firstLine, truncate, truncateMiddle } from '@/utils/string.js'
 
 /** Longest a single crumb renders before it is ellipsised. Small on
@@ -95,10 +98,11 @@ const crumbLabel = (data: BlockData): string => {
  *  content too, so `Tutorial` labelled `Tutorial` says nothing while
  *  `Tutorial › alias` places it.
  *
- *  `''` — i.e. the old drop — whenever the row cannot be NAMED: no resolver
- *  bound, a target that resolves to no definition (a `::` block someone
- *  typed by hand is not machinery), or a shadowed definition, whose name
- *  belongs to the winner. Raw `::((…))` is never a crumb.
+ *  `''` — i.e. the old drop — whenever `recognizePropertyField` does not
+ *  answer: no resolver bound, or any of the cases it lists (a root marker, an
+ *  unresolvable target, a shadowed definition). Raw `::((…))` is never a
+ *  crumb, so an unrecognized marked row drops rather than falling back to
+ *  its content — which is what the unconditional drop used to guarantee.
  *
  *  Ellipsised from the middle, like an aliased block: a property name is a
  *  NAME, and names are told apart by their tails. */
@@ -106,8 +110,7 @@ const propertyCrumbLabel = (
   data: BlockData,
   propertyName: PropertyNameResolver | undefined,
 ): string => {
-  const fieldId = data.referenceTargetId
-  const name = fieldId == null ? undefined : propertyName?.(fieldId)
+  const name = propertyName && recognizePropertyField(data, propertyName)?.name
   return name ? truncateMiddle(collapseWhitespace(name), CRUMB_MAX_CHARS) : ''
 }
 

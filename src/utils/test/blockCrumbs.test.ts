@@ -223,6 +223,19 @@ describe('crumbsFromAncestors: property machinery', () => {
     expect(crumbs).toEqual(['Task Board', 'Done'])
   })
 
+  it('does not name a marked row at the workspace ROOT, which owns no property', () => {
+    // §9: a marker with no parent has no block to be a field OF, so it is
+    // ordinary content — and labelling its descendants `alias` would place
+    // them under a property they are not in. Its raw `::((…))` is still no
+    // crumb, so it drops.
+    const crumbs = crumbsOf([
+      ancestor('child', 'Done', {parentId: 'root-marker'}),
+      fieldRow('root-marker', 'field-def-alias-0000', null as unknown as string),
+    ], null, nameOf)
+
+    expect(crumbs).toEqual(['Done'])
+  })
+
   it('drops every field row when no resolver is bound at all', () => {
     const crumbs = crumbsOf([
       ancestor('value', 'Done', {parentId: 'field'}),
