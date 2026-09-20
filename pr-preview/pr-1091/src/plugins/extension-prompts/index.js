@@ -1,0 +1,1 @@
+import{dw as e,fw as t}from"../../../chunks/app-Cbnnrlf9.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

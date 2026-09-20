@@ -1,0 +1,1 @@
+import{dQ as e,fQ as t,gQ as n,hQ as r,mQ as i,pQ as a}from"../../chunks/app-Cbnnrlf9.js";export{e as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,t as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,a as __resetLayoutSessionIdForTesting,i as getLayoutSessionId,r as isInstalledAppDisplayMode,n as readOrCreateLayoutSessionId};

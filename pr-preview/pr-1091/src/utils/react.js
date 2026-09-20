@@ -1,0 +1,1 @@
+import{DD as e,OD as t}from"../../chunks/app-Cbnnrlf9.js";export{e as useIsMobile,t as usePointerCoarse};

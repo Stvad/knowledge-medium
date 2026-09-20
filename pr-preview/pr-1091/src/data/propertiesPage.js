@@ -1,0 +1,1 @@
+import{Q$ as e,Z$ as t}from"../../chunks/app-Cbnnrlf9.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

@@ -1,0 +1,1 @@
+import{Hw as e,Uw as t}from"../chunks/app-Cbnnrlf9.js";export{e as appUpdate,t as useAppUpdateAvailable};

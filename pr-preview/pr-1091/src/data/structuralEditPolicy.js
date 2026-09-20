@@ -1,0 +1,1 @@
+import{UC as e,WC as t}from"../../chunks/app-Cbnnrlf9.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

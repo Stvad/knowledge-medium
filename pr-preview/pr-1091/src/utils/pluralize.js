@@ -1,0 +1,1 @@
+import{GE as e,KE as t}from"../../chunks/app-Cbnnrlf9.js";export{e as agree,t as pluralize};

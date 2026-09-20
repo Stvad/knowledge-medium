@@ -1,0 +1,1 @@
+import{fs as e,ps as t}from"../../../chunks/app-Cbnnrlf9.js";export{e as appendTagToBlocks,t as appendTagToContent};
