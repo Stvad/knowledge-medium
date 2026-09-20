@@ -23,6 +23,7 @@ import {
   dateValuePresetCore,
   enumValuePresetCore,
   listValuePresetCore,
+  jsonListValuePresetCore,
   jsonValuePresetCore,
   numberValuePresetCore,
   optionalJsonValuePresetCore,
@@ -95,7 +96,18 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     id: 'list',
     label: 'Options',
     Glyph: List,
+    Editor: asEditor<readonly string[]>(ListPropertyEditor),
+  }),
+  kernelPresetPresentation(jsonListValuePresetCore, {
+    // Arbitrary-JSON members (`snapshot-history`). Hidden from the picker:
+    // "Options" is the list a user creates, and this editor renders a member
+    // it cannot show as text as `String(member)`. Registered so a materialized
+    // seed definition renders as a list instead of "json-list (unknown)".
+    id: 'json-list',
+    label: 'Options (any JSON)',
+    Glyph: List,
     Editor: asEditor<unknown[]>(ListPropertyEditor),
+    hideFromPicker: true,
   }),
   kernelPresetPresentation(dateValuePresetCore, {
     id: 'date',

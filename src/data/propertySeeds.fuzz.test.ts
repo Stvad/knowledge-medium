@@ -299,7 +299,10 @@ const presetCaseArbById: Record<string, fc.Arbitrary<PresetCase>> = {
   string: fc.record({ config: fc.constant(undefined), value: fc.string() }),
   number: fc.record({ config: fc.constant(undefined), value: finiteNumberArb }),
   boolean: fc.record({ config: fc.constant(undefined), value: fc.boolean() }),
-  list: fc.record({ config: fc.constant(undefined), value: fc.array(jsonValueArb, { maxLength: 5 }) }),
+  // `list` is the user-pickable "Options" property and holds STRINGS (#1080);
+  // `json-list` is the arbitrary-JSON member list it was split from.
+  list: fc.record({ config: fc.constant(undefined), value: fc.array(fc.string(), { maxLength: 5 }) }),
+  'json-list': fc.record({ config: fc.constant(undefined), value: fc.array(jsonValueArb, { maxLength: 5 }) }),
   // Timestamps generated from ints (never Date.now()) — see docblock.
   date: fc.record({
     config: fc.constant(undefined),

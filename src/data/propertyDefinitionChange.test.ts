@@ -1539,7 +1539,7 @@ describe('the multi-value boundary (#1010)', () => {
     // unconvertible; the cell still stops holding a value, so the same
     // refusal applies.
     await seedWorkspace('children')
-    const repo = await setupDefinition('list')
+    const repo = await setupDefinition('json-list', undefined, 'list')
     await seedListProperty(repo, 'p', 'status', ['42'])
     // Raw, so the cell is not reprojected — the duplicate is visible only to
     // the union this pass takes, which is where the two values meet.
@@ -1550,22 +1550,24 @@ describe('the multi-value boundary (#1010)', () => {
       code: 'property.definition-change.unconvertible',
     })
     expect(await cell('p')).toEqual({status: ['42']})
-    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('list')
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('json-list')
   })
 
   it('keeps a value that is literally the word `null` (#1030)', async () => {
-    // The one end-to-end witness that `string` -> `list` carries the value
-    // rather than parsing it — `list` ("Options") being the only identity
-    // preset a person can pick. This value is chosen because getting it wrong
-    // changes the cell's TYPE and not just its spelling: the old codec
-    // REJECTS null, so the row held the literal word, and reading the text
-    // under a codec that accepts null makes it a JSON null (#1030).
+    // The one end-to-end witness that `string` -> an identity-member list
+    // carries the value rather than parsing it. This value is chosen because
+    // getting it wrong changes the cell's TYPE and not just its spelling: the
+    // old codec REJECTS null, so the row held the literal word, and reading
+    // the text under a codec that accepts null makes it a JSON null (#1030).
+    // `json-list` and not `list`: "Options" holds STRING members since #1080,
+    // so the pickable preset no longer re-reads a member's text as JSON at
+    // all. The case below it is what a person can now reach.
     await seedWorkspace('children')
     const repo = await setupDefinition()
     const {valueRowId} = await seedProperty(repo, 'p', 'status', 'null')
     expect(await cell('p')).toEqual({status: 'null'})
 
-    await retype(repo, FIELD_ID, 'list')
+    await retype(repo, FIELD_ID, 'json-list')
     await repo.awaitProcessors()
 
     expect(await cell('p')).toEqual({status: ['null']})
@@ -1715,11 +1717,11 @@ describe('the multi-value boundary (#1010)', () => {
   })
 
   it('re-encodes between two LIST presets that share a codec type (#1024)', async () => {
-    // `string-list` and the generic `list` preset both report `codec.type ===
-    // 'list'`, so a detector keyed on the type string sees no change. At member
-    // grain they disagree about the child TEXT: `string-list` stores a string
-    // member verbatim (`x`), the generic one stores it as JSON (`"x"`). Left
-    // un-re-encoded, `x` is then read as JSON, `JSON.parse` fails, and the
+    // `string-list` and the arbitrary-JSON `json-list` preset both report
+    // `codec.type === 'list'`, so a detector keyed on the type string sees no
+    // change. At member grain they disagree about the child TEXT: `string-list`
+    // stores a string member verbatim (`x`), the JSON one stores it as `"x"`.
+    // Left un-re-encoded, `x` is then read as JSON, `JSON.parse` fails, and the
     // projection drops every member — the whole list, silently.
     //
     // Two halves fix it. Keying on the codec's INPUTS SEES the change: the
@@ -1735,7 +1737,7 @@ describe('the multi-value boundary (#1010)', () => {
     const errors = collectUserErrors(repo)
     expect(await rowContent(ids[0]!)).toBe('x')
 
-    await retype(repo, FIELD_ID, 'list')
+    await retype(repo, FIELD_ID, 'json-list')
     await repo.awaitProcessors()
 
     expect(await rowContent(ids[0]!)).toBe('"x"')
@@ -1749,12 +1751,12 @@ describe('the multi-value boundary (#1010)', () => {
 
   it('ESCAPES a member the target codec would otherwise store as a live span', async () => {
     // The value route re-spells under the TARGET codec, so escaping is its
-    // duty too: a generic `list` stores the string `((a-id))` as JSON with the
+    // duty too: `json-list` stores the string `((a-id))` as JSON with the
     // parens intact, and written verbatim into a `string-list` row the inline
     // reference reader takes it as a pointer — a later rename or merge then
     // edits the value.
     await seedWorkspace('children')
-    const repo = await setupDefinition('list')
+    const repo = await setupDefinition('json-list', undefined, 'list')
     const ids = await seedListProperty(repo, 'p', 'status', ['((a-id))'])
 
     await retype(repo, FIELD_ID, 'string-list')
@@ -1775,7 +1777,7 @@ describe('the multi-value boundary (#1010)', () => {
     await seedListProperty(repo, 'p', 'status', ['"quoted"'])
     expect(await cell('p')).toEqual({status: ['"quoted"']})
 
-    await retype(repo, FIELD_ID, 'list')
+    await retype(repo, FIELD_ID, 'json-list')
     await repo.awaitProcessors()
 
     expect(await cell('p')).toEqual({status: ['"quoted"']})
@@ -1790,7 +1792,7 @@ describe('the multi-value boundary (#1010)', () => {
     const repo = await setupDefinition('string-list', undefined, 'list')
     const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
 
-    await retype(repo, FIELD_ID, 'list')
+    await retype(repo, FIELD_ID, 'json-list')
     await awaitDefinition(repo, 'status', 'list')
     expect(await rowContent(ids[0]!)).toBe('"x"')
 
@@ -1798,6 +1800,21 @@ describe('the multi-value boundary (#1010)', () => {
     await repo.awaitProcessors()
 
     expect(await rowContent(ids[0]!)).toBe('x')
+    expect(await cell('p')).toEqual({status: ['x', 'y']})
+  })
+
+  it('the pickable Options preset spells its members plainly (#1080)', async () => {
+    // What a person actually reaches. `list` used to hold arbitrary JSON
+    // members, so `x` was stored as `"x"` and retyping that row to the
+    // obvious `x` unset it. It is a list of STRINGS now, so the member is
+    // stored as the text it is — through the member path `string-list`
+    // already used, with no spelling code of its own.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('list')
+    const ids = await seedListProperty(repo, 'p', 'status', ['x', 'y'])
+
+    expect(await rowContent(ids[0]!)).toBe('x')
+    expect(await rowContent(ids[1]!)).toBe('y')
     expect(await cell('p')).toEqual({status: ['x', 'y']})
   })
 

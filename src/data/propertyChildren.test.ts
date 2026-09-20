@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema } from '@/data/api'
+import { ChangeScope, CodecError, codecs, defineProperty, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema } from '@/data/api'
 import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -2581,12 +2581,11 @@ describe('core.subtree visible-subtree exclusion (PR #386 review gap fix, §9)',
   })
 })
 
-describe('content <-> value codecs: lenient-read codecs keep values the write side rejects', () => {
-  // `enum` deliberately splits its read/write strictness (codecs.ts): `encode`
-  // rejects out-of-set values, but `decode` accepts a value whose option was
-  // later removed/renamed so it "still decodes and stays editable". Projection
-  // re-canonicalizes via encode(decode(...)) — which must NOT turn such a
-  // preserved value into "unparseable" and drop the owning cell key.
+describe('content <-> value codecs: an enum value child names a DECLARED option', () => {
+  // `enum` splits its read/write strictness (codecs.ts): `encode` rejects
+  // out-of-set values, `decode` only requires a string. The content -> encoded
+  // path asks the WRITE side, because nothing downstream does and an off-menu
+  // string would otherwise be published to the owner's cell verbatim (#1088).
   const currentOptionsSchema = defineProperty<string>('priority', {
     codec: codecs.enum(['low', 'high']),
     defaultValue: 'low',
@@ -2601,15 +2600,37 @@ describe('content <-> value codecs: lenient-read codecs keep values the write si
     changeScope: ChangeScope.BlockDefault,
   })
 
-  it('a value whose option was removed survives the projection round-trip', () => {
-    // Written while 'urgent' was still valid; the option list has since dropped it.
-    const content = propertyValueToChildContent(legacyOptionsSchema, 'urgent')
-    // The read/write split that makes this preservable: decode keeps it, encode rejects it.
-    expect(currentOptionsSchema.codec.decode('urgent')).toBe('urgent')
-    expect(() => currentOptionsSchema.codec.encode('urgent')).toThrow()
+  it('refuses a value that is not a declared option', () => {
+    // Plainly spelled, which is all it takes to type one by hand now (#1080).
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, 'bananas'))
+      .toThrow(CodecError)
+  })
 
-    // Must NOT throw — throwing marks it unparseable and the caller drops the cell key.
-    expect(valueChildContentToEncoded(currentOptionsSchema, content)).toBe('urgent')
+  it('refuses it through the JSON spelling too, so the old form is no way in', () => {
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, '"bananas"'))
+      .toThrow(CodecError)
+  })
+
+  it('refuses it through an ESCAPED envelope, which the unwrap above returns early for', () => {
+    // Pins the POSITION of the membership check, not just its presence: the
+    // escaped-envelope unwrap at the top of `contentToEncodedValue` hands back
+    // a decoded string of its own, so a check placed after it never sees this.
+    const content = encodedToValueChildContent(currentOptionsSchema, '"bananas"')
+    expect(content).not.toBe('"bananas"') // it escaped, so the unwrap will fire
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, content))
+      .toThrow(CodecError)
+  })
+
+  it('refuses a value whose option was REMOVED — the accepted cost of the above', () => {
+    // Written while 'urgent' was still valid; the option list has since dropped
+    // it. Post-flip the cell is derived purely from the children, so a device
+    // that has only just synced them has no prior cell to grandfather this
+    // from — "off-menu" has to have one answer. Nothing is destroyed: the row
+    // keeps its text, and re-adding the option projects it again (bd km-weh0).
+    const content = propertyValueToChildContent(legacyOptionsSchema, 'urgent')
+    expect(currentOptionsSchema.codec.decode('urgent')).toBe('urgent')
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, content))
+      .toThrow(CodecError)
   })
 
   it('still canonicalizes values that ARE in the current option set', () => {
@@ -2624,6 +2645,81 @@ describe('content <-> value codecs: lenient-read codecs keep values the write si
       changeScope: ChangeScope.BlockDefault,
     })
     expect(() => valueChildContentToEncoded(numberSchema, 'not-a-number')).toThrow()
+  })
+})
+
+describe('content <-> value codecs: an enum value child is spelled plainly', () => {
+  // #1080: the text the UI shows for a Choice value has to be the text that
+  // reads back as it, or the obvious correction is the one that loses the
+  // property. Both `enum` and `strict-enum` build a codec whose type is
+  // 'enum', so one branch covers the user-facing preset and the code-declared
+  // one; the two differ only in what they do with the unset sentinel.
+  const choiceSchema = defineProperty<string>('status', {
+    codec: kernelValuePresetCoresById.enum.build({
+      options: [{value: 'open', label: 'Open'}, {value: 'done', label: 'Done'}],
+    }),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const strictSchema = defineProperty<string>('status', {
+    codec: codecs.enum(['open', 'done']),
+    defaultValue: 'open',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('writes the option value with no quotes, and reads it back', () => {
+    expect(propertyValueToChildContent(strictSchema, 'done')).toBe('done')
+    expect(valueChildContentToEncoded(strictSchema, 'done')).toBe('done')
+  })
+
+  it('still reads the JSON spelling every existing value child holds', () => {
+    // No migration: these drift to the plain form on their next write.
+    expect(valueChildContentToEncoded(strictSchema, '"open"')).toBe('open')
+  })
+
+  it('reads a hand-typed value with stray whitespace', () => {
+    expect(valueChildContentToEncoded(strictSchema, '  done \n')).toBe('done')
+  })
+
+  describe('an option value that would be MISREAD is escaped, both ways', () => {
+    // The trap this pins: the escape side and the unwrap side are one
+    // predicate here (`needsEscape`'s enum clause is the negation of
+    // `enumValueFromContent`), so extending one without the other is not
+    // expressible. Each case below asserts the content is NOT the raw value
+    // AND that it reads back — a one-way escape fails the second half.
+    const cases: readonly (readonly [string, string])[] = [
+      ['quote-shaped', '"open"'],
+      ['reference-shaped', `((${SAMPLE_UUID}))`],
+      ['alias-shaped', '[[Some Page]]'],
+      ['edge whitespace', ' spaced '],
+    ]
+    for (const [label, option] of cases) {
+      it(`round-trips a ${label} option value`, () => {
+        const schema = defineProperty<string>('status', {
+          codec: codecs.enum([option]),
+          defaultValue: option,
+          changeScope: ChangeScope.BlockDefault,
+        })
+        const content = propertyValueToChildContent(schema, option)
+        expect(content).not.toBe(option)
+        expect(valueChildContentToEncoded(schema, content)).toBe(option)
+      })
+    }
+  })
+
+  it("the user-facing preset's unset sentinel round-trips as empty content", () => {
+    // '' is the Choice preset's unset/default sentinel and is deliberately not
+    // a configured option — the same spelling a cleared `ref` uses, which is
+    // why this is asserted rather than assumed.
+    expect(propertyValueToChildContent(choiceSchema, '')).toBe('')
+    expect(valueChildContentToEncoded(choiceSchema, '')).toBe('')
+  })
+
+  it('empty content is refused for a code-declared strict enum', () => {
+    // `strict-enum` has no unset sentinel — '' is simply not an option — so
+    // the key reads unset and the row keeps its text, as for any other
+    // off-menu value.
+    expect(() => valueChildContentToEncoded(strictSchema, '')).toThrow(CodecError)
   })
 })
 
@@ -3996,8 +4092,12 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     convertValueChildContent(from === null ? null : schemaOf(from), schemaOf(to), content)
 
   it('carries the VALUE across a pure spelling disagreement, both directions', () => {
-    expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
-    expect(convert('list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
+    expect(convert('string-list', 'json-list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
+    expect(convert('json-list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
+    // `list` is the property a user picks as "Options", and it spells members
+    // the way `string-list` does — narrowing it to a list of STRINGS (#1080)
+    // is what moved it to this side of the disagreement.
+    expect(convert('json-list', 'list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
   })
 
   it('re-reads the TEXT where the target cannot hold the value', () => {
@@ -4009,15 +4109,15 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
   })
 
   it('does NOT re-read the text for an IDENTITY target, which holds anything', () => {
-    expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"'})
-    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
+    expect(convert('string', 'json-list', '42')).toEqual({outcome: 'converted', content: '"42"'})
+    expect(convert('string', 'json-list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
   })
 
   it('re-reads the text for a row the OLD codec cannot read', () => {
     // A decline that has nothing to do with the target: within ONE `number`
     // property re-typed to `list`, the readable row keeps its number while
     // this stale one is re-read as JSON.
-    expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
+    expect(convert('number', 'json-list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
   })
 
   it('re-spells a reference the stored text ALREADY carried', () => {
@@ -4036,16 +4136,16 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     // the spelling for truthiness rather than for null would fall through to
     // the text route and keep the JSON `""` verbatim — #1055 again, at the one
     // value where it is invisible.
-    expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
+    expect(convert('json-list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
   })
 
   it('keeps a bare `null` the OLD codec read as the literal word (#1030)', () => {
     // `null` is the unset SENTINEL to a codec that accepts it and the literal
     // word to one that does not. `string` rejects null, so the row held the
     // word and the value route carries it. Settled only where a spelling
-    // holds: `list` -> `string` has none, and the text route decides it the
-    // other way.
-    expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
+    // holds: `json-list` -> `string` has none, and the text route decides it
+    // the other way.
+    expect(convert('string', 'json-list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
   })
 
   it('falls to the text route when no old codec records the encoding', () => {
