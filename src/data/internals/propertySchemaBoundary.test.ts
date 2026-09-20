@@ -351,6 +351,199 @@ describe('typed property identity boundary', () => {
       .toBe('unchanged')
   })
 
+  it('reports a rebuilt block definition\'s previous entry as stale-schema', async () => {
+    // The other side of the seed case above. A block-built entry is a fresh
+    // object every projection, so a caller's copy stops being the selected one
+    // with no rival definition anywhere — reporting that as `shadowed` sends the
+    // reader hunting a duplicate that does not exist (#1079).
+    const metadata = {
+      fieldId: 'field-rebuilt',
+      workspaceId: WS,
+      createdAt: 1,
+      name: 'rebuilt',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'user' as const,
+    }
+    const buildEntry = () => defineProperty(metadata.name, {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    const publish = (schema: ReturnType<typeof buildEntry>) =>
+      repo.setRuntimeContributions(
+        projectedPropertyDefinitionsFacet,
+        'test-rebuilt-definition',
+        [{metadata, schema}],
+        {workspaceId: WS},
+      )
+    const captured = buildEntry()
+    publish(captured)
+    await repo.tx(
+      tx => tx.create({id: 'rebuilt-target', workspaceId: WS, parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await repo.tx(
+      tx => tx.setProperty('rebuilt-target', captured, 'before'),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    // The projector republishes the same definition with an equivalent object.
+    const republished = buildEntry()
+    publish(republished)
+
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(captured)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'stale-schema',
+    })
+    await expect(repo.tx(
+      tx => tx.setProperty('rebuilt-target', captured, 'changed'),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'stale-schema',
+    })
+    expect(repo.block('rebuilt-target').peek()!.properties[metadata.name]).toBe('before')
+
+    // The entry the registry now publishes still writes.
+    await repo.tx(
+      tx => tx.setProperty('rebuilt-target', republished, 'changed'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(repo.block('rebuilt-target').peek()!.properties[metadata.name]).toBe('changed')
+  })
+
+  it('keeps shadowed when a second block definition claims the name', async () => {
+    // The rival arriving by sync/import: the caller's definition stops winning
+    // its name through no act of its own. That IS a duplicate to resolve, so it
+    // must not be softened to staleness — and the caller's object is no help in
+    // telling them apart, since the same tick rebuilds it either way.
+    const name = 'contested'
+    const entryFor = (fieldId: string, createdAt: number) => ({
+      metadata: {
+        fieldId,
+        workspaceId: WS,
+        createdAt,
+        name,
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        origin: 'user' as const,
+      },
+      schema: defineProperty(name, {
+        codec: codecs.string,
+        defaultValue: '',
+        changeScope: ChangeScope.BlockDefault,
+      }),
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    const held = entryFor('field-contested-late', 2)
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-contested-definitions',
+      [held],
+      {workspaceId: WS},
+    )
+    await repo.tx(
+      tx => tx.create({id: 'contested-target', workspaceId: WS, parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await repo.tx(
+      tx => tx.setProperty('contested-target', held.schema, 'before'),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    // A rival with an earlier createdAt syncs in and takes the name.
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-contested-definitions',
+      [held, entryFor('field-contested-early', 1)],
+      {workspaceId: WS},
+    )
+
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(held.schema)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'shadowed',
+    })
+    await expect(repo.tx(
+      tx => tx.setProperty('contested-target', held.schema, 'changed'),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'shadowed',
+    })
+    expect(repo.block('contested-target').peek()!.properties[name]).toBe('before')
+  })
+
+  it('orders the plain-schema refusal: owner, then buildability, then the object', async () => {
+    // One fact per refusal, and the first two come from the snapshot alone.
+    // A metadata-only winner is `definition-unavailable` only while nothing
+    // rivals it — once a second definition claims the name, the duplicate is
+    // the fact to report, exactly as it would be for a buildable winner.
+    const name = 'ordered'
+    const metadataFor = (fieldId: string, createdAt: number) => ({
+      fieldId,
+      workspaceId: WS,
+      createdAt,
+      name,
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'user' as const,
+    })
+    const held = defineProperty(name, {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    // A lone winner whose behavior could not be built here (its preset's
+    // plugin is not loaded), so the registry publishes metadata only.
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-ordered-definitions',
+      [{metadata: metadataFor('field-ordered-metadata-only', 1)}],
+      {workspaceId: WS},
+    )
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(held)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'definition-unavailable',
+    })
+
+    // A rival claims the same name. The winner is still unbuildable, but the
+    // contest outranks that.
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-ordered-definitions',
+      [
+        {metadata: metadataFor('field-ordered-metadata-only', 1)},
+        {metadata: metadataFor('field-ordered-rival', 2), schema: held},
+      ],
+      {workspaceId: WS},
+    )
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(held)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'shadowed',
+    })
+  })
+
   it('rejects a write whose resolved change-scope differs from the tx scope', async () => {
     // A stale-schema caller can open the tx under one scope while the resolved
     // definition carries another (its change-scope was edited after capture).

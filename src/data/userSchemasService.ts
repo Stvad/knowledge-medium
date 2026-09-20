@@ -14,6 +14,7 @@ import {
   ChangeScope,
   normalizePresetDefault,
   type AnyPropertySchema,
+  type AnyResolvedPropertySchema,
   type AnyValuePresetCore,
   type BlockData,
 } from '@/data/api'
@@ -263,10 +264,14 @@ export class UserSchemasService {
     this.handle?.upsert({metadata, schema}, blockId, workspaceId)
   }
 
-  /** Create a property-schema block in the workspace's Properties
-   *  page AND register the schema synchronously. Returns the freshly
-   *  registered schema. */
-  async addSchema(args: AddSchemaArgs): Promise<AnyPropertySchema> {
+  /** Create a property-schema block in the workspace's Properties page AND
+   *  register the schema synchronously. Returns the new definition RESOLVED,
+   *  so it keeps resolving by field id through later registry rebuilds. The
+   *  plain schema this publishes into the ambient registry would not: the
+   *  projector rebuilds each definition's behavior object per tick, and the
+   *  boundary admits a plain schema only as the object it currently
+   *  publishes. */
+  async addSchema(args: AddSchemaArgs): Promise<AnyResolvedPropertySchema> {
     const name = args.name.trim()
     const rejection = propertySchemaNameRejection(name)
     if (rejection) throw new Error(`[addSchema] ${rejection}`)
@@ -396,7 +401,16 @@ export class UserSchemasService {
 
       assertGeneration('registration')
       this.appendUserSchema(newSchema, childId, workspaceId)
-      return newSchema
+      const resolution = this.repo
+        .propertySchemaResolverFor(workspaceId)
+        .resolveField(childId)
+      if (resolution.status !== 'resolved') {
+        throw new Error(
+          `[addSchema] definition block ${childId} for ${JSON.stringify(name)} ` +
+          `does not resolve after registration (${resolution.reason})`,
+        )
+      }
+      return resolution.schema
     } finally {
       this.pendingCreations.delete(reservationKey)
     }

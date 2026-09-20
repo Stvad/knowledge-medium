@@ -2,7 +2,7 @@
  *  any of these; they all subclass `Error`. Names align with the data-layer
  *  spec (`tasks/data-layer-redesign.md` §5.3, §10.4, §4.7, §13.1). */
 
-import type {PropertySchemaIdentityUnavailableReason} from './propertySchema'
+import type {PropertyBoundaryIdentityUnavailableReason} from './propertySchema'
 
 export class DataLayerError extends Error {}
 
@@ -166,7 +166,7 @@ export class WorkspaceNotPinnedError extends DataLayerError {
 export class PropertySchemaIdentityError extends DataLayerError {
   constructor(
     public readonly schemaName: string,
-    public readonly reason: PropertySchemaIdentityUnavailableReason,
+    public readonly reason: PropertyBoundaryIdentityUnavailableReason,
   ) {
     super(
       `cannot write property ${JSON.stringify(schemaName)}: ` +
