@@ -1,1 +1,1 @@
-import{nE as e}from"../../chunks/app-CtdlHEXz.js";export{e as BlockLoadingPlaceholder};
+import{nE as e}from"../../chunks/app-DNePFpSy.js";export{e as BlockLoadingPlaceholder};

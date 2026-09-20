@@ -1,1 +1,1 @@
-import{dB as e}from"../../../chunks/app-CtdlHEXz.js";export{e as aliasDataExtension};
+import{dB as e}from"../../../chunks/app-DNePFpSy.js";export{e as aliasDataExtension};

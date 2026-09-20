@@ -1,1 +1,1 @@
-import{fs as e,ps as t}from"../../../chunks/app-CtdlHEXz.js";export{e as appendTagToBlocks,t as appendTagToContent};
+import{fs as e,ps as t}from"../../../chunks/app-DNePFpSy.js";export{e as appendTagToBlocks,t as appendTagToContent};

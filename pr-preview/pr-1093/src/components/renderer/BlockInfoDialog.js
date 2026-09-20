@@ -1,1 +1,1 @@
-import{PD as e}from"../../../chunks/app-CtdlHEXz.js";export{e as BlockInfoDialog};
+import{PD as e}from"../../../chunks/app-DNePFpSy.js";export{e as BlockInfoDialog};

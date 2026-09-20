@@ -1,1 +1,1 @@
-import{Ug as e}from"../../../chunks/app-CtdlHEXz.js";export{e as BreadcrumbList};
+import{Ug as e}from"../../../chunks/app-DNePFpSy.js";export{e as BreadcrumbList};

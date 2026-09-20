@@ -1,1 +1,1 @@
-import{Ox as e}from"../../../chunks/app-CtdlHEXz.js";export{e as openKeybindingsSettingsAction};
+import{Ox as e}from"../../../chunks/app-DNePFpSy.js";export{e as openKeybindingsSettingsAction};

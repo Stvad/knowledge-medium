@@ -1,1 +1,1 @@
-import{aA as e,oA as t}from"../../../chunks/app-CtdlHEXz.js";export{e as MetadataRow,t as PropertySectionLabel};
+import{aA as e,oA as t}from"../../../chunks/app-DNePFpSy.js";export{e as MetadataRow,t as PropertySectionLabel};

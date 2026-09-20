@@ -1,1 +1,1 @@
-import{DC as e}from"../../chunks/app-CtdlHEXz.js";export{e as ensureMetricsConsoleHook};
+import{DC as e}from"../../chunks/app-DNePFpSy.js";export{e as ensureMetricsConsoleHook};

@@ -1,1 +1,1 @@
-import{$T as e}from"../../chunks/app-CtdlHEXz.js";export{e as LazyBlockComponent};
+import{$T as e}from"../../chunks/app-DNePFpSy.js";export{e as LazyBlockComponent};

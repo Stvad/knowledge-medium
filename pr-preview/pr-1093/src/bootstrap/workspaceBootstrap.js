@@ -1,1 +1,1 @@
-import{c as e}from"../../chunks/app-CtdlHEXz.js";export{e as bootstrapWorkspace};
+import{c as e}from"../../chunks/app-DNePFpSy.js";export{e as bootstrapWorkspace};

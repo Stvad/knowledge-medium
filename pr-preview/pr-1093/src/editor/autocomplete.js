@@ -1,1 +1,1 @@
-import{cw as e}from"../../chunks/app-CtdlHEXz.js";export{e as editorAutocompleteExtension};
+import{cw as e}from"../../chunks/app-DNePFpSy.js";export{e as editorAutocompleteExtension};

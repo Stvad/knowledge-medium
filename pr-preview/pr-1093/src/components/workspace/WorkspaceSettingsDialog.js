@@ -1,1 +1,1 @@
-import{v_ as e}from"../../../chunks/app-CtdlHEXz.js";export{e as WorkspaceSettingsDialog};
+import{v_ as e}from"../../../chunks/app-DNePFpSy.js";export{e as WorkspaceSettingsDialog};

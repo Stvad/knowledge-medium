@@ -1,1 +1,1 @@
-import{$R as e,ez as t,tz as n}from"../../../chunks/app-CtdlHEXz.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};
+import{$R as e,ez as t,tz as n}from"../../../chunks/app-DNePFpSy.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};

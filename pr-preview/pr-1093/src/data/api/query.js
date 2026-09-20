@@ -1,1 +1,1 @@
-import{W2 as e}from"../../../chunks/app-CtdlHEXz.js";export{e as defineQuery};
+import{W2 as e}from"../../../chunks/app-DNePFpSy.js";export{e as defineQuery};

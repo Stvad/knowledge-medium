@@ -1,1 +1,1 @@
-import{QM as e,ZM as t}from"../../chunks/app-CtdlHEXz.js";export{t as isIOS,e as isMacPlatform};
+import{QM as e,ZM as t}from"../../chunks/app-DNePFpSy.js";export{t as isIOS,e as isMacPlatform};

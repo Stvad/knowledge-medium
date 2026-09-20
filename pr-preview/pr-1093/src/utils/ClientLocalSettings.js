@@ -1,1 +1,1 @@
-import{_T as e,gT as t}from"../../chunks/app-CtdlHEXz.js";export{t as ClientLocalSettings,e as clientLocalSettings};
+import{_T as e,gT as t}from"../../chunks/app-DNePFpSy.js";export{t as ClientLocalSettings,e as clientLocalSettings};

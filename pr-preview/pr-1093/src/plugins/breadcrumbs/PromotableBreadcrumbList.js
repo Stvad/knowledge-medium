@@ -1,1 +1,1 @@
-import{zg as e}from"../../../chunks/app-CtdlHEXz.js";export{e as PromotableBreadcrumbList};
+import{zg as e}from"../../../chunks/app-DNePFpSy.js";export{e as PromotableBreadcrumbList};

@@ -1,1 +1,1 @@
-import{_s as e}from"../../../chunks/app-CtdlHEXz.js";export{e as blockTaggingDataExtension};
+import{_s as e}from"../../../chunks/app-DNePFpSy.js";export{e as blockTaggingDataExtension};

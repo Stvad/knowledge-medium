@@ -1,1 +1,1 @@
-import{HC as e,VC as t}from"../../chunks/app-CtdlHEXz.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{HC as e,VC as t}from"../../chunks/app-DNePFpSy.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

@@ -1,1 +1,1 @@
-import{LO as e}from"../../chunks/app-CtdlHEXz.js";export{e as useShortcutSurfaceActivations};
+import{LO as e}from"../../chunks/app-DNePFpSy.js";export{e as useShortcutSurfaceActivations};
