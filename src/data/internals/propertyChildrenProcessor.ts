@@ -45,13 +45,19 @@
 import {
   defineSameTxProcessor,
   memberCodecOf,
+  normalizeReferences,
   type AnyPropertySchema,
   type BlockData,
+  type BlockReference,
   type ResolvedPropertySchema,
   type SameTxCtx,
   type Tx,
 } from '@/data/api'
 import { keyAtStart, keysBetween } from '@/data/orderKey'
+import {
+  isIdCarryingReference,
+  parseExactReferenceBlockContent,
+} from '@/data/referenceBlock'
 import {
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
@@ -618,6 +624,23 @@ const materializePropertiesForChangedRow = async (
   )
 }
 
+/** The `references` an id-carrying machinery row derives to, handed to `tx.create`
+ *  so `references.parseReferences` finds the row already correct: its plan comes out
+ *  idempotent, and a batch where every plan is idempotent returns before opening a
+ *  transaction at all. The processor aliases a bare `((id))` by the id itself, which
+ *  is the whole of the mapping for this shape.
+ *
+ *  `undefined` for every other content, and that direction is the safe one: a value
+ *  child holding prose with a `[[wikilink]]` needs the alias lookup and seat probe
+ *  only the references plugin can do, so a guess here would be a reference the
+ *  recompute has to undo. Core computes this without reaching into the plugin
+ *  because both halves — the grammar and `normalizeReferences` — already live here. */
+const idReferencesForContent = (content: string): BlockReference[] | undefined => {
+  const parsed = parseExactReferenceBlockContent(content)
+  if (!isIdCarryingReference(parsed) || parsed.kind !== 'blockRef') return undefined
+  return normalizeReferences([{id: parsed.id, alias: parsed.id}])
+}
+
 /** Find-or-create the field row for `fieldId` under `owner`, keeping its
  *  content canonical and folding any duplicate field rows into the survivor.
  *  Returns the row whose value children the caller then reconciles.
@@ -665,6 +688,7 @@ export const upsertFieldRow = async (
     isFieldForm: true,
     orderKey: keyAtStart(null),
     content,
+    references: idReferencesForContent(content),
   })
   return {id, workspaceId: owner.workspaceId}
 }
@@ -727,6 +751,7 @@ const createValueChild = (
   parentId: fieldRow.id,
   orderKey,
   content,
+  references: idReferencesForContent(content),
 })
 
 const reconcileSingleValueChild = async (

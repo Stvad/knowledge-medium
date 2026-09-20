@@ -146,6 +146,13 @@ const bagOf = async (id: string): Promise<Record<string, unknown>> => {
 const cellValue = async (id: string): Promise<unknown> =>
   (await bagOf(id))[statusSchema.name]
 
+const referencesOf = async (id: string): Promise<unknown> => {
+  const row = await sharedDb.db.get<{references_json: string}>(
+    'SELECT references_json FROM blocks WHERE id = ?', [id],
+  )
+  return JSON.parse(row.references_json) as unknown
+}
+
 /** What the escaped envelope must BE, rather than how it is spelled: it carries
  *  the value back, and carries no span OPENER. Asserting the spelling instead
  *  would only prove `escapeContent` agrees with a copy of itself.
@@ -205,6 +212,22 @@ describe('flipped workspace (properties_migration = children)', () => {
     await repo.undo(ChangeScope.BlockDefault)
     expect(await cellValue('p')).toBeUndefined()
     expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('a field row is born with its references, so the parse has nothing to write', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+
+    // Asserted on the CREATE, not on the eventual state: the references
+    // processor converges this either way, and the point of pre-filling is
+    // that it never opens its transaction. On a 350k-block graph the migration
+    // created 3,383 rows and the parse then updated 1,851 of them.
+    const fields = await liveFieldRows('p')
+    expect(await referencesOf(fields[0]!.id))
+      .toEqual([{id: STATUS_FIELD_ID, alias: STATUS_FIELD_ID}])
   })
 
   it('rejects a raw cell write whose value does not decode (no silent cell/child divergence)', async () => {
@@ -755,6 +778,17 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     expect(value?.reference_target_id).toBe('target-xyz')
     // ...and the synced cell keeps the bare id.
     expect(await relatedCell('p')).toBe('target-xyz')
+  })
+
+  it('a ref value child is born with its references too', async () => {
+    const repo = await setupWithRef()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'target-xyz'),
+      {scope: ChangeScope.BlockDefault})
+
+    const value = await relatedValueChild('p')
+    expect(await referencesOf(value!.id))
+      .toEqual([{id: 'target-xyz', alias: 'target-xyz'}])
   })
 
   it('re-projects the cell from the column when the ref is retargeted in the tree', async () => {
