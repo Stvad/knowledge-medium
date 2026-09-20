@@ -19,7 +19,7 @@ const schemaStore = vi.hoisted(() => ({
   schemas: new Map<string, unknown>(),
   refTargetDefaults: new Map<string, unknown>(),
   // query → candidates, for the mocked ref search
-  searchById: new Map<string, Array<{id: string; label: string; detail: string; key: string}>>(),
+  searchById: new Map<string, Array<{id: string; label: string; detail: string; key: string; context?: string}>>(),
   aliasLookupResult: null as { id: string } | null,
 }))
 
@@ -310,6 +310,34 @@ describe('BacklinkFilters', () => {
       include: [{scope: 'ancestor', referencedBy: {id: 'block-ab'}}],
       exclude: [],
     })
+  })
+
+  it('says where a property row belongs instead of echoing the label it duplicates', async () => {
+    // A page and the `alias` value row under it reach this picker with the
+    // same label, so the row's context is the only thing telling them apart
+    // (km-1iia). Same rule as the property panel's ref editor, one owner.
+    vi.useFakeTimers()
+    schemaStore.searchById.set('Reading List', [
+      {id: 'page', label: 'Reading List', detail: 'Reading List', key: 'page'},
+      {
+        id: 'value', label: 'Reading List', detail: 'Reading List', key: 'value',
+        context: 'alias of Reading List',
+      },
+    ])
+
+    render(<BacklinkFilters workspaceId="ws-1" filter={{}} onChange={vi.fn()} />)
+    const input = screen.getByPlaceholderText('Include reference')
+    fireEvent.focus(input)
+    fireEvent.change(input, {target: {value: 'Reading List'}})
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+
+    // The form's own <select>s contribute `option` elements too; the
+    // suggestion rows are the buttons.
+    const rows = screen.getAllByRole('option').filter(row => row.tagName === 'BUTTON')
+    expect(rows.map(row => row.textContent)).toEqual([
+      'Reading List',
+      'Reading List' + 'alias of Reading List',
+    ])
   })
 
   // Escape has two jobs in the reference-filter field and they must not both
