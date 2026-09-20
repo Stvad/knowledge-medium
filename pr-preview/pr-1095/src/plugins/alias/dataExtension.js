@@ -1,1 +1,1 @@
-import{dB as e}from"../../../chunks/app-DkywwqkX.js";export{e as aliasDataExtension};
+import{dB as e}from"../../../chunks/app-eW-n2_bw.js";export{e as aliasDataExtension};
