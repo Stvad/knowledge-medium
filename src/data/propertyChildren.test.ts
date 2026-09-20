@@ -2654,6 +2654,45 @@ describe('content <-> value codecs: an enum value child names a DECLARED option'
   })
 })
 
+describe('content <-> value codecs: only `enum` has its write side enforced', () => {
+  // The membership check is scoped to `enum`, whose option set is a promise
+  // to every consumer that switches on it. A codec a runtime extension
+  // registers may use the SAME lenient-read/strict-write design for its own
+  // reasons — decoding a retired value so it stays editable — and enforcing
+  // its write side here would make every value child under it vanish from the
+  // derived cell. Nothing in the tree has that asymmetry, so this is the only
+  // thing holding the scope in place.
+  const lenientReadSchema = defineProperty<string>('flavour', {
+    codec: {
+      type: 'test-lenient-read',
+      encode: (v: string) => {
+        if (v === 'retired') throw new CodecError('flavour', v)
+        return v
+      },
+      decode: (j: unknown) => {
+        if (typeof j !== 'string') throw new CodecError('flavour', j)
+        return j
+      },
+    },
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('keeps a value the codec READS but will not WRITE, for a non-enum codec', () => {
+    // JSON-spelled, because a codec outside the verbatim family takes the
+    // default branch.
+    expect(valueChildContentToEncoded(lenientReadSchema, '"retired"')).toBe('retired')
+  })
+
+  it('still canonicalizes through that codec when its write side accepts', () => {
+    expect(valueChildContentToEncoded(lenientReadSchema, '"vanilla"')).toBe('vanilla')
+  })
+
+  it('and a genuine shape error still throws out of its decode', () => {
+    expect(() => valueChildContentToEncoded(lenientReadSchema, '42')).toThrow(CodecError)
+  })
+})
+
 describe('content <-> value codecs: an enum value child is spelled plainly', () => {
   // #1080: the text the UI shows for a Choice value has to be the text that
   // reads back as it, or the obvious correction is the one that loses the
