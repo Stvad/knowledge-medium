@@ -1,1 +1,1 @@
-import{_w as e,bw as t,vw as n,yw as r}from"../../../chunks/app-CBEko9hN.js";export{e as extensionsOverridesPresetCore,n as extensionsOverridesProp,r as extensionsPrefsType,t as overridesCodec};
+import{_w as e,bw as t,vw as n,yw as r}from"../../../chunks/app-B_f21sBD.js";export{e as extensionsOverridesPresetCore,n as extensionsOverridesProp,r as extensionsPrefsType,t as overridesCodec};
