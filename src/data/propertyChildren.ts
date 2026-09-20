@@ -245,7 +245,15 @@ const verbatimContentLosesValue = (content: string): boolean =>
  *  Trimmed, like the `date`/`number`/`boolean` readers: this is text a person
  *  types, and a stray space must not read as a different option. An option
  *  whose own value carries edge whitespace is escaped instead, so the round
- *  trip stays total. */
+ *  trip stays total.
+ *
+ *  One-way across app versions, accepted: a client from before #1080 reads
+ *  enum content as JSON and unsets the key on the plain form, so a workspace
+ *  that was child-backed while two clients straddled this change would churn.
+ *  Declined rather than versioned — no workspace is child-backed yet (#671
+ *  ships the flip), and the alternative is a spelling older clients decode,
+ *  which is the JSON one this exists to stop writing. Re-check if the flip
+ *  ever lands first. */
 const enumValueFromContent = (content: string): string => {
   const trimmed = content.trim()
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
