@@ -2627,7 +2627,12 @@ describe('content <-> value codecs: an enum value child names a DECLARED option'
     // it. Post-flip the cell is derived purely from the children, so a device
     // that has only just synced them has no prior cell to grandfather this
     // from — "off-menu" has to have one answer. Nothing is destroyed: the row
-    // keeps its text, and re-adding the option projects it again (bd km-weh0).
+    // keeps its text, and re-adding the option projects it again.
+    //
+    // Reaching this state through the UI is a separate matter: an option
+    // removed while blocks still hold it is REFUSED, not applied — see
+    // `propertyDefinitionChange.test.ts`. What is left is an option set that
+    // moves in CODE, with no definition row edit to refuse (#1097).
     const content = propertyValueToChildContent(legacyOptionsSchema, 'urgent')
     expect(currentOptionsSchema.codec.decode('urgent')).toBe('urgent')
     expect(() => valueChildContentToEncoded(currentOptionsSchema, content))

@@ -946,6 +946,74 @@ describe('codec change', () => {
     expect(await cell('p')).toEqual({status: 'null'})
   })
 
+  describe('narrowing a Choice option set (#1080/#1088)', () => {
+    // The question this answers: now that an off-menu value is refused on the
+    // way in, what does REMOVING an option that blocks still use actually do?
+    // Not a silent mass unset — a config edit is a codec-inputs change, so it
+    // fans out, and the fan-out refuses rather than writing. Asserted rather
+    // than reasoned, because the alternative reading (every using block loses
+    // its value) is the one the fix would be unacceptable under.
+    const options = (...values: readonly string[]) =>
+      ({options: values.map(value => ({value, label: value}))})
+
+    const setupChoice = async (...values: readonly string[]) => {
+      await seedWorkspace('children')
+      const repo = await setupDefinition('enum', undefined, 'enum')
+      await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options(...values)),
+        {scope: ChangeScope.BlockDefault})
+      await awaitDefinition(repo, 'status', 'enum')
+      return repo
+    }
+
+    it('REFUSES to remove an option while blocks still hold it, keeping the value', async () => {
+      const repo = await setupChoice('low', 'high')
+      const {valueRowId} = await seedProperty(repo, 'p', 'status', 'high')
+      expect(await cell('p')).toEqual({status: 'high'})
+
+      await expect(
+        repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options('low')),
+          {scope: ChangeScope.BlockDefault}),
+      ).rejects.toMatchObject({code: 'property.definition-change.unconvertible'})
+
+      // Rolled back whole: the value, its row, and the option set itself.
+      expect(await cell('p')).toEqual({status: 'high'})
+      expect(await rowContent(valueRowId)).toBe('high')
+      expect((await cell(FIELD_ID))[presetConfigProp.name]).toEqual(options('low', 'high'))
+    })
+
+    it('allows removing an option no block holds', async () => {
+      const repo = await setupChoice('low', 'high')
+      await seedProperty(repo, 'p', 'status', 'low')
+
+      await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options('low')),
+        {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+
+      expect(await cell('p')).toEqual({status: 'low'})
+    })
+
+    it('writes no value row when ADDING an option, since no spelling moves', async () => {
+      // Widening is a codec-inputs change too, so the fan-out runs over every
+      // consuming parent. It must not turn into a write per block: the
+      // spelling is identical, and the processor skips a row whose converted
+      // content equals its current content.
+      const repo = await setupChoice('low', 'high')
+      const {valueRowId} = await seedProperty(repo, 'p', 'status', 'high')
+      const before = await sharedDb.db.get<{user_updated_at: number}>(
+        'SELECT user_updated_at FROM blocks WHERE id = ?', [valueRowId])
+
+      await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options('low', 'high', 'urgent')),
+        {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+
+      const after = await sharedDb.db.get<{user_updated_at: number}>(
+        'SELECT user_updated_at FROM blocks WHERE id = ?', [valueRowId])
+      expect(after.user_updated_at).toBe(before.user_updated_at)
+      expect(await rowContent(valueRowId)).toBe('high')
+      expect(await cell('p')).toEqual({status: 'high'})
+    })
+  })
+
   it('refuses an in-place RE-TYPE off a preset that loads, when consumers exist', async () => {
     // The values stay in the old encoding while the row names a codec nothing
     // can build. Dropping the edit silently is the trap: the preset can become

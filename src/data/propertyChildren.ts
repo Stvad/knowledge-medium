@@ -576,8 +576,18 @@ export const valueChildContentToEncoded = (
   // is stricter than its `decode`; every other one validates symmetrically or
   // validates on the READ side, which the `decode` here already runs.
   //
-  // What it costs, accepted: an option REMOVED from a live property stops
-  // projecting until it is re-added or the row re-typed (#1097).
+  // What it costs is NOT "a removed option unsets every block using it". A
+  // config edit is a codec-INPUTS change, so it fans out in the editing tx,
+  // and the fan-out REFUSES when a value will not convert — removing an option
+  // blocks still hold rolls the whole edit back with "the blocks using it
+  // would lose N stored values", which is the outcome that keeps them. Adding
+  // one writes nothing at all: the spelling does not move, and the fan-out
+  // skips a row whose converted content equals its current content. Both
+  // pinned in `propertyDefinitionChange.test.ts`.
+  //
+  // It costs where no row edit fires to be refused: an option set that moves
+  // in CODE (a `strict-enum` declaration), which materialization never writes
+  // back to a live definition row. #1097.
   return codec.encode(codec.decode(encoded))
 }
 

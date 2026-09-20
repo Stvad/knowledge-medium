@@ -93,8 +93,12 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     Editor: asEditor<boolean>(BooleanPropertyEditor),
   }),
   kernelPresetPresentation(listValuePresetCore, {
+    // "Text list", not "Options": this holds free-form strings a person types,
+    // which is what its members have always been. Picking FROM a configured
+    // set is `enum` below, sitting two entries away and reading as the same
+    // thing under the old name.
     id: 'list',
-    label: 'Options',
+    label: 'Text list',
     Glyph: List,
     Editor: asEditor<readonly string[]>(ListPropertyEditor),
   }),
@@ -104,7 +108,7 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     // it cannot show as text as `String(member)`. Registered so a materialized
     // seed definition renders as a list instead of "json-list (unknown)".
     id: 'json-list',
-    label: 'Options (any JSON)',
+    label: 'List (any JSON)',
     Glyph: List,
     Editor: asEditor<unknown[]>(ListPropertyEditor),
     hideFromPicker: true,
