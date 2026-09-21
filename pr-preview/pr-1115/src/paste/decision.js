@@ -1,1 +1,1 @@
-import{DO as e,OO as t}from"../../chunks/app-BJMQa9pF.js";export{e as defaultPasteDecision,t as pasteDecisionVerb};
+import{DO as e,OO as t}from"../../chunks/app-ChwbT4wG.js";export{e as defaultPasteDecision,t as pasteDecisionVerb};
