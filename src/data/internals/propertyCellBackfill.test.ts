@@ -128,6 +128,36 @@ const seedNotes = async (count: number) => {
 
 const run = async () => repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)
 
+/** A block's property machinery as SHAPE — ids dropped, because two blocks
+ *  written by different routes never share them, and order keys dropped for
+ *  their RANK, because `fractional-indexing-jittered` deliberately randomises
+ *  them so concurrent replicas do not collide. Sibling ORDER is the part that
+ *  carries meaning and the part the two routes must agree on. */
+const machineryShape = async (ownerId: string) => {
+  const fieldRows = await sharedDb.db.getAll<{
+    id: string; content: string; order_key: string
+    reference_target_id: string | null; is_field_form: number | null; references_json: string
+  }>(
+    `SELECT id, content, order_key, reference_target_id, is_field_form, references_json
+       FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`, [ownerId])
+  const out = []
+  for (const field of fieldRows) {
+    const values = await sharedDb.db.getAll<{content: string; order_key: string; references_json: string}>(
+      `SELECT content, order_key, references_json FROM blocks
+        WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`, [field.id])
+    out.push({
+      content: field.content,
+      referenceTargetId: field.reference_target_id,
+      isFieldForm: field.is_field_form,
+      references: field.references_json,
+      // Already `ORDER BY order_key, id`, so the array order IS the rank.
+      values: values.map(v => ({content: v.content, references: v.references_json})),
+      valueKeysAscend: values.every((v, i) => i === 0 || values[i - 1]!.order_key < v.order_key),
+    })
+  }
+  return out
+}
+
 /** The runner's context, rebuilt for tests that need to act BETWEEN batches.
  *  Same shape the runner passes, minus its per-transaction preconditions —
  *  those are the runner's own tests. */
@@ -600,5 +630,42 @@ describe('multi-value cells (km-h1hy)', {timeout: 30_000}, () => {
     expect((await run()).outcome).toBe('ran')
 
     expect((await fieldRowsOf('heavy'))[0]!.values).toEqual(members)
+  })
+})
+
+describe('the pass and the live writer agree about a value\'s children', () => {
+  /** THE guard on splitting the write path in two.
+   *
+   *  `tx.setProperty` dual-writes children inside a user's edit, one row at a
+   *  time; the pass emits the same rows for a whole batch and hands them to
+   *  `tx.createMany`. They share the builders (`plannedFieldRow`,
+   *  `plannedValueChildRows`) precisely so they cannot decide differently —
+   *  and this is what would notice if a future edit taught one of them
+   *  something the other does not know. Asserted on the SHAPE, since the two
+   *  routes never share ids.
+   *
+   *  Both grains, because the member split is the interesting half: a scalar
+   *  is one value child, a list is one per member in order. */
+  it.each([
+    ['a scalar', noteProp.name, 'hello world'],
+    ['a list', tagsProp.name, ['alpha', 'beta', 'gamma']],
+  ])('%s', async (_label, propertyName, value) => {
+    // MIGRATED: the cell exists before the flip, so the pass is what builds
+    // its children.
+    await create('migrated', {[propertyName]: value})
+    await flip()
+    expect((await run()).outcome).toBe('ran')
+
+    // LIVE: written past the flip, so the dual-write builds them.
+    await create('live', {})
+    await repo.tx(async tx => {
+      const schema = repo.propertySchemaResolverFor(WS).resolve(propertyName)
+      if (schema.status !== 'resolved') throw new Error('fixture schema did not resolve')
+      await tx.setProperty('live', schema.schema, value)
+    }, {scope: ChangeScope.BlockDefault})
+
+    const migrated = await machineryShape('migrated')
+    expect(migrated).toHaveLength(1)
+    expect(migrated).toEqual(await machineryShape('live'))
   })
 })

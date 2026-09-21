@@ -32,13 +32,20 @@
  * `materializePropertyChildrenForExistingRow` is idempotent per row.
  */
 
-import type { BlockData, Tx } from '@/data/api'
+import type { BlockData, ResolvedPropertySchema } from '@/data/api'
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
 import { CallbackSet } from '@/utils/callbackSet'
-import { getPropertyFieldTargetId } from '@/data/propertyChildren'
-import { materializePropertyChildrenForExistingRow } from './propertyChildrenProcessor'
+import {
+  getPropertyFieldTargetId,
+  propertyCellValueRejection,
+} from '@/data/propertyChildren'
+import { plannedFieldRow, plannedValueChildRows } from './propertyChildrenProcessor'
 
 export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
+
+/** What `ctx.resolveNameSchema` answers with: a schema that also knows the
+ *  fieldId its field rows point at. */
+type ResolvedNameSchema = ResolvedPropertySchema<unknown>
 
 /** Rows a writing transaction aims to insert. THE transaction-size knob,
  *  counted in ROWS not blocks — a heavy-property block would multiply a
@@ -203,110 +210,6 @@ const MAX_REPORTED_FAILURES = 50
  *  rather than to loop against a live user. */
 const MAX_SWEEPS = 4
 
-/** The fieldIds this owner already has LIVE field rows for. Same
- *  `tx.childrenOf` the materializer reads, so "already materialized" cannot
- *  disagree with the branch it will actually take. */
-const materializedFieldIds = async (tx: Tx, row: BlockData): Promise<Set<string>> => {
-  const ids = new Set<string>()
-  for (const child of await tx.childrenOf(row.id, undefined)) {
-    const fieldId = child.isFieldForm ? getPropertyFieldTargetId(child) : undefined
-    if (fieldId !== undefined) ids.add(fieldId)
-  }
-  return ids
-}
-
-/**
- * The create-only subset — the whole of what this pass does: cell keys with no
- * field row of their own.
- *
- * The CHILDREN are the property truth and the cell is a local, derived read
- * surface — a device that has received value rows from sync and not yet
- * re-projected them holds a stale bag over live children — so writing from the
- * cell against an existing field row overwrites real values, and naming a key
- * only the children carry tombstones them. A key with NO field row is the one
- * shape the cell is still authoritative for (§5's pending-materialization
- * rule), and it is exactly the branch
- * `materializePropertyChildrenForExistingRow` CREATES rather than reconciles:
- * filtering to it means the pass can only take that branch.
- *
- * A field row with NO value children is deliberately not treated as a gap:
- * that projects as "key unset" (§9), which is what deleting the value row
- * means, and re-adding it from the cell would undo the user's edit.
- *
- * A TOMBSTONED field row gets the same treatment. "No live field row" has two
- * causes — history, and a property DELETED through its children on a peer whose
- * owner row has not reached this device — and only the tombstone tells them
- * apart. Without it the pass recreates the property and UPLOADS it, undoing the
- * delete for the fleet. Genuine history carries no tombstone, so this costs the
- * intended path nothing. It does NOT cover an out-of-band HARD delete of a
- * child, which leaves no tombstone to find and whose stale cell key is a known
- * permanent orphan (issue #404).
- */
-const namesPendingMaterialization = async (
-  tx: Tx,
-  ctx: WorkspaceBackfillContext,
-  row: BlockData,
-): Promise<string[]> => {
-  const materialized = await materializedFieldIds(tx, row)
-  // Read under the SAME write lock as the materialization it gates. Taken with
-  // the candidate scan instead, a tombstone that landed while the batch waited
-  // for the writer would be missed — and missing it is the whole failure.
-  const reaped = new Set((await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id))
-    .map(getPropertyFieldTargetId))
-  return Object.keys(row.properties).filter(name => {
-    const fieldId = ctx.resolveNameSchema(name)?.fieldId
-    // An unregistered key has no definition to point a field row AT, so the
-    // materializer skips it and it can never leave this set. Excluded rather
-    // than carried: convergence is "a sweep that materialized nothing", and
-    // `materializeRow` counts NAMES HANDED to the materializer, so one such key
-    // on one block kept every sweep looking like work and the run ended in a
-    // give-up — on exactly the graphs `audit-properties` exists to find.
-    if (fieldId === undefined) return false
-    return !(materialized.has(fieldId) || reaped.has(fieldId))
-  })
-}
-
-/**
- * Materialize one row, isolating a name whose cell value will not decode.
- *
- * `materializePropertyChildrenForExistingRow` walks `names` and THROWS at the
- * first one whose cell value fails its codec — legacy junk from a raw
- * `tx.update({properties})`. Refusing is right for a live edit and wrong for a
- * one-time sweep in two ways: unhandled it aborts the migration for the whole
- * graph, and caught per ROW it strands every name after the bad one — so one
- * junk key leaves every other key on that block cell-only, silently, on a
- * workspace that is already reading children.
- *
- * So: one call for the whole list (one `childrenOf`, the common path), and on
- * a throw one call per name. The re-read cost is paid only by rows that are
- * already broken.
- */
-const materializeRow = async (
-  tx: Tx,
-  ctx: WorkspaceBackfillContext,
-  row: BlockData,
-  names: readonly string[],
-  onFailure: (blockId: string, cause: unknown) => void,
-  onMaterialized: (values: number) => void,
-): Promise<boolean> => {
-  const lookups = {resolveNameSchema: ctx.resolveNameSchema}
-  try {
-    await materializePropertyChildrenForExistingRow(tx, row, lookups, names)
-    onMaterialized(names.length)
-    return true
-  } catch {
-    for (const name of names) {
-      try {
-        await materializePropertyChildrenForExistingRow(tx, row, lookups, [name])
-        onMaterialized(1)
-      } catch (cause) {
-        onFailure(row.id, cause)
-      }
-    }
-    return false
-  }
-}
-
 /** One cursor-paginated walk of {@link CANDIDATE_SQL}. */
 const sweep = async (
   ctx: WorkspaceBackfillContext,
@@ -363,24 +266,71 @@ const sweep = async (
           'both in order.',
         )
       }
-      for (const {id} of batch) {
-        progress.blocksScanned += 1
-        // Re-read INSIDE the transaction rather than carrying the scan's
-        // snapshot into it. The scan ran before the write lock, and a pass
-        // over a whole workspace spans minutes — a sync arrival draining into
-        // `blocks`, or the user's own edit, lands in that window, and
-        // materializing from the stale bag would write children for values
-        // that are no longer there.
-        const row = await tx.get(id)
-        if (row === null || row.deleted) continue
-        const names = await namesPendingMaterialization(tx, ctx, row)
-        const ok = await materializeRow(tx, ctx, row, names, recordFailure,
-          values => {
-            progress.valuesMaterialized += values
-            progress.valuesMaterializedTotal += values
-          })
-        if (ok) progress.blocksMaterialized += 1
+      progress.blocksScanned += batch.length
+      // Re-read INSIDE the transaction rather than carrying the scan's
+      // snapshot into it. The scan ran before the write lock, and a pass
+      // over a whole workspace spans minutes — a sync arrival draining into
+      // `blocks`, or the user's own edit, lands in that window, and
+      // materializing from the stale bag would write children for values
+      // that are no longer there.
+      //
+      // TWO reads for the whole batch, not four per block. Asking per block
+      // was a third of the pass's reads on a large graph, and every one of
+      // them re-asked the same two questions of a different row.
+      const owners = await tx.liveRowsForIds(ctx.workspaceId, batch.map(b => b.id))
+      const takenByOwner = new Map<string, Set<string>>()
+      for (const fieldRow of await tx.propertyFieldRowsForParents(
+        ctx.workspaceId, owners.map(owner => owner.id),
+      )) {
+        const fieldId = getPropertyFieldTargetId(fieldRow)
+        if (fieldRow.parentId === null || fieldId === undefined) continue
+        const taken = takenByOwner.get(fieldRow.parentId) ?? new Set<string>()
+        taken.add(fieldId)
+        takenByOwner.set(fieldRow.parentId, taken)
       }
+
+      const planned: {owner: BlockData; schema: ResolvedNameSchema; encoded: unknown}[] = []
+      for (const owner of owners) {
+        let materializedHere = 0
+        for (const name of Object.keys(owner.properties)) {
+          const schema = ctx.resolveNameSchema(name)
+          // An unregistered key has no definition to point a field row AT, so
+          // it can never leave the pending set. Excluded rather than carried:
+          // convergence is "a sweep that materialized nothing", and one such
+          // key on one block kept every sweep looking like work.
+          if (schema === undefined) continue
+          if (takenByOwner.get(owner.id)?.has(schema.fieldId)) continue
+          const encoded = owner.properties[name]
+          // The per-NAME isolation the retry loop used to buy: legacy junk
+          // from a raw `tx.update({properties})` fails its codec, and one bad
+          // value must cost its own key rather than every key on the block.
+          const rejection = propertyCellValueRejection(schema, encoded)
+          if (rejection) {
+            recordFailure(owner.id, rejection.cause ?? new Error(
+              `property "${name}" does not decode under the "${schema.codec.type}" codec`,
+            ))
+            continue
+          }
+          planned.push({owner, schema, encoded})
+          materializedHere += 1
+        }
+        if (materializedHere > 0) progress.blocksMaterialized += 1
+        progress.valuesMaterialized += materializedHere
+        progress.valuesMaterializedTotal += materializedHere
+      }
+      if (planned.length === 0) return
+
+      // Field rows first, in their own call, because the value children need
+      // the minted ids to point at. Both calls go through `tx.createMany`, so
+      // the rows are workspace- and parent-checked and `record`ed exactly as
+      // one-at-a-time creates would be.
+      const fieldRowIds = await tx.createMany(
+        planned.map(({owner, schema}) => plannedFieldRow(owner, schema.fieldId)),
+      )
+      await tx.createMany(planned.flatMap(({owner, schema, encoded}, index) =>
+        plannedValueChildRows(
+          {id: fieldRowIds[index]!, workspaceId: owner.workspaceId}, schema, encoded,
+        )))
     }, {description: 'Migrate properties to child blocks'})
 
     // Awaited so a caller can do real work between batches — the seam a test

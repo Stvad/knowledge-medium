@@ -468,6 +468,43 @@ export class TxImpl implements Tx {
       .workspaceUnappliedCount(workspaceId)
   }
 
+  async liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {
+    if (ids.length === 0) return []
+    const out: BlockData[] = []
+    for (const chunk of chunked(ids, BULK_PARENT_LOOKUP_IDS)) {
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        `SELECT ${COLUMN_LIST} FROM blocks
+          WHERE workspace_id = ? AND deleted = 0 AND id IN (${chunk.map(() => '?').join(', ')})`,
+        [workspaceId, ...chunk],
+      )
+      out.push(...rows.map(parseBlockRow))
+    }
+    return out
+  }
+
+  async propertyFieldRowsForParents(
+    workspaceId: string,
+    parentIds: readonly string[],
+  ): Promise<BlockData[]> {
+    if (parentIds.length === 0) return []
+    const out: BlockData[] = []
+    for (const chunk of chunked(parentIds, BULK_PARENT_LOOKUP_IDS)) {
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        // Same INDEXED BY, and the same workspace term to reach it, as
+        // `tombstonedPropertyFieldRows` — and for the same reason: every other
+        // field-row index is `WHERE deleted = 0`, so letting the planner choose
+        // scans the whole database's field rows.
+        `SELECT ${COLUMN_LIST} FROM blocks INDEXED BY idx_blocks_any_field_form
+          WHERE workspace_id = ? AND parent_id IN (${chunk.map(() => '?').join(', ')})
+            AND is_field_form = 1 AND reference_target_id IS NOT NULL
+          ORDER BY order_key, id`,
+        [workspaceId, ...chunk],
+      )
+      out.push(...rows.map(parseBlockRow))
+    }
+    return out
+  }
+
   async tombstonedPropertyFieldRows(
     workspaceId: string,
     parentId: string,

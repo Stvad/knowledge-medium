@@ -109,6 +109,21 @@ export interface Tx {
    *  `ParentNotFoundError`. Returns the ids in that order. */
   createMany(rows: readonly NewBlockData[], opts?: TxInsertOpts): Promise<string[]>
 
+  /** Live rows for ids already known to the caller, in one query per 400 ids.
+   *  Missing and soft-deleted ids are simply absent from the result — the
+   *  caller is a pass that expects some of its candidates to have moved on. */
+  liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]>
+
+  /** Every property FIELD ROW under any of `parentIds`, live and tombstoned
+   *  alike, in one query per 400 parents. The union is deliberate: "this owner
+   *  already has a field row for this fieldId" and "this owner had one that was
+   *  reaped" are the two reasons a pass must leave a cell key alone, and asking
+   *  for them separately is two queries per owner to answer one question. */
+  propertyFieldRowsForParents(
+    workspaceId: string,
+    parentIds: readonly string[],
+  ): Promise<BlockData[]>
+
   /** Insert OR fetch the live row at a deterministic id. **No tombstone
    *  resurrection in the primitive** — see §10.4. Throws
    *  `DeterministicIdCrossWorkspaceError` if the existing row is in a

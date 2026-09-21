@@ -49,6 +49,7 @@ import {
   type AnyPropertySchema,
   type BlockData,
   type BlockReference,
+  type NewBlockData,
   type ResolvedPropertySchema,
   type SameTxCtx,
   type Tx,
@@ -641,6 +642,56 @@ const idReferencesForContent = (content: string): BlockReference[] | undefined =
   return normalizeReferences([{id: parsed.id, alias: parsed.id}])
 }
 
+/** The field row a property implies under `owner`, as DATA.
+ *
+ *  Machinery inserts field rows FIRST among children (§9 ordering decision):
+ *  fields cluster above content as an emergent default; orderKey stays
+ *  user-owned afterwards. Born classified — both derived columns pre-stamped
+ *  so the row classifies and projects within the same single pass. */
+export const plannedFieldRow = (
+  owner: Pick<BlockData, 'id' | 'workspaceId'>,
+  fieldId: string,
+): NewBlockData => {
+  const content = propertyFieldContent(fieldId)
+  return {
+    workspaceId: owner.workspaceId,
+    parentId: owner.id,
+    referenceTargetId: fieldId,
+    isFieldForm: true,
+    orderKey: keyAtStart(null),
+    content,
+    references: idReferencesForContent(content),
+  }
+}
+
+/** The value children a cell value implies under a field row that has NONE —
+ *  the create-only case, as DATA.
+ *
+ *  Emitted rather than written because two callers need it and they must not
+ *  be able to disagree about what a value's children are: the live writer
+ *  creates them one at a time inside a user's edit, while the one-time pass
+ *  hands a whole batch to `tx.createMany`. Everything that decides the ANSWER
+ *  — the member split, the content encoding, the order keys — is here once.
+ *
+ *  Only valid when the field row is empty. A field row that already has
+ *  children is a reconcile, which is `reconcileFieldValueChildren`'s job and a
+ *  different question (which existing row is this member?). */
+export const plannedValueChildRows = (
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): NewBlockData[] => {
+  const contents = encodedPropertyValueToChildContents(schema, encoded)
+  const keys = keysBetween(null, null, contents.length)
+  return contents.map((content, index) => ({
+    workspaceId: fieldRow.workspaceId,
+    parentId: fieldRow.id,
+    orderKey: keys[index]!,
+    content,
+    references: idReferencesForContent(content),
+  }))
+}
+
 /** Find-or-create the field row for `fieldId` under `owner`, keeping its
  *  content canonical and folding any duplicate field rows into the survivor.
  *  Returns the row whose value children the caller then reconciles.
@@ -679,17 +730,7 @@ export const upsertFieldRow = async (
   // Machinery inserts field rows FIRST among children (§9 ordering
   // decision): fields cluster above content as an emergent default;
   // orderKey stays user-owned afterwards.
-  const id = await tx.create({
-    workspaceId: owner.workspaceId,
-    parentId: owner.id,
-    // Born classified (§9): both derived columns pre-stamped in the create so
-    // the row classifies and projects within the same single pass.
-    referenceTargetId: fieldId,
-    isFieldForm: true,
-    orderKey: keyAtStart(null),
-    content,
-    references: idReferencesForContent(content),
-  })
+  const id = await tx.create(plannedFieldRow(owner, fieldId))
   return {id, workspaceId: owner.workspaceId}
 }
 
