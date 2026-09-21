@@ -1,1 +1,1 @@
-import{Md as e}from"../../../../../chunks/app-D3QJIkdz.js";export{e as wikilinkMarkdownExtension};
+import{Nd as e}from"../../../../../chunks/app-cm7sVejO.js";export{e as wikilinkMarkdownExtension};

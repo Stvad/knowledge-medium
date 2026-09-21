@@ -1,1 +1,1 @@
-import{QR as e}from"../../../chunks/app-D3QJIkdz.js";export{e as characterCounterDataExtension};
+import{$R as e}from"../../../chunks/app-cm7sVejO.js";export{e as characterCounterDataExtension};

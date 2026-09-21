@@ -1,1 +1,1 @@
-import{Bc as e}from"../../../chunks/app-D3QJIkdz.js";export{e as agentDispatchCompanionPlugin};
+import{Vc as e}from"../../../chunks/app-cm7sVejO.js";export{e as agentDispatchCompanionPlugin};

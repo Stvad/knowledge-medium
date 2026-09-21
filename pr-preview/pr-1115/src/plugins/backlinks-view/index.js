@@ -1,1 +1,1 @@
-import{Eu as e}from"../../../chunks/app-D3QJIkdz.js";export{e as backlinksViewPlugin};
+import{Du as e}from"../../../chunks/app-cm7sVejO.js";export{e as backlinksViewPlugin};
