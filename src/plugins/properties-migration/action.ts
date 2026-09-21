@@ -111,7 +111,7 @@ const FLIP_LANDED =
 export const describeOutcome = (
   result: OperatorBackfillResult,
   counts: {
-    blocksMaterialized: number
+    blocksMaterializedTotal: number
     valuesMaterializedTotal: number
     unmigrated: number
   },
@@ -139,21 +139,20 @@ export const describeOutcome = (
 const describePassOutcome = (
   result: OperatorBackfillResult,
   counts: {
-    blocksMaterialized: number
+    blocksMaterializedTotal: number
     valuesMaterializedTotal: number
     unmigrated: number
   },
   /** Already folded by the caller — the pass's own clear OR the gesture's. */
   cleared: boolean,
 ): {message: string; failed: boolean; followUp?: string} => {
-  const {blocksMaterialized, valuesMaterializedTotal, unmigrated} = counts
+  const {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated} = counts
   switch (result.outcome) {
     case 'ran':
-      // On VALUES, not on blocks: `blocksMaterialized` counts blocks accepted in
-      // FULL, so one junk key on every block reads as zero for a run that wrote
-      // all the other keys. And on the RUN's total, not the last sweep's — the
-      // converging sweep is by definition the one that found nothing left
-      // pending, so a per-sweep zero is how every successful run ends.
+      // Asked of VALUES, over the whole RUN. "Did anything move" is a question
+      // about values, and only the run-wide count can answer it: the converging
+      // sweep is by definition the one that found nothing left pending, so its
+      // per-sweep count is zero at the end of every successful run.
       //
       // Both "wrote no values" endings answered together, so a third cannot
       // slip between them: which one it is turns entirely on whether the values
@@ -174,10 +173,10 @@ const describePassOutcome = (
           }
         }
         // The runbook's stop condition, and the only report that can carry it.
-        // `blocksMaterialized` counts blocks the pass ACCEPTED, so a re-run over
-        // a finished workspace reports the whole candidate set and reads exactly
-        // like the first run — which is how a completed migration became
-        // indistinguishable from one starting over.
+        // The fall-through below reports `blocksMaterializedTotal`, which a
+        // re-run over a finished workspace leaves at zero — so without this
+        // branch the stop condition renders as "Migrated properties on 0
+        // blocks.", the same sentence a totally broken run produces.
         //
         // NOT "nothing was written": synthesis may have minted definitions on
         // this same run, and the flip may have landed. This says only what it
@@ -189,7 +188,7 @@ const describePassOutcome = (
         }
       }
       return {
-        message: `Migrated properties on ${blocksMaterialized.toLocaleString()} blocks.`,
+        message: `Migrated properties on ${blocksMaterializedTotal.toLocaleString()} blocks.`,
         // Surfaced through `done`, not `fail`: the pass DID complete, and
         // saying otherwise would send an operator looking for a broken run
         // rather than for the handful of values named in the console.
@@ -264,7 +263,7 @@ const describePassOutcome = (
  *  than faked per call site so a future branch that does read them sees zeros
  *  and not a guess. */
 const NOTHING_MIGRATED = {
-  blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 0,
+  blocksMaterializedTotal: 0, valuesMaterializedTotal: 0, unmigrated: 0,
 } as const
 
 /** Everything {@link migrateUnderClaim} needs that was decided BEFORE the
@@ -436,7 +435,7 @@ const migrateUnderClaim = async (
       return
     }
   }
-  let materialized = 0
+  let blocksMaterializedTotal = 0
   // Subscribed for the whole run, not just started with it: the pass reports
   // per committed batch, and a run of several minutes with a status line that
   // never moves is indistinguishable from a hung one.
@@ -447,7 +446,7 @@ const migrateUnderClaim = async (
     // per-sweep count is "was what this sweep scanned acceptable", so on a
     // converged sweep it reports the WHOLE scan, and reading it here would
     // tell the operator the run migrated everything it had merely re-checked.
-    materialized = progress.blocksMaterializedTotal
+    blocksMaterializedTotal = progress.blocksMaterializedTotal
     valuesMaterializedTotal = progress.valuesMaterializedTotal
     unmigrated = progress.failureCount
     // Counts are per-sweep, and the sweep number is shown because a second
@@ -463,7 +462,7 @@ const migrateUnderClaim = async (
     const result = await pass.run()
     const {message, failed, followUp} = describeOutcome(
       result,
-      {blocksMaterialized: materialized, valuesMaterializedTotal, unmigrated},
+      {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated},
       {flipped: flipLanded, undoCleared},
     )
     if (failed) banner.fail(message)

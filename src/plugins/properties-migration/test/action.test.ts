@@ -143,7 +143,7 @@ const dialogThatSwitchesWorkspace = (repo: Repo) => async () => {
 /** The counts `describeOutcome` reports on, for a run that migrated `blocks`
  *  blocks cleanly. Shared by every describe that renders an outcome. */
 const counts = (blocks: number) =>
-  ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks, unmigrated: 0})
+  ({blocksMaterializedTotal: blocks, valuesMaterializedTotal: blocks, unmigrated: 0})
 
 describe('a workspace another client is already migrating', () => {
   it('refuses before the consent screen, rather than after it', async () => {
@@ -1021,7 +1021,7 @@ describe('what a completed run tells the operator', () => {
     // otherwise came back as a success banner reading "Migrated properties on
     // 0 blocks."
     const {message, failed} = describeOutcome(
-      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 12})
+      RAN, {blocksMaterializedTotal: 0, valuesMaterializedTotal: 0, unmigrated: 12})
 
     expect(failed).toBe(true)
     expect(message).toMatch(/Nothing was migrated/i)
@@ -1036,19 +1036,22 @@ describe('what a completed run tells the operator', () => {
     // the second is the steady state, so the diagnosis was wrong on every
     // re-run, forever.
     const {message} = describeOutcome(
-      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 65})
+      RAN, {blocksMaterializedTotal: 0, valuesMaterializedTotal: 0, unmigrated: 65})
 
     expect(message).not.toMatch(/systematic/i)
   })
 
   it('reports a run that found nothing left as such, not as work it did', async () => {
     // The runbook's stop condition is "re-run until it reports nothing left",
-    // and `blocksMaterialized` cannot carry it: it counts blocks the pass
-    // ACCEPTED, so a re-run over a finished workspace reports the whole
-    // candidate set. Live numbers from the report — 249 blocks visited, no
-    // value moved — which rendered as "Migrated properties on 249 blocks."
+    // and a block count cannot carry it — a finished workspace once rendered
+    // as "Migrated properties on 249 blocks", live numbers from the report.
+    //
+    // The input pairs a nonzero block count with zero values ON PURPOSE. The
+    // run-wide counters cannot now produce it (the owner set only grows when
+    // a value moves), so this is defence in depth: it fails if either the
+    // branch or the message is ever re-pointed at the block count.
     const {message, failed} = describeOutcome(
-      RAN, {blocksMaterialized: 249, valuesMaterializedTotal: 0, unmigrated: 0})
+      RAN, {blocksMaterializedTotal: 249, valuesMaterializedTotal: 0, unmigrated: 0})
 
     expect(failed).toBe(false)
     expect(message).toMatch(/nothing left to migrate/i)
@@ -1073,11 +1076,12 @@ describe('what a completed run tells the operator', () => {
   })
 
   it('is not "systematic" when one bad key per block hid a mostly-good run', async () => {
-    // `blocksMaterialized` counts blocks accepted in FULL, so it reads zero for
-    // a run that wrote every other key on every block. Branching on it told the
-    // operator nothing was migrated while tens of thousands of rows were.
+    // A run that moved 40 values off 20 owners and refused 20 more is a
+    // mostly-good run, not a failure. Branching on a per-block "accepted in
+    // full" count called it one, because one bad key per block reads as zero
+    // accepted while tens of thousands of rows moved.
     const {failed} = describeOutcome(
-      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 40, unmigrated: 20},
+      RAN, {blocksMaterializedTotal: 20, valuesMaterializedTotal: 40, unmigrated: 20},
     )
 
     expect(failed).toBe(false)
@@ -1169,7 +1173,7 @@ describe('every outcome says whether the history is gone', () => {
   it('covers the all-values-failed branch, which returns before the common tail', () => {
     const {message} = describeOutcome(
       RAN,
-      {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 5},
+      {blocksMaterializedTotal: 0, valuesMaterializedTotal: 0, unmigrated: 5},
       {flipped: false, undoCleared: true})
     expect(message).toMatch(/all 5 property value\(s\) the pass tried/)
     expect(message).toMatch(/Undo history for this workspace was cleared/)

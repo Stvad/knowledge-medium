@@ -207,4 +207,24 @@ describe('the migration progress path', () => {
 
     expect(progressHandle.update).toHaveBeenCalledWith(expect.stringMatching(/sweep 2/i))
   })
+
+  it('reports the blocks the RUN changed, not the ones the sweep accepted', async () => {
+    // The two counters answer different questions and only diverge on a real
+    // graph: `blocksMaterialized` is every owner the last sweep found
+    // acceptable — its whole scan, once converged — while
+    // `blocksMaterializedTotal` is the distinct owners the run actually
+    // changed. Reading the first told the operator a re-run had migrated
+    // every block it had merely re-checked.
+    //
+    // Pinned HERE because it is a wiring choice: `describeOutcome` is handed
+    // one number and cannot tell which it was given, so no test of that
+    // function can catch the swap.
+    await runReporting(progress({
+      blocksScanned: 900, blocksMaterialized: 900, blocksMaterializedTotal: 12,
+      valuesMaterialized: 0, valuesMaterializedTotal: 34,
+    }))
+
+    expect(progressHandle.done).toHaveBeenCalledWith(expect.stringMatching(/on 12 blocks/))
+    expect(progressHandle.done).toHaveBeenCalledWith(expect.not.stringMatching(/900/))
+  })
 })
