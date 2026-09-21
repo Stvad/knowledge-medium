@@ -1,1 +1,1 @@
-import{ID as e,LD as t,RD as n}from"../../../chunks/app-B0p1detO.js";export{e as BootstrapErrorFallback,t as FallbackComponent,n as LocalDbCorruptionSentinel};
+import{ID as e,LD as t,RD as n}from"../../../chunks/app-B8Ok5r31.js";export{e as BootstrapErrorFallback,t as FallbackComponent,n as LocalDbCorruptionSentinel};
