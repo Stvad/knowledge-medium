@@ -1,0 +1,1 @@
+import{cs as e,fs as t,os as n,ps as r,ss as i,xs as a}from"../../../chunks/app-BtiXac6_.js";export{i as ADD_TAG_ACTION_ID,e as ADD_TAG_BLOCKS_ACTION_ID,t as appendTagToBlocks,r as appendTagToContent,n as blockTaggingPlugin,a as blockTagsConfigProp};

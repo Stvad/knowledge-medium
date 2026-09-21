@@ -1,0 +1,1 @@
+import{fm as e,pm as t}from"../../../chunks/app-BtiXac6_.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};

@@ -1,0 +1,1 @@
+import{dw as e,fw as t}from"../../../chunks/app-BtiXac6_.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

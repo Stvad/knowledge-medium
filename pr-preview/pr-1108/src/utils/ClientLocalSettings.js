@@ -1,0 +1,1 @@
+import{_T as e,gT as t}from"../../chunks/app-BtiXac6_.js";export{t as ClientLocalSettings,e as clientLocalSettings};

@@ -1,0 +1,1 @@
+import{fs as e,ps as t}from"../../../chunks/app-BtiXac6_.js";export{e as appendTagToBlocks,t as appendTagToContent};

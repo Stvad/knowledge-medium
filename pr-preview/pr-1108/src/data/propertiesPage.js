@@ -1,0 +1,1 @@
+import{n1 as e,r1 as t}from"../../chunks/app-BtiXac6_.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
