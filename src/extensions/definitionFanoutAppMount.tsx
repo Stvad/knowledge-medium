@@ -18,8 +18,13 @@
  * No escape and no cancel. A transaction in flight cannot be handed back
  * halfway — there is nothing here for a button to do that closing the tab
  * does not already do, which rolls the change back whole.
+ *
+ * NOT scoped to the active workspace, deliberately: the fan-out holds the
+ * database-wide writer, so navigating to another workspace mid-run reaches an
+ * app that is just as frozen. A surface that went away on the switch would
+ * take the only account of why with it.
  */
-import { useCallback, useSyncExternalStore } from 'react'
+import { useSyncExternalStore } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -28,11 +33,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  propertyDefinitionFanoutFor,
+  propertyDefinitionFanout,
   subscribePropertyDefinitionFanout,
   type PropertyDefinitionFanoutSnapshot,
 } from '@/data/propertyDefinitionFanout.js'
-import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import { useModalShadowing } from '@/shortcuts/useActionContext.js'
 import { appMountsFacet } from './core.ts'
 import type { AppExtension } from '@/facets/facet.js'
@@ -52,11 +56,11 @@ const statusLine = (run: PropertyDefinitionFanoutSnapshot): string => {
 }
 
 export const DefinitionFanoutProgress = () => {
-  const workspaceId = useActiveWorkspaceId()
-  const read = useCallback(
-    () => propertyDefinitionFanoutFor(workspaceId), [workspaceId],
+  const run = useSyncExternalStore(
+    subscribePropertyDefinitionFanout,
+    propertyDefinitionFanout,
+    propertyDefinitionFanout,
   )
-  const run = useSyncExternalStore(subscribePropertyDefinitionFanout, read, read)
   return run === null ? null : <FanoutProgressDialog run={run} />
 }
 

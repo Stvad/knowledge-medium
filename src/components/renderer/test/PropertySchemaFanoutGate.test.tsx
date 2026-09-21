@@ -15,6 +15,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChangeScope } from '@/data/api'
+import { propertyNameProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -26,7 +27,7 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
   LARGE_FANOUT_CONSUMERS,
-  propertyDefinitionFanoutFor,
+  propertyDefinitionFanout,
   subscribePropertyDefinitionFanout,
   type PropertyDefinitionFanoutSnapshot,
   __resetPropertyDefinitionFanoutForTests,
@@ -146,7 +147,7 @@ const storedName = async (): Promise<unknown> => {
  *  inside one awaited write is still observable afterwards. */
 const recordFanoutRuns = (): Array<PropertyDefinitionFanoutSnapshot | null> => {
   const seen: Array<PropertyDefinitionFanoutSnapshot | null> = []
-  subscribePropertyDefinitionFanout(() => { seen.push(propertyDefinitionFanoutFor(WS)) })
+  subscribePropertyDefinitionFanout(() => { seen.push(propertyDefinitionFanout()) })
   return seen
 }
 
@@ -176,7 +177,7 @@ describe('renaming a property with many consumers', () => {
     expect(seen[0]).toMatchObject({propertyName: 'test:myProp', total: 4_000, done: null})
     // CLOSED at the end, and nothing else closes it: a run left open is a
     // modal over a workspace that is no longer busy.
-    await waitFor(() => { expect(propertyDefinitionFanoutFor(WS)).toBeNull() })
+    await waitFor(() => { expect(propertyDefinitionFanout()).toBeNull() })
   })
 
   it('leaves the property alone when the change is declined, field included', async () => {
@@ -188,7 +189,7 @@ describe('renaming a property with many consumers', () => {
 
     await waitFor(() => { expect(nameInput().value).toBe('test:myProp') })
     expect(await storedName()).toBe('test:myProp')
-    expect(propertyDefinitionFanoutFor(WS)).toBeNull()
+    expect(propertyDefinitionFanout()).toBeNull()
   })
 
   it('rejects a name the field rows could not bind to, without asking', async () => {
@@ -203,6 +204,27 @@ describe('renaming a property with many consumers', () => {
     await waitFor(() => { expect(nameInput().value).toBe('test:myProp') })
     expect(screen.queryByRole('button', {name: 'Rename'})).toBeNull()
     expect(await storedName()).toBe('test:myProp')
+  })
+
+  it('writes nothing when the definition moved while the user was deciding', async () => {
+    // A confirmation is a human pause and sync keeps running through it.
+    // Without the in-transaction re-read, agreeing to "rename test:myProp to
+    // test:renamed" a moment after a peer renamed the same definition
+    // performs "rename theirName to test:renamed" — consent about a
+    // definition that no longer exists, and the peer's edit gone with no
+    // record of it.
+    consumersAre(4_000)
+    renderSchema()
+    await renameTo('test:renamed')
+    await screen.findByRole('button', {name: 'Rename'})
+
+    // The peer's write, landing while the dialog is up.
+    await repo.tx(tx => tx.setProperty(SCHEMA_ID, propertyNameProp, 'test:fromAPeer'),
+      {scope: ChangeScope.BlockDefault})
+    await user().click(screen.getByRole('button', {name: 'Rename'}))
+
+    await waitFor(async () => { expect(await storedName()).toBe('test:fromAPeer') })
+    expect(propertyDefinitionFanout()).toBeNull()
   })
 
   it('does not ask, or open a surface, for a change nobody will notice', async () => {
@@ -263,7 +285,7 @@ describe('re-typing a property with many consumers', () => {
 
     // The run DID open — otherwise the close below would be about nothing.
     await waitFor(() => { expect(seen.length).toBeGreaterThan(0) })
-    await waitFor(() => { expect(propertyDefinitionFanoutFor(WS)).toBeNull() })
+    await waitFor(() => { expect(propertyDefinitionFanout()).toBeNull() })
   })
 
   it('leaves the stored type alone when declined', async () => {

@@ -95,6 +95,16 @@ const openRun = async (
   return run
 }
 
+const openRunNamed = async (
+  propertyName: string, total: number,
+): Promise<PropertyDefinitionFanoutRun> => {
+  let run!: PropertyDefinitionFanoutRun
+  await act(async () => {
+    run = beginPropertyDefinitionFanout(WS, propertyName, total)
+  })
+  return run
+}
+
 const report = (done: number, total = 4_000, workspaceId = WS): void => {
   act(() => { reportPropertyDefinitionFanout(workspaceId, done, total) })
 }
@@ -137,20 +147,52 @@ describe('the fan-out progress surface', () => {
     expect(screen.getByTestId('shadowing').textContent).toBe('false')
   })
 
-  it('stays out of a workspace the change is not happening in', async () => {
+  it('stays up for a change in a workspace the user has navigated away from', async () => {
+    // The fan-out holds the DATABASE-WIDE writer, so the workspace the user
+    // switches to is just as frozen as the one being renamed. A surface filed
+    // under the changing workspace would take the only account of that with
+    // it, which is what keying this store per workspace used to do.
     renderMount()
-    // PRIMED FIRST, and that is the whole test: the dialog's first mount
-    // suspends on the shortcut funnel, so an absence asserted before anything
-    // has ever rendered here passes with the workspace keying deleted. Showing
-    // it once, and taking it down again, leaves the suspend resolved — so the
-    // absence below is about the keying.
-    const primed = await openRun()
-    expect(await screen.findByRole('dialog')).toBeTruthy()
-    act(() => { primed.end() })
-    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
-
     await openRun('ws-somewhere-else')
 
-    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    expect(screen.getByText(/Updating blocks that use “status”/)).toBeTruthy()
+  })
+
+  it('ignores a report belonging to another workspace\'s change', async () => {
+    // The run is found without the workspace now, so the workspace is what
+    // matches a report to it: a fan-out in another workspace must not move
+    // this one's numbers under this one's title.
+    renderMount()
+    await openRun(WS, 4_000)
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+
+    report(500, 4_000, 'ws-somewhere-else')
+
+    expect(screen.getByText('Starting…')).toBeTruthy()
+  })
+
+  it('keeps the first run when a second opens behind it', async () => {
+    // A run opens when the user CONFIRMS, which is before its transaction has
+    // the writer — so two confirmed gestures can both be waiting. If the
+    // second replaced the first, the first transaction's reports would land
+    // on the second property's name and the first `end` would take down a
+    // surface the second still needs.
+    renderMount()
+    const first = await openRun(WS, 4_000)
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+
+    const second = await openRunNamed('otherProperty', 9_000)
+    report(500)
+
+    expect(screen.getByText(/Updating blocks that use “status”/)).toBeTruthy()
+    expect(screen.getByText('500 of 4,000 blocks updated')).toBeTruthy()
+
+    // The loser's `end` owns nothing, so it cannot close the live run either.
+    act(() => { second.end() })
+    expect(screen.queryByRole('dialog')).not.toBeNull()
+
+    act(() => { first.end() })
+    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
   })
 })

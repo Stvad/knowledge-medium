@@ -19,13 +19,21 @@
  * WHO OWNS WHAT. The GESTURE opens and closes the run, because it is the only
  * thing that knows when the user's wait actually ends: the consumer loop is
  * not the last of it — the commit, the post-commit cache walk over every row
- * it touched, and the undo record all come after, and a surface that vanishes
- * at the last consumer would hand the user back a still-frozen app. The
+ * it touched, and the undo record all come after, and a surface that vanished
+ * at the last consumer would hand the user back a still-frozen app (measured:
+ * a third of a second of tail on 1,500 consumers, and it grows with them). The
  * PROCESSOR only reports into whatever run is open, and reporting where
  * nothing is listening is a no-op — which is what keeps a headless caller (the
  * agent CLI, an importer) from needing to know this module exists.
+ *
+ * ONE SLOT, NOT ONE PER WORKSPACE. A run describes the SQLite WRITER, and
+ * there is one of those per tab: while a fan-out holds it every workspace's
+ * writes are queued, so a surface filed under the workspace being renamed
+ * vanishes the moment the user navigates to another one — leaving them in a
+ * frozen app with no account of why. The workspace is still carried, as data a
+ * report is matched against, never as the key the surface is found under.
  */
-import { createWorkspaceSnapshotStore } from '@/utils/workspaceSnapshotStore.js'
+import { CallbackSet } from '@/utils/callbackSet.js'
 
 /** Above this many consuming blocks a definition change is worth interrupting
  *  the user for, in both directions — a confirmation before, a progress
@@ -43,7 +51,13 @@ export const LARGE_FANOUT_CONSUMERS = 1_000
 export const isLargeFanout = (consumerCount: number): boolean =>
   consumerCount >= LARGE_FANOUT_CONSUMERS
 
+/** Identity only — never inspected, so nothing can forge or guess one. */
+type RunOwner = symbol
+
 export interface PropertyDefinitionFanoutSnapshot {
+  /** The workspace whose definition is changing. Carried so a report can be
+   *  matched to the run it belongs to, and for nothing else — see the one-slot
+   *  note above. */
   readonly workspaceId: string
   /** What the user is waiting on, in the words they used: the property being
    *  renamed or re-typed. */
@@ -57,15 +71,31 @@ export interface PropertyDefinitionFanoutSnapshot {
   readonly done: number | null
 }
 
-const store = createWorkspaceSnapshotStore<PropertyDefinitionFanoutSnapshot>(
-  'property-definition-fanout',
-)
+interface LiveRun extends PropertyDefinitionFanoutSnapshot {
+  readonly owner: RunOwner
+}
 
-export const subscribePropertyDefinitionFanout = store.subscribe
-export const propertyDefinitionFanoutFor = store.getFor
+const listeners = new CallbackSet('property-definition-fanout')
+let live: LiveRun | null = null
+
+const publish = (next: LiveRun | null): void => {
+  live = next
+  listeners.notify()
+}
+
+export const subscribePropertyDefinitionFanout = (
+  listener: () => void,
+): (() => void) => listeners.add(listener)
+
+/** The run on screen, or null. A stable reference until something publishes,
+ *  so `useSyncExternalStore` can read it directly. */
+export const propertyDefinitionFanout = (): PropertyDefinitionFanoutSnapshot | null => live
 
 /** Test helper — also drops the listeners, which no production caller may do. */
-export const __resetPropertyDefinitionFanoutForTests = store.reset
+export const __resetPropertyDefinitionFanoutForTests = (): void => {
+  live = null
+  listeners.clear()
+}
 
 export interface PropertyDefinitionFanoutRun {
   /** ALWAYS from a `finally`. A refused change rolls the transaction back and
@@ -76,33 +106,36 @@ export interface PropertyDefinitionFanoutRun {
 
 /** Open the surface for a change the user has agreed to wait for.
  *
- *  No owner token, unlike the migration's run slot: there is one SQLite writer
- *  and a fan-out holds it for its whole duration, so a second definition
- *  change cannot be in flight anywhere in this tab to race the first. */
+ *  FIRST-WINS, the same rule the migration's run slot uses, and for a reason
+ *  "there is only one writer" does not cover: a run opens when the user
+ *  CONFIRMS, which is before its transaction has the writer, so two confirmed
+ *  gestures can both be waiting. Letting the second replace the first would
+ *  point the first transaction's reports at the second property's name, and
+ *  let the first's `end` take down a surface the second still needs. The
+ *  loser's token owns nothing and every write it makes is a no-op. */
 export const beginPropertyDefinitionFanout = (
   workspaceId: string, propertyName: string, total: number,
 ): PropertyDefinitionFanoutRun => {
-  store.publish({workspaceId, propertyName, total, done: null})
-  return {end: () => { store.clearFor(workspaceId) }}
+  const owner: RunOwner = Symbol('property-definition-fanout')
+  if (live === null) publish({workspaceId, propertyName, total, done: null, owner})
+  return {
+    end: () => { if (live?.owner === owner) publish(null) },
+  }
 }
 
-/** How far the fan-out has got. Silently ignored when no run is open for this
- *  workspace — see the ownership note above.
+/** How far the fan-out has got. Ignored when no run is open, and when the open
+ *  one belongs to a different workspace's change.
  *
  *  A report is an UPDATE to a run somebody else opened and never the opening
  *  of one, which is the whole of what keeps a headless rename from putting a
- *  modal in front of the next reader. DEFENCE IN DEPTH as written, and
- *  deliberately so: deleting the early return fails no test, because a spread
- *  of `null` files its snapshot under no workspace at all and the store's
- *  per-workspace keying then hides it. What IS pinned is the rule — a
- *  processor that opened a run instead of reporting into one fails two named
+ *  modal in front of the next reader. The rule is pinned where it can be: a
+ *  processor that OPENED a run rather than reporting into one fails two named
  *  tests in `propertyDefinitionChange.test.ts`. */
 export const reportPropertyDefinitionFanout = (
   workspaceId: string, done: number, total: number,
 ): void => {
-  const live = store.getFor(workspaceId)
-  if (live === null) return
-  store.publish({...live, done, total})
+  if (live === null || live.workspaceId !== workspaceId) return
+  publish({...live, done, total})
 }
 
 /** Consumers between published progress reports.
