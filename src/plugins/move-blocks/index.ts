@@ -18,6 +18,8 @@ import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { moveBlockAction, moveBlocksAction } from './moveAction.ts'
 import { moveBlocksContextMenuItem } from './contextMenuItem.ts'
+import { actionReceiptsFacet } from '@/plugins/action-receipts/facet.ts'
+import { moveBlockReceipt, moveBlocksReceipt } from './receipts.ts'
 
 export {
   MOVE_BLOCKS_ACTION_ID,
@@ -47,4 +49,6 @@ export const moveBlocksPlugin: AppExtension = systemToggle({
   // `commandPaletteForBlockAction` does), so without this the move
   // command has no dependable way to be invoked.
   blockContextMenuItemsFacet.of(moveBlocksContextMenuItem, {source: 'move-blocks'}),
+  actionReceiptsFacet.of(moveBlockReceipt, {source: 'move-blocks'}),
+  actionReceiptsFacet.of(moveBlocksReceipt, {source: 'move-blocks'}),
 ])

@@ -18,9 +18,8 @@ import {
 } from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.js'
 import { formatIsoDate } from '@/utils/dailyPage'
-import { createElement } from 'react'
-import { showCustom } from '@/utils/toast.js'
-import { RescheduleToast } from './RescheduleToast.tsx'
+import { showReceipt } from '@/plugins/action-receipts/receipts.ts'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import {
   ActionConfig,
   ActionContextTypes,
@@ -406,26 +405,24 @@ const runRescheduleWithFeedback = async (
   // Capture the reschedule's OWN workspace + entry, NOT the active ones.
   // `rescheduleBlock` awaited, so the user may have switched workspaces in
   // the meantime — reading `activeWorkspaceId` / the active undo manager
-  // here would bind the toast to a different workspace's top entry, and
+  // here would bind the receipt to a different workspace's top entry, and
   // clicking Undo could then revert an unrelated action (issue #186; PR
   // review). The reschedule wrote `block`, whose workspace is immutable,
   // and `rescheduleBlock` just resolved with no further await — so that
-  // workspace's manager top is reliably the reschedule entry. The toast
-  // subscribes via UndoManager and disables itself once a later tx lands
-  // or the user leaves this workspace.
-  const workspaceId = block.peek()?.workspaceId
+  // workspace's manager top is reliably the reschedule entry. The receipt
+  // keeps its Undo live while that entry stays on top (a trailing
+  // same-group merge mutates the entry in place, so identity holds).
+  const data = block.peek()
+  const workspaceId = data?.workspaceId
   if (!workspaceId) return
   const top = block.repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault)
-  const groupId = top?.groupId
-  if (!groupId) return
-  const message = formatRescheduleToastMessage(result)
-  showCustom(id => createElement(RescheduleToast, {
-    toastId: id,
-    message,
-    groupId,
-    workspaceId,
-    repo: block.repo,
-  }))
+  if (!top?.groupId) return
+  void showReceipt({
+    key: 'action:srs-reschedule',
+    verb: formatRescheduleToastMessage(result),
+    subject: {id: block.id, workspaceId, label: labelForBlockData(data, 'Card'), labelIsContent: true, kind: 'properties', navigable: true},
+    revert: {direction: 'undo', entry: top, workspaceId},
+  }, block.repo)
 }
 
 const createRescheduleAction = <T extends SrsActionContext>(
