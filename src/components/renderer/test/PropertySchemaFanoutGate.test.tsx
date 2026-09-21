@@ -12,6 +12,13 @@
  * write.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The refusal's own postcondition, and the only monotonic one this file has:
+// see the staleness test below for why the stored row cannot serve as a fence.
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showError: vi.fn(),
+}))
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChangeScope } from '@/data/api'
@@ -34,6 +41,8 @@ import {
 } from '@/data/propertyDefinitionFanout'
 import { PropertySchemaContentRenderer } from '../PropertySchemaBlockRenderer'
 import { useSyncExternalStore } from 'react'
+
+const showError = vi.mocked((await import('@/utils/toast.js')).showError)
 
 const WS = 'ws-fanout-gate'
 const SCHEMA_ID = 'user-schema'
@@ -75,6 +84,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  showError.mockClear()
   // BEFORE `cleanup`, and it is not tidiness: the dialog queue is module
   // state, so a test that leaves one open hands it to the next test's render —
   // where Radix's `aria-hidden` over the rest of the tree makes the schema
@@ -190,6 +200,9 @@ describe('renaming a property with many consumers', () => {
     await waitFor(() => { expect(nameInput().value).toBe('test:myProp') })
     expect(await storedName()).toBe('test:myProp')
     expect(propertyDefinitionFanout()).toBeNull()
+    // A decline is the user's own answer, not something to report back at
+    // them — only a change that was overtaken gets the toast.
+    expect(showError).not.toHaveBeenCalled()
   })
 
   it('rejects a name the field rows could not bind to, without asking', async () => {
@@ -223,7 +236,13 @@ describe('renaming a property with many consumers', () => {
       {scope: ChangeScope.BlockDefault})
     await user().click(screen.getByRole('button', {name: 'Rename'}))
 
-    await waitFor(async () => { expect(await storedName()).toBe('test:fromAPeer') })
+    // FENCED ON THE REFUSAL, not on the row. The peer's write has already
+    // landed, so `storedName` reads its value from the moment it commits —
+    // before the gate's transaction has even opened. Waiting on that passed
+    // locally and failed under CI load, which is the whole shape of a proxy
+    // fence. The toast is the postcondition and fires once.
+    await waitFor(() => { expect(showError).toHaveBeenCalledOnce() })
+    expect(await storedName()).toBe('test:fromAPeer')
     expect(propertyDefinitionFanout()).toBeNull()
   })
 
