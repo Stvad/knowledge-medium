@@ -1,1 +1,1 @@
-import{vk as e}from"../../../chunks/app-CI8nUTwD.js";export{e as MarkdownContentRenderer};
+import{vk as e}from"../../../chunks/app-BQUsDLHs.js";export{e as MarkdownContentRenderer};
