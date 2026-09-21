@@ -1,0 +1,1 @@
+import{H2 as e,U2 as t,W2 as n}from"../../../chunks/app-CI8nUTwD.js";export{e as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,n as systemAuthor};

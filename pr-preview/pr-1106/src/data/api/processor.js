@@ -1,0 +1,1 @@
+import{n4 as e}from"../../../chunks/app-CI8nUTwD.js";export{e as definePostCommitProcessor};
