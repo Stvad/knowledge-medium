@@ -6,7 +6,7 @@
  *    - all values are `[[…]]` page tokens          → 'refList' preset
  *    - all values are finite numbers               → 'number' preset
  *    - all values are true/false                   → 'boolean' preset
- *    - mixed string scalars + string arrays         → 'list' preset
+ *    - mixed string scalars + string arrays         → 'string-list' preset
  *    - otherwise                                   → 'string' preset
  *
  *  refList classification is paired with `normalizeRefPropertyValues`
@@ -29,7 +29,7 @@ import {
   parsePageTokenList,
 } from './properties'
 
-type ClassifiedPresetId = 'string' | 'number' | 'boolean' | 'list' | 'refList'
+type ClassifiedPresetId = 'string' | 'number' | 'boolean' | 'string-list' | 'refList'
 
 interface SampledNameStats {
   totalValues: number
@@ -42,7 +42,7 @@ interface SampledNameStats {
    *  path in `propertiesFromRoam` already produces these). */
   pageTokenArrays: number
   /** Array values whose items are plain strings (no `[[X]]` wrapping).
-   *  These map to the `list` preset, not `refList`, since the strings
+   *  These map to the `string-list` preset, not `refList`, since the strings
    *  aren't aliases to resolve — we keep them as-is in the value. */
   plainStringArrays: number
   /** Scalar strings that are not pure `[[X]]` token lists. If these
@@ -140,9 +140,15 @@ const classify = (stats: SampledNameStats): ClassifiedPresetId => {
   // string-array, though, the property is structurally a list; scalar
   // string cases are normalized to one-item arrays before writing.
   const plainTextValues = stats.plainStrings + stats.plainStringArrays
-  if (stats.plainStringArrays > 0 && plainTextValues === stats.totalValues) return 'list'
+  if (stats.plainStringArrays > 0 && plainTextValues === stats.totalValues) return 'string-list'
   return 'string'
 }
+
+/** The shapes a near-miss is worth reporting for: a property that landed on
+ *  free text rather than on references. Both list presets are here because the
+ *  argument is a preset id from the inferred channel and a codec TYPE — `list`
+ *  for either preset — from the existing-schema one. */
+const NEAR_MISS_SHAPES: ReadonlySet<string> = new Set(['string', 'list', 'string-list'])
 
 const schemaNearMissDiagnostic = (
   name: string,
@@ -151,7 +157,7 @@ const schemaNearMissDiagnostic = (
   schemaSource: 'existing' | 'inferred',
 ): string | null => {
   if (stats.totalValues < SCHEMA_NEAR_MISS_MIN_VALUES) return null
-  if (effectivePreset !== 'string' && effectivePreset !== 'list') return null
+  if (!NEAR_MISS_SHAPES.has(effectivePreset)) return null
 
   const refListLike = stats.pageTokenStrings + stats.pageTokenArrays
   if (refListLike === 0 || refListLike === stats.totalValues) return null
@@ -532,7 +538,7 @@ export const ensurePromotedPropertySchemas = async (
     }
     // refList would need `normalizeRefPropertyValues` + an aliasIdMap, which
     // only the importer builds; storing tokens under it rejects them on read.
-    const presetId = entry.presetId === 'refList' ? 'list' as const : entry.presetId
+    const presetId = entry.presetId === 'refList' ? 'string-list' as const : entry.presetId
     const config = entry.targetTypes ? {targetTypes: entry.targetTypes} : undefined
     try {
       await repo.userSchemas.addSchema(
