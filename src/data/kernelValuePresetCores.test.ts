@@ -7,6 +7,7 @@ import {definePresetCore} from './api/valuePresetCore'
 import { defineSplitPreset, joinValuePreset, type ValuePresetPresentation } from './api/valuePresets'
 import {readValuePresets} from './valuePresetRegistry'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
+import {selectablePresets} from '@/components/propertyEditors/selectablePresets'
 import {ChangeScope} from './api/changeScope'
 
 describe('kernel value preset split', () => {
@@ -100,6 +101,24 @@ describe('kernel value preset split', () => {
     expect(preset?.Editor).toBeTypeOf('function')
     expect(preset?.ConfigEditor).toBeTypeOf('function')
     expect(preset?.hideFromPicker).toBe(true)
+  })
+
+  it('offers the text list and retires the JSON one from the picker (#1101)', () => {
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelValuePresetsExtension,
+    ])
+    const presets = readValuePresets(runtime)
+
+    const offered = selectablePresets(presets).map(preset => preset.id)
+    expect(offered).toContain('string-list')
+    expect(offered).not.toContain('list')
+
+    // A definition already on the JSON list still offers its own entry, and
+    // the two are told apart ONLY by label — both codecs report type `list`,
+    // so an editor picked by codec type cannot distinguish them either.
+    expect(selectablePresets(presets, 'list').map(preset => preset.id)).toContain('list')
+    expect(presets.get('list')!.label).not.toBe(presets.get('string-list')!.label)
   })
 
   it('rejects a presentation joined to the wrong core id', () => {
