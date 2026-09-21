@@ -18,8 +18,7 @@ import {
 } from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.js'
 import { formatIsoDate } from '@/utils/dailyPage'
-import { showReceipt } from '@/plugins/action-receipts/receipts.ts'
-import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
+import { showReceipt, subjectOf, summarizeEntry, topEntry } from '@/plugins/action-receipts'
 import {
   ActionConfig,
   ActionContextTypes,
@@ -402,25 +401,17 @@ const runRescheduleWithFeedback = async (
 ): Promise<void> => {
   const result = await rescheduleBlock(block, signal)
   if (!result) return
-  // Capture the reschedule's OWN workspace + entry, NOT the active ones.
-  // `rescheduleBlock` awaited, so the user may have switched workspaces in
-  // the meantime — reading `activeWorkspaceId` / the active undo manager
-  // here would bind the receipt to a different workspace's top entry, and
-  // clicking Undo could then revert an unrelated action (issue #186; PR
-  // review). The reschedule wrote `block`, whose workspace is immutable,
-  // and `rescheduleBlock` just resolved with no further await — so that
-  // workspace's manager top is reliably the reschedule entry. The receipt
-  // keeps its Undo live while that entry stays on top (a trailing
-  // same-group merge mutates the entry in place, so identity holds).
-  const data = block.peek()
-  const workspaceId = data?.workspaceId
+  // The reschedule's OWN workspace, not the active one: `rescheduleBlock`
+  // awaited, and the user may have switched meanwhile (#186). No further
+  // await follows, so that workspace's top entry is the reschedule.
+  const workspaceId = block.peek()?.workspaceId
   if (!workspaceId) return
-  const top = block.repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault)
+  const top = topEntry(block.repo, workspaceId)
   if (!top?.groupId) return
   void showReceipt({
     key: 'action:srs-reschedule',
     verb: formatRescheduleToastMessage(result),
-    subject: {id: block.id, workspaceId, label: labelForBlockData(data, 'Card'), labelIsContent: true, kind: 'properties', navigable: true},
+    subject: subjectOf(summarizeEntry(top), 'forward'),
     revert: {direction: 'undo', entry: top, workspaceId},
   }, block.repo)
 }

@@ -97,8 +97,37 @@ describe('summarizeEntry', () => {
     ]))
     expect(summary.subject).toMatchObject({id: 'card', kind: 'properties'})
     expect(summary.changedProperties).toEqual(['srs:next'])
-    expect(summary.others).toBe(2)
-    expect(phrase(summary, 'undo')).toMatchObject({verb: 'Undid next change', riders: 'and 2 more'})
+    // The daily note and its journal block are not under the card.
+    expect(summary.others).toBe(0)
+    expect(phrase(summary, 'undo')).toMatchObject({verb: 'Undid next change', riders: ''})
+  })
+
+  it('names the moved block when the move also revealed a collapsed destination', () => {
+    const dest = block('dest', {content: 'Destination', properties: {collapsed: true}})
+    const moved = block('x', {parentId: 'old', content: 'Moved block'})
+    const summary = summarizeEntry(entryOf([
+      ['x', moved, {...moved, parentId: 'dest', orderKey: 'zz'}],
+      ['dest', dest, {...dest, properties: {collapsed: false}}],
+    ]))
+    expect(summary.subject).toMatchObject({id: 'x', kind: 'move', parentAfter: 'dest'})
+    expect(summary.others).toBe(0)
+    expect(phrase(summary, 'undo').verb).toBe('Moved back')
+    expect(phrase(summary, 'forward').verb).toBe('Moved')
+  })
+
+  it('counts only the rows under the subject as riders', () => {
+    // A paste of a root with two children, plus an unrelated edit in the
+    // same entry: the children ride, the edit does not.
+    const root = block('r', {content: 'Pasted'})
+    const summary = summarizeEntry(entryOf([
+      ['r', null, root],
+      ['c1', null, block('c1', {parentId: 'r'})],
+      ['c2', null, block('c2', {parentId: 'c1'})],
+      ['e', block('e', {content: 'a'}), block('e', {content: 'b'})],
+    ]))
+    // The edited row wins the subject by priority; the paste root is not under it.
+    expect(summary.subject).toMatchObject({id: 'e', kind: 'content'})
+    expect(summary.others).toBe(0)
   })
 
   it('reports a move with both parents', () => {

@@ -31,6 +31,12 @@ export const nearestScrollableAncestor = (element: HTMLElement): HTMLElement | n
   return null
 }
 
+/** The user asked for less motion; animations shorten or drop out. */
+export const prefersReducedMotion = (): boolean =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
 /** Where `element` can actually be seen: the window, clipped by EVERY scrollport
  *  between it and the root.
  *

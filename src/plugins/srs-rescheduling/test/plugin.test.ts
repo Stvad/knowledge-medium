@@ -55,7 +55,10 @@ import {
 // other test in this file invokes that path, so overriding it (while keeping
 // the rest of the toast module real) is side-effect-free here.
 const { showCustomMock, showReceiptMock } = vi.hoisted(() => ({ showCustomMock: vi.fn(), showReceiptMock: vi.fn() }))
-vi.mock('@/plugins/action-receipts/receipts.ts', () => ({ showReceipt: showReceiptMock }))
+vi.mock('@/plugins/action-receipts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/plugins/action-receipts')>(),
+  showReceipt: showReceiptMock,
+}))
 vi.mock('@/utils/toast.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/utils/toast.js')>()),
   showCustom: showCustomMock,

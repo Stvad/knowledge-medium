@@ -607,6 +607,11 @@ export interface HistoryReplayEvent {
   scope: ChangeScope
   workspaceId: string
   entry: UndoEntry | null
+  /** Whether `entry` reached the opposite stack, so the inverse gesture
+   *  is available. False when the history was dropped while the replay
+   *  was in flight (the replay still committed). Always false with a null
+   *  entry. */
+  inverseOffered: boolean
 }
 
 export class Repo {
@@ -1953,7 +1958,7 @@ export class Repo {
       // An empty stack is a gesture that did nothing, and that is worth
       // telling the user; a drop-in-progress refusal above is not, since the
       // pass that owns the drop has its own surface.
-      this.historyReplayListeners.notify({kind: action, scope, workspaceId, entry: null})
+      this.historyReplayListeners.notify({kind: action, scope, workspaceId, entry: null, inverseOffered: false})
       return false
     }
     /** Put `entry` on a stack — unless the history was DROPPED while this
@@ -1967,10 +1972,11 @@ export class Repo {
      *  emptied, with an entry describing a pre-pass row — and the next gesture
      *  samples the new epoch, passes, and replays it over the pass's committed
      *  writes. Dropping that entry is the whole point of the clear. */
-    const push = (onto: 'undo' | 'redo'): void => {
-      if (manager.clearEpoch !== clearEpoch) return
+    const push = (onto: 'undo' | 'redo'): boolean => {
+      if (manager.clearEpoch !== clearEpoch) return false
       if (onto === 'undo') manager.pushUndo(scope, entry)
       else manager.pushRedo(scope, entry)
+      return true
     }
     try {
       await this._replay(entry, action, {manager, clearEpoch})
@@ -1985,17 +1991,17 @@ export class Repo {
       // into the pushed-back entry rather than the newer one. We keep
       // the groupId on pushback anyway: stripping it would break the
       // legitimate retry path (a receipt's Undo re-matches the restored
-      // entry by groupId once read-only clears), which is a far more
-      // common sequence than a mid-replay same-group commit.
+      // entry — the same object — once read-only clears), which is a far
+      // more common sequence than a mid-replay same-group commit.
       push(action)
       throw err
     }
     // True even when the push above was refused: the replay COMMITTED, so the
     // gesture did what the user asked. All that is withheld is the inverse.
-    push(opposite)
+    const inverseOffered = push(opposite)
     // After the push, so a listener that peeks the opposite stack to decide
     // whether the inverse is still offered sees the entry already there.
-    this.historyReplayListeners.notify({kind: action, scope, workspaceId, entry})
+    this.historyReplayListeners.notify({kind: action, scope, workspaceId, entry, inverseOffered})
     return true
   }
 

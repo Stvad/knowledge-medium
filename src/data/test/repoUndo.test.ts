@@ -344,16 +344,19 @@ describe('repo.onHistoryReplay', () => {
       await tx.update('a', {content: 'edited'})
     }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
     const events: HistoryReplayEvent[] = []
+    const redoTopAtEvent: unknown[] = []
     const off = repo.onHistoryReplay(event => {
-      // Sampled inside the listener: the contract is that the inverse is
-      // already offered when the event fires.
-      events.push({...event, entry: event.entry})
-      expect(repo.undoManager.peekRedo(ChangeScope.BlockDefault)).toBe(event.entry)
+      events.push(event)
+      // Sampled inside the listener, asserted outside: the CallbackSet
+      // swallows a throw here.
+      redoTopAtEvent.push(repo.undoManager.peekRedo(ChangeScope.BlockDefault))
     })
 
     expect(await repo.undo()).toBe(true)
     expect(events).toHaveLength(1)
     expect(events[0].kind).toBe('undo')
+    expect(events[0].inverseOffered).toBe(true)
+    expect(redoTopAtEvent[0]).toBe(events[0].entry)
     expect(events[0].workspaceId).toBe(WS)
     expect(events[0].entry?.description).toBe('edit a')
     expect([...events[0].entry!.snapshots.keys()]).toEqual(['a'])
@@ -371,7 +374,7 @@ describe('repo.onHistoryReplay', () => {
     env.repo.onHistoryReplay(event => { events.push(event) })
     expect(await env.repo.undo()).toBe(false)
     expect(events).toEqual([
-      {kind: 'undo', scope: ChangeScope.BlockDefault, workspaceId: WS, entry: null},
+      {kind: 'undo', scope: ChangeScope.BlockDefault, workspaceId: WS, entry: null, inverseOffered: false},
     ])
   })
 

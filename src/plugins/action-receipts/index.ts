@@ -4,7 +4,8 @@
  * inverse gesture. Design: docs/action-receipts.html.
  *
  * Composition:
- *   - `facet.ts`        — the `Receipt` shape and the describer facet
+ *   - `facet.ts`        — the `Receipt` shape, the describer facet, and the
+ *                         receipt builders
  *   - `summarize.ts`    — undo entry → words (pure)
  *   - `receipts.ts`     — the toast slot, coalescing, the session ledger,
  *                         and the on-screen / off-screen decision
@@ -28,21 +29,25 @@ import { systemToggle } from '@/facets/togglable.js'
 import { actionDispatchVerb } from '@/shortcuts/actionDispatch.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { deleteBlockReceipt, multiSelectDeleteReceipt } from './describers.ts'
-import { receiptsAfterDispatch, receiptsBeforeDispatch, setReceiptsHost } from './dispatch.ts'
-import { actionReceiptsFacet, locationOf, subjectOf, type Receipt } from './facet.ts'
+import { receiptsAfterDispatch, receiptsBeforeDispatch } from './dispatch.ts'
+import { actionReceiptsFacet, historyReceipt } from './facet.ts'
 import { LedgerTray } from './LedgerTray.tsx'
-import { ledgerOpen, showReceipt } from './receipts.ts'
-import { phrase, summarizeEntry } from './summarize.ts'
+import { ledgerOpen, setReceiptsHost, showReceipt } from './receipts.ts'
 
-export { actionReceiptsFacet, locationOf, subjectOf, type Receipt, type ReceiptDescriber } from './facet.ts'
-export { showReceipt, ledgerOpen } from './receipts.ts'
-export { summarizeEntry, phrase } from './summarize.ts'
+export {
+  actionReceiptsFacet,
+  locationOf,
+  recordedReceipt,
+  subjectOf,
+  type Receipt,
+  type ReceiptDescriber,
+} from './facet.ts'
+export { showReceipt, topEntry } from './receipts.ts'
+export { summarizeEntry } from './summarize.ts'
 
 export const TOGGLE_LEDGER_ACTION_ID = 'action-receipts.toggle_ledger'
 
 const SOURCE = {source: 'action-receipts'}
-
-const EMPTY_HINT = 'History is per workspace and starts fresh each session.'
 
 const receiptsHostEffect: AppEffect = {
   id: 'action-receipts.host',
@@ -50,26 +55,7 @@ const receiptsHostEffect: AppEffect = {
     setReceiptsHost({repo, runtime})
     const off = repo.onHistoryReplay(event => {
       if (event.scope !== ChangeScope.BlockDefault) return
-      if (event.entry === null) {
-        void showReceipt({key: event.kind, verb: `Nothing to ${event.kind}`, tone: 'empty', hint: EMPTY_HINT}, repo)
-        return
-      }
-      const summary = summarizeEntry(event.entry)
-      const words = phrase(summary, event.kind)
-      const receipt: Receipt = {
-        key: event.kind,
-        verb: words.verb,
-        subject: subjectOf(summary, event.kind),
-        riders: words.riders,
-        location: locationOf(summary, event.kind),
-        peek: words.peek,
-        revert: {
-          direction: event.kind === 'undo' ? 'redo' : 'undo',
-          entry: event.entry,
-          workspaceId: event.workspaceId,
-        },
-      }
-      void showReceipt(receipt, repo)
+      void showReceipt(historyReceipt(event), repo)
     })
     return () => {
       off()

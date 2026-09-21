@@ -13,7 +13,9 @@ import { FolderInput } from 'lucide-react'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo.js'
 import { defineBlocksAction, type BlocksActionContext } from '@/shortcuts/utils.js'
-import { showError } from '@/utils/toast.js'
+import { showError, showSuccess } from '@/utils/toast.js'
+import { showReceipt } from '@/plugins/action-receipts'
+import { moveReceipt } from './receipts.ts'
 import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
 import { selectionStateProp } from '@/data/properties.js'
 import { openDialog } from '@/utils/dialogs.js'
@@ -146,9 +148,9 @@ export const runMoveFlow = async (
           await selectedIdsCoveredByMove(repo, context.uiStateBlock, new Set(result.movedIds)),
         )
       }
-      // Feedback is the move receipt (`receipts.ts`): the blocks left the
-      // viewport, so the receipt names them, where they went, and offers
-      // Undo and Go to.
+      const receipt = moveReceipt(repo, firstData.workspaceId, result.movedIds, choice.destinationId)
+      if (receipt !== null) void showReceipt(receipt, repo)
+      else showSuccess(`Moved ${result.moved} block${result.moved === 1 ? '' : 's'}`)
     } else {
       showError('No blocks were moved')
     }

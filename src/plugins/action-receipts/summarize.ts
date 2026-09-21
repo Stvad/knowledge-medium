@@ -13,10 +13,17 @@ import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 
 export type ChangeKind = 'content' | 'properties' | 'delete' | 'move' | 'create'
 
-/** Kinds in the order a receipt names them: the row the user edited beats
- *  the rows a helper minted alongside it (a reschedule creates a daily note
- *  and writes one property — the property row is the subject). */
-const SUBJECT_PRIORITY: readonly ChangeKind[] = ['content', 'properties', 'delete', 'move', 'create']
+/** Kinds in the order a receipt names them: the row the user acted on
+ *  beats the rows a helper touched alongside it. A reschedule creates a
+ *  daily note and writes one property — the property row is the subject;
+ *  a move into a collapsed destination also flips the destination's
+ *  collapse flag — the moved row is the subject. */
+const SUBJECT_PRIORITY: readonly ChangeKind[] = ['content', 'move', 'delete', 'properties', 'create']
+
+/** Kinds that carry rows along: a deleted subtree's children, a pasted
+ *  root's descendants. A property or content change on a parent carries
+ *  nothing. */
+const STRUCTURAL: ReadonlySet<ChangeKind> = new Set<ChangeKind>(['create', 'delete', 'move'])
 
 export interface RowChange {
   id: string
@@ -40,8 +47,8 @@ export interface ContentPeek {
 
 export interface EntrySummary {
   /** The row the receipt names — the topmost changed block (its parent is
-   *  not itself in the entry) of the highest-priority kind — or null when
-   *  the entry touched only property field rows. */
+   *  not itself structurally changed in the entry) of the highest-priority
+   *  kind — or null when the entry touched only property field rows. */
   subject: {
     id: string
     workspaceId: string
@@ -53,21 +60,14 @@ export interface EntrySummary {
     parentBefore: string | null
     parentAfter: string | null
   } | null
-  /** Changed rows beyond the subject, field rows excluded. */
+  /** Changed rows under the subject: the children a delete or a paste took
+   *  along. Rows the entry touched elsewhere are not counted. */
   others: number
   /** Present when the subject's content changed. */
   peek: ContentPeek | null
   /** Property names that changed on the subject, when its kind is
    *  `properties`. */
   changedProperties: string[]
-}
-
-const propertiesEqual = (a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
-  for (const key of keys) {
-    if (JSON.stringify(a[key] ?? null) !== JSON.stringify(b[key] ?? null)) return false
-  }
-  return true
 }
 
 const changedPropertyNames = (a: Record<string, unknown>, b: Record<string, unknown>): string[] =>
@@ -88,7 +88,7 @@ export const classifyRow = (id: string, before: BlockData | null, after: BlockDa
     return {id, kind: 'move', before, after}
   }
   if (before.content !== after.content) return {id, kind: 'content', before, after}
-  if (!propertiesEqual(before.properties, after.properties)) {
+  if (changedPropertyNames(before.properties, after.properties).length > 0) {
     return {id, kind: 'properties', before, after}
   }
   return null
@@ -123,13 +123,33 @@ export const contentPeek = (before: string, after: string): ContentPeek => {
 const isFieldRow = (row: RowChange): boolean =>
   (row.after ?? row.before)?.isFieldForm === true
 
-/** Rows whose parent the entry ALSO changed are riders — the children of
- *  a deleted subtree, the blocks under a pasted root. The receipt names
- *  the row at the top. Either state's parent counts: a moved block's old
- *  and new parents are both outside the entry in the common case. */
-const isTopmost = (row: RowChange, ids: ReadonlySet<string>): boolean => {
-  const parents = [row.before?.parentId, row.after?.parentId]
-  return !parents.some(parent => parent !== null && parent !== undefined && ids.has(parent))
+/** The row's parent in whichever state has one; a moved row's two parents
+ *  both count. */
+const parentsOf = (row: RowChange): string[] =>
+  [row.before?.parentId, row.after?.parentId].filter((p): p is string => typeof p === 'string')
+
+/** Rows whose parent the entry ALSO changed structurally are riders — the
+ *  children of a deleted subtree, the blocks under a pasted root. The
+ *  receipt names the row at the top. */
+const isTopmost = (row: RowChange, structuralIds: ReadonlySet<string>): boolean =>
+  !parentsOf(row).some(parent => structuralIds.has(parent))
+
+/** Rows under `subjectId`, walking parents within the entry only. */
+const countUnder = (subjectId: string, rows: readonly RowChange[]): number => {
+  const parentById = new Map(rows.map(row => [row.id, parentsOf(row)] as const))
+  const under = new Set<string>([subjectId])
+  // Rows may come in any order; iterate until the set stops growing.
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const [id, parents] of parentById) {
+      if (!under.has(id) && parents.some(parent => under.has(parent))) {
+        under.add(id)
+        grew = true
+      }
+    }
+  }
+  return under.size - 1
 }
 
 export const summarizeEntry = (entry: UndoEntry): EntrySummary => {
@@ -139,8 +159,8 @@ export const summarizeEntry = (entry: UndoEntry): EntrySummary => {
     if (row !== null) rows.push(row)
   }
   const visible = rows.filter(row => !isFieldRow(row))
-  const ids = new Set(visible.map(row => row.id))
-  const topmost = visible.filter(row => isTopmost(row, ids))
+  const structuralIds = new Set(visible.filter(row => STRUCTURAL.has(row.kind)).map(row => row.id))
+  const topmost = visible.filter(row => isTopmost(row, structuralIds))
   const pool = topmost.length > 0 ? topmost : visible
   let subjectRow: RowChange | null = null
   for (const kind of SUBJECT_PRIORITY) {
@@ -165,7 +185,7 @@ export const summarizeEntry = (entry: UndoEntry): EntrySummary => {
       parentBefore: before?.parentId ?? null,
       parentAfter: after?.parentId ?? null,
     },
-    others: visible.length - 1,
+    others: countUnder(subjectRow.id, visible),
     peek: subjectRow.kind === 'content' && before !== null && after !== null
       ? contentPeek(before.content, after.content)
       : null,
@@ -210,9 +230,7 @@ const RIDER_NOUN: Record<ChangeKind, string> = {
 
 export const phrase = (summary: EntrySummary, direction: Direction): Phrase => {
   const subject = summary.subject
-  if (subject === null) {
-    return {verb: direction === 'undo' ? 'Undid change' : direction === 'redo' ? 'Redid change' : 'Changed', riders: '', peek: null}
-  }
+  if (subject === null) return {verb: VERBS[direction].properties, riders: '', peek: null}
   let verb = VERBS[direction][subject.kind]
   if (subject.kind === 'properties' && summary.changedProperties.length === 1) {
     const prop = propertyDisplayName(summary.changedProperties[0])

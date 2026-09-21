@@ -22,8 +22,8 @@ import { newSnapshotsMap } from '@/data/internals/txSnapshots'
 import { makeBlockData } from '@/data/test/factories'
 import type { Repo } from '@/data/repo'
 import type { Receipt, ReceiptSubject } from './facet.ts'
-import { ledgerOpen, resetReceiptsForTests, type ShownReceipt } from './receipts.ts'
-import { coalescedVerb, ReceiptToast } from './ReceiptToast.tsx'
+import { ledgerOpen, type ShownReceipt } from './receipts.ts'
+import { coalescedVerb, ReceiptToast, EmptyReceiptToast } from './ReceiptToast.tsx'
 
 const { dismissToastMock, showErrorMock, navigateFromGlobalCommandMock } = vi.hoisted(() => ({
   dismissToastMock: vi.fn(),
@@ -33,6 +33,8 @@ const { dismissToastMock, showErrorMock, navigateFromGlobalCommandMock } = vi.ho
 vi.mock('@/utils/toast.js', () => ({
   dismissToast: dismissToastMock,
   showError: showErrorMock,
+  showInfo: vi.fn(),
+  showCustom: vi.fn(),
 }))
 vi.mock('@/utils/navigation.js', () => ({
   navigateFromGlobalCommand: navigateFromGlobalCommandMock,
@@ -73,6 +75,7 @@ const makeRepo = (
     undo?: ReturnType<typeof vi.fn>
     redo?: ReturnType<typeof vi.fn>
     block?: (id: string) => Handle<BlockData | null>
+    exists?: boolean
   } = {},
 ): Repo =>
   ({
@@ -82,6 +85,7 @@ const makeRepo = (
     undo: opts.undo ?? vi.fn().mockResolvedValue(true),
     redo: opts.redo ?? vi.fn().mockResolvedValue(true),
     block: opts.block ?? (() => stubBlockHandle()),
+    exists: vi.fn().mockResolvedValue(opts.exists ?? true),
   } as unknown as Repo)
 
 const makeSubject = (overrides: Partial<ReceiptSubject> = {}): ReceiptSubject => ({
@@ -102,7 +106,7 @@ const renderToast = (shown: ShownReceipt, repo: Repo) =>
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
-  resetReceiptsForTests()
+  ledgerOpen.close()
 })
 
 describe('ReceiptToast inverse-gesture liveness (#186, entry identity)', () => {
@@ -250,7 +254,7 @@ describe('ReceiptToast inverse-gesture liveness (#186, entry identity)', () => {
 })
 
 describe('ReceiptToast Go to', () => {
-  it('navigates to the subject and dismisses the toast', () => {
+  it('navigates to the subject and dismisses the toast', async () => {
     const subject = makeSubject({id: 'block-1', workspaceId: 'ws-1'})
     const receipt: Receipt = {key: 'move', verb: 'Moved', subject}
     const repo = makeRepo(new UndoManager(), {id: 'ws-1'})
@@ -258,8 +262,30 @@ describe('ReceiptToast Go to', () => {
 
     fireEvent.click(screen.getByRole('button', {name: 'Go to'}))
 
-    expect(navigateFromGlobalCommandMock).toHaveBeenCalledWith(repo, {blockId: 'block-1', workspaceId: 'ws-1'})
+    await vi.waitFor(() => {
+      expect(navigateFromGlobalCommandMock).toHaveBeenCalledWith(repo, {blockId: 'block-1', workspaceId: 'ws-1'})
+    })
     expect(dismissToastMock).toHaveBeenCalledWith('toast-1')
+  })
+
+  it('does not navigate onto a block deleted since the receipt', async () => {
+    const subject = makeSubject({id: 'block-1', workspaceId: 'ws-1'})
+    const receipt: Receipt = {key: 'move', verb: 'Moved', subject}
+    const repo = makeRepo(new UndoManager(), {id: 'ws-1'}, {exists: false})
+    renderToast({receipt, count: 1, offscreen: true}, repo)
+
+    fireEvent.click(screen.getByRole('button', {name: 'Go to'}))
+
+    await vi.waitFor(() => { expect(repo.exists).toHaveBeenCalledWith('block-1') })
+    expect(navigateFromGlobalCommandMock).not.toHaveBeenCalled()
+  })
+
+  it('does not render Go to for a subject in another workspace', () => {
+    const subject = makeSubject({id: 'block-1', workspaceId: 'ws-2'})
+    const receipt: Receipt = {key: 'move', verb: 'Moved', subject}
+    renderToast({receipt, count: 1, offscreen: true}, makeRepo(new UndoManager(), {id: 'ws-1'}))
+
+    expect(screen.queryByRole('button', {name: 'Go to'})).toBeNull()
   })
 
   it('does not render Go to when the subject is not offscreen', () => {
@@ -284,10 +310,9 @@ describe('ReceiptToast ledger', () => {
   })
 })
 
-describe('ReceiptToast empty tone', () => {
+describe('EmptyReceiptToast', () => {
   it('renders just the verb and hint, with no buttons', () => {
-    const receipt: Receipt = {key: 'noop', verb: 'Nothing to undo', tone: 'empty', hint: '⌘Z has nothing to do'}
-    renderToast({receipt, count: 1, offscreen: false}, makeRepo(new UndoManager(), {id: 'ws-1'}))
+    render(<EmptyReceiptToast verb="Nothing to undo" hint="⌘Z has nothing to do" />)
 
     expect(screen.getByText('Nothing to undo')).toBeInTheDocument()
     expect(screen.getByText('⌘Z has nothing to do')).toBeInTheDocument()
@@ -312,18 +337,13 @@ describe('coalescedVerb', () => {
     expect(coalescedVerb(receipt, 1)).toBe('Deleted')
   })
 
-  it('summarizes a redo-direction revert as "Undid N steps"', () => {
-    const entry = makeEntry('t1')
-    const receipt: Receipt = {
-      key: 'redo',
-      verb: 'Redid',
-      revert: {direction: 'redo', entry, workspaceId: 'ws-1'},
-    }
+  it('summarizes an undo receipt as "Undid N steps"', () => {
+    const receipt: Receipt = {key: 'undo', history: 'undo', verb: 'Undid edit'}
     expect(coalescedVerb(receipt, 3)).toBe('Undid 3 steps')
   })
 
-  it('summarizes key "redo" with no revert as "Redid N steps"', () => {
-    const receipt: Receipt = {key: 'redo', verb: 'Redid'}
+  it('summarizes a redo receipt as "Redid N steps"', () => {
+    const receipt: Receipt = {key: 'redo', history: 'redo', verb: 'Redid edit'}
     expect(coalescedVerb(receipt, 3)).toBe('Redid 3 steps')
   })
 
