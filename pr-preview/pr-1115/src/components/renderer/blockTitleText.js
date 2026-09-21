@@ -1,1 +1,1 @@
-import{Ck as e,Sk as t}from"../../../chunks/app-DN_VGPhw.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};
+import{Ck as e,Sk as t}from"../../../chunks/app-BzA-sP7p.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};
