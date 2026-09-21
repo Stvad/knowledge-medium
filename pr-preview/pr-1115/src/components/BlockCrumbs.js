@@ -1,1 +1,1 @@
-import{py as e}from"../../chunks/app-ChbKGxuK.js";export{e as BlockCrumbs};
+import{py as e}from"../../chunks/app-D3QJIkdz.js";export{e as BlockCrumbs};

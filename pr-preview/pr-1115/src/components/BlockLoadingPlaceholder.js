@@ -1,1 +1,1 @@
-import{tE as e}from"../../chunks/app-ChbKGxuK.js";export{e as BlockLoadingPlaceholder};
+import{tE as e}from"../../chunks/app-D3QJIkdz.js";export{e as BlockLoadingPlaceholder};
