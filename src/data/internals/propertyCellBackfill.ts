@@ -1,18 +1,25 @@
 /**
  * The properties-as-blocks cell → children pass (§11 slice C).
  *
- * Every block whose `properties_json` holds a registered key gets the field
- * and value CHILD rows that key implies, built by the same helper the live
- * dual-write uses (`materializePropertyChildrenForExistingRow`). Cells are
- * left exactly as they are: this pass ADDS the child representation.
+ * Every block whose `properties_json` holds a registered key gets the field and
+ * value CHILD rows that key implies, from the same builders the live dual-write
+ * uses — {@link plannedFieldRow} and {@link plannedValueChildRows} — so the two
+ * writers cannot decide differently what a value's children are. Cells are left
+ * exactly as they are: this pass ADDS the child representation.
  *
- * IT RUNS ONLY PAST THE FLIP, and is CREATE-ONLY (see
- * {@link namesPendingMaterialization}): the live maintainers are on and the
- * children are the property truth, so the only work left is GAPS — a cell key
- * with no field row of its own. The runbook is flip THEN backfill: flipping a
- * workspace with no children hides nothing, because at `'children'` the cell is
- * still dual-written and still the synchronous read surface, while backfilling
- * first leaves a window in which new machinery is unrecognized and visible.
+ * IT RUNS ONLY PAST THE FLIP, and is CREATE-ONLY: the live maintainers are on
+ * and the children are the property truth, so the only work left is GAPS — a
+ * cell key with no field row of its own. That restriction is what the batch
+ * plan enforces, by skipping any key whose fieldId already has a field row
+ * under its owner, LIVE OR TOMBSTONED. Both halves matter: an existing row
+ * means the key is already migrated, and a tombstoned one means the property
+ * was deleted through its children on a peer, so re-creating it from the stale
+ * cell would undo that delete and upload it.
+ *
+ * The runbook is flip THEN backfill: flipping a workspace with no children
+ * hides nothing, because at `'children'` the cell is still dual-written and
+ * still the synchronous read surface, while backfilling first leaves a window
+ * in which new machinery is unrecognized and visible.
  *
  * So every batch that WRITES re-asserts the flip and REFUSES an un-flipped
  * workspace (see {@link sweep}), instead of carrying a second mode for the order
@@ -20,16 +27,17 @@
  * transaction and so never asks — and writes nothing either, which is the
  * property the check exists for.
  *
- * `operator` trigger, so nothing schedules it. Its writes upload — that is the
- * point, one device builds the rows and every other device receives them —
- * which is also why it must not be attempted concurrently by a fleet; the
- * `BackfillCompletionClaim` records who is doing it.
+ * READ AND WRITTEN IN BULK, because the pass is read-bound: a batch asks two
+ * questions for the WHOLE batch — the rows, and every field row under them —
+ * plans in memory, and writes through `tx.createMany`. Asking per block is the
+ * shape to keep out of here; each question added costs one round trip per block
+ * visited, not per batch.
  *
  * RESUMABILITY IS DERIVED, NOT CHECKPOINTED. The candidate query asks the data
  * itself what is left to do, so a run killed halfway simply finds less work
  * next time and no progress state can go stale or disagree with the graph.
- * That is why there is no cursor to persist: the pass is a fixpoint, and
- * `materializePropertyChildrenForExistingRow` is idempotent per row.
+ * That is why there is no cursor to persist: the pass is a fixpoint, and the
+ * already-has-a-field-row test above is what makes revisiting a block a no-op.
  */
 
 import type { BlockData, ResolvedPropertySchema } from '@/data/api'
@@ -98,8 +106,8 @@ const CARRIES_A_PROPERTY = `
  * for B has one of each and drops out while A is still unmigrated. Any count
  * comparison can be fooled that way, and whether a key is REGISTERED is a
  * question only the JS registry can answer — so SQL selects the superset and
- * `materializePropertyChildrenForExistingRow` is the exact test. A visited row
- * with nothing to do costs one read and no write.
+ * the batch plan is the exact test. A visited row with nothing to do costs no
+ * read of its own, since its batch reads it either way, and no write.
  *
  * `id > ?` paginates rather than `OFFSET`, which would re-walk the prefix per
  * batch. The pass's own creates (field and value rows) carry no properties, so
@@ -197,8 +205,9 @@ export interface PropertyCellBackfillProgress {
    *  arriving under the pass. */
   sweeps: number
   /** Property values that could not be materialized this sweep, with the
-   *  reason. Reported, never fatal — see {@link materializeRow}. Capped at
-   *  {@link MAX_REPORTED_FAILURES}. */
+   *  reason. Reported, never fatal: a cell value its codec refuses is legacy
+   *  junk from a raw bag write, and one such key must cost its own key rather
+   *  than every key on the block. Capped at {@link MAX_REPORTED_FAILURES}. */
   failures: {blockId: string; reason: string}[]
   /** Failures this sweep, including any past the cap. Paired with
    *  `blocksMaterialized === 0` it is the signal that the run hit something
