@@ -37,6 +37,7 @@ import {
 import { DefinitionFanoutProgress } from '../definitionFanoutAppMount.tsx'
 
 const WS = 'ws-fanout-surface'
+const FIELD_ID = 'field-status'
 
 let sharedDb: TestDb
 let repo: Repo
@@ -86,11 +87,11 @@ const renderMount = (): void => {
 /** ASYNC act: mounting the dialog suspends on the shortcut funnel's UI-state
  *  read, and the resolution needs a flush the synchronous form does not give. */
 const openRun = async (
-  workspaceId = WS, total = 4_000,
+  workspaceId = WS, total = 4_000, fieldId = FIELD_ID,
 ): Promise<PropertyDefinitionFanoutRun> => {
   let run!: PropertyDefinitionFanoutRun
   await act(async () => {
-    run = beginPropertyDefinitionFanout(workspaceId, 'status', total)
+    run = beginPropertyDefinitionFanout(workspaceId, fieldId, 'status', total)
   })
   return run
 }
@@ -100,13 +101,15 @@ const openRunNamed = async (
 ): Promise<PropertyDefinitionFanoutRun> => {
   let run!: PropertyDefinitionFanoutRun
   await act(async () => {
-    run = beginPropertyDefinitionFanout(WS, propertyName, total)
+    run = beginPropertyDefinitionFanout(WS, 'field-other', propertyName, total)
   })
   return run
 }
 
-const report = (done: number, total = 4_000, workspaceId = WS): void => {
-  act(() => { reportPropertyDefinitionFanout(workspaceId, done, total) })
+const report = (
+  done: number, total = 4_000, workspaceId = WS, fieldIds = [FIELD_ID],
+): void => {
+  act(() => { reportPropertyDefinitionFanout(workspaceId, fieldIds, done, total) })
 }
 
 const bar = () => screen.getByRole('progressbar')
@@ -168,6 +171,20 @@ describe('the fan-out progress surface', () => {
     expect(await screen.findByRole('dialog')).toBeTruthy()
 
     report(500, 4_000, 'ws-somewhere-else')
+
+    expect(screen.getByText('Starting…')).toBeTruthy()
+  })
+
+  it('ignores a report from a change to a DIFFERENT definition', async () => {
+    // Only the gesture is serialised. A headless caller — the agent CLI, an
+    // importer — can take the writer while a confirmation is open, and its
+    // counts would otherwise pour into a modal titled for another property,
+    // up to declaring it saved before its own transaction had started.
+    renderMount()
+    await openRun(WS, 4_000)
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+
+    report(500, 4_000, WS, ['field-somebody-elses'])
 
     expect(screen.getByText('Starting…')).toBeTruthy()
   })

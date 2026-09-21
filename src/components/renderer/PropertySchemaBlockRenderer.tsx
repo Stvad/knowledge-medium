@@ -101,10 +101,22 @@ const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
   value: unknown,
   onChange: (next: unknown) => void,
+  /** Bumped when a config change did NOT land, which remounts the editor.
+   *
+   *  A config editor holds its own in-progress state and learns nothing from
+   *  `onChange`, which returns void — so a change that is cancelled at the
+   *  confirmation, or refused in its transaction, leaves it showing options
+   *  the definition never got, and a later edit resubmits them. Nothing it
+   *  can do about that by itself: the outcome is the HOST's to know. Saying
+   *  "forget what you thought" is the one instruction that needs no contract
+   *  and reaches every config editor, including ones this repo did not
+   *  write. The cost is the caret, and only on a path where the change did
+   *  not happen. */
+  generation: number,
 ): React.ReactNode => {
   if (!preset.ConfigEditor) return null
   const ConfigEditor = preset.ConfigEditor
-  return <ConfigEditor value={value} onChange={onChange} />
+  return <ConfigEditor key={generation} value={value} onChange={onChange} />
 }
 
 /** Exported for the read-only regression test; production mounts it only
@@ -213,7 +225,9 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       if (confirmed !== true) return false
     }
     const run = large
-      ? beginPropertyDefinitionFanout(workspaceId, change.propertyName, consumers)
+      ? beginPropertyDefinitionFanout(
+        workspaceId, block.id, change.propertyName, consumers,
+      )
       : null
     let wrote = false
     try {
@@ -348,6 +362,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     })
   }, [block, presetId, presets, throughFanoutGate])
 
+  // See `renderConfigEditor`: bumping this remounts the config editor, which
+  // is how a change that did not land takes its optimistic state with it.
+  const [configGeneration, setConfigGeneration] = useState(0)
+
   const writeConfig = useCallback(async (next: unknown) => {
     if (!preset?.configCodec) return
     let encoded: Record<string, unknown>
@@ -357,7 +375,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       console.warn(`[PropertySchemaContentRenderer] cannot encode config:`, err)
       return
     }
-    await throughFanoutGate(atStart => {
+    const wrote = await throughFanoutGate(atStart => {
       // The ONE gesture that cannot be re-aimed: `encoded` is the editor's
       // view of the STORED object with one part changed, and the codec that
       // produced it is this preset's. Applied over a row that has moved it
@@ -379,6 +397,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         write: tx => tx.setProperty(block.id, presetConfigProp, encoded),
       }
     })
+    if (!wrote) setConfigGeneration(generation => generation + 1)
   }, [block, persistedConfig, preset, presetId, throughFanoutGate])
 
   // Lazy delete-confirm: first click counts users; if any, ask for a
@@ -503,7 +522,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
             className={`m-0 min-w-0 border-0 p-0${
               readOnly ? ' pointer-events-none opacity-60' : ''}`}
           >
-            {renderConfigEditor(preset, decodedConfig, writeConfig)}
+            {renderConfigEditor(preset, decodedConfig, writeConfig, configGeneration)}
           </fieldset>
         </div>
       )}

@@ -48,6 +48,7 @@ const showError = vi.mocked((await import('@/utils/toast.js')).showError)
 const WS = 'ws-fanout-gate'
 const SCHEMA_ID = 'user-schema'
 const REF_SCHEMA_ID = 'user-ref-schema'
+const ENUM_SCHEMA_ID = 'user-enum-schema'
 
 let sharedDb: TestDb
 let repo: Repo
@@ -80,6 +81,21 @@ beforeEach(async () => {
         'property-schema:name': 'test:myProp',
         'property-schema:preset': 'string',
         'property-schema:config': {},
+      },
+    })
+    // An optimistic config editor: the enum options editor keeps a draft, so
+    // it is the one with state a change that does not land could strand.
+    await tx.create({
+      id: ENUM_SCHEMA_ID,
+      workspaceId: WS,
+      parentId: 'root',
+      orderKey: 'a3',
+      content: 'test:myEnum',
+      properties: {
+        types: ['property-schema'],
+        'property-schema:name': 'test:myEnum',
+        'property-schema:preset': 'enum',
+        'property-schema:config': {options: [{value: 'a', label: 'A'}]},
       },
     })
     // The config gestures need a preset that CONTRIBUTES a config editor;
@@ -395,6 +411,28 @@ describe('a change planned against a row that moved while it waited', () => {
     )
     expect((JSON.parse(row.properties_json) as Record<string, unknown>)['property-schema:config'])
       .toEqual({targetTypes: ['task']})
+  })
+
+  it('makes the options editor forget a change that did not land', async () => {
+    // A config editor holds its own in-progress state and learns nothing
+    // from `onChange`, so a cancelled change leaves it showing options the
+    // definition never got — and a later edit resubmits them. The host is
+    // the only one that knows, and remounting is how it says so.
+    consumersAre(4_000)
+    renderSchema(ENUM_SCHEMA_ID)
+    const session = user()
+
+    await session.click(screen.getByRole('button', {name: 'Add choice'}))
+
+    // The editor is showing the choice it asked for, uncommitted.
+    expect(await screen.findByRole('button', {name: 'Change options'})).toBeTruthy()
+    expect(screen.getAllByLabelText(/Choice \d+ value/)).toHaveLength(2)
+
+    await session.click(screen.getByRole('button', {name: 'Cancel'}))
+
+    await waitFor(() => {
+      expect(screen.getAllByLabelText(/Choice \d+ value/)).toHaveLength(1)
+    })
   })
 
   it('asks nothing at all when the row already reads the way the gesture wanted', async () => {

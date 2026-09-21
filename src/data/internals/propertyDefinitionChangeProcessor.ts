@@ -919,6 +919,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     const lostByField = new Map<string, number>()
     const lostParents = new Set<string>()
+    const changingFieldIds = changes.map(change => change.fieldId)
     let done = 0
     for (const parentId of parentIds) {
       await applyToParent(
@@ -938,7 +939,9 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       // Still not the END of the run: the commit and the post-commit walk
       // come after it, and the gesture that opened the run is what closes it.
       if (done === 1 || done === parentIds.length || done % FANOUT_REPORT_STRIDE === 0) {
-        reportPropertyDefinitionFanout(event.workspaceId, done, parentIds.length)
+        reportPropertyDefinitionFanout(
+          event.workspaceId, changingFieldIds, done, parentIds.length,
+        )
       }
     }
     // REFUSE rather than commit a change that takes a value away. Every write
