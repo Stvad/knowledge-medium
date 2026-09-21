@@ -133,7 +133,15 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
    *  Uniform across both sides of the threshold on purpose. Under it the
    *  window is one await and a refusal is all but unreachable — but two write
    *  paths, one guarded and one not, is how the guarded one stops being the
-   *  one that runs. */
+   *  one that runs.
+   *
+   *  The COUNT is deliberately not re-checked in the transaction, unlike the
+   *  row. It would prevent no wrong write — only add a confirmation, which
+   *  nothing can raise from inside a transaction that already holds the
+   *  writer, so closing it means a rejection code, a retry loop and a bypass
+   *  flag at every call site, permanently. DECLINED against the alternative
+   *  of a fan-out that turns out large going unasked, whose outcome is the
+   *  behaviour this gate replaced. */
   const throughFanoutGate = useCallback(async (
     change: Omit<ConfirmDefinitionChangeDialogProps, 'blockCount'>,
     stillAsShown: (current: DefinitionFacts) => boolean,
