@@ -56,7 +56,7 @@ import {
 import type { Repo } from './repo'
 import {
   beginPropertyDefinitionFanout,
-  propertyDefinitionFanoutFor,
+  propertyDefinitionFanout,
   __resetPropertyDefinitionFanoutForTests,
 } from './propertyDefinitionFanout'
 
@@ -2226,15 +2226,33 @@ describe('reporting fan-out progress', () => {
     await seedProperty(repo, 'p1', 'status', 'done')
     const run = beginPropertyDefinitionFanout(WS, 'status', 1)
     try {
-      expect(propertyDefinitionFanoutFor(WS)?.done).toBeNull()
+      expect(propertyDefinitionFanout()?.done).toBeNull()
 
       await rename(repo, FIELD_ID, 'state')
 
-      expect(propertyDefinitionFanoutFor(WS)).toMatchObject({done: 1, total: 1})
+      expect(propertyDefinitionFanout()).toMatchObject({done: 1, total: 1})
     } finally {
       run.end()
     }
-    expect(propertyDefinitionFanoutFor(WS)).toBeNull()
+    expect(propertyDefinitionFanout()).toBeNull()
+  })
+
+  it('reports the LAST consumer, whatever the stride lands on', async () => {
+    // Without it the surface sits at the previous stride for the whole tail —
+    // "1,000 of 1,124 blocks updated" while the transaction commits, and then
+    // it vanishes. Three consumers is the cheapest total that is neither 1
+    // nor a multiple of the stride.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    for (const id of ['p1', 'p2', 'p3']) await seedProperty(repo, id, 'status', 'done')
+    const run = beginPropertyDefinitionFanout(WS, 'status', 3)
+    try {
+      await rename(repo, FIELD_ID, 'state')
+
+      expect(propertyDefinitionFanout()).toMatchObject({done: 3, total: 3})
+    } finally {
+      run.end()
+    }
   })
 
   it('opens no surface of its own for a caller that did not ask for one', async () => {
@@ -2247,6 +2265,6 @@ describe('reporting fan-out progress', () => {
 
     await rename(repo, FIELD_ID, 'state')
 
-    expect(propertyDefinitionFanoutFor(WS)).toBeNull()
+    expect(propertyDefinitionFanout()).toBeNull()
   })
 })

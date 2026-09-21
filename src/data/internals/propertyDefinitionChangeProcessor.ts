@@ -914,14 +914,17 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       done += 1
       // Unconditional, and a no-op unless a gesture opened a run for this
       // workspace — the processor does not decide whether anyone is watching.
-      // No report after the loop: the run outlives it either way (the commit
-      // and the post-commit walk are still to come) and its owner is the one
-      // that ends it.
-      // The FIRST as well as every stride: it is what turns the surface's
-      // "Starting…" into a number, and making that wait for a whole stride
-      // spends the one moment the user is most likely to think nothing is
-      // happening.
-      if (done === 1 || done % FANOUT_REPORT_STRIDE === 0) {
+      //
+      // Three moments, and each is a state the surface cannot reach without
+      // it. The FIRST turns "Starting…" into a number, which is when the user
+      // is likeliest to think nothing is happening. Every STRIDE moves the
+      // bar. And the LAST says the consumers are done and the commit is what
+      // remains — a total that is not a multiple of the stride would
+      // otherwise sit at the previous one for the whole tail, reading
+      // "1,000 of 1,124" while the transaction commits, and then vanish.
+      // Still not the END of the run: the commit and the post-commit walk
+      // come after it, and the gesture that opened the run is what closes it.
+      if (done === 1 || done === parentIds.length || done % FANOUT_REPORT_STRIDE === 0) {
         reportPropertyDefinitionFanout(event.workspaceId, done, parentIds.length)
       }
     }

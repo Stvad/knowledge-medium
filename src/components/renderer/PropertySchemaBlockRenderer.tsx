@@ -18,7 +18,13 @@ import {
   presetIdProp,
   propertyNameProp,
 } from '@/data/properties.js'
-import { ChangeScope, propertyValue, type AnyJoinedValuePreset } from '@/data/api'
+import {
+  ChangeScope,
+  propertyValue,
+  type AnyJoinedValuePreset,
+  type Tx,
+} from '@/data/api'
+import { decodeRowProperty } from '@/data/rowProperty.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
@@ -34,7 +40,33 @@ import {
 import {
   ConfirmDefinitionChangeDialog,
   type ConfirmDefinitionChangeDialogProps,
+  type DefinitionChangeKind,
 } from './ConfirmDefinitionChangeDialog.tsx'
+import { showError } from '@/utils/toast.js'
+
+/** The three bag keys this editor writes, read the ONE way.
+ *
+ *  Shared by the render and by the guard that re-reads the row inside the
+ *  writing transaction: "what the user was shown" and "what is there now"
+ *  have to be compared through the same decode, and they were three
+ *  hand-copied decodes before this. `undefined` properties (no row yet) read
+ *  as the defaults, which is what every one of those copies did. */
+const definitionFacts = (properties: Record<string, unknown> | undefined) => {
+  const row = {properties: properties ?? {}}
+  return {
+    name: decodeRowProperty(row, propertyNameProp),
+    presetId: decodeRowProperty(row, presetIdProp),
+    config: decodeRowProperty(row, presetConfigProp),
+  }
+}
+
+type DefinitionFacts = ReturnType<typeof definitionFacts>
+
+const TX_DESCRIPTIONS: Record<DefinitionChangeKind, string> = {
+  rename: 'rename property',
+  type: 'change property type',
+  options: 'change property options',
+}
 
 const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
@@ -71,69 +103,78 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   const readOnly = block.repo.isReadOnly || isSeedBacked
 
 
-  const presetId = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[presetIdProp.name]
-    return raw === undefined ? presetIdProp.defaultValue : presetIdProp.codec.decode(raw)
-  }, [data])
-
-  const propertyName = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[propertyNameProp.name]
-    return raw === undefined ? propertyNameProp.defaultValue : propertyNameProp.codec.decode(raw)
-  }, [data])
-
-  const persistedConfig = useMemo<Record<string, unknown>>(() => {
-    if (!data) return {}
-    const raw = data.properties[presetConfigProp.name]
-    return raw === undefined ? presetConfigProp.defaultValue : presetConfigProp.codec.decode(raw)
-  }, [data])
+  const facts = useMemo(() => definitionFacts(data?.properties), [data])
+  const {presetId, name: propertyName, config: persistedConfig} = facts
 
   const preset = presets.get(presetId) ?? null
 
-  /** Ask before a change that stops the app, and hold the progress surface up
-   *  for as long as the user is waiting on it.
+  /** Ask before a change that stops the app, hold the progress surface up for
+   *  as long as the user is waiting on it, and write only if the definition is
+   *  still the one they were shown.
    *
-   *  BOTH halves here rather than in the processor that does the work: the
-   *  count is a query the gesture can afford and the transaction cannot (it
-   *  already holds the writer by then), and the wait the user is owed a
+   *  The first two live here rather than in the processor that does the work:
+   *  the count is a query the gesture can afford and the transaction cannot
+   *  (it already holds the writer by then), and the wait the user is owed a
    *  surface for is the whole `repo.tx`, not the consumer loop inside it — the
    *  commit and the post-commit walk over every row it touched come after.
-   *
    *  One predicate (`isLargeFanout`) decides both, so a change can never ask
-   *  and then run silently, or run for a minute without having asked. */
+   *  and then run silently, or run for a minute without having asked.
+   *
+   *  The third is `stillAsShown`, checked INSIDE the writing transaction
+   *  against a freshly read row. A confirmation is a human pause, and sync
+   *  keeps running through it: without this, agreeing to "rename status to
+   *  state" a moment after a peer renamed it performs "rename theirName to
+   *  state" instead — the consent was about a definition that no longer
+   *  exists, and the peer's edit is gone with no record. Each gesture supplies
+   *  the one key it is REPLACING rather than comparing the whole row: a peer
+   *  changing the type while this renames is not a reason to refuse the
+   *  rename, and over-refusing costs the user a retry for nothing.
+   *
+   *  Uniform across both sides of the threshold on purpose. Under it the
+   *  window is one await and a refusal is all but unreachable — but two write
+   *  paths, one guarded and one not, is how the guarded one stops being the
+   *  one that runs. */
   const throughFanoutGate = useCallback(async (
     change: Omit<ConfirmDefinitionChangeDialogProps, 'blockCount'>,
-    write: () => Promise<void>,
+    stillAsShown: (current: DefinitionFacts) => boolean,
+    write: (tx: Tx) => Promise<void>,
   ): Promise<boolean> => {
     // The definition's OWN workspace, never the active one — this renderer is
     // mounted per block. With no row loaded there is nothing to scope the
     // count to, and no gesture either: every control below renders from `data`.
     const workspaceId = data?.workspaceId
-    if (workspaceId === undefined) {
-      await write()
-      return true
-    }
+    if (workspaceId === undefined) return false
     const consumers = await block.repo.countPropertyDefinitionConsumers(
       block.id, workspaceId,
     )
-    if (!isLargeFanout(consumers)) {
-      await write()
-      return true
+    const large = isLargeFanout(consumers)
+    if (large) {
+      const confirmed = await openDialog(
+        ConfirmDefinitionChangeDialog, {...change, blockCount: consumers},
+      )
+      if (confirmed !== true) return false
     }
-    const confirmed = await openDialog(
-      ConfirmDefinitionChangeDialog, {...change, blockCount: consumers},
-    )
-    if (confirmed !== true) return false
-    const run = beginPropertyDefinitionFanout(
-      workspaceId, change.propertyName, consumers,
-    )
+    const run = large
+      ? beginPropertyDefinitionFanout(workspaceId, change.propertyName, consumers)
+      : null
+    let wrote = false
     try {
-      await write()
+      await block.repo.tx(async tx => {
+        const current = await tx.get(block.id)
+        if (current === null || !stillAsShown(definitionFacts(current.properties))) return
+        await write(tx)
+        wrote = true
+      }, {scope: ChangeScope.BlockDefault, description: TX_DESCRIPTIONS[change.kind]})
     } finally {
-      run.end()
+      run?.end()
     }
-    return true
+    if (!wrote) {
+      showError(
+        `“${change.propertyName}” changed somewhere else while you were deciding, `
+        + 'so nothing was written. Take another look and try again.',
+      )
+    }
+    return wrote
   }, [block, data])
 
   const decodedConfig = useMemo<unknown>(() => {
@@ -180,7 +221,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     }
     const wrote = await throughFanoutGate(
       {kind: 'rename', propertyName, nextName: next},
-      () => block.set(propertyNameProp, next),
+      current => current.name === propertyName,
+      tx => tx.setProperty(block.id, propertyNameProp, next),
     )
     // A cancelled rename has to put the FIELD back too, not just decline the
     // write: the draft is what the user typed, and leaving it there shows a
@@ -197,8 +239,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // setProperties applies a two-key DELTA read against the fresh in-tx row —
     // NOT a whole-bag replace off the (possibly stale) `data` render snapshot,
     // which would clobber any sibling key written between render and commit.
-    const write = () => block.repo.tx(async tx => {
-      await tx.setProperties(block.id, {
+    await throughFanoutGate(
+      {kind: 'type', propertyName},
+      current => current.presetId === presetId,
+      tx => tx.setProperties(block.id, {
         set: [
           propertyValue(presetIdProp, next),
           // Reset config to the new preset's defaultConfig (re-encoded through
@@ -208,9 +252,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
             ? target.configCodec.encode(target.defaultConfig as never) as Record<string, unknown>
             : {}),
         ],
-      })
-    }, {scope: ChangeScope.BlockDefault, description: `change preset to ${next}`})
-    await throughFanoutGate({kind: 'type', propertyName}, write)
+      }),
+    )
   }, [block, presetId, presets, propertyName, throughFanoutGate])
 
   const writeConfig = useCallback(async (next: unknown) => {
@@ -224,9 +267,14 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     }
     await throughFanoutGate(
       {kind: 'options', propertyName},
-      () => block.set(presetConfigProp, encoded),
+      // A config write REPLACES the whole object, so a peer's edit to it is
+      // what this would silently drop. Compared as stored text: both sides
+      // come from the same round trip, and a re-ordering that is only
+      // cosmetically different costs a retry, not a lost write.
+      current => JSON.stringify(current.config) === JSON.stringify(persistedConfig),
+      tx => tx.setProperty(block.id, presetConfigProp, encoded),
     )
-  }, [block, preset, propertyName, throughFanoutGate])
+  }, [block, persistedConfig, preset, propertyName, throughFanoutGate])
 
   // Lazy delete-confirm: first click counts users; if any, ask for a
   // second click; second click (or no users) deletes. Confirm state
