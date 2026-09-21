@@ -1,1 +1,1 @@
-import{mP as e}from"../../chunks/app-cm7sVejO.js";export{e as usePropertySchemas};
+import{mP as e}from"../../chunks/app-DN_VGPhw.js";export{e as usePropertySchemas};
