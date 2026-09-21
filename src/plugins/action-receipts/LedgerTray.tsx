@@ -18,7 +18,7 @@ import { useMinuteClock } from '@/hooks/useMinuteClock.js'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import { formatRelativeTime } from '@/utils/relativeTime.js'
 import { canGoTo, goToSubject, ledgerOpen, ledgerStore, runRevert, type LedgerEntry } from './receipts.ts'
-import { coalescedVerb, historyGlyph, useRevertIsLive } from './ReceiptToast.tsx'
+import { historyGlyph, useRevertIsLive } from './ReceiptToast.tsx'
 
 const LedgerRow = ({entry, now}: {entry: LedgerEntry; now: number}) => {
   const repo = useRepo()
@@ -32,7 +32,7 @@ const LedgerRow = ({entry, now}: {entry: LedgerEntry; now: number}) => {
       </span>
       <div className="min-w-0">
         <div className="truncate">
-          <span>{coalescedVerb(receipt, 1)}</span>
+          <span>{receipt.verb}</span>
           {receipt.subject && <span className="font-medium"> · {receipt.subject.label}</span>}
           {receipt.riders && <span className="text-muted-foreground"> {receipt.riders}</span>}
         </div>

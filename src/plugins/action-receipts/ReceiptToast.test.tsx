@@ -23,7 +23,7 @@ import { makeBlockData } from '@/data/test/factories'
 import type { Repo } from '@/data/repo'
 import type { Receipt, ReceiptSubject } from './facet.ts'
 import { ledgerOpen, type ShownReceipt } from './receipts.ts'
-import { coalescedVerb, ReceiptToast, EmptyReceiptToast } from './ReceiptToast.tsx'
+import { ReceiptToast, EmptyReceiptToast } from './ReceiptToast.tsx'
 
 const { dismissToastMock, showErrorMock, navigateFromGlobalCommandMock } = vi.hoisted(() => ({
   dismissToastMock: vi.fn(),
@@ -331,24 +331,21 @@ describe('ReceiptToast subject label', () => {
   })
 })
 
-describe('coalescedVerb', () => {
-  it('returns the plain verb for a single press', () => {
-    const receipt: Receipt = {key: 'delete', verb: 'Deleted'}
-    expect(coalescedVerb(receipt, 1)).toBe('Deleted')
+describe('ReceiptToast folded presses', () => {
+  it('shows the latest receipt in full with a +N chip for the earlier ones', () => {
+    const subject = makeSubject({label: 'Third block'})
+    const receipt: Receipt = {key: 'undo', history: 'undo', verb: 'Undid edit', subject}
+    renderToast({receipt, count: 3, offscreen: false}, makeRepo(new UndoManager(), {id: 'ws-1'}))
+
+    expect(screen.getByText('+2')).toBeInTheDocument()
+    expect(screen.getByText('Undid edit')).toBeInTheDocument()
+    expect(screen.getByText('Third block')).toBeInTheDocument()
   })
 
-  it('summarizes an undo receipt as "Undid N steps"', () => {
+  it('shows no chip for a single press', () => {
     const receipt: Receipt = {key: 'undo', history: 'undo', verb: 'Undid edit'}
-    expect(coalescedVerb(receipt, 3)).toBe('Undid 3 steps')
-  })
+    renderToast({receipt, count: 1, offscreen: false}, makeRepo(new UndoManager(), {id: 'ws-1'}))
 
-  it('summarizes a redo receipt as "Redid N steps"', () => {
-    const receipt: Receipt = {key: 'redo', history: 'redo', verb: 'Redid edit'}
-    expect(coalescedVerb(receipt, 3)).toBe('Redid 3 steps')
-  })
-
-  it('summarizes a forward receipt as "<verb> ×N"', () => {
-    const receipt: Receipt = {key: 'delete', verb: 'Deleted'}
-    expect(coalescedVerb(receipt, 3)).toBe('Deleted ×3')
+    expect(screen.queryByText(/^\+\d/)).toBeNull()
   })
 })

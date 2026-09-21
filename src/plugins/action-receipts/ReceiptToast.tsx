@@ -62,14 +62,6 @@ export const historyGlyph = (receipt: Receipt) => {
   return null
 }
 
-/** "Undid 3 steps" / "Deleted ×3" — the verb once several presses fold in. */
-export const coalescedVerb = (receipt: Receipt, count: number): string => {
-  if (count <= 1) return receipt.verb
-  if (receipt.history === 'undo') return `Undid ${count} steps`
-  if (receipt.history === 'redo') return `Redid ${count} steps`
-  return `${receipt.verb} ×${count}`
-}
-
 const inverseLabel = (direction: ReceiptRevert['direction']): string =>
   direction === 'undo' ? 'Undo' : 'Redo'
 
@@ -102,12 +94,9 @@ export const ReceiptToast = ({toastId, shown, repo}: ReceiptToastProps) => {
   const {receipt, count, offscreen, chord} = shown
   const live = useRevertIsLive(repo, receipt.revert)
   const peek = receipt.peek && (receipt.peek.gone || receipt.peek.now) ? receipt.peek : null
-  // A folded toast counts presses; the last press's subject would read as
-  // the subject of all of them.
-  const detailed = count <= 1
   // A peek is a window onto the content; naming the block by that same
   // content in front of it would say it twice.
-  const showLabel = detailed && receipt.subject !== undefined && !(peek !== null && receipt.subject.labelIsContent)
+  const showLabel = receipt.subject !== undefined && !(peek !== null && receipt.subject.labelIsContent)
   const showGoTo = offscreen && receipt.subject !== undefined && canGoTo(repo, receipt.subject)
   const glyph = historyGlyph(receipt)
 
@@ -132,16 +121,25 @@ export const ReceiptToast = ({toastId, shown, repo}: ReceiptToastProps) => {
       <span className="flex min-w-0 flex-1 basis-40 items-start gap-2">
         {glyph && <span className="mt-0.5 text-primary">{glyph}</span>}
         <span className="min-w-0 line-clamp-2 break-words">
-          <span>{coalescedVerb(receipt, count)}</span>
+          {/* A folded toast shows the LATEST press in full; the chip counts the earlier ones. */}
+          {count > 1 && (
+            <span
+              className="mr-1.5 inline-block rounded-full bg-muted px-1.5 text-[11px] font-medium tabular-nums text-muted-foreground align-[1px]"
+              title={`${count - 1} earlier ${count === 2 ? 'step' : 'steps'} folded into this receipt`}
+            >
+              +{count - 1}
+            </span>
+          )}
+          <span>{receipt.verb}</span>
           {showLabel && receipt.subject && (
             <>
               <span className="text-muted-foreground"> · </span>
               <SubjectLabel repo={repo} subject={receipt.subject} />
             </>
           )}
-          {detailed && receipt.riders && <span className="text-muted-foreground"> {receipt.riders}</span>}
-          {detailed && receipt.location && <LocationLabel repo={repo} location={receipt.location} />}
-          {detailed && peek && (
+          {receipt.riders && <span className="text-muted-foreground"> {receipt.riders}</span>}
+          {receipt.location && <LocationLabel repo={repo} location={receipt.location} />}
+          {peek && (
             <>
               <span className="text-muted-foreground"> · </span>
               <Peek peek={peek} />
