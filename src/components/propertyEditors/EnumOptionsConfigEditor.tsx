@@ -82,9 +82,11 @@ export function EnumOptionsConfigEditor({
     if (JSON.stringify(draft) === requested) return
     request(draft)
   }
-  /** Keeps the focus where it is, so pressing a structural button does not
-   *  blur the input being typed in — the click below then carries that edit
-   *  in the draft it writes from, as one change. */
+  /** Keeps the PRESS from taking focus, so it does not blur the input being
+   *  typed in — the click then carries that edit in the draft it writes
+   *  from, as one change. It claims nothing about focus afterwards: a
+   *  confirmation mounting behind the click traps focus and blurs the input
+   *  anyway, which is `pending`'s half of the job, not this one's. */
   const keepFocus = (event: {preventDefault: () => void}) => { event.preventDefault() }
   return (
     <div className="space-y-2">
