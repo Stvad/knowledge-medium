@@ -30,8 +30,15 @@
  * there is one of those per tab: while a fan-out holds it every workspace's
  * writes are queued, so a surface filed under the workspace being renamed
  * vanishes the moment the user navigates to another one — leaving them in a
- * frozen app with no account of why. The workspace is still carried, as data a
- * report is matched against, never as the key the surface is found under.
+ * frozen app with no account of why.
+ *
+ * A report is matched to the run by the DEFINITION it is changing, not by the
+ * workspace. Only the gesture is serialised, and headless callers — the agent
+ * CLI, an importer — are the ones this module deliberately asks nothing of,
+ * so one of them can hold the writer while a confirmation is open; a
+ * workspace match would then pour its counts into a modal titled for another
+ * property, up to and including declaring it saved before its own
+ * transaction had started.
  */
 import { CallbackSet } from '@/utils/callbackSet.js'
 
@@ -80,10 +87,11 @@ export const queueDefinitionChange = <T>(change: () => Promise<T>): Promise<T> =
 type RunOwner = symbol
 
 export interface PropertyDefinitionFanoutSnapshot {
-  /** The workspace whose definition is changing. Carried so a report can be
-   *  matched to the run it belongs to, and for nothing else — see the one-slot
-   *  note above. */
+  /** The workspace whose definition is changing. */
   readonly workspaceId: string
+  /** The definition block. Carried so a report can be matched to the run it
+   *  belongs to, and for nothing else — see the one-slot note above. */
+  readonly fieldId: string
   /** What the user is waiting on, in the words they used: the property being
    *  renamed or re-typed. */
   readonly propertyName: string
@@ -141,17 +149,19 @@ export interface PropertyDefinitionFanoutRun {
  *  which is a property of the CALLER, and a store that silently let one
  *  caller's run repoint another's is the wrong thing to leave lying around. */
 export const beginPropertyDefinitionFanout = (
-  workspaceId: string, propertyName: string, total: number,
+  workspaceId: string, fieldId: string, propertyName: string, total: number,
 ): PropertyDefinitionFanoutRun => {
   const owner: RunOwner = Symbol('property-definition-fanout')
-  if (live === null) publish({workspaceId, propertyName, total, done: null, owner})
+  if (live === null) publish({workspaceId, fieldId, propertyName, total, done: null, owner})
   return {
     end: () => { if (live?.owner === owner) publish(null) },
   }
 }
 
-/** How far the fan-out has got. Ignored when no run is open, and when the open
- *  one belongs to a different workspace's change.
+/** How far the fan-out has got, from a transaction changing `fieldIds`.
+ *  Ignored when no run is open, and when the open one is not about any of
+ *  them — the transaction holding the writer is not necessarily the one the
+ *  user is waiting on.
  *
  *  A report is an UPDATE to a run somebody else opened and never the opening
  *  of one, which is the whole of what keeps a headless rename from putting a
@@ -159,9 +169,10 @@ export const beginPropertyDefinitionFanout = (
  *  processor that OPENED a run rather than reporting into one fails two named
  *  tests in `propertyDefinitionChange.test.ts`. */
 export const reportPropertyDefinitionFanout = (
-  workspaceId: string, done: number, total: number,
+  workspaceId: string, fieldIds: readonly string[], done: number, total: number,
 ): void => {
   if (live === null || live.workspaceId !== workspaceId) return
+  if (!fieldIds.includes(live.fieldId)) return
   publish({...live, done, total})
 }
 
