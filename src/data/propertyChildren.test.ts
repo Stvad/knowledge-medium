@@ -214,21 +214,6 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(await liveFieldRows('p')).toEqual([])
   })
 
-  it('a field row is born with its references, so the parse has nothing to write', async () => {
-    await seedWorkspace('children')
-    const repo = setup()
-    await createBlock(repo, 'p')
-    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
-      {scope: ChangeScope.BlockDefault})
-
-    // Asserted on the CREATE, not on the eventual state: the references
-    // processor converges this either way, and the point of pre-filling is
-    // that it never opens its transaction. On a 350k-block graph the migration
-    // created 3,383 rows and the parse then updated 1,851 of them.
-    const fields = await liveFieldRows('p')
-    expect(await referencesOf(fields[0]!.id))
-      .toEqual([{id: STATUS_FIELD_ID, alias: STATUS_FIELD_ID}])
-  })
 
   it('rejects a raw cell write whose value does not decode (no silent cell/child divergence)', async () => {
     await seedWorkspace('children')
@@ -780,16 +765,6 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     expect(await relatedCell('p')).toBe('target-xyz')
   })
 
-  it('a ref value child is born with its references too', async () => {
-    const repo = await setupWithRef()
-    await createBlock(repo, 'p')
-    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'target-xyz'),
-      {scope: ChangeScope.BlockDefault})
-
-    const value = await relatedValueChild('p')
-    expect(await referencesOf(value!.id))
-      .toEqual([{id: 'target-xyz', alias: 'target-xyz'}])
-  })
 
   it('re-projects the cell from the column when the ref is retargeted in the tree', async () => {
     const repo = await setupWithRef()
@@ -4084,5 +4059,64 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
 
   it('falls to the text route when no old codec records the encoding', () => {
     expect(convert(null, 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
+  })
+})
+
+describe('machinery rows are born with the references the parse would recompute', () => {
+  /** The prefill exists so `references.parseReferences` finds the row already
+   *  correct and never opens its transaction. That only holds for references
+   *  the plugin's INLINE scanner would itself produce, and that scanner is
+   *  UUID-only — narrower than the whole-block grammar a field row is read
+   *  with. Prefilling outside it writes a reference the recompute retracts. */
+  const UUID_FIELD_ID = '33333333-3333-4333-8333-333333333333'
+  const UUID_TARGET = '44444444-4444-4444-8444-444444444444'
+
+  const uuidRefSchema = defineProperty<string>('uuidref', {
+    codec: codecs.ref(),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  const setupUuidRef = async (): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    registerDefinition(repo, 'test-uuidref-definition', UUID_FIELD_ID, uuidRefSchema)
+    return repo
+  }
+
+  const valueChildOf = async (ownerId: string): Promise<ChildRow | undefined> => {
+    const fields = (await childrenRows(ownerId)).filter(
+      r => r.deleted === 0 && r.reference_target_id === UUID_FIELD_ID)
+    if (fields.length === 0) return undefined
+    return (await childrenRows(fields[0]!.id)).find(v => v.deleted === 0)
+  }
+
+  it('a field row and a ref value child both carry theirs at create', async () => {
+    const repo = await setupUuidRef()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', uuidRefSchema, UUID_TARGET),
+      {scope: ChangeScope.BlockDefault})
+
+    const fields = (await childrenRows('p')).filter(
+      r => r.deleted === 0 && r.reference_target_id === UUID_FIELD_ID)
+    expect(await referencesOf(fields[0]!.id))
+      .toEqual([{id: UUID_FIELD_ID, alias: UUID_FIELD_ID}])
+    expect(await referencesOf((await valueChildOf('p'))!.id))
+      .toEqual([{id: UUID_TARGET, alias: UUID_TARGET}])
+  })
+
+  it('a ref value child whose target is NOT uuid-shaped is left to the parse', async () => {
+    // A ref property accepts these — `((target-xyz))` is a legal stored value
+    // and the whole-block reading calls it a blockRef — but the inline scanner
+    // will not, so a prefill here is a reference nothing recomputes and the
+    // plugin would strip it right back out.
+    const repo = await setupUuidRef()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', uuidRefSchema, 'target-xyz'),
+      {scope: ChangeScope.BlockDefault})
+
+    const value = await valueChildOf('p')
+    expect(value?.content).toBe('((target-xyz))')
+    expect(await referencesOf(value!.id)).toEqual([])
   })
 })

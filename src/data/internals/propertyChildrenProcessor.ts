@@ -56,6 +56,7 @@ import {
 } from '@/data/api'
 import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
+  UUID_RE_SOURCE,
   isIdCarryingReference,
   parseExactReferenceBlockContent,
 } from '@/data/referenceBlock'
@@ -630,6 +631,14 @@ const materializePropertiesForChangedRow = async (
 const idReferencesForContent = (content: string): BlockReference[] | undefined => {
   const parsed = parseExactReferenceBlockContent(content)
   if (!isIdCarryingReference(parsed) || parsed.kind !== 'blockRef') return undefined
+  // UUID-shaped only, from the SAME source the references plugin builds its
+  // scanner from. The whole-block grammar above accepts a broader id than the
+  // inline one does, and a ref property will happily hold one — so prefilling
+  // from this reading alone writes a reference the recompute cannot reproduce
+  // and immediately retracts, which is a write, an upload and a retraction per
+  // row instead of the zero this exists to achieve. Prefill only what the
+  // parse would have produced anyway; everything else is left to it.
+  if (!new RegExp(`^${UUID_RE_SOURCE}$`, 'i').test(parsed.id)) return undefined
   return normalizeReferences([{id: parsed.id, alias: parsed.id}])
 }
 

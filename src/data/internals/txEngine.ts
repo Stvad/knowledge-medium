@@ -682,36 +682,40 @@ export class TxImpl implements Tx {
       }
     }
 
-    for (const chunk of chunked(built, BULK_INSERT_ROWS_PER_STATEMENT)) {
-      try {
-        await this.ctx.txDb.execute(
-          bulkInsertSql(chunk.length),
-          chunk.flatMap(({row}) => blockToRowParams(row)),
-        )
-      } catch (e) {
-        // A multi-row INSERT cannot say WHICH row collided, and
-        // `DuplicateIdError` names one. Re-run the chunk a row at a time so
-        // the caller gets the same error it would have got from `create`;
-        // the transaction is being rolled back either way, so the cost is
-        // paid only on the failing path.
-        if (!isUniqueConstraint(e, 'blocks.id')) throw e
-        for (const {id, row} of chunk) {
-          try {
-            await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
-          } catch (inner) {
-            if (isUniqueConstraint(inner, 'blocks.id')) throw new DuplicateIdError(id)
-            throw inner
-          }
-        }
-        throw e
-      }
+    // Duplicates are found by READING, before anything is written. The
+    // alternative — let the multi-row INSERT fail and re-run the chunk a row at
+    // a time to learn which id collided — inserts every row before the
+    // colliding one on the way to the error, and a caller that catches it then
+    // commits rows this method never reached `record` for: invisible to the
+    // same-tx processors, the snapshot cache, undo and invalidation. One
+    // indexed read per 400 ids is the cheaper half of that trade anyway.
+    for (const chunk of chunked(built.map(({id}) => id), BULK_PARENT_LOOKUP_IDS)) {
+      const taken = await this.ctx.txDb.getAll<{id: string}>(
+        `SELECT id FROM blocks WHERE id IN (${chunk.map(() => '?').join(', ')})`,
+        chunk,
+      )
+      if (taken.length > 0) throw new DuplicateIdError(taken[0]!.id)
     }
 
-    // Only now, with every row written: same order as `create`.
-    this.pinWorkspace(batchWorkspaceId!)
-    for (const {id, row} of built) {
-      this.markSystemMint(id, opts)
-      this.record(id, null, row)
+    // Recorded per chunk, immediately after the statement that wrote it, so a
+    // throw part-way leaves exactly the state a loop of `create` calls would:
+    // the rows that landed are recorded, and the ones that did not are absent.
+    // Recording only at the end left every written row unrecorded if a later
+    // chunk threw — a trigger abort, an alias collision — and a caught error
+    // then committed them with no processor having seen them.
+    let pinned = false
+    for (const chunk of chunked(built, BULK_INSERT_ROWS_PER_STATEMENT)) {
+      await this.ctx.txDb.execute(
+        bulkInsertSql(chunk.length),
+        chunk.flatMap(({row}) => blockToRowParams(row)),
+      )
+      // After the first statement that wrote, never before: a call that
+      // refuses must not decide the transaction's workspace.
+      if (!pinned) { this.pinWorkspace(batchWorkspaceId!); pinned = true }
+      for (const {id, row} of chunk) {
+        this.markSystemMint(id, opts)
+        this.record(id, null, row)
+      }
     }
     return built.map(({id}) => id)
   }

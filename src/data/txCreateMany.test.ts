@@ -166,3 +166,30 @@ describe('tx.createMany pins only once it has written', () => {
     expect(pinned).toBe(WS)
   })
 })
+
+describe('tx.createMany writes nothing on a refusal the caller swallows', () => {
+  it('a duplicate anywhere in the batch leaves the earlier rows unwritten', async () => {
+    // The batch is refused before any statement runs, so a caller that catches
+    // the error and lets the transaction commit finds none of it. Learning
+    // which id collided by re-inserting the chunk a row at a time instead put
+    // every row before the duplicate into `blocks` on the way to the error —
+    // and those rows never reached `record`, so they committed invisible to
+    // the same-tx processors, the snapshot cache, undo and invalidation.
+    await seedRoot('root')
+    await repo.tx(tx => tx.create(
+      {id: 'taken', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'first'},
+    ), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      await expect(tx.createMany([
+        {id: 'before', workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'before'},
+        {id: 'taken', workspaceId: WS, parentId: 'root', orderKey: 'a2', content: 'again'},
+        {id: 'after', workspaceId: WS, parentId: 'root', orderKey: 'a3', content: 'after'},
+      ])).rejects.toThrow(/taken/)
+      // Swallowed on purpose: the transaction commits, and the question is
+      // what it commits.
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect((await rowsOf('root')).map(r => r.id)).toEqual(['taken'])
+  })
+})
