@@ -557,19 +557,21 @@ export const encodedToValueChildContent = (
  *  for the same reason `enum` does, where re-canonicalizing through a stricter
  *  write side would drop a value the codec means to preserve.
  *
- *  THROUGH THE MEMBER, because a value child is read at member grain: a
- *  `list(enum)` child holds one option, so the question a scalar `enum` asks
- *  has to be asked of the list that contains it too.
+ *  THROUGH THE WHOLE MEMBER CHAIN, because a `list(enum)` holds options just
+ *  as a scalar `enum` does and nothing about the nesting changes that. Walking
+ *  it is shorter than justifying a depth: stop at one level and the levels
+ *  below are a limit to explain, while the two directions stay in agreement
+ *  for a separate reason — that `propertyCellValueRejection` asks this at
+ *  every storage grain it would materialize.
  *
- *  ONE level, and it does not need more. What keeps the two directions in
- *  agreement is that each STORAGE GRAIN is asked — `propertyCellValueRejection`
- *  runs this over the whole cell and again over every member it would
- *  materialize — not this predicate modelling arbitrary nesting. Deeper than
- *  one level the answer is uniformly "not enforced" on BOTH sides, so such a
- *  value is kept rather than accepted-then-dropped, which is the failure mode
- *  that matters. */
-const enforcesWriteSide = (codec: AnyCodec): boolean =>
-  codec.type === 'enum' || memberCodecOf(codec)?.type === 'enum'
+ *  No cycle guard. A codec whose member chain loops describes an infinitely
+ *  nested value, so its own `encode` and `decode` recur forever too; it is
+ *  broken before this asks it anything. */
+const enforcesWriteSide = (codec: AnyCodec): boolean => {
+  if (codec.type === 'enum') return true
+  const member = memberCodecOf(codec)
+  return member !== undefined && enforcesWriteSide(member)
+}
 
 /** The form `encoded` is STORED as under `codec`, or a throw saying it cannot
  *  be stored at all. `encode(decode(v))`, so tolerant text ("1" for a number,

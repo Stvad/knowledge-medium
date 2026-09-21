@@ -2700,18 +2700,26 @@ describe('propertyCellValueRejection asks what the projection will ask', () => {
     expect(propertyCellValueRejection(choiceListSchema, ['a', 'b'])).toBeNull()
   })
 
-  it('refuses a NESTED off-menu member, rather than deriving an empty list', () => {
-    // One level further down, and the reason the grains are each ASKED rather
-    // than the predicate modelling the nesting: the whole cell is offered to
-    // an outer codec that does not enforce, but the member it would
-    // materialize is a `list(enum)` that does.
-    const nestedSchema = defineProperty<unknown>('tags', {
-      codec: codecs.list(codecs.list(codecs.enum(['a', 'b']))) as AnyPropertySchema['codec'],
-      defaultValue: [],
-      changeScope: ChangeScope.BlockDefault,
+  // At every depth, because an `enum` nested in lists still declares an
+  // option set. Two mechanisms hold this up and the cases below separate
+  // them: the member CHAIN is walked when deciding whether the write side is
+  // enforced, and the question is re-asked at every storage GRAIN — so a
+  // depth the chain missed used to be accepted whole and then dropped by the
+  // projection, and a depth the grain missed used to keep an off-menu value.
+  it.each([1, 2, 3])('refuses an off-menu option nested %i list(s) deep', depth => {
+    let codec = codecs.enum(['a', 'b']) as AnyPropertySchema['codec']
+    let ok: unknown = 'a'
+    let bad: unknown = 'retired'
+    for (let i = 0; i < depth; i += 1) {
+      codec = codecs.list(codec) as AnyPropertySchema['codec']
+      ok = [ok]
+      bad = [bad]
+    }
+    const nested = defineProperty<unknown>('tags', {
+      codec, defaultValue: [], changeScope: ChangeScope.BlockDefault,
     })
-    expect(propertyCellValueRejection(nestedSchema, [['a', 'retired']])).not.toBeNull()
-    expect(propertyCellValueRejection(nestedSchema, [['a', 'b']])).toBeNull()
+    expect(propertyCellValueRejection(nested, bad)).not.toBeNull()
+    expect(propertyCellValueRejection(nested, ok)).toBeNull()
   })
 
   it('and the projection agrees, rather than quietly returning a shorter list', () => {
