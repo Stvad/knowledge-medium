@@ -1017,14 +1017,40 @@ describe('the orphan-definition step', () => {
 
 describe('what a completed run tells the operator', () => {
   it('calls a run that migrated nothing a failure, not a green "0 blocks"', async () => {
-    // Failures are per-value by design, so a systematic problem — a codec
-    // rejecting everything, storage refusing writes — otherwise came back as
-    // a success banner reading "Migrated properties on 0 blocks."
+    // Failures are per-value by design, so a run where every value was refused
+    // otherwise came back as a success banner reading "Migrated properties on
+    // 0 blocks."
     const {message, failed} = describeOutcome(
       RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 12})
 
     expect(failed).toBe(true)
-    expect(message).toMatch(/systematic/i)
+    expect(message).toMatch(/Nothing was migrated/i)
+    expect(message).toMatch(/12/)
+  })
+
+  it('does not tell the operator WHY nothing migrated, having no way to know', async () => {
+    // It used to call this "a systematic problem, not a handful of bad
+    // values". Nothing available here separates a broken first run from a
+    // converged graph whose only remaining cells are permanently undecodable:
+    // both write nothing and refuse the same count. On a real migrated graph
+    // the second is the steady state, so the diagnosis was wrong on every
+    // re-run, forever.
+    const {message} = describeOutcome(
+      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 65})
+
+    expect(message).not.toMatch(/systematic/i)
+  })
+
+  it('says a converged re-run had nothing to do, not that it migrated 0 blocks', async () => {
+    // Wrote nothing AND refused nothing: the ordinary ending of every re-run
+    // once the graph has converged. "Migrated properties on 0 blocks." is the
+    // same sentence a totally broken run produces.
+    const {message, failed} = describeOutcome(
+      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 0})
+
+    expect(failed).toBe(false)
+    expect(message).toMatch(/nothing left to migrate/i)
+    expect(message).not.toMatch(/0 blocks/)
   })
 
   it('is not "systematic" when one bad key per block hid a mostly-good run', async () => {
@@ -1126,7 +1152,7 @@ describe('every outcome says whether the history is gone', () => {
       RAN,
       {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 5},
       {flipped: false, undoCleared: true})
-    expect(message).toMatch(/all 5 property value\(s\) failed/)
+    expect(message).toMatch(/all 5 property value\(s\) the pass tried/)
     expect(message).toMatch(/Undo history for this workspace was cleared/)
   })
 })
