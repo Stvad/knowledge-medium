@@ -365,7 +365,7 @@ export class TxImpl implements Tx {
    *  (or first write candidate that the engine validated to insert). */
   private workspacePinned = false
 
-  /** Ids inserted in THIS tx via a `{systemMint: true}` create/createOrGet.
+  /** Ids inserted in THIS tx by a `{systemMint: true}` insert.
    *  Same-tx follow-up writes (`update` / `setProperty` / `move` / …) to one
    *  of these HOLD `updated_at` at the `0` pristine sentinel instead of
    *  advancing it — mirrors the upload compactor's same-tx CREATE+PATCH fusion
@@ -1495,8 +1495,8 @@ export class TxImpl implements Tx {
    *  PUT+PATCH fusion — would overwrite the `0`, so the sentinel the reconcile
    *  gate lets yield to the server would never exist. No-op unless
    *  `opts.systemMint` — and `systemMint` is insert-only at the type level
-   *  ({@link TxInsertOpts}), so this is only ever reached from
-   *  `create` / `createOrGet`. */
+   *  ({@link TxInsertOpts}), so this is only ever reached while MINTING a row,
+   *  never from a later `update` promoting one. */
   private markSystemMint(id: string, opts: TxInsertOpts | undefined): void {
     if (opts?.systemMint) this.systemMintedIds.add(id)
   }
@@ -1525,8 +1525,8 @@ export class TxImpl implements Tx {
     return {updatedAt, userUpdatedAt: now, updatedBy: this.meta.user.id}
   }
 
-  /** Build a fresh BlockData for `tx.create` / `tx.createOrGet` insert
-   *  paths. Engine sets all metadata columns from tx_context unless
+  /** Build a fresh BlockData for the engine's insert paths.
+   *  Engine sets all metadata columns from tx_context unless
    *  `opts.skipMetadata` (used only by bookkeeping writes).
    *
    *  `opts.systemMint` marks the row as a speculative default the reconcile
@@ -1541,13 +1541,17 @@ export class TxImpl implements Tx {
     opts: TxInsertOpts | undefined,
     context: string,
   ): BlockData {
-    // The block-id shape contract (issue #456). `create` and `createOrGet`
-    // are the two MINTING paths and both build their row here, so every id
-    // this engine brings into existence is checked once, by construction,
-    // rather than at each of the N call sites that can supply one.
+    // The block-id shape contract (issue #456). EVERY minting path builds its
+    // row here, so every id this engine brings into existence is checked once,
+    // by construction, rather than at each of the N call sites that can supply
+    // one. Stated as a property rather than a list of the paths there happen
+    // to be today: a new one that does not come through here is the violation,
+    // and a list would instead just go quietly out of date (it did, when bulk
+    // insert became the third).
     //
-    // `applyRaw`'s re-INSERT is the third statement that can insert a row and
-    // is deliberately NOT gated — see the note at its missing-row branch.
+    // `applyRaw`'s re-INSERT is the one statement that inserts a row without
+    // coming here, and is deliberately NOT gated — see the note at its
+    // missing-row branch.
     //
     // Checked on the RESOLVED id, not on `data.id`: the invariant is a
     // property of the ROW, so a Repo wired with a `newId` that mints
