@@ -1,0 +1,1 @@
+import{Lg as e}from"../../../chunks/app-ChbKGxuK.js";export{e as usePromotableBreadcrumb};

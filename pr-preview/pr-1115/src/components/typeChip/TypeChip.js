@@ -1,0 +1,1 @@
+import{cC as e}from"../../../chunks/app-ChbKGxuK.js";export{e as TypeChip};

@@ -1,0 +1,1 @@
+import{vS as e}from"../../../chunks/app-ChbKGxuK.js";export{e as SwipeActionMenu};

@@ -1,0 +1,1 @@
+import{Oh as e}from"../../../chunks/app-ChbKGxuK.js";export{e as SpatialNavigationShellDecorator};

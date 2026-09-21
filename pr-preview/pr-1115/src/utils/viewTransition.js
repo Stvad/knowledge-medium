@@ -1,0 +1,1 @@
+import{oN as e}from"../../chunks/app-ChbKGxuK.js";export{e as withMoveTransition};

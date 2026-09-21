@@ -1,0 +1,1 @@
+import{wB as e}from"../../../chunks/app-ChbKGxuK.js";export{e as agentDispatchCompanionDataExtension};

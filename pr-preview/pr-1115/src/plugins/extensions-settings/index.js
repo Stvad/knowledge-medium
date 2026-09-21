@@ -1,0 +1,1 @@
+import{_w as e,gt as t,vw as n}from"../../../chunks/app-ChbKGxuK.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

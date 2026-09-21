@@ -1,0 +1,1 @@
+import{QR as e}from"../../../chunks/app-ChbKGxuK.js";export{e as characterCounterDataExtension};

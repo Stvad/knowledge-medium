@@ -1,0 +1,1 @@
+import{$P as e,JP as t,QP as n,XP as r,YP as i,ZP as a,eF as o,nF as s,tF as c}from"../../chunks/app-ChbKGxuK.js";export{t as getLastLongTaskEndMs,i as getStartupTimeline,r as hasStartupMark,a as longTasksSupported,n as markStartup,e as markStartupAt,o as onLongTask,c as resetStartupTimeline,s as startStartupObservers};

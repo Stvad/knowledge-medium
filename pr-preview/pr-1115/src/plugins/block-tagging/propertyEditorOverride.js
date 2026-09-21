@@ -1,0 +1,1 @@
+import{ms as e}from"../../../chunks/app-ChbKGxuK.js";export{e as blockTagsConfigUi};

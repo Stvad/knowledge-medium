@@ -1,0 +1,1 @@
+import{Gu as e,Ku as t,Uu as n,Wu as r,qu as i}from"../../../chunks/app-ChbKGxuK.js";export{n as DEFAULT_BACKLINKS_VIEW_ID,r as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,t as backlinksViewProp,i as defaultBacklinksViewIdForBlock};

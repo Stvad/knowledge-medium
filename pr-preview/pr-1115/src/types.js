@@ -1,0 +1,1 @@
+import{a1 as e}from"../chunks/app-ChbKGxuK.js";export{e as isChildBackedPropertiesWorkspace};

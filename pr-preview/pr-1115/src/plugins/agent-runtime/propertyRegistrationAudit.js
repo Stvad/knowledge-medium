@@ -1,0 +1,1 @@
+import{Al as e,Ml as t,Nl as n,jl as r}from"../../../chunks/app-ChbKGxuK.js";export{e as PROVENANCE_BLOCKS_PER_KEY,r as PROVENANCE_KEY_LIMIT,t as auditPropertyRegistration,n as describeUnregisteredProperty};

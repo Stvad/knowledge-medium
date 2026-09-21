@@ -1,0 +1,1 @@
+import{Hv as e}from"../../../chunks/app-ChbKGxuK.js";export{e as openRecentsPage};

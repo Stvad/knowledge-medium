@@ -1,0 +1,1 @@
+import{Vg as e}from"../../../chunks/app-ChbKGxuK.js";export{e as Breadcrumbs};

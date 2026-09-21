@@ -1,0 +1,1 @@
+import{Ug as e}from"../../../chunks/app-ChbKGxuK.js";export{e as plainOutlinerPlugin};
