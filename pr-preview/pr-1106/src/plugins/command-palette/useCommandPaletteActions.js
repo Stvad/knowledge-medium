@@ -1,1 +1,1 @@
-import{Vx as e}from"../../../chunks/app-BZPxYtui.js";export{e as useCommandPaletteActions};
+import{Vx as e}from"../../../chunks/app-ChWLMZaV.js";export{e as useCommandPaletteActions};

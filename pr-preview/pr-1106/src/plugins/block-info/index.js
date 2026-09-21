@@ -1,1 +1,1 @@
-import{vu as e}from"../../../chunks/app-BZPxYtui.js";export{e as blockInfoPlugin};
+import{vu as e}from"../../../chunks/app-ChWLMZaV.js";export{e as blockInfoPlugin};

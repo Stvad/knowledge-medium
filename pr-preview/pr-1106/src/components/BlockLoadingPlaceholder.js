@@ -1,1 +1,1 @@
-import{nE as e}from"../../chunks/app-BZPxYtui.js";export{e as BlockLoadingPlaceholder};
+import{nE as e}from"../../chunks/app-ChWLMZaV.js";export{e as BlockLoadingPlaceholder};

@@ -1,1 +1,1 @@
-import{Ul as e}from"../../../chunks/app-BZPxYtui.js";export{e as deriveWorkspaceIdNamespace};
+import{Ul as e}from"../../../chunks/app-ChWLMZaV.js";export{e as deriveWorkspaceIdNamespace};

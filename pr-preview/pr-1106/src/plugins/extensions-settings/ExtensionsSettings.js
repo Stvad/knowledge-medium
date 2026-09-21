@@ -1,1 +1,1 @@
-import{Ct as e}from"../../../chunks/app-BZPxYtui.js";export{e as ExtensionsSettings};
+import{Ct as e}from"../../../chunks/app-ChWLMZaV.js";export{e as ExtensionsSettings};

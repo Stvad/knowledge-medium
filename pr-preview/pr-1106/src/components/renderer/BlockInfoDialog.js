@@ -1,1 +1,1 @@
-import{PD as e}from"../../../chunks/app-BZPxYtui.js";export{e as BlockInfoDialog};
+import{PD as e}from"../../../chunks/app-ChWLMZaV.js";export{e as BlockInfoDialog};

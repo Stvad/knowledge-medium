@@ -1,1 +1,1 @@
-import{vk as e}from"../../../chunks/app-BZPxYtui.js";export{e as MarkdownContentRenderer};
+import{vk as e}from"../../../chunks/app-ChWLMZaV.js";export{e as MarkdownContentRenderer};

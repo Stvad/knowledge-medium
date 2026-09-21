@@ -1,1 +1,1 @@
-import{bu as e}from"../../../chunks/app-BZPxYtui.js";export{e as updateIndicatorPlugin};
+import{bu as e}from"../../../chunks/app-ChWLMZaV.js";export{e as updateIndicatorPlugin};
