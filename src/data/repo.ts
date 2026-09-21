@@ -65,6 +65,8 @@ import {
 } from '@/data/blockSchema'
 import { kernelDataExtension } from './kernelDataExtension'
 import {
+  contentReferencePrefillFor,
+  contentReferencePrefillsFacet,
   systemPagesFacet,
   type WorkspaceBackfill,
   type BackfillCompletionClaim,
@@ -2192,6 +2194,9 @@ export class Repo {
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
         valuePresets: this._valuePresetCores,
+        contentReferencePrefill: contentReferencePrefillFor(
+          this.facetRuntime?.read(contentReferencePrefillsFacet) ?? [],
+        ),
         // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
         // whether the source/destination actually OWN the tokens they look like
         // they own, which their rows alone cannot answer. Keyed by the TX's

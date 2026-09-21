@@ -45,21 +45,14 @@
 import {
   defineSameTxProcessor,
   memberCodecOf,
-  normalizeReferences,
   type AnyPropertySchema,
   type BlockData,
-  type BlockReference,
   type NewBlockData,
   type ResolvedPropertySchema,
   type SameTxCtx,
   type Tx,
 } from '@/data/api'
 import { keyAtStart, keysBetween } from '@/data/orderKey'
-import {
-  UUID_RE_SOURCE,
-  isIdCarryingReference,
-  parseExactReferenceBlockContent,
-} from '@/data/referenceBlock'
 import {
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
@@ -617,31 +610,6 @@ const materializePropertiesForChangedRow = async (
   )
 }
 
-/** The `references` an id-carrying machinery row derives to, handed to `tx.create`
- *  so `references.parseReferences` finds the row already correct: its plan comes out
- *  idempotent, and a batch where every plan is idempotent returns before opening a
- *  transaction at all. The processor aliases a bare `((id))` by the id itself, which
- *  is the whole of the mapping for this shape.
- *
- *  `undefined` for every other content, and that direction is the safe one: a value
- *  child holding prose with a `[[wikilink]]` needs the alias lookup and seat probe
- *  only the references plugin can do, so a guess here would be a reference the
- *  recompute has to undo. Core computes this without reaching into the plugin
- *  because both halves — the grammar and `normalizeReferences` — already live here. */
-const idReferencesForContent = (content: string): BlockReference[] | undefined => {
-  const parsed = parseExactReferenceBlockContent(content)
-  if (!isIdCarryingReference(parsed) || parsed.kind !== 'blockRef') return undefined
-  // UUID-shaped only, from the SAME source the references plugin builds its
-  // scanner from. The whole-block grammar above accepts a broader id than the
-  // inline one does, and a ref property will happily hold one — so prefilling
-  // from this reading alone writes a reference the recompute cannot reproduce
-  // and immediately retracts, which is a write, an upload and a retraction per
-  // row instead of the zero this exists to achieve. Prefill only what the
-  // parse would have produced anyway; everything else is left to it.
-  if (!new RegExp(`^${UUID_RE_SOURCE}$`, 'i').test(parsed.id)) return undefined
-  return normalizeReferences([{id: parsed.id, alias: parsed.id}])
-}
-
 /** Why one cell value could not become children, in the one wording both
  *  callers use.
  *
@@ -677,6 +645,7 @@ export const undecodableCellValueError = (
  *  user-owned afterwards. Born classified — both derived columns pre-stamped
  *  so the row classifies and projects within the same single pass. */
 export const plannedFieldRow = (
+  tx: Tx,
   owner: Pick<BlockData, 'id' | 'workspaceId'>,
   fieldId: string,
 ): NewBlockData => {
@@ -688,7 +657,7 @@ export const plannedFieldRow = (
     isFieldForm: true,
     orderKey: keyAtStart(null),
     content,
-    references: idReferencesForContent(content),
+    references: tx.derivedReferencesFor(content),
   }
 }
 
@@ -705,6 +674,7 @@ export const plannedFieldRow = (
  *  children is a reconcile, which is `reconcileFieldValueChildren`'s job and a
  *  different question (which existing row is this member?). */
 export const plannedValueChildRows = (
+  tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   schema: AnyPropertySchema,
   encoded: unknown,
@@ -716,7 +686,7 @@ export const plannedValueChildRows = (
     parentId: fieldRow.id,
     orderKey: keys[index]!,
     content,
-    references: idReferencesForContent(content),
+    references: tx.derivedReferencesFor(content),
   }))
 }
 
@@ -758,7 +728,7 @@ export const upsertFieldRow = async (
   // Machinery inserts field rows FIRST among children (§9 ordering
   // decision): fields cluster above content as an emergent default;
   // orderKey stays user-owned afterwards.
-  const id = await tx.create(plannedFieldRow(owner, fieldId))
+  const id = await tx.create(plannedFieldRow(tx, owner, fieldId))
   return {id, workspaceId: owner.workspaceId}
 }
 
@@ -820,7 +790,7 @@ const createValueChild = (
   parentId: fieldRow.id,
   orderKey,
   content,
-  references: idReferencesForContent(content),
+  references: tx.derivedReferencesFor(content),
 })
 
 const reconcileSingleValueChild = async (

@@ -12,7 +12,8 @@ import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { contentReferencePrefillsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { exactBlockRefPrefill } from '@/plugins/references/contentPrefill'
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
@@ -4077,9 +4078,21 @@ describe('machinery rows are born with the references the parse would recompute'
     changeScope: ChangeScope.BlockDefault,
   })
 
-  const setupUuidRef = async (): Promise<Repo> => {
+  /** Core mints the rows; what a machinery span means is answered by whoever
+   *  parses content in this configuration. The real contribution, so the test
+   *  cannot agree with a prediction the plugin has since stopped making. */
+  const withReferencesPlugin = (repo: Repo): void => {
+    repo.setRuntimeContributions(
+      contentReferencePrefillsFacet, 'references', [exactBlockRefPrefill],
+    )
+  }
+
+  const setupUuidRef = async (
+    {references = true}: {references?: boolean} = {},
+  ): Promise<Repo> => {
     await seedWorkspace('children')
     const repo = setup()
+    if (references) withReferencesPlugin(repo)
     registerDefinition(repo, 'test-uuidref-definition', UUID_FIELD_ID, uuidRefSchema)
     return repo
   }
@@ -4103,6 +4116,25 @@ describe('machinery rows are born with the references the parse would recompute'
       .toEqual([{id: UUID_FIELD_ID, alias: UUID_FIELD_ID}])
     expect(await referencesOf((await valueChildOf('p'))!.id))
       .toEqual([{id: UUID_TARGET, alias: UUID_TARGET}])
+  })
+
+  it('carries none when nothing parses references, so the toggle still means off', async () => {
+    // With References disabled there is no parser to hand an answer to, and
+    // none to retract one either: a row born with a backlink here would keep
+    // it through every later edit. Core therefore asks rather than derives,
+    // and the answer with no contributor is "nothing".
+    const repo = await setupUuidRef({references: false})
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', uuidRefSchema, UUID_TARGET),
+      {scope: ChangeScope.BlockDefault})
+
+    const fields = (await childrenRows('p')).filter(
+      r => r.deleted === 0 && r.reference_target_id === UUID_FIELD_ID)
+    // The LOCAL derived column is core's own and is stamped either way — it is
+    // per-device, re-derived on arrival, and nothing about it is the plugin's.
+    expect(fields[0]!.reference_target_id).toBe(UUID_FIELD_ID)
+    expect(await referencesOf(fields[0]!.id)).toEqual([])
+    expect(await referencesOf((await valueChildOf('p'))!.id)).toEqual([])
   })
 
   it('a ref value child whose target is NOT uuid-shaped is left to the parse', async () => {

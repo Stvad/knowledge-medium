@@ -30,6 +30,7 @@ import type {
   AnyPropertySchema,
   BlockData,
   BlockDataPatch,
+  BlockReference,
   Mutator,
   NewBlockData,
   PropertySchema,
@@ -243,6 +244,11 @@ export interface TxImplContext {
    *  property schemas against one registry snapshot per tx, without this
    *  context re-deriving that closure itself. */
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
+  /** Content → the `references` it already implies, snapshotted at tx start
+   *  from `contentReferencePrefillsFacet` — see `Tx.derivedReferencesFor`.
+   *  Absent means no contributor, so nothing is prefilled and every row is
+   *  left to whatever parses content in that configuration. */
+  contentReferencePrefill?: (content: string) => BlockReference[] | undefined
   /** UUID generator — injected for testability. */
   newId: () => string
   /** Block-id shape contract for this tx's inserts (issue #456) — see
@@ -885,6 +891,10 @@ export class TxImpl implements Tx {
     )
     this.pinWorkspace(before.workspaceId)
     this.record(id, before, after)
+  }
+
+  derivedReferencesFor(content: string): BlockReference[] | undefined {
+    return this.ctx.contentReferencePrefill?.(content)
   }
 
   // ──── Tree moves ────

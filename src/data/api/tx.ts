@@ -1,6 +1,7 @@
 import type {
   BlockData,
   BlockDataPatch,
+  BlockReference,
   NewBlockData,
 } from './blockData'
 import type { ChangeScope, TxSource } from './changeScope'
@@ -164,6 +165,19 @@ export interface Tx {
    *  when both already match. NOT for content-bundled retargets — those
    *  change a synced column and go through `update`. */
   stampReferenceTarget(id: string, targetId: string | null, isFieldForm: boolean): Promise<void>
+
+  /** The `references` this content already implies, for a row core is about to
+   *  mint with content it wrote itself — a field row addressing its definition,
+   *  a ref value child addressing its target.
+   *
+   *  Answered by whoever parses content into references in this configuration
+   *  (`contentReferencePrefillsFacet`, snapshotted at tx start like every other
+   *  registry the tx reads), so that the row can be BORN correct and the parse
+   *  never has to write it a second time. `undefined` — including whenever
+   *  nothing contributes, which is what References being off looks like — means
+   *  create the row without references and leave the content to whatever reads
+   *  it afterwards. */
+  derivedReferencesFor(content: string): BlockReference[] | undefined
 
   // ──── Tree moves (structural) ────
 

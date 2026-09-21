@@ -465,7 +465,7 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
 
   it('reports the blocks it changed over the RUN, not over the converging sweep', async () => {
     // The converging sweep is by definition the one that found nothing pending,
-    // so its per-sweep count is zero — and that is the count the operator's
+    // so it WRITES to nothing — and that sweep's count is what the operator's
     // "Migrated properties on N blocks" was read from, which made every
     // successful run report zero.
     const ids = await seedNotes(5)
@@ -474,8 +474,14 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     const progress = await runPropertyCellBackfill(makeCtx())
 
     expect(progress.sweeps).toBeGreaterThan(1)
-    expect(progress.blocksMaterialized).toBe(0)
     expect(progress.blocksMaterializedTotal).toBe(ids.length)
+    // The per-sweep counter answers the other question — whether what it
+    // scanned is acceptable — so on the converging sweep it reports the whole
+    // scan rather than zero. Zero there is reserved for "every key was
+    // refused", which is the reading `failureCount` is paired with.
+    expect(progress.blocksScanned).toBe(ids.length)
+    expect(progress.blocksMaterialized).toBe(ids.length)
+    expect(progress.failureCount).toBe(0)
   })
 
   it('does not resurrect a property that was deleted through its children', async () => {

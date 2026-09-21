@@ -170,11 +170,13 @@ export const onPropertyCellBackfillProgress = (
 export interface PropertyCellBackfillProgress {
   /** Blocks read this sweep. */
   blocksScanned: number
-  /** Blocks the materializer accepted in full this sweep. Not "blocks
-   *  changed" — a block that already had its children is accepted and written
-   *  to zero times. NOT a proxy for "anything happened": one junk key on every
-   *  block leaves this at zero for a run that migrated all the others, which
-   *  is what `valuesMaterialized` is for. */
+  /** Blocks this sweep found acceptable — every key on them either
+   *  materialized or was already there. Not "blocks changed": a block that
+   *  already had its children is accepted and written to zero times, so a
+   *  converged sweep reports every block it scanned. NOT a proxy for "anything
+   *  happened" either: one junk key on every block leaves this at zero for a
+   *  run that migrated all the others, which is what `valuesMaterialized` is
+   *  for. */
   blocksMaterialized: number
   /** DISTINCT blocks changed over the WHOLE run — the number an operator is
    *  shown at the end.
@@ -361,7 +363,7 @@ const sweep = async (
           }
           let fieldRow: NewBlockData
           try {
-            fieldRow = plannedFieldRow(owner, schema.fieldId)
+            fieldRow = plannedFieldRow(tx, owner, schema.fieldId)
           } catch (cause) {
             recordFailure(owner.id, cause)
             rejectedHere += 1
@@ -370,13 +372,18 @@ const sweep = async (
           planned.push({owner, schema, encoded, fieldRow})
           materializedHere += 1
         }
-        // `blocksMaterialized` is "accepted IN FULL" — a block that kept a key
-        // back is not that, and the systematic-failure signal reads this
-        // paired with the failure count. The run-wide set is the other
-        // question, "which blocks did this run change", and a partly migrated
-        // owner did change.
+        // "Accepted IN FULL", which is a statement about REJECTIONS alone: an
+        // owner whose field rows already exist is accepted having been written
+        // to zero times. Gating this on `materializedHere` instead made a
+        // converged sweep — the one that by definition plans nothing — report
+        // `0 / blocksScanned`, which is the same reading as a sweep whose every
+        // key was refused, and telling those two apart is the whole job of the
+        // pairing with `failureCount`.
+        if (rejectedHere === 0) progress.blocksMaterialized += 1
+        // The run-wide set answers the other question, "which blocks did this
+        // run change", so it counts writes and a partly migrated owner did
+        // change.
         if (materializedHere > 0) {
-          if (rejectedHere === 0) progress.blocksMaterialized += 1
           changedOwners.add(owner.id)
           progress.blocksMaterializedTotal = changedOwners.size
         }
@@ -392,7 +399,7 @@ const sweep = async (
       const fieldRowIds = await tx.createMany(planned.map(({fieldRow}) => fieldRow))
       await tx.createMany(planned.flatMap(({owner, schema, encoded}, index) =>
         plannedValueChildRows(
-          {id: fieldRowIds[index]!, workspaceId: owner.workspaceId}, schema, encoded,
+          tx, {id: fieldRowIds[index]!, workspaceId: owner.workspaceId}, schema, encoded,
         )))
     }, {description: 'Migrate properties to child blocks'})
 
