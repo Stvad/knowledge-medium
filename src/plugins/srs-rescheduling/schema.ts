@@ -80,6 +80,8 @@ export const srsSnapshotHistoryProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 // The shared list core is runtime-equivalent to the historical
 // list(unsafeIdentity<SrsReviewSnapshot>()) codec. Keep the typed handle local.
+// The JSON list on purpose, and the only seed still on it: these members are
+// snapshot objects, not text, so `string-list` would reject them (#1101).
 }) as PropertySeedDeclaration<SrsReviewSnapshot[]>
 
 export const srsSm25Type = seedType({
