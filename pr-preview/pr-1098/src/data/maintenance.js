@@ -1,1 +1,1 @@
-import{LW as e,RW as t}from"../../chunks/app-CC4dB3Ax.js";export{e as runAnalyzeIfStale,t as runAnalyzeNow};
+import{LW as e,RW as t}from"../../chunks/app-KCKUXQpC.js";export{e as runAnalyzeIfStale,t as runAnalyzeNow};

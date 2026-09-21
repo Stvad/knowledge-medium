@@ -1,1 +1,1 @@
-import{MQ as e,NQ as t,PQ as n}from"../../chunks/app-CC4dB3Ax.js";export{e as MIGRATIONS_PAGE_ALIAS,t as getOrCreateMigrationsPage,n as migrationsPageBlockId};
+import{MQ as e,NQ as t,PQ as n}from"../../chunks/app-KCKUXQpC.js";export{e as MIGRATIONS_PAGE_ALIAS,t as getOrCreateMigrationsPage,n as migrationsPageBlockId};

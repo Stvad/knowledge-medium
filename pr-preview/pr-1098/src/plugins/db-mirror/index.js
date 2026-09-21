@@ -1,1 +1,1 @@
-import{Br as e,Hr as t}from"../../../chunks/app-CC4dB3Ax.js";export{t as OPEN_DB_MIRROR_SETTINGS_ACTION_ID,e as dbMirrorPlugin};
+import{Br as e,Hr as t}from"../../../chunks/app-KCKUXQpC.js";export{t as OPEN_DB_MIRROR_SETTINGS_ACTION_ID,e as dbMirrorPlugin};
