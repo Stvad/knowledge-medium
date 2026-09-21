@@ -488,7 +488,7 @@ export { isRegistrablePropertyName } from '@/data/userSchemasService'
  *
  *  Two known limits, both deliberate:
  *
- *  - **refList is downgraded to `list`.** The importer earns refList by
+ *  - **refList is downgraded to `string-list`.** The importer earns refList by
  *    building an `aliasIdMap` and rewriting `[[X]]` tokens to ids via
  *    `normalizeRefPropertyValues`. A streaming consumer has neither, so
  *    registering refList would store token strings under a codec that
