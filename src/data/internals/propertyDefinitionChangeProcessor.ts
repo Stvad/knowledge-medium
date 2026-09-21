@@ -103,6 +103,10 @@ import {
 } from './referenceTargetProcessor'
 import { tryBuildSchema } from '@/data/userSchemasService'
 import {
+  FANOUT_REPORT_STRIDE,
+  reportPropertyDefinitionFanout,
+} from '@/data/propertyDefinitionFanout'
+import {
   STRANDED_CLAIM_RECOVERY,
   isGraphBackfillClaimActive,
 } from './graphBackfillClaim'
@@ -523,20 +527,47 @@ export const consumingParentIds = async (
   const set = new Set<string>()
   for (let i = 0; i < fieldIds.length; i += chunkSize) {
     const chunk = fieldIds.slice(i, i + chunkSize)
-    // §9 selection discipline: field-row discovery keys on the BIT plus the
-    // target (an unmarked `((fieldId))` link row is not a consumer), and
-    // `parent_id IS NOT NULL` — a marked workspace-root row is user content,
-    // not a field row (§9 root half) — never re-key it.
     const rows = await db.getAll<{parent_id: string | null}>(
-      `SELECT DISTINCT parent_id FROM blocks
-        WHERE workspace_id = ? AND reference_target_id IN (${chunk.map(() => '?').join(', ')})
-          AND is_field_form = 1
-          AND deleted = 0 AND parent_id IS NOT NULL`,
+      `SELECT DISTINCT parent_id FROM blocks WHERE ${consumingParentWhereSql(chunk.length)}`,
       [workspaceId, ...chunk],
     )
     for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
   }
   return [...set]
+}
+
+/** §9 selection discipline: field-row discovery keys on the BIT plus the
+ *  target (an unmarked `((fieldId))` link row is not a consumer), and
+ *  `parent_id IS NOT NULL` — a marked workspace-root row is user content, not
+ *  a field row (§9 root half) — never re-key it.
+ *
+ *  Spelled once because two callers ask the same question for one gesture:
+ *  {@link countConsumingParents} sizes the fan-out for the confirmation, and
+ *  {@link consumingParentIds} then walks it. A drifted copy would show the
+ *  user a number that is not the work they consented to. */
+const consumingParentWhereSql = (targetCount: number): string =>
+  `workspace_id = ?
+     AND reference_target_id IN (${Array.from({length: targetCount}, () => '?').join(', ')})
+     AND is_field_form = 1
+     AND deleted = 0 AND parent_id IS NOT NULL`
+
+/** How many parents a change to ONE definition would re-key.
+ *
+ *  Single definition rather than the set {@link consumingParentIds} takes: a
+ *  count across several needs that function's cross-chunk `Set` to avoid
+ *  double-counting a parent consuming two of them, and no caller has that
+ *  question — a gesture edits one definition row. */
+export const countConsumingParents = async (
+  db: Pick<SameTxCtx['db'], 'getOptional'>,
+  workspaceId: string,
+  fieldId: string,
+): Promise<number> => {
+  const row = await db.getOptional<{count: number}>(
+    `SELECT COUNT(DISTINCT parent_id) AS count FROM blocks
+      WHERE ${consumingParentWhereSql(1)}`,
+    [workspaceId, fieldId],
+  )
+  return row?.count ?? 0
 }
 
 /** How many values this change takes away from ONE parent, comparing what the
@@ -875,10 +906,24 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     const lostByField = new Map<string, number>()
     const lostParents = new Set<string>()
+    let done = 0
     for (const parentId of parentIds) {
       await applyToParent(
         ctx, parentId, changes, isFieldDefinition, lostByField, lostParents,
       )
+      done += 1
+      // Unconditional, and a no-op unless a gesture opened a run for this
+      // workspace — the processor does not decide whether anyone is watching.
+      // No report after the loop: the run outlives it either way (the commit
+      // and the post-commit walk are still to come) and its owner is the one
+      // that ends it.
+      // The FIRST as well as every stride: it is what turns the surface's
+      // "Starting…" into a number, and making that wait for a whole stride
+      // spends the one moment the user is most likely to think nothing is
+      // happening.
+      if (done === 1 || done % FANOUT_REPORT_STRIDE === 0) {
+        reportPropertyDefinitionFanout(event.workspaceId, done, parentIds.length)
+      }
     }
     // REFUSE rather than commit a change that takes a value away. Every write
     // above rolls back with the definition row, so the graph is left exactly as

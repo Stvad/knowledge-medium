@@ -54,6 +54,11 @@ import {
   migrationCompletedAtProp,
 } from './properties'
 import type { Repo } from './repo'
+import {
+  beginPropertyDefinitionFanout,
+  propertyDefinitionFanoutFor,
+  __resetPropertyDefinitionFanoutForTests,
+} from './propertyDefinitionFanout'
 
 const WS = 'ws-def-change'
 const FIELD_ID = 'field-status-change'
@@ -2162,5 +2167,86 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
 
     expect((await cell(FIELD_ID))['test:unrelated']).toBe('note')
     expect(await cell('p')).toEqual({status: 'done'})
+  })
+})
+
+describe('sizing the fan-out before it starts', () => {
+  /** The gesture's count and the fan-out's walk answer the same question
+   *  through one predicate, so these are about what that predicate CALLS a
+   *  consumer — a number that over-reports asks the user to wait for work
+   *  that never happens, and one that under-reports lets the app freeze after
+   *  promising it would not. */
+  it('counts the parents the fan-out will actually visit, once each', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    await seedProperty(repo, 'p2', 'status', 'todo')
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(2)
+    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toHaveLength(2)
+  })
+
+  it('does not count a plain reference to the definition', async () => {
+    // An unmarked `((fieldId))` row is a link somebody wrote, not a field row,
+    // and the fan-out passes it by. Counting it would put a number in the
+    // confirmation that nothing in the transaction corresponds to.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await createHost(repo, 'mentions')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'mention-row', workspaceId: WS, parentId: 'mentions', orderKey: 'm0',
+        content: `((${FIELD_ID}))`,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    // The precondition the assertion is about: the row DID resolve to the
+    // definition, so it is only the field-form bit keeping it out.
+    expect(await referenceTargetOf('mention-row')).toBe(FIELD_ID)
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
+  })
+
+  it('stops counting a consumer whose field row is gone', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    await repo.tx(tx => tx.unsetProperty('p1', schemaFor(repo, 'status')),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
+  })
+})
+
+describe('reporting fan-out progress', () => {
+  afterEach(() => { __resetPropertyDefinitionFanoutForTests() })
+
+  it('reports into a run the gesture opened', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    const run = beginPropertyDefinitionFanout(WS, 'status', 1)
+    try {
+      expect(propertyDefinitionFanoutFor(WS)?.done).toBeNull()
+
+      await rename(repo, FIELD_ID, 'state')
+
+      expect(propertyDefinitionFanoutFor(WS)).toMatchObject({done: 1, total: 1})
+    } finally {
+      run.end()
+    }
+    expect(propertyDefinitionFanoutFor(WS)).toBeNull()
+  })
+
+  it('opens no surface of its own for a caller that did not ask for one', async () => {
+    // A headless rename — the agent CLI, an importer — has nobody to show a
+    // modal to, and a store entry nothing clears would strand one over the
+    // next tab that reads it.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect(propertyDefinitionFanoutFor(WS)).toBeNull()
   })
 })
