@@ -1,1 +1,1 @@
-import{Vx as e}from"../../../chunks/app-DhAMC-UQ.js";export{e as useCommandPaletteActions};
+import{Vx as e}from"../../../chunks/app-DmqcxhP8.js";export{e as useCommandPaletteActions};
