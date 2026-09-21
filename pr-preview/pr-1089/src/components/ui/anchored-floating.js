@@ -1,1 +1,0 @@
-import{lP as e,uP as t}from"../../../chunks/app-Dqei50Rx.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

@@ -1,1 +1,0 @@
-import{dP as e}from"../../chunks/app-Dqei50Rx.js";export{e as usePropertySchemas};
