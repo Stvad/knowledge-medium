@@ -26,6 +26,15 @@ import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import { trimIfEdited } from '@/utils/nameFieldCommit.js'
+import { openDialog } from '@/utils/dialogs.js'
+import {
+  beginPropertyDefinitionFanout,
+  isLargeFanout,
+} from '@/data/propertyDefinitionFanout.js'
+import {
+  ConfirmDefinitionChangeDialog,
+  type ConfirmDefinitionChangeDialogProps,
+} from './ConfirmDefinitionChangeDialog.tsx'
 
 const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
@@ -82,6 +91,51 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
 
   const preset = presets.get(presetId) ?? null
 
+  /** Ask before a change that stops the app, and hold the progress surface up
+   *  for as long as the user is waiting on it.
+   *
+   *  BOTH halves here rather than in the processor that does the work: the
+   *  count is a query the gesture can afford and the transaction cannot (it
+   *  already holds the writer by then), and the wait the user is owed a
+   *  surface for is the whole `repo.tx`, not the consumer loop inside it — the
+   *  commit and the post-commit walk over every row it touched come after.
+   *
+   *  One predicate (`isLargeFanout`) decides both, so a change can never ask
+   *  and then run silently, or run for a minute without having asked. */
+  const throughFanoutGate = useCallback(async (
+    change: Omit<ConfirmDefinitionChangeDialogProps, 'blockCount'>,
+    write: () => Promise<void>,
+  ): Promise<boolean> => {
+    // The definition's OWN workspace, never the active one — this renderer is
+    // mounted per block. With no row loaded there is nothing to scope the
+    // count to, and no gesture either: every control below renders from `data`.
+    const workspaceId = data?.workspaceId
+    if (workspaceId === undefined) {
+      await write()
+      return true
+    }
+    const consumers = await block.repo.countPropertyDefinitionConsumers(
+      block.id, workspaceId,
+    )
+    if (!isLargeFanout(consumers)) {
+      await write()
+      return true
+    }
+    const confirmed = await openDialog(
+      ConfirmDefinitionChangeDialog, {...change, blockCount: consumers},
+    )
+    if (confirmed !== true) return false
+    const run = beginPropertyDefinitionFanout(
+      workspaceId, change.propertyName, consumers,
+    )
+    try {
+      await write()
+    } finally {
+      run.end()
+    }
+    return true
+  }, [block, data])
+
   const decodedConfig = useMemo<unknown>(() => {
     if (!preset?.configCodec) return undefined
     try {
@@ -124,8 +178,17 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       setDraftName(propertyName)
       return
     }
-    await block.set(propertyNameProp, next)
-  }, [block, propertyName])
+    const wrote = await throughFanoutGate(
+      {kind: 'rename', propertyName, nextName: next},
+      () => block.set(propertyNameProp, next),
+    )
+    // A cancelled rename has to put the FIELD back too, not just decline the
+    // write: the draft is what the user typed, and leaving it there shows a
+    // name the definition does not have. Only on the decline — after a write
+    // the resync above adopts the new committed name, and `propertyName` here
+    // is the old one this closure captured.
+    if (!wrote) setDraftName(propertyName)
+  }, [block, propertyName, throughFanoutGate])
 
   const writePresetId = useCallback(async (next: string) => {
     if (next === presetId) return
@@ -134,7 +197,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // setProperties applies a two-key DELTA read against the fresh in-tx row —
     // NOT a whole-bag replace off the (possibly stale) `data` render snapshot,
     // which would clobber any sibling key written between render and commit.
-    await block.repo.tx(async tx => {
+    const write = () => block.repo.tx(async tx => {
       await tx.setProperties(block.id, {
         set: [
           propertyValue(presetIdProp, next),
@@ -147,7 +210,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         ],
       })
     }, {scope: ChangeScope.BlockDefault, description: `change preset to ${next}`})
-  }, [block, presetId, presets])
+    await throughFanoutGate({kind: 'type', propertyName}, write)
+  }, [block, presetId, presets, propertyName, throughFanoutGate])
 
   const writeConfig = useCallback(async (next: unknown) => {
     if (!preset?.configCodec) return
@@ -158,8 +222,11 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       console.warn(`[PropertySchemaContentRenderer] cannot encode config:`, err)
       return
     }
-    await block.set(presetConfigProp, encoded)
-  }, [block, preset])
+    await throughFanoutGate(
+      {kind: 'options', propertyName},
+      () => block.set(presetConfigProp, encoded),
+    )
+  }, [block, preset, propertyName, throughFanoutGate])
 
   // Lazy delete-confirm: first click counts users; if any, ask for a
   // second click; second click (or no users) deletes. Confirm state

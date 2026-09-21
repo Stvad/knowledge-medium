@@ -1,0 +1,232 @@
+// @vitest-environment happy-dom
+/**
+ * The gate in front of a definition change big enough to stop the app
+ * (#1112): ask first, then hold a progress surface up for the wait.
+ *
+ * The CONSUMER COUNT is stubbed. What it counts is pinned where it is
+ * answered — `propertyDefinitionChange.test.ts`, against real field rows — and
+ * the threshold is in the thousands, so materializing enough consumers here
+ * would only make these tests slow at proving something they are not about.
+ * What they ARE about is the branch: which side of the threshold asks, what a
+ * decline leaves behind, and whether the surface opens and closes around the
+ * write.
+ */
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { ChangeScope } from '@/data/api'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import { Repo } from '@/data/repo'
+import { type FacetRuntime } from '@/facets/facet'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { RepoContext } from '@/context/repo'
+import { __resetDialogsForTests, getDialogQueue, subscribeDialogs } from '@/utils/dialogs'
+import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
+import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
+import {
+  LARGE_FANOUT_CONSUMERS,
+  propertyDefinitionFanoutFor,
+  subscribePropertyDefinitionFanout,
+  type PropertyDefinitionFanoutSnapshot,
+  __resetPropertyDefinitionFanoutForTests,
+} from '@/data/propertyDefinitionFanout'
+import { PropertySchemaContentRenderer } from '../PropertySchemaBlockRenderer'
+import { useSyncExternalStore } from 'react'
+
+const WS = 'ws-fanout-gate'
+const SCHEMA_ID = 'user-schema'
+
+let sharedDb: TestDb
+let repo: Repo
+let runtime: FacetRuntime
+
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+
+beforeEach(async () => {
+  await resetTestDb(sharedDb.db)
+  repo = createTestRepo({
+    db: sharedDb.db,
+    user: {id: 'user-1'},
+    extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension],
+  }).repo
+  runtime = repo.facetRuntime!
+  repo.setActiveWorkspaceId(WS)
+  await repo.tx(async tx => {
+    await tx.create({
+      id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Root',
+    })
+    await tx.create({
+      id: SCHEMA_ID,
+      workspaceId: WS,
+      parentId: 'root',
+      orderKey: 'a1',
+      content: 'test:myProp',
+      properties: {
+        types: ['property-schema'],
+        'property-schema:name': 'test:myProp',
+        'property-schema:preset': 'string',
+        'property-schema:config': {},
+      },
+    })
+  }, {scope: ChangeScope.BlockDefault, description: 'fan-out gate fixture'})
+})
+
+afterEach(() => {
+  // BEFORE `cleanup`, and it is not tidiness: the dialog queue is module
+  // state, so a test that leaves one open hands it to the next test's render —
+  // where Radix's `aria-hidden` over the rest of the tree makes the schema
+  // editor's own controls unfindable, and the failure reads as a missing
+  // combobox rather than a leaked dialog.
+  __resetDialogsForTests()
+  cleanup()
+  __resetPropertyDefinitionFanoutForTests()
+  vi.restoreAllMocks()
+})
+
+/** Radix marks the page `pointer-events: none` while a modal is up, which
+ *  user-event reads as an unclickable control. The buttons under test are
+ *  INSIDE that modal, so the check has nothing true to say here. */
+const user = () => userEvent.setup({pointerEventsCheck: 0})
+
+/** The size the gesture believes the fan-out is. Stubbed on the Repo seam the
+ *  gate reads, so the ARGUMENTS it passes stay under test — a count scoped to
+ *  the wrong workspace, or taken against the wrong block, is exactly the way
+ *  this could size the wrong change and go unnoticed. */
+const consumersAre = (count: number) =>
+  vi.spyOn(repo, 'countPropertyDefinitionConsumers').mockResolvedValue(count)
+
+/** `DialogHost` without its modal shadowing, which suspends on the workspace's
+ *  UI-state block and needs the signed-in `UserContext` this render has no
+ *  business standing up. Everything these tests are about — the `openDialog`
+ *  queue, the real dialog component, `resolve`/`cancel` — is the same path. */
+const TestDialogHost = () => {
+  const queue = useSyncExternalStore(subscribeDialogs, getDialogQueue, getDialogQueue)
+  return <>{queue.map(entry => {
+    const Component = entry.Component
+    return (
+      <Component
+        key={entry.id}
+        {...entry.props}
+        resolve={(value: unknown) => entry.finalize(value)}
+        cancel={() => entry.finalize(null)}
+      />
+    )
+  })}</>
+}
+
+const renderSchema = () =>
+  render(
+    <RepoContext value={repo}>
+      <AppRuntimeContextProvider value={runtime}>
+        <PropertySchemaContentRenderer block={repo.block(SCHEMA_ID)} />
+        <TestDialogHost />
+      </AppRuntimeContextProvider>
+    </RepoContext>,
+  )
+
+const nameInput = () => screen.getByPlaceholderText('property name') as HTMLInputElement
+
+const renameTo = async (next: string) => {
+  const session = user()
+  await session.tripleClick(nameInput())
+  await session.keyboard(next)
+  await session.tab()
+}
+
+const storedName = async (): Promise<unknown> => {
+  const row = await sharedDb.db.get<{properties_json: string}>(
+    'SELECT properties_json FROM blocks WHERE id = ?', [SCHEMA_ID],
+  )
+  return (JSON.parse(row.properties_json) as Record<string, unknown>)['property-schema:name']
+}
+
+/** Every snapshot the fan-out store published, so a run that opened and closed
+ *  inside one awaited write is still observable afterwards. */
+const recordFanoutRuns = (): Array<PropertyDefinitionFanoutSnapshot | null> => {
+  const seen: Array<PropertyDefinitionFanoutSnapshot | null> = []
+  subscribePropertyDefinitionFanout(() => { seen.push(propertyDefinitionFanoutFor(WS)) })
+  return seen
+}
+
+describe('renaming a property with many consumers', () => {
+  it('asks first, naming the blocks the change will rewrite', async () => {
+    const count = consumersAre(LARGE_FANOUT_CONSUMERS)
+    renderSchema()
+
+    await renameTo('test:renamed')
+
+    expect(await screen.findByText(/Rename “test:myProp” to “test:renamed”\?/)).toBeTruthy()
+    expect(screen.getByText(/1,000 blocks use this property/)).toBeTruthy()
+    // Sized against THIS definition in ITS workspace, not the ambient one.
+    expect(count).toHaveBeenCalledWith(SCHEMA_ID, WS)
+    expect(await storedName()).toBe('test:myProp')
+  })
+
+  it('writes the new name, with the surface up for the whole write', async () => {
+    consumersAre(4_000)
+    const seen = recordFanoutRuns()
+    renderSchema()
+    await renameTo('test:renamed')
+
+    await user().click(await screen.findByRole('button', {name: 'Rename'}))
+
+    await waitFor(async () => { expect(await storedName()).toBe('test:renamed') })
+    expect(seen[0]).toMatchObject({propertyName: 'test:myProp', total: 4_000, done: null})
+    // CLOSED at the end, and nothing else closes it: a run left open is a
+    // modal over a workspace that is no longer busy.
+    await waitFor(() => { expect(propertyDefinitionFanoutFor(WS)).toBeNull() })
+  })
+
+  it('leaves the property alone when the change is declined, field included', async () => {
+    consumersAre(4_000)
+    renderSchema()
+    await renameTo('test:renamed')
+
+    await user().click(await screen.findByRole('button', {name: 'Cancel'}))
+
+    await waitFor(() => { expect(nameInput().value).toBe('test:myProp') })
+    expect(await storedName()).toBe('test:myProp')
+    expect(propertyDefinitionFanoutFor(WS)).toBeNull()
+  })
+
+  it('does not ask, or open a surface, for a change nobody will notice', async () => {
+    consumersAre(LARGE_FANOUT_CONSUMERS - 1)
+    const seen = recordFanoutRuns()
+    renderSchema()
+
+    await renameTo('test:renamed')
+
+    await waitFor(async () => { expect(await storedName()).toBe('test:renamed') })
+    expect(screen.queryByText(/Rename “test:myProp”/)).toBeNull()
+    expect(seen).toEqual([])
+  })
+})
+
+describe('re-typing a property with many consumers', () => {
+  it('asks before a change that re-reads every stored value', async () => {
+    consumersAre(4_000)
+    renderSchema()
+
+    await user().selectOptions(screen.getByRole('combobox'), 'number')
+
+    expect(await screen.findByText(/Change the type of “test:myProp”\?/)).toBeTruthy()
+    // The half a rename does not have: a re-type can be refused outright.
+    expect(screen.getByText(/the whole change is refused/)).toBeTruthy()
+  })
+
+  it('leaves the stored type alone when declined', async () => {
+    consumersAre(4_000)
+    renderSchema()
+    await user().selectOptions(screen.getByRole('combobox'), 'number')
+
+    await user().click(await screen.findByRole('button', {name: 'Cancel'}))
+
+    const row = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [SCHEMA_ID],
+    )
+    const properties = JSON.parse(row.properties_json) as Record<string, unknown>
+    expect(properties['property-schema:preset']).toBe('string')
+  })
+})
