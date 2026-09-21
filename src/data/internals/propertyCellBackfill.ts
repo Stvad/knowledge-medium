@@ -181,10 +181,11 @@ export interface PropertyCellBackfillProgress {
   /** DISTINCT blocks changed over the WHOLE run — the number an operator is
    *  shown at the end.
    *
-   *  The per-sweep count cannot be it: the converging sweep is by definition
-   *  the one that found nothing pending, so it materializes nothing, and the
-   *  outcome read from the last notification therefore reported a migration of
-   *  a hundred thousand blocks as "Migrated properties on 0 blocks."
+   *  The per-sweep count cannot be it, because it is not counting the same
+   *  thing: `blocksMaterialized` is every owner the sweep found acceptable,
+   *  written to or not, so the converging sweep reports its whole scan. Read
+   *  as the run's total it claims a migration of every block the pass merely
+   *  re-checked.
    *
    *  Nor can the per-sweep counts be SUMMED. A key that arrives behind the
    *  cursor is picked up by a later sweep, which is the whole reason the pass
@@ -195,13 +196,12 @@ export interface PropertyCellBackfillProgress {
   /** Property values materialized this sweep, counting the ones on a block that
    *  also had a failure. */
   valuesMaterialized: number
-  /** The same, for the WHOLE run. This is the one that distinguishes a
-   *  systematic failure from a handful of bad values, and the per-sweep count
+  /** The same, for the WHOLE run. This is the one that separates "nothing
+   *  moved" from "some moved and some were refused", and the per-sweep count
    *  cannot: the converging sweep is BY DEFINITION the one that found nothing
-   *  left pending, so its zero is the normal ending. Testing the
-   *  per-sweep count reported a run that migrated everything as "nothing was
-   *  migrated — that is a systematic problem", and suppressed the repair
-   *  worklist naming the values that actually failed. */
+   *  left pending, so its zero is the normal ending of a healthy run. Read
+   *  per-sweep, a run that migrated everything came back as a failure, with
+   *  the repair worklist naming the actually-bad values suppressed. */
   valuesMaterializedTotal: number
   /** Full passes over the workspace. More than two means cell keys kept
    *  arriving under the pass. */
