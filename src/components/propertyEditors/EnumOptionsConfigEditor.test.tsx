@@ -83,21 +83,21 @@ describe('EnumOptionsConfigEditor', () => {
     expect(onChange).toHaveBeenLastCalledWith({options: [{value: 'openx', label: 'Open'}]})
   })
 
-  it('commits normally again after a structural press that never clicked', async () => {
-    // The stand-down flag is cleared by an input taking focus, which is the
-    // only thing that can produce another blur — so a press abandoned with a
-    // drag cannot swallow the next commit.
+  it('does not take the focus from the input being typed in', async () => {
+    // How the single write above is achieved, and why nothing has to be
+    // remembered between the press and the click: with no blur there is no
+    // commit to suppress, so a press dragged away or cancelled leaves no
+    // state behind that could swallow the edit later.
     const user = userEvent.setup()
     const onChange = vi.fn()
     render(<EnumOptionsConfigEditor
       value={{options: [{value: 'open', label: 'Open'}]}} onChange={onChange} />)
+    const input = screen.getByLabelText('Choice 1 value')
+    await user.type(input, 'x')
 
-    fireEvent.pointerDown(screen.getByRole('button', {name: 'Add choice'}))
-    await user.type(screen.getByLabelText('Choice 1 value'), 'x')
-    await user.tab()
+    await user.click(screen.getByRole('button', {name: 'Add choice'}))
 
-    expect(onChange).toHaveBeenCalledOnce()
-    expect(onChange).toHaveBeenLastCalledWith({options: [{value: 'openx', label: 'Open'}]})
+    expect(document.activeElement).toBe(input)
   })
 
   it('adopts a committed change that lands under an open draft', async () => {

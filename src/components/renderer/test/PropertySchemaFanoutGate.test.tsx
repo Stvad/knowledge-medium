@@ -22,7 +22,7 @@ vi.mock('@/utils/toast.js', async importOriginal => ({
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChangeScope } from '@/data/api'
-import { presetIdProp, propertyNameProp } from '@/data/properties'
+import { presetConfigProp, presetIdProp, propertyNameProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -39,6 +39,7 @@ import {
   type PropertyDefinitionFanoutSnapshot,
   __resetPropertyDefinitionFanoutForTests,
 } from '@/data/propertyDefinitionFanout'
+import { queueDefinitionChange } from '@/data/propertyDefinitionFanout'
 import { PropertySchemaContentRenderer } from '../PropertySchemaBlockRenderer'
 import { useSyncExternalStore } from 'react'
 
@@ -320,6 +321,105 @@ describe('changing the options of a property with many consumers', () => {
   })
 })
 
+describe('a change planned against a row that moved while it waited', () => {
+  it('labels a waiting rename with the name the definition has when its turn comes', async () => {
+    // HELD IN THE QUEUE deliberately: what a change is planned against is
+    // only observable while something is ahead of it, and the queue is the
+    // seam that produces that state without a second racing gesture.
+    consumersAre(4_000)
+    renderSchema()
+    let release!: () => void
+    void queueDefinitionChange(() => new Promise<void>(resolve => { release = resolve }))
+
+    fireEvent.change(nameInput(), {target: {value: 'test:renamed'}})
+    fireEvent.blur(nameInput())
+    // Lands while the rename waits — so the name it is replacing is not the
+    // one the gesture was composed against.
+    await repo.tx(tx => tx.setProperty(SCHEMA_ID, propertyNameProp, 'test:fromAPeer'),
+      {scope: ChangeScope.BlockDefault})
+    release()
+
+    expect(await screen.findByText(/Rename “test:fromAPeer” to “test:renamed”\?/)).toBeTruthy()
+  })
+
+  it('labels a waiting re-type with the name its predecessor gave the definition', async () => {
+    // Two gestures from one action: the rename lands first, and the type
+    // change behind it was composed when the property still had its old
+    // name. A whole replacement value means the same thing from any starting
+    // point, so what moves is which name the dialog shows — not whether to
+    // make the change.
+    consumersAre(4_000)
+    renderSchema()
+
+    fireEvent.change(nameInput(), {target: {value: 'test:renamed'}})
+    fireEvent.blur(nameInput())
+    fireEvent.change(screen.getByRole('combobox'), {target: {value: 'number'}})
+    await user().click(await screen.findByRole('button', {name: 'Rename'}))
+
+    // The second dialog names the property as it stands NOW, not as the
+    // gesture found it.
+    expect(await screen.findByText(/Change the type of “test:renamed”\?/)).toBeTruthy()
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('abandons a config edit composed before the row moved, without asking first', async () => {
+    // The one payload that cannot be re-aimed: it is the editor's view of
+    // the stored object with one part changed, so applying it over a row
+    // that has moved would put back what the change before it removed.
+    //
+    // It abandons in the PLANNER, which is the part worth pinning — carried
+    // as far as the transaction it would be refused there too, but only
+    // after making the user count a graph and confirm a change that was
+    // never going to land, and told it was a conflict with somebody else.
+    const count = consumersAre(4_000)
+    renderSchema(REF_SCHEMA_ID)
+    let release!: () => void
+    void queueDefinitionChange(() => new Promise<void>(resolve => { release = resolve }))
+    const session = user()
+    screen.getByPlaceholderText('Add a block type…').focus()
+    await session.keyboard('page{Enter}')
+    await repo.tx(tx => tx.setProperty(REF_SCHEMA_ID, presetConfigProp, {targetTypes: ['task']}),
+      {scope: ChangeScope.BlockDefault})
+    release()
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledOnce() })
+    expect(showError.mock.calls[0]?.[0]).toMatch(/changed before this was applied/)
+    expect(count).not.toHaveBeenCalled()
+    const row = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [REF_SCHEMA_ID],
+    )
+    expect((JSON.parse(row.properties_json) as Record<string, unknown>)['property-schema:config'])
+      .toEqual({targetTypes: ['task']})
+  })
+
+  it('asks nothing at all when the row already reads the way the gesture wanted', async () => {
+    // Reachable with no editing: the ref picker re-emits its list when a
+    // target type already on it is entered again. Counting a whole graph to
+    // confirm a write of the same bytes is the confirmation at its least
+    // trustworthy, so the planner stops before the count.
+    const count = consumersAre(4_000)
+    await repo.tx(tx => tx.setProperty(REF_SCHEMA_ID, presetConfigProp, {targetTypes: ['page']}),
+      {scope: ChangeScope.BlockDefault})
+    renderSchema(REF_SCHEMA_ID)
+    // The gate reads the row before it plans, so this rising is the proof
+    // that the gesture got as far as planning — without it the assertions
+    // below are true of a gesture that never started.
+    const planned = vi.spyOn(repo, 'load')
+    const plannedFor = () =>
+      planned.mock.calls.filter(([id]) => id === REF_SCHEMA_ID).length
+    const before = plannedFor()
+    const session = user()
+    screen.getByPlaceholderText('Add a block type…').focus()
+
+    await session.keyboard('page{Enter}')
+
+    await waitFor(() => { expect(plannedFor()).toBeGreaterThan(before) })
+    expect(count).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', {name: 'Change options'})).toBeNull()
+    expect(showError).not.toHaveBeenCalled()
+  })
+})
+
 describe('two changes confirmed from one gesture', () => {
   it('runs them one at a time, each sized after the last one landed', async () => {
     // Blurring the name field and clicking the type picker in one gesture
@@ -400,6 +500,31 @@ describe('re-typing a property with many consumers', () => {
     // The run DID open — otherwise the close below would be about nothing.
     await waitFor(() => { expect(seen.length).toBeGreaterThan(0) })
     await waitFor(() => { expect(propertyDefinitionFanout()).toBeNull() })
+  })
+
+  it('refuses when a config edit landed that the reset would discard', async () => {
+    // The re-type replaces the config as well as the preset — resetting it
+    // to the new preset's default is the point — so a config edit that
+    // arrived while the confirmation was up is one this would throw away
+    // without ever having looked at it.
+    consumersAre(4_000)
+    renderSchema(REF_SCHEMA_ID)
+    // The ref preset's own config editor contributes a second combobox, so
+    // the type picker is named by position rather than by role alone.
+    await user().selectOptions(screen.getAllByRole('combobox')[0]!, 'string')
+    await screen.findByRole('button', {name: 'Change type'})
+
+    await repo.tx(tx => tx.setProperty(REF_SCHEMA_ID, presetConfigProp, {targetTypes: ['task']}),
+      {scope: ChangeScope.BlockDefault})
+    await user().click(screen.getByRole('button', {name: 'Change type'}))
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledOnce() })
+    const row = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [REF_SCHEMA_ID],
+    )
+    const properties = JSON.parse(row.properties_json) as Record<string, unknown>
+    expect(properties['property-schema:preset']).toBe('ref')
+    expect(properties['property-schema:config']).toEqual({targetTypes: ['task']})
   })
 
   it('leaves the stored type alone when declined', async () => {
