@@ -417,7 +417,11 @@ const migrateUnderClaim = async (
   let unmigrated = 0
   let valuesMaterializedTotal = 0
   const unsubscribe = onPropertyCellBackfillProgress(progress => {
-    materialized = progress.blocksMaterialized
+    // The RUN's total, not this sweep's. The converging sweep is by definition
+    // the one that found nothing pending, so its `blocksMaterialized` is zero
+    // and reading it here ended every successful run with "Migrated properties
+    // on 0 blocks."
+    materialized = progress.blocksMaterializedTotal
     valuesMaterializedTotal = progress.valuesMaterializedTotal
     unmigrated = progress.failureCount
     // Counts are per-sweep, and the sweep number is shown because a second

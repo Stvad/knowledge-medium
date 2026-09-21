@@ -631,6 +631,20 @@ export class TxImpl implements Tx {
     const parentsToCheck = new Set<string>()
     for (const data of rows) {
       this.checkWorkspace(data.workspaceId)
+      // PINNED HERE, inside the loop, so the check above has something to
+      // compare against for every row after the first. `create` gets this for
+      // free by pinning after each row; checking a whole batch before pinning
+      // any of it lets an UNPINNED transaction past every check, because
+      // nothing is pinned yet.
+      //
+      // DEFENCE IN DEPTH, labelled as such: moving the pin back to after the
+      // inserts fails no test. A mixed-workspace batch is refused either way,
+      // because `core.deriveReferenceTarget` runs over the second row and its
+      // `stampReferenceTarget` takes the same check. That is an incidental
+      // guard — it holds only while some processor happens to touch the row —
+      // and it pays for two inserts and their triggers before refusing. This
+      // refuses at the first row that disagrees, before anything is written.
+      this.pinWorkspace(data.workspaceId)
       const id = data.id ?? this.ctx.newId()
       // Decided HERE, against the ids minted BEFORE this row, and carried on
       // the entry. Re-deriving it after the loop would ask a completed set,
@@ -691,7 +705,6 @@ export class TxImpl implements Tx {
 
     for (const {id, row} of built) {
       this.markSystemMint(id, opts)
-      this.pinWorkspace(row.workspaceId)
       this.record(id, null, row)
     }
     return built.map(({id}) => id)

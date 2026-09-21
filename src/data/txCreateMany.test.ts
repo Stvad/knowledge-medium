@@ -113,6 +113,23 @@ describe('tx.createMany', () => {
     expect(peeked).toEqual(['one', 'two'])
   })
 
+  it('refuses a batch spanning two workspaces, even on an unpinned transaction', async () => {
+    // Pins the BEHAVIOUR, not the layer: `createMany`'s own check refuses at the
+    // first row that disagrees, and with that check removed
+    // `core.deriveReferenceTarget` refuses the same batch a moment later. This
+    // passes either way by design — it is here so that a future edit which
+    // removes BOTH is noticed.
+    await seedRoot('root')
+    await seedRoot('foreign', OTHER_WS)
+    await expect(repo.tx(tx => tx.createMany([
+      {id: 'here', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'here'},
+      {id: 'there', workspaceId: OTHER_WS, parentId: 'foreign', orderKey: 'a0', content: 'there'},
+    ]), {scope: ChangeScope.BlockDefault})).rejects.toThrow(/tx pinned to workspace/)
+
+    expect(await rowsOf('root')).toEqual([])
+    expect(await rowsOf('foreign')).toEqual([])
+  })
+
   it('is a no-op for an empty list', async () => {
     await seedRoot('root')
     expect(await repo.tx(tx => tx.createMany([]), {scope: ChangeScope.BlockDefault})).toEqual([])

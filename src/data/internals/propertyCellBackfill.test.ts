@@ -435,6 +435,25 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // The per-sweep count is zero on the converging sweep and that is CORRECT;
     // the run-scoped total is what says whether anything worked.
     expect(progress.valuesMaterializedTotal).toBeGreaterThan(0)
+    // And the entry has to say WHICH key to repair. `rejection.cause` is a
+    // CodecError reading "expected string, got object" — true, and useless on a
+    // block with several properties.
+    expect(progress.failures[0]!.reason).toContain('demo:extra')
+  })
+
+  it('reports the blocks it changed over the RUN, not over the converging sweep', async () => {
+    // The converging sweep is by definition the one that found nothing pending,
+    // so its per-sweep count is zero — and that is the count the operator's
+    // "Migrated properties on N blocks" was read from, which made every
+    // successful run report zero.
+    const ids = await seedNotes(5)
+    await flip()
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(progress.sweeps).toBeGreaterThan(1)
+    expect(progress.blocksMaterialized).toBe(0)
+    expect(progress.blocksMaterializedTotal).toBe(ids.length)
   })
 
   it('does not resurrect a property that was deleted through its children', async () => {

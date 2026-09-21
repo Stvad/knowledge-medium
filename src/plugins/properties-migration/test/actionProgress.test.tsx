@@ -61,7 +61,8 @@ import { migratePropertiesToBlocksAction } from '../action.ts'
 const THIS_DEVICE = getClientId()
 
 const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCellBackfillProgress => ({
-  blocksScanned: 7, blocksMaterialized: 7, valuesMaterialized: 7,
+  blocksScanned: 7, blocksMaterialized: 7, blocksMaterializedTotal: 7,
+  valuesMaterialized: 7,
   valuesMaterializedTotal: 7, sweeps: 2, failures: [], failureCount: 0, ...over,
 })
 

@@ -540,16 +540,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // entire flip. That caller must catch per row and report the offending
       // block, not let one bad value throw the whole pass.
       if (undecodable === 'skip') continue
-      const failure = rejection.reason === 'decode'
-        ? `does not decode under the "${schema.codec.type}" codec`
-        : `decodes under the "${schema.codec.type}" codec but cannot be written ` +
-          'as a value child'
-      throw new Error(
-        `Cannot materialize property "${name}" on block ${row.id}: its cell ` +
-        `value ${failure}. Write property values through tx.setProperty / ` +
-        `block.set, not a raw tx.update({properties}).`,
-        {cause: rejection.cause},
-      )
+      throw undecodableCellValueError(name, row.id, schema, rejection)
     }
 
     // Revive AFTER the rejection gate, never before it: a name the gate skipped
@@ -640,6 +631,34 @@ const idReferencesForContent = (content: string): BlockReference[] | undefined =
   const parsed = parseExactReferenceBlockContent(content)
   if (!isIdCarryingReference(parsed) || parsed.kind !== 'blockRef') return undefined
   return normalizeReferences([{id: parsed.id, alias: parsed.id}])
+}
+
+/** Why one cell value could not become children, in the one wording both
+ *  callers use.
+ *
+ *  The live writer THROWS this and the one-time pass RECORDS it, and the
+ *  operator reads the same sentence either way. Naming the property and the
+ *  block is the load-bearing part: `rejection.cause` is a `CodecError` that
+ *  says only something like "expected string, got object", and a worklist entry
+ *  carrying that plus a block id does not say which of that block's keys to
+ *  repair. The cause is kept underneath for whoever wants the codec's own
+ *  words. */
+export const undecodableCellValueError = (
+  name: string,
+  blockId: string,
+  schema: AnyPropertySchema,
+  rejection: {reason: string; cause?: unknown},
+): Error => {
+  const failure = rejection.reason === 'decode'
+    ? `does not decode under the "${schema.codec.type}" codec`
+    : `decodes under the "${schema.codec.type}" codec but cannot be written ` +
+      'as a value child'
+  return new Error(
+    `Cannot materialize property "${name}" on block ${blockId}: its cell ` +
+    `value ${failure}. Write property values through tx.setProperty / ` +
+    `block.set, not a raw tx.update({properties}).`,
+    {cause: rejection.cause},
+  )
 }
 
 /** The field row a property implies under `owner`, as DATA.

@@ -39,7 +39,11 @@ import {
   getPropertyFieldTargetId,
   propertyCellValueRejection,
 } from '@/data/propertyChildren'
-import { plannedFieldRow, plannedValueChildRows } from './propertyChildrenProcessor'
+import {
+  plannedFieldRow,
+  plannedValueChildRows,
+  undecodableCellValueError,
+} from './propertyChildrenProcessor'
 
 export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
 
@@ -164,6 +168,12 @@ export interface PropertyCellBackfillProgress {
    *  block leaves this at zero for a run that migrated all the others, which
    *  is what `valuesMaterialized` is for. */
   blocksMaterialized: number
+  /** The same, for the WHOLE run — the number an operator is shown at the end.
+   *  The per-sweep count cannot be it: the converging sweep is by definition
+   *  the one that found nothing pending, so it materializes nothing, and the
+   *  outcome read from the last notification therefore reported a migration of
+   *  a hundred thousand blocks as "Migrated properties on 0 blocks." */
+  blocksMaterializedTotal: number
   /** Property values materialized this sweep, counting the ones on a block that
    *  also had a failure. */
   valuesMaterialized: number
@@ -196,7 +206,8 @@ export interface PropertyCellBackfillProgress {
  *  `WorkspaceBackfill` wrapper that parks the last run for the operator surface
  *  — and a field added to the type must reach both. */
 const emptyProgress = (): PropertyCellBackfillProgress => ({
-  blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0,
+  blocksScanned: 0, blocksMaterialized: 0, blocksMaterializedTotal: 0,
+  valuesMaterialized: 0,
   valuesMaterializedTotal: 0, sweeps: 0, failures: [], failureCount: 0,
 })
 
@@ -306,15 +317,18 @@ const sweep = async (
           // value must cost its own key rather than every key on the block.
           const rejection = propertyCellValueRejection(schema, encoded)
           if (rejection) {
-            recordFailure(owner.id, rejection.cause ?? new Error(
-              `property "${name}" does not decode under the "${schema.codec.type}" codec`,
-            ))
+            // The wrapper, not the bare cause: a `CodecError` says "expected
+            // string, got object" and nothing about WHICH key on this block.
+            recordFailure(owner.id, undecodableCellValueError(name, owner.id, schema, rejection))
             continue
           }
           planned.push({owner, schema, encoded})
           materializedHere += 1
         }
-        if (materializedHere > 0) progress.blocksMaterialized += 1
+        if (materializedHere > 0) {
+          progress.blocksMaterialized += 1
+          progress.blocksMaterializedTotal += 1
+        }
         progress.valuesMaterialized += materializedHere
         progress.valuesMaterializedTotal += materializedHere
       }
