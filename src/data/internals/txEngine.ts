@@ -620,9 +620,7 @@ export class TxImpl implements Tx {
    * time. What goes away is the REPETITION: a parent named by two hundred rows
    * is read once, and two hundred inserts become one statement. `create`
    * remains the door for a single row; this one is for a caller that already
-   * knows its whole write set, which today means the properties cell->children
-   * pass (~761k rows on a large graph, where the per-row parent SELECT was a
-   * third of the pass's reads).
+   * knows its whole write set.
    *
    * ORDER IS PART OF THE CONTRACT: a row may name a parent created earlier in
    * the SAME call — a value child under the field row above it — so parents

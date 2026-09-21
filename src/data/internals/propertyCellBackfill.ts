@@ -308,9 +308,8 @@ const sweep = async (
       // materializing from the stale bag would write children for values
       // that are no longer there.
       //
-      // TWO reads for the whole batch, not four per block. Asking per block
-      // was a third of the pass's reads on a large graph, and every one of
-      // them re-asked the same two questions of a different row.
+      // TWO reads for the whole batch, not four per block: asked per block,
+      // every one of them re-asks the same two questions of a different row.
       const owners = await tx.liveRowsForIds(ctx.workspaceId, batch.map(b => b.id))
       const takenByOwner = new Map<string, Set<string>>()
       for (const fieldRow of await tx.propertyFieldRowsForParents(
@@ -432,9 +431,8 @@ export const runPropertyCellBackfill = async (
 ): Promise<PropertyCellBackfillProgress> => {
   const progress = emptyProgress()
   // One entry per block this run changed, for the run-wide total. Bounded by
-  // the workspace's property-carrying blocks — ~108k ids on the largest graph
-  // measured, which is small beside the block snapshots the pass already holds
-  // for the same run (#605).
+  // the workspace's property-carrying blocks, and an id apiece — far smaller
+  // than the block snapshots the same run already holds (#605).
   const changedOwners = new Set<string>()
 
   for (;;) {

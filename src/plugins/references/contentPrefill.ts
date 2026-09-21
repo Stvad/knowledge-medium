@@ -6,9 +6,9 @@
  * a ref value child addressing its target — by writing the id into the content
  * itself, and then has to pay for the parser to read that id back out: the
  * plan differs from the empty `references` a fresh row carries, so the
- * processor opens a transaction and writes every row a second time. On a
- * migrated graph that is one extra write, row event and upload for each of
- * several hundred thousand rows. Prefilled, every plan in the batch comes out
+ * processor opens a transaction and writes every row a second time — one extra
+ * write, row event and upload per machinery row, and a migration mints one of
+ * those per property per block. Prefilled, every plan in the batch comes out
  * idempotent and the processor returns without opening a transaction at all.
  *
  * It lives HERE, not in core, for two reasons that are really one. The
