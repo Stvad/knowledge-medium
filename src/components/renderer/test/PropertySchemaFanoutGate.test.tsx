@@ -191,6 +191,20 @@ describe('renaming a property with many consumers', () => {
     expect(propertyDefinitionFanoutFor(WS)).toBeNull()
   })
 
+  it('rejects a name the field rows could not bind to, without asking', async () => {
+    // POSITION, not merely presence: the label hygiene runs BEFORE the gate.
+    // Asked first, the user would agree to wait for a rename this renderer
+    // then reverts on its own, having written nothing.
+    consumersAre(4_000)
+    renderSchema()
+
+    await renameTo('test:bad]]name')
+
+    await waitFor(() => { expect(nameInput().value).toBe('test:myProp') })
+    expect(screen.queryByRole('button', {name: 'Rename'})).toBeNull()
+    expect(await storedName()).toBe('test:myProp')
+  })
+
   it('does not ask, or open a surface, for a change nobody will notice', async () => {
     consumersAre(LARGE_FANOUT_CONSUMERS - 1)
     const seen = recordFanoutRuns()
@@ -214,6 +228,42 @@ describe('re-typing a property with many consumers', () => {
     expect(await screen.findByText(/Change the type of “test:myProp”\?/)).toBeTruthy()
     // The half a rename does not have: a re-type can be refused outright.
     expect(screen.getByText(/the whole change is refused/)).toBeTruthy()
+  })
+
+  it('takes the surface down when the kernel refuses the change', async () => {
+    // The run is ended from a `finally`, and this is the branch that needs it:
+    // a refusal rolls the transaction back and reports nothing on the way out,
+    // so an end placed after the write would leave a modal over a workspace
+    // that is no longer busy — with no gesture left to close it.
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode,
+          wk_canary, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS])
+    const schema = await vi.waitFor(() => {
+      const registered = repo.propertySchemas.get('test:myProp')
+      if (!registered) throw new Error('[test] test:myProp not registered yet')
+      return registered
+    }, {timeout: 3000})
+    // Prose under a string property: `number` cannot read it, so the re-type
+    // is refused rather than dropping it.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'host', workspaceId: WS, parentId: 'root', orderKey: 'a3', content: 'host',
+      })
+      await tx.setProperty('host', schema, 'not a number')
+    }, {scope: ChangeScope.BlockDefault})
+    consumersAre(4_000)
+    const seen = recordFanoutRuns()
+    renderSchema()
+    await user().selectOptions(screen.getByRole('combobox'), 'number')
+
+    await user().click(await screen.findByRole('button', {name: 'Change type'}))
+
+    // The run DID open — otherwise the close below would be about nothing.
+    await waitFor(() => { expect(seen.length).toBeGreaterThan(0) })
+    await waitFor(() => { expect(propertyDefinitionFanoutFor(WS)).toBeNull() })
   })
 
   it('leaves the stored type alone when declined', async () => {
