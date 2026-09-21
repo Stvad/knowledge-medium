@@ -1,1 +1,1 @@
-import{fP as e,pP as t}from"../../../chunks/app-BzA-sP7p.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
+import{fP as e,pP as t}from"../../../chunks/app-YqutLv4H.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
