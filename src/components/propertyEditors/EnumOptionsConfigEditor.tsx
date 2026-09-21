@@ -16,14 +16,17 @@
  * stale draft overwriting it on the next blur.
  *
  * ADDING OR REMOVING A CHOICE CARRIES THE PENDING EDIT rather than racing it.
- * Clicking one of those buttons blurs whatever input was being typed in, so
- * the naive pair is two writes from one user action — and the second is
- * judged against a definition row the first has already changed, which the
- * gesture's staleness check then refuses. Both buttons write from the DRAFT,
- * so one write carries both, and the blur that precedes the click is told to
- * stand down.
+ * Those buttons would otherwise blur whatever input was being typed in, and
+ * one user action would be two writes — the second judged against a
+ * definition row the first had already changed, which the gesture's
+ * staleness check then refuses. So they write from the DRAFT, and they
+ * decline the focus that would cause the blur at all (`preventDefault` on
+ * mousedown, the toolbar-button convention). Nothing has to be remembered
+ * between the press and the click, which is what a flag set on pointer-down
+ * got wrong: a press dragged away or cancelled left it set with no click to
+ * clear it, and the typed edit sat in a draft no blur would ever commit.
  */
-import {useRef, useState} from 'react'
+import {useState} from 'react'
 import {Plus, X} from 'lucide-react'
 import {Button} from '@/components/ui/button'
 import {Input} from '@/components/ui/input'
@@ -45,29 +48,19 @@ export function EnumOptionsConfigEditor({
     setDraft(value.options)
   }
 
-  // Set on the pointer press that is about to steal focus from an input, so
-  // the blur it causes knows the click behind it is already writing. Cleared
-  // when an input takes focus, which is the only thing that can produce
-  // another blur — so a press abandoned without a click cannot swallow a
-  // later commit.
-  const structural = useRef(false)
-
   const edit = (index: number, patch: {value?: string; label?: string}) => {
     setDraft(draft.map((option, i) => i === index ? {...option, ...patch} : option))
   }
   /** Commit the draft, or put it back if nothing moved — an input left
    *  untouched must not write, or tabbing through the editor would fan out. */
   const commit = () => {
-    if (structural.current) return
     if (JSON.stringify(draft) === committed) return
     onChange({options: draft})
   }
-  /** Write from the draft, so a structural click carries whatever was being
-   *  typed when it stole focus. */
-  const commitStructural = (options: EnumPresetConfig['options']) => {
-    structural.current = false
-    onChange({options})
-  }
+  /** Keeps the focus where it is, so pressing a structural button does not
+   *  blur the input being typed in — the click below then carries that edit
+   *  in the draft it writes from, as one change. */
+  const keepFocus = (event: {preventDefault: () => void}) => { event.preventDefault() }
   return (
     <div className="space-y-2">
       {draft.map((option, index) => (
@@ -77,7 +70,6 @@ export function EnumOptionsConfigEditor({
             value={option.value}
             placeholder="value"
             onChange={event => edit(index, {value: event.target.value})}
-            onFocus={() => { structural.current = false }}
             onBlur={commit}
           />
           <Input
@@ -85,7 +77,6 @@ export function EnumOptionsConfigEditor({
             value={option.label}
             placeholder="Label"
             onChange={event => edit(index, {label: event.target.value})}
-            onFocus={() => { structural.current = false }}
             onBlur={commit}
           />
           <Button
@@ -93,8 +84,8 @@ export function EnumOptionsConfigEditor({
             variant="ghost"
             size="icon"
             aria-label={`Remove choice ${index + 1}`}
-            onPointerDown={() => { structural.current = true }}
-            onClick={() => commitStructural(draft.filter((_, i) => i !== index))}
+            onMouseDown={keepFocus}
+            onClick={() => onChange({options: draft.filter((_, i) => i !== index)})}
           >
             <X className="h-4 w-4" />
           </Button>
@@ -104,8 +95,8 @@ export function EnumOptionsConfigEditor({
         type="button"
         variant="outline"
         size="sm"
-        onPointerDown={() => { structural.current = true }}
-        onClick={() => commitStructural([...draft, {value: '', label: ''}])}
+        onMouseDown={keepFocus}
+        onClick={() => onChange({options: [...draft, {value: '', label: ''}]})}
       >
         <Plus className="mr-1 h-4 w-4" /> Add choice
       </Button>
