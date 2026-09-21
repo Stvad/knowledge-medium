@@ -27,11 +27,12 @@
  *    other two — reference-shaped content and ill-formed UTF-16 (#688) — hold
  *    for EVERY string-family codec, and are stated as an output invariant in
  *    the "#688" describe below rather than as a per-value expectation.
- *  - Enum leniency: a value outside the CURRENT option set still
- *    round-trips through content (`decode` is lenient on membership,
- *    `codecs.ts`) but is kept in its DECODED form rather than
- *    re-encoded, because `encode`/`where` would reject it — documented in
- *    the try/catch in `valueChildContentToEncoded`.
+ *  - Enum membership and spelling: an option value is spelled PLAINLY and
+ *    reads back, in either spelling — the JSON one every value child was
+ *    written with before #1080 still reads, with no migration. A value
+ *    OUTSIDE the current option set is refused whichever way it is spelled,
+ *    which is the `encode`-side check `decode` deliberately omits (#1088);
+ *    a value that would be misread verbatim is escaped instead.
  *  - Ref addressing: a non-empty ref value renders as
  *    an editable `((id))` span and reads back via the CALLER-SUPPLIED
  *    `referenceTargetId` (the derived column), not by re-parsing content.
@@ -229,12 +230,15 @@ describe('round trip: valueChildContentToEncoded(propertyValueToChildContent(v))
     )
   })
 
-  it('enum: a current-option value round-trips through JSON content (the default/json codec branch)', () => {
+  it('enum: a current-option value is spelled plainly and reads back (#1080)', () => {
     fc.assert(
       fc.property(fc.constantFrom(...enumOptions), v => {
         const content = propertyValueToChildContent(enumSchema, v)
-        expect(content).toBe(JSON.stringify(v))
+        expect(content).toBe(v)
         expect(valueChildContentToEncoded(enumSchema, content)).toBe(v)
+        // And the spelling these children were written with before still
+        // reads, so nothing has to be migrated off it.
+        expect(valueChildContentToEncoded(enumSchema, JSON.stringify(v))).toBe(v)
       }),
       fuzzParams(100),
     )
@@ -318,14 +322,42 @@ describe('#688: content is always storable text, never a span and never ill-form
   })
 })
 
-describe('enum leniency: a retired option decodes but is not re-canonicalized', () => {
-  it('a value stored before its option was removed still decodes, kept AS-IS rather than re-encoded', () => {
-    const content = JSON.stringify('retired-option')
-    // decode is lenient (only checks it's a string, `enumCodec`); encode
-    // would reject it (not a current member) — the fallback in
-    // valueChildContentToEncoded keeps the decoded value verbatim
-    // instead of throwing or dropping it.
-    expect(valueChildContentToEncoded(enumSchema, content)).toBe('retired-option')
+describe('enum: only a DECLARED option reads (#1088)', () => {
+  it('an off-menu value is refused in either spelling, and in an escaped envelope', () => {
+    // `decode` is lenient (it only checks the value is a string, `enumCodec`),
+    // so the membership check has to come from `encode`. Asserted for all
+    // three routes into `contentToEncodedValue`, because they are three
+    // different returns and only one of them is the plain one.
+    for (const content of [
+      'retired-option',
+      JSON.stringify('retired-option'),
+      encodedToValueChildContent(enumSchema, '"retired-option"'),
+    ]) {
+      expect(() => valueChildContentToEncoded(enumSchema, content),
+        `content ${JSON.stringify(content)}`).toThrow(CodecError)
+    }
+  })
+
+  it('any option value round-trips, and its content is inert to both readers', () => {
+    // The same invariant the verbatim string family carries above, now that
+    // `enum` has joined it: whatever the option value is — quote-shaped,
+    // span-shaped, ill-formed, whitespace-edged — the content either IS the
+    // value and the whole-block reader sees nothing in it, or it is an
+    // envelope that is inert to both readers; and it reads back either way.
+    fc.assert(
+      fc.property(textArb, option => {
+        const schema = defineProperty<string>('e1', {
+          codec: codecs.enum([option]),
+          defaultValue: option,
+          changeScope: ChangeScope.BlockDefault,
+        })
+        const content = propertyValueToChildContent(schema, option)
+        expect(valueChildContentToEncoded(schema, content)).toBe(option)
+        expect(parseExactReferenceBlockContent(content)).toBeNull()
+        if (content !== option) expect(parseReferences(content)).toEqual([])
+      }),
+      fuzzParams(300),
+    )
   })
 })
 

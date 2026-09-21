@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema } from '@/data/api'
+import { ChangeScope, CodecError, codecs, defineProperty, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema } from '@/data/api'
 import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -16,8 +16,11 @@ import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
+  childContentsToEncodedPropertyValue,
   convertValueChildContent,
+  encodedPropertyValueToChildContents,
   encodedToValueChildContent,
+  propertyCellValueRejection,
   valueChildContentToEncoded,
   type ValueChildConversion,
 } from './propertyChildren'
@@ -2581,12 +2584,11 @@ describe('core.subtree visible-subtree exclusion (PR #386 review gap fix, §9)',
   })
 })
 
-describe('content <-> value codecs: lenient-read codecs keep values the write side rejects', () => {
-  // `enum` deliberately splits its read/write strictness (codecs.ts): `encode`
-  // rejects out-of-set values, but `decode` accepts a value whose option was
-  // later removed/renamed so it "still decodes and stays editable". Projection
-  // re-canonicalizes via encode(decode(...)) — which must NOT turn such a
-  // preserved value into "unparseable" and drop the owning cell key.
+describe('content <-> value codecs: an enum value child names a DECLARED option', () => {
+  // `enum` splits its read/write strictness (codecs.ts): `encode` rejects
+  // out-of-set values, `decode` only requires a string. The content -> encoded
+  // path asks the WRITE side, because nothing downstream does and an off-menu
+  // string would otherwise be published to the owner's cell verbatim (#1088).
   const currentOptionsSchema = defineProperty<string>('priority', {
     codec: codecs.enum(['low', 'high']),
     defaultValue: 'low',
@@ -2601,15 +2603,43 @@ describe('content <-> value codecs: lenient-read codecs keep values the write si
     changeScope: ChangeScope.BlockDefault,
   })
 
-  it('a value whose option was removed survives the projection round-trip', () => {
-    // Written while 'urgent' was still valid; the option list has since dropped it.
-    const content = propertyValueToChildContent(legacyOptionsSchema, 'urgent')
-    // The read/write split that makes this preservable: decode keeps it, encode rejects it.
-    expect(currentOptionsSchema.codec.decode('urgent')).toBe('urgent')
-    expect(() => currentOptionsSchema.codec.encode('urgent')).toThrow()
+  it('refuses a value that is not a declared option', () => {
+    // Plainly spelled, which is all it takes to type one by hand now (#1080).
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, 'bananas'))
+      .toThrow(CodecError)
+  })
 
-    // Must NOT throw — throwing marks it unparseable and the caller drops the cell key.
-    expect(valueChildContentToEncoded(currentOptionsSchema, content)).toBe('urgent')
+  it('refuses it through the JSON spelling too, so the old form is no way in', () => {
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, '"bananas"'))
+      .toThrow(CodecError)
+  })
+
+  it('refuses it through an ESCAPED envelope, the third route into the reader', () => {
+    // A quote-shaped off-menu value escapes on the way out, so it comes back
+    // through `contentToEncodedValue`'s envelope unwrap rather than through
+    // the enum case. Asserted because that is a different return, and the
+    // check has to sit downstream of every one of them.
+    const content = encodedToValueChildContent(currentOptionsSchema, '"bananas"')
+    expect(content).not.toBe('"bananas"') // it escaped, so the unwrap will fire
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, content))
+      .toThrow(CodecError)
+  })
+
+  it('refuses a value whose option was REMOVED — the accepted cost of the above', () => {
+    // Written while 'urgent' was still valid; the option list has since dropped
+    // it. Post-flip the cell is derived purely from the children, so a device
+    // that has only just synced them has no prior cell to grandfather this
+    // from — "off-menu" has to have one answer. Nothing is destroyed: the row
+    // keeps its text, and re-adding the option projects it again.
+    //
+    // Reaching this state through the UI is a separate matter: an option
+    // removed while blocks still hold it is REFUSED, not applied — see
+    // `propertyDefinitionChange.test.ts`. What is left is an option set that
+    // moves in CODE, with no definition row edit to refuse (#1097).
+    const content = propertyValueToChildContent(legacyOptionsSchema, 'urgent')
+    expect(currentOptionsSchema.codec.decode('urgent')).toBe('urgent')
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, content))
+      .toThrow(CodecError)
   })
 
   it('still canonicalizes values that ARE in the current option set', () => {
@@ -2624,6 +2654,212 @@ describe('content <-> value codecs: lenient-read codecs keep values the write si
       changeScope: ChangeScope.BlockDefault,
     })
     expect(() => valueChildContentToEncoded(numberSchema, 'not-a-number')).toThrow()
+  })
+})
+
+describe('propertyCellValueRejection asks what the projection will ask', () => {
+  // The cell -> children direction and the children -> cell direction have to
+  // agree about whether a codec's write side is enforced. When they did not,
+  // a raw `tx.update({properties})` of an off-menu Choice value was ACCEPTED
+  // here, its value child written, and the owner's key then dropped by the
+  // projection that read the child back — with the writing tx long committed
+  // and nothing reported. Refused at the write instead, so the tx rolls back.
+  const choiceSchema = defineProperty<string>('status', {
+    codec: codecs.enum(['open', 'done']),
+    defaultValue: 'open',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('refuses an off-menu enum cell, which its own decode would have accepted', () => {
+    // The leniency that made this reachable: decode says yes.
+    expect(choiceSchema.codec.decode('bananas')).toBe('bananas')
+    expect(propertyCellValueRejection(choiceSchema, 'bananas')).toMatchObject({reason: 'decode'})
+  })
+
+  it('accepts a declared option', () => {
+    expect(propertyCellValueRejection(choiceSchema, 'done')).toBeNull()
+  })
+
+  // At MEMBER grain too. A cell is offered whole, but the projection reads it
+  // back one value child at a time, so asking only the outer codec let a
+  // `list(enum)` take an off-menu member — the list's decode is exactly as
+  // lenient as its member's — and then dropped that member on the way back,
+  // deriving a list one shorter with nothing reported.
+  const choiceListSchema = defineProperty<readonly string[]>('tags', {
+    codec: codecs.list(codecs.enum(['a', 'b'])) as AnyPropertySchema['codec'],
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('refuses an off-menu MEMBER of a list of options', () => {
+    expect(propertyCellValueRejection(choiceListSchema, ['a', 'bananas']))
+      .toMatchObject({reason: 'decode'})
+  })
+
+  it('accepts a list whose members are all declared', () => {
+    expect(propertyCellValueRejection(choiceListSchema, ['a', 'b'])).toBeNull()
+  })
+
+  // At every depth, because an `enum` nested in lists still declares an
+  // option set. Two mechanisms hold this up and the cases below separate
+  // them: the member CHAIN is walked when deciding whether the write side is
+  // enforced, and the question is re-asked at every storage GRAIN — so a
+  // depth the chain missed used to be accepted whole and then dropped by the
+  // projection, and a depth the grain missed used to keep an off-menu value.
+  it.each([1, 2, 3])('refuses an off-menu option nested %i list(s) deep', depth => {
+    let codec = codecs.enum(['a', 'b']) as AnyPropertySchema['codec']
+    let ok: unknown = 'a'
+    let bad: unknown = 'retired'
+    for (let i = 0; i < depth; i += 1) {
+      codec = codecs.list(codec) as AnyPropertySchema['codec']
+      ok = [ok]
+      bad = [bad]
+    }
+    const nested = defineProperty<unknown>('tags', {
+      codec, defaultValue: [], changeScope: ChangeScope.BlockDefault,
+    })
+    expect(propertyCellValueRejection(nested, bad)).not.toBeNull()
+    expect(propertyCellValueRejection(nested, ok)).toBeNull()
+  })
+
+  it('and the projection agrees, rather than quietly returning a shorter list', () => {
+    // The symptom the disagreement produced: this is what the cell would have
+    // become if the write above had been accepted.
+    const contents = encodedPropertyValueToChildContents(choiceListSchema, ['a', 'b'])
+    expect(childContentsToEncodedPropertyValue(choiceListSchema, contents)).toEqual(['a', 'b'])
+  })
+})
+
+describe('content <-> value codecs: only `enum` has its write side enforced', () => {
+  // The membership check is scoped to `enum`, whose option set is a promise
+  // to every consumer that switches on it. A codec a runtime extension
+  // registers may use the SAME lenient-read/strict-write design for its own
+  // reasons — decoding a retired value so it stays editable — and enforcing
+  // its write side here would make every value child under it vanish from the
+  // derived cell. Nothing in the tree has that asymmetry, so this is the only
+  // thing holding the scope in place.
+  const lenientReadSchema = defineProperty<string>('flavour', {
+    codec: {
+      type: 'test-lenient-read',
+      encode: (v: string) => {
+        if (v === 'retired') throw new CodecError('flavour', v)
+        return v
+      },
+      decode: (j: unknown) => {
+        if (typeof j !== 'string') throw new CodecError('flavour', j)
+        return j
+      },
+    },
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('keeps a value the codec READS but will not WRITE, for a non-enum codec', () => {
+    // JSON-spelled, because a codec outside the verbatim family takes the
+    // default branch.
+    expect(valueChildContentToEncoded(lenientReadSchema, '"retired"')).toBe('retired')
+  })
+
+  it('still canonicalizes through that codec when its write side accepts', () => {
+    expect(valueChildContentToEncoded(lenientReadSchema, '"vanilla"')).toBe('vanilla')
+  })
+
+  it('and a genuine shape error still throws out of its decode', () => {
+    expect(() => valueChildContentToEncoded(lenientReadSchema, '42')).toThrow(CodecError)
+  })
+})
+
+describe('content <-> value codecs: an enum value child is spelled plainly', () => {
+  // #1080: the text the UI shows for a Choice value has to be the text that
+  // reads back as it, or the obvious correction is the one that loses the
+  // property. Both `enum` and `strict-enum` build a codec whose type is
+  // 'enum', so one branch covers the user-facing preset and the code-declared
+  // one; the two differ only in what they do with the unset sentinel.
+  const choiceSchema = defineProperty<string>('status', {
+    codec: kernelValuePresetCoresById.enum.build({
+      options: [{value: 'open', label: 'Open'}, {value: 'done', label: 'Done'}],
+    }),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const strictSchema = defineProperty<string>('status', {
+    codec: codecs.enum(['open', 'done']),
+    defaultValue: 'open',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('writes the option value with no quotes, and reads it back', () => {
+    expect(propertyValueToChildContent(strictSchema, 'done')).toBe('done')
+    expect(valueChildContentToEncoded(strictSchema, 'done')).toBe('done')
+  })
+
+  it('still reads the JSON spelling every existing value child holds', () => {
+    // No migration: these drift to the plain form on their next write.
+    expect(valueChildContentToEncoded(strictSchema, '"open"')).toBe('open')
+  })
+
+  it('reads a hand-typed value with stray whitespace', () => {
+    expect(valueChildContentToEncoded(strictSchema, '  done \n')).toBe('done')
+  })
+
+  describe('an option value that would be MISREAD is escaped, both ways', () => {
+    // The trap this pins: the escape side and the unwrap side are one
+    // predicate here (`needsEscape`'s enum clause is the negation of
+    // `enumValueFromContent`), so extending one without the other is not
+    // expressible. Each case below asserts the content is NOT the raw value
+    // AND that it reads back — a one-way escape fails the second half.
+    const cases: readonly (readonly [string, string])[] = [
+      ['quote-shaped', '"open"'],
+      ['reference-shaped', `((${SAMPLE_UUID}))`],
+      ['alias-shaped', '[[Some Page]]'],
+      ['edge whitespace', ' spaced '],
+    ]
+    for (const [label, option] of cases) {
+      it(`round-trips a ${label} option value`, () => {
+        const schema = defineProperty<string>('status', {
+          codec: codecs.enum([option]),
+          defaultValue: option,
+          changeScope: ChangeScope.BlockDefault,
+        })
+        const content = propertyValueToChildContent(schema, option)
+        expect(content).not.toBe(option)
+        expect(valueChildContentToEncoded(schema, content)).toBe(option)
+      })
+    }
+  })
+
+  it('refuses a reference-shaped option typed in BARE, and reads its escaped form', () => {
+    // The encoder escapes such an option, so bare content in that shape was
+    // written by a hand-edit or a find-replace, not by the encoder. Accepting
+    // it would decode as the option while leaving a LIVE span in the row: a
+    // rename then rewrites the content, and the same row is off-menu
+    // afterwards with the owner's key gone.
+    const linkSchema = defineProperty<string>('status', {
+      codec: codecs.enum(['[[Page]]', 'plain']),
+      defaultValue: 'plain',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    expect(() => valueChildContentToEncoded(linkSchema, '[[Page]]')).toThrow(CodecError)
+    // The spelling the encoder actually writes still round-trips, and the
+    // legacy JSON one still reads — neither is bare reference-shaped.
+    const escaped = propertyValueToChildContent(linkSchema, '[[Page]]')
+    expect(valueChildContentToEncoded(linkSchema, escaped)).toBe('[[Page]]')
+    expect(valueChildContentToEncoded(linkSchema, JSON.stringify('[[Page]]'))).toBe('[[Page]]')
+  })
+
+  it("the user-facing preset's unset sentinel round-trips as empty content", () => {
+    // '' is the Choice preset's unset/default sentinel and is deliberately not
+    // a configured option — the same spelling a cleared `ref` uses, which is
+    // why this is asserted rather than assumed.
+    expect(propertyValueToChildContent(choiceSchema, '')).toBe('')
+    expect(valueChildContentToEncoded(choiceSchema, '')).toBe('')
+  })
+
+  it('empty content is refused for a code-declared strict enum', () => {
+    // `strict-enum` has no unset sentinel — '' is simply not an option — so
+    // the key reads unset and the row keeps its text, as for any other
+    // off-menu value.
+    expect(() => valueChildContentToEncoded(strictSchema, '')).toThrow(CodecError)
   })
 })
 
