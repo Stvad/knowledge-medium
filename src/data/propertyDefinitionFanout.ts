@@ -87,7 +87,16 @@ export const beginPropertyDefinitionFanout = (
 }
 
 /** How far the fan-out has got. Silently ignored when no run is open for this
- *  workspace — see the ownership note above. */
+ *  workspace — see the ownership note above.
+ *
+ *  A report is an UPDATE to a run somebody else opened and never the opening
+ *  of one, which is the whole of what keeps a headless rename from putting a
+ *  modal in front of the next reader. DEFENCE IN DEPTH as written, and
+ *  deliberately so: deleting the early return fails no test, because a spread
+ *  of `null` files its snapshot under no workspace at all and the store's
+ *  per-workspace keying then hides it. What IS pinned is the rule — a
+ *  processor that opened a run instead of reporting into one fails two named
+ *  tests in `propertyDefinitionChange.test.ts`. */
 export const reportPropertyDefinitionFanout = (
   workspaceId: string, done: number, total: number,
 ): void => {
