@@ -193,3 +193,21 @@ describe('tx.createMany writes nothing on a refusal the caller swallows', () => 
     expect((await rowsOf('root')).map(r => r.id)).toEqual(['taken'])
   })
 })
+
+describe('tx.createMany refuses a duplicate inside the batch itself', () => {
+  it('names the repeated id, and writes nothing', async () => {
+    // The existing-rows lookup cannot see this one: both rows are new, and the
+    // collision is between them. Left to the INSERT it surfaces as a raw
+    // constraint error rather than DuplicateIdError — and from a later chunk,
+    // after earlier chunks have already been written.
+    await seedRoot('root')
+    await repo.tx(async tx => {
+      await expect(tx.createMany([
+        {id: 'twice', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'one'},
+        {id: 'twice', workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'two'},
+      ])).rejects.toThrow(/twice/)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await rowsOf('root')).toEqual([])
+  })
+})

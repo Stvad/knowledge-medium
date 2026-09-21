@@ -657,6 +657,12 @@ export class TxImpl implements Tx {
       // that names neither the row nor its parent.
       const checkParent = data.parentId !== null && !mintedBefore.has(data.parentId)
       if (checkParent) parentsToCheck.add(data.parentId!)
+      // A collision WITHIN the batch, which the `blocks` lookup below cannot
+      // see: two rows carrying one explicit id, or a `newId` that repeated.
+      // Left to the INSERT it would surface as a raw constraint error rather
+      // than `DuplicateIdError`, and from a later chunk, after earlier chunks
+      // had already been written.
+      if (mintedBefore.has(id)) throw new DuplicateIdError(id)
       mintedBefore.add(id)
       built.push({id, row: this.buildNewBlockRow(id, data, opts, 'tx.createMany'), checkParent})
     }

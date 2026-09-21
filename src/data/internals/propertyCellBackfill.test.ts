@@ -128,6 +128,23 @@ const seedNotes = async (count: number) => {
 
 const run = async () => repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)
 
+/** A context whose registry answers with a BROKEN fieldId for one name — an
+ *  id `propertyFieldContent` cannot render back out, which is what a legacy or
+ *  hand-made definition block can carry. Injected at the resolver rather than
+ *  seeded, because a definition seed's id is derived and cannot be made to
+ *  look like this. */
+const ctxWithUnrenderableFieldId = (brokenName: string): WorkspaceBackfillContext => {
+  const base = makeCtx()
+  return {
+    ...base,
+    resolveNameSchema: name => {
+      const schema = base.resolveNameSchema(name)
+      if (schema === undefined || name !== brokenName) return schema
+      return {...schema, fieldId: 'not a renderable id'}
+    },
+  }
+}
+
 /** A block's property machinery as SHAPE — ids dropped, because two blocks
  *  written by different routes never share them, and order keys dropped for
  *  their RANK, because `fractional-indexing-jittered` deliberately randomises
@@ -691,5 +708,38 @@ describe('the pass and the live writer agree about a value\'s children', () => {
     const migrated = await machineryShape('migrated')
     expect(migrated).toHaveLength(1)
     expect(migrated).toEqual(await machineryShape('live'))
+  })
+})
+
+describe('one key that cannot be planned costs its own key', () => {
+  it('a definition whose fieldId will not render fails that property only', async () => {
+    // The row-at-a-time retry loop this pass replaced caught ANY throw around
+    // one name. A value its codec refuses is the common case and is checked
+    // before planning; a fieldId that cannot be rendered back out is the other
+    // one, and it is a property of the DEFINITION, so the value check cannot
+    // see it coming. Unisolated it took the whole workspace pass down.
+    await create('b1', {'demo:note': 'fine', 'demo:extra': 'broken definition'})
+    await flip()
+
+    const progress = await runPropertyCellBackfill(ctxWithUnrenderableFieldId('demo:extra'))
+
+    expect(progress.failureCount).toBe(1)
+    expect(progress.failures[0]!.reason).toMatch(/not a renderable id/)
+    // The other key on the same block still migrated.
+    expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['fine'])
+  })
+
+  it('a partly migrated owner is not counted as accepted in full', async () => {
+    // `blocksMaterialized` is documented as blocks accepted IN FULL, and it is
+    // read paired with the failure count as the systematic-failure signal. The
+    // run-wide set answers the other question — which blocks this run changed
+    // — and a partly migrated owner did change.
+    await create('b1', {'demo:note': 'fine', 'demo:extra': 'broken definition'})
+    await flip()
+
+    const progress = await runPropertyCellBackfill(ctxWithUnrenderableFieldId('demo:extra'))
+
+    expect(progress.blocksMaterialized).toBe(0)
+    expect(progress.blocksMaterializedTotal).toBe(1)
   })
 })

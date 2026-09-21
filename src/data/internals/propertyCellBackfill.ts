@@ -40,7 +40,7 @@
  * already-has-a-field-row test above is what makes revisiting a block a no-op.
  */
 
-import type { BlockData, ResolvedPropertySchema } from '@/data/api'
+import type { BlockData, NewBlockData, ResolvedPropertySchema } from '@/data/api'
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
 import { CallbackSet } from '@/utils/callbackSet'
 import {
@@ -321,9 +321,15 @@ const sweep = async (
         takenByOwner.set(fieldRow.parentId, taken)
       }
 
-      const planned: {owner: BlockData; schema: ResolvedNameSchema; encoded: unknown}[] = []
+      const planned: {
+        owner: BlockData
+        schema: ResolvedNameSchema
+        encoded: unknown
+        fieldRow: NewBlockData
+      }[] = []
       for (const owner of owners) {
         let materializedHere = 0
+        let rejectedHere = 0
         for (const name of Object.keys(owner.properties)) {
           const schema = ctx.resolveNameSchema(name)
           // An unregistered key has no definition to point a field row AT, so
@@ -333,21 +339,44 @@ const sweep = async (
           if (schema === undefined) continue
           if (takenByOwner.get(owner.id)?.has(schema.fieldId)) continue
           const encoded = owner.properties[name]
-          // The per-NAME isolation the retry loop used to buy: legacy junk
-          // from a raw `tx.update({properties})` fails its codec, and one bad
-          // value must cost its own key rather than every key on the block.
+          // PER-NAME ISOLATION, which the row-at-a-time retry loop this
+          // replaced bought by catching around one name. One key that cannot
+          // be planned must cost its own key, not every key on the block and
+          // not the workspace's whole pass.
+          //
+          // Two ways it fails, and both belong here. The cell VALUE its codec
+          // refuses is the common one — legacy junk from a raw
+          // `tx.update({properties})`. The other is the DEFINITION: a fieldId
+          // that `propertyFieldContent` cannot render back out (whitespace,
+          // parentheses) throws when the field row is built, and that is a
+          // property of the definition rather than of this block's value, so
+          // the value check above cannot see it coming.
           const rejection = propertyCellValueRejection(schema, encoded)
           if (rejection) {
             // The wrapper, not the bare cause: a `CodecError` says "expected
             // string, got object" and nothing about WHICH key on this block.
             recordFailure(owner.id, undecodableCellValueError(name, owner.id, schema, rejection))
+            rejectedHere += 1
             continue
           }
-          planned.push({owner, schema, encoded})
+          let fieldRow: NewBlockData
+          try {
+            fieldRow = plannedFieldRow(owner, schema.fieldId)
+          } catch (cause) {
+            recordFailure(owner.id, cause)
+            rejectedHere += 1
+            continue
+          }
+          planned.push({owner, schema, encoded, fieldRow})
           materializedHere += 1
         }
+        // `blocksMaterialized` is "accepted IN FULL" — a block that kept a key
+        // back is not that, and the systematic-failure signal reads this
+        // paired with the failure count. The run-wide set is the other
+        // question, "which blocks did this run change", and a partly migrated
+        // owner did change.
         if (materializedHere > 0) {
-          progress.blocksMaterialized += 1
+          if (rejectedHere === 0) progress.blocksMaterialized += 1
           changedOwners.add(owner.id)
           progress.blocksMaterializedTotal = changedOwners.size
         }
@@ -360,9 +389,7 @@ const sweep = async (
       // the minted ids to point at. Both calls go through `tx.createMany`, so
       // the rows are workspace- and parent-checked and `record`ed exactly as
       // one-at-a-time creates would be.
-      const fieldRowIds = await tx.createMany(
-        planned.map(({owner, schema}) => plannedFieldRow(owner, schema.fieldId)),
-      )
+      const fieldRowIds = await tx.createMany(planned.map(({fieldRow}) => fieldRow))
       await tx.createMany(planned.flatMap(({owner, schema, encoded}, index) =>
         plannedValueChildRows(
           {id: fieldRowIds[index]!, workspaceId: owner.workspaceId}, schema, encoded,
