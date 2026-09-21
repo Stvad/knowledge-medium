@@ -261,6 +261,11 @@ describe('renaming a property with many consumers', () => {
     await waitFor(() => { expect(showError).toHaveBeenCalledOnce() })
     expect(await storedName()).toBe('test:fromAPeer')
     expect(propertyDefinitionFanout()).toBeNull()
+    // AND THE FIELD SHOWS THEIRS. Putting the pre-dialog name back here
+    // would stick — the resync has already adopted the peer's name, so it
+    // will not correct the draft again — and the next blur would submit it,
+    // undoing the very edit this refusal protected.
+    await waitFor(() => { expect(nameInput().value).toBe('test:fromAPeer') })
   })
 
   it('writes nothing to a definition deleted while the user was deciding', async () => {

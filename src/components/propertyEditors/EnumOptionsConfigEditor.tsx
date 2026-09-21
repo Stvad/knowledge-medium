@@ -10,10 +10,23 @@
  * own draft until it is left; adding and removing a choice are single acts and
  * commit straight away.
  *
- * The drafts re-adopt the committed value whenever it changes underneath them
- * (a peer edit, an undo, a preset switch that resets the config), which is the
- * same trade the name field records: a remote write landing mid-edit beats a
- * stale draft overwriting it on the next blur.
+ * The drafts re-adopt the committed value whenever SOMEBODY ELSE changes it
+ * (a peer edit, an undo, a preset switch that resets the config), which is
+ * the same trade the name field records: a remote write landing mid-edit
+ * beats a stale draft overwriting it on the next blur.
+ *
+ * Somebody else, and that qualifier is load-bearing now that a write is not
+ * instant — it is planned, counted, sometimes confirmed, and only then
+ * committed, so the props go on describing the old value for as long as that
+ * takes. `pending` is what this editor has asked for and not yet seen come
+ * back, and it settles two things that both read as "my own write is not
+ * mine". Its acknowledgement must not wipe a draft: tab out of one field and
+ * type in the next, and the first field's write coming back would otherwise
+ * replace everything with its own snapshot, erasing what is being typed. And
+ * a blur caused by that write must not write again: a structural change big
+ * enough to be confirmed mounts a focus trap, which blurs the input this
+ * editor had just kept focused, and the commit behind it would queue a
+ * second change that puts back the choice the first one removed.
  *
  * ADDING OR REMOVING A CHOICE CARRIES THE PENDING EDIT rather than racing it.
  * Those buttons would otherwise blur whatever input was being typed in, and
@@ -43,19 +56,31 @@ export function EnumOptionsConfigEditor({
   const committed = JSON.stringify(value.options)
   const [adopted, setAdopted] = useState(committed)
   const [draft, setDraft] = useState(value.options)
+  const [pending, setPending] = useState<string | null>(null)
   if (committed !== adopted) {
     setAdopted(committed)
-    setDraft(value.options)
+    // Only what this editor did NOT ask for takes the draft away.
+    if (committed !== pending) setDraft(value.options)
+    setPending(null)
   }
+  /** What the stored options are, or are about to be. Comparing against this
+   *  rather than `committed` is what keeps an in-flight write from being
+   *  asked for twice. */
+  const requested = pending ?? committed
 
   const edit = (index: number, patch: {value?: string; label?: string}) => {
     setDraft(draft.map((option, i) => i === index ? {...option, ...patch} : option))
   }
   /** Commit the draft, or put it back if nothing moved — an input left
    *  untouched must not write, or tabbing through the editor would fan out. */
+  const request = (options: EnumPresetConfig['options']) => {
+    setDraft(options)
+    setPending(JSON.stringify(options))
+    onChange({options})
+  }
   const commit = () => {
-    if (JSON.stringify(draft) === committed) return
-    onChange({options: draft})
+    if (JSON.stringify(draft) === requested) return
+    request(draft)
   }
   /** Keeps the focus where it is, so pressing a structural button does not
    *  blur the input being typed in — the click below then carries that edit
@@ -85,7 +110,7 @@ export function EnumOptionsConfigEditor({
             size="icon"
             aria-label={`Remove choice ${index + 1}`}
             onMouseDown={keepFocus}
-            onClick={() => onChange({options: draft.filter((_, i) => i !== index)})}
+            onClick={() => request(draft.filter((_, i) => i !== index))}
           >
             <X className="h-4 w-4" />
           </Button>
@@ -96,7 +121,7 @@ export function EnumOptionsConfigEditor({
         variant="outline"
         size="sm"
         onMouseDown={keepFocus}
-        onClick={() => onChange({options: [...draft, {value: '', label: ''}]})}
+        onClick={() => request([...draft, {value: '', label: ''}])}
       >
         <Plus className="mr-1 h-4 w-4" /> Add choice
       </Button>
