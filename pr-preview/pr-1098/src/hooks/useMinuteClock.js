@@ -1,1 +1,0 @@
-import{Vv as e}from"../../chunks/app-KCKUXQpC.js";export{e as useMinuteClock};

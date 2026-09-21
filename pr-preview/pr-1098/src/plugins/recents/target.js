@@ -1,1 +1,0 @@
-import{Uv as e}from"../../../chunks/app-KCKUXQpC.js";export{e as openRecentsPage};

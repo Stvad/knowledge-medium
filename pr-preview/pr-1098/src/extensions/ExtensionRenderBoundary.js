@@ -1,1 +1,0 @@
-import{FD as e}from"../../chunks/app-KCKUXQpC.js";export{e as ExtensionRenderBoundary};
