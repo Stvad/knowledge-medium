@@ -145,19 +145,20 @@ const classify = (stats: SampledNameStats): ClassifiedPresetId => {
 }
 
 /** The shapes a near-miss is worth reporting for: a property that landed on
- *  free text rather than on references. Both list presets are here because the
- *  argument is a preset id from the inferred channel and a codec TYPE — `list`
- *  for either preset — from the existing-schema one. */
+ *  free text rather than on references. Both list spellings are here because
+ *  the two channels name a shape differently — see `effectiveShape`. */
 const NEAR_MISS_SHAPES: ReadonlySet<string> = new Set(['string', 'list', 'string-list'])
 
 const schemaNearMissDiagnostic = (
   name: string,
   stats: SampledNameStats,
-  effectivePreset: string,
+  /** A preset id from the inferred channel, a codec TYPE from the
+   *  existing-schema one — which is `list` for either list preset. */
+  effectiveShape: string,
   schemaSource: 'existing' | 'inferred',
 ): string | null => {
   if (stats.totalValues < SCHEMA_NEAR_MISS_MIN_VALUES) return null
-  if (!NEAR_MISS_SHAPES.has(effectivePreset)) return null
+  if (!NEAR_MISS_SHAPES.has(effectiveShape)) return null
 
   const refListLike = stats.pageTokenStrings + stats.pageTokenArrays
   if (refListLike === 0 || refListLike === stats.totalValues) return null
@@ -165,8 +166,8 @@ const schemaNearMissDiagnostic = (
   if (ratio < SCHEMA_NEAR_MISS_THRESHOLD) return null
 
   const sourceLabel = schemaSource === 'existing'
-    ? `uses existing ${effectivePreset} schema`
-    : `inferred ${effectivePreset}`
+    ? `uses existing ${effectiveShape} schema`
+    : `inferred ${effectiveShape}`
   const percent = Math.round(ratio * 100)
   const nonRefListValues = stats.totalValues - refListLike
   const samples = stats.nonRefListSamples.length > 0
