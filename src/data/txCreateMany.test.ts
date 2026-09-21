@@ -135,3 +135,34 @@ describe('tx.createMany', () => {
     expect(await repo.tx(tx => tx.createMany([]), {scope: ChangeScope.BlockDefault})).toEqual([])
   })
 })
+
+describe('tx.createMany pins only once it has written', () => {
+  it('leaves the transaction unpinned when the batch is refused', async () => {
+    // A refused batch writes nothing, so it must not decide the transaction's
+    // workspace on the way out: a caller that catches the refusal would find a
+    // later, valid write to another workspace rejected, and `afterCommit`
+    // admitted for a transaction that never wrote.
+    await seedRoot('root')
+    await seedRoot('foreign', OTHER_WS)
+    const pinnedAfterRefusal = await repo.tx(async tx => {
+      await expect(tx.createMany([
+        {id: 'never', workspaceId: WS, parentId: 'nobody', orderKey: 'a0', content: 'never'},
+      ])).rejects.toThrow(/nobody/)
+      return tx.meta.workspaceId
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(pinnedAfterRefusal).toBeNull()
+  })
+
+  it('pins to the batch it did write', async () => {
+    await seedRoot('root')
+    const pinned = await repo.tx(async tx => {
+      await tx.createMany([
+        {id: 'w1', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'w1'},
+      ])
+      return tx.meta.workspaceId
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(pinned).toBe(WS)
+  })
+})

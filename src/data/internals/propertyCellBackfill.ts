@@ -168,11 +168,19 @@ export interface PropertyCellBackfillProgress {
    *  block leaves this at zero for a run that migrated all the others, which
    *  is what `valuesMaterialized` is for. */
   blocksMaterialized: number
-  /** The same, for the WHOLE run — the number an operator is shown at the end.
+  /** DISTINCT blocks changed over the WHOLE run — the number an operator is
+   *  shown at the end.
+   *
    *  The per-sweep count cannot be it: the converging sweep is by definition
    *  the one that found nothing pending, so it materializes nothing, and the
    *  outcome read from the last notification therefore reported a migration of
-   *  a hundred thousand blocks as "Migrated properties on 0 blocks." */
+   *  a hundred thousand blocks as "Migrated properties on 0 blocks."
+   *
+   *  Nor can the per-sweep counts be SUMMED. A key that arrives behind the
+   *  cursor is picked up by a later sweep, which is the whole reason the pass
+   *  is a fixpoint — and if that owner already had another key materialized
+   *  earlier, summing counts it twice and the total can exceed the number of
+   *  blocks in the workspace. Counted by owner id instead. */
   blocksMaterializedTotal: number
   /** Property values materialized this sweep, counting the ones on a block that
    *  also had a failure. */
@@ -225,6 +233,10 @@ const MAX_SWEEPS = 4
 const sweep = async (
   ctx: WorkspaceBackfillContext,
   progress: PropertyCellBackfillProgress,
+  /** Owner ids changed so far in this RUN, across sweeps — see
+   *  `blocksMaterializedTotal`, whose value is this set's size. Held by the
+   *  run rather than the sweep because deduplicating is the whole point. */
+  changedOwners: Set<string>,
   onBatch: () => void | Promise<void>,
 ): Promise<void> => {
   const recordFailure = (blockId: string, cause: unknown) => {
@@ -327,7 +339,8 @@ const sweep = async (
         }
         if (materializedHere > 0) {
           progress.blocksMaterialized += 1
-          progress.blocksMaterializedTotal += 1
+          changedOwners.add(owner.id)
+          progress.blocksMaterializedTotal = changedOwners.size
         }
         progress.valuesMaterialized += materializedHere
         progress.valuesMaterializedTotal += materializedHere
@@ -375,6 +388,11 @@ export const runPropertyCellBackfill = async (
   onProgress?: (progress: PropertyCellBackfillProgress) => void | Promise<void>,
 ): Promise<PropertyCellBackfillProgress> => {
   const progress = emptyProgress()
+  // One entry per block this run changed, for the run-wide total. Bounded by
+  // the workspace's property-carrying blocks — ~108k ids on the largest graph
+  // measured, which is small beside the block snapshots the pass already holds
+  // for the same run (#605).
+  const changedOwners = new Set<string>()
 
   for (;;) {
     progress.sweeps += 1
@@ -383,7 +401,7 @@ export const runPropertyCellBackfill = async (
     progress.valuesMaterialized = 0
     progress.failures = []
     progress.failureCount = 0
-    await sweep(ctx, progress, async () => { await onProgress?.(progress) })
+    await sweep(ctx, progress, changedOwners, async () => { await onProgress?.(progress) })
     if (progress.valuesMaterialized === 0) {
       // One last notification: everything a subscriber knows arrives through
       // `onProgress`, which otherwise fires only from inside a batch — so the

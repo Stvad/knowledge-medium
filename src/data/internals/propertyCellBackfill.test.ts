@@ -341,6 +341,11 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // `> 1` would hold for any non-empty graph and so says nothing about the edit.
     expect(progress.sweeps).toBe(3)
     expect(await fieldRowsOf(ids[0]!)).toHaveLength(2)
+    // DISTINCT blocks, not per-sweep touches. This owner is changed in sweep 1
+    // for its original key and again in sweep 2 for the one that arrived behind
+    // the cursor; summing the sweeps would count it twice and report more
+    // migrated blocks than the graph holds.
+    expect(progress.blocksMaterializedTotal).toBe(ids.length)
   })
 
   it('migrates an owner whose existing field row belongs to a different property', async () => {

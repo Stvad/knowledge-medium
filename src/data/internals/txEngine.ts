@@ -629,22 +629,26 @@ export class TxImpl implements Tx {
     const built: {id: string; row: BlockData; checkParent: boolean}[] = []
     const mintedBefore = new Set<string>()
     const parentsToCheck = new Set<string>()
+    // The workspace this batch writes to, established by its first row and held
+    // LOCALLY — not by pinning the transaction. Pinning here would pin it on the
+    // way to a refusal: a batch that throws on a missing parent or a bad id
+    // writes nothing, and a transaction left pinned by a zero-write call then
+    // rejects a later valid write to another workspace and lets `afterCommit`
+    // through for a transaction that never wrote. `create` pins after its
+    // insert; this pins after the batch's.
+    //
+    // The comparison itself is DEFENCE IN DEPTH, labelled as such: dropping it
+    // fails no test, because `core.deriveReferenceTarget` runs over the second
+    // row and its `stampReferenceTarget` takes the same check. That guard is
+    // incidental — it holds only while some processor happens to touch the row
+    // — and it pays for every insert and its triggers first.
+    let batchWorkspaceId: string | null = null
     for (const data of rows) {
       this.checkWorkspace(data.workspaceId)
-      // PINNED HERE, inside the loop, so the check above has something to
-      // compare against for every row after the first. `create` gets this for
-      // free by pinning after each row; checking a whole batch before pinning
-      // any of it lets an UNPINNED transaction past every check, because
-      // nothing is pinned yet.
-      //
-      // DEFENCE IN DEPTH, labelled as such: moving the pin back to after the
-      // inserts fails no test. A mixed-workspace batch is refused either way,
-      // because `core.deriveReferenceTarget` runs over the second row and its
-      // `stampReferenceTarget` takes the same check. That is an incidental
-      // guard — it holds only while some processor happens to touch the row —
-      // and it pays for two inserts and their triggers before refusing. This
-      // refuses at the first row that disagrees, before anything is written.
-      this.pinWorkspace(data.workspaceId)
+      if (batchWorkspaceId === null) batchWorkspaceId = data.workspaceId
+      else if (batchWorkspaceId !== data.workspaceId) {
+        throw new WorkspaceMismatchError(batchWorkspaceId, data.workspaceId)
+      }
       const id = data.id ?? this.ctx.newId()
       // Decided HERE, against the ids minted BEFORE this row, and carried on
       // the entry. Re-deriving it after the loop would ask a completed set,
@@ -703,6 +707,8 @@ export class TxImpl implements Tx {
       }
     }
 
+    // Only now, with every row written: same order as `create`.
+    this.pinWorkspace(batchWorkspaceId!)
     for (const {id, row} of built) {
       this.markSystemMint(id, opts)
       this.record(id, null, row)
