@@ -255,19 +255,24 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     }
   }, [persistedConfig, preset])
 
-  // Render-phase resync via two pieces of derived state. When the
-  // committed `propertyName` changes (remote edit, undo/redo, sync),
-  // we adopt it as the draft in the same render — React supports
-  // setState-during-render for this exact case. Focus is intentionally
-  // not preserved: if a remote write lands mid-edit, accepting the
-  // new committed name beats letting a stale draft overwrite it on
-  // the next blur.
-  const [draftName, setDraftName] = useState(propertyName)
+  // The draft is an OVERRIDE that exists only while the user is typing, not a
+  // copy of the name kept in step with it. `null` means "show what the
+  // definition says", so dropping it is how every path that does not write
+  // gets back to the truth — including the ones that hold a name from before
+  // they started, which a captured value cannot do (see `writeName`).
+  //
+  // Render-phase resync when the committed name changes (remote edit,
+  // undo/redo, sync): React supports setState-during-render for this exact
+  // case. Focus is intentionally not preserved — if a remote write lands
+  // mid-edit, accepting the new committed name beats letting a stale draft
+  // overwrite it on the next blur.
+  const [draftName, setDraftName] = useState<string | null>(null)
   const [committedName, setCommittedName] = useState(propertyName)
   if (propertyName !== committedName) {
     setCommittedName(propertyName)
-    setDraftName(propertyName)
+    setDraftName(null)
   }
+  const shownName = draftName ?? propertyName
 
   const writeName = useCallback(async (draft: string) => {
     const next = trimIfEdited(draft, propertyName)
@@ -285,7 +290,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // them is `]]`-lossy) while reading as a reference to some other block
     // wherever the name is rendered.
     if (!isRoundTrippableReferenceLabel(next) || isGrammarShapedLabel(next)) {
-      setDraftName(propertyName)
+      setDraftName(null)
       return
     }
     const wrote = await throughFanoutGate(atStart => {
@@ -300,12 +305,15 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         write: tx => tx.setProperty(block.id, propertyNameProp, next),
       }
     })
-    // A cancelled rename has to put the FIELD back too, not just decline the
-    // write: the draft is what the user typed, and leaving it there shows a
-    // name the definition does not have. Only on the decline — after a write
-    // the resync above adopts the new committed name, and `propertyName` here
-    // is the old one this closure captured.
-    if (!wrote) setDraftName(propertyName)
+    // Anything that did not write has to put the FIELD back too: the draft is
+    // what the user typed, and leaving it there shows a name the definition
+    // does not have — one a later blur would then submit as a fresh rename.
+    // DROPPED rather than restored to the name this closure captured, and
+    // that distinction is the whole of it: when the write was refused BECAUSE
+    // a peer renamed, the resync has already adopted the peer's name, so
+    // writing the captured one back sticks and the next blur undoes exactly
+    // the edit the refusal protected.
+    if (!wrote) setDraftName(null)
   }, [block, propertyName, throughFanoutGate])
 
   const writePresetId = useCallback(async (next: string) => {
@@ -433,11 +441,11 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           className={preset ? 'text-fuchsia-500' : 'text-muted-foreground'}
         />
         <Input
-          value={draftName}
+          value={shownName}
           placeholder="property name"
           disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
-          onBlur={() => { void writeName(draftName) }}
+          onBlur={() => { void writeName(shownName) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()

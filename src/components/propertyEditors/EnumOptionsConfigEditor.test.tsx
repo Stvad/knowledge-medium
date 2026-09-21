@@ -100,6 +100,59 @@ describe('EnumOptionsConfigEditor', () => {
     expect(document.activeElement).toBe(input)
   })
 
+  it('keeps the field being typed in when its own earlier write comes back', async () => {
+    // A write is planned, counted, sometimes confirmed and only then
+    // committed, so the props describe the old value for as long as that
+    // takes — long enough to tab into the next field and start typing. The
+    // acknowledgement arriving then must not replace the draft with its own
+    // snapshot and erase what is being entered.
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const {rerender} = render(<EnumOptionsConfigEditor value={{options: [
+      {value: 'open', label: 'Open'},
+      {value: 'done', label: 'Done'},
+    ]}} onChange={onChange} />)
+
+    await user.type(screen.getByLabelText('Choice 1 value'), 'x')
+    await user.tab()
+    expect(onChange).toHaveBeenLastCalledWith({options: [
+      {value: 'openx', label: 'Open'}, {value: 'done', label: 'Done'},
+    ]})
+    await user.type(screen.getByLabelText('Choice 1 label'), '!')
+    // The first write lands only now.
+    rerender(<EnumOptionsConfigEditor value={{options: [
+      {value: 'openx', label: 'Open'},
+      {value: 'done', label: 'Done'},
+    ]}} onChange={onChange} />)
+
+    expect((screen.getByLabelText('Choice 1 label') as HTMLInputElement).value).toBe('Open!')
+    await user.tab()
+    expect(onChange).toHaveBeenLastCalledWith({options: [
+      {value: 'openx', label: 'Open!'}, {value: 'done', label: 'Done'},
+    ]})
+  })
+
+  it('does not write again when a confirmation steals the focus it kept', async () => {
+    // A structural change big enough to be confirmed mounts a focus trap,
+    // which blurs the input this editor had just declined to blur. The
+    // commit behind that blur would queue a second change putting back the
+    // choice the first one removed.
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<EnumOptionsConfigEditor value={{options: [
+      {value: 'open', label: 'Open'},
+      {value: 'done', label: 'Done'},
+    ]}} onChange={onChange} />)
+
+    await user.type(screen.getByLabelText('Choice 1 value'), 'x')
+    await user.click(screen.getByRole('button', {name: 'Remove choice 2'}))
+    // What the dialog's focus trap does to the input that still has focus.
+    fireEvent.blur(screen.getByLabelText('Choice 1 value'))
+
+    expect(onChange).toHaveBeenCalledOnce()
+    expect(onChange).toHaveBeenLastCalledWith({options: [{value: 'openx', label: 'Open'}]})
+  })
+
   it('adopts a committed change that lands under an open draft', async () => {
     // A peer edit, an undo, or a preset switch that resets the config. The
     // same trade the name field records: the committed value wins over a
