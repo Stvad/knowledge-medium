@@ -51,6 +51,31 @@ export const LARGE_FANOUT_CONSUMERS = 1_000
 export const isLargeFanout = (consumerCount: number): boolean =>
   consumerCount >= LARGE_FANOUT_CONSUMERS
 
+/** One definition change at a time, from the moment it starts ASKING to the
+ *  moment its transaction commits.
+ *
+ *  Two gestures reach the gate from one user action — blurring the name field
+ *  and clicking the type picker in the same gesture does exactly that — and
+ *  each of them awaits a count before it opens its dialog, so both dialogs
+ *  queue and both can be confirmed. Everything downstream of that was being
+ *  patched one consequence at a time: two runs contending for one surface,
+ *  two confirmations stacked over each other, and a second transaction whose
+ *  staleness check is judged against a row the first has already changed.
+ *  Serialising the gesture removes the class instead: the second gets its
+ *  count, its confirmation and its run AFTER the first has committed, which
+ *  is also the only order in which its numbers are true.
+ *
+ *  Chained rather than rejected, because both changes are ones the user
+ *  asked for. `then(fn, fn)` so a change that throws does not strand every
+ *  change after it. */
+let queue: Promise<unknown> = Promise.resolve()
+
+export const queueDefinitionChange = <T>(change: () => Promise<T>): Promise<T> => {
+  const next = queue.then(change, change)
+  queue = next.then(() => undefined, () => undefined)
+  return next
+}
+
 /** Identity only — never inspected, so nothing can forge or guess one. */
 type RunOwner = symbol
 
@@ -94,6 +119,7 @@ export const propertyDefinitionFanout = (): PropertyDefinitionFanoutSnapshot | n
 /** Test helper — also drops the listeners, which no production caller may do. */
 export const __resetPropertyDefinitionFanoutForTests = (): void => {
   live = null
+  queue = Promise.resolve()
   listeners.clear()
 }
 
@@ -106,13 +132,14 @@ export interface PropertyDefinitionFanoutRun {
 
 /** Open the surface for a change the user has agreed to wait for.
  *
- *  FIRST-WINS, the same rule the migration's run slot uses, and for a reason
- *  "there is only one writer" does not cover: a run opens when the user
- *  CONFIRMS, which is before its transaction has the writer, so two confirmed
- *  gestures can both be waiting. Letting the second replace the first would
- *  point the first transaction's reports at the second property's name, and
- *  let the first's `end` take down a surface the second still needs. The
- *  loser's token owns nothing and every write it makes is a no-op. */
+ *  FIRST-WINS, the same rule the migration's run slot uses. DEFENCE IN DEPTH
+ *  now that {@link queueDefinitionChange} admits one change at a time: a
+ *  second run cannot be opened through the gate while the first is live, so
+ *  nothing reaches this branch from there. Kept, and kept pinned by the
+ *  surface's own tests, because the loser of that race is left with a handle
+ *  that can never publish — sound only while nothing is queueing behind it,
+ *  which is a property of the CALLER, and a store that silently let one
+ *  caller's run repoint another's is the wrong thing to leave lying around. */
 export const beginPropertyDefinitionFanout = (
   workspaceId: string, propertyName: string, total: number,
 ): PropertyDefinitionFanoutRun => {

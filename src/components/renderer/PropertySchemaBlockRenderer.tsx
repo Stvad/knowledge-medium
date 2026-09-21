@@ -25,6 +25,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { decodeRowProperty } from '@/data/rowProperty.js'
+import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
@@ -36,6 +37,7 @@ import { openDialog } from '@/utils/dialogs.js'
 import {
   beginPropertyDefinitionFanout,
   isLargeFanout,
+  queueDefinitionChange,
 } from '@/data/propertyDefinitionFanout.js'
 import {
   ConfirmDefinitionChangeDialog,
@@ -142,11 +144,11 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
    *  flag at every call site, permanently. DECLINED against the alternative
    *  of a fan-out that turns out large going unasked, whose outcome is the
    *  behaviour this gate replaced. */
-  const throughFanoutGate = useCallback(async (
+  const throughFanoutGate = useCallback((
     change: Omit<ConfirmDefinitionChangeDialogProps, 'blockCount'>,
     stillAsShown: (current: DefinitionFacts) => boolean,
     write: (tx: Tx) => Promise<void>,
-  ): Promise<boolean> => {
+  ): Promise<boolean> => queueDefinitionChange(async () => {
     // The definition's OWN workspace, never the active one — this renderer is
     // mounted per block. With no row loaded there is nothing to scope the
     // count to, and no gesture either: every control below renders from `data`.
@@ -169,7 +171,18 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     try {
       await block.repo.tx(async tx => {
         const current = await tx.get(block.id)
-        if (current === null || !stillAsShown(definitionFacts(current.properties))) return
+        // A row that is no longer a PUBLISHED definition is not one to edit,
+        // and a tombstone is the reachable case: `tx.get` hands one back, its
+        // bag still reads as it did, so comparing the bag alone would write
+        // through to a deleted row. The fan-out then skips it — the processor
+        // stops at a deleted `after` — and a later restore fans nothing out
+        // either, because by then both sides of the restore carry the edit.
+        // Consumers are left under the old name or encoding with nothing to
+        // re-derive them. `parsePropertyDefinitionMetadata` is the existing
+        // owner of that question, so it answers it here rather than a list of
+        // states kept in step by hand.
+        if (current === null || parsePropertyDefinitionMetadata(current) === null) return
+        if (!stillAsShown(definitionFacts(current.properties))) return
         await write(tx)
         wrote = true
       }, {scope: ChangeScope.BlockDefault, description: TX_DESCRIPTIONS[change.kind]})
@@ -183,7 +196,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       )
     }
     return wrote
-  }, [block, data])
+  }), [block, data])
 
   const decodedConfig = useMemo<unknown>(() => {
     if (!preset?.configCodec) return undefined
@@ -279,10 +292,17 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       // what this would silently drop. Compared as stored text: both sides
       // come from the same round trip, and a re-ordering that is only
       // cosmetically different costs a retry, not a lost write.
-      current => JSON.stringify(current.config) === JSON.stringify(persistedConfig),
+      //
+      // The PRESET too, which the other two gestures do not need: `encoded`
+      // was produced by THIS preset's `configCodec`, so a preset that moved
+      // under the dialog would store it against a codec that never saw it —
+      // and two presets sharing a default config make the config comparison
+      // alone pass while that happens.
+      current => current.presetId === presetId
+        && JSON.stringify(current.config) === JSON.stringify(persistedConfig),
       tx => tx.setProperty(block.id, presetConfigProp, encoded),
     )
-  }, [block, persistedConfig, preset, propertyName, throughFanoutGate])
+  }, [block, persistedConfig, preset, presetId, propertyName, throughFanoutGate])
 
   // Lazy delete-confirm: first click counts users; if any, ask for a
   // second click; second click (or no users) deletes. Confirm state

@@ -19,10 +19,10 @@ vi.mock('@/utils/toast.js', async importOriginal => ({
   ...await importOriginal<typeof import('@/utils/toast.js')>(),
   showError: vi.fn(),
 }))
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChangeScope } from '@/data/api'
-import { propertyNameProp } from '@/data/properties'
+import { presetIdProp, propertyNameProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -46,6 +46,7 @@ const showError = vi.mocked((await import('@/utils/toast.js')).showError)
 
 const WS = 'ws-fanout-gate'
 const SCHEMA_ID = 'user-schema'
+const REF_SCHEMA_ID = 'user-ref-schema'
 
 let sharedDb: TestDb
 let repo: Repo
@@ -77,6 +78,21 @@ beforeEach(async () => {
         types: ['property-schema'],
         'property-schema:name': 'test:myProp',
         'property-schema:preset': 'string',
+        'property-schema:config': {},
+      },
+    })
+    // The config gestures need a preset that CONTRIBUTES a config editor;
+    // `string` has none, so the type picker is all the other tests can drive.
+    await tx.create({
+      id: REF_SCHEMA_ID,
+      workspaceId: WS,
+      parentId: 'root',
+      orderKey: 'a2',
+      content: 'test:myRef',
+      properties: {
+        types: ['property-schema'],
+        'property-schema:name': 'test:myRef',
+        'property-schema:preset': 'ref',
         'property-schema:config': {},
       },
     })
@@ -127,11 +143,11 @@ const TestDialogHost = () => {
   })}</>
 }
 
-const renderSchema = () =>
+const renderSchema = (blockId = SCHEMA_ID) =>
   render(
     <RepoContext value={repo}>
       <AppRuntimeContextProvider value={runtime}>
-        <PropertySchemaContentRenderer block={repo.block(SCHEMA_ID)} />
+        <PropertySchemaContentRenderer block={repo.block(blockId)} />
         <TestDialogHost />
       </AppRuntimeContextProvider>
     </RepoContext>,
@@ -246,6 +262,23 @@ describe('renaming a property with many consumers', () => {
     expect(propertyDefinitionFanout()).toBeNull()
   })
 
+  it('writes nothing to a definition deleted while the user was deciding', async () => {
+    // `tx.get` hands back the TOMBSTONE and its bag still reads as it did, so
+    // comparing the bag alone writes through to a deleted row — which the
+    // fan-out then skips, and a later restore fans nothing out either
+    // because by then both sides of the restore carry the edit.
+    consumersAre(4_000)
+    renderSchema()
+    await renameTo('test:renamed')
+    await screen.findByRole('button', {name: 'Rename'})
+
+    await repo.tx(tx => tx.delete(SCHEMA_ID), {scope: ChangeScope.BlockDefault})
+    await user().click(screen.getByRole('button', {name: 'Rename'}))
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledOnce() })
+    expect(await storedName()).toBe('test:myProp')
+  })
+
   it('does not ask, or open a surface, for a change nobody will notice', async () => {
     consumersAre(LARGE_FANOUT_CONSUMERS - 1)
     const seen = recordFanoutRuns()
@@ -256,6 +289,68 @@ describe('renaming a property with many consumers', () => {
     await waitFor(async () => { expect(await storedName()).toBe('test:renamed') })
     expect(screen.queryByText(/Rename “test:myProp”/)).toBeNull()
     expect(seen).toEqual([])
+  })
+})
+
+describe('changing the options of a property with many consumers', () => {
+  it('refuses when the PRESET moved, even though the config still matches', async () => {
+    // The encoded config was produced by THIS preset's `configCodec`, so a
+    // preset that moved under the dialog would store it against a codec that
+    // never saw it — and two presets sharing a default config leave the
+    // config comparison alone passing while exactly that happens.
+    consumersAre(4_000)
+    renderSchema(REF_SCHEMA_ID)
+    const session = user()
+    screen.getByPlaceholderText('Add a block type…').focus()
+    await session.keyboard('page{Enter}')
+    await screen.findByRole('button', {name: 'Change options'})
+
+    // The peer's write: a different preset, and the config left as it was.
+    await repo.tx(tx => tx.setProperty(REF_SCHEMA_ID, presetIdProp, 'optional-ref'),
+      {scope: ChangeScope.BlockDefault})
+    await session.click(screen.getByRole('button', {name: 'Change options'}))
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledOnce() })
+    const row = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [REF_SCHEMA_ID],
+    )
+    const properties = JSON.parse(row.properties_json) as Record<string, unknown>
+    expect(properties['property-schema:config']).toEqual({})
+    expect(properties['property-schema:preset']).toBe('optional-ref')
+  })
+})
+
+describe('two changes confirmed from one gesture', () => {
+  it('runs them one at a time, each sized after the last one landed', async () => {
+    // Blurring the name field and clicking the type picker in one gesture
+    // reaches the gate twice, and each awaits a count before opening its
+    // dialog — so both dialogs would queue and both could be confirmed. Every
+    // consequence of that was being patched separately (two runs over one
+    // surface, a staleness check judged against a row the other change had
+    // already rewritten); serialising the gesture removes the class.
+    const count = consumersAre(4_000)
+    renderSchema()
+
+    // Dispatched synchronously, in one tick, because that is the shape: one
+    // user action, two gate entries. Two concurrent `userEvent` sessions
+    // would interleave their own pointer choreography and race instead.
+    fireEvent.change(nameInput(), {target: {value: 'test:renamed'}})
+    fireEvent.blur(nameInput())
+    fireEvent.change(screen.getByRole('combobox'), {target: {value: 'number'}})
+
+    // ONE dialog, not two stacked — and the second gesture has not even
+    // asked for its count yet.
+    await screen.findByRole('button', {name: 'Rename'})
+    expect(screen.queryByRole('button', {name: 'Change type'})).toBeNull()
+    expect(count).toHaveBeenCalledOnce()
+
+    await user().click(screen.getByRole('button', {name: 'Rename'}))
+
+    // Only once the rename has landed does the re-type ask, with a count
+    // taken after it.
+    expect(await screen.findByRole('button', {name: 'Change type'})).toBeTruthy()
+    expect(await storedName()).toBe('test:renamed')
+    expect(count).toHaveBeenCalledTimes(2)
   })
 })
 

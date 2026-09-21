@@ -64,6 +64,42 @@ describe('EnumOptionsConfigEditor', () => {
     expect(onChange).toHaveBeenLastCalledWith({options: [{value: 'done', label: 'Done'}]})
   })
 
+  it('carries a pending edit into a removal, as ONE write', async () => {
+    // Clicking the button blurs the input being typed in, so the naive pair
+    // is two writes from one action — and the second is judged against a
+    // definition row the first has already changed, which the gesture's
+    // staleness check refuses. One write, from the draft.
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<EnumOptionsConfigEditor value={{options: [
+      {value: 'open', label: 'Open'},
+      {value: 'done', label: 'Done'},
+    ]}} onChange={onChange} />)
+
+    await user.type(screen.getByLabelText('Choice 1 value'), 'x')
+    await user.click(screen.getByRole('button', {name: 'Remove choice 2'}))
+
+    expect(onChange).toHaveBeenCalledOnce()
+    expect(onChange).toHaveBeenLastCalledWith({options: [{value: 'openx', label: 'Open'}]})
+  })
+
+  it('commits normally again after a structural press that never clicked', async () => {
+    // The stand-down flag is cleared by an input taking focus, which is the
+    // only thing that can produce another blur — so a press abandoned with a
+    // drag cannot swallow the next commit.
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<EnumOptionsConfigEditor
+      value={{options: [{value: 'open', label: 'Open'}]}} onChange={onChange} />)
+
+    fireEvent.pointerDown(screen.getByRole('button', {name: 'Add choice'}))
+    await user.type(screen.getByLabelText('Choice 1 value'), 'x')
+    await user.tab()
+
+    expect(onChange).toHaveBeenCalledOnce()
+    expect(onChange).toHaveBeenLastCalledWith({options: [{value: 'openx', label: 'Open'}]})
+  })
+
   it('adopts a committed change that lands under an open draft', async () => {
     // A peer edit, an undo, or a preset switch that resets the config. The
     // same trade the name field records: the committed value wins over a
