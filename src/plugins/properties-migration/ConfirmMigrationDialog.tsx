@@ -10,8 +10,12 @@ import type { DialogContextProps } from '@/utils/dialogs.js'
 import { agree, pluralize } from '@/utils/pluralize'
 
 export interface ConfirmMigrationDialogProps {
-  /** Blocks the pass will visit — the same over-approximating predicate the
-   *  pass uses, hence "check" rather than "change". */
+  /** Blocks the pass will VISIT — the same over-approximating predicate the
+   *  pass uses, which selects every block carrying a property and cannot tell
+   *  which of them still owe children (only the JS registry can answer that).
+   *  So the copy must never spend it as a promise of work: on a re-run of a
+   *  finished migration this is the whole candidate set and the pass writes
+   *  nothing. */
   blockCount: number
   /** Already reads properties from child blocks, so the gesture backfills alone
    *  instead of switching the workspace over first — two materially different
@@ -71,9 +75,10 @@ export const ConfirmMigrationDialog = ({
         <p>
           {childBacked
             ? <>This workspace already reads properties from child blocks.
-                Properties written before that have none yet; this fills them in
-                across {blocks}, and leaves every value already stored as a block
-                exactly as it is.</>
+                Properties written before that have none yet; this goes through
+                {' '}{blocks} — every block carrying a property, however much of it is
+                already done — and fills in what is missing, leaving every value
+                already stored as a block exactly as it is.</>
             : <>This switches the workspace over to storing properties as child
                 blocks, then gives every <em>registered</em> property on {blocks}
                 {' '}the blocks it implies. Existing values are not changed or moved,
@@ -124,8 +129,9 @@ export const ConfirmMigrationDialog = ({
         <p className="text-destructive">
           {!childBacked && <>The switch cannot be undone from the app — it only ever
             moves forward, and reversing it is a hand-run database migration.{' '}</>}
-          Undo history for this workspace will be cleared on this device — undoing
-          an edit made before the migration would revert part of it. Undo is paused
+          Undo history for this workspace will be cleared on this device once this
+          writes anything — undoing an edit made before the migration would revert
+          part of it. Undo is paused
           everywhere while it runs, but a device that stays open keeps its own
           history, so reload your other tabs and devices afterwards.
         </p>

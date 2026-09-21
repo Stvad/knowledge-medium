@@ -1041,16 +1041,35 @@ describe('what a completed run tells the operator', () => {
     expect(message).not.toMatch(/systematic/i)
   })
 
-  it('says a converged re-run had nothing to do, not that it migrated 0 blocks', async () => {
-    // Wrote nothing AND refused nothing: the ordinary ending of every re-run
-    // once the graph has converged. "Migrated properties on 0 blocks." is the
-    // same sentence a totally broken run produces.
+  it('reports a run that found nothing left as such, not as work it did', async () => {
+    // The runbook's stop condition is "re-run until it reports nothing left",
+    // and `blocksMaterialized` cannot carry it: it counts blocks the pass
+    // ACCEPTED, so a re-run over a finished workspace reports the whole
+    // candidate set. Live numbers from the report — 249 blocks visited, no
+    // value moved — which rendered as "Migrated properties on 249 blocks."
     const {message, failed} = describeOutcome(
-      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 0})
+      RAN, {blocksMaterialized: 249, valuesMaterializedTotal: 0, unmigrated: 0})
 
     expect(failed).toBe(false)
     expect(message).toMatch(/nothing left to migrate/i)
-    expect(message).not.toMatch(/0 blocks/)
+    // The count is the whole defect: reporting it here is what made a finished
+    // migration read exactly like one starting over.
+    expect(message).not.toMatch(/249/)
+  })
+
+  it('does not claim the undo history for a re-run that wrote nothing', async () => {
+    // The runner only drops the stack for a batch that WROTE, so a no-op
+    // re-run comes back with `undoHistoryCleared: false` — and the banner must
+    // not charge the operator for a cost that was not taken.
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).not.toHaveBeenCalled()
+    expect(progressHandle.done).toHaveBeenCalledWith(
+      expect.stringMatching(/nothing left to migrate/i))
+    expect(progressHandle.done).toHaveBeenCalledWith(
+      expect.not.stringMatching(/undo history/i))
   })
 
   it('is not "systematic" when one bad key per block hid a mostly-good run', async () => {

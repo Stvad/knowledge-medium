@@ -4026,7 +4026,18 @@ export class Repo {
             // database handing the lock to a waiting replay and `this.tx`
             // resolving, which the harness cannot schedule into. Kept because
             // what it loses is a committed batch of a once-per-graph migration.
-            drop = this.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
+            //
+            // Only for a batch that WROTE. `meta.workspaceId` is pinned by the
+            // first write primitive and stays null otherwise, so this is the
+            // "did anything change" question asked at the one moment it is
+            // answerable — and a batch that wrote nothing leaves nothing an
+            // entry could be replayed over, so no history is owed for it. The
+            // re-run of a completed pass is the case that makes this worth
+            // asking: every batch commits and writes nothing, so clearing per
+            // batch charged the operator their whole stack for a no-op.
+            if (t.meta.workspaceId !== null) {
+              drop = this.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
+            }
             return value
           }, {
             scope: ChangeScope.BlockDefault,
@@ -4044,8 +4055,6 @@ export class Repo {
           // pre-pass state and reverts it when replayed, permanently once the
           // pass has recorded itself complete.
           //
-          // An over-approximation in one direction: a committed batch that
-          // happened to write nothing clears too, which errs toward clearing.
           // A mid-group `repo.undoGroup` composite is SPLIT rather than dropped
           // whole — its earlier constituents go and the later ones record onto
           // an empty stack — so one cmd-Z reverts only the tail. Accepted: the
@@ -4054,7 +4063,12 @@ export class Repo {
           //
           // This tab's manager only; a cross-tab clear was declined (#1007).
           drop?.finish()
-          if (!announcedUndoClear) {
+          // Under the same condition the drop is, so what the caller reports is
+          // what happened: `undoHistoryCleared` is the operator's only account
+          // of the cost, and a run that announced it over batches that wrote
+          // nothing made a completed migration indistinguishable from one
+          // starting over.
+          if (drop !== undefined && !announcedUndoClear) {
             announcedUndoClear = true
             undoHistoryCleared = true
             console.warn(

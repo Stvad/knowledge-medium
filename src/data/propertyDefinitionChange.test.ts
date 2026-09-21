@@ -946,6 +946,116 @@ describe('codec change', () => {
     expect(await cell('p')).toEqual({status: 'null'})
   })
 
+  describe('narrowing a Choice option set (#1080/#1088)', () => {
+    // The question this answers: now that an off-menu value is refused on the
+    // way in, what does REMOVING an option that blocks still use actually do?
+    // Not a silent mass unset — a config edit is a codec-inputs change, so it
+    // fans out, and the fan-out refuses rather than writing. Asserted rather
+    // than reasoned, because the alternative reading (every using block loses
+    // its value) is the one the fix would be unacceptable under.
+    const options = (...values: readonly string[]) =>
+      ({options: values.map(value => ({value, label: value}))})
+
+    /** Fence on the OPTION SET, not on the codec type. The definition is
+     *  created with preset `enum` and the default empty config, so
+     *  `awaitDefinition(..., 'enum')` is already satisfied before the config
+     *  write projects — under load the seed below then encodes against
+     *  `enum()` and throws, which is how this first reached CI. Ask the
+     *  registry the question the test depends on: does this codec accept the
+     *  value we are about to store? */
+    const awaitOptions = (repo: Repo, ...values: readonly string[]) =>
+      vi.waitFor(() => {
+        const codec = schemaFor(repo, 'status').codec
+        for (const value of values) codec.encode(value)
+      }, {timeout: 3000})
+
+    const setupChoice = async (...values: readonly string[]) => {
+      await seedWorkspace('children')
+      const repo = await setupDefinition('enum', undefined, 'enum')
+      await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options(...values)),
+        {scope: ChangeScope.BlockDefault})
+      await awaitOptions(repo, ...values)
+      return repo
+    }
+
+    it('REFUSES to remove an option while blocks still hold it, keeping the value', async () => {
+      const repo = await setupChoice('low', 'high')
+      const {valueRowId} = await seedProperty(repo, 'p', 'status', 'high')
+      expect(await cell('p')).toEqual({status: 'high'})
+
+      await expect(
+        repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options('low')),
+          {scope: ChangeScope.BlockDefault}),
+      ).rejects.toMatchObject({code: 'property.definition-change.unconvertible'})
+
+      // Rolled back whole: the value, its row, and the option set itself.
+      expect(await cell('p')).toEqual({status: 'high'})
+      expect(await rowContent(valueRowId)).toBe('high')
+      expect((await cell(FIELD_ID))[presetConfigProp.name]).toEqual(options('low', 'high'))
+    })
+
+    it('allows removing an option no block holds', async () => {
+      const repo = await setupChoice('low', 'high')
+      await seedProperty(repo, 'p', 'status', 'low')
+
+      await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options('low')),
+        {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+
+      expect(await cell('p')).toEqual({status: 'low'})
+    })
+
+    it('writes no value row when ADDING an option to rows in the LEGACY spelling', async () => {
+      // The case the test below cannot reach, because it seeds through the
+      // current writer. A child written before #1080 holds `"high"`, which the
+      // new codec still reads — so canonicalizing it would rewrite every
+      // consuming row for an edit that changes no value, in the user's own tx
+      // and straight up to sync. The value route keeps text that already reads
+      // back as the value it holds.
+      const repo = await setupChoice('low', 'high')
+      const {valueRowId} = await seedProperty(repo, 'p', 'status', 'high')
+      await setRawValueContent(valueRowId, '"high"')
+      await sharedDb.db.execute('UPDATE blocks SET updated_at = 0 WHERE id = ?', [valueRowId])
+
+      await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options('low', 'high', 'urgent')),
+        {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+
+      const after = await sharedDb.db.get<{updated_at: number}>(
+        'SELECT updated_at FROM blocks WHERE id = ?', [valueRowId])
+      expect(after.updated_at).toBe(0)
+      expect(await rowContent(valueRowId)).toBe('"high"')
+      expect(await cell('p')).toEqual({status: 'high'})
+    })
+
+    it('writes no value row when ADDING an option, since no spelling moves', async () => {
+      // Widening is a codec-inputs change too, so the fan-out runs over every
+      // consuming parent. It must not turn into a write per block: the
+      // spelling is identical, and the processor skips a row whose converted
+      // content equals its current content.
+      const repo = await setupChoice('low', 'high')
+      const {valueRowId} = await seedProperty(repo, 'p', 'status', 'high')
+      // `updated_at`, stamped to a SENTINEL, and not `user_updated_at`: the
+      // fan-out writes with `{skipMetadata: true}`, which deliberately leaves
+      // the user-facing stamp alone, so a redundant same-content rewrite is
+      // invisible there. `metadataPatch` still returns a fresh `updatedAt` on
+      // that path, so any write at all replaces the sentinel — and a sentinel
+      // rather than a captured value because a fast test stamps both in the
+      // same millisecond.
+      await sharedDb.db.execute('UPDATE blocks SET updated_at = 0 WHERE id = ?', [valueRowId])
+
+      await repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, options('low', 'high', 'urgent')),
+        {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+
+      const after = await sharedDb.db.get<{updated_at: number}>(
+        'SELECT updated_at FROM blocks WHERE id = ?', [valueRowId])
+      expect(after.updated_at).toBe(0)
+      expect(await rowContent(valueRowId)).toBe('high')
+      expect(await cell('p')).toEqual({status: 'high'})
+    })
+  })
+
   it('refuses an in-place RE-TYPE off a preset that loads, when consumers exist', async () => {
     // The values stay in the old encoding while the row names a codec nothing
     // can build. Dropping the edit silently is the trap: the preset can become
@@ -1555,11 +1665,11 @@ describe('the multi-value boundary (#1010)', () => {
 
   it('keeps a value that is literally the word `null` (#1030)', async () => {
     // The one end-to-end witness that `string` -> `list` carries the value
-    // rather than parsing it — `list` ("Options") being the only identity
-    // preset a person can pick. This value is chosen because getting it wrong
-    // changes the cell's TYPE and not just its spelling: the old codec
-    // REJECTS null, so the row held the literal word, and reading the text
-    // under a codec that accepts null makes it a JSON null (#1030).
+    // rather than parsing it — `list` being the only identity preset a person
+    // can pick. This value is chosen because getting it wrong changes the
+    // cell's TYPE and not just its spelling: the old codec REJECTS null, so
+    // the row held the literal word, and reading the text under a codec that
+    // accepts null makes it a JSON null (#1030).
     await seedWorkspace('children')
     const repo = await setupDefinition()
     const {valueRowId} = await seedProperty(repo, 'p', 'status', 'null')
@@ -1718,8 +1828,8 @@ describe('the multi-value boundary (#1010)', () => {
     // `string-list` and the generic `list` preset both report `codec.type ===
     // 'list'`, so a detector keyed on the type string sees no change. At member
     // grain they disagree about the child TEXT: `string-list` stores a string
-    // member verbatim (`x`), the generic one stores it as JSON (`"x"`). Left
-    // un-re-encoded, `x` is then read as JSON, `JSON.parse` fails, and the
+    // member verbatim (`x`), the generic one stores it as JSON (`"x"`).
+    // Left un-re-encoded, `x` is then read as JSON, `JSON.parse` fails, and the
     // projection drops every member — the whole list, silently.
     //
     // Two halves fix it. Keying on the codec's INPUTS SEES the change: the

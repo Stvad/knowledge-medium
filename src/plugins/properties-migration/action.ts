@@ -149,33 +149,43 @@ const describePassOutcome = (
   const {blocksMaterialized, valuesMaterializedTotal, unmigrated} = counts
   switch (result.outcome) {
     case 'ran':
-      // A run that wrote nothing and refused nothing had NOTHING TO DO, which
-      // is the ordinary ending of every re-run once the graph has converged —
-      // and the outcome "Migrated properties on 0 blocks." describes worst,
-      // since that sentence is also what a totally broken run produces.
-      if (valuesMaterializedTotal === 0 && unmigrated === 0) {
-        return {
-          message: 'Nothing left to migrate — every property value already has its blocks.',
-          failed: false,
-        }
-      }
       // On VALUES, not on blocks: `blocksMaterialized` counts blocks accepted in
       // FULL, so one junk key on every block reads as zero for a run that wrote
       // all the other keys. And on the RUN's total, not the last sweep's — the
       // converging sweep is by definition the one that found nothing left
       // pending, so a per-sweep zero is how every successful run ends.
+      //
+      // Both "wrote no values" endings answered together, so a third cannot
+      // slip between them: which one it is turns entirely on whether the values
+      // were REFUSED or were never there.
       if (valuesMaterializedTotal === 0) {
+        if (unmigrated > 0) {
+          return {
+            // Flagged, but deliberately NOT diagnosed as systematic. Nothing
+            // here can separate a broken first run from a converged graph
+            // whose only remaining cells are ones no codec will ever accept —
+            // both write nothing and refuse the same count — and the claim
+            // seam answers `minted | inherited | declined`, so "has this pass
+            // completed before" cannot be asked either.
+            message: `Nothing was migrated — all ${unmigrated.toLocaleString()} property ` +
+              'value(s) the pass tried kept their cell value. See the console for which; ' +
+              'a re-run reports the same ones until they are repaired.',
+            failed: true,
+          }
+        }
+        // The runbook's stop condition, and the only report that can carry it.
+        // `blocksMaterialized` counts blocks the pass ACCEPTED, so a re-run over
+        // a finished workspace reports the whole candidate set and reads exactly
+        // like the first run — which is how a completed migration became
+        // indistinguishable from one starting over.
+        //
+        // NOT "nothing was written": synthesis may have minted definitions on
+        // this same run, and the flip may have landed. This says only what it
+        // knows, which is that no VALUE needed moving.
         return {
-          // Flagged, but deliberately NOT diagnosed as systematic. Nothing
-          // here can separate a broken first run from a converged graph whose
-          // only remaining cells are ones no codec will ever accept — both
-          // write nothing and refuse the same count — and the claim seam
-          // answers `minted | inherited | declined`, so "has this pass
-          // completed before" cannot be asked either.
-          message: `Nothing was migrated — all ${unmigrated.toLocaleString()} property ` +
-            'value(s) the pass tried kept their cell value. See the console for which; ' +
-            'a re-run reports the same ones until they are repaired.',
-          failed: true,
+          message: 'Nothing left to migrate — every property value this pass can move ' +
+            'already has its blocks.',
+          failed: false,
         }
       }
       return {
