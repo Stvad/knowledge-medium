@@ -1,1 +1,1 @@
-import{Pd as e}from"../../../../../chunks/app-e6I-w-YX.js";export{e as Wikilink};
+import{Pd as e}from"../../../../../chunks/app-BQ55Wwf8.js";export{e as Wikilink};

@@ -1,1 +1,1 @@
-import{fs as e,ps as t}from"../../../chunks/app-e6I-w-YX.js";export{e as appendTagToBlocks,t as appendTagToContent};
+import{fs as e,ps as t}from"../../../chunks/app-BQ55Wwf8.js";export{e as appendTagToBlocks,t as appendTagToContent};

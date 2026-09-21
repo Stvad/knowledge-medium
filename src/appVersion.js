@@ -1,1 +1,1 @@
-import{Ca as e}from"../chunks/app-e6I-w-YX.js";export{e as appVersion};
+import{Ca as e}from"../chunks/app-BQ55Wwf8.js";export{e as appVersion};
