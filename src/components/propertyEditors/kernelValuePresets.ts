@@ -98,11 +98,14 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     // them (#1101). Its members are arbitrary JSON, which this editor has
     // never been able to write.
     //
-    // The label must stay distinguishable from the one below: both build a
-    // codec whose type is `list`, and a definition on this preset shows this
-    // entry alongside that one (`selectablePresets`' keepId).
+    // This label is read for BOTH presets, so it must stay true of both:
+    // every display resolves a presentation by CODEC TYPE, which is `list`
+    // either way, and the id-keyed map answers with this one (#1111). The two
+    // still need distinct labels, because a definition on this preset offers
+    // this entry beside the other (`selectablePresets`' keepId) — hence the
+    // qualifier sits on the one below, where it is read only in the picker.
     id: 'list',
-    label: 'List (JSON)',
+    label: 'List',
     Glyph: List,
     Editor: asEditor<unknown[]>(ListPropertyEditor),
     hideFromPicker: true,
@@ -112,7 +115,7 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     // own value child holding the text itself — `["a","b"]` in the tree as two
     // children `a` and `b`, not two children `"a"` and `"b"`.
     id: 'string-list',
-    label: 'List',
+    label: 'Text list',
     Glyph: List,
     Editor: asEditor<readonly string[]>(ListPropertyEditor),
   }),
