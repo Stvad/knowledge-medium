@@ -528,7 +528,7 @@ export const consumingParentIds = async (
   for (let i = 0; i < fieldIds.length; i += chunkSize) {
     const chunk = fieldIds.slice(i, i + chunkSize)
     const rows = await db.getAll<{parent_id: string | null}>(
-      `SELECT DISTINCT parent_id FROM blocks WHERE ${consumingParentWhereSql(chunk.length)}`,
+      `SELECT DISTINCT field.parent_id FROM ${consumingParentsFromSql(chunk.length)}`,
       [workspaceId, ...chunk],
     )
     for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
@@ -541,15 +541,32 @@ export const consumingParentIds = async (
  *  `parent_id IS NOT NULL` — a marked workspace-root row is user content, not
  *  a field row (§9 root half) — never re-key it.
  *
+ *  The OWNER must be live too, and that is the half a `deleted = 0` on the
+ *  field row does not cover: a soft-deleted block can still own live field
+ *  rows. Its bag is history and re-keying it is declined — the live set is
+ *  bounded by current usage while the tombstoned set is bounded by ALL-TIME
+ *  usage, so re-keying it would put an unbounded write in the user's own
+ *  transaction, and #1023 fixes the restore case where it belongs, at
+ *  restore. Asked HERE rather than skipped during the walk, which is where it
+ *  used to live: a count that included tombstones told the user their change
+ *  would rewrite blocks it then quietly passed over, and on a graph with a
+ *  long delete history that number is the one that decides whether they are
+ *  asked at all.
+ *
  *  Spelled once because two callers ask the same question for one gesture:
  *  {@link countConsumingParents} sizes the fan-out for the confirmation, and
  *  {@link consumingParentIds} then walks it. A drifted copy would show the
  *  user a number that is not the work they consented to. */
-const consumingParentWhereSql = (targetCount: number): string =>
-  `workspace_id = ?
-     AND reference_target_id IN (${Array.from({length: targetCount}, () => '?').join(', ')})
-     AND is_field_form = 1
-     AND deleted = 0 AND parent_id IS NOT NULL`
+const consumingParentsFromSql = (targetCount: number): string =>
+  `blocks field
+    WHERE field.workspace_id = ?
+      AND field.reference_target_id IN (${Array.from({length: targetCount}, () => '?').join(', ')})
+      AND field.is_field_form = 1
+      AND field.deleted = 0 AND field.parent_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM blocks owner
+         WHERE owner.id = field.parent_id AND owner.deleted = 0
+      )`
 
 /** How many parents a change to ONE definition would re-key.
  *
@@ -563,8 +580,8 @@ export const countConsumingParents = async (
   fieldId: string,
 ): Promise<number> => {
   const row = await db.getOptional<{count: number}>(
-    `SELECT COUNT(DISTINCT parent_id) AS count FROM blocks
-      WHERE ${consumingParentWhereSql(1)}`,
+    `SELECT COUNT(DISTINCT field.parent_id) AS count
+       FROM ${consumingParentsFromSql(1)}`,
     [workspaceId, fieldId],
   )
   return row?.count ?? 0
@@ -661,14 +678,10 @@ const applyToParent = async (
   lostParents: Set<string>,
 ): Promise<void> => {
   const parent = await ctx.tx.get(parentId)
-  // A soft-deleted parent can still own live field rows, so the query that
-  // found it does return one. Skipped by choice, not by necessity — `tx.update`
-  // accepts a tombstone: a deleted block's bag is history, and the live set is
-  // bounded by current usage while the tombstoned set is bounded by ALL-TIME
-  // usage, so re-keying it would put an unbounded write in the user's own
-  // transaction. The cost is that restoring such a block revives it under the
-  // old key; #1023 fixes that where it belongs, at restore.
-  if (parent === null || parent.deleted) return
+  // Tombstoned owners are excluded by `consumingParentsFromSql`, which is the
+  // one place that decides what a consumer is — so this is only the row
+  // vanishing between the probe and here.
+  if (parent === null) return
   const referenceLookups = sameTxReferenceTargetLookups(ctx.tx)
   const siblings = await ctx.tx.childrenOf(parentId, undefined)
   // Collected across EVERY change, then applied in two phases below — see the

@@ -2206,6 +2206,25 @@ describe('sizing the fan-out before it starts', () => {
     expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
   })
 
+  it('leaves out an owner that is itself deleted', async () => {
+    // `deleted = 0` on the field row does not cover the OWNER, and a
+    // tombstoned block can still hold live field rows. The fan-out declines
+    // to re-key those, so counting them tells the user their change will
+    // rewrite blocks it then passes over — and on a graph with a long delete
+    // history that number is what decides whether they are asked at all.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    await seedProperty(repo, 'p2', 'status', 'todo')
+    await repo.tx(tx => tx.delete('p2'), {scope: ChangeScope.BlockDefault})
+    // The precondition the assertion is about: the field row under the dead
+    // owner is still live, so only the owner's own state keeps it out.
+    expect(await liveFieldRow('p2', FIELD_ID)).toBeDefined()
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(1)
+    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toEqual(['p1'])
+  })
+
   it('stops counting a consumer whose field row is gone', async () => {
     await seedWorkspace('children')
     const repo = await setupDefinition()
