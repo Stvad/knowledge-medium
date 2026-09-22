@@ -547,11 +547,10 @@ export const consumingParentIds = async (
  *  bounded by current usage while the tombstoned set is bounded by ALL-TIME
  *  usage, so re-keying it would put an unbounded write in the user's own
  *  transaction, and #1023 fixes the restore case where it belongs, at
- *  restore. Asked HERE rather than skipped during the walk, which is where it
- *  used to live: a count that included tombstones told the user their change
- *  would rewrite blocks it then quietly passed over, and on a graph with a
- *  long delete history that number is the one that decides whether they are
- *  asked at all.
+ *  restore. Asked HERE rather than skipped during the walk, so that the
+ *  COUNT excludes them as well: on a graph with a long delete history that
+ *  number is what decides whether the user is asked at all, and it must not
+ *  promise blocks the change will pass over.
  *
  *  Spelled once because two callers ask the same question for one gesture:
  *  {@link countConsumingParents} sizes the fan-out for the confirmation, and

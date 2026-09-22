@@ -148,7 +148,7 @@ describe('the fan-out progress surface', () => {
 
     transactionStarts()
     report(1_000)
-    expect(screen.getByText('1,000 of 4,000 blocks updated')).toBeTruthy()
+    expect(screen.getByText('1,000 of 4,000 blocks checked')).toBeTruthy()
     expect(bar().getAttribute('aria-valuenow')).toBe('1000')
 
     // The last consumer is NOT yet the uninterruptible part: the checks that
@@ -168,9 +168,9 @@ describe('the fan-out progress surface', () => {
 
   it('stays up for a change in a workspace the user has navigated away from', async () => {
     // The fan-out holds the DATABASE-WIDE writer, so the workspace the user
-    // switches to is just as frozen as the one being renamed. A surface filed
-    // under the changing workspace would take the only account of that with
-    // it, which is what keying this store per workspace used to do.
+    // switches to is just as frozen as the one being renamed — and a surface
+    // filed under the changing workspace would take the only account of that
+    // with it.
     renderMount()
     await openRun('ws-somewhere-else')
 
@@ -179,7 +179,7 @@ describe('the fan-out progress surface', () => {
   })
 
   it('ignores a report belonging to another workspace\'s change', async () => {
-    // The run is found without the workspace now, so the workspace is what
+    // The run is not found BY workspace, so the workspace is what
     // matches a report to it: a fan-out in another workspace must not move
     // this one's numbers under this one's title.
     renderMount()
@@ -209,7 +209,7 @@ describe('the fan-out progress surface', () => {
     // And once it IS running, the same report is this run's.
     transactionStarts()
     report(500)
-    expect(screen.getByText('500 of 4,000 blocks updated')).toBeTruthy()
+    expect(screen.getByText('500 of 4,000 blocks checked')).toBeTruthy()
   })
 
   it('ignores a report from a change to a DIFFERENT definition', async () => {
@@ -242,7 +242,7 @@ describe('the fan-out progress surface', () => {
     report(500)
 
     expect(screen.getByText(/Updating blocks that use “status”/)).toBeTruthy()
-    expect(screen.getByText('500 of 4,000 blocks updated')).toBeTruthy()
+    expect(screen.getByText('500 of 4,000 blocks checked')).toBeTruthy()
 
     // The loser's `end` owns nothing, so it cannot close the live run either.
     act(() => { second.end() })
