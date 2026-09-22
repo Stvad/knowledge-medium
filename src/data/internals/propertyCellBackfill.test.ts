@@ -188,6 +188,7 @@ const machineryShape = async (ownerId: string) => {
 const makeCtx = (): WorkspaceBackfillContext => {
   const resolver = repo.propertySchemaResolverFor(WS)
   return {
+    syncWaitCount: 0,
     workspaceId: WS,
     getAll: (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined),
     tx: (fn, opts) => repo.tx(fn, {scope: ChangeScope.BlockDefault, skipUndo: true, ...opts}),
@@ -370,6 +371,46 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // the cursor; summing the sweeps would count it twice and report more
     // migrated blocks than the graph holds.
     expect(progress.blocksMaterializedTotal).toBe(ids.length)
+  })
+
+  it('rescans a zero-write sweep interrupted by sync without losing run totals', async () => {
+    const ids = await seedNotes(TWO_BATCHES)
+    await flip()
+    let syncWaitCount = 0
+    const ctx = {...makeCtx(), get syncWaitCount() { return syncWaitCount }}
+    let arrived = false
+    const progress = await runPropertyCellBackfill(ctx, async p => {
+      if (p.sweeps !== 2 || arrived) return
+      expect(p.valuesMaterialized).toBe(0)
+      expect(p.blocksScanned).toBeGreaterThan(0)
+      expect(p.blocksScanned).toBeLessThan(ids.length)
+      arrived = true
+      // An owner-only sync arrival behind the converging scan's cursor.
+      await rawCell(ids[0]!, {'demo:note': ids[0], 'demo:extra': 'arrived during sync'})
+      syncWaitCount += 1
+    })
+
+    expect(arrived).toBe(true)
+    expect(await fieldRowsOf(ids[0]!)).toHaveLength(2)
+    expect(progress.sweeps).toBe(4)
+    expect(progress.blocksMaterializedTotal).toBe(ids.length)
+    expect(progress.valuesMaterializedTotal).toBe(ids.length + 1)
+  })
+
+  it('bounds rescans when sync keeps interrupting zero-write sweeps', async () => {
+    await create('already-migrated', {'demo:note': 'note'})
+    await flip()
+    await runPropertyCellBackfill(makeCtx())
+    let syncWaitCount = 0
+    const ctx = {...makeCtx(), get syncWaitCount() { return syncWaitCount }}
+    const sweeps: number[] = []
+
+    await expect(runPropertyCellBackfill(ctx, p => {
+      expect(p.valuesMaterialized).toBe(0)
+      sweeps.push(p.sweeps)
+      syncWaitCount += 1
+    })).rejects.toThrow('gave up after 4 sweeps')
+    expect(sweeps).toEqual([1, 2, 3, 4])
   })
 
   it('migrates an owner whose existing field row belongs to a different property', async () => {

@@ -636,8 +636,8 @@ const sweep = async (
  * workspace's property-child row count: the live maintainers move that too, so
  * a block gaining a property while the pass ran read as "not converged", and
  * four sweeps of ordinary editing ended the run with a give-up on a workspace
- * that was already complete. The pending set only SHRINKS, so a sweep that
- * found nothing pending has nothing left to find.
+ * that was already complete. A sync wait can admit cells behind the cursor, so
+ * only an uninterrupted zero-write sweep establishes convergence.
  */
 export const runPropertyCellBackfill = async (
   ctx: WorkspaceBackfillContext,
@@ -658,8 +658,9 @@ export const runPropertyCellBackfill = async (
     progress.failureCount = 0
     progress.unresolvedNames = []
     progress.unresolvedCount = 0
+    const syncWaitCount = ctx.syncWaitCount
     await sweep(ctx, progress, changedOwners, async () => { await onProgress?.(progress) })
-    if (progress.valuesMaterialized === 0) {
+    if (progress.valuesMaterialized === 0 && ctx.syncWaitCount === syncWaitCount) {
       // One last notification: everything a subscriber knows arrives through
       // `onProgress`, which otherwise fires only from inside a batch — so the
       // surface an operator watches never saw the converging sweep's counts.
@@ -668,9 +669,8 @@ export const runPropertyCellBackfill = async (
     }
     if (progress.sweeps >= MAX_SWEEPS) {
       throw new Error(
-        `[${PROPERTY_CELL_BACKFILL_ID}] gave up after ${MAX_SWEEPS} sweeps: cell keys with ` +
-        'no children kept appearing, which means the workspace is changing faster than the ' +
-        'pass runs. Nothing is lost — run it again when it is idle. ' +
+        `[${PROPERTY_CELL_BACKFILL_ID}] gave up after ${MAX_SWEEPS} sweeps: properties or sync ` +
+        'kept changing before the scan could converge. Nothing is lost — run it again when it is idle. ' +
         'Completion was NOT recorded.',
       )
     }

@@ -153,6 +153,10 @@ export interface BackfillCompletionClaim {
     backfillId: string,
     opts?: {reclaimCompleted?: boolean},
   ): Promise<ClaimAttempt>
+  /** Read the live claim through the writing transaction so a sync drain
+   *  cannot replace it between this check and the guarded batch. Never creates,
+   *  restores, or reclaims a missing or completed claim. */
+  stillOwned(tx: Pick<Tx, 'get'>, workspaceId: string, backfillId: string): Promise<boolean>
   /** The claimed run finished. Record completion where every device sees it. */
   markComplete(workspaceId: string, backfillId: string): Promise<void>
   /** The claimed run aborted without finishing (a transient precondition, a
@@ -202,6 +206,9 @@ export interface WorkspaceBackfill {
 }
 
 export interface WorkspaceBackfillContext {
+  /** Successful sync waits during this run. A scan spanning a change in this
+   *  count must revisit its candidates before declaring convergence. */
+  readonly syncWaitCount: number
   /** The single workspace this run is scoped to. Every read and write MUST be
    *  filtered to it — a backfill never touches another workspace (that was the
    *  cross-workspace cold-start hazard the original raw backfill had). */
