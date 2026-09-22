@@ -1,0 +1,1 @@
+import{Uw as e,Ww as t}from"../chunks/app-BN-JnBCx.js";export{e as checkForAppUpdate,t as registerServiceWorker};

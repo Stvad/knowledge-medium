@@ -1,0 +1,1 @@
+import{Xk as e,Zk as t}from"../../chunks/app-BN-JnBCx.js";export{e as defineVariant,t as defineVariantFacet};

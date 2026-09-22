@@ -1,0 +1,1 @@
+import{Zg as e}from"../../../chunks/app-BN-JnBCx.js";export{e as blockEditingContentRenderer};

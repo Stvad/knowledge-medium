@@ -1,0 +1,1 @@
+import{Gl as e,Ul as t,Wl as n}from"../../chunks/app-BN-JnBCx.js";export{t as NAMES_IN_A_SENTENCE,n as describeNames,e as firstFew};

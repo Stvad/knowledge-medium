@@ -1,0 +1,1 @@
+import{LA as e}from"../../../chunks/app-BN-JnBCx.js";export{e as AddPropertyForm};

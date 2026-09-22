@@ -1,0 +1,1 @@
+import{Ca as e}from"../chunks/app-BN-JnBCx.js";export{e as appVersion};

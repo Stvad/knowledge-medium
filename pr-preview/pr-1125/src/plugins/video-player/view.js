@@ -1,0 +1,1 @@
+import{Bm as e,Vm as t,zm as n}from"../../../chunks/app-BN-JnBCx.js";export{n as DEFAULT_VIDEO_NOTES_PANE_RATIO,e as VIDEO_NOTES_VIEW_MODE,t as videoNotesPaneRatioProp};

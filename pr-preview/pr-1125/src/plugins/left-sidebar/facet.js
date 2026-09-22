@@ -1,0 +1,1 @@
+import{__ as e,v_ as t}from"../../../chunks/app-BN-JnBCx.js";export{e as isLeftSidebarSectionContribution,t as leftSidebarSectionsFacet};

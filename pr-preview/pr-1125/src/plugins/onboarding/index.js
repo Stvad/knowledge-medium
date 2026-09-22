@@ -1,0 +1,1 @@
+import{ah as e,ch as t,oh as n,qm as r,sh as i}from"../../../chunks/app-BN-JnBCx.js";export{n as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,r as onboardingPlugin,e as seedTutorial};

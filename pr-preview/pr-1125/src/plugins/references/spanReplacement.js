@@ -1,0 +1,1 @@
+import{bI as e}from"../../../chunks/app-BN-JnBCx.js";export{e as preferredSpanReplacement};

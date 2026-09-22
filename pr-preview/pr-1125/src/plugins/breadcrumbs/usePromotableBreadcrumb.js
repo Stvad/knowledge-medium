@@ -1,0 +1,1 @@
+import{Vg as e}from"../../../chunks/app-BN-JnBCx.js";export{e as usePromotableBreadcrumb};

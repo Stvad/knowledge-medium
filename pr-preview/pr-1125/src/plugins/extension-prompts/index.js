@@ -1,0 +1,1 @@
+import{hw as e,mw as t}from"../../../chunks/app-BN-JnBCx.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

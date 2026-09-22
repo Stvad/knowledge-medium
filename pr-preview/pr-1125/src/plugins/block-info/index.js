@@ -1,0 +1,1 @@
+import{xu as e}from"../../../chunks/app-BN-JnBCx.js";export{e as blockInfoPlugin};

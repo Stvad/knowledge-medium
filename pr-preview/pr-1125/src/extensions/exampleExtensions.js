@@ -1,0 +1,1 @@
+import{GC as e,WC as t}from"../../chunks/app-BN-JnBCx.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

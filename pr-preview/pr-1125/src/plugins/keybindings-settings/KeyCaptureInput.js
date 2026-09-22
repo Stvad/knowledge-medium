@@ -1,0 +1,1 @@
+import{ft as e}from"../../../chunks/app-BN-JnBCx.js";export{e as KeyCaptureInput};
