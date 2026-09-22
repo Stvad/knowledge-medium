@@ -1,1 +1,1 @@
-import{ic as e,rc as t}from"../../../chunks/app-B4HjrbyU.js";export{t as extractRoamTodoMarker,e as stripRoamTodoContent};
+import{ic as e,rc as t}from"../../../chunks/app-BqMu0Xdu.js";export{t as extractRoamTodoMarker,e as stripRoamTodoContent};

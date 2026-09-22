@@ -1,1 +1,1 @@
-import{RF as e,zF as t}from"../../../chunks/app-B4HjrbyU.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};
+import{RF as e,zF as t}from"../../../chunks/app-BqMu0Xdu.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};
