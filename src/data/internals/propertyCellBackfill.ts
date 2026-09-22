@@ -189,10 +189,17 @@ const SURVEY_SQL = `
  * are identical; past it such a cell is junk left under a key whose children
  * moved on, and the cell is still a read surface, so naming it is right.
  *
- * A "NO KNOWN BAD CELLS" GATE, NOT A PROOF: a bad cell can arrive between this
- * and the flip. That is the hole `scanSyncGap` covers for the key survey, and
- * the pass is a fixpoint besides — so the answer to one arriving late is the
- * next run, not a lock held across a user-length dialog.
+ * A "NO KNOWN BAD CELLS" GATE, NOT A PROOF, and its pages are not one instant
+ * either: it walks by cursor, so a row already read can change while a later
+ * page is being read, and a value can arrive after the last page and before
+ * the flip. DECLINED, a snapshot or write barrier spanning the scan: it would
+ * have to hold off the sync drain and the user's own edits across a walk of
+ * every property bag plus a server round trip. What covers the gap instead is
+ * that the pass is a FIXPOINT which reports what it could not carry, and that
+ * at `children` the cell is still dual-written and still the read surface — so
+ * a late arrival is named by the next run rather than lost, until the cell
+ * end-state (#1012) retires the cell. That is also the hole `scanSyncGap`
+ * covers for the key survey.
  *
  * Keys that resolve NO schema are out of scope: they have no codec to refuse
  * anything, and {@link flipBlockedBySynthesis} blocks the flip over every one

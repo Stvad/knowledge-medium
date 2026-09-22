@@ -423,18 +423,6 @@ const migrateUnderClaim = async (
     // Assumes no workspace has run an earlier build's pass, so none holds
     // stale property machinery. Owner's call not to carry a check for a state
     // that cannot exist.
-    // The second of exactly TWO active-workspace checks, not a rule applied
-    // at every await. Each guards a step the user cannot take back: the
-    // post-dialog one because a confirmation is a user-length pause, this one
-    // because the flip is fleet-wide and irreversible. Synthesis deliberately
-    // has neither — it writes dormant blocks scoped to the workspace named in
-    // its own argument, so navigating away withdraws nothing. Do not add a
-    // third.
-    if (repo.activeWorkspaceId !== workspaceId) {
-      banner.fail('Stopped before switching this workspace over: a different workspace ' +
-        'is open now. Nothing was switched.' + undoNote(undoCleared))
-      return
-    }
     // The cell survey AGAIN, and this is the one that guards the flip — the
     // pre-dialog answer was taken across a user-length pause, in which a sync
     // arrival or a raw write can land a value no codec carries. Past the flip
@@ -446,10 +434,17 @@ const migrateUnderClaim = async (
     // {@link ClaimedMigration}). This asks one question, it can only REFUSE,
     // and it changes nothing the confirmation promised.
     //
-    // It shrinks the window rather than closing it — the claim holds off other
-    // devices, not sync or this user's own edits, so a cell arriving between
-    // this and the PATCH is still possible. Bounded by one scan instead of by
-    // how long the dialog sat open, and only ever paid on the flip path.
+    // It shrinks the window rather than closing it — see the survey's own
+    // declaration for why closing it is not on offer. Bounded by one scan
+    // instead of by how long the dialog sat open, and only ever paid on the
+    // flip path.
+    //
+    // ABOVE the active-workspace check below, not under it, though that costs
+    // a wasted scan when the user has navigated away. That check earns its
+    // keep by being the LAST thing before the flip, and a paginated walk of
+    // every property bag is exactly the await that would stop it being that.
+    // The alternative — a third check, after this — is what its own comment
+    // refuses.
     let stillCarried: PropertyCellRejectionSurvey
     try {
       stillCarried = await surveyPropertyCellRejections(repo, workspaceId)
@@ -468,6 +463,19 @@ const migrateUnderClaim = async (
     if (arrivedBlocked !== null) {
       banner.fail(`Stopped before switching this workspace over. ${arrivedBlocked}` +
         undoNote(undoCleared))
+      return
+    }
+    // The second of exactly TWO active-workspace checks, and the LAST thing
+    // between here and the flip — anything awaited below it reopens the window
+    // it closes. Not a rule applied at every await: each guards a step the
+    // user cannot take back — the post-dialog one because a confirmation is a
+    // user-length pause, this one because the flip is fleet-wide and
+    // irreversible. Synthesis deliberately has neither — it writes dormant
+    // blocks scoped to the workspace named in its own argument, so navigating
+    // away withdraws nothing. Do not add a third.
+    if (repo.activeWorkspaceId !== workspaceId) {
+      banner.fail('Stopped before switching this workspace over: a different workspace ' +
+        'is open now. Nothing was switched.' + undoNote(undoCleared))
       return
     }
     banner.update('Switching this workspace to property blocks…')

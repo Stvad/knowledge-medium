@@ -756,24 +756,26 @@ describe('the stored-cell-value gate', () => {
     expect(beginHistoryDrop).not.toHaveBeenCalled()
   })
 
-  it('does not re-survey when the workspace changed under the claim', async () => {
-    // Cost ordering, the same rule the pre-dialog gate follows: the cheap
-    // check that stops the gesture runs before a full walk of every property
-    // bag in the workspace.
-    const {repo, workspaceViewGap} = makeRepo()
-    // On the SECOND fitness read, so the switch lands past the post-dialog
-    // check and the pre-flip guards are the next thing to act.
-    let reads = 0
-    workspaceViewGap.mockImplementation(async () => {
-      if (++reads === 2) (repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
-      return null
-    })
+  it('still catches a workspace switched DURING the pre-flip re-survey', async () => {
+    // The re-survey is a paginated walk of every property bag, so it is a
+    // multi-second suspension point — and dropped BELOW the active-workspace
+    // check it would reopen the exact window that check exists to close, with
+    // the flip the next thing to run. It sits above it instead, which costs a
+    // wasted scan on this path and keeps the check the LAST thing before the
+    // flip. A third check is what that check's own comment refuses.
+    const {repo, runPass} = makeRepo()
+    surveyCells.mockResolvedValueOnce({keys: [], cells: 0, blocksScanned: 7})
+      .mockImplementation(async () => {
+        ;(repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
+        return {keys: [], cells: 0, blocksScanned: 7}
+      })
 
     await invoke(repo)
 
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/different workspace is open now/i))
-    expect(surveyCells).toHaveBeenCalledTimes(1)
   })
 
   it('re-surveys under the claim, not against the pre-dialog snapshot', async () => {
