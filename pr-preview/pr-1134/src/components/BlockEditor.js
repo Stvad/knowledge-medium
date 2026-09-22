@@ -1,1 +1,1 @@
-import{DO as e}from"../../chunks/app-BBPmx0mi.js";export{e as BlockEditor};
+import{DO as e}from"../../chunks/app-C0eHTpLR.js";export{e as BlockEditor};
