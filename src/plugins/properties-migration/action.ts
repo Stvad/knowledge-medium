@@ -19,6 +19,7 @@ import {
   STRANDED_CLAIM_RECOVERY,
 } from '@/data/internals/graphBackfillClaim'
 import { getClientId } from '@/utils/clientId'
+import { NAMES_IN_A_SENTENCE, describeNames } from '@/utils/nameList'
 import { readIsChildBackedWorkspace, readWorkspaceOwnerId } from '@/data/workspaceSchema'
 import {
   flipRejectionProvesNoWrite,
@@ -29,7 +30,9 @@ import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
-import { ConfirmMigrationDialog } from './ConfirmMigrationDialog.tsx'
+import {
+  ConfirmMigrationDialog, type NamedPropertyKeys,
+} from './ConfirmMigrationDialog.tsx'
 
 /** The runner's reasons come from several places and only some end in a
  *  period, which is how "…partially materialized graph.. Try again" happened. */
@@ -115,12 +118,14 @@ const FLIP_LANDED =
   'This workspace was switched to property blocks — that part is done, and it ' +
   'applies to everyone in the workspace.'
 
-/** The first few keys, for a sentence a person reads. The console gets the
- *  whole (capped) list; a toast naming fifty property keys is not read at all. */
-const namesForMessage = (names: readonly string[]): string => {
-  const shown = names.slice(0, 3).join(', ')
-  return names.length > 3 ? `${shown} and ${names.length - 3} more` : shown
-}
+/** A plan category, as the confirmation reports it: the exact count, plus the
+ *  keys the copy will name. Capped here rather than in the dialog so a
+ *  workspace with thousands of orphan keys hands a React prop a handful of
+ *  strings and not a copy of the plan. */
+const namedKeys = (entries: readonly {key: string}[]): NamedPropertyKeys => ({
+  count: entries.length,
+  names: entries.slice(0, NAMES_IN_A_SENTENCE).map(entry => entry.key),
+})
 
 /** One sticky worklist, however many kinds of repair it names. Two toasts
  *  under one id would mean the second silently replacing the first. */
@@ -186,7 +191,7 @@ const describePassOutcome = (
   // list of repairs that never happened.
   const unresolvedNote = unresolved > 0
     ? `${unresolved.toLocaleString()} property value(s) were skipped because no `
-      + `registered schema resolves their key (${namesForMessage(unresolvedNames)}) — `
+      + `registered schema resolves their key (${describeNames(unresolvedNames)}) — `
       + 'they still have no blocks. Register or re-enable whatever defines those keys, '
       + 'then run this again.'
     : undefined
@@ -681,15 +686,23 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // candidates are then keys that stay cell-only, NOT keys about to be given
     // a definition — counting them as the latter would have the dialog promise
     // something the gesture then skips.
-    const willSynthesize = plan.refusal === null ? plan.candidates.length : 0
+    const refusal = plan.refusal
+    const willSynthesize = refusal === null ? plan.candidates.length : 0
     const blockCount = await countPropertyCellBackfillCandidates(
       (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId,
     )
     if (!await openDialog(ConfirmMigrationDialog, {
       blockCount, childBacked,
-      synthesizedKeys: willSynthesize,
-      unfixableKeys: plan.candidates.length - willSynthesize + plan.blockers.length,
-      repairableKeys: plan.brokenDefinitions.length,
+      synthesizedKeys: namedKeys(refusal === null ? plan.candidates : []),
+      // Those same candidates, under the heading that is true of them once the
+      // refusal has taken minting off the table. A definition COULD back them;
+      // what the refusal says is that this DEVICE will not mint one — a repair
+      // the operator can make, which `unfixableKeys` would call permanent.
+      stranded: refusal !== null && plan.candidates.length > 0
+        ? {...namedKeys(plan.candidates), reason: refusal}
+        : null,
+      unfixableKeys: namedKeys(plan.blockers),
+      repairableKeys: namedKeys(plan.brokenDefinitions),
     })) return
     // Re-read AFTER the dialog. A confirmation is a user-length pause, and the
     // workspace pinned before it may not be the open one now — the runner's

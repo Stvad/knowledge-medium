@@ -7,7 +7,22 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { DialogContextProps } from '@/utils/dialogs.js'
+import { describeNames } from '@/utils/nameList'
 import { agree, pluralize } from '@/utils/pluralize'
+
+/** A category of property key this screen reports.
+ *
+ *  Named and not merely counted: this asks consent for a one-way, fleet-wide
+ *  change, and a bare "N keys cannot be migrated" leaves `audit-properties` as
+ *  the only way to find out which ones — which is exactly the moment the
+ *  operator has no reason to go looking. */
+export interface NamedPropertyKeys {
+  /** Exact, workspace-wide. */
+  count: number
+  /** The first few keys, capped by the caller. `count` stays exact, so the
+   *  copy can say how many are not named. */
+  names: readonly string[]
+}
 
 export interface ConfirmMigrationDialogProps {
   /** Blocks the pass will VISIT — the same over-approximating predicate the
@@ -24,19 +39,35 @@ export interface ConfirmMigrationDialogProps {
   /** Keys nothing declares, which the gesture will give a definition before it
    *  migrates anything (§9). Named here because it is the one part that
    *  invents something rather than moving what is already there. */
-  synthesizedKeys: number
-  /** Keys no definition can ever carry, or that this device will not mint for.
-   *  On an un-flipped workspace the gesture refuses before reaching the dialog,
-   *  so seeing a number here means the workspace is already flipped. */
-  unfixableKeys: number
+  synthesizedKeys: NamedPropertyKeys
+  /** Keys no definition can ever carry. On an un-flipped workspace the gesture
+   *  refuses before reaching the dialog, so seeing a number here means the
+   *  workspace is already flipped. */
+  unfixableKeys: NamedPropertyKeys
+  /** Keys that COULD be defined but that this DEVICE will not mint for, with
+   *  the reason — which is a fact about the device, not about the key. Kept
+   *  apart from `unfixableKeys` for the reason `repairableKeys` is: the repair
+   *  is real and cheap, and filing it under "cannot be defined at all" is how
+   *  it is missed. Null when this device will mint. */
+  stranded: (NamedPropertyKeys & {reason: string}) | null
   /** Keys whose definition block exists but is BROKEN — usually a preset from
    *  an extension that is not loaded on this device, in which case the
    *  definition is fine and enabling the provider fixes it. Kept separate from
    *  `unfixableKeys` because calling a repairable problem permanent on a
    *  one-way consent screen is how the one cheap moment to repair it is
    *  missed. */
-  repairableKeys: number
+  repairableKeys: NamedPropertyKeys
 }
+
+/** The keys behind the count just given. Subordinate to it on purpose: the
+ *  count is what the consent decision turns on, and a screen that opens with a
+ *  list of property names is one nobody finishes reading. Quoted (through
+ *  {@link describeNames}) because a property key may contain a comma. */
+const KeyNames = ({keys}: {keys: NamedPropertyKeys}) => (
+  <span className="mt-1 block font-mono text-xs text-muted-foreground">
+    {describeNames(keys.names, keys.count)}
+  </span>
+)
 
 /** Confirmation for the one-time properties migration.
  *
@@ -59,6 +90,7 @@ export const ConfirmMigrationDialog = ({
   childBacked,
   synthesizedKeys,
   unfixableKeys,
+  stranded,
   repairableKeys,
   resolve,
   cancel,
@@ -85,8 +117,9 @@ export const ConfirmMigrationDialog = ({
                 and a property with no blocks yet keeps being read from where it
                 is now — so the switch itself changes nothing you can see.</>}
         </p>
-        {synthesizedKeys > 0 && <p>
-          {properties(synthesizedKeys)} in this workspace {agree(synthesizedKeys, 'has', 'have')}
+        {synthesizedKeys.count > 0 && <p>
+          {properties(synthesizedKeys.count)} in this workspace
+          {' '}{agree(synthesizedKeys.count, 'has', 'have')}
           {' '}no definition — written by an importer, a raw write, or a plugin that is no
           longer installed. They get one created for them first, with a type guessed
           from the values already stored, and it shows up in the property panel so you can
@@ -98,19 +131,29 @@ export const ConfirmMigrationDialog = ({
           afterwards leaves two definitions competing, or — for an extension that declares
           properties in code rather than as blocks — makes its writes start failing. Run{' '}
           <code>audit-properties</code> first if you are not sure who wrote them.
+          <KeyNames keys={synthesizedKeys} />
         </p>}
-        {repairableKeys > 0 && <p className="text-destructive">
-          {properties(repairableKeys)} {agree(repairableKeys, 'has', 'have')} a definition
-          this device cannot read — most often one whose type comes from an extension that
-          is not enabled here, in which case enabling it is the whole fix. Repair
-          {' '}{agree(repairableKeys, 'it', 'them')} first if you can: migrating now leaves
-          {' '}{agree(repairableKeys, 'it', 'them')} behind, and this is the cheap moment.
-          Run <code>audit-properties</code> to see which.
+        {repairableKeys.count > 0 && <p className="text-destructive">
+          {properties(repairableKeys.count)} {agree(repairableKeys.count, 'has', 'have')} a
+          definition this device cannot read — most often one whose type comes from an
+          extension that is not enabled here, in which case enabling it is the whole fix.
+          Repair {agree(repairableKeys.count, 'it', 'them')} first if you can: migrating now
+          leaves {agree(repairableKeys.count, 'it', 'them')} behind, and this is the cheap
+          moment.
+          <KeyNames keys={repairableKeys} />
         </p>}
-        {unfixableKeys > 0 && <p>
-          {properties(unfixableKeys)} cannot be given a definition at all and will stay as
-          {' '}{agree(unfixableKeys, 'it is', 'they are')}. Run{' '}
-          <code>audit-properties</code> to see which and why.
+        {stranded !== null && <p>
+          {properties(stranded.count)} {agree(stranded.count, 'has', 'have')} no definition
+          and this device will not create one — {stranded.reason}. Nothing here changes
+          {' '}{agree(stranded.count, 'it', 'them')}; fix that and run this again to bring
+          {' '}{agree(stranded.count, 'it', 'them')} along.
+          <KeyNames keys={stranded} />
+        </p>}
+        {unfixableKeys.count > 0 && <p>
+          {properties(unfixableKeys.count)} cannot be given a definition at all and will stay
+          as {agree(unfixableKeys.count, 'it is', 'they are')}. Run{' '}
+          <code>audit-properties</code> to see why.
+          <KeyNames keys={unfixableKeys} />
         </p>}
         <p>
           {!childBacked && <>The switch applies to everyone in the workspace, so

@@ -923,7 +923,66 @@ describe('the orphan-definition step', () => {
     expect(applySynthesis).not.toHaveBeenCalled()
     // And the dialog does not promise the minting it is about to skip.
     expect(openDialog).toHaveBeenCalledWith(expect.anything(),
-      expect.objectContaining({synthesizedKeys: 0, unfixableKeys: 2}))
+      expect.objectContaining({synthesizedKeys: {count: 0, names: []}}))
+  })
+
+  it('files keys a REFUSED device skips as stranded, not as impossible', async () => {
+    // These are keys a definition could back — what the refusal says is that
+    // this DEVICE will not mint one, which the operator can fix. Reported as
+    // "cannot be given a definition at all" they read as permanent, which is
+    // the `repairableKeys` mistake with a different cause.
+    planSynthesis.mockResolvedValue(
+      {...plan(2), refusal: 'this device holds no content key for the encrypted workspace'})
+    const {repo} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      unfixableKeys: {count: 0, names: []},
+      stranded: {
+        count: 2,
+        names: ['demo:orphan0', 'demo:orphan1'],
+        reason: 'this device holds no content key for the encrypted workspace',
+      },
+    }))
+  })
+
+  it('raises no stranded category when the refusal strands nothing', async () => {
+    // A refused device whose keys all already have definitions. The refusal is
+    // real — the flip still cannot happen here — but there is no key to name,
+    // and a paragraph about "0 properties" is noise on a consent screen.
+    planSynthesis.mockResolvedValue({...plan(0), refusal: 'this device has no local row'})
+    const {repo} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({stranded: null}))
+  })
+
+  it('names the keys behind every count it shows, and caps what it hands over', async () => {
+    // The whole point of the screen: it asks consent for a one-way, fleet-wide
+    // change, and a bare count sends the operator to the CLI audit to find out
+    // which keys — at the one moment they have no reason to go looking. Capped
+    // at the construction site so a workspace with thousands of orphan keys
+    // hands a React prop a handful of strings rather than a copy of the plan.
+    planSynthesis.mockResolvedValue({
+      ...plan(5),
+      blockers: [{key: 'demo:hopeless', cells: 2, reason: 'reads as a block reference'}],
+      brokenDefinitions: [{key: 'demo:broken', cells: 3}],
+    })
+    const {repo} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      // Count exact, names a sample — so the copy can say how many it left out.
+      synthesizedKeys: {
+        count: 5, names: ['demo:orphan0', 'demo:orphan1', 'demo:orphan2'],
+      },
+      unfixableKeys: {count: 1, names: ['demo:hopeless']},
+      repairableKeys: {count: 1, names: ['demo:broken']},
+    }))
   })
 
   it('does not mint into a workspace the operator navigated away from', async () => {
@@ -948,8 +1007,10 @@ describe('the orphan-definition step', () => {
 
     await invoke(repo)
 
-    expect(openDialog).toHaveBeenCalledWith(expect.anything(),
-      expect.objectContaining({repairableKeys: 1, unfixableKeys: 0}))
+    expect(openDialog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      repairableKeys: {count: 1, names: ['demo:b']},
+      unfixableKeys: {count: 0, names: []},
+    }))
   })
 
   it('does not flip when a key came back with no definition, even though minting succeeded', async () => {
