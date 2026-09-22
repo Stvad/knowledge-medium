@@ -50,11 +50,10 @@ import { showError } from '@/utils/toast.js'
 
 /** The three bag keys this editor writes, read the ONE way.
  *
- *  Shared by the render and by the guard that re-reads the row inside the
- *  writing transaction: "what the user was shown" and "what is there now"
- *  have to be compared through the same decode, and they were three
- *  hand-copied decodes before this. `undefined` properties (no row yet) read
- *  as the defaults, which is what every one of those copies did. */
+ *  The render and the guard that re-reads the row inside the writing
+ *  transaction must share it: "what the user was shown" and "what is there
+ *  now" are only comparable through the same decode. `undefined` properties
+ *  (no row yet) read as the defaults. */
 const definitionFacts = (properties: Record<string, unknown> | undefined) => {
   const row = {properties: properties ?? {}}
   return {
@@ -232,17 +231,15 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       )
       : null
     // Three outcomes, not two. A kernel REFUSAL (a re-type that would discard
-    // stored values, say) comes out of `repo.tx` as a throw, and until it was
-    // caught here it left every caller's cleanup unrun — the name field kept
-    // the rejected draft, the config editor was not remounted although the
-    // comment there promised it would be — and became an unhandled rejection
-    // in a void event handler besides.
-    // `guardPassed` is what the CALLBACK got to, `wrote` is what the
-    // TRANSACTION did, and they are not the same moment: the same-tx
-    // processors run after the callback returns, so a fan-out this change
-    // asks for can still refuse it — which is the commonest refusal there
-    // is. Setting success inside the callback reported those as written,
-    // and every caller's cleanup was skipped for a change that rolled back.
+    // stored values, say) comes out of `repo.tx` as a throw, and a caller
+    // that let it escape leaves its cleanup unrun and a void event handler
+    // holding an unhandled rejection.
+    //
+    // `guardPassed` is what the CALLBACK reached, `wrote` is what the
+    // TRANSACTION did, and they are not the same moment: same-tx processors
+    // run after the callback returns, so the fan-out this change asks for
+    // can still refuse it — the commonest refusal there is. Success is
+    // therefore only assignable once `repo.tx` resolves.
     let guardPassed = false
     let wrote = false
     let refused = false

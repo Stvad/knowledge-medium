@@ -36,10 +36,12 @@
  * definition row the first had already changed, which the gesture's
  * staleness check then refuses. So they write from the DRAFT, and they
  * decline the focus that would cause the blur at all (`preventDefault` on
- * mousedown, the toolbar-button convention). Nothing has to be remembered
- * between the press and the click, which is what a flag set on pointer-down
- * got wrong: a press dragged away or cancelled left it set with no click to
- * clear it, and the typed edit sat in a draft no blur would ever commit.
+ * mousedown, the toolbar-button convention).
+ *
+ * DECLINED: suppressing the blur's commit with a flag set on pointer-down
+ * instead. A press that is dragged away or cancelled never reaches a click
+ * to clear such a flag, and the typed edit then sits in a draft no blur
+ * will commit. Nothing may be remembered between the press and the click.
  */
 import {useState} from 'react'
 import {Plus, X} from 'lucide-react'

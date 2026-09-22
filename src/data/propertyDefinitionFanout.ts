@@ -19,10 +19,9 @@
  * WHO OWNS WHAT. The GESTURE opens and closes the run, because it is the only
  * thing that knows when the user's wait actually ends: the consumer loop is
  * not the last of it — the commit, the post-commit cache walk over every row
- * it touched, and the undo record all come after, and a surface that vanished
- * at the last consumer would hand the user back a still-frozen app (measured:
- * a third of a second of tail on 1,500 consumers, and it grows with them). The
- * PROCESSOR only reports into whatever run is open, and reporting where
+ * it touched, and the undo record all come after, and that tail grows with
+ * the fan-out — a surface that vanished at the last consumer would hand the
+ * user back a still-frozen app. The PROCESSOR only reports into whatever run is open, and reporting where
  * nothing is listening is a no-op — which is what keeps a headless caller (the
  * agent CLI, an importer) from needing to know this module exists.
  *

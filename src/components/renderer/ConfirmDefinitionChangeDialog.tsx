@@ -52,6 +52,16 @@ const TITLES: Record<DefinitionChangeKind, (name: string, next?: string) => stri
   options: name => `Change the options of “${name}”?`,
 }
 
+/** A rename re-spells nothing, so it never reaches this; the other two both
+ *  move the codec, but only one of them moves the TYPE — telling a user
+ *  adjusting an enum's choices that their values face a "new type" describes
+ *  an operation they did not ask for. */
+const RE_READ_AS: Record<DefinitionChangeKind, string> = {
+  rename: '',
+  type: 'under the new type',
+  options: 'under the new settings',
+}
+
 const CONFIRM_LABELS: Record<DefinitionChangeKind, string> = {
   rename: 'Rename',
   type: 'Change type',
@@ -95,10 +105,10 @@ export const ConfirmDefinitionChangeDialog = ({
             that splits them into sibling text nodes is a sentence no screen
             reader and no test reads as one. */}
         <p>{`${blockCount.toLocaleString()} `
-          + `${agree(blockCount, 'block uses', 'blocks use')} this property, and every `
-          + 'one of them is rewritten in the same change. That is what makes it a single '
-          + 'step you can undo — and it means the app saves nothing else until it '
-          + `finishes, which on this many blocks is around ${describeFanoutWait(blockCount)}.`
+          + `${agree(blockCount, 'block uses', 'blocks use')} this property, and the change `
+          + 'goes through every one of them. That is what makes it a single step you '
+          + 'can undo — and it means the app saves nothing else until it finishes, '
+          + `which on this many blocks is around ${describeFanoutWait(blockCount)}.`
         }</p>
         <p>
           Your other devices receive the finished blocks the usual way; there
@@ -106,7 +116,7 @@ export const ConfirmDefinitionChangeDialog = ({
           property exactly as it is now — once it starts saving, it is done.
         </p>
         {kind !== 'rename' && <p>
-          Every stored value is re-read under the new type. If any of them
+          Every stored value is re-read {RE_READ_AS[kind]}. If any of them
           cannot be, the whole change is refused and nothing is written.
         </p>}
         </div>

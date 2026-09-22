@@ -525,6 +525,10 @@ describe('a change planned against a row that moved while it waited', () => {
 
     // The editor is showing the choice it asked for, uncommitted.
     expect(await screen.findByRole('button', {name: 'Change options'})).toBeTruthy()
+    // An options change moves the codec, not the TYPE — telling the user
+    // their values face a "new type" describes something they did not ask
+    // for.
+    expect(screen.getByText(/re-read under the new settings/)).toBeTruthy()
     expect(screen.getAllByLabelText(/Choice \d+ value/)).toHaveLength(2)
 
     await session.click(screen.getByRole('button', {name: 'Cancel'}))
@@ -535,12 +539,10 @@ describe('a change planned against a row that moved while it waited', () => {
   })
 
   it('reports a change the KERNEL refused as not written, cleanup and all', async () => {
-    // A REAL refusal, reaching the processor after the callback has already
-    // written — which is the whole point. The previous version of this test
-    // rejected `repo.tx` at the seam, so the callback never ran and it could
-    // not see that success had already been recorded inside it: same-tx
-    // processors run after `fn` returns, so the commonest refusal there is
-    // arrived with the write marked done and every caller's cleanup skipped.
+    // The fixture has to reach a REAL same-tx refusal, after the callback
+    // has already written: same-tx processors run once `fn` returns, so a
+    // test that rejects `repo.tx` at the seam never runs the callback and
+    // cannot tell whether success was recorded inside it.
     //
     // The migration claim is the refusal that needs no consumers: any
     // definition change is turned away while a peer holds it.
@@ -643,8 +645,9 @@ describe('re-typing a property with many consumers', () => {
     await user().selectOptions(screen.getByRole('combobox'), 'number')
 
     expect(await screen.findByText(/Change the type of “test:myProp”\?/)).toBeTruthy()
-    // The half a rename does not have: a re-type can be refused outright.
-    expect(screen.getByText(/the whole change is refused/)).toBeTruthy()
+    // The half a rename does not have: a re-type can be refused outright —
+    // and it says the TYPE, which an options change must not.
+    expect(screen.getByText(/re-read under the new type/)).toBeTruthy()
   })
 
   it('takes the surface down when the kernel refuses the change', async () => {

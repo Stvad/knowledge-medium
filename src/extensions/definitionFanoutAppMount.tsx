@@ -68,7 +68,11 @@ const percentDone = (run: PropertyDefinitionFanoutSnapshot): number | null => {
 const statusLine = (run: PropertyDefinitionFanoutSnapshot): string => {
   if (run.done === null) return 'Starting…'
   if (run.done >= run.total) return 'Finishing…'
-  return `${run.done.toLocaleString()} of ${run.total.toLocaleString()} blocks updated`
+  // CHECKED, not updated: a consumer whose cell projects to what it already
+  // held is visited and written zero times (`propertiesEqual` in
+  // `applyToParent`), which a widening re-type can be true of for every one
+  // of them.
+  return `${run.done.toLocaleString()} of ${run.total.toLocaleString()} blocks checked`
 }
 
 export const DefinitionFanoutProgress = () => {
