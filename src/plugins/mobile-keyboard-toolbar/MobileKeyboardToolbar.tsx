@@ -7,6 +7,7 @@ import { ActionContextTypes } from '@/shortcuts/types.js'
 import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import {
   getKeyboardTop,
+  keyboardBottomStyle,
   setEditingToolbarHeight,
   subscribeKeyboardViewport,
 } from '@/utils/keyboardViewport.js'
@@ -41,16 +42,9 @@ const useKeyboardViewportValue = <T,>(active: boolean, read: () => T, initial: T
 }
 
 /** The toolbar's `bottom`: its bottom edge lands on the keyboard's top edge
- *  (see `getKeyboardTop`). The engine resolves `100%` against the containing
- *  block it positions the fixed element with, so no viewport height is read
- *  here; `max(0px, …)` absorbs a sub-pixel over-measure on engines that shrink
- *  the layout viewport with the keyboard. */
+ *  (see `getKeyboardTop` / `keyboardBottomStyle`). */
 const useKeyboardBottom = (active: boolean): string =>
-  useKeyboardViewportValue(active, readKeyboardBottom, '0px')
-const readKeyboardBottom = (): string => {
-  const top = getKeyboardTop()
-  return top === undefined ? '0px' : `max(0px, calc(100% - ${top}px))`
-}
+  keyboardBottomStyle(useKeyboardViewportValue<number | undefined>(active, getKeyboardTop, undefined))
 
 /** Mobile-only toolbar that sits above the on-screen keyboard while a
  *  block is being edited. Its buttons are facet contributions
@@ -176,6 +170,10 @@ export function MobileKeyboardToolbar() {
   return (
     <div
       ref={toolbarRef}
+      // Must stay a direct child of the app root: the `100%` in `bottom` is the
+      // viewport only while no ancestor carries a transform, filter, contain
+      // or backdrop-filter, any of which would make itself the containing
+      // block and send the bar to that ancestor's top edge.
       className="mobile-keyboard-toolbar fixed left-0 right-0 z-50 flex items-center justify-around gap-1 border-t border-border bg-background/95 px-1 py-1 backdrop-blur supports-[backdrop-filter]:bg-background/80"
       style={{bottom: keyboardBottom}}
       data-block-interaction="ignore"

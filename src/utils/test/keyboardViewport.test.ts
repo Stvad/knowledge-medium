@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   getKeyboardOverlap,
   getKeyboardTop,
-  keyboardTop,
+  keyboardBottomStyle,
   setEditingToolbarHeight,
   subscribeKeyboardViewport,
 } from '@/utils/keyboardViewport'
@@ -65,34 +65,34 @@ describe('getKeyboardOverlap', () => {
   })
 })
 
-describe('keyboardTop', () => {
-  // The mobile editing toolbar's bottom edge: the visual viewport's offset
-  // (the iOS pan) plus its height, both layout-viewport coordinates.
-  it('is the visual viewport height when unscrolled (iOS, no pan)', () => {
-    expect(keyboardTop(0, 314)).toBe(314)
-  })
-
-  it('moves down with the pan as the page scrolls with the keyboard up', () => {
-    // Device-verified iPad case: vv 314 tall, panned by 277.
-    expect(keyboardTop(277, 314)).toBe(591)
-  })
-
-  it('rounds fractional sub-pixel viewport metrics to a whole px', () => {
-    expect(keyboardTop(0.4, 313.7)).toBe(314)
-  })
-})
-
 describe('getKeyboardTop', () => {
-  it('reads the live visual viewport', () => {
+  it('reads the live visual viewport, not a layout height', () => {
     // Device-verified standalone iPhone: keyboard shrinks vv to 518, no pan;
     // the toolbar's bottom edge belongs at 518 whatever the layout height reads.
     installViewport({height: 518})
     expect(getKeyboardTop()).toBe(518)
   })
 
+  it('adds the pan and rounds to a whole px', () => {
+    // 277 + 313.2 = 590.2 → 590; and 0.4 + 313.2 = 313.6, where floor/trunc
+    // would give 313 and round 314 — the fixture distinguishes them.
+    installViewport({height: 313.2, offsetTop: 0.4})
+    expect(getKeyboardTop()).toBe(314)
+  })
+
   it('is undefined without a visual viewport, where bottom:0 is already right', () => {
     vi.stubGlobal('visualViewport', undefined)
     expect(getKeyboardTop()).toBeUndefined()
+  })
+})
+
+describe('keyboardBottomStyle', () => {
+  it('lands the bottom edge on the keyboard via the engine-resolved 100%', () => {
+    expect(keyboardBottomStyle(518)).toBe('max(0px, calc(100% - 518px))')
+  })
+
+  it('falls back to bottom:0 without a visual viewport', () => {
+    expect(keyboardBottomStyle(undefined)).toBe('0px')
   })
 })
 
