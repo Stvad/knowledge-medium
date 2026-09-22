@@ -20,6 +20,7 @@ import {
 } from '@/data/properties.js'
 import {
   ChangeScope,
+  ProcessorRejection,
   propertyValue,
   type AnyJoinedValuePreset,
   type Tx,
@@ -229,7 +230,14 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         workspaceId, block.id, change.propertyName, consumers,
       )
       : null
+    // Three outcomes, not two. A kernel REFUSAL (a re-type that would discard
+    // stored values, say) comes out of `repo.tx` as a throw, and until it was
+    // caught here it left every caller's cleanup unrun — the name field kept
+    // the rejected draft, the config editor was not remounted although the
+    // comment there promised it would be — and became an unhandled rejection
+    // in a void event handler besides.
     let wrote = false
+    let refused = false
     try {
       await block.repo.tx(async tx => {
         const current = await tx.get(block.id)
@@ -248,10 +256,19 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         await write(tx)
         wrote = true
       }, {scope: ChangeScope.BlockDefault, description: TX_DESCRIPTIONS[change.kind]})
+    } catch (error) {
+      refused = true
+      // `repo.tx` notifies the user-error channel before it rethrows, so a
+      // rejection has already said why in the kernel's own words and ours
+      // would only contradict it. Anything else has told nobody.
+      if (!(error instanceof ProcessorRejection)) {
+        console.error('[PropertySchemaContentRenderer] the change failed:', error)
+        showError(`“${change.propertyName}” could not be changed. See the console.`)
+      }
     } finally {
       run?.end()
     }
-    if (!wrote) {
+    if (!wrote && !refused) {
       showError(
         `“${change.propertyName}” changed somewhere else while you were deciding, `
         + 'so nothing was written. Take another look and try again.',
@@ -482,15 +499,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
             className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
             value={presetId}
             disabled={readOnly}
-            onChange={(e) => {
-              // A refusal is already surfaced: `repo.tx` notifies the
-              // user-error channel before it rethrows, and the toast layer
-              // listens. Catching keeps the rethrow from becoming an unhandled
-              // rejection — nothing here has anything to add to it. Routine
-              // now that a re-type over values the new type cannot read is one
-              // of the refusals (#1024).
-              writePresetId(e.target.value).catch(() => {})
-            }}
+            // The gate owns the refusal now — it catches it, leaves the
+            // kernel's own message standing, and reports a non-write to the
+            // caller — so there is nothing left here to catch.
+            onChange={(e) => { void writePresetId(e.target.value) }}
           >
             {presetEntries.map(p => (
               <option key={p.id} value={p.id}>{p.label}</option>
