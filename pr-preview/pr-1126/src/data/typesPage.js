@@ -1,1 +1,0 @@
-import{g1 as e,h1 as t}from"../../chunks/app-DCOEpuyW.js";export{t as getOrCreateTypesPage,e as typesPageBlockId};
