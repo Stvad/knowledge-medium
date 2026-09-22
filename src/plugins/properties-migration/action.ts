@@ -692,11 +692,10 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       dismissToast(SYNTHESIS_TOAST.id)
     }
     // The CELL-level survey, and deliberately BELOW the key-level refusal: it
-    // decodes every property value in the workspace, so a workspace the cheap
-    // key survey already refuses never pays for it. Measured at ~1.5s over
-    // 108k property-carrying blocks (~378k cells) in Node — it also replaces
-    // the separate candidate COUNT this used to run here, so it is the only
-    // full scan between the palette and the dialog rather than a second one.
+    // decodes every stored property value in the workspace, so a workspace the
+    // cheap key survey already refuses never pays for it. It also answers the
+    // dialog's block count, which keeps this the ONLY full walk of the property
+    // bags between the palette and the confirmation.
     let survey: PropertyCellRejectionSurvey
     try {
       survey = await surveyPropertyCellRejections(repo, workspaceId)
@@ -715,6 +714,9 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       showInfo(valuesBlocked, CELL_VALUE_TOAST)
       if (!childBacked) return
     } else {
+      // Only where the survey RAN. The key-level refusal above returns without
+      // one, and taking down a "cannot migrate" banner over cells this run
+      // never looked at would claim a repair nothing verified.
       dismissToast(CELL_VALUE_TOAST.id)
     }
     // A refused workspace reaches here only when the flip is not at stake. Its

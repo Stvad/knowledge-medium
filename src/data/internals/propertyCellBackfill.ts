@@ -174,41 +174,39 @@ const SURVEY_SQL = `
 /**
  * Cells whose stored value the codec their key resolves will not carry.
  *
- * The pre-flip half of what the pass reports after the fact. `sweep` asks
- * {@link propertyCellValueRejection} of every cell it visits and counts the
- * refusals — which on an UN-FLIPPED workspace is one step too late, because the
- * flip is one-way and a value no codec carries can never become child-backed.
- * So the same predicate is asked here, over the same rows, with nothing
- * written: the survey and the pass share the DECISION, not a code path, which
- * is what a `dryRun` flag through the writer would have cost.
+ * The pass asks {@link propertyCellValueRejection} of every cell it visits and
+ * counts the refusals, which on an UN-FLIPPED workspace is one step too late:
+ * the flip is one-way and a value no codec carries can never become
+ * child-backed. So the same predicate is asked here, over the same rows, with
+ * nothing written. The survey and the pass share the DECISION, not a code path
+ * — a `dryRun` flag through the writer would have been two modes and a guard
+ * at every write site.
  *
  * IT ASKS ABOUT THE DATA — "does this stored value refuse its codec" — and not
- * "will the pass visit this cell". So it does not subtract a cell whose key is
- * already child-backed, which the pass skips without decoding. Pre-flip, the
+ * "will the pass visit this cell", so it does not subtract a cell whose key is
+ * already child-backed (which the pass skips without decoding). Pre-flip, the
  * only path that refuses over this, nothing is child-backed and the two sets
- * are identical; past it such a cell is junk a raw or synced write left under a
- * key whose children moved on, and the cell is still a read surface, so naming
- * it is right either way.
+ * are identical; past it such a cell is junk left under a key whose children
+ * moved on, and the cell is still a read surface, so naming it is right.
  *
  * A "NO KNOWN BAD CELLS" GATE, NOT A PROOF: a bad cell can arrive between this
  * and the flip. That is the hole `scanSyncGap` covers for the key survey, and
  * the pass is a fixpoint besides — so the answer to one arriving late is the
  * next run, not a lock held across a user-length dialog.
  *
- * Keys that resolve NO schema are not this survey's business: they have no
- * codec to refuse anything, and {@link flipBlockedBySynthesis} already blocks
- * the flip over every one it cannot mint for. The ones it does mint for arrive
- * with a preset `provePresetId` ran over every distinct value the key holds.
+ * Keys that resolve NO schema are out of scope: they have no codec to refuse
+ * anything, and {@link flipBlockedBySynthesis} blocks the flip over every one
+ * it cannot mint for. The ones it does mint for arrive with a preset
+ * `provePresetId` ran over every distinct value the key holds.
  */
 export const surveyPropertyCellRejections = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<PropertyCellRejectionSurvey> => {
-  // The canonical factory, one resolver for the whole scan — the same rule the
-  // pass's own context is built under, and the reason this takes a `Repo`
-  // rather than the pass's context: the gesture that runs it has no backfill
-  // context yet (the runner builds one later, under the claim), so a context
-  // parameter would only move the adapter into a plugin.
+  // One resolver for the whole scan, through the canonical factory. A `Repo`
+  // rather than the pass's own context because the gesture that runs this has
+  // no backfill context yet — the runner builds one later, under the claim —
+  // so a context parameter would only move this adapter into a plugin.
   const resolver = repo.propertySchemaResolverFor(workspaceId)
   const resolveNameSchema = (name: string): AnyPropertySchema | undefined => {
     const resolution = resolver.resolve(name)
