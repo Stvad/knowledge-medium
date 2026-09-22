@@ -1,1 +1,1 @@
-import{wA as e}from"../../chunks/app-DcdSVipy.js";export{e as buildPropertyPanelSections};
+import{wA as e}from"../../chunks/app-BBPmx0mi.js";export{e as buildPropertyPanelSections};

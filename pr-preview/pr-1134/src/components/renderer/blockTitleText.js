@@ -1,1 +1,1 @@
-import{_k as e,vk as t}from"../../../chunks/app-DcdSVipy.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};
+import{_k as e,vk as t}from"../../../chunks/app-BBPmx0mi.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};

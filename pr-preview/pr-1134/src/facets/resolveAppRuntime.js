@@ -1,1 +1,1 @@
-import{vT as e,yT as t}from"../../chunks/app-DcdSVipy.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};
+import{vT as e,yT as t}from"../../chunks/app-BBPmx0mi.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};

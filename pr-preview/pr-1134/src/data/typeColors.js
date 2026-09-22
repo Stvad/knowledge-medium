@@ -1,1 +1,1 @@
-import{dC as e,fC as t,pC as n}from"../../chunks/app-DcdSVipy.js";export{e as DEFAULT_TYPE_COLORS,t as defaultTypeColor,n as pickLeastUsedTypeColor};
+import{dC as e,fC as t,pC as n}from"../../chunks/app-BBPmx0mi.js";export{e as DEFAULT_TYPE_COLORS,t as defaultTypeColor,n as pickLeastUsedTypeColor};

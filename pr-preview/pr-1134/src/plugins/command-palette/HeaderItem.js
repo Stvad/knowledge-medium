@@ -1,1 +1,1 @@
-import{lS as e}from"../../../chunks/app-DcdSVipy.js";export{e as CommandPaletteHeaderItem};
+import{lS as e}from"../../../chunks/app-BBPmx0mi.js";export{e as CommandPaletteHeaderItem};

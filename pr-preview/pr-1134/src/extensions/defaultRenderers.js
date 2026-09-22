@@ -1,1 +1,1 @@
-import{aE as e,oE as t,sE as n}from"../../chunks/app-DcdSVipy.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};
+import{aE as e,oE as t,sE as n}from"../../chunks/app-BBPmx0mi.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};

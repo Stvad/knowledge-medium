@@ -1,1 +1,1 @@
-import{gw as e,hw as t}from"../../../chunks/app-DcdSVipy.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
+import{gw as e,hw as t}from"../../../chunks/app-BBPmx0mi.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
