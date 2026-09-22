@@ -1,1 +1,1 @@
-import{ay as e,iy as t,ry as n}from"../../../chunks/app-BgyQfmUt.js";export{n as aliasResultItems,t as blockResultItems,e as recentResultItems};
+import{ay as e,iy as t,ry as n}from"../../../chunks/app-BJxyI2ZE.js";export{n as aliasResultItems,t as blockResultItems,e as recentResultItems};
