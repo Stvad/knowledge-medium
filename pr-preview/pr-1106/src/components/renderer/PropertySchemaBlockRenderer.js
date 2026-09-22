@@ -1,1 +1,1 @@
-import{vE as e,yE as t}from"../../../chunks/app-oJs1SnFQ.js";export{e as PropertySchemaBlockRenderer,t as PropertySchemaContentRenderer};
+import{vE as e,yE as t}from"../../../chunks/app-Bgkbwu-x.js";export{e as PropertySchemaBlockRenderer,t as PropertySchemaContentRenderer};

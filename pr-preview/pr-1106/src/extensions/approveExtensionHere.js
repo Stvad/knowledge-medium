@@ -1,1 +1,1 @@
-import{Ew as e}from"../../chunks/app-oJs1SnFQ.js";export{e as approveExtensionHere};
+import{Ew as e}from"../../chunks/app-Bgkbwu-x.js";export{e as approveExtensionHere};

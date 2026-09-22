@@ -1,1 +1,1 @@
-import{aE as e,oE as t,sE as n}from"../../chunks/app-oJs1SnFQ.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};
+import{aE as e,oE as t,sE as n}from"../../chunks/app-Bgkbwu-x.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};
