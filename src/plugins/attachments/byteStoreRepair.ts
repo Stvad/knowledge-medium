@@ -13,11 +13,11 @@
  * pass, so the same tick's presence scan already sees the repaired tree.
  */
 
-import type { ByteStore } from './byteStore.js'
+import { ENTRY_SETTLE_MS, type ByteStore } from './byteStore.js'
 
 /** An empty entry younger than this may be a `put` still in flight (the entry is
  *  minted before the bytes land) — it is left for the next page's sweep. */
-export const EMPTY_ENTRY_MIN_AGE_MS = 60_000
+export const EMPTY_ENTRY_MIN_AGE_MS = ENTRY_SETTLE_MS
 
 const sweptThisPage = new Set<string>()
 

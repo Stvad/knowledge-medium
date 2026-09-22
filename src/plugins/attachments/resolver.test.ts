@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createAssetResolver, type AssetResolverDeps } from './resolver.js'
 import { NO_REMOTE_BLOB_STORE } from './assetResolver.js'
-import { InMemoryByteStore } from './byteStore.js'
+import { ENTRY_SETTLE_MS, InMemoryByteStore } from './byteStore.js'
 import type { BlobStore } from './blobStore.js'
 import { encodeBytes } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
@@ -238,10 +238,13 @@ describe('createAssetResolver — fail-closed (the §7.3/§5.1 acceptance gate)'
 
 describe('createAssetResolver — a local copy is verified before it is served (a poisoned store)', () => {
   // The write path is not atomic on every engine: an entry can exist that was never
-  // written (empty), was cut short, or holds other bytes. Each is discarded, deleted,
-  // and re-fetched — the same fail-closed rule the download path applies (§5.1).
-  const poisoned = async (mode: 'none' | 'e2ee', contentHash: string, local: Uint8Array<ArrayBuffer>) => {
-    const byteStore = new InMemoryByteStore()
+  // written (empty), was cut short, or holds other bytes. THE HASH is the authority
+  // (`media:size` is cosmetic and user-editable). A defect is a miss — re-fetched under
+  // the same fail-closed rule the download path applies (§5.1) — and the entry is deleted
+  // once it is old enough not to be a write in flight.
+  const OLD = () => Date.now() - ENTRY_SETTLE_MS - 1
+  const poisoned = async (mode: 'none' | 'e2ee', contentHash: string, local: Uint8Array<ArrayBuffer>, now: () => number = OLD) => {
+    const byteStore = new InMemoryByteStore({ now })
     const key = await contentKeyFor(mode, contentHash)
     await byteStore.put(USER, WS, key, local)
     return { byteStore, key }
@@ -258,7 +261,7 @@ describe('createAssetResolver — a local copy is verified before it is served (
       serve: async () => seal('none', plain, contentHash),
     })
 
-    expect(await resolver.resolve({ workspaceId: WS, contentHash, expectedSize: 4 })).toEqual({ ok: true, bytes: plain })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
     expect(blobGet).toHaveBeenCalledTimes(1)
     expect(del).toHaveBeenCalledWith(USER, WS, key)
     expect(await byteStore.get(USER, WS, key)).toEqual(plain) // healed
@@ -280,21 +283,7 @@ describe('createAssetResolver — a local copy is verified before it is served (
     expect(await byteStore.has(USER, WS, key)).toBe(false) // the poison is gone either way
   })
 
-  it('a SHORT local copy (length ≠ media:size) is a miss — rejected by length, before any hash', async () => {
-    const plain = bytes(1, 2, 3, 4)
-    const contentHash = await hashOf(plain)
-    const { byteStore } = await poisoned('none', contentHash, bytes(1, 2))
-    const { resolver, blobGet } = build({
-      getMaterializability: mat('copy'),
-      byteStore,
-      serve: async () => seal('none', plain, contentHash),
-    })
-
-    expect(await resolver.resolve({ workspaceId: WS, contentHash, expectedSize: 4 })).toEqual({ ok: true, bytes: plain })
-    expect(blobGet).toHaveBeenCalledTimes(1)
-  })
-
-  it('a SHORT local copy with NO size hint is still caught — by the hash', async () => {
+  it('a SHORT local copy (a write cut short) is caught by the hash', async () => {
     const plain = bytes(1, 2, 3, 4)
     const contentHash = await hashOf(plain)
     const { byteStore } = await poisoned('none', contentHash, bytes(1, 2))
@@ -318,20 +307,53 @@ describe('createAssetResolver — a local copy is verified before it is served (
       serve: async () => seal('e2ee', plain, contentHash),
     })
 
-    expect(await resolver.resolve({ workspaceId: WS, contentHash, expectedSize: 4 })).toEqual({ ok: true, bytes: plain })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
     expect(blobGet).toHaveBeenCalledTimes(1)
     expect(await byteStore.get(USER, WS, key)).toEqual(plain)
   })
 
-  it('a size hint of 0 (unknown) does not reject a good copy', async () => {
+  it('a hash-matching local copy is served as-is, whatever any size claim says — the hash is the authority', async () => {
     const plain = bytes(4, 2)
     const contentHash = await hashOf(plain)
     const byteStore = new InMemoryByteStore()
     await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    const del = vi.spyOn(byteStore, 'delete')
     const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
 
-    expect(await resolver.resolve({ workspaceId: WS, contentHash, expectedSize: 0 })).toEqual({ ok: true, bytes: plain })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
     expect(blobGet).not.toHaveBeenCalled()
+    expect(del).not.toHaveBeenCalled()
+  })
+
+  it('a defective YOUNG entry (a write possibly in flight) is a miss but is NOT deleted', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    // Stamped "now": what a peer's truncated-mid-write file looks like from here.
+    const { byteStore } = await poisoned('none', contentHash, bytes(1, 2), () => Date.now())
+    const del = vi.spyOn(byteStore, 'delete')
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalledTimes(1) // still a miss — served from the network
+    expect(del).not.toHaveBeenCalled() // the peer's write is left to finish
+  })
+
+  it('an entry whose store tracks no timestamp (lastModified 0) is treated as old — deleted', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore, key } = await poisoned('none', contentHash, bytes(), () => 0)
+    const del = vi.spyOn(byteStore, 'delete')
+    const { resolver } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    await resolver.resolve({ workspaceId: WS, contentHash })
+    expect(del).toHaveBeenCalledWith(USER, WS, key)
   })
 
   it('a failed delete of the bad copy does not block the re-fetch', async () => {

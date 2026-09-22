@@ -26,12 +26,20 @@ describe('repairByteStoreOnce', () => {
     expect(sweep).toHaveBeenCalledTimes(3)
   })
 
-  it('removes the empty entries so a presence scan no longer counts them', async () => {
-    const store = new InMemoryByteStore()
+  it('removes the empty entries past the age floor (an older build’s poison), so they stop existing', async () => {
+    const store = new InMemoryByteStore({ now: () => Date.now() - EMPTY_ENTRY_MIN_AGE_MS - 1 })
     await store.put(U, WS, 'poisoned', new Uint8Array(0))
     await store.put(U, WS, 'fine', new Uint8Array([1]))
     await repairByteStoreOnce(store, U, WS)
+    expect(await store.stat(U, WS, 'poisoned')).toBeNull()
     expect(await store.listWorkspaceKeys(U, WS)).toEqual(new Set(['fine']))
+  })
+
+  it('spares a YOUNG empty entry — a put still filling it', async () => {
+    const store = new InMemoryByteStore() // stamps "now"
+    await store.put(U, WS, 'in-flight', new Uint8Array(0))
+    await repairByteStoreOnce(store, U, WS)
+    expect(await store.stat(U, WS, 'in-flight')).not.toBeNull()
   })
 
   it('a failed sweep never throws, and is retried on the next call', async () => {

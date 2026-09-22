@@ -17,25 +17,41 @@
  * (`OpfsByteStore`); `InMemoryByteStore` is the test double + no-OPFS fallback.
  *
  * Two write invariants the store DOES own, because OPFS gives neither for free:
- *   - a failed `put` leaves NO entry at the key. `getFileHandle(create)` mints an
- *     empty file before any byte lands, so a write that then fails must remove it —
- *     otherwise the empty file reads as a local hit forever;
+ *   - a failed `put` leaves NO INCOMPLETE entry at the key. `getFileHandle(create)`
+ *     mints an empty file before any byte lands, so a write that then fails must
+ *     remove it — otherwise the empty file reads as a local hit forever. An entry
+ *     whose size already equals the bytes being written is a PEER's complete copy of
+ *     the same content-addressed bytes (another tab / the PWA / this page's other
+ *     resolver) and is never deleted; a peer's open handle is waited for, not failed
+ *     on (byteStoreWriter.ts);
  *   - a `put` works on every engine with OPFS: through `createWritable` where the
  *     engine has it, else through a worker + sync access handle (WebKit before
  *     Safari 26 — every iOS 18 browser — has only the latter; byteStoreWriter.ts).
- * The store still does not VERIFY what it reads back: the resolver checks every
- * local hit's length + hash against the block (§5.1) and deletes a bad entry, and
- * `sweepEmpty` reaps the empty entries an older build left behind.
+ * The store still does not VERIFY what it reads back: the resolver hashes every
+ * local hit against the block (§5.1) and deletes a bad entry once it is old enough
+ * to not be a write in flight (`ENTRY_SETTLE_MS`), presence probes (`has`,
+ * `listWorkspaceKeys`) report only non-empty entries, and `sweepEmpty` reaps the
+ * empty entries an older build left behind.
  *
  * Destruction is the coarse platform clear (§7.2) — this store has no per-store
  * wipe role; `purgeWorkspace` is an AUTHORIZATION claw-back (revoke/leave), not
  * a destruction hook.
  */
 
-import { createWorkerFileWriter, type WorkerFileWriter, type WriterWorkerLike } from './byteStoreWriter.js'
+import {
+  createWorkerFileWriter,
+  removeUnlessComplete,
+  type WorkerFileWriter,
+  type WriterWorkerLike,
+} from './byteStoreWriter.js'
 
 /** Root directory name under the OPFS root for all asset bytes. */
 export const ASSETS_ROOT = 'assets'
+
+/** An entry younger than this may be a `put` still in flight: the entry is minted
+ *  before its bytes land, and a peer's write can be read mid-way. A defective read of
+ *  a young entry is a miss but not grounds to delete it; the sweep leaves it alone. */
+export const ENTRY_SETTLE_MS = 60_000
 
 // All path-segment encoding routes through here. `encodeURIComponent` turns a `/`
 // (or other reserved char) in an id into one inert directory name, but it leaves
@@ -73,9 +89,13 @@ export interface ByteStore {
   /** Is the object present locally, with bytes? (the §6 down-lane's "already replicated?"
    *  probe). An EMPTY entry is not present — nothing was replicated into it. */
   has(userId: string, workspaceId: string, contentKey: string): Promise<boolean>
-  /** Every stored object's content-key for one (user, workspace) — the down-lane's
-   *  ONE-SHOT presence scan (§8): a single directory enumeration in place of a `has()`
-   *  per block. Empty when nothing is stored. */
+  /** The entry's size + modification time, or `null` when absent — what the resolver
+   *  needs to tell a write in flight from a poisoned entry. */
+  stat(userId: string, workspaceId: string, contentKey: string): Promise<ByteStoreEntryStat | null>
+  /** Every stored NON-EMPTY object's content-key for one (user, workspace) — the
+   *  down-lane's ONE-SHOT presence scan (§8): a single directory enumeration in place
+   *  of a `has()` per block, and it agrees with `has()`: an empty entry is not listed.
+   *  Empty when nothing is stored. */
   listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>>
   /** Drop a single object's bytes — the §9 reconciler's orphan reap (a never-
    *  committed capture's bytes). A no-op when absent. */
@@ -102,6 +122,12 @@ export interface SweepResult {
   readonly removed: number
 }
 
+export interface ByteStoreEntryStat {
+  readonly size: number
+  /** Epoch ms; `0` when the backing store doesn't track it. */
+  readonly lastModified: number
+}
+
 /** Path segments under the OPFS root for one object. Each is {@link encodeSegment}-
  *  escaped so a `/` (or other reserved char) in an id becomes one inert directory
  *  name — it can't introduce extra tree levels or alias two distinct ids — and so a
@@ -124,7 +150,14 @@ const isNotFound = (err: unknown): boolean =>
  * buffer can't corrupt the cache, matching OPFS's read-a-fresh-File semantics.
  */
 export class InMemoryByteStore implements ByteStore {
-  private readonly blobs = new Map<string, Uint8Array>()
+  private readonly blobs = new Map<string, { bytes: Uint8Array; lastModified: number }>()
+  private readonly now: () => number
+
+  /** `now` stamps each put's `lastModified` (the sweep's age floor and the resolver's
+   *  settle window read it); injectable so a test can age an entry. */
+  constructor(deps: { now?: () => number } = {}) {
+    this.now = deps.now ?? Date.now
+  }
 
   private key(userId: string, workspaceId: string, contentKey: string): string {
     return assetPathSegments(userId, workspaceId, contentKey).join('/')
@@ -140,36 +173,41 @@ export class InMemoryByteStore implements ByteStore {
 
   async get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null> {
     const hit = this.blobs.get(this.key(userId, workspaceId, contentKey))
-    return hit ? new Uint8Array(hit) : null
+    return hit ? new Uint8Array(hit.bytes) : null
   }
 
   async put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
-    this.blobs.set(this.key(userId, workspaceId, contentKey), new Uint8Array(bytes))
+    this.blobs.set(this.key(userId, workspaceId, contentKey), { bytes: new Uint8Array(bytes), lastModified: this.now() })
   }
 
   async has(userId: string, workspaceId: string, contentKey: string): Promise<boolean> {
     const hit = this.blobs.get(this.key(userId, workspaceId, contentKey))
-    return hit !== undefined && hit.byteLength > 0
+    return hit !== undefined && hit.bytes.byteLength > 0
+  }
+
+  async stat(userId: string, workspaceId: string, contentKey: string): Promise<ByteStoreEntryStat | null> {
+    const hit = this.blobs.get(this.key(userId, workspaceId, contentKey))
+    return hit ? { size: hit.bytes.byteLength, lastModified: hit.lastModified } : null
   }
 
   async listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>> {
     const prefix = this.wsPrefix(userId, workspaceId)
     const out = new Set<string>()
-    for (const k of this.blobs.keys()) {
-      if (k.startsWith(prefix)) out.add(decodeSegment(k.slice(prefix.length)))
+    for (const [k, v] of this.blobs) {
+      if (k.startsWith(prefix) && v.bytes.byteLength > 0) out.add(decodeSegment(k.slice(prefix.length)))
     }
     return out
   }
 
-  async sweepEmpty(userId: string, workspaceId: string): Promise<SweepResult> {
-    // No timestamps in memory: every empty entry counts as old enough.
+  async sweepEmpty(userId: string, workspaceId: string, opts: SweepOptions): Promise<SweepResult> {
     const prefix = this.wsPrefix(userId, workspaceId)
+    const now = opts.now ?? Date.now // wall time, like OPFS's lastModified — `this.now` only stamps
     let scanned = 0
     let removed = 0
     for (const [k, v] of [...this.blobs]) {
       if (!k.startsWith(prefix)) continue
       scanned++
-      if (v.byteLength === 0) {
+      if (v.bytes.byteLength === 0 && now() - v.lastModified >= opts.minAgeMs) {
         this.blobs.delete(k)
         removed++
       }
@@ -197,6 +235,8 @@ export interface OpfsByteStoreDeps {
   hasWritableStream?: () => boolean
   /** Spawns the writer worker (byteStoreWriter.worker.ts); injectable for tests. */
   spawnWriterWorker?: () => WriterWorkerLike
+  /** How long a worker write may take before it is abandoned; injectable for tests. */
+  writeTimeoutMs?: number
 }
 
 /** The engine has the stream write API on the main thread (Chromium, Firefox,
@@ -229,14 +269,32 @@ export class OpfsByteStore implements ByteStore {
   private rootCache?: Promise<FileSystemDirectoryHandle>
   private readonly wsDirCache = new Map<string, Promise<FileSystemDirectoryHandle>>()
 
+  private readonly writeTimeoutMs?: number
+
   constructor(deps: OpfsByteStoreDeps = {}) {
     this.getRoot = deps.getRoot ?? (() => navigator.storage.getDirectory())
     this.hasWritableStream = deps.hasWritableStream ?? engineHasWritableStream
     this.spawnWriterWorker = deps.spawnWriterWorker ?? spawnRealWriterWorker
+    this.writeTimeoutMs = deps.writeTimeoutMs
   }
 
   private root(): Promise<FileSystemDirectoryHandle> {
     return (this.rootCache ??= this.getRoot())
+  }
+
+  /** The clean-up for a write the worker was killed in the middle of (a timeout):
+   *  drop the entry unless it is already a complete copy (a peer's, or ours before the
+   *  reply was lost). Walks with `create: false` — never mints anything. */
+  private async removeIfIncomplete(path: readonly string[], byteLength: number): Promise<void> {
+    try {
+      let dir = await this.root()
+      for (const name of path.slice(0, -1)) dir = await dir.getDirectoryHandle(name)
+      const name = path[path.length - 1]
+      const size = (await (await dir.getFileHandle(name)).getFile()).size
+      if (size !== byteLength) await dir.removeEntry(name)
+    } catch {
+      // absent already, or a peer holds the handle (it is writing the complete copy)
+    }
   }
 
   /** Walk a chain of (already-encoded) directory names from the cached OPFS root.
@@ -307,7 +365,10 @@ export class OpfsByteStore implements ByteStore {
     const dir = await this.workspaceDir(userId, workspaceId, true)
     const name = encodeSegment(contentKey)
     if (!this.hasWritableStream()) {
-      this.workerWriter ??= createWorkerFileWriter(this.spawnWriterWorker)
+      this.workerWriter ??= createWorkerFileWriter(this.spawnWriterWorker, {
+        timeoutMs: this.writeTimeoutMs,
+        onAbandoned: (path, byteLength) => this.removeIfIncomplete(path, byteLength),
+      })
       await this.workerWriter.write(assetPathSegments(userId, workspaceId, contentKey), bytes)
       return
     }
@@ -322,7 +383,22 @@ export class OpfsByteStore implements ByteStore {
       }
       await writable.close() // the commit — a failure here leaves the entry as it was, i.e. possibly empty
     } catch (err) {
-      await dir.removeEntry(name).catch(() => {})
+      // A peer (another tab / this page's other resolver) may hold the file or have
+      // just finished it: a complete copy is these same content-addressed bytes, so
+      // it is never deleted — and counts as our write having landed.
+      await removeUnlessComplete(dir, name, fileHandle, bytes.byteLength)
+      if ((await fileHandle.getFile().then((f) => f.size, () => null)) === bytes.byteLength) return
+      throw err
+    }
+  }
+
+  async stat(userId: string, workspaceId: string, contentKey: string): Promise<ByteStoreEntryStat | null> {
+    try {
+      const dir = await this.workspaceDir(userId, workspaceId, false)
+      const file = await (await dir.getFileHandle(encodeSegment(contentKey))).getFile()
+      return { size: file.size, lastModified: file.lastModified }
+    } catch (err) {
+      if (isNotFound(err)) return null
       throw err
     }
   }
@@ -371,7 +447,14 @@ export class OpfsByteStore implements ByteStore {
     try {
       const dir = await this.workspaceDir(userId, workspaceId, false)
       const keys = new Set<string>()
-      for await (const name of dir.keys()) keys.add(decodeSegment(name))
+      for await (const [name, entry] of dir.entries()) {
+        if (entry.kind !== 'file') continue
+        // Only an entry with bytes is present (agreeing with `has()`): an empty one is
+        // a poisoned or in-flight write, and one a peer holds open (getFile refused)
+        // is in flight — either way not replicated yet, so the down-lane re-checks it.
+        const size = await (entry as FileSystemFileHandle).getFile().then((f) => f.size, () => 0)
+        if (size > 0) keys.add(decodeSegment(name))
+      }
       return keys
     } catch (err) {
       if (isNotFound(err)) return new Set() // no objects stored for this (user, workspace) yet

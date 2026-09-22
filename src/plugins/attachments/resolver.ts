@@ -23,9 +23,10 @@
  * a store whose write then fails (WebKit before Safari 26 had no `createWritable`
  * — every asset on an iPad was an empty local hit after its first open) or a
  * killed writer leaves an entry that was never verified. So a local read is
- * accepted only if its length is non-zero, matches the block's `media:size` when
- * that is known, and its sha256 matches the block's `hash`; anything else is
- * discarded (the entry deleted) and treated as a miss. The hash is over bytes
+ * accepted only if its sha256 matches the block's `hash` — THE hash is the
+ * authority (`media:size` is cosmetic and user-editable, so it decides nothing);
+ * anything else is treated as a miss and, unless the entry is young enough to be
+ * a write still in flight (`ENTRY_SETTLE_MS`), deleted. The hash is over bytes
  * already in memory — cheap next to the read itself, and it makes the store a
  * cache that cannot lie rather than an authority the renderer has to trust.
  *
@@ -51,16 +52,13 @@ import {
   type SyncMode,
 } from '@/sync/transform.js'
 import type { BlobStore } from './blobStore.js'
-import type { ByteStore } from './byteStore.js'
+import { ENTRY_SETTLE_MS, type ByteStore } from './byteStore.js'
 
 /** What the renderer asks the resolver to materialize. */
 export interface AssetResolveRequest {
   readonly workspaceId: string
   /** The block's synced `sha256:<hex>` content hash (§5.1). */
   readonly contentHash: string
-  /** The block's `media:size` when known (> 0): a local copy of another length is
-   *  rejected before it is hashed. Absent / 0 → the hash check alone decides. */
-  readonly expectedSize?: number
 }
 
 /** Why a resolve failed closed — every value renders the broken-asset
@@ -181,17 +179,12 @@ type ResolveOutcome =
   | { readonly ok: true; readonly bytes: Uint8Array<ArrayBuffer>; readonly source: ResolveSource }
   | { readonly ok: false; readonly reason: AssetFailReason }
 
-/** Why a local copy is NOT the block's bytes — see the module header. `null` = it is. */
-type LocalDefect = 'empty' | 'size-mismatch' | 'hash-mismatch'
+/** Why a local copy is NOT the block's bytes — see the module header. `null` = it is.
+ *  `empty` is just the cheap name for the mismatch every poisoned entry has. */
+type LocalDefect = 'empty' | 'hash-mismatch'
 
-/** Cheapest check first: length (free) gates the hash (a sha256 over the bytes). */
-const localDefect = async (
-  local: Uint8Array<ArrayBuffer>,
-  contentHash: string,
-  expectedSize: number | undefined,
-): Promise<LocalDefect | null> => {
+const localDefect = async (local: Uint8Array<ArrayBuffer>, contentHash: string): Promise<LocalDefect | null> => {
   if (local.byteLength === 0) return 'empty'
-  if (expectedSize !== undefined && expectedSize > 0 && local.byteLength !== expectedSize) return 'size-mismatch'
   return (await verifyContentHash(local, contentHash)) ? null : 'hash-mismatch'
 }
 
@@ -235,7 +228,7 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     }
   }
 
-  const resolveImpl = async ({ workspaceId, contentHash, expectedSize }: AssetResolveRequest): Promise<ResolveOutcome> => {
+  const resolveImpl = async ({ workspaceId, contentHash }: AssetResolveRequest): Promise<ResolveOutcome> => {
     // Outer safety net: ANY unexpected throw (a misbehaving injected policy dep, an
     // OPFS error the inner guards don't anticipate) returns a verdict, never a thrown
     // promise — the renderer always gets a placeholder, never an unhandled rejection
@@ -259,14 +252,24 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
         console.warn(`[assetResolver] local byte-store read failed for ${workspaceId}; re-fetching`, err)
       }
       if (local) {
-        const defect = await localDefect(local, contentHash, expectedSize)
+        const defect = await localDefect(local, contentHash)
         if (!defect) return { ok: true, bytes: local, source: 'local' } // already durable (§8) — a hit, not a download
+        // A defective read is a miss either way. It is grounds to DELETE only once the
+        // entry is old enough not to be a write in flight: a peer (another tab, this
+        // page's other resolver) may hold the file open and we read it truncated —
+        // deleting then would destroy its completed write a moment later.
+        const stat = await byteStore.stat(userId, workspaceId, contentKey).catch(() => null)
+        const inFlight = stat !== null && stat.lastModified > 0 && Date.now() - stat.lastModified < ENTRY_SETTLE_MS
         console.warn(
-          `[assetResolver] local copy of ${contentHash} in ${workspaceId} is ${defect} (${local.byteLength} bytes); discarding it and re-fetching`,
+          `[assetResolver] local copy of ${contentHash} in ${workspaceId} is ${defect} (${local.byteLength} bytes); ${
+            inFlight ? 'possibly a write in flight, leaving it and' : 'discarding it and'
+          } re-fetching`,
         )
-        await byteStore.delete(userId, workspaceId, contentKey).catch((err: unknown) => {
-          console.warn(`[assetResolver] could not delete the ${defect} local copy for ${workspaceId}`, err)
-        })
+        if (!inFlight) {
+          await byteStore.delete(userId, workspaceId, contentKey).catch((err: unknown) => {
+            console.warn(`[assetResolver] could not delete the ${defect} local copy for ${workspaceId}`, err)
+          })
+        }
       }
 
       // (4) Miss → fetch the ciphertext (direct RLS-gated GET, §10.1).

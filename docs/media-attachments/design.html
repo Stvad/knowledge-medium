@@ -666,13 +666,17 @@ amount of wiping addresses.
     <code>getFileHandle(name, {create: true})</code> mints an <em>empty</em> entry before any byte lands,
     so a <code>put</code> whose write then fails (WebKit before Safari 26 had no
     <code>createWritable</code> — every asset on an iPad was an empty local hit after its first open) or a
-    writer killed mid-write leaves an entry that was never verified. So a local read is accepted only if it
-    is <em>non-empty</em>, its length equals the block's <code>media:size</code> when that is known, and its
-    <code>sha256</code> matches the block's <code>hash</code> — the same rule a download passes, over bytes
-    already in memory. Anything else is a <em>defect</em>: the entry is deleted and the resolve proceeds
-    exactly as a miss (the remote fetch → decode → verify → store path); if the remote also fails, the
-    resolve fails closed (<code>fetch-failed</code>, placeholder) — empty or short bytes are never served.
-    The down-lane's presence probes agree: an empty entry is <em>not</em> present.</li>
+    writer killed mid-write leaves an entry that was never verified. So a local read is accepted only if its
+    <code>sha256</code> matches the block's <code>hash</code> — <strong>the hash is the authority</strong>
+    (<code>media:size</code> is cosmetic and user-editable, so it decides nothing) — the same rule a download
+    passes, over bytes already in memory. Anything else is a <em>defect</em>: the resolve proceeds exactly as a
+    miss (the remote fetch → decode → verify → store path), and if the remote also fails it fails closed
+    (<code>fetch-failed</code>, placeholder) — empty or short bytes are never served. The defective entry is
+    <em>deleted only when it is safe to</em>: an entry younger than the settle window (60&nbsp;s) may be a peer's
+    write still in flight, read truncated through its open handle — deleting it would destroy the peer's
+    completed write a moment later — so a young defect is a miss that leaves the entry alone. The down-lane's
+    presence probes agree: an empty entry is <em>not</em> present (neither <code>has()</code> nor the one-shot
+    <code>listWorkspaceKeys()</code> enumeration reports it), and neither is one a peer holds open.</li>
   <li><strong>Stored bytes are not an independent authority — revocation rides the block claw-back.</strong>
     The OPFS byte store is namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke
     PowerSync drops the workspace's block rows from the local DB, and the out-of-band OPFS bytes need their
@@ -722,9 +726,8 @@ investigation).
   path (<code>&lt;ws&gt;/&lt;content-key&gt;</code>, §10). It is both the offline replica <em>and</em> the
   render source — there is no second tier. Decryption happens <strong>once, when bytes enter the
   store</strong> (a download decrypts + hash-verifies before writing, §9; a paste already holds plaintext),
-  not on every render — so the render path is a local read → <em>verify</em> (non-empty, length =
-  <code>media:size</code> when known, <code>sha256</code> = the block's <code>hash</code>; §7.3) → object
-  URL, with no decrypt step, and plaintext and E2EE workspaces are <strong>identical locally</strong>,
+  not on every render — so the render path is a local read → <em>verify</em> (<code>sha256</code> = the
+  block's <code>hash</code>; §7.3) → object URL, with no decrypt step, and plaintext and E2EE workspaces are <strong>identical locally</strong>,
   differing only in the at-rest format on the <em>server</em>. The read-side verify is not optional
   belt-and-braces: the store's write is not atomic on every engine (below), so a stored entry is not by
   itself proof of verified bytes.</p>
@@ -753,12 +756,19 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
     block in-thread, §5.1), and a stored byte is re-checked against it on every read (§7.3); never serve a
     content key's bytes for a different hash.</li>
   <li><strong>Writing the store: two invariants OPFS does not give for free.</strong>
-    (a) <em>A failed <code>put</code> leaves no entry.</em> <code>getFileHandle(create)</code> mints an
-    empty file before any byte lands, so a write that then fails (quota, a thrown API, a dead worker) must
-    remove the entry — otherwise the empty file is a permanent local hit. The stream path aborts the
-    writable and <code>removeEntry</code>s; the worker path removes the entry itself. A pre-existing entry
-    at the key held the same content-addressed bytes, so losing it on a failed re-put costs a re-fetch,
-    never data. There is no temp-file-then-rename: WebKit's <code>FileSystemFileHandle.move()</code> takes
+    (a) <em>A failed <code>put</code> leaves no <u>incomplete</u> entry.</em> <code>getFileHandle(create)</code>
+    mints an empty file before any byte lands, so a write that then fails (quota, a thrown API, a dead or
+    timed-out worker) must remove the entry — otherwise the empty file is a permanent local hit. The stream
+    path aborts the writable and <code>removeEntry</code>s; the worker path removes the entry itself; a
+    worker killed by the client's timeout gets the same clean-up from the store. The one exception is
+    load-bearing: an entry whose size already equals the bytes being written is a <em>peer's</em> complete
+    copy of the same content-addressed bytes — another tab, the home-screen PWA, or this page's other
+    resolver (the demand and down-lane resolvers don't share an in-flight map) — and is never deleted; the
+    failed writer treats it as its own write having landed. Likewise a peer's <em>open</em> sync access handle
+    (exclusive per file — a second opener is refused) is waited for with back-off, not failed on, and the
+    write resolves once the file's size equals ours. Same-path writes are serialized on both sides (the
+    client coalesces in-flight paths; the worker chains per path), so a page never races itself for the
+    lock. There is no temp-file-then-rename: WebKit's <code>FileSystemFileHandle.move()</code> takes
     different arguments from Chromium's, so atomicity is delete-on-failure plus the read-side verify, not a
     rename. (b) <em>A <code>put</code> works on every engine with OPFS.</em> Where
     <code>FileSystemFileHandle.prototype.createWritable</code> exists (Chromium, Firefox, Safari 26+) the
@@ -768,7 +778,10 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
     (<code>byteStoreWriter.worker.ts</code>) that re-walks the path, truncates, writes, flushes, and answers
     — a handle cannot be structured-cloned to a worker on that engine. The choice is read off the prototype
     once per store, never by trying and failing. Either path resolves only once the bytes are durable, so
-    the paste hot-path's "bytes before the block tx" ordering (§9/§11) is unchanged.</li>
+    the paste hot-path's "bytes before the block tx" ordering (§9/§11) is unchanged. The up-lane applies the
+    same rule on its way out: the §9 drain hash-verifies the local bytes against the record before sealing
+    and uploading them (a partial must never be uploaded under the content hash — that would poison the
+    path, §17); a mismatch deletes the entry and quarantines the record.</li>
   <li><strong>Repairing an already-poisoned store.</strong> A device that ran the pre-fix build holds empty
     entries the presence scans would otherwise count as replicated forever. <code>sweepEmpty(user, ws)</code>
     reaps a workspace's empty entries older than 60&nbsp;s (a younger one may be a <code>put</code> mid-flight
