@@ -241,6 +241,40 @@ describe('renaming a property with many consumers', () => {
     await waitFor(() => { expect(propertyDefinitionFanout()).toBeNull() })
   })
 
+  it('feeds the surface real progress, end to end', async () => {
+    // Everything else here mocks the COUNT, so nothing was driving an actual
+    // fan-out through the gate — and the mark that makes a report
+    // attributable is set inside the gesture's own transaction. Without it
+    // no report is accepted and the modal counts nothing for the whole
+    // freeze, which no amount of store-level testing would notice.
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode,
+          wk_canary, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS])
+    const schema = await vi.waitFor(() => {
+      const registered = repo.propertySchemas.get('test:myProp')
+      if (!registered) throw new Error('[test] test:myProp not registered yet')
+      return registered
+    }, {timeout: 3000})
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'consumer', workspaceId: WS, parentId: 'root', orderKey: 'b0', content: 'host',
+      })
+      await tx.setProperty('consumer', schema, 'v')
+    }, {scope: ChangeScope.BlockDefault})
+    consumersAre(4_000)
+    const seen = recordFanoutRuns()
+    renderSchema()
+    await renameTo('test:renamed')
+
+    await user().click(await screen.findByRole('button', {name: 'Rename'}))
+
+    await waitFor(async () => { expect(await storedName()).toBe('test:renamed') })
+    expect(seen.some(snapshot => snapshot?.done === 1)).toBe(true)
+  })
+
   it('leaves the property alone when the change is declined, field included', async () => {
     consumersAre(4_000)
     renderSchema()

@@ -56,6 +56,7 @@ import {
 import type { Repo } from './repo'
 import {
   beginPropertyDefinitionFanout,
+  markPropertyDefinitionFanoutRunning,
   propertyDefinitionFanout,
   __resetPropertyDefinitionFanoutForTests,
 } from './propertyDefinitionFanout'
@@ -2246,6 +2247,7 @@ describe('reporting fan-out progress', () => {
     const run = beginPropertyDefinitionFanout(WS, FIELD_ID, 'status', 1)
     try {
       expect(propertyDefinitionFanout()?.done).toBeNull()
+      markPropertyDefinitionFanoutRunning(WS, FIELD_ID)
 
       await rename(repo, FIELD_ID, 'state')
 
@@ -2266,40 +2268,10 @@ describe('reporting fan-out progress', () => {
     for (const id of ['p1', 'p2', 'p3']) await seedProperty(repo, id, 'status', 'done')
     const run = beginPropertyDefinitionFanout(WS, FIELD_ID, 'status', 3)
     try {
+      markPropertyDefinitionFanoutRunning(WS, FIELD_ID)
       await rename(repo, FIELD_ID, 'state')
 
       expect(propertyDefinitionFanout()).toMatchObject({done: 3, total: 3})
-    } finally {
-      run.end()
-    }
-  })
-
-  it('says it is committing once the change is going to land', async () => {
-    await seedWorkspace('children')
-    const repo = await setupDefinition()
-    await seedProperty(repo, 'p1', 'status', 'done')
-    const run = beginPropertyDefinitionFanout(WS, FIELD_ID, 'status', 1)
-    try {
-      await rename(repo, FIELD_ID, 'state')
-
-      expect(propertyDefinitionFanout()).toMatchObject({done: 1, phase: 'committing'})
-    } finally {
-      run.end()
-    }
-  })
-
-  it('says it is committing only once it is past every refusal', async () => {
-    // The checks that turn a change away run AFTER the last consumer, so a
-    // surface told "committing" at the last consumer would be promising an
-    // uninterruptible save over a transaction about to roll back.
-    await seedWorkspace('children')
-    const repo = await setupDefinition('string', undefined, 'string')
-    await seedProperty(repo, 'p1', 'status', 'not a number')
-    const run = beginPropertyDefinitionFanout(WS, FIELD_ID, 'status', 1)
-    try {
-      await expect(retype(repo, FIELD_ID, 'number')).rejects.toThrow()
-
-      expect(propertyDefinitionFanout()).toMatchObject({done: 1, phase: 'updating'})
     } finally {
       run.end()
     }

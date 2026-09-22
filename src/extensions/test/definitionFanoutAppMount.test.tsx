@@ -30,8 +30,8 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   beginPropertyDefinitionFanout,
+  markPropertyDefinitionFanoutRunning,
   reportPropertyDefinitionFanout,
-  reportPropertyDefinitionFanoutCommitting,
   __resetPropertyDefinitionFanoutForTests,
   type PropertyDefinitionFanoutRun,
 } from '@/data/propertyDefinitionFanout'
@@ -107,14 +107,16 @@ const openRunNamed = async (
   return run
 }
 
+/** A report is only accepted while the run's own transaction is running, so
+ *  every progress test has to say that first — which is the point of it. */
+const transactionStarts = (workspaceId = WS, fieldId = FIELD_ID): void => {
+  act(() => { markPropertyDefinitionFanoutRunning(workspaceId, fieldId) })
+}
+
 const report = (
   done: number, total = 4_000, workspaceId = WS, fieldIds = [FIELD_ID],
 ): void => {
   act(() => { reportPropertyDefinitionFanout(workspaceId, fieldIds, done, total) })
-}
-
-const committing = (workspaceId = WS, fieldIds = [FIELD_ID]): void => {
-  act(() => { reportPropertyDefinitionFanoutCommitting(workspaceId, fieldIds) })
 }
 
 const bar = () => screen.getByRole('progressbar')
@@ -141,6 +143,7 @@ describe('the fan-out progress surface', () => {
       expect(screen.getByTestId('shadowing').textContent).toBe('true')
     })
 
+    transactionStarts()
     report(1_000)
     expect(screen.getByText('1,000 of 4,000 blocks updated')).toBeTruthy()
     expect(bar().getAttribute('aria-valuenow')).toBe('1000')
@@ -149,14 +152,11 @@ describe('the fan-out progress surface', () => {
     // refuse a change which would lose stored values run after it, and a
     // rollback is not something to tell the user cannot be stopped.
     report(4_000)
-    expect(screen.getByText('4,000 of 4,000 blocks updated')).toBeTruthy()
+    // NEUTRAL, not "saving": the remaining same-tx processors run in this
+    // tail and a plugin's can still reject, so the change may yet be rolled
+    // back whole and nothing here may claim otherwise.
+    expect(screen.getByText('Finishing…')).toBeTruthy()
     expect(screen.getByText(/leaves the property as it was/)).toBeTruthy()
-
-    // Only the fan-out can say it is past every refusal.
-    committing()
-    expect(screen.getByText('Saving the change…')).toBeTruthy()
-    expect(screen.getByText(/cannot be stopped/)).toBeTruthy()
-    expect(screen.queryByText(/leaves the property as it was/)).toBeNull()
 
     act(() => { run.end() })
     await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
@@ -183,9 +183,30 @@ describe('the fan-out progress surface', () => {
     await openRun(WS, 4_000)
     expect(await screen.findByRole('dialog')).toBeTruthy()
 
+    transactionStarts()
     report(500, 4_000, 'ws-somewhere-else')
 
     expect(screen.getByText('Starting…')).toBeTruthy()
+  })
+
+  it('ignores a report arriving before its own transaction starts', async () => {
+    // Identity cannot separate this case: a headless change to the SAME
+    // definition in the same workspace can hold the writer while the user
+    // is still at the confirmation. What separates them is that the writer
+    // is exclusive — so a report before this run's transaction is running
+    // belongs to whatever else holds it.
+    renderMount()
+    await openRun(WS, 4_000)
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+
+    report(500)
+
+    expect(screen.getByText('Starting…')).toBeTruthy()
+
+    // And once it IS running, the same report is this run's.
+    transactionStarts()
+    report(500)
+    expect(screen.getByText('500 of 4,000 blocks updated')).toBeTruthy()
   })
 
   it('ignores a report from a change to a DIFFERENT definition', async () => {
@@ -197,6 +218,7 @@ describe('the fan-out progress surface', () => {
     await openRun(WS, 4_000)
     expect(await screen.findByRole('dialog')).toBeTruthy()
 
+    transactionStarts()
     report(500, 4_000, WS, ['field-somebody-elses'])
 
     expect(screen.getByText('Starting…')).toBeTruthy()
@@ -213,6 +235,7 @@ describe('the fan-out progress surface', () => {
     expect(await screen.findByRole('dialog')).toBeTruthy()
 
     const second = await openRunNamed('otherProperty', 9_000)
+    transactionStarts()
     report(500)
 
     expect(screen.getByText(/Updating blocks that use “status”/)).toBeTruthy()
