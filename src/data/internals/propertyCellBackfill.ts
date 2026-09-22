@@ -1,18 +1,25 @@
 /**
  * The properties-as-blocks cell → children pass (§11 slice C).
  *
- * Every block whose `properties_json` holds a registered key gets the field
- * and value CHILD rows that key implies, built by the same helper the live
- * dual-write uses (`materializePropertyChildrenForExistingRow`). Cells are
- * left exactly as they are: this pass ADDS the child representation.
+ * Every block whose `properties_json` holds a registered key gets the field and
+ * value CHILD rows that key implies, from the same builders the live dual-write
+ * uses — {@link plannedFieldRow} and {@link valueChildRowsFor} — so the two
+ * writers cannot decide differently what a value's children are. Cells are left
+ * exactly as they are: this pass ADDS the child representation.
  *
- * IT RUNS ONLY PAST THE FLIP, and is CREATE-ONLY (see
- * {@link namesPendingMaterialization}): the live maintainers are on and the
- * children are the property truth, so the only work left is GAPS — a cell key
- * with no field row of its own. The runbook is flip THEN backfill: flipping a
- * workspace with no children hides nothing, because at `'children'` the cell is
- * still dual-written and still the synchronous read surface, while backfilling
- * first leaves a window in which new machinery is unrecognized and visible.
+ * IT RUNS ONLY PAST THE FLIP, and is CREATE-ONLY: the live maintainers are on
+ * and the children are the property truth, so the only work left is GAPS — a
+ * cell key with no field row of its own. That restriction is what the batch
+ * plan enforces, by skipping any key whose fieldId already has a field row
+ * under its owner, LIVE OR TOMBSTONED. Both halves matter: an existing row
+ * means the key is already migrated, and a tombstoned one means the property
+ * was deleted through its children on a peer, so re-creating it from the stale
+ * cell would undo that delete and upload it.
+ *
+ * The runbook is flip THEN backfill: flipping a workspace with no children
+ * hides nothing, because at `'children'` the cell is still dual-written and
+ * still the synchronous read surface, while backfilling first leaves a window
+ * in which new machinery is unrecognized and visible.
  *
  * So every batch that WRITES re-asserts the flip and REFUSES an un-flipped
  * workspace (see {@link sweep}), instead of carrying a second mode for the order
@@ -20,23 +27,32 @@
  * transaction and so never asks — and writes nothing either, which is the
  * property the check exists for.
  *
- * `operator` trigger, so nothing schedules it. Its writes upload — that is the
- * point, one device builds the rows and every other device receives them —
- * which is also why it must not be attempted concurrently by a fleet; the
- * `BackfillCompletionClaim` records who is doing it.
+ * READ AND WRITTEN IN BULK, because the pass is read-bound: a batch asks two
+ * questions for the WHOLE batch — the rows, and every field row under them —
+ * plans in memory, and writes through `tx.createMany`. Asking per block is the
+ * shape to keep out of here; each question added costs one round trip per block
+ * visited, not per batch.
  *
  * RESUMABILITY IS DERIVED, NOT CHECKPOINTED. The candidate query asks the data
  * itself what is left to do, so a run killed halfway simply finds less work
  * next time and no progress state can go stale or disagree with the graph.
- * That is why there is no cursor to persist: the pass is a fixpoint, and
- * `materializePropertyChildrenForExistingRow` is idempotent per row.
+ * That is why there is no cursor to persist: the pass is a fixpoint, and the
+ * already-has-a-field-row test above is what makes revisiting a block a no-op.
  */
 
-import type { BlockData, Tx } from '@/data/api'
+import type { BlockData, NewBlockData } from '@/data/api'
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
 import { CallbackSet } from '@/utils/callbackSet'
-import { getPropertyFieldTargetId } from '@/data/propertyChildren'
-import { materializePropertyChildrenForExistingRow } from './propertyChildrenProcessor'
+import {
+  encodedPropertyValueToChildContents,
+  getPropertyFieldTargetId,
+  propertyCellValueRejection,
+} from '@/data/propertyChildren'
+import {
+  plannedFieldRow,
+  valueChildRowsFor,
+  undecodableCellValueError,
+} from './propertyChildrenProcessor'
 
 export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
 
@@ -87,8 +103,8 @@ const CARRIES_A_PROPERTY = `
  * for B has one of each and drops out while A is still unmigrated. Any count
  * comparison can be fooled that way, and whether a key is REGISTERED is a
  * question only the JS registry can answer — so SQL selects the superset and
- * `materializePropertyChildrenForExistingRow` is the exact test. A visited row
- * with nothing to do costs one read and no write.
+ * the batch plan is the exact test. A visited row with nothing to do costs no
+ * read of its own, since its batch reads it either way, and no write.
  *
  * `id > ?` paginates rather than `OFFSET`, which would re-walk the prefix per
  * batch. The pass's own creates (field and value rows) carry no properties, so
@@ -151,51 +167,96 @@ export const onPropertyCellBackfillProgress = (
 export interface PropertyCellBackfillProgress {
   /** Blocks read this sweep. */
   blocksScanned: number
-  /** Blocks the materializer accepted in full this sweep. Not "blocks
-   *  changed" — a block that already had its children is accepted and written
-   *  to zero times. NOT a proxy for "anything happened": one junk key on every
-   *  block leaves this at zero for a run that migrated all the others, which
-   *  is what `valuesMaterialized` is for. */
+  /** Blocks this sweep found acceptable — every key on them either
+   *  materialized or was already there. Not "blocks changed": a block that
+   *  already had its children is accepted and written to zero times, so a
+   *  converged sweep reports every block it scanned. NOT a proxy for "anything
+   *  happened" either: one junk key on every block leaves this at zero for a
+   *  run that migrated all the others, which is what `valuesMaterialized` is
+   *  for. */
   blocksMaterialized: number
+  /** DISTINCT blocks changed over the WHOLE run — the number an operator is
+   *  shown at the end.
+   *
+   *  The per-sweep count cannot be it, because it is not counting the same
+   *  thing: `blocksMaterialized` is every owner the sweep found acceptable,
+   *  written to or not, so the converging sweep reports its whole scan. Read
+   *  as the run's total it claims a migration of every block the pass merely
+   *  re-checked.
+   *
+   *  Nor can the per-sweep counts be SUMMED. A key that arrives behind the
+   *  cursor is picked up by a later sweep, which is the whole reason the pass
+   *  is a fixpoint — and if that owner already had another key materialized
+   *  earlier, summing counts it twice and the total can exceed the number of
+   *  blocks in the workspace. Counted by owner id instead. */
+  blocksMaterializedTotal: number
   /** Property values materialized this sweep, counting the ones on a block that
    *  also had a failure. */
   valuesMaterialized: number
-  /** The same, for the WHOLE run. This is the one that distinguishes a
-   *  systematic failure from a handful of bad values, and the per-sweep count
+  /** The same, for the WHOLE run. This is the one that separates "nothing
+   *  moved" from "some moved and some were refused", and the per-sweep count
    *  cannot: the converging sweep is BY DEFINITION the one that found nothing
-   *  left pending, so its zero is the normal ending. Testing the
-   *  per-sweep count reported a run that migrated everything as "nothing was
-   *  migrated — that is a systematic problem", and suppressed the repair
-   *  worklist naming the values that actually failed. */
+   *  left pending, so its zero is the normal ending of a healthy run. Read
+   *  per-sweep, a run that migrated everything came back as a failure, with
+   *  the repair worklist naming the actually-bad values suppressed. */
   valuesMaterializedTotal: number
   /** Full passes over the workspace. More than two means cell keys kept
    *  arriving under the pass. */
   sweeps: number
   /** Property values that could not be materialized this sweep, with the
-   *  reason. Reported, never fatal — see {@link materializeRow}. Capped at
-   *  {@link MAX_REPORTED_FAILURES}. */
+   *  reason. Reported, never fatal: a cell value its codec refuses is legacy
+   *  junk from a raw bag write, and one such key must cost its own key rather
+   *  than every key on the block. Capped at {@link MAX_REPORTED_DETAIL}. */
   failures: {blockId: string; reason: string}[]
-  /** Failures this sweep, including any past the cap. Paired with
-   *  `blocksMaterialized === 0` it is the signal that the run hit something
-   *  SYSTEMATIC — a codec rejecting everything, storage refusing writes —
-   *  rather than a handful of bad values, and the operator must be told that
-   *  rather than shown "migrated 0 blocks" in green. Deliberately not a throw:
-   *  `blocksMaterialized` counts blocks accepted IN FULL, so one junk key on
-   *  every block would abort a migration that in fact wrote most of it. */
+  /** Failures this sweep, including any past the cap. Read with
+   *  `valuesMaterializedTotal === 0` to separate "nothing moved" from "some
+   *  moved and some were refused" — nothing here can say WHY nothing moved,
+   *  and `describePassOutcome` deliberately does not guess. Reported rather
+   *  than thrown: one junk key on every block would otherwise abort a
+   *  migration that in fact wrote every other key. */
   failureCount: number
+  /** DISTINCT property names this sweep skipped because no registered schema
+   *  resolves them. Capped at {@link MAX_REPORTED_DETAIL}. Names rather than
+   *  block ids because the repair is per KEY — register or re-enable whatever
+   *  defines it — and one such key is typically on thousands of blocks. */
+  unresolvedNames: string[]
+  /** Cells skipped for want of a registered schema this sweep, including any
+   *  past the cap on the names above.
+   *
+   *  A separate count from {@link failureCount} because the two ask different
+   *  things of the operator: a refused value is junk to repair, an unresolved
+   *  key is a schema to register — and unlike a refusal it may be permanent
+   *  (an abandoned key no plugin will ever claim again), so folding them would
+   *  put a workspace with dead keys under a failure banner forever. What every
+   *  surface actually wants is the pair, which is {@link pendingValueCount}. */
+  unresolvedCount: number
 }
+
+/** Values this sweep did NOT leave migrated, whatever the reason. THE question
+ *  every operator surface asks — "is there anything left?" — and the one place
+ *  it is answered, so a caller cannot ask it of one category and miss the
+ *  other.
+ *
+ *  It exists because they did: `failureCount` alone reads as zero for a sweep
+ *  that skipped every cell it saw, which told the palette action a run had
+ *  verified an empty worklist and let it clear one that was still live. */
+export const pendingValueCount = (progress: PropertyCellBackfillProgress): number =>
+  progress.failureCount + progress.unresolvedCount
 
 /** A run's counters at zero. Two callers build one — the pass, and the
  *  `WorkspaceBackfill` wrapper that parks the last run for the operator surface
  *  — and a field added to the type must reach both. */
 const emptyProgress = (): PropertyCellBackfillProgress => ({
-  blocksScanned: 0, blocksMaterialized: 0, valuesMaterialized: 0,
+  blocksScanned: 0, blocksMaterialized: 0, blocksMaterializedTotal: 0,
+  valuesMaterialized: 0,
   valuesMaterializedTotal: 0, sweeps: 0, failures: [], failureCount: 0,
+  unresolvedNames: [], unresolvedCount: 0,
 })
 
-/** Cap on retained failure detail. `failureCount` stays exact; this only
- *  bounds what a pathological graph can accumulate in memory and hand back. */
-const MAX_REPORTED_FAILURES = 50
+/** Cap on retained detail, for BOTH lists a sweep hands back. The counts
+ *  beside them stay exact; this only bounds what a pathological graph can
+ *  accumulate in memory. */
+const MAX_REPORTED_DETAIL = 50
 
 /** Sweeps before giving up. A second sweep is normal — it is what proves the
  *  first one converged. Needing a fifth means the workspace is being edited
@@ -203,124 +264,44 @@ const MAX_REPORTED_FAILURES = 50
  *  rather than to loop against a live user. */
 const MAX_SWEEPS = 4
 
-/** The fieldIds this owner already has LIVE field rows for. Same
- *  `tx.childrenOf` the materializer reads, so "already materialized" cannot
- *  disagree with the branch it will actually take. */
-const materializedFieldIds = async (tx: Tx, row: BlockData): Promise<Set<string>> => {
-  const ids = new Set<string>()
-  for (const child of await tx.childrenOf(row.id, undefined)) {
-    const fieldId = child.isFieldForm ? getPropertyFieldTargetId(child) : undefined
-    if (fieldId !== undefined) ids.add(fieldId)
-  }
-  return ids
-}
-
-/**
- * The create-only subset — the whole of what this pass does: cell keys with no
- * field row of their own.
- *
- * The CHILDREN are the property truth and the cell is a local, derived read
- * surface — a device that has received value rows from sync and not yet
- * re-projected them holds a stale bag over live children — so writing from the
- * cell against an existing field row overwrites real values, and naming a key
- * only the children carry tombstones them. A key with NO field row is the one
- * shape the cell is still authoritative for (§5's pending-materialization
- * rule), and it is exactly the branch
- * `materializePropertyChildrenForExistingRow` CREATES rather than reconciles:
- * filtering to it means the pass can only take that branch.
- *
- * A field row with NO value children is deliberately not treated as a gap:
- * that projects as "key unset" (§9), which is what deleting the value row
- * means, and re-adding it from the cell would undo the user's edit.
- *
- * A TOMBSTONED field row gets the same treatment. "No live field row" has two
- * causes — history, and a property DELETED through its children on a peer whose
- * owner row has not reached this device — and only the tombstone tells them
- * apart. Without it the pass recreates the property and UPLOADS it, undoing the
- * delete for the fleet. Genuine history carries no tombstone, so this costs the
- * intended path nothing. It does NOT cover an out-of-band HARD delete of a
- * child, which leaves no tombstone to find and whose stale cell key is a known
- * permanent orphan (issue #404).
- */
-const namesPendingMaterialization = async (
-  tx: Tx,
-  ctx: WorkspaceBackfillContext,
-  row: BlockData,
-): Promise<string[]> => {
-  const materialized = await materializedFieldIds(tx, row)
-  // Read under the SAME write lock as the materialization it gates. Taken with
-  // the candidate scan instead, a tombstone that landed while the batch waited
-  // for the writer would be missed — and missing it is the whole failure.
-  const reaped = new Set((await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id))
-    .map(getPropertyFieldTargetId))
-  return Object.keys(row.properties).filter(name => {
-    const fieldId = ctx.resolveNameSchema(name)?.fieldId
-    // An unregistered key has no definition to point a field row AT, so the
-    // materializer skips it and it can never leave this set. Excluded rather
-    // than carried: convergence is "a sweep that materialized nothing", and
-    // `materializeRow` counts NAMES HANDED to the materializer, so one such key
-    // on one block kept every sweep looking like work and the run ended in a
-    // give-up — on exactly the graphs `audit-properties` exists to find.
-    if (fieldId === undefined) return false
-    return !(materialized.has(fieldId) || reaped.has(fieldId))
-  })
-}
-
-/**
- * Materialize one row, isolating a name whose cell value will not decode.
- *
- * `materializePropertyChildrenForExistingRow` walks `names` and THROWS at the
- * first one whose cell value fails its codec — legacy junk from a raw
- * `tx.update({properties})`. Refusing is right for a live edit and wrong for a
- * one-time sweep in two ways: unhandled it aborts the migration for the whole
- * graph, and caught per ROW it strands every name after the bad one — so one
- * junk key leaves every other key on that block cell-only, silently, on a
- * workspace that is already reading children.
- *
- * So: one call for the whole list (one `childrenOf`, the common path), and on
- * a throw one call per name. The re-read cost is paid only by rows that are
- * already broken.
- */
-const materializeRow = async (
-  tx: Tx,
-  ctx: WorkspaceBackfillContext,
-  row: BlockData,
-  names: readonly string[],
-  onFailure: (blockId: string, cause: unknown) => void,
-  onMaterialized: (values: number) => void,
-): Promise<boolean> => {
-  const lookups = {resolveNameSchema: ctx.resolveNameSchema}
-  try {
-    await materializePropertyChildrenForExistingRow(tx, row, lookups, names)
-    onMaterialized(names.length)
-    return true
-  } catch {
-    for (const name of names) {
-      try {
-        await materializePropertyChildrenForExistingRow(tx, row, lookups, [name])
-        onMaterialized(1)
-      } catch (cause) {
-        onFailure(row.id, cause)
-      }
-    }
-    return false
-  }
-}
-
 /** One cursor-paginated walk of {@link CANDIDATE_SQL}. */
 const sweep = async (
   ctx: WorkspaceBackfillContext,
   progress: PropertyCellBackfillProgress,
+  /** Owner ids changed so far in this RUN, across sweeps — see
+   *  `blocksMaterializedTotal`, whose value is this set's size. Held by the
+   *  run rather than the sweep because deduplicating is the whole point. */
+  changedOwners: Set<string>,
   onBatch: () => void | Promise<void>,
 ): Promise<void> => {
   const recordFailure = (blockId: string, cause: unknown) => {
     progress.failureCount += 1
-    if (progress.failures.length < MAX_REPORTED_FAILURES) {
+    if (progress.failures.length < MAX_REPORTED_DETAIL) {
       progress.failures.push({
         blockId,
         reason: cause instanceof Error ? cause.message : String(cause),
       })
     }
+  }
+
+  /** Deduped against what this sweep has already reported: one unregistered
+   *  key is normally on every block that carries it, and the operator needs
+   *  the key once, not once per block. The COUNT stays per cell — it is the
+   *  scale of what was skipped.
+   *
+   *  Bounded by the same cap as the list it feeds, and the ORDER of the two
+   *  checks is what bounds it: past the cap nothing is reported, so there is
+   *  nothing left to dedup against and a set that kept growing would be pure
+   *  retention. A graph with a unique junk key per cell is exactly the shape
+   *  the cap exists for, and it is the one that would have grown this without
+   *  bound for the whole sweep. */
+  const seenUnresolved = new Set<string>()
+  const recordUnresolved = (name: string) => {
+    progress.unresolvedCount += 1
+    if (progress.unresolvedNames.length >= MAX_REPORTED_DETAIL) return
+    if (seenUnresolved.has(name)) return
+    seenUnresolved.add(name)
+    progress.unresolvedNames.push(name)
   }
 
   let cursor = ''
@@ -363,24 +344,136 @@ const sweep = async (
           'both in order.',
         )
       }
-      for (const {id} of batch) {
-        progress.blocksScanned += 1
-        // Re-read INSIDE the transaction rather than carrying the scan's
-        // snapshot into it. The scan ran before the write lock, and a pass
-        // over a whole workspace spans minutes — a sync arrival draining into
-        // `blocks`, or the user's own edit, lands in that window, and
-        // materializing from the stale bag would write children for values
-        // that are no longer there.
-        const row = await tx.get(id)
-        if (row === null || row.deleted) continue
-        const names = await namesPendingMaterialization(tx, ctx, row)
-        const ok = await materializeRow(tx, ctx, row, names, recordFailure,
-          values => {
-            progress.valuesMaterialized += values
-            progress.valuesMaterializedTotal += values
-          })
-        if (ok) progress.blocksMaterialized += 1
+      progress.blocksScanned += batch.length
+      // Re-read INSIDE the transaction rather than carrying the scan's
+      // snapshot into it. The scan ran before the write lock, and a pass
+      // over a whole workspace spans minutes — a sync arrival draining into
+      // `blocks`, or the user's own edit, lands in that window, and
+      // materializing from the stale bag would write children for values
+      // that are no longer there.
+      //
+      // TWO reads for the whole batch, not four per block: asked per block,
+      // every one of them re-asks the same two questions of a different row.
+      const owners = await tx.liveRowsForIds(ctx.workspaceId, batch.map(b => b.id))
+      const takenByOwner = new Map<string, Set<string>>()
+      for (const fieldRow of await tx.propertyFieldRowsForParents(
+        ctx.workspaceId, owners.map(owner => owner.id),
+      )) {
+        const fieldId = getPropertyFieldTargetId(fieldRow)
+        if (fieldRow.parentId === null || fieldId === undefined) continue
+        const taken = takenByOwner.get(fieldRow.parentId) ?? new Set<string>()
+        taken.add(fieldId)
+        takenByOwner.set(fieldRow.parentId, taken)
       }
+
+      const planned: {
+        owner: BlockData
+        fieldRow: NewBlockData
+        /** Encoded INSIDE the per-key guard below, so a value no codec will
+         *  take costs its own key instead of aborting the batch. */
+        contents: readonly string[]
+      }[] = []
+      // Counted into locals and committed to `progress` only once the batch has
+      // WRITTEN. A throw from either `createMany` rolls the transaction back,
+      // and the run parks its progress for the operator surface — so counting
+      // as we plan reported rolled-back rows as migrated. Row-at-a-time, that
+      // was one row; batched, it is the whole batch.
+      let acceptedHere = 0
+      let valuesHere = 0
+      const changedHere: string[] = []
+      const commitCounts = () => {
+        progress.blocksMaterialized += acceptedHere
+        for (const id of changedHere) changedOwners.add(id)
+        progress.blocksMaterializedTotal = changedOwners.size
+        progress.valuesMaterialized += valuesHere
+        progress.valuesMaterializedTotal += valuesHere
+      }
+      for (const owner of owners) {
+        let materializedHere = 0
+        let rejectedHere = 0
+        /** Keys skipped for want of a schema, which are NOT rejections but are
+         *  equally not migrated — see the acceptance test below. */
+        let unresolvedHere = 0
+        for (const name of Object.keys(owner.properties)) {
+          const schema = ctx.resolveNameSchema(name)
+          // An unregistered key has no definition to point a field row AT, so
+          // it can never leave the pending set. Excluded from the MATERIALIZED
+          // counts rather than carried: convergence is "a sweep that
+          // materialized nothing", and one such key on one block kept every
+          // sweep looking like work.
+          //
+          // Counted all the same, which it was not. Skipped silently, it left
+          // every surface that asks "is there anything left?" reading a zero
+          // that was not true — including the runbook's stop condition, which
+          // announced a finished migration over cells nothing had attempted.
+          if (schema === undefined) { recordUnresolved(name); unresolvedHere += 1; continue }
+          if (takenByOwner.get(owner.id)?.has(schema.fieldId)) continue
+          const encoded = owner.properties[name]
+          // PER-NAME ISOLATION, which the row-at-a-time retry loop this
+          // replaced bought by catching around one name. One key that cannot
+          // be planned must cost its own key, not every key on the block and
+          // not the workspace's whole pass.
+          //
+          // Two ways it fails, and both belong here. The cell VALUE its codec
+          // refuses is the common one — legacy junk from a raw
+          // `tx.update({properties})`. The other is the DEFINITION: a fieldId
+          // that `propertyFieldContent` cannot render back out (whitespace,
+          // parentheses) throws when the field row is built, and that is a
+          // property of the definition rather than of this block's value, so
+          // the value check above cannot see it coming.
+          const rejection = propertyCellValueRejection(schema, encoded)
+          if (rejection) {
+            // The wrapper, not the bare cause: a `CodecError` says "expected
+            // string, got object" and nothing about WHICH key on this block.
+            recordFailure(owner.id, undecodableCellValueError(name, owner.id, schema, rejection))
+            rejectedHere += 1
+            continue
+          }
+          let fieldRow: NewBlockData
+          let contents: readonly string[]
+          try {
+            fieldRow = plannedFieldRow(tx, owner, schema.fieldId)
+            contents = encodedPropertyValueToChildContents(schema, encoded)
+          } catch (cause) {
+            recordFailure(owner.id, cause)
+            rejectedHere += 1
+            continue
+          }
+          planned.push({owner, fieldRow, contents})
+          materializedHere += 1
+        }
+        // "Accepted IN FULL" = every key on this owner either materialized or
+        // was already there, which is what `blocksMaterialized` promises. So
+        // it asks about both ways a key can fail to land: refused by a codec,
+        // and skipped for want of a schema. Counting a skipped owner as
+        // accepted put the same claim the banner used to make — a finished
+        // migration over cells nothing attempted — back on the per-sweep
+        // console line, one derivation below where that was fixed.
+        //
+        // NOT gated on `materializedHere`: an owner whose field rows already
+        // exist is accepted having been written to zero times, and gating on
+        // writes made a converged sweep — the one that by definition plans
+        // nothing — report `0 / blocksScanned`, the same reading as a sweep
+        // whose every key was refused.
+        if (rejectedHere === 0 && unresolvedHere === 0) acceptedHere += 1
+        // The run-wide set answers the other question, "which blocks did this
+        // run change", so it counts writes and a partly migrated owner did
+        // change.
+        if (materializedHere > 0) changedHere.push(owner.id)
+        valuesHere += materializedHere
+      }
+      if (planned.length === 0) { commitCounts(); return }
+
+      // Field rows first, in their own call, because the value children need
+      // the minted ids to point at. Both calls go through `tx.createMany`, so
+      // the rows are workspace- and parent-checked and `record`ed exactly as
+      // one-at-a-time creates would be.
+      const fieldRowIds = await tx.createMany(planned.map(({fieldRow}) => fieldRow))
+      await tx.createMany(planned.flatMap(({owner, contents}, index) =>
+        valueChildRowsFor(
+          tx, {id: fieldRowIds[index]!, workspaceId: owner.workspaceId}, contents,
+        )))
+      commitCounts()
     }, {description: 'Migrate properties to child blocks'})
 
     // Awaited so a caller can do real work between batches — the seam a test
@@ -411,6 +504,10 @@ export const runPropertyCellBackfill = async (
   onProgress?: (progress: PropertyCellBackfillProgress) => void | Promise<void>,
 ): Promise<PropertyCellBackfillProgress> => {
   const progress = emptyProgress()
+  // One entry per block this run changed, for the run-wide total. Bounded by
+  // the workspace's property-carrying blocks, and an id apiece — far smaller
+  // than the block snapshots the same run already holds (#605).
+  const changedOwners = new Set<string>()
 
   for (;;) {
     progress.sweeps += 1
@@ -419,7 +516,9 @@ export const runPropertyCellBackfill = async (
     progress.valuesMaterialized = 0
     progress.failures = []
     progress.failureCount = 0
-    await sweep(ctx, progress, async () => { await onProgress?.(progress) })
+    progress.unresolvedNames = []
+    progress.unresolvedCount = 0
+    await sweep(ctx, progress, changedOwners, async () => { await onProgress?.(progress) })
     if (progress.valuesMaterialized === 0) {
       // One last notification: everything a subscriber knows arrives through
       // `onProgress`, which otherwise fires only from inside a batch — so the
@@ -487,6 +586,15 @@ export const propertyCellBackfill: WorkspaceBackfill = {
       console.warn(
         `[${PROPERTY_CELL_BACKFILL_ID}] ${progress.failureCount} property value(s) could ` +
         `not be migrated and kept their cell value:`, progress.failures,
+      )
+    }
+    if (progress.unresolvedCount > 0) {
+      console.warn(
+        `[${PROPERTY_CELL_BACKFILL_ID}] ${progress.unresolvedCount} property value(s) were ` +
+        'SKIPPED because no registered schema resolves their key, so they still have no ' +
+        'blocks. Register or re-enable whatever defines these keys and run this again ' +
+        '(`pnpm agent audit-properties` lists every unresolved key in the workspace):',
+        progress.unresolvedNames,
       )
     }
   },

@@ -34,6 +34,7 @@ import type {
   AnyValuePresetCore,
   SameTxTypeOwnership,
   BlockData,
+  BlockReference,
   ChangedRow,
   RepoTxOptions,
   SameTxEmittedEvent,
@@ -308,6 +309,9 @@ export interface RunTxParams<R> {
    *  Throws (e.g. `ProcessorRejection`) propagate out and roll back
    *  the user's tx atomically. */
   sameTxProcessors: ReadonlyMap<string, AnySameTxProcessor>
+  /** Content → the `references` it already implies, snapshotted at tx start
+   *  alongside the registries above — see `Tx.derivedReferencesFor`. */
+  contentReferencePrefill?: (content: string) => BlockReference[] | undefined
   /** When true this tx is an undo/redo replay driven by
    *  `TxImpl.applyRaw` (see `Repo._replay`). The same-tx processor
    *  pass is SKIPPED for replays: `applyRaw` is contracted to drive
@@ -381,6 +385,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
     mutators, processors, sameTxProcessors, propertySchemas, valuePresets,
+    contentReferencePrefill,
     typeDefinitionsForWorkspace,
     propertyDefinitionRegistryForWorkspace,
     propertySchemaWorkspaceId,
@@ -507,6 +512,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       mutatorCalls,
       mutators,
       processors,
+      contentReferencePrefill,
       propertySchemaResolverFor: resolverFor,
       sameTxEvents,
       now,

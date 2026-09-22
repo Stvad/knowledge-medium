@@ -14,6 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { referencesDataExtension } from '@/plugins/references/dataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -64,6 +65,11 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
+    // The References plugin, so `references_json` is REAL here. Without it the
+    // prefill has no contributor and the pass-vs-live comparison below comes
+    // out `'[]' === '[]'` — proving nothing about the column the whole
+    // create-time prefill exists to fill.
+    referencesDataExtension,
     definitionSeedsFacet.of(noteProp, {source: 'test'}),
     definitionSeedsFacet.of(extraProp, {source: 'test'}),
     definitionSeedsFacet.of(tagsProp, {source: 'test'}),
@@ -127,6 +133,53 @@ const seedNotes = async (count: number) => {
 }
 
 const run = async () => repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)
+
+/** A context whose registry answers with a BROKEN fieldId for one name — an
+ *  id `propertyFieldContent` cannot render back out, which is what a legacy or
+ *  hand-made definition block can carry. Injected at the resolver rather than
+ *  seeded, because a definition seed's id is derived and cannot be made to
+ *  look like this. */
+const ctxWithUnrenderableFieldId = (brokenName: string): WorkspaceBackfillContext => {
+  const base = makeCtx()
+  return {
+    ...base,
+    resolveNameSchema: name => {
+      const schema = base.resolveNameSchema(name)
+      if (schema === undefined || name !== brokenName) return schema
+      return {...schema, fieldId: 'not a renderable id'}
+    },
+  }
+}
+
+/** A block's property machinery as SHAPE — ids dropped, because two blocks
+ *  written by different routes never share them, and order keys dropped for
+ *  their RANK, because `fractional-indexing-jittered` deliberately randomises
+ *  them so concurrent replicas do not collide. Sibling ORDER is the part that
+ *  carries meaning and the part the two routes must agree on. */
+const machineryShape = async (ownerId: string) => {
+  const fieldRows = await sharedDb.db.getAll<{
+    id: string; content: string; order_key: string
+    reference_target_id: string | null; is_field_form: number | null; references_json: string
+  }>(
+    `SELECT id, content, order_key, reference_target_id, is_field_form, references_json
+       FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`, [ownerId])
+  const out = []
+  for (const field of fieldRows) {
+    const values = await sharedDb.db.getAll<{content: string; order_key: string; references_json: string}>(
+      `SELECT content, order_key, references_json FROM blocks
+        WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`, [field.id])
+    out.push({
+      content: field.content,
+      referenceTargetId: field.reference_target_id,
+      isFieldForm: field.is_field_form,
+      references: field.references_json,
+      // Already `ORDER BY order_key, id`, so the array order IS the rank.
+      values: values.map(v => ({content: v.content, references: v.references_json})),
+      valueKeysAscend: values.every((v, i) => i === 0 || values[i - 1]!.order_key < v.order_key),
+    })
+  }
+  return out
+}
 
 /** The runner's context, rebuilt for tests that need to act BETWEEN batches.
  *  Same shape the runner passes, minus its per-transaction preconditions —
@@ -311,6 +364,11 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // `> 1` would hold for any non-empty graph and so says nothing about the edit.
     expect(progress.sweeps).toBe(3)
     expect(await fieldRowsOf(ids[0]!)).toHaveLength(2)
+    // DISTINCT blocks, not per-sweep touches. This owner is changed in sweep 1
+    // for its original key and again in sweep 2 for the one that arrived behind
+    // the cursor; summing the sweeps would count it twice and report more
+    // migrated blocks than the graph holds.
+    expect(progress.blocksMaterializedTotal).toBe(ids.length)
   })
 
   it('migrates an owner whose existing field row belongs to a different property', async () => {
@@ -405,6 +463,31 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // The per-sweep count is zero on the converging sweep and that is CORRECT;
     // the run-scoped total is what says whether anything worked.
     expect(progress.valuesMaterializedTotal).toBeGreaterThan(0)
+    // And the entry has to say WHICH key to repair. `rejection.cause` is a
+    // CodecError reading "expected string, got object" — true, and useless on a
+    // block with several properties.
+    expect(progress.failures[0]!.reason).toContain('demo:extra')
+  })
+
+  it('reports the blocks it changed over the RUN, not over the converging sweep', async () => {
+    // The converging sweep is by definition the one that found nothing pending,
+    // so it WRITES to nothing — and that sweep's count is what the operator's
+    // "Migrated properties on N blocks" was read from, which made every
+    // successful run report zero.
+    const ids = await seedNotes(5)
+    await flip()
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(progress.sweeps).toBeGreaterThan(1)
+    expect(progress.blocksMaterializedTotal).toBe(ids.length)
+    // The per-sweep counter answers the other question — whether what it
+    // scanned is acceptable — so on the converging sweep it reports the whole
+    // scan rather than zero. Zero there is reserved for "every key was
+    // refused", which is the reading `failureCount` is paired with.
+    expect(progress.blocksScanned).toBe(ids.length)
+    expect(progress.blocksMaterialized).toBe(ids.length)
+    expect(progress.failureCount).toBe(0)
   })
 
   it('does not resurrect a property that was deleted through its children', async () => {
@@ -441,6 +524,62 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['fine'])
     expect((await repo.load('b1'))?.properties['demo:nobody-declares-this']).toBe('x')
     expect(progress.sweeps).toBeLessThan(4)
+  })
+
+  it('counts the cells it skipped, and names the key once', async () => {
+    // The skip above is deliberate; being SILENT was not. Uncounted, it left
+    // every surface that asks "is anything left?" reading a zero that was not
+    // true — the palette announced the runbook's stop condition over cells it
+    // had never attempted, and cleared the worklist naming them.
+    //
+    // Counted per CELL and named per KEY: one unregistered key is normally on
+    // every block that carries it, while the repair is per key.
+    await create('b1', {'demo:nobody-declares-this': 'x'})
+    await create('b2', {'demo:nobody-declares-this': 'y'})
+    await flip()
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(progress.unresolvedCount).toBe(2)
+    expect(progress.unresolvedNames).toEqual(['demo:nobody-declares-this'])
+    // NOT a failure: there is no value here to repair, and the two send the
+    // operator to different places.
+    expect(progress.failureCount).toBe(0)
+  })
+
+  it('does not count an owner whose key it skipped as accepted', async () => {
+    // `blocksMaterialized` promises every key on the block either materialized
+    // or was already there, and the pass's per-sweep console line reports it
+    // as `accepted/scanned`. A skipped key did neither — so counting the owner
+    // anyway put a finished-looking `N/N` on a sweep that had migrated none of
+    // it, which is the same claim the operator banner used to make, one
+    // derivation below where that was fixed.
+    await create('b1', {'demo:nobody-declares-this': 'x'})
+    await create('b2', {'demo:note': 'fine'})
+    await flip()
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(progress.blocksScanned).toBe(2)
+    // b2 only. b1 carries a key that never landed and never will.
+    expect(progress.blocksMaterialized).toBe(1)
+  })
+
+  it('caps the key names it retains without losing the count', async () => {
+    // The scale is exact; the detail is bounded, because an imported or
+    // malformed graph can carry a unique junk key per cell. Asserted as a
+    // RELATION rather than against the cap's value, which would only restate
+    // the constant.
+    const keys = Object.fromEntries(
+      Array.from({length: 60}, (_, i) => [`demo:undeclared-${i}`, 'x']))
+    await create('b1', keys)
+    await flip()
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(progress.unresolvedCount).toBe(60)
+    expect(progress.unresolvedNames.length).toBeLessThan(60)
+    expect(new Set(progress.unresolvedNames).size).toBe(progress.unresolvedNames.length)
   })
 
   it('does not sweep an owner whose cell has emptied out', async () => {
@@ -600,5 +739,79 @@ describe('multi-value cells (km-h1hy)', {timeout: 30_000}, () => {
     expect((await run()).outcome).toBe('ran')
 
     expect((await fieldRowsOf('heavy'))[0]!.values).toEqual(members)
+  })
+})
+
+describe('the pass and the live writer agree about a value\'s children', () => {
+  /** THE guard on splitting the write path in two.
+   *
+   *  `tx.setProperty` dual-writes children inside a user's edit, one row at a
+   *  time; the pass emits the same rows for a whole batch and hands them to
+   *  `tx.createMany`. They share the builders (`plannedFieldRow`,
+   *  `plannedValueChildRows`) precisely so they cannot decide differently —
+   *  and this is what would notice if a future edit taught one of them
+   *  something the other does not know. Asserted on the SHAPE, since the two
+   *  routes never share ids.
+   *
+   *  Both grains, because the member split is the interesting half: a scalar
+   *  is one value child, a list is one per member in order. */
+  it.each([
+    ['a scalar', noteProp.name, 'hello world'],
+    ['a list', tagsProp.name, ['alpha', 'beta', 'gamma']],
+  ])('%s', async (_label, propertyName, value) => {
+    // MIGRATED: the cell exists before the flip, so the pass is what builds
+    // its children.
+    await create('migrated', {[propertyName]: value})
+    await flip()
+    expect((await run()).outcome).toBe('ran')
+
+    // LIVE: written past the flip, so the dual-write builds them.
+    await create('live', {})
+    await repo.tx(async tx => {
+      const schema = repo.propertySchemaResolverFor(WS).resolve(propertyName)
+      if (schema.status !== 'resolved') throw new Error('fixture schema did not resolve')
+      await tx.setProperty('live', schema.schema, value)
+    }, {scope: ChangeScope.BlockDefault})
+
+    const migrated = await machineryShape('migrated')
+    expect(migrated).toHaveLength(1)
+    expect(migrated).toEqual(await machineryShape('live'))
+    // The field row's `references` must be REAL on both sides, or the equality
+    // above is `'[]' === '[]'` and says nothing about the create-time prefill
+    // — which is the whole reason the References plugin is in this runtime.
+    expect(JSON.parse(migrated[0]!.references)).toHaveLength(1)
+  })
+})
+
+describe('one key that cannot be planned costs its own key', () => {
+  it('a definition whose fieldId will not render fails that property only', async () => {
+    // The row-at-a-time retry loop this pass replaced caught ANY throw around
+    // one name. A value its codec refuses is the common case and is checked
+    // before planning; a fieldId that cannot be rendered back out is the other
+    // one, and it is a property of the DEFINITION, so the value check cannot
+    // see it coming. Unisolated it took the whole workspace pass down.
+    await create('b1', {'demo:note': 'fine', 'demo:extra': 'broken definition'})
+    await flip()
+
+    const progress = await runPropertyCellBackfill(ctxWithUnrenderableFieldId('demo:extra'))
+
+    expect(progress.failureCount).toBe(1)
+    expect(progress.failures[0]!.reason).toMatch(/not a renderable id/)
+    // The other key on the same block still migrated.
+    expect((await fieldRowsOf('b1'))[0]!.values).toEqual(['fine'])
+  })
+
+  it('a partly migrated owner is not counted as accepted in full', async () => {
+    // `blocksMaterialized` is documented as blocks accepted IN FULL, and it
+    // surfaces on the pass's per-sweep console line. The run-wide set answers
+    // the other question — which blocks this run changed — and a partly
+    // migrated owner did change.
+    await create('b1', {'demo:note': 'fine', 'demo:extra': 'broken definition'})
+    await flip()
+
+    const progress = await runPropertyCellBackfill(ctxWithUnrenderableFieldId('demo:extra'))
+
+    expect(progress.blocksMaterialized).toBe(0)
+    expect(progress.blocksMaterializedTotal).toBe(1)
   })
 })

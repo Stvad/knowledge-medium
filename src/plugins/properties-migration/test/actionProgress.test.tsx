@@ -15,12 +15,13 @@ const progressHandle = {
   addNote: vi.fn(),
 }
 const showInfo = vi.fn()
+const dismissToast = vi.fn()
 let emit: ((progress: PropertyCellBackfillProgress) => void) | null = null
 
 vi.mock('@/utils/dialogs.js', () => ({openDialog: () => openDialog()}))
 vi.mock('@/utils/toast.js', () => ({
   showInfo: (message: string, opts?: unknown) => showInfo(message, opts),
-  dismissToast: vi.fn(),
+  dismissToast: (id: string) => dismissToast(id),
 }))
 vi.mock('../progressReport.ts', () => ({
   reportMigrationProgress: () => progressHandle,
@@ -44,7 +45,12 @@ vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
   applyPropertyDefinitionSynthesis: async () => ({created: 0, restored: 0, skipped: []}),
   flipBlockedBySynthesis: () => null,
 }))
-vi.mock('@/data/internals/propertyCellBackfill', () => ({
+vi.mock('@/data/internals/propertyCellBackfill', async importOriginal => ({
+  // The REAL one, not a stand-in. It is a pure sum over the progress this file
+  // already emits, and a copy written here would keep these assertions green
+  // with the actual function wrong — which is the whole thing they pin.
+  pendingValueCount: (await importOriginal<
+    typeof import('@/data/internals/propertyCellBackfill')>()).pendingValueCount,
   PROPERTY_CELL_BACKFILL_ID: 'properties:cell-to-children',
   countPropertyCellBackfillCandidates: async () => 7,
   onPropertyCellBackfillProgress: (listener: (p: PropertyCellBackfillProgress) => void) => {
@@ -61,8 +67,10 @@ import { migratePropertiesToBlocksAction } from '../action.ts'
 const THIS_DEVICE = getClientId()
 
 const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCellBackfillProgress => ({
-  blocksScanned: 7, blocksMaterialized: 7, valuesMaterialized: 7,
-  valuesMaterializedTotal: 7, sweeps: 2, failures: [], failureCount: 0, ...over,
+  blocksScanned: 7, blocksMaterialized: 7, blocksMaterializedTotal: 7,
+  valuesMaterialized: 7,
+  valuesMaterializedTotal: 7, sweeps: 2, failures: [], failureCount: 0,
+  unresolvedNames: [], unresolvedCount: 0, ...over,
 })
 
 /** Is a claim still in flight when the gesture ends? Read from `blocks`, so the
@@ -74,7 +82,11 @@ let claimHeldAfterRun: false | 'this-device' | 'a-peer' = false
 let runHasHappened = false
 
 /** Emits `reported` from inside the run, the way the pass notifies. */
-const runReporting = async (reported: PropertyCellBackfillProgress) => {
+const runReporting = async (
+  reported: PropertyCellBackfillProgress,
+  outcome: {outcome: 'ran' | 'deferred'; undoHistoryCleared: boolean; reason?: string;
+            retryable?: boolean} = {outcome: 'ran', undoHistoryCleared: false},
+) => {
   const repo = {
     activeWorkspaceId: 'ws-1',
     user: {id: 'user-1'},
@@ -103,7 +115,7 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
     withOperatorBackfillClaim: claimStub(async () => {
       emit?.(reported)
       runHasHappened = true
-      return {outcome: 'ran' as const, undoHistoryCleared: false}
+      return outcome
     }),
   } as unknown as Repo
   await migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
@@ -140,6 +152,7 @@ afterEach(() => {
   progressHandle.settleUnreported.mockReset()
   progressHandle.addNote.mockReset()
   showInfo.mockReset()
+  dismissToast.mockReset()
   emit = null
   claimHeldAfterRun = false
   runHasHappened = false
@@ -156,6 +169,68 @@ describe('the migration progress path', () => {
       expect.stringContaining('3'),
       expect.objectContaining({id: expect.any(String)}),
     )
+  })
+
+  it('dismisses the worklist when the run that follows has nothing to repair', async () => {
+    // A stable id only covers the run that ALSO has failures. The run that
+    // fixed them produces no follow-up at all, so without an explicit dismiss
+    // the "N could not be migrated — repair them and run this again" toast is
+    // sticky (duration Infinity) and outlives the repair, ending up beside a
+    // banner that says there is nothing left to migrate.
+    await runReporting(progress({failureCount: 0, failures: []}))
+
+    expect(showInfo).not.toHaveBeenCalled()
+    expect(dismissToast).toHaveBeenCalledWith('properties-migration-worklist')
+  })
+
+  it('does not dismiss the worklist it just raised', async () => {
+    await runReporting(progress({failureCount: 3, failures: [{blockId: 'b1', reason: 'x'}]}))
+
+    expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
+  })
+
+  it('keeps the worklist when the run completed but refused everything', async () => {
+    // `ran`, so it completed — but it moved no value and refused N, which
+    // raises no `followUp` of its own (the banner carries that count instead).
+    // Those N are exactly what the standing worklist is about, so this is the
+    // other ending that must not clear it.
+    await runReporting(progress({
+      valuesMaterialized: 0, valuesMaterializedTotal: 0,
+      failureCount: 65, failures: [{blockId: 'b1', reason: 'x'}],
+    }))
+
+    expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
+  })
+
+  it('keeps the worklist when the run SKIPPED cells no schema resolves', async () => {
+    // The pass excludes an unregistered key from its counters deliberately —
+    // carrying it kept every sweep looking like work — so a cell skipped for
+    // want of a schema raises NO failure. Read as "this run refused nothing",
+    // that cleared a worklist over values nothing had ever attempted.
+    await runReporting(progress({
+      valuesMaterialized: 0, valuesMaterializedTotal: 0,
+      failureCount: 0, failures: [],
+      unresolvedCount: 12, unresolvedNames: ['a-key'],
+    }))
+
+    expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
+    // And says which repair it is: registering a schema, not fixing a value.
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringContaining('no registered schema'),
+      expect.objectContaining({id: expect.any(String)}),
+    )
+  })
+
+  it('keeps the worklist when the run did not complete', async () => {
+    // A run that DEFERRED verified nothing. It produces no `followUp` either,
+    // so dismissing on "no follow-up" would clear a still-actionable list of
+    // what to repair on the one ending that proves least about it. Same for
+    // held-by-peer, read-only, already-running and failed.
+    await runReporting(progress({failureCount: 0, failures: []}),
+      {outcome: 'deferred', undoHistoryCleared: false,
+       reason: 'this device is not caught up', retryable: true})
+
+    expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
   })
 
   it('says the workspace is still locked when THIS device ends still holding it', async () => {
@@ -205,5 +280,25 @@ describe('the migration progress path', () => {
     await runReporting(progress({sweeps: 2, blocksScanned: 3}))
 
     expect(progressHandle.update).toHaveBeenCalledWith(expect.stringMatching(/sweep 2/i))
+  })
+
+  it('reports the blocks the RUN changed, not the ones the sweep accepted', async () => {
+    // The two counters answer different questions and only diverge on a real
+    // graph: `blocksMaterialized` is every owner the last sweep found
+    // acceptable — its whole scan, once converged — while
+    // `blocksMaterializedTotal` is the distinct owners the run actually
+    // changed. Reading the first told the operator a re-run had migrated
+    // every block it had merely re-checked.
+    //
+    // Pinned HERE because it is a wiring choice: `describeOutcome` is handed
+    // one number and cannot tell which it was given, so no test of that
+    // function can catch the swap.
+    await runReporting(progress({
+      blocksScanned: 900, blocksMaterialized: 900, blocksMaterializedTotal: 12,
+      valuesMaterialized: 0, valuesMaterializedTotal: 34,
+    }))
+
+    expect(progressHandle.done).toHaveBeenCalledWith(expect.stringMatching(/on 12 blocks/))
+    expect(progressHandle.done).toHaveBeenCalledWith(expect.not.stringMatching(/900/))
   })
 })

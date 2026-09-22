@@ -47,6 +47,7 @@ import {
   memberCodecOf,
   type AnyPropertySchema,
   type BlockData,
+  type NewBlockData,
   type ResolvedPropertySchema,
   type SameTxCtx,
   type Tx,
@@ -533,16 +534,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // entire flip. That caller must catch per row and report the offending
       // block, not let one bad value throw the whole pass.
       if (undecodable === 'skip') continue
-      const failure = rejection.reason === 'decode'
-        ? `does not decode under the "${schema.codec.type}" codec`
-        : `decodes under the "${schema.codec.type}" codec but cannot be written ` +
-          'as a value child'
-      throw new Error(
-        `Cannot materialize property "${name}" on block ${row.id}: its cell ` +
-        `value ${failure}. Write property values through tx.setProperty / ` +
-        `block.set, not a raw tx.update({properties}).`,
-        {cause: rejection.cause},
-      )
+      throw undecodableCellValueError(name, row.id, schema, rejection)
     }
 
     // Revive AFTER the rejection gate, never before it: a name the gate skipped
@@ -618,6 +610,102 @@ const materializePropertiesForChangedRow = async (
   )
 }
 
+/** Why one cell value could not become children, in the one wording both
+ *  callers use.
+ *
+ *  The live writer THROWS this and the one-time pass RECORDS it, and the
+ *  operator reads the same sentence either way. Naming the property and the
+ *  block is the load-bearing part: `rejection.cause` is a `CodecError` that
+ *  says only something like "expected string, got object", and a worklist entry
+ *  carrying that plus a block id does not say which of that block's keys to
+ *  repair. The cause is kept underneath for whoever wants the codec's own
+ *  words. */
+export const undecodableCellValueError = (
+  name: string,
+  blockId: string,
+  schema: AnyPropertySchema,
+  rejection: {reason: string; cause?: unknown},
+): Error => {
+  const failure = rejection.reason === 'decode'
+    ? `does not decode under the "${schema.codec.type}" codec`
+    : `decodes under the "${schema.codec.type}" codec but cannot be written ` +
+      'as a value child'
+  return new Error(
+    `Cannot materialize property "${name}" on block ${blockId}: its cell ` +
+    `value ${failure}. Write property values through tx.setProperty / ` +
+    `block.set, not a raw tx.update({properties}).`,
+    {cause: rejection.cause},
+  )
+}
+
+/** The field row a property implies under `owner`, as DATA.
+ *
+ *  Machinery inserts field rows FIRST among children (§9 ordering decision):
+ *  fields cluster above content as an emergent default; orderKey stays
+ *  user-owned afterwards. Born classified — both derived columns pre-stamped
+ *  so the row classifies and projects within the same single pass. */
+export const plannedFieldRow = (
+  tx: Tx,
+  owner: Pick<BlockData, 'id' | 'workspaceId'>,
+  fieldId: string,
+): NewBlockData => {
+  const content = propertyFieldContent(fieldId)
+  return {
+    workspaceId: owner.workspaceId,
+    parentId: owner.id,
+    referenceTargetId: fieldId,
+    isFieldForm: true,
+    orderKey: keyAtStart(null),
+    content,
+    references: tx.derivedReferencesFor(content),
+  }
+}
+
+/** The value children a cell value implies under a field row that has NONE —
+ *  the create-only case, as DATA.
+ *
+ *  Emitted rather than written so the one-time pass can hand a whole batch to
+ *  `tx.createMany`. The live writer does NOT come through here — it reconciles
+ *  an existing value set row by row (`reconcileFieldValueChildren`) — but both
+ *  routes decide a value's MEMBERS through the same
+ *  `encodedPropertyValueToChildContents`, which is the part they must not be
+ *  able to disagree about.
+ *
+ *  Only valid when the field row is empty. A field row that already has
+ *  children is a reconcile, which is `reconcileFieldValueChildren`'s job and a
+ *  different question (which existing row is this member?). */
+export const plannedValueChildRows = (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): NewBlockData[] =>
+  valueChildRowsFor(tx, fieldRow, encodedPropertyValueToChildContents(schema, encoded))
+
+/** The same rows, from contents a caller has ALREADY encoded.
+ *
+ *  Split out for the one-time pass, which must encode inside its per-key
+ *  guard: `encodedPropertyValueToChildContents` throws on a value no codec
+ *  will take, and a key that cannot be planned has to cost its own key rather
+ *  than the batch. Encoding here instead would put that throw outside the
+ *  guard, where it aborts the whole run — safe today only because the pass's
+ *  rejection check happens to call this same encoder first, which is a
+ *  coupling neither site states. */
+export const valueChildRowsFor = (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  contents: readonly string[],
+): NewBlockData[] => {
+  const keys = keysBetween(null, null, contents.length)
+  return contents.map((content, index) => ({
+    workspaceId: fieldRow.workspaceId,
+    parentId: fieldRow.id,
+    orderKey: keys[index]!,
+    content,
+    references: tx.derivedReferencesFor(content),
+  }))
+}
+
 /** Find-or-create the field row for `fieldId` under `owner`, keeping its
  *  content canonical and folding any duplicate field rows into the survivor.
  *  Returns the row whose value children the caller then reconciles.
@@ -656,16 +744,7 @@ export const upsertFieldRow = async (
   // Machinery inserts field rows FIRST among children (§9 ordering
   // decision): fields cluster above content as an emergent default;
   // orderKey stays user-owned afterwards.
-  const id = await tx.create({
-    workspaceId: owner.workspaceId,
-    parentId: owner.id,
-    // Born classified (§9): both derived columns pre-stamped in the create so
-    // the row classifies and projects within the same single pass.
-    referenceTargetId: fieldId,
-    isFieldForm: true,
-    orderKey: keyAtStart(null),
-    content,
-  })
+  const id = await tx.create(plannedFieldRow(tx, owner, fieldId))
   return {id, workspaceId: owner.workspaceId}
 }
 
@@ -727,6 +806,7 @@ const createValueChild = (
   parentId: fieldRow.id,
   orderKey,
   content,
+  references: tx.derivedReferencesFor(content),
 })
 
 const reconcileSingleValueChild = async (

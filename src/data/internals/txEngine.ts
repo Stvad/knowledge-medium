@@ -30,6 +30,7 @@ import type {
   AnyPropertySchema,
   BlockData,
   BlockDataPatch,
+  BlockReference,
   Mutator,
   NewBlockData,
   PropertySchema,
@@ -66,6 +67,8 @@ import {
 } from '@/data/api'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import { assertCanonicalBlockId, type BlockIdPolicy } from '@/data/blockId'
+import { chunk as chunksOf } from 'lodash-es'
+import { MAX_IDS_PER_IN_CLAUSE, buildInClause } from './sqlBinds'
 import {
   BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
@@ -243,6 +246,11 @@ export interface TxImplContext {
    *  property schemas against one registry snapshot per tx, without this
    *  context re-deriving that closure itself. */
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
+  /** Content → the `references` it already implies, snapshotted at tx start
+   *  from `contentReferencePrefillsFacet` — see `Tx.derivedReferencesFor`.
+   *  Absent means no contributor, so nothing is prefilled and every row is
+   *  left to whatever parses content in that configuration. */
+  contentReferencePrefill?: (content: string) => BlockReference[] | undefined
   /** UUID generator — injected for testability. */
   newId: () => string
   /** Block-id shape contract for this tx's inserts (issue #456) — see
@@ -270,7 +278,7 @@ export interface TxImplContext {
 // live table, never `blocks_synced`.
 const COLUMN_NAMES = BLOCKS_TABLE_COLUMN_NAMES
 const COLUMN_LIST = COLUMN_NAMES.join(', ')
-const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
+const COLUMN_PLACEHOLDERS = buildInClause(COLUMN_NAMES.length)
 
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
@@ -333,6 +341,25 @@ const SELECT_PARENT_WORKSPACE_SQL =
   `SELECT workspace_id, deleted FROM blocks WHERE id = ?`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
 
+/** Rows per multi-row INSERT in {@link TxImpl.createMany}.
+ *
+ *  `sqlBinds` does not govern this one: it states the ceiling for `IN (…)`
+ *  READS over a caller-sized id list, and this is an INSERT. Derived from the
+ *  column count so it stays correct when a column is added, and sized against
+ *  SQLITE_MAX_VARIABLE_NUMBER (32766 on the shipped build) with room to spare.
+ *
+ *  EXPORTED because it is a boundary nothing would otherwise cross: the only
+ *  caller batches on a row budget below it, so a test that does not derive its
+ *  fixture from this number never runs the multi-chunk path at all — and that
+ *  path is where the per-chunk `record` and the deferred `pinWorkspace` below
+ *  have any effect. */
+export const BULK_INSERT_ROWS_PER_STATEMENT =
+  Math.floor(3000 / BLOCKS_TABLE_COLUMN_NAMES.length)
+
+const bulkInsertSql = (rowCount: number): string =>
+  `INSERT INTO blocks (${COLUMN_LIST}) VALUES `
+  + new Array(rowCount).fill(`(${COLUMN_PLACEHOLDERS})`).join(', ')
+
 export class TxImpl implements Tx {
   readonly meta: TxMeta
 
@@ -342,7 +369,7 @@ export class TxImpl implements Tx {
    *  (or first write candidate that the engine validated to insert). */
   private workspacePinned = false
 
-  /** Ids inserted in THIS tx via a `{systemMint: true}` create/createOrGet.
+  /** Ids inserted in THIS tx by a `{systemMint: true}` insert.
    *  Same-tx follow-up writes (`update` / `setProperty` / `move` / …) to one
    *  of these HOLD `updated_at` at the `0` pristine sentinel instead of
    *  advancing it — mirrors the upload compactor's same-tx CREATE+PATCH fusion
@@ -451,23 +478,52 @@ export class TxImpl implements Tx {
       .workspaceUnappliedCount(workspaceId)
   }
 
+  async liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {
+    if (ids.length === 0) return []
+    const out: BlockData[] = []
+    for (const chunk of chunksOf(ids, MAX_IDS_PER_IN_CLAUSE)) {
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        `SELECT ${COLUMN_LIST} FROM blocks
+          WHERE workspace_id = ? AND deleted = 0 AND id IN (${buildInClause(chunk.length)})`,
+        [workspaceId, ...chunk],
+      )
+      out.push(...rows.map(parseBlockRow))
+    }
+    return out
+  }
+
+  async propertyFieldRowsForParents(
+    workspaceId: string,
+    parentIds: readonly string[],
+  ): Promise<BlockData[]> {
+    if (parentIds.length === 0) return []
+    const out: BlockData[] = []
+    for (const chunk of chunksOf(parentIds, MAX_IDS_PER_IN_CLAUSE)) {
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        // Same INDEXED BY, and the same workspace term to reach it, as
+        // `tombstonedPropertyFieldRows` — and for the same reason: every other
+        // field-row index is `WHERE deleted = 0`, so letting the planner choose
+        // scans the whole database's field rows.
+        `SELECT ${COLUMN_LIST} FROM blocks INDEXED BY idx_blocks_any_field_form
+          WHERE workspace_id = ? AND parent_id IN (${buildInClause(chunk.length)})
+            AND is_field_form = 1 AND reference_target_id IS NOT NULL
+          ORDER BY order_key, id`,
+        [workspaceId, ...chunk],
+      )
+      out.push(...rows.map(parseBlockRow))
+    }
+    return out
+  }
+
   async tombstonedPropertyFieldRows(
     workspaceId: string,
     parentId: string,
   ): Promise<BlockData[]> {
-    const rows = await this.ctx.txDb.getAll<BlockRow>(
-      // INDEXED BY, and the workspace term exists to reach it: every other
-      // field-row index is `WHERE deleted = 0`, so a tombstone query that let
-      // the planner choose scanned the field rows of the whole DATABASE once
-      // per owner (measured: `SCAN blocks USING INDEX idx_blocks_any_field_form`
-      // as first written). This runs inside the write transaction, per block.
-      `SELECT ${COLUMN_LIST} FROM blocks INDEXED BY idx_blocks_any_field_form
-        WHERE workspace_id = ? AND parent_id = ? AND is_field_form = 1 AND deleted = 1
-          AND reference_target_id IS NOT NULL
-        ORDER BY order_key, id`,
-      [workspaceId, parentId],
-    )
-    return rows.map(parseBlockRow)
+    // Delegated, so the index hint and the reason for it have ONE home. This
+    // reads that owner's live field rows too — a handful of rows — which is
+    // cheaper than a second statement of the same query.
+    const rows = await this.propertyFieldRowsForParents(workspaceId, [parentId])
+    return rows.filter(row => row.deleted)
   }
 
   async deletedChildrenOf(parentId: string): Promise<BlockData[]> {
@@ -547,6 +603,127 @@ export class TxImpl implements Tx {
     this.pinWorkspace(data.workspaceId)
     this.record(id, null, row)
     return id
+  }
+
+  /**
+   * Create many rows with one batched parent check and one INSERT per chunk,
+   * where {@link create} pays a SELECT and an INSERT per row.
+   *
+   * Every guarantee `create` makes is kept — each row is workspace-checked,
+   * each parent is proven to exist in the same workspace, each id goes through
+   * the same shape policy, and each row is `record`ed so the same-tx
+   * processors and the snapshot cache see it exactly as they would one at a
+   * time. What goes away is the REPETITION: a parent named by two hundred rows
+   * is read once, and two hundred inserts become one statement. `create`
+   * remains the door for a single row; this one is for a caller that already
+   * knows its whole write set.
+   *
+   * ORDER IS PART OF THE CONTRACT: a row may name a parent created earlier in
+   * the SAME call — a value child under the field row above it — so parents
+   * are resolved against the ids built here before the database is asked.
+   * Rows are inserted in the order given, so a forward reference is a
+   * `ParentNotFoundError` rather than a row whose parent lands after it.
+   */
+  async createMany(rows: readonly NewBlockData[], opts?: TxInsertOpts): Promise<string[]> {
+    if (rows.length === 0) return []
+    const built: {id: string; row: BlockData; checkParent: boolean}[] = []
+    const mintedBefore = new Set<string>()
+    const parentsToCheck = new Set<string>()
+    // The workspace this batch writes to, established by its first row and held
+    // LOCALLY — not by pinning the transaction. Pinning here would pin it on the
+    // way to a refusal: a batch that throws on a missing parent or a bad id
+    // writes nothing, and a transaction left pinned by a zero-write call then
+    // rejects a later valid write to another workspace and lets `afterCommit`
+    // through for a transaction that never wrote. `create` pins after its
+    // insert; this pins after the batch's.
+    //
+    // The comparison itself is DEFENCE IN DEPTH, labelled as such: dropping it
+    // fails no test, because `core.deriveReferenceTarget` runs over the second
+    // row and its `stampReferenceTarget` takes the same check. That guard is
+    // incidental — it holds only while some processor happens to touch the row
+    // — and it pays for every insert and its triggers first.
+    let batchWorkspaceId: string | null = null
+    for (const data of rows) {
+      this.checkWorkspace(data.workspaceId)
+      if (batchWorkspaceId === null) batchWorkspaceId = data.workspaceId
+      else if (batchWorkspaceId !== data.workspaceId) {
+        throw new WorkspaceMismatchError(batchWorkspaceId, data.workspaceId)
+      }
+      const id = data.id ?? this.ctx.newId()
+      // Decided HERE, against the ids minted BEFORE this row, and carried on
+      // the entry. Re-deriving it after the loop would ask a completed set,
+      // which answers yes for a parent that comes LATER — the row would skip
+      // this check and fail on the storage trigger instead, with a message
+      // that names neither the row nor its parent.
+      const checkParent = data.parentId !== null && !mintedBefore.has(data.parentId)
+      if (checkParent) parentsToCheck.add(data.parentId!)
+      // A collision WITHIN the batch, which the `blocks` lookup below cannot
+      // see: two rows carrying one explicit id, or a `newId` that repeated.
+      // Left to the INSERT it would surface as a raw constraint error rather
+      // than `DuplicateIdError`, and from a later chunk, after earlier chunks
+      // had already been written.
+      if (mintedBefore.has(id)) throw new DuplicateIdError(id)
+      mintedBefore.add(id)
+      built.push({id, row: this.buildNewBlockRow(id, data, opts, 'tx.createMany'), checkParent})
+    }
+
+    // One lookup for every distinct parent not minted in this call. The same
+    // two refusals `requireParentInWorkspace` raises, raised on the same rows.
+    const seen = new Map<string, {workspace_id: string}>()
+    for (const chunk of chunksOf([...parentsToCheck], MAX_IDS_PER_IN_CLAUSE)) {
+      const found = await this.ctx.txDb.getAll<{id: string; workspace_id: string}>(
+        `SELECT id, workspace_id FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
+        chunk,
+      )
+      for (const row of found) seen.set(row.id, row)
+    }
+    for (const {row, checkParent} of built) {
+      if (!checkParent || row.parentId === null) continue
+      const parent = seen.get(row.parentId)
+      if (parent === undefined) throw new ParentNotFoundError(row.parentId)
+      if (parent.workspace_id !== row.workspaceId) {
+        throw new ParentWorkspaceMismatchError(
+          row.parentId, parent.workspace_id, row.workspaceId,
+        )
+      }
+    }
+
+    // Duplicates are found by READING, before anything is written. The
+    // alternative — let the multi-row INSERT fail and re-run the chunk a row at
+    // a time to learn which id collided — inserts every row before the
+    // colliding one on the way to the error, and a caller that catches it then
+    // commits rows this method never reached `record` for: invisible to the
+    // same-tx processors, the snapshot cache, undo and invalidation. One
+    // indexed read per chunk is the cheaper half of that trade anyway.
+    for (const chunk of chunksOf(built.map(({id}) => id), MAX_IDS_PER_IN_CLAUSE)) {
+      const taken = await this.ctx.txDb.getAll<{id: string}>(
+        `SELECT id FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
+        chunk,
+      )
+      if (taken.length > 0) throw new DuplicateIdError(taken[0]!.id)
+    }
+
+    // Recorded per chunk, immediately after the statement that wrote it, so a
+    // throw part-way leaves exactly the state a loop of `create` calls would:
+    // the rows that landed are recorded, and the ones that did not are absent.
+    // Recording only at the end left every written row unrecorded if a later
+    // chunk threw — a trigger abort, an alias collision — and a caught error
+    // then committed them with no processor having seen them.
+    let pinned = false
+    for (const chunk of chunksOf(built, BULK_INSERT_ROWS_PER_STATEMENT)) {
+      await this.ctx.txDb.execute(
+        bulkInsertSql(chunk.length),
+        chunk.flatMap(({row}) => blockToRowParams(row)),
+      )
+      // After the first statement that wrote, never before: a call that
+      // refuses must not decide the transaction's workspace.
+      if (!pinned) { this.pinWorkspace(batchWorkspaceId!); pinned = true }
+      for (const {id, row} of chunk) {
+        this.markSystemMint(id, opts)
+        this.record(id, null, row)
+      }
+    }
+    return built.map(({id}) => id)
   }
 
   async createOrGet(
@@ -708,6 +885,10 @@ export class TxImpl implements Tx {
     )
     this.pinWorkspace(before.workspaceId)
     this.record(id, before, after)
+  }
+
+  derivedReferencesFor(content: string): BlockReference[] | undefined {
+    return this.ctx.contentReferencePrefill?.(content)
   }
 
   // ──── Tree moves ────
@@ -1308,8 +1489,8 @@ export class TxImpl implements Tx {
    *  PUT+PATCH fusion — would overwrite the `0`, so the sentinel the reconcile
    *  gate lets yield to the server would never exist. No-op unless
    *  `opts.systemMint` — and `systemMint` is insert-only at the type level
-   *  ({@link TxInsertOpts}), so this is only ever reached from
-   *  `create` / `createOrGet`. */
+   *  ({@link TxInsertOpts}), so this is only ever reached while MINTING a row,
+   *  never from a later `update` promoting one. */
   private markSystemMint(id: string, opts: TxInsertOpts | undefined): void {
     if (opts?.systemMint) this.systemMintedIds.add(id)
   }
@@ -1338,8 +1519,8 @@ export class TxImpl implements Tx {
     return {updatedAt, userUpdatedAt: now, updatedBy: this.meta.user.id}
   }
 
-  /** Build a fresh BlockData for `tx.create` / `tx.createOrGet` insert
-   *  paths. Engine sets all metadata columns from tx_context unless
+  /** Build a fresh BlockData for the engine's insert paths.
+   *  Engine sets all metadata columns from tx_context unless
    *  `opts.skipMetadata` (used only by bookkeeping writes).
    *
    *  `opts.systemMint` marks the row as a speculative default the reconcile
@@ -1354,13 +1535,17 @@ export class TxImpl implements Tx {
     opts: TxInsertOpts | undefined,
     context: string,
   ): BlockData {
-    // The block-id shape contract (issue #456). `create` and `createOrGet`
-    // are the two MINTING paths and both build their row here, so every id
-    // this engine brings into existence is checked once, by construction,
-    // rather than at each of the N call sites that can supply one.
+    // The block-id shape contract (issue #456). EVERY minting path builds its
+    // row here, so every id this engine brings into existence is checked once,
+    // by construction, rather than at each of the N call sites that can supply
+    // one. Stated as a property rather than a list of the paths there happen
+    // to be today: a new one that does not come through here is the violation,
+    // and a list would instead just go quietly out of date (it did, when bulk
+    // insert became the third).
     //
-    // `applyRaw`'s re-INSERT is the third statement that can insert a row and
-    // is deliberately NOT gated — see the note at its missing-row branch.
+    // `applyRaw`'s re-INSERT is the one statement that inserts a row without
+    // coming here, and is deliberately NOT gated — see the note at its
+    // missing-row branch.
     //
     // Checked on the RESOLVED id, not on `data.id`: the invariant is a
     // property of the ROW, so a Repo wired with a `newId` that mints
