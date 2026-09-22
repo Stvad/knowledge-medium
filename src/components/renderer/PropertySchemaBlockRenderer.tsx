@@ -38,6 +38,7 @@ import { openDialog } from '@/utils/dialogs.js'
 import {
   beginPropertyDefinitionFanout,
   isLargeFanout,
+  markPropertyDefinitionFanoutRunning,
   queueDefinitionChange,
 } from '@/data/propertyDefinitionFanout.js'
 import {
@@ -260,6 +261,12 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         // states kept in step by hand.
         if (current === null || parsePropertyDefinitionMetadata(current) === null) return
         if (!stillCurrent(definitionFacts(current.properties))) return
+        // From INSIDE the transaction, which is the only thing that makes a
+        // progress report attributable: a run opens at the confirmation, and
+        // a headless change to the same definition can hold the writer in
+        // that gap. The writer is exclusive, so once this is set, whatever
+        // reports next is this transaction's fan-out.
+        markPropertyDefinitionFanoutRunning(workspaceId, block.id)
         await write(tx)
         guardPassed = true
       }, {scope: ChangeScope.BlockDefault, description: TX_DESCRIPTIONS[change.kind]})

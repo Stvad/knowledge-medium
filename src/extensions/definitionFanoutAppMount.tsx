@@ -49,18 +49,22 @@ const percentDone = (run: PropertyDefinitionFanoutSnapshot): number | null => {
   return Math.min(100, Math.round((run.done / run.total) * 100))
 }
 
-/** The fan-out says when it is committing, and only it can: past the last
- *  consumer it still runs the checks that refuse a change which would lose
- *  stored values, and a rollback is not a step to tell the user cannot be
- *  stopped. Once it IS committing, the commit lands, the post-commit walk
- *  over every row it touched runs, and only then does the gesture close this
- *  run — none of which closing the tab takes back. */
-const isSaving = (run: PropertyDefinitionFanoutSnapshot): boolean =>
-  run.phase === 'committing'
-
+/** NEUTRAL past the last consumer, and it took two rounds to land on that.
+ *  The tail is not "saving": the remaining same-tx processors run there —
+ *  including plugins', which come after the kernel's and can reject — so
+ *  the change may still be refused and rolled back whole. Nothing this
+ *  surface can see marks the moment that stops being true; only the commit
+ *  itself does, and reaching it from here would mean a UI hook in the
+ *  commit pipeline. So it says what it knows and claims nothing about
+ *  irrevocability.
+ *
+ *  ACCEPTED, and the only part left inexact: after the commit the modal is
+ *  still up for the post-commit walk, where the rollback line below has
+ *  stopped being true. Closing the tab in that window is both unlikely and
+ *  already too late to matter. */
 const statusLine = (run: PropertyDefinitionFanoutSnapshot): string => {
-  if (isSaving(run)) return 'Saving the change…'
   if (run.done === null) return 'Starting…'
+  if (run.done >= run.total) return 'Finishing…'
   return `${run.done.toLocaleString()} of ${run.total.toLocaleString()} blocks updated`
 }
 
@@ -110,10 +114,8 @@ const FanoutProgressDialog = ({run}: {run: PropertyDefinitionFanoutSnapshot}) =>
           <DialogDescription>
             This change and every block it touches are saved together, so it
             stays one step you can undo — and nothing else can be saved until
-            it finishes.{' '}
-            {isSaving(run)
-              ? 'It is being written now; this part cannot be stopped.'
-              : 'Closing this tab before it saves leaves the property as it was.'}
+            it finishes. Closing this tab before it saves leaves the property
+            as it was.
           </DialogDescription>
         </div>
       </DialogContent>

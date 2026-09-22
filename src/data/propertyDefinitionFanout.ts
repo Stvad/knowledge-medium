@@ -102,18 +102,16 @@ export interface PropertyDefinitionFanoutSnapshot {
   /** Consumers rewritten so far. `null` until the fan-out reports, which is
    *  the honest state while the transaction is still getting to it. */
   readonly done: number | null
-  /** `committing` once the fan-out has finished its consumers AND decided
-   *  not to refuse the change.
+  /** Is THIS run's transaction the one currently holding the writer?
    *
-   *  The two are one state because only the second makes the wait
-   *  uninterruptible, and the last consumer is not it: the checks that can
-   *  still throw — a re-type that would lose stored values — run after the
-   *  loop, and until they pass SQLite is as likely to roll every tentative
-   *  rewrite back as to keep it. A surface that called that "saving, cannot
-   *  be stopped" contradicted the confirmation's own warning that the change
-   *  may yet be refused. Nothing runs between here and the commit:
-   *  `core.migratePropertyDefinition` is last in `KERNEL_SAME_TX_PROCESSORS`. */
-  readonly phase: 'updating' | 'committing'
+   *  A run opens when the user confirms, which is before its transaction has
+   *  the writer — and only the gesture is serialised, so a headless caller
+   *  can be mid-change over the same definition in that gap. Identity does
+   *  not separate them: same workspace, same definition. What does is that
+   *  the writer is exclusive, so a report arriving while this run's own
+   *  transaction is running can only be its own. The gesture sets this from
+   *  inside that transaction. */
+  readonly transactionRunning: boolean
 }
 
 interface LiveRun extends PropertyDefinitionFanoutSnapshot {
@@ -165,7 +163,10 @@ export const beginPropertyDefinitionFanout = (
 ): PropertyDefinitionFanoutRun => {
   const owner: RunOwner = Symbol('property-definition-fanout')
   if (live === null) {
-    publish({workspaceId, fieldId, propertyName, total, done: null, phase: 'updating', owner})
+    publish({
+      workspaceId, fieldId, propertyName, total,
+      done: null, transactionRunning: false, owner,
+    })
   }
   return {
     end: () => { if (live?.owner === owner) publish(null) },
@@ -185,15 +186,16 @@ export const beginPropertyDefinitionFanout = (
 export const reportPropertyDefinitionFanout = (
   workspaceId: string, fieldIds: readonly string[], done: number, total: number,
 ): void => {
+  if (live?.transactionRunning !== true) return
   amendLiveRun(workspaceId, fieldIds, {done, total})
 }
 
-/** The fan-out is past its consumers AND past the checks that could still
- *  refuse it — see {@link PropertyDefinitionFanoutSnapshot.phase}. */
-export const reportPropertyDefinitionFanoutCommitting = (
-  workspaceId: string, fieldIds: readonly string[],
+/** Said by the GESTURE from inside its own transaction — see
+ *  {@link PropertyDefinitionFanoutSnapshot.transactionRunning}. */
+export const markPropertyDefinitionFanoutRunning = (
+  workspaceId: string, fieldId: string,
 ): void => {
-  amendLiveRun(workspaceId, fieldIds, {phase: 'committing'})
+  amendLiveRun(workspaceId, [fieldId], {transactionRunning: true})
 }
 
 const amendLiveRun = (
