@@ -1,0 +1,1 @@
+import{FO as e}from"../../chunks/app-DcdSVipy.js";export{e as useShortcutSurfaceActivations};

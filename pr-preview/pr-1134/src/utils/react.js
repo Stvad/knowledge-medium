@@ -1,0 +1,1 @@
+import{ED as e,TD as t}from"../../chunks/app-DcdSVipy.js";export{t as useIsMobile,e as usePointerCoarse};

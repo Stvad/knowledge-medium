@@ -1,0 +1,1 @@
+import{UC as e,WC as t}from"../../chunks/app-DcdSVipy.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

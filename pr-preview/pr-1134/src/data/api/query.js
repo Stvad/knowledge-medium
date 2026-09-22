@@ -1,0 +1,1 @@
+import{s4 as e}from"../../../chunks/app-DcdSVipy.js";export{e as defineQuery};

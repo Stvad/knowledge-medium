@@ -1,0 +1,1 @@
+import{XM as e,YM as t}from"../../chunks/app-DcdSVipy.js";export{t as isIOS,e as isMacPlatform};

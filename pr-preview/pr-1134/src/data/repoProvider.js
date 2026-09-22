@@ -1,0 +1,1 @@
+import{aF as e,cF as t,iF as n,lF as r,nF as i,oF as a,rF as o,sF as s,tF as c,uF as l}from"../../chunks/app-DcdSVipy.js";export{c as BATCH_SENTINEL_SQL,i as closePowerSyncDbIfOpen,o as ensurePowerSyncReady,n as getActiveSyncResolver,e as getActiveUserId,a as getPowerSyncDb,s as initializeClientSchema,t as isRemoteSyncActive,r as syncObserverDepsFor,l as syncResolverForUser};

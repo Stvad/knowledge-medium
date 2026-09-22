@@ -1,0 +1,1 @@
+import{eR as e}from"../../chunks/app-DcdSVipy.js";export{e as matchCharTrigger};

@@ -1,0 +1,1 @@
+import{gt as e,vw as t,yw as n}from"../../../chunks/app-DcdSVipy.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};

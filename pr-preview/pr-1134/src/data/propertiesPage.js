@@ -1,0 +1,1 @@
+import{_1 as e,v1 as t}from"../../chunks/app-DcdSVipy.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

@@ -1,0 +1,1 @@
+import{Ug as e}from"../../../chunks/app-DcdSVipy.js";export{e as BreadcrumbList};

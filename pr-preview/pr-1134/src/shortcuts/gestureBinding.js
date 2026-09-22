@@ -1,0 +1,1 @@
+import{Xw as e,Yw as t}from"../../chunks/app-DcdSVipy.js";export{t as gestureBindingDescriptor,e as matchesGestureEvent};

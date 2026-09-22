@@ -1,0 +1,1 @@
+import{TG as e,wG as t}from"../../chunks/app-DcdSVipy.js";export{t as Block,e as requireLoadedBlock};

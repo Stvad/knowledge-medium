@@ -1,0 +1,1 @@
+import{l as e}from"../../chunks/app-DcdSVipy.js";export{e as resolveWorkspace};

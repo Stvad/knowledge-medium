@@ -1,0 +1,1 @@
+import{GP as e,JP as t,KP as n,QP as r,WP as i,XP as a,YP as o,ZP as s,qP as c}from"../../chunks/app-DcdSVipy.js";export{i as getLastLongTaskEndMs,e as getStartupTimeline,n as hasStartupMark,c as longTasksSupported,t as markStartup,o as markStartupAt,a as onLongTask,s as resetStartupTimeline,r as startStartupObservers};

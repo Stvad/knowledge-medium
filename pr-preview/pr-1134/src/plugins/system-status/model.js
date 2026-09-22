@@ -1,0 +1,1 @@
+import{Sa as e}from"../../../chunks/app-DcdSVipy.js";export{e as getSyncIndicatorView};

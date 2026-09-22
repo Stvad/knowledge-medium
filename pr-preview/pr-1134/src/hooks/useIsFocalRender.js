@@ -1,0 +1,1 @@
+import{Jk as e,qk as t}from"../../chunks/app-DcdSVipy.js";export{t as isFocalRender,e as useIsFocalRender};
