@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { approvePreview, parsePrNumber, validatePreviewArtifact } from './approved-pr-preview.ts'
+import { resolveAppVersion } from './app-version.ts'
 
 const repository = 'owner/project'
 const sha = 'a'.repeat(40)
@@ -69,17 +70,27 @@ describe('commit-pinned preview approval', () => {
       getPull: async () => ({ ...pull(), head: { sha, repo: null } }),
     })).rejects.toThrow('head repository')
   })
+
+  it('refuses a same-repository PR head because previews must come from forks', async () => {
+    await expect(approve(vi.fn(async () => ({
+      ...pull(),
+      head: { sha, repo: { full_name: repository } },
+    })))).rejects.toThrow('fork')
+  })
 })
 
 const directories: string[] = []
-function artifact() {
+function artifact(version: unknown = { sha: sha.slice(0, 8) }) {
   const dir = mkdtempSync(join(tmpdir(), 'approved-preview-'))
   directories.push(dir)
   writeFileSync(join(dir, 'index.html'), '<html></html>')
-  writeFileSync(join(dir, 'version.json'), JSON.stringify({ sha: sha.slice(0, 12) }))
+  writeFileSync(join(dir, 'version.json'), JSON.stringify(version))
   return dir
 }
-afterEach(() => directories.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true })))
+afterEach(() => {
+  directories.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true }))
+  vi.unstubAllEnvs()
+})
 
 describe('static preview artifact boundary', () => {
   it('accepts ordinary assets and the Pages marker', () => {
@@ -87,7 +98,31 @@ describe('static preview artifact boundary', () => {
     mkdirSync(join(dir, 'assets'))
     writeFileSync(join(dir, 'assets', 'app.js'), 'console.log("preview")')
     writeFileSync(join(dir, '.nojekyll'), '')
-    expect(() => validatePreviewArtifact(dir)).not.toThrow()
+    expect(() => validatePreviewArtifact(dir, sha)).not.toThrow()
+  })
+
+  it('rejects a stale or spoofed version SHA', () => {
+    const dir = artifact({ sha: 'b'.repeat(8) })
+    expect(() => validatePreviewArtifact(dir, sha)).toThrow()
+  })
+
+  it.each([
+    ['missing', {}],
+    ['non-string', { sha: 42 }],
+    ['null', { sha: null }],
+  ])('rejects %s version SHA metadata', (_description, version) => {
+    expect(() => validatePreviewArtifact(artifact(version), sha)).toThrow()
+  })
+
+  it('rejects malformed version metadata', () => {
+    const dir = artifact()
+    writeFileSync(join(dir, 'version.json'), '{')
+    expect(() => validatePreviewArtifact(dir, sha)).toThrow()
+  })
+
+  it('accepts the version shape emitted by resolveAppVersion for the approved SHA', () => {
+    vi.stubEnv('GITHUB_SHA', sha)
+    expect(() => validatePreviewArtifact(artifact(resolveAppVersion()), sha)).not.toThrow()
   })
 
   it.each(['.git', '.git/config', 'assets/.gitattributes', '.github/workflows/publish.yml'])('rejects Git control files %s', name => {
@@ -95,18 +130,18 @@ describe('static preview artifact boundary', () => {
     const parts = name.split('/')
     mkdirSync(join(dir, ...parts.slice(0, -1)), { recursive: true })
     writeFileSync(join(dir, name), 'malicious')
-    expect(() => validatePreviewArtifact(dir)).toThrow('Git control')
+    expect(() => validatePreviewArtifact(dir, sha)).toThrow('Git control')
   })
 
   it('rejects symlinks even when they point to regular files', () => {
     const dir = artifact()
     symlinkSync(join(dir, 'index.html'), join(dir, 'link.html'))
-    expect(() => validatePreviewArtifact(dir)).toThrow('regular files')
+    expect(() => validatePreviewArtifact(dir, sha)).toThrow('regular files')
   })
 
   it.each(['index.html', 'version.json'])('rejects incomplete builds missing %s', file => {
     const dir = artifact()
     rmSync(join(dir, file))
-    expect(() => validatePreviewArtifact(dir)).toThrow()
+    expect(() => validatePreviewArtifact(dir, sha)).toThrow()
   })
 })

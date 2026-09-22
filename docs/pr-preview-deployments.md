@@ -107,8 +107,8 @@ it from the selected `master` branch, never from a PR branch. It takes:
 - `pr_number`
 - `head_sha`, the full, lowercase, 40-character head SHA to approve
 
-It validates that the PR is open, targets `master`, and still has exactly that
-head SHA before it builds. It checks the same facts again immediately before
+It validates that the PR comes from a fork, is open, targets `master`, and still
+has exactly that head SHA before it builds. It checks the same facts again immediately before
 publication. The build checks out that exact head, not a merge result, with a
 read-only token and `persist-credentials: false`. It receives only public
 `VITE_*` client configuration through the existing `vars.* || secrets.*`
@@ -120,6 +120,9 @@ uses `cache-mode: none`, GitHub Actions' enforced runtime cache restriction, so
 fork code cannot use the dispatch on `master` to poison a cache. The separate
 fresh publishing job checks out the trusted workflow commit, consumes only the
 static artifact, and never checks out or executes contributor code or scripts.
+Before publishing, it requires `version.json` to contain the approved head's
+eight-character SHA, using the same formatter as the build. A stale or malformed
+publication marker is rejected before it can fool the Pages readiness check.
 
 Approving the workflow is therefore approval to publish and run that frontend on
 the production origin/backend. The per-preview service-worker and local DB

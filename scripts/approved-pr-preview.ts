@@ -1,5 +1,6 @@
-import { lstatSync, readdirSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { shortCommitSha } from './app-version.ts'
 
 type PullRequest = {
   number: number
@@ -13,6 +14,12 @@ export function parsePrNumber(value: string): number {
     throw new Error('PR number must be a canonical positive integer')
   }
   return Number(value)
+}
+
+export function assertForkPreview(headRepository: string | undefined, repository: string): void {
+  if (headRepository === repository) {
+    throw new Error('Approved previews are only for forks; same-repository previews are managed by PR Preview')
+  }
 }
 
 export async function approvePreview({ prNumber, headSha, repository, getPull }: {
@@ -32,6 +39,7 @@ export async function approvePreview({ prNumber, headSha, repository, getPull }:
   if (pr.base.ref !== 'master') throw new Error('PR must target master')
   if (pr.head.sha !== headSha) throw new Error('PR head has changed; review and approve the new SHA')
   if (!pr.head.repo) throw new Error('PR head repository is unavailable')
+  assertForkPreview(pr.head.repo.full_name, repository)
   return {
     number,
     sha: headSha,
@@ -41,7 +49,7 @@ export async function approvePreview({ prNumber, headSha, repository, getPull }:
 }
 
 // The privileged publisher accepts files, never Git metadata or filesystem links.
-export function validatePreviewArtifact(directory: string): void {
+export function validatePreviewArtifact(directory: string, approvedHeadSha: string): void {
   function walk(path: string) {
     const stat = lstatSync(path)
     if (stat.isDirectory()) {
@@ -56,5 +64,9 @@ export function validatePreviewArtifact(directory: string): void {
   walk(directory)
   for (const file of ['index.html', 'version.json']) {
     if (!lstatSync(join(directory, file)).isFile()) throw new Error(`Missing build file: ${file}`)
+  }
+  const version = JSON.parse(readFileSync(join(directory, 'version.json'), 'utf8')) as { sha?: unknown } | null
+  if (version?.sha !== shortCommitSha(approvedHeadSha)) {
+    throw new Error('Preview version SHA must match the approved head')
   }
 }

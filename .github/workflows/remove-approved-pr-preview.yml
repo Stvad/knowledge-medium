@@ -46,12 +46,10 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
         with:
           script: |
-            const { parsePrNumber } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/approved-pr-preview.ts`);
+            const { parsePrNumber, assertForkPreview } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/approved-pr-preview.ts`);
             const number = parsePrNumber(process.env.PR_NUMBER);
             const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: number });
-            if (pr.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`) {
-              throw new Error('Same-repository previews are managed by PR Preview');
-            }
+            assertForkPreview(pr.head.repo?.full_name, `${context.repo.owner}/${context.repo.repo}`);
             core.setOutput('number', number);
       - name: Remove preview files
         uses: rossjrw/pr-preview-action@v1

@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: PR number to preview (must target master)
+        description: Fork PR number to preview (must target master)
         required: true
         type: string
       head_sha:
@@ -145,12 +145,12 @@ jobs:
         with:
           script: |
             const { approvePreview, validatePreviewArtifact } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/approved-pr-preview.ts`);
-            await approvePreview({
+            const approved = await approvePreview({
               prNumber: process.env.PR_NUMBER, headSha: process.env.HEAD_SHA,
               repository: `${context.repo.owner}/${context.repo.repo}`,
               getPull: async number => (await github.rest.pulls.get({ ...context.repo, pull_number: number })).data,
             });
-            validatePreviewArtifact(`${process.env.GITHUB_WORKSPACE}/dist`);
+            validatePreviewArtifact(`${process.env.GITHUB_WORKSPACE}/dist`, approved.sha);
       - name: Deploy approved preview
         id: deploy
         uses: rossjrw/pr-preview-action@v1
