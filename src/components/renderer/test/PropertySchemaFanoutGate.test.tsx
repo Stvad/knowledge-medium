@@ -21,8 +21,18 @@ vi.mock('@/utils/toast.js', async importOriginal => ({
 }))
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChangeScope, ProcessorRejection } from '@/data/api'
-import { presetConfigProp, presetIdProp, propertyNameProp } from '@/data/properties'
+import { ChangeScope } from '@/data/api'
+import { graphBackfillClaimBlockId } from '@/data/internals/graphBackfillClaim'
+import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
+import { MIGRATION_CLAIM_TYPE } from '@/data/blockTypes'
+import {
+  addBlockTypeToProperties,
+  migrationClaimantProp,
+  migrationClaimedAtProp,
+  presetConfigProp,
+  presetIdProp,
+  propertyNameProp,
+} from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -443,29 +453,37 @@ describe('a change planned against a row that moved while it waited', () => {
     })
   })
 
-  it('makes the editor forget a change the KERNEL refused, not just a cancelled one', async () => {
-    // The other half of the same cleanup, and the half that was broken: a
-    // refusal leaves `repo.tx` as a THROW, which used to carry past every
-    // caller's cleanup and land in a void handler as an unhandled rejection.
-    // Driven at the seam that produces it rather than through a real
-    // refusal, because the branch under test is the gate's, not the
-    // kernel's — the re-type test above drives a real one end to end.
+  it('reports a change the KERNEL refused as not written, cleanup and all', async () => {
+    // A REAL refusal, reaching the processor after the callback has already
+    // written — which is the whole point. The previous version of this test
+    // rejected `repo.tx` at the seam, so the callback never ran and it could
+    // not see that success had already been recorded inside it: same-tx
+    // processors run after `fn` returns, so the commonest refusal there is
+    // arrived with the write marked done and every caller's cleanup skipped.
+    //
+    // The migration claim is the refusal that needs no consumers: any
+    // definition change is turned away while a peer holds it.
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+         properties_json, deleted, created_at, updated_at, user_updated_at,
+         created_by, updated_by)
+       VALUES (?, ?, NULL, 'k-claim', ?, ?, 0, 1, 1, 1, 'user-1', 'user-1')`,
+      [graphBackfillClaimBlockId(WS, PROPERTY_CELL_BACKFILL_ID), WS,
+        PROPERTY_CELL_BACKFILL_ID,
+        JSON.stringify(addBlockTypeToProperties({
+          [migrationClaimantProp.name]: 'peer-device',
+          [migrationClaimedAtProp.name]: 1,
+        }, MIGRATION_CLAIM_TYPE))])
     consumersAre(3)
-    renderSchema(ENUM_SCHEMA_ID)
-    const rejection = new ProcessorRejection(
-      'the blocks using it would lose 1 stored value',
-      'property.definition-change.unconvertible',
-    )
-    vi.spyOn(repo, 'tx').mockRejectedValueOnce(rejection)
+    renderSchema()
 
-    await user().click(screen.getByRole('button', {name: 'Add choice'}))
+    await renameTo('test:renamed')
 
-    // The editor asked for a second choice and did not get one.
-    await waitFor(() => {
-      expect(screen.getAllByLabelText(/Choice \d+ value/)).toHaveLength(1)
-    })
-    // And the kernel's own message is the only one: the gate must not answer
-    // a refusal with a conflict message over the top of it.
+    // The field goes back to what the definition says, which is the cleanup
+    // that a write reported as successful skips.
+    await waitFor(() => { expect(nameInput().value).toBe('test:myProp') })
+    expect(await storedName()).toBe('test:myProp')
+    // The kernel's own message is the only one.
     expect(showError).not.toHaveBeenCalled()
   })
 

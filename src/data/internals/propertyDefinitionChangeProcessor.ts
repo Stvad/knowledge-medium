@@ -105,6 +105,7 @@ import { tryBuildSchema } from '@/data/userSchemasService'
 import {
   FANOUT_REPORT_STRIDE,
   reportPropertyDefinitionFanout,
+  reportPropertyDefinitionFanoutCommitting,
 } from '@/data/propertyDefinitionFanout'
 import {
   STRANDED_CLAIM_RECOVERY,
@@ -980,5 +981,13 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         },
       )
     }
+    // PAST EVERY REFUSAL, which is what makes the wait uninterruptible and
+    // is why this is not the last report of the loop: until these checks
+    // passed, SQLite was as likely to roll every rewrite above back as to
+    // keep it, and a surface saying "saving, cannot be stopped" over that
+    // contradicted the confirmation's own warning. Nothing runs between
+    // here and the commit — this processor is last in
+    // `KERNEL_SAME_TX_PROCESSORS`.
+    reportPropertyDefinitionFanoutCommitting(event.workspaceId, changingFieldIds)
   },
 })

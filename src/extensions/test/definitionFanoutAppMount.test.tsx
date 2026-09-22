@@ -31,6 +31,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   beginPropertyDefinitionFanout,
   reportPropertyDefinitionFanout,
+  reportPropertyDefinitionFanoutCommitting,
   __resetPropertyDefinitionFanoutForTests,
   type PropertyDefinitionFanoutRun,
 } from '@/data/propertyDefinitionFanout'
@@ -112,6 +113,10 @@ const report = (
   act(() => { reportPropertyDefinitionFanout(workspaceId, fieldIds, done, total) })
 }
 
+const committing = (workspaceId = WS, fieldIds = [FIELD_ID]): void => {
+  act(() => { reportPropertyDefinitionFanoutCommitting(workspaceId, fieldIds) })
+}
+
 const bar = () => screen.getByRole('progressbar')
 
 describe('the fan-out progress surface', () => {
@@ -140,14 +145,16 @@ describe('the fan-out progress surface', () => {
     expect(screen.getByText('1,000 of 4,000 blocks updated')).toBeTruthy()
     expect(bar().getAttribute('aria-valuenow')).toBe('1000')
 
-    // The last consumer is NOT the end of the wait — the commit and the
-    // post-commit walk are still to come — so the surface stays up and stops
-    // counting rather than reading as finished.
+    // The last consumer is NOT yet the uninterruptible part: the checks that
+    // refuse a change which would lose stored values run after it, and a
+    // rollback is not something to tell the user cannot be stopped.
     report(4_000)
+    expect(screen.getByText('4,000 of 4,000 blocks updated')).toBeTruthy()
+    expect(screen.getByText(/leaves the property as it was/)).toBeTruthy()
+
+    // Only the fan-out can say it is past every refusal.
+    committing()
     expect(screen.getByText('Saving the change…')).toBeTruthy()
-    // And the copy stops offering a way out that no longer exists: past the
-    // last consumer the transaction is committing, and closing the tab does
-    // not take that back.
     expect(screen.getByText(/cannot be stopped/)).toBeTruthy()
     expect(screen.queryByText(/leaves the property as it was/)).toBeNull()
 
