@@ -1,1 +1,0 @@
-import{XM as e,YM as t}from"../../chunks/app-CMGXx4Gi.js";export{t as isIOS,e as isMacPlatform};

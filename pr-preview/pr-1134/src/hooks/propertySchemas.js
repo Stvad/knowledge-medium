@@ -1,1 +1,0 @@
-import{lP as e}from"../../chunks/app-CMGXx4Gi.js";export{e as usePropertySchemas};

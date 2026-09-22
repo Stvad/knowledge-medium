@@ -1,1 +1,0 @@
-import{UC as e,WC as t}from"../../chunks/app-CMGXx4Gi.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

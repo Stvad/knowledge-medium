@@ -1,1 +1,0 @@
-import{Cq as e,Sq as t}from"../../chunks/app-CMGXx4Gi.js";export{t as agree,e as pluralize};

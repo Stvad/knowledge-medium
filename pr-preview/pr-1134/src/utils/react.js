@@ -1,1 +1,0 @@
-import{ED as e,TD as t}from"../../chunks/app-CMGXx4Gi.js";export{t as useIsMobile,e as usePointerCoarse};

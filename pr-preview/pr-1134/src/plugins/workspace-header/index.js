@@ -1,1 +1,0 @@
-import{Qg as e,Xg as t,Yg as n,Zg as r}from"../../../chunks/app-CMGXx4Gi.js";export{n as WorkspaceSwitcherSidebarSection,t as pendingInvitationsHeaderItem,r as workspaceHeaderPlugin,e as workspaceSwitcherSidebarSection};

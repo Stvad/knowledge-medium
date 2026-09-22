@@ -1,1 +1,0 @@
-import{s4 as e}from"../../../chunks/app-CMGXx4Gi.js";export{e as defineQuery};
