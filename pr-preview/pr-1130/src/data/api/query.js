@@ -1,0 +1,1 @@
+import{s4 as e}from"../../../chunks/app-Bb97ridM.js";export{e as defineQuery};

@@ -1,0 +1,1 @@
+import{JQ as e,YQ as t,qQ as n}from"../../chunks/app-Bb97ridM.js";export{n as MIGRATIONS_PAGE_ALIAS,e as getOrCreateMigrationsPage,t as migrationsPageBlockId};

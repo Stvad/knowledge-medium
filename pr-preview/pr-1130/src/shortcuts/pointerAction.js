@@ -1,0 +1,1 @@
+import{Qw as e,Zw as t}from"../../chunks/app-Bb97ridM.js";export{t as dispatchPointerAction,e as setPointerActionDispatcher};

@@ -1,0 +1,1 @@
+import{_1 as e,v1 as t}from"../../chunks/app-Bb97ridM.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
