@@ -1,1 +1,1 @@
-import{$O as e,QO as t,XO as n,ZO as r,ek as i}from"../../chunks/app-CHsy2G1i.js";export{n as getElementScrollportBounds,r as isEditorElement,t as isElementProperlyVisible,e as nearestScrollableAncestor,i as shouldExitEditModeAfterBlur};
+import{$O as e,QO as t,XO as n,ZO as r,ek as i}from"../../chunks/app-dxJ6IJns.js";export{n as getElementScrollportBounds,r as isEditorElement,t as isElementProperlyVisible,e as nearestScrollableAncestor,i as shouldExitEditModeAfterBlur};
