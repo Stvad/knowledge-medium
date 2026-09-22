@@ -16,8 +16,10 @@
  * a number that has stopped moving.
  *
  * No escape and no cancel. A transaction in flight cannot be handed back
- * halfway — there is nothing here for a button to do that closing the tab
- * does not already do, which rolls the change back whole.
+ * halfway, so there is nothing here for a button to do that closing the tab
+ * does not already do — and while the transaction is still open, that rolls
+ * the change back whole. Only while it is open: see `statusLine`, which owns
+ * how far that holds.
  *
  * NOT scoped to the active workspace, deliberately: the fan-out holds the
  * database-wide writer, so navigating to another workspace mid-run reaches an
@@ -49,7 +51,8 @@ const percentDone = (run: PropertyDefinitionFanoutSnapshot): number | null => {
   return Math.min(100, Math.round((run.done / run.total) * 100))
 }
 
-/** NEUTRAL past the last consumer, and it took two rounds to land on that.
+/** NEUTRAL past the last consumer.
+ *
  *  The tail is not "saving": the remaining same-tx processors run there —
  *  including plugins', which come after the kernel's and can reject — so
  *  the change may still be refused and rolled back whole. Nothing this
