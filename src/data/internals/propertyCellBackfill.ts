@@ -287,15 +287,21 @@ const sweep = async (
   /** Deduped against what this sweep has already reported: one unregistered
    *  key is normally on every block that carries it, and the operator needs
    *  the key once, not once per block. The COUNT stays per cell — it is the
-   *  scale of what was skipped. */
+   *  scale of what was skipped.
+   *
+   *  Bounded by the same cap as the list it feeds, and the ORDER of the two
+   *  checks is what bounds it: past the cap nothing is reported, so there is
+   *  nothing left to dedup against and a set that kept growing would be pure
+   *  retention. A graph with a unique junk key per cell is exactly the shape
+   *  the cap exists for, and it is the one that would have grown this without
+   *  bound for the whole sweep. */
   const seenUnresolved = new Set<string>()
   const recordUnresolved = (name: string) => {
     progress.unresolvedCount += 1
+    if (progress.unresolvedNames.length >= MAX_REPORTED_DETAIL) return
     if (seenUnresolved.has(name)) return
     seenUnresolved.add(name)
-    if (progress.unresolvedNames.length < MAX_REPORTED_DETAIL) {
-      progress.unresolvedNames.push(name)
-    }
+    progress.unresolvedNames.push(name)
   }
 
   let cursor = ''
@@ -385,6 +391,9 @@ const sweep = async (
       for (const owner of owners) {
         let materializedHere = 0
         let rejectedHere = 0
+        /** Keys skipped for want of a schema, which are NOT rejections but are
+         *  equally not migrated — see the acceptance test below. */
+        let unresolvedHere = 0
         for (const name of Object.keys(owner.properties)) {
           const schema = ctx.resolveNameSchema(name)
           // An unregistered key has no definition to point a field row AT, so
@@ -397,7 +406,7 @@ const sweep = async (
           // every surface that asks "is there anything left?" reading a zero
           // that was not true — including the runbook's stop condition, which
           // announced a finished migration over cells nothing had attempted.
-          if (schema === undefined) { recordUnresolved(name); continue }
+          if (schema === undefined) { recordUnresolved(name); unresolvedHere += 1; continue }
           if (takenByOwner.get(owner.id)?.has(schema.fieldId)) continue
           const encoded = owner.properties[name]
           // PER-NAME ISOLATION, which the row-at-a-time retry loop this
@@ -433,14 +442,20 @@ const sweep = async (
           planned.push({owner, fieldRow, contents})
           materializedHere += 1
         }
-        // "Accepted IN FULL", which is a statement about REJECTIONS alone: an
-        // owner whose field rows already exist is accepted having been written
-        // to zero times. Gating this on `materializedHere` instead made a
-        // converged sweep — the one that by definition plans nothing — report
-        // `0 / blocksScanned`, which is the same reading as a sweep whose every
-        // key was refused. It surfaces on the pass's own per-sweep console
-        // line; the operator's banner reads the run-wide counters below.
-        if (rejectedHere === 0) acceptedHere += 1
+        // "Accepted IN FULL" = every key on this owner either materialized or
+        // was already there, which is what `blocksMaterialized` promises. So
+        // it asks about both ways a key can fail to land: refused by a codec,
+        // and skipped for want of a schema. Counting a skipped owner as
+        // accepted put the same claim the banner used to make — a finished
+        // migration over cells nothing attempted — back on the per-sweep
+        // console line, one derivation below where that was fixed.
+        //
+        // NOT gated on `materializedHere`: an owner whose field rows already
+        // exist is accepted having been written to zero times, and gating on
+        // writes made a converged sweep — the one that by definition plans
+        // nothing — report `0 / blocksScanned`, the same reading as a sweep
+        // whose every key was refused.
+        if (rejectedHere === 0 && unresolvedHere === 0) acceptedHere += 1
         // The run-wide set answers the other question, "which blocks did this
         // run change", so it counts writes and a partly migrated owner did
         // change.

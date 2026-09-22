@@ -547,6 +547,41 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     expect(progress.failureCount).toBe(0)
   })
 
+  it('does not count an owner whose key it skipped as accepted', async () => {
+    // `blocksMaterialized` promises every key on the block either materialized
+    // or was already there, and the pass's per-sweep console line reports it
+    // as `accepted/scanned`. A skipped key did neither — so counting the owner
+    // anyway put a finished-looking `N/N` on a sweep that had migrated none of
+    // it, which is the same claim the operator banner used to make, one
+    // derivation below where that was fixed.
+    await create('b1', {'demo:nobody-declares-this': 'x'})
+    await create('b2', {'demo:note': 'fine'})
+    await flip()
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(progress.blocksScanned).toBe(2)
+    // b2 only. b1 carries a key that never landed and never will.
+    expect(progress.blocksMaterialized).toBe(1)
+  })
+
+  it('caps the key names it retains without losing the count', async () => {
+    // The scale is exact; the detail is bounded, because an imported or
+    // malformed graph can carry a unique junk key per cell. Asserted as a
+    // RELATION rather than against the cap's value, which would only restate
+    // the constant.
+    const keys = Object.fromEntries(
+      Array.from({length: 60}, (_, i) => [`demo:undeclared-${i}`, 'x']))
+    await create('b1', keys)
+    await flip()
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(progress.unresolvedCount).toBe(60)
+    expect(progress.unresolvedNames.length).toBeLessThan(60)
+    expect(new Set(progress.unresolvedNames).size).toBe(progress.unresolvedNames.length)
+  })
+
   it('does not sweep an owner whose cell has emptied out', async () => {
     // The pass has NO deleting leg, and must not regrow one: an empty bag is
     // not a deleted property, it is an unprojected one — a device holding value
