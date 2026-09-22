@@ -1,1 +1,1 @@
-import{Al as e,kl as t}from"../../chunks/app-CivwVLo5.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
+import{Al as e,kl as t}from"../../chunks/app-D7ucAqUY.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
