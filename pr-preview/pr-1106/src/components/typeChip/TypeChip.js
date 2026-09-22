@@ -1,1 +1,1 @@
-import{lC as e}from"../../../chunks/app-Bgkbwu-x.js";export{e as TypeChip};
+import{lC as e}from"../../../chunks/app-CPNUYoZA.js";export{e as TypeChip};

@@ -1,1 +1,1 @@
-import{Vu as e}from"../../../../chunks/app-Bgkbwu-x.js";export{e as inlineBacklinksApplies};
+import{Vu as e}from"../../../../chunks/app-CPNUYoZA.js";export{e as inlineBacklinksApplies};
