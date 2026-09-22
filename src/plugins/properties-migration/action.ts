@@ -2,9 +2,11 @@ import { FolderTree } from 'lucide-react'
 import type { OperatorBackfillPass, OperatorBackfillResult, Repo } from '@/data/repo'
 import {
   PROPERTY_CELL_BACKFILL_ID,
-  countPropertyCellBackfillCandidates,
+  flipBlockedByCellValues,
   onPropertyCellBackfillProgress,
   pendingValueCount,
+  surveyPropertyCellRejections,
+  type PropertyCellRejectionSurvey,
 } from '@/data/internals/propertyCellBackfill'
 import {
   applyPropertyDefinitionSynthesis,
@@ -101,6 +103,13 @@ const passIsUnfit = async (
  *  a second run stacks an identical toast beside the first. */
 const SYNTHESIS_TOAST = {
   id: 'properties-migration-synthesis', duration: Number.POSITIVE_INFINITY,
+} as const
+
+/** The cell-VALUE advisory. Its own id rather than sharing the synthesis
+ *  one: a workspace can hold both problems at once, and two toasts under one
+ *  id means the second silently replacing the first. */
+const CELL_VALUE_TOAST = {
+  id: 'properties-migration-cell-values', duration: Number.POSITIVE_INFINITY,
 } as const
 
 /** The repair worklist. Its id lives here, beside the advisory's, so the
@@ -414,13 +423,56 @@ const migrateUnderClaim = async (
     // Assumes no workspace has run an earlier build's pass, so none holds
     // stale property machinery. Owner's call not to carry a check for a state
     // that cannot exist.
-    // The second of exactly TWO active-workspace checks, not a rule applied
-    // at every await. Each guards a step the user cannot take back: the
-    // post-dialog one because a confirmation is a user-length pause, this one
-    // because the flip is fleet-wide and irreversible. Synthesis deliberately
-    // has neither — it writes dormant blocks scoped to the workspace named in
-    // its own argument, so navigating away withdraws nothing. Do not add a
-    // third.
+    // The cell survey AGAIN, and this is the one that guards the flip — the
+    // pre-dialog answer was taken across a user-length pause, in which a sync
+    // arrival or a raw write can land a value no codec carries. Past the flip
+    // that cell is stranded for good, which is the whole hazard this gate
+    // exists for.
+    //
+    // NOT a re-derivation of what the user consented to: `plan`, `blockCount`
+    // and `willSynthesize` stay the pre-dialog ones deliberately (see
+    // {@link ClaimedMigration}). This asks one question, it can only REFUSE,
+    // and it changes nothing the confirmation promised.
+    //
+    // It shrinks the window rather than closing it — see the survey's own
+    // declaration for why closing it is not on offer. Bounded by one scan
+    // instead of by how long the dialog sat open, and only ever paid on the
+    // flip path.
+    //
+    // ABOVE the active-workspace check below, not under it, though that costs
+    // a wasted scan when the user has navigated away. That check earns its
+    // keep by being the LAST thing before the flip, and a paginated walk of
+    // every property bag is exactly the await that would stop it being that.
+    // The alternative — a third check, after this — is what its own comment
+    // refuses.
+    let stillCarried: PropertyCellRejectionSurvey
+    try {
+      stillCarried = await surveyPropertyCellRejections(repo, workspaceId)
+    } catch (err) {
+      console.error('[properties-migration] could not re-survey stored cell values:', err)
+      // Fail CLOSED. A read that threw says nothing about whether the
+      // precondition holds, and this is the last thing between here and a
+      // one-way step.
+      banner.fail('Stopped before switching this workspace over: this device could not ' +
+        're-check whether every stored property value can be carried as blocks ' +
+        `(${err instanceof Error ? err.message : String(err)}). Nothing was switched.` +
+        undoNote(undoCleared))
+      return
+    }
+    const arrivedBlocked = flipBlockedByCellValues(stillCarried)
+    if (arrivedBlocked !== null) {
+      banner.fail(`Stopped before switching this workspace over. ${arrivedBlocked}` +
+        undoNote(undoCleared))
+      return
+    }
+    // The second of exactly TWO active-workspace checks, and the LAST thing
+    // between here and the flip — anything awaited below it reopens the window
+    // it closes. Not a rule applied at every await: each guards a step the
+    // user cannot take back — the post-dialog one because a confirmation is a
+    // user-length pause, this one because the flip is fleet-wide and
+    // irreversible. Synthesis deliberately has neither — it writes dormant
+    // blocks scoped to the workspace named in its own argument, so navigating
+    // away withdraws nothing. Do not add a third.
     if (repo.activeWorkspaceId !== workspaceId) {
       banner.fail('Stopped before switching this workspace over: a different workspace ' +
         'is open now. Nothing was switched.' + undoNote(undoCleared))
@@ -682,15 +734,41 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // succeeds is worse than never having shown it.
       dismissToast(SYNTHESIS_TOAST.id)
     }
+    // The CELL-level survey, and deliberately BELOW the key-level refusal: it
+    // decodes every stored property value in the workspace, so a workspace the
+    // cheap key survey already refuses never pays for it. It also answers the
+    // dialog's block count, which keeps this the ONLY full walk of the property
+    // bags between the palette and the confirmation.
+    let survey: PropertyCellRejectionSurvey
+    try {
+      survey = await surveyPropertyCellRejections(repo, workspaceId)
+    } catch (err) {
+      console.error('[properties-migration] could not survey stored cell values:', err)
+      showInfo('Could not check whether every stored property value can be carried as ' +
+        `blocks, so nothing was changed: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    const valuesBlocked = flipBlockedByCellValues(survey)
+    // The same bargain as the key-level refusal one branch up, for the same
+    // reason: only the way IN has a one-way step to guard, and refusing an
+    // already-flipped workspace would withhold the backfill from every other
+    // key over a handful that can never migrate.
+    if (valuesBlocked !== null) {
+      showInfo(valuesBlocked, CELL_VALUE_TOAST)
+      if (!childBacked) return
+    } else {
+      // Only where the survey RAN. The key-level refusal above returns without
+      // one, and taking down a "cannot migrate" banner over cells this run
+      // never looked at would claim a repair nothing verified.
+      dismissToast(CELL_VALUE_TOAST.id)
+    }
     // A refused workspace reaches here only when the flip is not at stake. Its
     // candidates are then keys that stay cell-only, NOT keys about to be given
     // a definition — counting them as the latter would have the dialog promise
     // something the gesture then skips.
     const refusal = plan.refusal
     const willSynthesize = refusal === null ? plan.candidates.length : 0
-    const blockCount = await countPropertyCellBackfillCandidates(
-      (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId,
-    )
+    const blockCount = survey.blocksScanned
     if (!await openDialog(ConfirmMigrationDialog, {
       blockCount, childBacked,
       synthesizedKeys: namedKeys(refusal === null ? plan.candidates : []),
@@ -703,6 +781,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         : null,
       unfixableKeys: namedKeys(plan.blockers),
       repairableKeys: namedKeys(plan.brokenDefinitions),
+      undecodableValueKeys: {...namedKeys(survey.keys), cells: survey.cells},
     })) return
     // Re-read AFTER the dialog. A confirmation is a user-length pause, and the
     // workspace pinned before it may not be the open one now — the runner's

@@ -21,8 +21,9 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { WorkspaceBackfillContext } from '@/data/facets'
 import {
-  CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, TARGET_INSERT_ROWS,
-  onPropertyCellBackfillProgress, runPropertyCellBackfill,
+  CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, SCAN_PAGE, TARGET_INSERT_ROWS,
+  flipBlockedByCellValues, onPropertyCellBackfillProgress, runPropertyCellBackfill,
+  surveyPropertyCellRejections,
 } from './propertyCellBackfill'
 
 const WS = 'ws-cell-backfill'
@@ -813,5 +814,105 @@ describe('one key that cannot be planned costs its own key', () => {
 
     expect(progress.blocksMaterialized).toBe(0)
     expect(progress.blocksMaterializedTotal).toBe(1)
+  })
+})
+
+describe('the pre-flip survey of cells no codec will carry', () => {
+  it('finds the cells the pass would refuse, BEFORE anything is flipped', async () => {
+    // The whole point: the pass reports these AFTER the one-way flip, as a
+    // repair worklist. Un-flipped, the same values are a reason not to flip.
+    await create('b1', {'demo:note': 'carries fine'})
+    await create('b2', {})
+    await rawCell('b2', {'demo:note': {not: 'a string'}})
+
+    const survey = await surveyPropertyCellRejections(repo, WS)
+
+    expect(survey.cells).toBe(1)
+    expect(survey.keys.map(k => k.key)).toEqual(['demo:note'])
+    expect(survey.keys[0]!.blockIds).toEqual(['b2'])
+    expect(survey.keys[0]!.reason).toBe('does not decode under the "string" codec')
+  })
+
+  it('agrees with the pass about which cells are refused', async () => {
+    // The survey and the pass must not be able to disagree — that is what
+    // sharing `propertyCellValueRejection` buys, and the only thing that
+    // proves it is running both over one graph. A `dryRun` mode inside the
+    // writer would make this test vacuous.
+    await create('b1', {'demo:note': 'fine'})
+    await create('b2', {})
+    await create('b3', {})
+    await rawCell('b2', {'demo:note': {not: 'a string'}})
+    await rawCell('b3', {'demo:tags': 'not a list'})
+
+    const survey = await surveyPropertyCellRejections(repo, WS)
+    await flip()
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(survey.cells).toBe(progress.failureCount)
+    expect(survey.cells).toBe(2)
+    expect(new Set(survey.keys.map(k => k.key))).toEqual(new Set(['demo:note', 'demo:tags']))
+  })
+
+  it('counts every refused cell but names each key once, with a few owners', async () => {
+    // The repair is per KEY — one bad-valued key is typically on thousands of
+    // blocks — while the SCALE of it is per cell. Naming a handful of owners is
+    // the way in to look at one; naming them all is the worklist the run
+    // produces afterwards.
+    for (const id of ['b1', 'b2', 'b3', 'b4', 'b5']) {
+      await create(id, {})
+      await rawCell(id, {'demo:note': {not: 'a string'}})
+    }
+
+    const survey = await surveyPropertyCellRejections(repo, WS)
+
+    expect(survey.cells).toBe(5)
+    expect(survey.keys).toHaveLength(1)
+    expect(survey.keys[0]!.cells).toBe(5)
+    expect(survey.keys[0]!.blockIds).toEqual(['b1', 'b2', 'b3'])
+  })
+
+  it('says nothing about a key no schema resolves', async () => {
+    // An unregistered key has no codec to refuse anything, and it is
+    // `flipBlockedBySynthesis` that owns whether the flip may step over it.
+    // Reporting it here would refuse the flip twice for one problem, under a
+    // remedy ("repair the value") that does not apply.
+    await create('b1', {})
+    await rawCell('b1', {'demo:nobody-declares-this': {anything: 'at all'}})
+
+    const survey = await surveyPropertyCellRejections(repo, WS)
+
+    expect(survey.cells).toBe(0)
+    expect(survey.keys).toEqual([])
+  })
+
+  it('reads every page of a workspace, not just the first', async () => {
+    // Cursor-paginated like the pass. A survey that stopped at one page would
+    // vouch for a graph it had not read, which is the one failure mode a gate
+    // like this cannot have.
+    const ids = await seedNotes(SCAN_PAGE + 5)
+    await rawCell(ids[ids.length - 1]!, {'demo:note': {not: 'a string'}})
+
+    const survey = await surveyPropertyCellRejections(repo, WS)
+
+    expect(survey.blocksScanned).toBe(ids.length)
+    expect(survey.cells).toBe(1)
+  })
+
+  it('blocks the flip, naming the key, its scale and where to look', async () => {
+    await create('b1', {})
+    await rawCell('b1', {'demo:note': {not: 'a string'}})
+
+    const survey = await surveyPropertyCellRejections(repo, WS)
+    const blocked = flipBlockedByCellValues(survey)
+
+    expect(blocked).toContain('demo:note')
+    expect(blocked).toContain('b1')
+    expect(blocked).toContain('can never finish the migration')
+  })
+
+  it('does not block a workspace whose every cell value carries', async () => {
+    await create('b1', {'demo:note': 'fine', 'demo:tags': ['a', 'b']})
+
+    expect(flipBlockedByCellValues(await surveyPropertyCellRejections(repo, WS))).toBeNull()
   })
 })

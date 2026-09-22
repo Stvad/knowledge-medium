@@ -625,18 +625,29 @@ export const undecodableCellValueError = (
   blockId: string,
   schema: AnyPropertySchema,
   rejection: {reason: string; cause?: unknown},
-): Error => {
-  const failure = rejection.reason === 'decode'
+): Error => new Error(
+  `Cannot materialize property "${name}" on block ${blockId}: its cell ` +
+  `value ${describeCellValueRejection(schema, rejection)}. Write property values ` +
+  `through tx.setProperty / block.set, not a raw tx.update({properties}).`,
+  {cause: rejection.cause},
+)
+
+/** Which of {@link propertyCellValueRejection}'s two legs refused, as a clause
+ *  that follows "its cell value".
+ *
+ *  Its own export because the sentence is said at two grains: per BLOCK by the
+ *  error above, and per KEY by the pre-flip survey, which names the key once
+ *  over however many blocks hold it. The two must not drift — an operator
+ *  reading the survey and then the run's worklist is reading about the same
+ *  refusal. */
+export const describeCellValueRejection = (
+  schema: AnyPropertySchema,
+  rejection: {reason: string},
+): string =>
+  rejection.reason === 'decode'
     ? `does not decode under the "${schema.codec.type}" codec`
     : `decodes under the "${schema.codec.type}" codec but cannot be written ` +
       'as a value child'
-  return new Error(
-    `Cannot materialize property "${name}" on block ${blockId}: its cell ` +
-    `value ${failure}. Write property values through tx.setProperty / ` +
-    `block.set, not a raw tx.update({properties}).`,
-    {cause: rejection.cause},
-  )
-}
 
 /** The field row a property implies under `owner`, as DATA.
  *

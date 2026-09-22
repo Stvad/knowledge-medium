@@ -40,7 +40,8 @@
  * already-has-a-field-row test above is what makes revisiting a block a no-op.
  */
 
-import type { BlockData, NewBlockData } from '@/data/api'
+import type { AnyPropertySchema, BlockData, NewBlockData } from '@/data/api'
+import type { Repo } from '@/data/repo'
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
 import { CallbackSet } from '@/utils/callbackSet'
 import {
@@ -49,10 +50,13 @@ import {
   propertyCellValueRejection,
 } from '@/data/propertyChildren'
 import {
+  describeCellValueRejection,
   plannedFieldRow,
   valueChildRowsFor,
   undecodableCellValueError,
 } from './propertyChildrenProcessor'
+import { firstFew } from '@/utils/nameList'
+import { pluralize } from '@/utils/pluralize'
 
 export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
 
@@ -65,7 +69,7 @@ export const TARGET_INSERT_ROWS = 190
 /** Candidates fetched per scan query. Independent of the write budget: this
  *  bounds how often the pass pays for a cursor seek, the budget bounds how
  *  long it holds the writer. */
-const SCAN_PAGE = 500
+export const SCAN_PAGE = 500
 
 /** What "carries a property" means, for a block aliased `b`. Written once
  *  because the pass's scan and the operator's pre-run count must select the
@@ -123,26 +127,162 @@ export const CANDIDATE_SQL = `
    ORDER BY b.id
    LIMIT ?`
 
-/** How much there is to visit, for a confirmation prompt. Same predicate as
- *  the pass, so the number the user is shown is the number of blocks it will
- *  read — most of which may already be migrated, which is why it surfaces as
- *  "blocks to check". */
-export const countPropertyCellBackfillCandidates = async (
-  getAll: <T>(sql: string, params?: readonly unknown[]) => Promise<T[]>,
+/** Owners named per refused key — enough to open one and look at the value.
+ *  The repair is per KEY, so these are a way in, not the work list. */
+const SAMPLE_OWNERS_PER_KEY = 3
+
+/** One key holding values its own codec will not carry. */
+export interface PropertyCellRejection {
+  key: string
+  /** Cells under this key that are refused. Exact. */
+  cells: number
+  /** What the FIRST of them ran into, as a clause following "its cell value".
+   *  One key's cells normally fail the same way; the sample owners are how you
+   *  check that they do. */
+  reason: string
+  /** A few owners holding one, capped at {@link SAMPLE_OWNERS_PER_KEY}. */
+  blockIds: readonly string[]
+}
+
+export interface PropertyCellRejectionSurvey {
+  /** One entry per refused KEY, first-seen order. Uncapped, like the synthesis
+   *  plan's own blocker list and for the same reason: it is bounded by the
+   *  workspace's key vocabulary, not by its cells. */
+  keys: PropertyCellRejection[]
+  /** Cells refused across every key. Exact. */
+  cells: number
+  /** Blocks read: every block carrying a property, which is also the number
+   *  the pass will VISIT — the same predicate selects both. The confirmation
+   *  prompt spends it as "blocks to check" and never as a promise of work,
+   *  since most of them may already be migrated. */
+  blocksScanned: number
+}
+
+/** Same predicate as the pass, so the survey vouches for the rows the pass will
+ *  visit. Only the bag is selected: the row estimate `CANDIDATE_SQL` carries is
+ *  a write budget, and nothing here writes. */
+const SURVEY_SQL = `
+  SELECT b.id AS id, b.properties_json AS propertiesJson
+    FROM blocks b
+   WHERE b.workspace_id = ?
+     AND b.deleted = 0
+     AND b.id > ?
+     AND ${CARRIES_A_PROPERTY}
+   ORDER BY b.id
+   LIMIT ?`
+
+/**
+ * Cells whose stored value the codec their key resolves will not carry.
+ *
+ * The pass asks {@link propertyCellValueRejection} of every cell it visits and
+ * counts the refusals, which on an UN-FLIPPED workspace is one step too late:
+ * the flip is one-way and a value no codec carries can never become
+ * child-backed. So the same predicate is asked here, over the same rows, with
+ * nothing written. The survey and the pass share the DECISION, not a code path
+ * — a `dryRun` flag through the writer would have been two modes and a guard
+ * at every write site.
+ *
+ * IT ASKS ABOUT THE DATA — "does this stored value refuse its codec" — and not
+ * "will the pass visit this cell", so it does not subtract a cell whose key is
+ * already child-backed (which the pass skips without decoding). Pre-flip, the
+ * only path that refuses over this, nothing is child-backed and the two sets
+ * are identical; past it such a cell is junk left under a key whose children
+ * moved on, and the cell is still a read surface, so naming it is right.
+ *
+ * A "NO KNOWN BAD CELLS" GATE, NOT A PROOF, and its pages are not one instant
+ * either: it walks by cursor, so a row already read can change while a later
+ * page is being read, and a value can arrive after the last page and before
+ * the flip. DECLINED, a snapshot or write barrier spanning the scan: it would
+ * have to hold off the sync drain and the user's own edits across a walk of
+ * every property bag plus a server round trip. What covers the gap instead is
+ * that the pass is a FIXPOINT which reports what it could not carry, and that
+ * at `children` the cell is still dual-written and still the read surface — so
+ * a late arrival is named by the next run rather than lost, until the cell
+ * end-state (#1012) retires the cell. That is also the hole `scanSyncGap`
+ * covers for the key survey.
+ *
+ * Keys that resolve NO schema are out of scope: they have no codec to refuse
+ * anything, and {@link flipBlockedBySynthesis} blocks the flip over every one
+ * it cannot mint for. The ones it does mint for arrive with a preset
+ * `provePresetId` ran over every distinct value the key holds.
+ */
+export const surveyPropertyCellRejections = async (
+  repo: Repo,
   workspaceId: string,
-): Promise<number> => {
-  const rows = await getAll<{n: number}>(
-    // INDEXED BY, unlike the pass's own scan: with no cursor to anchor it the
-    // planner picks `idx_blocks_workspace_active` at realistic property
-    // densities and reads `properties_json` off every row in the workspace.
-    // This runs before the confirmation dialog, on the UI thread.
-    `SELECT COUNT(*) AS n
-       FROM blocks b INDEXED BY idx_blocks_workspace_nonempty_properties
-      WHERE b.workspace_id = ? AND b.deleted = 0
-        AND ${CARRIES_A_PROPERTY}`,
-    [workspaceId],
-  )
-  return rows[0]?.n ?? 0
+): Promise<PropertyCellRejectionSurvey> => {
+  // One resolver for the whole scan, through the canonical factory. A `Repo`
+  // rather than the pass's own context because the gesture that runs this has
+  // no backfill context yet — the runner builds one later, under the claim —
+  // so a context parameter would only move this adapter into a plugin.
+  const resolver = repo.propertySchemaResolverFor(workspaceId)
+  const resolveNameSchema = (name: string): AnyPropertySchema | undefined => {
+    const resolution = resolver.resolve(name)
+    return resolution.status === 'resolved' ? resolution.schema : undefined
+  }
+  const byKey = new Map<string, PropertyCellRejection & {blockIds: string[]}>()
+  let cells = 0
+  let blocksScanned = 0
+  let cursor = ''
+  for (;;) {
+    const page = await repo.db.getAll<{id: string; propertiesJson: string}>(
+      SURVEY_SQL, [workspaceId, cursor, SCAN_PAGE])
+    if (page.length === 0) break
+    cursor = page[page.length - 1]!.id
+    blocksScanned += page.length
+    for (const row of page) {
+      let properties: Record<string, unknown>
+      try {
+        properties = JSON.parse(row.propertiesJson) as Record<string, unknown>
+      } catch {
+        // Unreachable past `CARRIES_A_PROPERTY`'s own `json_valid`, and a bag
+        // this device cannot read is `flipBlockedBySynthesis`'s refusal to
+        // make, not this one's — it counts them and blocks the flip first.
+        continue
+      }
+      for (const [name, encoded] of Object.entries(properties)) {
+        const schema = resolveNameSchema(name)
+        if (schema === undefined) continue
+        const rejection = propertyCellValueRejection(schema, encoded)
+        if (rejection === null) continue
+        cells += 1
+        const seen = byKey.get(name)
+        if (seen === undefined) {
+          byKey.set(name, {
+            key: name, cells: 1, blockIds: [row.id],
+            reason: describeCellValueRejection(schema, rejection),
+          })
+          continue
+        }
+        seen.cells += 1
+        if (seen.blockIds.length < SAMPLE_OWNERS_PER_KEY) seen.blockIds.push(row.id)
+      }
+    }
+  }
+  return {keys: [...byKey.values()], cells, blocksScanned}
+}
+
+/**
+ * Why this workspace must not be flipped over its stored cell VALUES, or null.
+ *
+ * The cell-level twin of {@link flipBlockedBySynthesis}, and the same bargain:
+ * a hard refusal on the way IN, because the flip is one-way and these values
+ * can never become child-backed; advisory once already flipped, where refusing
+ * would withhold the backfill from every other key over a handful that can
+ * never migrate. The caller owns which of the two it is, exactly as it does for
+ * the key-level refusal.
+ */
+export const flipBlockedByCellValues = (
+  survey: PropertyCellRejectionSurvey,
+): string | null => {
+  if (survey.keys.length === 0) return null
+  const {shown, more} = firstFew(survey.keys)
+  const named = shown.map(entry =>
+    `${JSON.stringify(entry.key)} on ${pluralize(entry.cells, 'block')} — its cell ` +
+    `value ${entry.reason} (e.g. ${entry.blockIds.join(', ')})`).join('; ')
+  return `${pluralize(survey.cells, 'property value')} cannot be stored as property ` +
+    'blocks, so this workspace can never finish the migration while they exist: ' +
+    `${more > 0 ? `${named} and ${more} more key(s)` : named}. ` +
+    'Repair or remove those values, then run this again.'
 }
 
 /** Progress fan-out for a surface that wants to show a running count. The pass
