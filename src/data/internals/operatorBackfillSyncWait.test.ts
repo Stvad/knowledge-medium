@@ -5,6 +5,7 @@ import {
   workspaceBackfillsFacet,
   type BackfillCompletionClaim,
   type WorkspaceBackfill,
+  type WorkspaceBackfillContext,
 } from '@/data/facets'
 import {ChangeScope} from '@/data/api'
 import {Repo} from '@/data/repo'
@@ -84,6 +85,22 @@ const persistedBatchIds = async (): Promise<string[]> => (
   )).map(row => row.id)
 )
 
+const twoBatchWriter = (
+  batches: number[],
+  afterBatch?: (index: number, ctx: WorkspaceBackfillContext) => void,
+): WorkspaceBackfill['run'] => async ctx => {
+  for (let index = 0; index < 2; index++) {
+    await ctx.tx(async tx => {
+      batches.push(index)
+      await tx.create({
+        id: `operator-sync-wait-batch-${index}`, workspaceId: WS,
+        parentId: null, orderKey: `b${index}`, content: `batch ${index}`,
+      })
+    }, {description: `batch ${index}`})
+    afterBatch?.(index, ctx)
+  }
+}
+
 describe('operator backfill transient sync waits', () => {
   it('resumes after a download gap between committed batches and writes each batch once', async () => {
     const events: string[] = []
@@ -93,19 +110,10 @@ describe('operator backfill transient sync waits', () => {
     const backfill: WorkspaceBackfill = {
       id: BACKFILL_ID,
       trigger: 'operator',
-      run: async ctx => {
-        for (let index = 0; index < 2; index++) {
-          await ctx.tx(async t => {
-            batches.push(index)
-            await t.create({
-              id: `operator-sync-wait-batch-${index}`, workspaceId: WS,
-              parentId: null, orderKey: `b${index}`, content: `batch ${index}`,
-            })
-          }, {description: `batch ${index}`})
-          observedWaitCounts.push(ctx.syncWaitCount)
-          if (index === 0) gate.close()
-        }
-      },
+      run: twoBatchWriter(batches, (index, ctx) => {
+        observedWaitCounts.push(ctx.syncWaitCount)
+        if (index === 0) gate.close()
+      }),
     }
     const repo = await makeRepo(backfill, events, {backfillSyncGate: gate.gate})
     const realWorkspaceViewGap = repo.workspaceViewGap.bind(repo)
@@ -251,18 +259,9 @@ describe('operator backfill transient sync waits', () => {
     const repo = await makeRepo({
       id: BACKFILL_ID,
       trigger: 'operator',
-      run: async ({tx}) => {
-        for (let index = 0; index < 2; index++) {
-          await tx(async t => {
-            batches.push(index)
-            await t.create({
-              id: `operator-sync-wait-batch-${index}`, workspaceId: WS,
-              parentId: null, orderKey: `b${index}`, content: `batch ${index}`,
-            })
-          }, {description: `batch ${index}`})
-          if (index === 0) gate.close()
-        }
-      },
+      run: twoBatchWriter(batches, index => {
+        if (index === 0) gate.close()
+      }),
     }, events, {backfillSyncGate: gate.gate, backfillCompletionClaim: {
       tryClaim: async () => {
         events.push('tryClaim')
@@ -353,17 +352,7 @@ describe('operator backfill transient sync waits', () => {
     const repo = await makeRepo({
       id: BACKFILL_ID,
       trigger: 'operator',
-      run: async ({tx}) => {
-        for (let index = 0; index < 2; index++) {
-          await tx(async t => {
-            batches.push(index)
-            await t.create({
-              id: `operator-sync-wait-batch-${index}`, workspaceId: WS,
-              parentId: null, orderKey: `b${index}`, content: `batch ${index}`,
-            })
-          }, {description: `batch ${index}`})
-        }
-      },
+      run: twoBatchWriter(batches),
     }, events)
     vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => batches.length === 0
       ? null
@@ -387,22 +376,7 @@ describe('operator backfill transient sync waits', () => {
     const repo = await makeRepo({
       id: BACKFILL_ID,
       trigger: 'operator',
-      run: async ({tx}) => {
-        await tx(async t => {
-          batches.push(0)
-          await t.create({
-            id: 'operator-sync-wait-batch-0', workspaceId: WS,
-            parentId: null, orderKey: 'b0', content: 'batch 0',
-          })
-        }, {description: 'first batch'})
-        await tx(async t => {
-          batches.push(1)
-          await t.create({
-            id: 'operator-sync-wait-batch-1', workspaceId: WS,
-            parentId: null, orderKey: 'b1', content: 'batch 1',
-          })
-        }, {description: 'second batch'})
-      },
+      run: twoBatchWriter(batches),
     }, events)
     vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => batches.length === 0
       ? null
@@ -440,18 +414,9 @@ describe('operator backfill transient sync waits', () => {
     const repo = await makeRepo({
       id: BACKFILL_ID,
       trigger: 'operator',
-      run: async ({tx}) => {
-        for (let index = 0; index < 2; index++) {
-          await tx(async t => {
-            batches.push(index)
-            await t.create({
-              id: `operator-sync-wait-batch-${index}`, workspaceId: WS,
-              parentId: null, orderKey: `b${index}`, content: `batch ${index}`,
-            })
-          }, {description: `batch ${index}`})
-          if (index === 0) gate.close()
-        }
-      },
+      run: twoBatchWriter(batches, index => {
+        if (index === 0) gate.close()
+      }),
     }, events, {backfillSyncGate: gate.gate})
     const realWorkspaceViewGap = repo.workspaceViewGap.bind(repo)
     let sawGap = false
@@ -483,18 +448,9 @@ describe('operator backfill transient sync waits', () => {
     const repo = await makeRepo({
       id: 'workspace-open-sync-wait-v1',
       trigger: 'workspace-open',
-      run: async ({tx}) => {
-        for (let index = 0; index < 2; index++) {
-          await tx(async t => {
-            batches.push(index)
-            await t.create({
-              id: `operator-sync-wait-batch-${index}`, workspaceId: WS,
-              parentId: null, orderKey: `b${index}`, content: `batch ${index}`,
-            })
-          }, {description: `batch ${index}`})
-          if (index === 0) gate.close()
-        }
-      },
+      run: twoBatchWriter(batches, index => {
+        if (index === 0) gate.close()
+      }),
     }, events, {backfillSyncGate: gate.gate})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
