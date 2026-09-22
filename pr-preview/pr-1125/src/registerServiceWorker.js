@@ -1,1 +1,0 @@
-import{Uw as e,Ww as t}from"../chunks/app-DnZJ_NuE.js";export{e as checkForAppUpdate,t as registerServiceWorker};

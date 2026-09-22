@@ -1,1 +1,0 @@
-import{AT as e,MT as t,jT as n,kT as r}from"../../chunks/app-DnZJ_NuE.js";export{r as extensionDisplayName,e as extensionName,n as userExtensionShellToggle,t as userExtensionToggle};

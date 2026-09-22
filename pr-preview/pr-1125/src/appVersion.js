@@ -1,1 +1,0 @@
-import{Ca as e}from"../chunks/app-DnZJ_NuE.js";export{e as appVersion};

@@ -1,1 +1,0 @@
-import{az as e,iz as t,rz as n}from"../../../chunks/app-DnZJ_NuE.js";export{n as charLimitProp,t as charProfileProp,e as charScopeProp};

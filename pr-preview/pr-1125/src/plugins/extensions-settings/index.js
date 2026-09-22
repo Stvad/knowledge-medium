@@ -1,1 +1,0 @@
-import{Sw as e,gt as t,xw as n}from"../../../chunks/app-DnZJ_NuE.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

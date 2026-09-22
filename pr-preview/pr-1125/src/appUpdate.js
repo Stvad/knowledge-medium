@@ -1,1 +1,0 @@
-import{Gw as e,Kw as t}from"../chunks/app-DnZJ_NuE.js";export{e as appUpdate,t as useAppUpdateAvailable};

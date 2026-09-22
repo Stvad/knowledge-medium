@@ -1,1 +1,0 @@
-import{GC as e,WC as t}from"../../chunks/app-DnZJ_NuE.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

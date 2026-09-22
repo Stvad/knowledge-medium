@@ -1,1 +1,0 @@
-import{KC as e,qC as t}from"../../chunks/app-DnZJ_NuE.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

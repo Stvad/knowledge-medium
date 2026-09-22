@@ -1,1 +1,0 @@
-import{gm as e,hm as t}from"../../../chunks/app-DnZJ_NuE.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};

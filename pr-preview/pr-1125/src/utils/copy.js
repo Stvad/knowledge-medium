@@ -1,1 +1,0 @@
-import{BC as e,HC as t,UC as n,VC as r,zC as i}from"../../chunks/app-DnZJ_NuE.js";export{i as copyBlockIdsToClipboard,e as copyBlockToClipboard,r as copySelectedBlocksToClipboard,t as serializeBlock,n as serializeSelectedBlocks};
