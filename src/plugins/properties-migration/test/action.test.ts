@@ -732,6 +732,87 @@ describe('the stored-cell-value gate', () => {
     expect(runPass).toHaveBeenCalled()
   })
 
+  it('refuses the flip when a bad cell arrives while the dialog is open', async () => {
+    // The pre-dialog survey is taken across a user-length pause. A sync
+    // arrival or a raw write landing in it would otherwise be carried straight
+    // into the one-way flip, after which that cell is stranded for good —
+    // exactly the hazard the gate exists for, through the one window the
+    // pre-dialog answer cannot see.
+    cellValuesBlocked.mockReturnValueOnce(null)
+      .mockReturnValue('1 property value(s) cannot be stored as property blocks')
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/stopped before switching this workspace over/i))
+    // And it refuses ABOVE the history drop, which is a POSITION this pins
+    // rather than a second effect: a drop begun and then returned past is
+    // never ended, and an unended one refuses every replay in the workspace
+    // until the page reloads.
+    expect(beginHistoryDrop).not.toHaveBeenCalled()
+  })
+
+  it('does not re-survey when the workspace changed under the claim', async () => {
+    // Cost ordering, the same rule the pre-dialog gate follows: the cheap
+    // check that stops the gesture runs before a full walk of every property
+    // bag in the workspace.
+    const {repo, workspaceViewGap} = makeRepo()
+    // On the SECOND fitness read, so the switch lands past the post-dialog
+    // check and the pre-flip guards are the next thing to act.
+    let reads = 0
+    workspaceViewGap.mockImplementation(async () => {
+      if (++reads === 2) (repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
+      return null
+    })
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/different workspace is open now/i))
+    expect(surveyCells).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-surveys under the claim, not against the pre-dialog snapshot', async () => {
+    // Two calls, the second of them the one that guards the flip. One call
+    // means the gate is a snapshot taken before the user had answered.
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(surveyCells).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not make an already-flipped workspace pay for the re-survey', async () => {
+    // There is no irreversible step left on that path, so the second scan
+    // would be a full walk of every property bag bought for nothing.
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(surveyCells).toHaveBeenCalledTimes(1)
+    expect(runPass).toHaveBeenCalled()
+  })
+
+  it('fails closed when the pre-flip re-survey THROWS', async () => {
+    // A read that threw says nothing about whether the precondition holds, and
+    // this is the last thing between here and a one-way step.
+    surveyCells.mockResolvedValueOnce({keys: [], cells: 0, blocksScanned: 7})
+      .mockRejectedValue(new Error('the read failed'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/could not re-check/i))
+  })
+
   it('does not survey the cells of a workspace the key gate already refused', async () => {
     // Ordering, and it is the expensive half: the survey decodes every stored
     // property value in the workspace, on the UI thread, before a dialog the

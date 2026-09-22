@@ -435,6 +435,41 @@ const migrateUnderClaim = async (
         'is open now. Nothing was switched.' + undoNote(undoCleared))
       return
     }
+    // The cell survey AGAIN, and this is the one that guards the flip — the
+    // pre-dialog answer was taken across a user-length pause, in which a sync
+    // arrival or a raw write can land a value no codec carries. Past the flip
+    // that cell is stranded for good, which is the whole hazard this gate
+    // exists for.
+    //
+    // NOT a re-derivation of what the user consented to: `plan`, `blockCount`
+    // and `willSynthesize` stay the pre-dialog ones deliberately (see
+    // {@link ClaimedMigration}). This asks one question, it can only REFUSE,
+    // and it changes nothing the confirmation promised.
+    //
+    // It shrinks the window rather than closing it — the claim holds off other
+    // devices, not sync or this user's own edits, so a cell arriving between
+    // this and the PATCH is still possible. Bounded by one scan instead of by
+    // how long the dialog sat open, and only ever paid on the flip path.
+    let stillCarried: PropertyCellRejectionSurvey
+    try {
+      stillCarried = await surveyPropertyCellRejections(repo, workspaceId)
+    } catch (err) {
+      console.error('[properties-migration] could not re-survey stored cell values:', err)
+      // Fail CLOSED. A read that threw says nothing about whether the
+      // precondition holds, and this is the last thing between here and a
+      // one-way step.
+      banner.fail('Stopped before switching this workspace over: this device could not ' +
+        're-check whether every stored property value can be carried as blocks ' +
+        `(${err instanceof Error ? err.message : String(err)}). Nothing was switched.` +
+        undoNote(undoCleared))
+      return
+    }
+    const arrivedBlocked = flipBlockedByCellValues(stillCarried)
+    if (arrivedBlocked !== null) {
+      banner.fail(`Stopped before switching this workspace over. ${arrivedBlocked}` +
+        undoNote(undoCleared))
+      return
+    }
     banner.update('Switching this workspace to property blocks…')
     // BEGUN before the flip, not after it — see `UndoManager.beginHistoryDrop`.
     // From the PATCH onward the workspace is child-backed for the whole graph,
