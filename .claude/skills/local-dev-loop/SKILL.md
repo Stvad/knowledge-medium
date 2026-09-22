@@ -157,12 +157,12 @@ against the code on 2026-08-14:
   is a Rollup build. The `@/` importmap surface extensions consume
   (`src/extensions/apiCatalog.ts`) is deliberately identical, but bundling,
   tree-shaking and chunk-splitting bugs will not reproduce in dev.
-- **React is fetched from esm.sh in both modes**, but dev uses the `?dev`
-  builds pinned in `index.html`'s importmap and the build swaps in production
-  URLs (`vite-plugins/reactImportMapMode.ts`). Two consequences: the dev
-  server still needs **internet** for the first React fetch ("local" is not
-  "offline"), and `StrictMode` (`src/main.tsx`, unconditional) double-invokes
-  effects in dev only, because only the dev React build does that.
+- **React is a bundled dependency in both modes**, like everything an
+  extension imports by bare name (`vite-plugins/vendorImportMap.ts`): dev serves
+  Vite's pre-bundled development build through `/vendor/react.js`, prod the
+  production build inside the app chunk. `StrictMode` (`src/main.tsx`,
+  unconditional) double-invokes effects in dev only, because only the
+  development React build does that.
 - **Local-only has no Supabase at all**: member management, invitations,
   attachment upload/fetch and anything gated on `useIsLocalOnly()`
   (`src/components/Login.tsx`) are inert. Sign into the sandbox account

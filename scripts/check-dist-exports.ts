@@ -1,7 +1,8 @@
 /**
- * Post-build gate, two contracts: every export the extension API catalog names
- * must survive into the emitted module, and the boot graph must have bundled
- * into one chunk (the shape gate at the end).
+ * Post-build gate, three contracts: every export the extension API catalog
+ * names must survive into the emitted module; the boot graph must have bundled
+ * into one chunk; and every vendor facade the importmap names must be a pure
+ * re-export over chunks the app ships.
  *
  * The failure is SILENT: every module is a build entry written to its own
  * path whether or not its exports survived, so a dropped export leaves the
@@ -20,6 +21,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { extensionApiCatalog } from '../src/extensions/apiCatalog'
+import { facadeImportTargets, facadeResidue } from '../vite-plugins/facadeShape'
+import { readImportMap } from '../vite-plugins/importMapHtml'
+import { VENDOR_DIR } from '../vite-plugins/vendorImportMap'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const distDir = path.join(rootDir, 'dist')
@@ -114,3 +118,40 @@ const moduleScripts = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8').
 if (moduleScripts.length !== 1) fail(`expected one <script type="module"> in index.html, found ${moduleScripts.length}`)
 
 console.log(`[check-dist-exports] boot shape: one app chunk, a facade entry, one module script.`)
+
+// Vendor facades (vite-plugins/vendorImportMap.ts): every importmap entry must
+// point at an emitted file that only re-exports from chunks the app ships —
+// one carrying its own copy of the package is the instanceof failure the plugin
+// exists to prevent, and it would still resolve. Three entries are also checked
+// for a named export: the editor facet's package, a CommonJS shim, and a subpath.
+const importMap = readImportMap(fs.readFileSync(path.join(distDir, 'index.html'), 'utf8'))
+  ?? fail('dist/index.html has no parseable importmap')
+const vendorEntries = Object.entries(importMap.imports ?? {}).filter(([, target]) => target.startsWith(`./${VENDOR_DIR}/`))
+if (vendorEntries.length === 0) fail('index.html importmap has no vendor entries; vendorImportMapPlugin did not run')
+if (Object.values(importMap.imports ?? {}).some(target => /^https?:/.test(target))) fail('index.html importmap maps a specifier to a remote URL')
+const facadeRel = (target: string): string => target.slice('./'.length)
+for (const [specifier, target] of vendorEntries) {
+  const rel = facadeRel(target)
+  const file = path.join(distDir, rel)
+  if (!fs.existsSync(file)) fail(`importmap maps ${specifier} to ${target}, which was not emitted`)
+  const text = fs.readFileSync(file, 'utf8')
+  for (const from of facadeImportTargets(text)) {
+    const resolved = path.resolve(path.dirname(file), from)
+    if (!resolved.startsWith(path.join(distDir, 'chunks') + path.sep)) fail(`${rel} imports ${from}, not a chunk`)
+    if (!fs.existsSync(resolved)) fail(`${rel} imports ${from}, which was not emitted`)
+  }
+  const residue = facadeResidue(text)
+  if (residue) fail(`${rel} carries code of its own, not just re-exports:\n` + residue.slice(0, 300))
+}
+const vendorSamples: Array<[specifier: string, exportName: string]> = [
+  ['@codemirror/view', 'Decoration'],
+  ['react', 'createContext'],
+  ['react/jsx-runtime', 'jsx'],
+]
+for (const [specifier, exportName] of vendorSamples) {
+  const target = importMap.imports?.[specifier] ?? fail(`index.html importmap does not map ${specifier}`)
+  const text = fs.readFileSync(path.join(distDir, facadeRel(target)), 'utf8')
+  if (!emittedExportNames(text).has(exportName)) fail(`${target} lacks the ${exportName} export`)
+}
+
+console.log(`[check-dist-exports] vendor facades: ${vendorEntries.length} importmap entries re-export from chunks only; ${vendorSamples.length} named samples present.`)

@@ -40,6 +40,8 @@
 // `@/data/api` is the data layer's own stable public barrel (a directory), so
 // extensions must write its explicit `/index.js` form; every other entry here
 // is a single file.
+// Bundled dependencies are importable by bare package name (`@codemirror/view`,
+// `zod`, `react`); which ones and which subpaths: vite-plugins/vendorImportMap.ts.
 
 export interface ApiModuleGroup {
   /** Coarse grouping for discovery display (facets, data, ui, navigation, …). */

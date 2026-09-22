@@ -102,6 +102,12 @@ export interface DynamicExtensionsOptions {
    *     symbol from its real module (e.g. `import { actionsFacet } from
    *     '@/extensions/core.js'`) returns the *same* module instance the
    *     running app uses, so contribution facets match by identity.
+   *     Bundled dependencies resolve by their bare package name the same
+   *     way (`import {Decoration} from '@codemirror/view'`): the importmap
+   *     maps each one to a facade over the app chunk, so CodeMirror's own
+   *     instanceof checks pass. Package names (minus a few excluded for
+   *     boot-chunk size) plus the subpaths the app itself imports — see
+   *     vite-plugins/vendorImportMap.ts.
    *   - Display metadata comes from extension block properties, not
    *     executable module code. That keeps settings rows descriptive
    *     even when a block is disabled and intentionally not compiled.
