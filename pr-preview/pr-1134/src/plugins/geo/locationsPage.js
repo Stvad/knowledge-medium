@@ -1,1 +1,1 @@
-import{RL as e,zL as t}from"../../../chunks/app-C0eHTpLR.js";export{e as getOrCreateLocationsPage,t as locationsPageBlockId};
+import{RL as e,zL as t}from"../../../chunks/app-CMGXx4Gi.js";export{e as getOrCreateLocationsPage,t as locationsPageBlockId};

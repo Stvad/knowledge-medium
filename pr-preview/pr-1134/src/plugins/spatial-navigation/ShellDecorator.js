@@ -1,1 +1,1 @@
-import{kh as e}from"../../../chunks/app-C0eHTpLR.js";export{e as SpatialNavigationShellDecorator};
+import{kh as e}from"../../../chunks/app-CMGXx4Gi.js";export{e as SpatialNavigationShellDecorator};
