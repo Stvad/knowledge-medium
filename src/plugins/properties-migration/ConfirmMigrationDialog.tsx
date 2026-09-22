@@ -57,6 +57,13 @@ export interface ConfirmMigrationDialogProps {
    *  one-way consent screen is how the one cheap moment to repair it is
    *  missed. */
   repairableKeys: NamedPropertyKeys
+  /** Keys whose DEFINITION is fine and whose stored VALUES disagree with it —
+   *  the class `audit-properties` cannot see, because the key resolves and only
+   *  its cells do not. On an un-flipped workspace the gesture refuses before
+   *  reaching the dialog, so a number here means the workspace is already
+   *  flipped. Carries the CELL count as well: the repair is per key, and the
+   *  scale that decides whether it is worth doing now is per value. */
+  undecodableValueKeys: NamedPropertyKeys & {cells: number}
 }
 
 /** The keys behind the count just given. Subordinate to it on purpose: the
@@ -92,6 +99,7 @@ export const ConfirmMigrationDialog = ({
   unfixableKeys,
   stranded,
   repairableKeys,
+  undecodableValueKeys,
   resolve,
   cancel,
 }: ConfirmMigrationDialogProps & DialogContextProps<true>) => {
@@ -141,6 +149,14 @@ export const ConfirmMigrationDialog = ({
           leaves {agree(repairableKeys.count, 'it', 'them')} behind, and this is the cheap
           moment.
           <KeyNames keys={repairableKeys} />
+        </p>}
+        {undecodableValueKeys.count > 0 && <p className="text-destructive">
+          {pluralize(undecodableValueKeys.cells, 'stored property value')} across
+          {' '}{properties(undecodableValueKeys.count)} cannot be stored as blocks — the
+          value does not match the type its property declares. Nothing here changes
+          {' '}{agree(undecodableValueKeys.cells, 'it', 'them')}, and nothing later will:
+          fix the value or the declared type and run this again.
+          <KeyNames keys={undecodableValueKeys} />
         </p>}
         {stranded !== null && <p>
           {properties(stranded.count)} {agree(stranded.count, 'has', 'have')} no definition

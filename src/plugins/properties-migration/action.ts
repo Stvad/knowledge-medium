@@ -2,9 +2,11 @@ import { FolderTree } from 'lucide-react'
 import type { OperatorBackfillPass, OperatorBackfillResult, Repo } from '@/data/repo'
 import {
   PROPERTY_CELL_BACKFILL_ID,
-  countPropertyCellBackfillCandidates,
+  flipBlockedByCellValues,
   onPropertyCellBackfillProgress,
   pendingValueCount,
+  surveyPropertyCellRejections,
+  type PropertyCellRejectionSurvey,
 } from '@/data/internals/propertyCellBackfill'
 import {
   applyPropertyDefinitionSynthesis,
@@ -101,6 +103,13 @@ const passIsUnfit = async (
  *  a second run stacks an identical toast beside the first. */
 const SYNTHESIS_TOAST = {
   id: 'properties-migration-synthesis', duration: Number.POSITIVE_INFINITY,
+} as const
+
+/** The cell-VALUE advisory. Its own id rather than sharing the synthesis
+ *  one: a workspace can hold both problems at once, and two toasts under one
+ *  id means the second silently replacing the first. */
+const CELL_VALUE_TOAST = {
+  id: 'properties-migration-cell-values', duration: Number.POSITIVE_INFINITY,
 } as const
 
 /** The repair worklist. Its id lives here, beside the advisory's, so the
@@ -682,15 +691,39 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // succeeds is worse than never having shown it.
       dismissToast(SYNTHESIS_TOAST.id)
     }
+    // The CELL-level survey, and deliberately BELOW the key-level refusal: it
+    // decodes every property value in the workspace, so a workspace the cheap
+    // key survey already refuses never pays for it. Measured at ~1.5s over
+    // 108k property-carrying blocks (~378k cells) in Node — it also replaces
+    // the separate candidate COUNT this used to run here, so it is the only
+    // full scan between the palette and the dialog rather than a second one.
+    let survey: PropertyCellRejectionSurvey
+    try {
+      survey = await surveyPropertyCellRejections(repo, workspaceId)
+    } catch (err) {
+      console.error('[properties-migration] could not survey stored cell values:', err)
+      showInfo('Could not check whether every stored property value can be carried as ' +
+        `blocks, so nothing was changed: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    const valuesBlocked = flipBlockedByCellValues(survey)
+    // The same bargain as the key-level refusal one branch up, for the same
+    // reason: only the way IN has a one-way step to guard, and refusing an
+    // already-flipped workspace would withhold the backfill from every other
+    // key over a handful that can never migrate.
+    if (valuesBlocked !== null) {
+      showInfo(valuesBlocked, CELL_VALUE_TOAST)
+      if (!childBacked) return
+    } else {
+      dismissToast(CELL_VALUE_TOAST.id)
+    }
     // A refused workspace reaches here only when the flip is not at stake. Its
     // candidates are then keys that stay cell-only, NOT keys about to be given
     // a definition — counting them as the latter would have the dialog promise
     // something the gesture then skips.
     const refusal = plan.refusal
     const willSynthesize = refusal === null ? plan.candidates.length : 0
-    const blockCount = await countPropertyCellBackfillCandidates(
-      (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined), workspaceId,
-    )
+    const blockCount = survey.blocksScanned
     if (!await openDialog(ConfirmMigrationDialog, {
       blockCount, childBacked,
       synthesizedKeys: namedKeys(refusal === null ? plan.candidates : []),
@@ -703,6 +736,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
         : null,
       unfixableKeys: namedKeys(plan.blockers),
       repairableKeys: namedKeys(plan.brokenDefinitions),
+      undecodableValueKeys: {...namedKeys(survey.keys), cells: survey.cells},
     })) return
     // Re-read AFTER the dialog. A confirmation is a user-length pause, and the
     // workspace pinned before it may not be the open one now — the runner's

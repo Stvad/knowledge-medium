@@ -54,6 +54,19 @@ vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
   flipBlockedBySynthesis: () => flipBlocked(),
 }))
 
+/** The pre-dialog survey of stored cell values, faked for the same reason the
+ *  plan above is: this file is about the gesture's ORDER — when the scan runs,
+ *  and what the gesture does with its verdict. What the verdict MEANS is
+ *  `propertyCellBackfill.test.ts`. Partial, so `pendingValueCount` and the
+ *  pass id stay real. */
+const surveyCells = vi.fn<() => Promise<PropertyCellRejectionSurvey>>()
+const cellValuesBlocked = vi.fn<() => string | null>()
+vi.mock('@/data/internals/propertyCellBackfill', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/data/internals/propertyCellBackfill')>()),
+  surveyPropertyCellRejections: () => surveyCells(),
+  flipBlockedByCellValues: () => cellValuesBlocked(),
+}))
+
 /** A plan with `n` keys to mint and nothing wrong. */
 const plan = (candidates = 0) => ({
   workspaceId: 'ws-1', refusal: null, unreadableBlocks: 0,
@@ -65,6 +78,7 @@ const plan = (candidates = 0) => ({
 
 import type { OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
 import type { SynthesisResult } from '@/data/internals/propertyDefinitionSynthesis'
+import type { PropertyCellRejectionSurvey } from '@/data/internals/propertyCellBackfill'
 import type { HistoryDrop } from '@/data/internals/undoManager'
 import { getClientId } from '@/utils/clientId'
 import { claimStub, type ClaimStubLog } from './claimStub.ts'
@@ -102,7 +116,7 @@ const makeRepo = (
   } = {},
 ) => {
   const runPass = vi.fn(async () => result)
-  const getAll = vi.fn(async () => [{n: 7}])
+  const getAll = vi.fn(async () => [])
   const workspaceViewGap = vi.fn(async (): Promise<ViewGap | null> => null)
   // Two readers of the `workspaces` row now — the flip state and the owner.
   const getOptional = vi.fn(async (sql: string) => {
@@ -195,6 +209,8 @@ afterEach(() => {
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockReset()
   flipBlocked.mockReset()
+  surveyCells.mockReset()
+  cellValuesBlocked.mockReset()
 })
 
 // Every default lives HERE, not split with `afterEach`: arming in `afterEach`
@@ -210,6 +226,8 @@ beforeEach(() => {
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockResolvedValue(synthesized())
   flipBlocked.mockReturnValue(null)
+  surveyCells.mockResolvedValue({keys: [], cells: 0, blocksScanned: 7})
+  cellValuesBlocked.mockReturnValue(null)
 })
 
 describe('migrate_properties_to_blocks action', () => {
@@ -278,15 +296,15 @@ describe('migrate_properties_to_blocks action', () => {
   })
 
   it('refuses an already-flipped workspace before the workspace-wide scan', async () => {
-    // No flip on this path, so nothing irreversible — but the candidate count is
-    // an unbounded json_each walk on the UI thread and the dialog would ask for
-    // consent to a run the runner is about to refuse.
-    const {repo, runPass, getAll, workspaceViewGap} = makeRepo(RAN, {flipped: true})
+    // No flip on this path, so nothing irreversible — but the cell survey is an
+    // unbounded walk of every property bag on the UI thread, and the dialog
+    // would ask for consent to a run the runner is about to refuse.
+    const {repo, runPass, workspaceViewGap} = makeRepo(RAN, {flipped: true})
     workspaceViewGap.mockResolvedValue(DRAINING)
 
     await invoke(repo)
 
-    expect(getAll).not.toHaveBeenCalled()
+    expect(surveyCells).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
     expect(runPass).not.toHaveBeenCalled()
   })
@@ -682,19 +700,110 @@ describe('the graph-wide claim', () => {
   })
 })
 
+describe('the stored-cell-value gate', () => {
+  it('refuses the flip when a stored value no codec will carry exists', async () => {
+    // The cell-level twin of the orphan-key refusal, and the reason it has to
+    // be one: the key IS registered, so `audit-properties` reports the
+    // workspace clean while these cells can never become child-backed — and
+    // the flip they would be stranded by is one-way.
+    cellValuesBlocked.mockReturnValue('2 property value(s) cannot be stored as property blocks')
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringMatching(/cannot be stored as property blocks/), expect.anything())
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+  })
+
+  it('lets an already-flipped workspace run anyway, as an advisory', async () => {
+    // Same bargain as the orphan-key gate: past the flip nothing irreversible
+    // is left, and refusing would withhold the backfill from every other key
+    // over a handful that can never migrate.
+    cellValuesBlocked.mockReturnValue('2 property value(s) cannot be stored as property blocks')
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringMatching(/cannot be stored as property blocks/), expect.anything())
+    expect(runPass).toHaveBeenCalled()
+  })
+
+  it('does not survey the cells of a workspace the key gate already refused', async () => {
+    // Ordering, and it is the expensive half: the survey decodes every stored
+    // property value in the workspace, on the UI thread, before a dialog the
+    // gesture is about to decline to show.
+    flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(surveyCells).not.toHaveBeenCalled()
+  })
+
+  it('takes the cell-value advisory down once a re-run comes back clean', async () => {
+    // Sticky and stable-id like the synthesis one, and for the same reason: a
+    // repaired workspace must not keep a "cannot migrate" banner through a
+    // migration that then succeeds.
+    const {repo} = makeRepo(RAN, {flipped: true})
+    cellValuesBlocked.mockReturnValue('2 property value(s) cannot be stored as property blocks')
+    await invoke(repo)
+    const advisory = (showInfo.mock.calls[0]![1] as {id: string}).id
+
+    showInfo.mockReset()
+    dismissToast.mockReset()
+    cellValuesBlocked.mockReturnValue(null)
+    await invoke(repo)
+
+    expect(dismissToast).toHaveBeenCalledWith(advisory)
+  })
+
+  it('reports a survey that THREW without changing anything', async () => {
+    // Database reads, and nothing else is watching this await. Left to throw it
+    // would end the gesture with no outcome reported, over a flip that had not
+    // happened.
+    surveyCells.mockRejectedValue(new Error('the read failed'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/nothing was changed/i))
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+  })
+
+  it('shows the dialog the blocks the survey actually read', async () => {
+    // The survey replaced a separate candidate COUNT that ran here, so its scan
+    // is now the only thing that can answer "how many blocks". Reading it from
+    // anywhere else would be a second full walk of every property bag.
+    surveyCells.mockResolvedValue({keys: [], cells: 0, blocksScanned: 41})
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({blockCount: 41}))
+  })
+})
+
 describe('the orphan-definition step', () => {
   it('refuses the flip when a key can never have a definition, before anything is scanned', async () => {
     // The hard case: such a key makes "every cell key resolves a definition"
     // unsatisfiable forever, and the flip is one-way. Refusing after the flip
     // would be refusing after the damage.
     flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
-    const {repo, runPass, getAll} = makeRepo()
+    const {repo, runPass} = makeRepo()
 
     await invoke(repo)
 
     expect(showInfo).toHaveBeenCalledWith(
       expect.stringMatching(/cannot be given a definition/), expect.anything())
-    expect(getAll).not.toHaveBeenCalled()
+    expect(surveyCells).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
     expect(flipWorkspace).not.toHaveBeenCalled()
     expect(runPass).not.toHaveBeenCalled()
@@ -799,14 +908,14 @@ describe('the orphan-definition step', () => {
     // editor runs the whole gesture, mints definitions that claim shared
     // property names, clears the workspace's undo history — and only then finds
     // out the flip was never available to them.
-    const {repo, runPass, getAll} = makeRepo(
+    const {repo, runPass} = makeRepo(
       RAN, {owner: 'someone-else'})
 
     await invoke(repo)
 
     expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/only the workspace owner/i))
     expect(planSynthesis).not.toHaveBeenCalled()
-    expect(getAll).not.toHaveBeenCalled()
+    expect(surveyCells).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
     expect(flipWorkspace).not.toHaveBeenCalled()
     expect(runPass).not.toHaveBeenCalled()

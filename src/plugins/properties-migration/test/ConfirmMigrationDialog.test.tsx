@@ -20,6 +20,7 @@ const show = (over: Partial<ConfirmMigrationDialogProps> = {}) => render(
   <ConfirmMigrationDialog
     blockCount={7} childBacked
     synthesizedKeys={NONE} unfixableKeys={NONE} repairableKeys={NONE} stranded={null}
+    undecodableValueKeys={{...NONE, cells: 0}}
     resolve={vi.fn()} cancel={vi.fn()}
     {...over}
   />,
@@ -46,6 +47,18 @@ describe('what the consent screen names', () => {
     show({unfixableKeys: {count: 1, names: ['[[demo]]']}})
 
     expect(copy()).toContain('"[[demo]]"')
+  })
+
+  it('names the keys whose stored values disagree with their own type', () => {
+    // The class `audit-properties` cannot see: the key resolves, so the audit
+    // calls the workspace clean while these cells can never migrate. Un-flipped
+    // the gesture refuses before this screen, so a number here is an
+    // already-flipped workspace being told what it is about to leave behind.
+    show({undecodableValueKeys: {count: 1, cells: 65, names: ['demo:tags']}})
+
+    expect(copy()).toContain('"demo:tags"')
+    // The SCALE is per value, and it is what decides whether to repair now.
+    expect(copy()).toContain('65 stored property values')
   })
 
   it('says how many keys it did not name, counting off the real total', () => {

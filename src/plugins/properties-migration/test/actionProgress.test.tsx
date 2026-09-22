@@ -52,7 +52,8 @@ vi.mock('@/data/internals/propertyCellBackfill', async importOriginal => ({
   pendingValueCount: (await importOriginal<
     typeof import('@/data/internals/propertyCellBackfill')>()).pendingValueCount,
   PROPERTY_CELL_BACKFILL_ID: 'properties:cell-to-children',
-  countPropertyCellBackfillCandidates: async () => 7,
+  surveyPropertyCellRejections: async () => ({keys: [], cells: 0, blocksScanned: 7}),
+  flipBlockedByCellValues: () => null,
   onPropertyCellBackfillProgress: (listener: (p: PropertyCellBackfillProgress) => void) => {
     emit = listener
     return () => { emit = null }
