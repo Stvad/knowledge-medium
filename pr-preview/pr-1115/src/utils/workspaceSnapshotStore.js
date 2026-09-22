@@ -1,1 +1,1 @@
-import{Xi as e}from"../../chunks/app-CbFvFYOP.js";export{e as createWorkspaceSnapshotStore};
+import{Xi as e}from"../../chunks/app-BgyQfmUt.js";export{e as createWorkspaceSnapshotStore};

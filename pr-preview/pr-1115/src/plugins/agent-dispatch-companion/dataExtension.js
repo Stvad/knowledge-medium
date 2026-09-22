@@ -1,1 +1,1 @@
-import{TB as e}from"../../../chunks/app-CbFvFYOP.js";export{e as agentDispatchCompanionDataExtension};
+import{TB as e}from"../../../chunks/app-BgyQfmUt.js";export{e as agentDispatchCompanionDataExtension};
