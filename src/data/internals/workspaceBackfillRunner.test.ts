@@ -392,7 +392,10 @@ describe('workspace backfill runner — sync gating', () => {
     ))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
+    const running = repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
+    await vi.waitFor(() => expect(batches).toEqual([0]))
+    await vi.advanceTimersByTimeAsync(30_000)
+    const result = await running
     warn.mockRestore()
 
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
