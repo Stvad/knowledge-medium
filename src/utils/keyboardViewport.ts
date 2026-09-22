@@ -15,10 +15,8 @@
  *    itself shrinks with the keyboard → overlap == 0. The scroller
  *    already shrank, so no extra margin is needed.
  *
- *  NB: the mobile editing toolbar's positioning (`getKeyboardTop` below) reads
- *  no layout-viewport height at all. innerHeight is fine here, where it only
- *  feeds a keyboard-up gate (why an under-report is tolerable there:
- *  `keyboardAwareScroll.ts:shouldReassertCaret`).
+ *  NB: innerHeight only feeds a keyboard-up gate here, where an under-report
+ *  is tolerable (`keyboardAwareScroll.ts:shouldReassertCaret`).
  */
 
 import { CallbackSet } from './callbackSet'
@@ -38,24 +36,21 @@ export const getKeyboardOverlap = (): number => computeOverlap()
 /** Live layout-viewport y of the on-screen keyboard's top edge — where a
  *  layout-anchored `position: fixed` element's bottom edge must land. The
  *  visual viewport's offset and height are both layout-viewport coordinates,
- *  so the layout viewport's own height (which iOS reports two disagreeing
- *  ways) never enters. Undefined without a visual viewport (desktop engines
- *  without the API), where `bottom: 0` is already right. */
+ *  so no layout-viewport height is read. Undefined without a visual viewport
+ *  (desktop engines without the API), where `bottom: 0` is already right. */
 export const getKeyboardTop = (): number | undefined => {
   const vv = typeof window === 'undefined' ? undefined : window.visualViewport
   return vv ? Math.round(vv.offsetTop + vv.height) : undefined
 }
 
-/** The `bottom` of a fixed element whose bottom edge must sit on the keyboard:
+/** The `bottom` of a fixed element whose bottom edge must sit on the keyboard.
  *  `100%` is resolved by the engine against the containing block it positions
- *  the element with, so no viewport height is read here. That block is not a
- *  constant on iOS: it is the full window at rest and shrinks to the
- *  safe-area-less height while the visual viewport is panned, and the visual
- *  viewport's offset and height follow the same switch, which is why a JS
- *  reading of either height cannot stand in for the engine. With no keyboard the
- *  visual viewport fills the layout viewport and this is 0. The `max()` is
- *  defence in depth: an engine that shrinks the layout viewport with the
- *  keyboard can over-measure the visual viewport by a pixel, which would
+ *  the element with, and on iOS that block is not a constant: it is the full
+ *  window at rest and the safe-area-less height while the visual viewport is
+ *  panned, with the visual viewport's offset and height switching along with
+ *  it. No JS reading of a layout height can stand in for the engine here. The
+ *  `max()` is defence in depth: an engine that shrinks the layout viewport with
+ *  the keyboard can over-measure the visual viewport by a pixel, which would
  *  otherwise sink the bar that pixel below the fold. */
 export const keyboardBottomStyle = (keyboardTop: number | undefined): string =>
   keyboardTop === undefined ? '0px' : `max(0px, calc(100% - ${keyboardTop}px))`

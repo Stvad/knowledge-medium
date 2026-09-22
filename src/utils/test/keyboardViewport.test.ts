@@ -66,16 +66,9 @@ describe('getKeyboardOverlap', () => {
 })
 
 describe('getKeyboardTop', () => {
-  it('reads the live visual viewport, not a layout height', () => {
-    // Device-verified standalone iPhone: keyboard shrinks vv to 518, no pan;
-    // the toolbar's bottom edge belongs at 518 whatever the layout height reads.
-    installViewport({height: 518})
-    expect(getKeyboardTop()).toBe(518)
-  })
-
-  it('adds the pan and rounds to a whole px', () => {
-    // 277 + 313.2 = 590.2 → 590; and 0.4 + 313.2 = 313.6, where floor/trunc
-    // would give 313 and round 314 — the fixture distinguishes them.
+  it('reads the live visual viewport, adding the pan and rounding to a whole px', () => {
+    // 0.4 + 313.2 = 313.6: floor/trunc would give 313, round 314. No layout
+    // height is consulted (none is stubbed here).
     installViewport({height: 313.2, offsetTop: 0.4})
     expect(getKeyboardTop()).toBe(314)
   })
@@ -87,7 +80,9 @@ describe('getKeyboardTop', () => {
 })
 
 describe('keyboardBottomStyle', () => {
-  it('lands the bottom edge on the keyboard via the engine-resolved 100%', () => {
+  it('lands the bottom edge on the keyboard via the engine-resolved 100%, clamped at the fold', () => {
+    // Pins the max(0px, …) clamp and the 100% base (not 100vh, the large
+    // viewport on iOS) around the keyboard top.
     expect(keyboardBottomStyle(518)).toBe('max(0px, calc(100% - 518px))')
   })
 

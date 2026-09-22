@@ -41,10 +41,6 @@ const useKeyboardViewportValue = <T,>(active: boolean, read: () => T, initial: T
   return value
 }
 
-/** The toolbar's `bottom`: its bottom edge lands on the keyboard's top edge
- *  (see `getKeyboardTop` / `keyboardBottomStyle`). */
-const useKeyboardBottom = (active: boolean): string =>
-  keyboardBottomStyle(useKeyboardViewportValue<number | undefined>(active, getKeyboardTop, undefined))
 
 /** Mobile-only toolbar that sits above the on-screen keyboard while a
  *  block is being edited. Its buttons are facet contributions
@@ -83,9 +79,11 @@ export function MobileKeyboardToolbar() {
   const pointerCoarse = usePointerCoarse()
   const showToolbar = isEditing && pointerCoarse
   // Hooks above the early-return must run on every render. Pass the
-  // activation flag in so the sentinel only mounts/listens while the
-  // toolbar is on screen.
-  const keyboardBottom = useKeyboardBottom(showToolbar)
+  // activation flag in so the subscription only exists while the toolbar is
+  // on screen.
+  const keyboardBottom = keyboardBottomStyle(
+    useKeyboardViewportValue<number | undefined>(showToolbar, getKeyboardTop, undefined),
+  )
 
   // Publish the toolbar's rendered height so keyboardAwareScroll can keep
   // the caret above the toolbar, not just above the keyboard. Measured
@@ -173,7 +171,7 @@ export function MobileKeyboardToolbar() {
       // Must stay a direct child of the app root: the `100%` in `bottom` is the
       // viewport only while no ancestor carries a transform, filter, contain
       // or backdrop-filter, any of which would make itself the containing
-      // block and send the bar to that ancestor's top edge.
+      // block and resolve the bar to an arbitrary y.
       className="mobile-keyboard-toolbar fixed left-0 right-0 z-50 flex items-center justify-around gap-1 border-t border-border bg-background/95 px-1 py-1 backdrop-blur supports-[backdrop-filter]:bg-background/80"
       style={{bottom: keyboardBottom}}
       data-block-interaction="ignore"
