@@ -19,8 +19,9 @@
  * the sampled types below are the only signal about who owns a key. The
  * migration gesture runs this same scan and names a few keys per bucket on
  * its consent screen, so this is no longer the only way to see them — but it
- * is still the only COMPLETE one, and it adds a fix per key plus provenance
- * for the keys the sample reaches.
+ * is the only one that lists every key the scan can READ (`unreadableBlocks`
+ * bounds that), and it adds a fix per key plus provenance for the keys the
+ * sample reaches.
  *
  * Deliberately no exemption list. `grainAudit` skips `system:*` / `agent:*`
  * to keep a per-extension report readable; here an exemption would hide keys
