@@ -63,14 +63,12 @@ export const isLargeFanout = (consumerCount: number): boolean =>
  *
  *  Two gestures reach the gate from one user action — blurring the name field
  *  and clicking the type picker in the same gesture does exactly that — and
- *  each of them awaits a count before it opens its dialog, so both dialogs
- *  queue and both can be confirmed. Everything downstream of that was being
- *  patched one consequence at a time: two runs contending for one surface,
- *  two confirmations stacked over each other, and a second transaction whose
- *  staleness check is judged against a row the first has already changed.
- *  Serialising the gesture removes the class instead: the second gets its
- *  count, its confirmation and its run AFTER the first has committed, which
- *  is also the only order in which its numbers are true.
+ *  each awaits a count before opening its dialog, so both dialogs queue and
+ *  both can be confirmed. Nothing a second change carries is true until the
+ *  first has committed: its consumer count, the row its confirmation
+ *  describes and the baseline its staleness check is judged against are all
+ *  about a row that is about to change. So it does not get to count, ask or
+ *  write until then.
  *
  *  Chained rather than rejected, because both changes are ones the user
  *  asked for. `then(fn, fn)` so a change that throws does not strand every

@@ -589,7 +589,13 @@ describe('a change planned against a row that moved while it waited', () => {
 
     await session.keyboard('page{Enter}')
 
-    await waitFor(() => { expect(plannedFor()).toBeGreaterThan(before) })
+    // FENCED ON THE QUEUE, not on the planner having been reached: the load
+    // spy firing says the change started, not that it finished, so a
+    // planner that went on to count would still be mid-flight when the
+    // assertions below ran. The queue is FIFO, so a change enqueued after
+    // this one completes only once it has.
+    await queueDefinitionChange(async () => {})
+    expect(plannedFor()).toBeGreaterThan(before)
     expect(count).not.toHaveBeenCalled()
     expect(screen.queryByRole('button', {name: 'Change options'})).toBeNull()
     expect(showError).not.toHaveBeenCalled()
@@ -600,10 +606,9 @@ describe('two changes confirmed from one gesture', () => {
   it('runs them one at a time, each sized after the last one landed', async () => {
     // Blurring the name field and clicking the type picker in one gesture
     // reaches the gate twice, and each awaits a count before opening its
-    // dialog — so both dialogs would queue and both could be confirmed. Every
-    // consequence of that was being patched separately (two runs over one
-    // surface, a staleness check judged against a row the other change had
-    // already rewritten); serialising the gesture removes the class.
+    // dialog — so both dialogs would queue and both could be confirmed, with
+    // the second sized and judged against a row the first is about to
+    // change.
     const count = consumersAre(4_000)
     renderSchema()
 

@@ -2,11 +2,14 @@
 /**
  * The surface a definition change puts up while it holds the writer.
  *
- * Driven through the STORE rather than by calling the component with props:
- * the mount reads a module store keyed by the active workspace, and the two
- * ways this fails in production are both about that wiring — a run opened for
- * one workspace showing over another, and a run that ends leaving the modal
- * behind.
+ * Driven through the STORE rather than by calling the component with props,
+ * because the wiring is where this goes wrong. The slot is ONE per tab, not
+ * one per workspace — a fan-out holds the database-wide writer, so the
+ * workspace the user navigates to is as frozen as the one being changed and
+ * the modal has to follow them there. What separates one run's reports from
+ * another's is therefore not the workspace but the definition, plus the run's
+ * own transaction being the one holding the writer; and a run that ends must
+ * take the modal with it.
  */
 import { Suspense, type ReactNode } from 'react'
 import { vi } from 'vitest'
