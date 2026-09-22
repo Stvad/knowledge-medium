@@ -3994,14 +3994,6 @@ export class Repo {
       const assertMayWrite = async (waitForSync = backfill.trigger === 'operator'): Promise<void> => {
         if (!await this.assertBackfillMayWrite(workspaceId, backfill, generation, waitForSync)) return
         syncWaitCount += 1
-        // A download can replace the claim and the definition snapshot.
-        // Revalidate both before resuming against the new view.
-        if (!await claim.stillOwned(workspaceId, backfill.id)) {
-          throw Object.assign(new Error(
-            `[workspaceBackfills] "${backfill.id}" aborted: the migration claim is no longer held by this device`,
-          ), {kind: Repo.TRANSIENT, retryable: false})
-        }
-        resolver = this.propertySchemaResolverFor(workspaceId)
       }
       // Announced once, not per batch: the history is gone either way, and
       // saying so repeatedly for a pass that runs for minutes is noise.
@@ -4009,7 +4001,7 @@ export class Repo {
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
         get syncWaitCount() { return syncWaitCount },
-        // Reuse the snapshot within a batch; refresh after sync may replace it.
+        // Reuse one snapshot per batch, captured after acquiring its write lock.
         resolveNameSchema: (name) => {
           const resolution = resolver.resolve(name)
           return resolution.status === 'resolved' ? resolution.schema : undefined
@@ -4050,6 +4042,14 @@ export class Repo {
           await assertMayWrite()
           const value = await this.tx(async t => {
             this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
+            // The claim can change while waiting for this lock, even without
+            // an observed sync gap. Check every batch on this transaction's view.
+            if (!await claim.stillOwned(t, workspaceId, backfill.id)) {
+              throw Object.assign(new Error(
+                `[workspaceBackfills] "${backfill.id}" aborted: the migration claim is no longer held by this device`,
+              ), {kind: Repo.TRANSIENT, retryable: false})
+            }
+            resolver = this.propertySchemaResolverFor(workspaceId)
             const value = await fn(t)
             // AGAIN, now the body has returned — see the method. `fn` can span a
             // whole insert budget, so the entry check above is as stale by here

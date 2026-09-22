@@ -23,6 +23,7 @@ import { constMat, drainStagingWindowOnce, noKey } from '@/data/internals/syncOb
 import { createGraphBackfillClaim, graphBackfillClaimBlockId } from '@/data/internals/graphBackfillClaim'
 import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
 import type { Repo } from '@/data/repo'
+import { ChangeScope } from '@/data/api'
 import type { BlockCache } from '@/data/blockCache'
 
 const WS = 'ws-claim-race'
@@ -111,6 +112,7 @@ describe('the completion record across two databases', () => {
     ['completed', false],
     ['deleted', false],
     ['absent', false],
+    ['foreign', false],
   ] as const)('checks %s ownership without reclaiming or writing', async (state, owned) => {
     const {a} = await setup()
     const backfillId = 'ownership-v1'
@@ -128,9 +130,19 @@ describe('the completion record across two databases', () => {
     }
     const tx = vi.fn(async () => { throw new Error('ownership check opened a write transaction') })
     const ensureHome = vi.fn(async () => { throw new Error('ownership check ensured its parent') })
-    const observer = createGraphBackfillClaim({db: a.db, claimantId: 'device-a', tx, ensureHome})
+    const outsideRead = vi.fn(async () => { throw new Error('ownership read escaped the transaction') })
+    const observer = createGraphBackfillClaim({
+      db: {getOptional: outsideRead}, claimantId: 'device-a', tx, ensureHome,
+    })
 
-    expect(await observer.stillOwned(WS, backfillId)).toBe(owned)
+    if (state === 'foreign') {
+      await a.db.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?',
+        ['other-workspace', graphBackfillClaimBlockId(WS, backfillId)])
+    }
+    expect(await a.repo.tx(t => observer.stillOwned(t, WS, backfillId), {
+      scope: ChangeScope.BlockDefault, description: 'Check ownership under the write lock',
+    })).toBe(owned)
+    expect(outsideRead).not.toHaveBeenCalled()
     expect(tx).not.toHaveBeenCalled()
     expect(ensureHome).not.toHaveBeenCalled()
   })

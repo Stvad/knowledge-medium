@@ -169,10 +169,6 @@ export const claimHoldingGraph = (
   row: Pick<BlockData, 'deleted' | 'workspaceId' | 'properties'> | null | undefined,
   workspaceId: string,
 ): GraphBackfillClaim | null => {
-  // `row.deleted` is DEFENCE IN DEPTH through today's only caller — `Block.peek`
-  // is tombstone-aware and hands back `null` — and is kept because the parameter
-  // is a raw row type and a RELEASED claim is exactly a tombstone: a reader that
-  // skipped it would hold a modal over a workspace nobody is migrating, forever.
   if (!row || row.deleted || row.workspaceId !== workspaceId) return null
   const claim = claimFromProperties(row.properties)
   return claimHoldsGraph(claim) ? claim : null
@@ -320,11 +316,9 @@ export const releaseStrandedGraphBackfillClaim = async (
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => ({
-  async stillOwned(workspaceId, backfillId) {
-    const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
-    return decideClaim(
-      await readGraphBackfillClaim(deps.db, claimId, workspaceId), deps.claimantId,
-    ) === 'proceed'
+  async stillOwned(tx, workspaceId, backfillId) {
+    const row = await tx.get(graphBackfillClaimBlockId(workspaceId, backfillId))
+    return claimHoldingGraph(row, workspaceId)?.claimantId === deps.claimantId
   },
   async tryClaim(workspaceId, backfillId, opts) {
     const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)

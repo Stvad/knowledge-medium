@@ -153,9 +153,10 @@ export interface BackfillCompletionClaim {
     backfillId: string,
     opts?: {reclaimCompleted?: boolean},
   ): Promise<ClaimAttempt>
-  /** Whether the live, incomplete claim still names this claimant. Read-only:
-   *  never creates, restores, or reclaims a missing or completed claim. */
-  stillOwned(workspaceId: string, backfillId: string): Promise<boolean>
+  /** Read the live claim through the writing transaction so a sync drain
+   *  cannot replace it between this check and the guarded batch. Never creates,
+   *  restores, or reclaims a missing or completed claim. */
+  stillOwned(tx: Pick<Tx, 'get'>, workspaceId: string, backfillId: string): Promise<boolean>
   /** The claimed run finished. Record completion where every device sees it. */
   markComplete(workspaceId: string, backfillId: string): Promise<void>
   /** The claimed run aborted without finishing (a transient precondition, a
