@@ -307,16 +307,28 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   // gets back to the truth — including the ones that hold a name from before
   // they started, which a captured value cannot do (see `writeName`).
   //
-  // Render-phase resync when the committed name changes (remote edit,
-  // undo/redo, sync): React supports setState-during-render for this exact
-  // case. Focus is intentionally not preserved — if a remote write lands
-  // mid-edit, accepting the new committed name beats letting a stale draft
-  // overwrite it on the next blur.
+  // Render-phase resync when the committed name changes: React supports
+  // setState-during-render for this exact case. Focus is intentionally not
+  // preserved — if a remote write lands mid-edit, accepting the new
+  // committed name beats letting a stale draft overwrite it on the next
+  // blur.
+  //
+  // SOMEBODY ELSE'S change, though, and `requestedName` is what tells them
+  // apart. A rename is not instant — it is planned, counted, sometimes
+  // confirmed, then committed — and the field is live throughout below the
+  // threshold, so the user can be typing the next name when the last one
+  // lands. Its own acknowledgement arriving then must not read as a remote
+  // edit and take that typing away. The enum options editor learned the
+  // same thing about its own writes (`pending`, there); both are working
+  // around a seam that tells an editor nothing about its request, which is
+  // what #1117 is for.
   const [draftName, setDraftName] = useState<string | null>(null)
   const [committedName, setCommittedName] = useState(propertyName)
+  const [requestedName, setRequestedName] = useState<string | null>(null)
   if (propertyName !== committedName) {
     setCommittedName(propertyName)
-    setDraftName(null)
+    if (propertyName !== requestedName) setDraftName(null)
+    setRequestedName(null)
   }
   const shownName = draftName ?? propertyName
 
@@ -339,6 +351,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       setDraftName(null)
       return
     }
+    setRequestedName(next)
     const wrote = await throughFanoutGate(atStart => {
       // Re-aimed at whatever the definition is called NOW: a rename carries
       // a whole replacement name and means the same thing from any starting
@@ -359,7 +372,14 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // a peer renamed, the resync has already adopted the peer's name, so
     // writing the captured one back sticks and the next blur undoes exactly
     // the edit the refusal protected.
-    if (!wrote) setDraftName(null)
+    //
+    // Only THIS request's draft, though — the user may have typed past it
+    // while it was in flight, and that newer name is not this one's to
+    // discard.
+    if (!wrote) {
+      setRequestedName(null)
+      setDraftName(current => current === next ? null : current)
+    }
   }, [block, propertyName, throughFanoutGate])
 
   const writePresetId = useCallback(async (next: string) => {
