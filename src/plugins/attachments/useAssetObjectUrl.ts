@@ -50,6 +50,10 @@ export interface AssetUrlArgs {
   readonly contentHash: string
   /** The block's `media:mime` — the Blob type for the object URL. */
   readonly mime: string
+  /** The block's `media:size` when known (> 0) — lets the resolver reject a short
+   *  local copy before hashing it. Not part of the settled-result key: the bytes a
+   *  hash names don't change with it. */
+  readonly expectedSize?: number
 }
 
 export type AssetUrlState =
@@ -72,7 +76,7 @@ export function useAssetObjectUrl(
   // and is simply ignored by such a viewer. Defaults to true (the inline/image path).
   options: { readonly enabled?: boolean } = {},
 ): readonly [AssetUrlState, ReportDecodeFailure] {
-  const { workspaceId, contentHash, mime } = args
+  const { workspaceId, contentHash, mime, expectedSize } = args
   const enabled = options.enabled ?? true
   // A settled result is tagged with the inputs it was resolved FOR. The derived
   // return (below) treats a result for STALE inputs as `loading`, so we never
@@ -101,7 +105,7 @@ export function useAssetObjectUrl(
     let objectUrl: string | null = null
 
     void resolver
-      .resolve({ workspaceId, contentHash })
+      .resolve({ workspaceId, contentHash, expectedSize })
       .then((result) => {
         if (cancelled) return // inputs changed / unmounted — never create a URL we'd orphan
         if (!result.ok) {
@@ -121,7 +125,7 @@ export function useAssetObjectUrl(
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [enabled, resolver, workspaceId, contentHash, mime, key, retryTick])
+  }, [enabled, resolver, workspaceId, contentHash, mime, expectedSize, key, retryTick])
 
   const state: AssetUrlState = settled?.key === key ? settled.state : { status: 'loading' }
 

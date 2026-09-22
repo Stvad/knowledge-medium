@@ -27,6 +27,8 @@ import { useRepo } from '@/context/repo.js'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { DOWN_LANE_SWEEP_INTERVAL_MS, runDownLaneReconcile } from './assetDownLane.js'
+import { getByteStore } from './byteStore.js'
+import { repairByteStoreOnce } from './byteStoreRepair.js'
 import { armSharedLaneTriggers } from './laneArming.js'
 
 export const MediaDownLaneReplicator = (): null => {
@@ -38,9 +40,14 @@ export const MediaDownLaneReplicator = (): null => {
     let cancelled = false
     const pass = (): void => {
       if (cancelled) return // a workspace switch / unmount already tore this arming down
-      void runDownLaneReconcile(repo, workspaceId).catch((err) =>
-        console.warn('[media] down-lane reconcile failed', err),
-      )
+      // The repair sweep goes FIRST (a no-op after its first run): the reconcile's presence
+      // scan must not count a poisoned empty entry as replicated. Not gated on remote sync
+      // the way the reconcile is — the entries it reaps predate this session either way.
+      const userId = repo.user.id
+      const repair = userId ? repairByteStoreOnce(getByteStore(), userId, workspaceId) : Promise.resolve()
+      void repair
+        .then(() => runDownLaneReconcile(repo, workspaceId))
+        .catch((err) => console.warn('[media] down-lane reconcile failed', err))
     }
 
     // EVERY trigger goes through here: defer the pass to a genuine idle window (never the

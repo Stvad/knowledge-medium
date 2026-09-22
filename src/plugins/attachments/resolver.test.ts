@@ -236,6 +236,133 @@ describe('createAssetResolver — fail-closed (the §7.3/§5.1 acceptance gate)'
   })
 })
 
+describe('createAssetResolver — a local copy is verified before it is served (a poisoned store)', () => {
+  // The write path is not atomic on every engine: an entry can exist that was never
+  // written (empty), was cut short, or holds other bytes. Each is discarded, deleted,
+  // and re-fetched — the same fail-closed rule the download path applies (§5.1).
+  const poisoned = async (mode: 'none' | 'e2ee', contentHash: string, local: Uint8Array<ArrayBuffer>) => {
+    const byteStore = new InMemoryByteStore()
+    const key = await contentKeyFor(mode, contentHash)
+    await byteStore.put(USER, WS, key, local)
+    return { byteStore, key }
+  }
+
+  it('an EMPTY local copy is a miss: deleted, re-fetched, verified, re-stored, served', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore, key } = await poisoned('none', contentHash, bytes())
+    const del = vi.spyOn(byteStore, 'delete')
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash, expectedSize: 4 })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(del).toHaveBeenCalledWith(USER, WS, key)
+    expect(await byteStore.get(USER, WS, key)).toEqual(plain) // healed
+  })
+
+  it('an EMPTY local copy with the remote unreachable fails closed — empty bytes are NEVER served', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore, key } = await poisoned('none', contentHash, bytes())
+    const { resolver } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => {
+        throw new Error('offline')
+      },
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'fetch-failed' })
+    expect(await byteStore.has(USER, WS, key)).toBe(false) // the poison is gone either way
+  })
+
+  it('a SHORT local copy (length ≠ media:size) is a miss — rejected by length, before any hash', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore } = await poisoned('none', contentHash, bytes(1, 2))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash, expectedSize: 4 })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+  })
+
+  it('a SHORT local copy with NO size hint is still caught — by the hash', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore } = await poisoned('none', contentHash, bytes(1, 2))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+  })
+
+  it('a local copy of the RIGHT length but the WRONG bytes is a miss (hash mismatch) — e2ee too', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore, key } = await poisoned('e2ee', contentHash, bytes(9, 9, 9, 9))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('decrypt'),
+      byteStore,
+      serve: async () => seal('e2ee', plain, contentHash),
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash, expectedSize: 4 })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(await byteStore.get(USER, WS, key)).toEqual(plain)
+  })
+
+  it('a size hint of 0 (unknown) does not reject a good copy', async () => {
+    const plain = bytes(4, 2)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash, expectedSize: 0 })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('a failed delete of the bad copy does not block the re-fetch', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore } = await poisoned('none', contentHash, bytes())
+    vi.spyOn(byteStore, 'delete').mockRejectedValue(new DOMException('locked', 'InvalidStateError'))
+    const { resolver } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+  })
+
+  it('replicate: an EMPTY local entry is not "present" — it is fetched and replicated', async () => {
+    const plain = bytes(5, 5, 5)
+    const contentHash = await hashOf(plain)
+    const { byteStore, key } = await poisoned('none', contentHash, bytes())
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'replicated' })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(await byteStore.get(USER, WS, key)).toEqual(plain)
+  })
+})
+
 describe('createAssetResolver — never throws out of resolve (the §7.3 fail-closed contract)', () => {
   it('treats a transient local-store read error (non-NotFound) as a miss and re-fetches', async () => {
     // OpfsByteStore.get rethrows any DOMException that isn't NotFoundError; the

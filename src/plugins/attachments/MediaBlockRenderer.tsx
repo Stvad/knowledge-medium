@@ -78,8 +78,11 @@ export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
 
   // Resolve on mount for an EAGER inline viewer (image); for a LAZY-INLINE viewer (audio)
   // only once armed; never for the pure download fallback (it uses resolveBytes on click).
+  // `media:size` is cosmetic elsewhere, but here it lets the resolver reject a short local
+  // copy before hashing it; 0 (the default — unknown) hands the decision to the hash alone.
+  const expectedSize = size > 0 ? size : undefined
   const [state, reportDecodeFailure] = useAssetObjectUrl(
-    { workspaceId, contentHash: hash, mime },
+    { workspaceId, contentHash: hash, mime, expectedSize },
     resolver,
     { enabled: viewer.eager || armed },
   )
@@ -87,8 +90,8 @@ export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
   // The lazy path: a bound "give me the VERIFIED bytes" thunk for the download affordance
   // (file fallback + audio) — fail-closed like the eager path (resolve() discards unverified).
   const resolveBytes = useCallback(
-    () => resolver.resolve({ workspaceId, contentHash: hash }),
-    [resolver, workspaceId, hash],
+    () => resolver.resolve({ workspaceId, contentHash: hash, expectedSize }),
+    [resolver, workspaceId, hash, expectedSize],
   )
 
   const { Component } = viewer

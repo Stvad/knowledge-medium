@@ -17,6 +17,18 @@
  * and NEVER served; the caller renders the broken-asset placeholder. This is the
  * hard Phase-3 acceptance gate (§17), not an optimization.
  *
+ * A LOCAL HIT IS VERIFIED TOO, on the same rule. "Verified when stored" is a
+ * premise about the write path, and the write path is not atomic on every
+ * engine: `getFileHandle(create)` mints an empty file before any byte lands, so
+ * a store whose write then fails (WebKit before Safari 26 had no `createWritable`
+ * — every asset on an iPad was an empty local hit after its first open) or a
+ * killed writer leaves an entry that was never verified. So a local read is
+ * accepted only if its length is non-zero, matches the block's `media:size` when
+ * that is known, and its sha256 matches the block's `hash`; anything else is
+ * discarded (the entry deleted) and treated as a miss. The hash is over bytes
+ * already in memory — cheap next to the read itself, and it makes the store a
+ * cache that cannot lie rather than an authority the renderer has to trust.
+ *
  * Three-valued, never two-valued (§5.1 / §7.3 / e2ee §6 rule 2): the decode
  * decision is driven by `getMaterializability` — decrypt (e2ee + WK) / copy
  * (plaintext-pinned) / defer (e2ee without WK, unpinned, or signed out). `defer`
@@ -46,6 +58,9 @@ export interface AssetResolveRequest {
   readonly workspaceId: string
   /** The block's synced `sha256:<hex>` content hash (§5.1). */
   readonly contentHash: string
+  /** The block's `media:size` when known (> 0): a local copy of another length is
+   *  rejected before it is hashed. Absent / 0 → the hash check alone decides. */
+  readonly expectedSize?: number
 }
 
 /** Why a resolve failed closed — every value renders the broken-asset
@@ -166,6 +181,20 @@ type ResolveOutcome =
   | { readonly ok: true; readonly bytes: Uint8Array<ArrayBuffer>; readonly source: ResolveSource }
   | { readonly ok: false; readonly reason: AssetFailReason }
 
+/** Why a local copy is NOT the block's bytes — see the module header. `null` = it is. */
+type LocalDefect = 'empty' | 'size-mismatch' | 'hash-mismatch'
+
+/** Cheapest check first: length (free) gates the hash (a sha256 over the bytes). */
+const localDefect = async (
+  local: Uint8Array<ArrayBuffer>,
+  contentHash: string,
+  expectedSize: number | undefined,
+): Promise<LocalDefect | null> => {
+  if (local.byteLength === 0) return 'empty'
+  if (expectedSize !== undefined && expectedSize > 0 && local.byteLength !== expectedSize) return 'size-mismatch'
+  return (await verifyContentHash(local, contentHash)) ? null : 'hash-mismatch'
+}
+
 export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
   const { getUserId, byteStore, blobStore, getMaterializability, getCek, getContentKeyHmac } = deps
   // Coalesce concurrent identical resolves (see `coalescedResolve` below).
@@ -206,7 +235,7 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     }
   }
 
-  const resolveImpl = async ({ workspaceId, contentHash }: AssetResolveRequest): Promise<ResolveOutcome> => {
+  const resolveImpl = async ({ workspaceId, contentHash, expectedSize }: AssetResolveRequest): Promise<ResolveOutcome> => {
     // Outer safety net: ANY unexpected throw (a misbehaving injected policy dep, an
     // OPFS error the inner guards don't anticipate) returns a verdict, never a thrown
     // promise — the renderer always gets a placeholder, never an unhandled rejection
@@ -217,16 +246,28 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
       if (!prep.ok) return fail(prep.reason)
       const { userId, mode, contentKey } = prep
 
-      // (3) Local hit — already verified when stored (§8), serve directly. A
-      // transient store-read error is treated as a MISS (the bytes are re-fetchable,
-      // §8), not a hard failure: fall through to the network.
+      // (3) Local hit — serve directly once it passes the same verification a download
+      // gets (module header: the store's write is not atomic on every engine, so a
+      // stored entry is not proof of verified bytes). A defective copy is deleted and
+      // treated as a MISS, exactly like a transient store-read error (the bytes are
+      // re-fetchable, §8): fall through to the network. An EMPTY or short copy is never
+      // served — that was the every-asset-broken-on-second-open failure.
       let local: Uint8Array<ArrayBuffer> | null = null
       try {
         local = await byteStore.get(userId, workspaceId, contentKey)
       } catch (err) {
         console.warn(`[assetResolver] local byte-store read failed for ${workspaceId}; re-fetching`, err)
       }
-      if (local) return { ok: true, bytes: local, source: 'local' } // already durable (§8) — a hit, not a download
+      if (local) {
+        const defect = await localDefect(local, contentHash, expectedSize)
+        if (!defect) return { ok: true, bytes: local, source: 'local' } // already durable (§8) — a hit, not a download
+        console.warn(
+          `[assetResolver] local copy of ${contentHash} in ${workspaceId} is ${defect} (${local.byteLength} bytes); discarding it and re-fetching`,
+        )
+        await byteStore.delete(userId, workspaceId, contentKey).catch((err: unknown) => {
+          console.warn(`[assetResolver] could not delete the ${defect} local copy for ${workspaceId}`, err)
+        })
+      }
 
       // (4) Miss → fetch the ciphertext (direct RLS-gated GET, §10.1).
       let blob: Uint8Array<ArrayBuffer>

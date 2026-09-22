@@ -16,10 +16,23 @@
  * holds no keys and makes no trust decisions. The backing store is OPFS
  * (`OpfsByteStore`); `InMemoryByteStore` is the test double + no-OPFS fallback.
  *
+ * Two write invariants the store DOES own, because OPFS gives neither for free:
+ *   - a failed `put` leaves NO entry at the key. `getFileHandle(create)` mints an
+ *     empty file before any byte lands, so a write that then fails must remove it —
+ *     otherwise the empty file reads as a local hit forever;
+ *   - a `put` works on every engine with OPFS: through `createWritable` where the
+ *     engine has it, else through a worker + sync access handle (WebKit before
+ *     Safari 26 — every iOS 18 browser — has only the latter; byteStoreWriter.ts).
+ * The store still does not VERIFY what it reads back: the resolver checks every
+ * local hit's length + hash against the block (§5.1) and deletes a bad entry, and
+ * `sweepEmpty` reaps the empty entries an older build left behind.
+ *
  * Destruction is the coarse platform clear (§7.2) — this store has no per-store
  * wipe role; `purgeWorkspace` is an AUTHORIZATION claw-back (revoke/leave), not
  * a destruction hook.
  */
+
+import { createWorkerFileWriter, type WorkerFileWriter, type WriterWorkerLike } from './byteStoreWriter.js'
 
 /** Root directory name under the OPFS root for all asset bytes. */
 export const ASSETS_ROOT = 'assets'
@@ -54,9 +67,11 @@ const decodeSegment = (s: string): string => {
 export interface ByteStore {
   /** The stored plaintext bytes, or `null` on a miss. */
   get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null>
-  /** Write already-verified plaintext bytes (the resolver hash-checks first). */
+  /** Write already-verified plaintext bytes (the resolver hash-checks first).
+   *  Resolves once the bytes are durable; rejects — leaving NO entry — when they aren't. */
   put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
-  /** Is the object present locally? (the §6 down-lane's "already replicated?" probe). */
+  /** Is the object present locally, with bytes? (the §6 down-lane's "already replicated?"
+   *  probe). An EMPTY entry is not present — nothing was replicated into it. */
   has(userId: string, workspaceId: string, contentKey: string): Promise<boolean>
   /** Every stored object's content-key for one (user, workspace) — the down-lane's
    *  ONE-SHOT presence scan (§8): a single directory enumeration in place of a `has()`
@@ -68,6 +83,23 @@ export interface ByteStore {
   /** Drop every byte for one (user, workspace) — the §8 revoke/leave claw-back.
    *  A no-op when nothing is stored. */
   purgeWorkspace(userId: string, workspaceId: string): Promise<void>
+  /** Remove every EMPTY entry for one (user, workspace) that is older than `minAgeMs`
+   *  — the repair for a store an older build poisoned (a `put` that created the entry
+   *  and then failed to write it). The age floor spares an entry a concurrent `put` is
+   *  still filling. Idempotent; per-entry failures are skipped. */
+  sweepEmpty(userId: string, workspaceId: string, opts: SweepOptions): Promise<SweepResult>
+}
+
+export interface SweepOptions {
+  /** An empty entry younger than this may be a write in progress — left alone. */
+  readonly minAgeMs: number
+  /** The clock the age is measured against; injectable for tests. */
+  readonly now?: () => number
+}
+
+export interface SweepResult {
+  readonly scanned: number
+  readonly removed: number
 }
 
 /** Path segments under the OPFS root for one object. Each is {@link encodeSegment}-
@@ -116,7 +148,8 @@ export class InMemoryByteStore implements ByteStore {
   }
 
   async has(userId: string, workspaceId: string, contentKey: string): Promise<boolean> {
-    return this.blobs.has(this.key(userId, workspaceId, contentKey))
+    const hit = this.blobs.get(this.key(userId, workspaceId, contentKey))
+    return hit !== undefined && hit.byteLength > 0
   }
 
   async listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>> {
@@ -126,6 +159,22 @@ export class InMemoryByteStore implements ByteStore {
       if (k.startsWith(prefix)) out.add(decodeSegment(k.slice(prefix.length)))
     }
     return out
+  }
+
+  async sweepEmpty(userId: string, workspaceId: string): Promise<SweepResult> {
+    // No timestamps in memory: every empty entry counts as old enough.
+    const prefix = this.wsPrefix(userId, workspaceId)
+    let scanned = 0
+    let removed = 0
+    for (const [k, v] of [...this.blobs]) {
+      if (!k.startsWith(prefix)) continue
+      scanned++
+      if (v.byteLength === 0) {
+        this.blobs.delete(k)
+        removed++
+      }
+    }
+    return { scanned, removed }
   }
 
   async delete(userId: string, workspaceId: string, contentKey: string): Promise<void> {
@@ -143,7 +192,23 @@ export class InMemoryByteStore implements ByteStore {
 export interface OpfsByteStoreDeps {
   /** The OPFS root; injectable for tests. Defaults to the real origin root. */
   getRoot?: () => Promise<FileSystemDirectoryHandle>
+  /** Does this engine's `FileSystemFileHandle` have `createWritable`? Decides the
+   *  write path ONCE per store; injectable to force the worker path in tests. */
+  hasWritableStream?: () => boolean
+  /** Spawns the writer worker (byteStoreWriter.worker.ts); injectable for tests. */
+  spawnWriterWorker?: () => WriterWorkerLike
 }
+
+/** The engine has the stream write API on the main thread (Chromium, Firefox,
+ *  Safari 26+); without it (Safari 16.4–18) only a worker's sync access handle
+ *  can write. Read off the prototype, not a probe: `createWritable` on a handle
+ *  either exists or is `undefined` — there's no runtime feature switch. */
+export const engineHasWritableStream = (): boolean =>
+  typeof FileSystemFileHandle !== 'undefined' &&
+  typeof (FileSystemFileHandle.prototype as { createWritable?: unknown }).createWritable === 'function'
+
+const spawnRealWriterWorker = (): WriterWorkerLike =>
+  new Worker(new URL('./byteStoreWriter.worker.ts', import.meta.url), { type: 'module' })
 
 /**
  * OPFS-backed store (the production §8 store). Each `(user, workspace, key)`
@@ -152,6 +217,10 @@ export interface OpfsByteStoreDeps {
  */
 export class OpfsByteStore implements ByteStore {
   private readonly getRoot: () => Promise<FileSystemDirectoryHandle>
+  private readonly hasWritableStream: () => boolean
+  /** The worker write path, built on first use (never on an engine with the stream API). */
+  private workerWriter?: WorkerFileWriter
+  private readonly spawnWriterWorker: () => WriterWorkerLike
   /** Cached OPFS root + per-(user,ws) dir handles, so repeated ops (the down-lane's
    *  probes, capture/demand reads+writes) skip re-walking the 3-level chain from the
    *  root each call. Only SUCCESSFUL resolutions are cached. Invalidated on
@@ -162,6 +231,8 @@ export class OpfsByteStore implements ByteStore {
 
   constructor(deps: OpfsByteStoreDeps = {}) {
     this.getRoot = deps.getRoot ?? (() => navigator.storage.getDirectory())
+    this.hasWritableStream = deps.hasWritableStream ?? engineHasWritableStream
+    this.spawnWriterWorker = deps.spawnWriterWorker ?? spawnRealWriterWorker
   }
 
   private root(): Promise<FileSystemDirectoryHandle> {
@@ -224,6 +295,9 @@ export class OpfsByteStore implements ByteStore {
     }
   }
 
+  /** Either write path resolves only once the bytes are durable, and on failure
+   *  removes the entry (see the module header): the stream path via
+   *  `abort` + `removeEntry` here, the worker path inside the worker. */
   private async writeFile(
     userId: string,
     workspaceId: string,
@@ -231,24 +305,66 @@ export class OpfsByteStore implements ByteStore {
     bytes: Uint8Array<ArrayBuffer>,
   ): Promise<void> {
     const dir = await this.workspaceDir(userId, workspaceId, true)
-    const fileHandle = await dir.getFileHandle(encodeSegment(contentKey), { create: true })
-    const writable = await fileHandle.createWritable()
+    const name = encodeSegment(contentKey)
+    if (!this.hasWritableStream()) {
+      this.workerWriter ??= createWorkerFileWriter(this.spawnWriterWorker)
+      await this.workerWriter.write(assetPathSegments(userId, workspaceId, contentKey), bytes)
+      return
+    }
+    const fileHandle = await dir.getFileHandle(name, { create: true })
     try {
-      await writable.write(bytes)
-    } finally {
-      await writable.close()
+      const writable = await fileHandle.createWritable()
+      try {
+        await writable.write(bytes)
+      } catch (err) {
+        await writable.abort().catch(() => {})
+        throw err
+      }
+      await writable.close() // the commit — a failure here leaves the entry as it was, i.e. possibly empty
+    } catch (err) {
+      await dir.removeEntry(name).catch(() => {})
+      throw err
     }
   }
 
   async has(userId: string, workspaceId: string, contentKey: string): Promise<boolean> {
     try {
       const dir = await this.workspaceDir(userId, workspaceId, false)
-      await dir.getFileHandle(encodeSegment(contentKey))
-      return true
+      const fileHandle = await dir.getFileHandle(encodeSegment(contentKey))
+      return (await fileHandle.getFile()).size > 0
     } catch (err) {
       if (isNotFound(err)) return false
       throw err
     }
+  }
+
+  async sweepEmpty(userId: string, workspaceId: string, opts: SweepOptions): Promise<SweepResult> {
+    let scanned = 0
+    let removed = 0
+    let dir: FileSystemDirectoryHandle
+    try {
+      dir = await this.workspaceDir(userId, workspaceId, false)
+    } catch (err) {
+      if (isNotFound(err)) return { scanned, removed } // nothing stored — nothing to repair
+      throw err
+    }
+    const now = opts.now ?? Date.now
+    // Snapshot the names first: removing while iterating a live directory listing is
+    // engine-defined behaviour.
+    const names: string[] = []
+    for await (const name of dir.keys()) names.push(name)
+    for (const name of names) {
+      scanned++
+      try {
+        const file = await (await dir.getFileHandle(name)).getFile()
+        if (file.size !== 0 || now() - file.lastModified < opts.minAgeMs) continue
+        await dir.removeEntry(name)
+        removed++
+      } catch {
+        // a directory, an entry that vanished, or one a writer holds open — next sweep
+      }
+    }
+    return { scanned, removed }
   }
 
   async listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>> {
