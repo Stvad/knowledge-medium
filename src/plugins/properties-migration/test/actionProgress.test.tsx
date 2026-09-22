@@ -76,7 +76,11 @@ let claimHeldAfterRun: false | 'this-device' | 'a-peer' = false
 let runHasHappened = false
 
 /** Emits `reported` from inside the run, the way the pass notifies. */
-const runReporting = async (reported: PropertyCellBackfillProgress) => {
+const runReporting = async (
+  reported: PropertyCellBackfillProgress,
+  outcome: {outcome: 'ran' | 'deferred'; undoHistoryCleared: boolean; reason?: string;
+            retryable?: boolean} = {outcome: 'ran', undoHistoryCleared: false},
+) => {
   const repo = {
     activeWorkspaceId: 'ws-1',
     user: {id: 'user-1'},
@@ -105,7 +109,7 @@ const runReporting = async (reported: PropertyCellBackfillProgress) => {
     withOperatorBackfillClaim: claimStub(async () => {
       emit?.(reported)
       runHasHappened = true
-      return {outcome: 'ran' as const, undoHistoryCleared: false}
+      return outcome
     }),
   } as unknown as Repo
   await migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
@@ -175,6 +179,31 @@ describe('the migration progress path', () => {
 
   it('does not dismiss the worklist it just raised', async () => {
     await runReporting(progress({failureCount: 3, failures: [{blockId: 'b1', reason: 'x'}]}))
+
+    expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
+  })
+
+  it('keeps the worklist when the run completed but refused everything', async () => {
+    // `ran`, so it completed — but it moved no value and refused N, which
+    // raises no `followUp` of its own (the banner carries that count instead).
+    // Those N are exactly what the standing worklist is about, so this is the
+    // other ending that must not clear it.
+    await runReporting(progress({
+      valuesMaterialized: 0, valuesMaterializedTotal: 0,
+      failureCount: 65, failures: [{blockId: 'b1', reason: 'x'}],
+    }))
+
+    expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
+  })
+
+  it('keeps the worklist when the run did not complete', async () => {
+    // A run that DEFERRED verified nothing. It produces no `followUp` either,
+    // so dismissing on "no follow-up" would clear a still-actionable list of
+    // what to repair on the one ending that proves least about it. Same for
+    // held-by-peer, read-only, already-running and failed.
+    await runReporting(progress({failureCount: 0, failures: []}),
+      {outcome: 'deferred', undoHistoryCleared: false,
+       reason: 'this device is not caught up', retryable: true})
 
     expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
   })

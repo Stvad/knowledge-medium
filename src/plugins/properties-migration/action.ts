@@ -477,15 +477,19 @@ const migrateUnderClaim = async (
     )
     if (failed) banner.fail(message)
     else banner.done(message)
-    // Sticky and stable-id, and DISMISSED when this run has no worklist of its
-    // own — the same pairing the synthesis advisory uses, for the same reason.
-    // A stable id alone only covers the run that also has failures; the run
-    // that fixed them produces no `followUp` at all, so without the dismissal
-    // an "N could not be migrated, repair them and run this again" toast
-    // outlives the repair and sits beside a banner saying there is nothing
-    // left to migrate.
+    // Sticky and stable-id, and dismissed ONLY by a run that proved there is
+    // nothing left to repair — a completed pass that refused nothing.
+    //
+    // Both halves are load-bearing. Without the dismissal, the run that fixes
+    // the values produces no `followUp` at all, so "N could not be migrated,
+    // repair them and run this again" outlives the repair and ends up beside
+    // a banner saying there is nothing left. But dismissing on every
+    // followUp-less ending is worse: `deferred`, `held-by-peer`, `read-only`,
+    // `already-running` and `failed` all verified NOTHING, and so does a `ran`
+    // that refused every value — clearing a still-actionable worklist on those
+    // loses the only list of what to repair.
     if (followUp) showInfo(followUp, WORKLIST_TOAST)
-    else dismissToast(WORKLIST_TOAST.id)
+    else if (result.outcome === 'ran' && unmigrated === 0) dismissToast(WORKLIST_TOAST.id)
   } catch (err) {
     console.error('[properties-migration] failed:', err)
     // The runner can REJECT rather than return an outcome (a claim write that
