@@ -1,1 +1,0 @@
-import{$4 as e,Q4 as t,X4 as n,Y4 as r,Z4 as i,e3 as a,n3 as o,r3 as s,t3 as c}from"../../../chunks/app-B9IQb4A2.js";export{r as CHANGE_SCOPE_POLICIES,n as ChangeScope,i as isChangeScope,t as policyForScope,e as scopeAllowedInReadOnly,a as scopeIsUndoable,c as scopePoliciesEquivalent,o as scopeUploadsToServer,s as sourceForScope};
