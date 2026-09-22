@@ -42,7 +42,7 @@ const useKeyboardViewportValue = <T,>(active: boolean, read: () => T, initial: T
 
 /** The toolbar's `bottom` inset — the live layout-viewport keyboard overlap
  *  that lifts the `position: fixed` toolbar just above the on-screen keyboard
- *  (see `getLayoutViewportKeyboardOverlap` for the iOS clientHeight/pan
+ *  (see `getLayoutViewportKeyboardOverlap` for the iOS height/pan
  *  rationale). ~0 on Chromium/Firefox, nonzero on iOS Safari. */
 const useKeyboardInset = (active: boolean): number =>
   useKeyboardViewportValue(active, getLayoutViewportKeyboardOverlap, 0)

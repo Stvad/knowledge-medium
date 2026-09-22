@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   getKeyboardOverlap,
+  getLayoutViewportKeyboardOverlap,
   layoutViewportKeyboardOverlap,
   setEditingToolbarHeight,
   subscribeKeyboardViewport,
@@ -101,6 +102,30 @@ describe('layoutViewportKeyboardOverlap', () => {
     // proper round yields 336; dropping Math.round (335.9) or swapping it for
     // floor/trunc (335) would diverge — this pins the rounding.
     expect(layoutViewportKeyboardOverlap(650, 313.7, 0.4)).toBe(336)
+  })
+})
+
+describe('getLayoutViewportKeyboardOverlap', () => {
+  const stubClientHeight = (value: number) =>
+    vi.spyOn(document.documentElement, 'clientHeight', 'get').mockReturnValue(value)
+  afterEach(() => vi.restoreAllMocks())
+
+  it('measures against the window height when the client height is short (standalone iPhone, viewport-fit=cover)', () => {
+    // Device-verified: clientHeight 873, innerHeight 932 (the 59px top safe
+    // area), keyboard shrinks vv to 518. The fixed toolbar is positioned
+    // against 932; a 355px inset (from 873) left it behind the keyboard's
+    // system strip.
+    stubClientHeight(873)
+    vi.stubGlobal('innerHeight', 932)
+    installViewport({height: 518})
+    expect(getLayoutViewportKeyboardOverlap()).toBe(414)
+  })
+
+  it('measures against the client height when the window height is short (iPad Stage Manager + scroll)', () => {
+    stubClientHeight(650)
+    vi.stubGlobal('innerHeight', 500)
+    installViewport({height: 314, offsetTop: 277})
+    expect(getLayoutViewportKeyboardOverlap()).toBe(59)
   })
 })
 

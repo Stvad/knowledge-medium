@@ -17,14 +17,12 @@
  *
  *  NB: `getLayoutViewportKeyboardOverlap` (below) is the SIBLING quantity for
  *  the mobile editing toolbar's `position:fixed` bottom inset — the same
- *  arithmetic, but it reads `documentElement.clientHeight` for the
- *  layout-viewport height instead of `window.innerHeight`. innerHeight is fine
- *  here (fed only as ONE input to a keyboard-up gate — the ≥60 overlap arm,
- *  OR-ed with and backstopped by the editing-toolbar sentinel — where its iOS
- *  Stage-Manager under-reporting is tolerable) but WRONG for positioning a
- *  layout-anchored fixed element, which needs the reliable clientHeight. They
- *  stay two readers, not one parameterized helper — the height-source
- *  difference is load-bearing. */
+ *  arithmetic over the height a fixed element is actually positioned against
+ *  (see there). innerHeight alone is fine here: it feeds ONE input to a
+ *  keyboard-up gate (the ≥60 overlap arm, OR-ed with and backstopped by the
+ *  editing-toolbar sentinel), where an under-report is tolerable. They stay
+ *  two readers, not one parameterized helper — the height source is
+ *  load-bearing for the inset and not for the gate. */
 
 import { CallbackSet } from './callbackSet'
 
@@ -53,16 +51,19 @@ export const layoutViewportKeyboardOverlap = (
   Math.max(0, Math.round(layoutHeight - visualViewportHeight - visualViewportOffsetTop))
 
 /** Live {@link layoutViewportKeyboardOverlap} read from the DOM — the mobile
- *  editing toolbar's `bottom` inset. Uses `documentElement.clientHeight` (NOT
- *  `window.innerHeight`, which under-reports on iOS Stage Manager + scroll) for
- *  the layout-viewport height, since a fixed element is positioned against the
- *  layout viewport. On Chromium/Firefox (interactive-widget=resizes-content)
- *  clientHeight and vv.height shrink together with no pan, so this is ~0 and
- *  bottom:0 already clears the keyboard. */
+ *  editing toolbar's `bottom` inset. A fixed element is positioned against the
+ *  layout viewport, and neither reading of its height is reliable alone on
+ *  iOS: `window.innerHeight` under-reports on iPad Stage Manager + scroll, and
+ *  `documentElement.clientHeight` under-reports in a standalone (home-screen)
+ *  app with `viewport-fit=cover`, by the top safe-area inset — which put the
+ *  toolbar behind the keyboard's system strip. Each error is a shortfall, so
+ *  the larger reading is the true height. On Chromium/Firefox
+ *  (interactive-widget=resizes-content) both shrink with the keyboard and no
+ *  pan occurs, so this is ~0 and bottom:0 already clears the keyboard. */
 export const getLayoutViewportKeyboardOverlap = (): number => {
-  if (typeof document === 'undefined') return 0
-  const layoutH = document.documentElement.clientHeight
-  const vv = typeof window === 'undefined' ? undefined : window.visualViewport
+  if (typeof document === 'undefined' || typeof window === 'undefined') return 0
+  const layoutH = Math.max(document.documentElement.clientHeight, window.innerHeight)
+  const vv = window.visualViewport
   return layoutViewportKeyboardOverlap(layoutH, vv?.height ?? layoutH, vv?.offsetTop ?? 0)
 }
 
