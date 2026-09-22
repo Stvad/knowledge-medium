@@ -21,7 +21,7 @@ vi.mock('@/utils/toast.js', async importOriginal => ({
 }))
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { presetConfigProp, presetIdProp, propertyNameProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -203,6 +203,14 @@ describe('renaming a property with many consumers', () => {
 
     expect(await screen.findByText(/Rename “test:myProp” to “test:renamed”\?/)).toBeTruthy()
     expect(screen.getByText(/1,000 blocks use this property/)).toBeTruthy()
+    // Announced, not merely present: Radix points `aria-describedby` at the
+    // description, and the count and the freeze are what is being consented
+    // to — a title plus two buttons is not a confirmation.
+    const dialog = screen.getByRole('dialog')
+    const describedBy = dialog.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    expect(document.getElementById(describedBy!)?.textContent)
+      .toMatch(/1,000 blocks use this property/)
     // Sized against THIS definition in ITS workspace, not the ambient one.
     expect(count).toHaveBeenCalledWith(SCHEMA_ID, WS)
     expect(await storedName()).toBe('test:myProp')
@@ -435,6 +443,32 @@ describe('a change planned against a row that moved while it waited', () => {
     })
   })
 
+  it('makes the editor forget a change the KERNEL refused, not just a cancelled one', async () => {
+    // The other half of the same cleanup, and the half that was broken: a
+    // refusal leaves `repo.tx` as a THROW, which used to carry past every
+    // caller's cleanup and land in a void handler as an unhandled rejection.
+    // Driven at the seam that produces it rather than through a real
+    // refusal, because the branch under test is the gate's, not the
+    // kernel's — the re-type test above drives a real one end to end.
+    consumersAre(3)
+    renderSchema(ENUM_SCHEMA_ID)
+    const rejection = new ProcessorRejection(
+      'the blocks using it would lose 1 stored value',
+      'property.definition-change.unconvertible',
+    )
+    vi.spyOn(repo, 'tx').mockRejectedValueOnce(rejection)
+
+    await user().click(screen.getByRole('button', {name: 'Add choice'}))
+
+    // The editor asked for a second choice and did not get one.
+    await waitFor(() => {
+      expect(screen.getAllByLabelText(/Choice \d+ value/)).toHaveLength(1)
+    })
+    // And the kernel's own message is the only one: the gate must not answer
+    // a refusal with a conflict message over the top of it.
+    expect(showError).not.toHaveBeenCalled()
+  })
+
   it('asks nothing at all when the row already reads the way the gesture wanted', async () => {
     // Reachable with no editing: the ref picker re-emits its list when a
     // target type already on it is entered again. Counting a whole graph to
@@ -543,6 +577,11 @@ describe('re-typing a property with many consumers', () => {
     // The run DID open — otherwise the close below would be about nothing.
     await waitFor(() => { expect(seen.length).toBeGreaterThan(0) })
     await waitFor(() => { expect(propertyDefinitionFanout()).toBeNull() })
+    // A refusal comes out of `repo.tx` as a THROW. Until the gate caught it
+    // no caller's cleanup ran and a void handler was left with an unhandled
+    // rejection; and the kernel has already said why in its own words, so
+    // this must not answer with a conflict message over the top of it.
+    expect(showError).not.toHaveBeenCalled()
   })
 
   it('refuses when a config edit landed that the reset would discard', async () => {

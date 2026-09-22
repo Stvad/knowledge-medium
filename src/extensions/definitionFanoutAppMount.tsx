@@ -49,9 +49,17 @@ const percentDone = (run: PropertyDefinitionFanoutSnapshot): number | null => {
   return Math.min(100, Math.round((run.done / run.total) * 100))
 }
 
+/** Past the last consumer the transaction is committing, and a commit is not
+ *  a step this surface can promise to undo: it lands, then the post-commit
+ *  walk over every row it touched runs, and only then does the gesture that
+ *  opened this run close it. Closing the tab in that tail does not roll
+ *  anything back, so the copy stops saying it does. */
+const isSaving = (run: PropertyDefinitionFanoutSnapshot): boolean =>
+  run.done !== null && run.done >= run.total
+
 const statusLine = (run: PropertyDefinitionFanoutSnapshot): string => {
   if (run.done === null) return 'Starting…'
-  if (run.done >= run.total) return 'Saving the change…'
+  if (isSaving(run)) return 'Saving the change…'
   return `${run.done.toLocaleString()} of ${run.total.toLocaleString()} blocks updated`
 }
 
@@ -101,7 +109,10 @@ const FanoutProgressDialog = ({run}: {run: PropertyDefinitionFanoutSnapshot}) =>
           <DialogDescription>
             This change and every block it touches are saved together, so it
             stays one step you can undo — and nothing else can be saved until
-            it finishes. Closing this tab now leaves the property as it was.
+            it finishes.{' '}
+            {isSaving(run)
+              ? 'It is being written now; this part cannot be stopped.'
+              : 'Closing this tab before it saves leaves the property as it was.'}
           </DialogDescription>
         </div>
       </DialogContent>

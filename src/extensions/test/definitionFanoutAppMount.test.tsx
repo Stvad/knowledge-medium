@@ -131,6 +131,7 @@ describe('the fan-out progress surface', () => {
     expect(await screen.findByText(/Updating blocks that use “status”/)).toBeTruthy()
     expect(screen.getByText('Starting…')).toBeTruthy()
     expect(bar().getAttribute('aria-valuenow')).toBeNull()
+    expect(screen.getByText(/leaves the property as it was/)).toBeTruthy()
     await waitFor(() => {
       expect(screen.getByTestId('shadowing').textContent).toBe('true')
     })
@@ -144,6 +145,11 @@ describe('the fan-out progress surface', () => {
     // counting rather than reading as finished.
     report(4_000)
     expect(screen.getByText('Saving the change…')).toBeTruthy()
+    // And the copy stops offering a way out that no longer exists: past the
+    // last consumer the transaction is committing, and closing the tab does
+    // not take that back.
+    expect(screen.getByText(/cannot be stopped/)).toBeTruthy()
+    expect(screen.queryByText(/leaves the property as it was/)).toBeNull()
 
     act(() => { run.end() })
     await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })

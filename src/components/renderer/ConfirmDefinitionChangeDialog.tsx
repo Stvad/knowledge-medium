@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -81,7 +82,14 @@ export const ConfirmDefinitionChangeDialog = ({
       <DialogHeader>
         <DialogTitle>{TITLES[kind](propertyName, nextName)}</DialogTitle>
       </DialogHeader>
-      <div className="space-y-3 text-sm">
+      {/* `DialogDescription`, not a bare div: it is what Radix points
+          `aria-describedby` at, so without it a screen reader announces the
+          title and then the buttons — the count, the freeze and the refusal
+          are exactly what the user is being asked to consent to, and the
+          people who most need them announced were the ones not hearing
+          them. */}
+      <DialogDescription className="space-y-3 text-sm text-foreground" asChild>
+        <div>
         {/* ONE interpolated string rather than a sentence with the count
             spliced in: the number and the wait are the whole message, and JSX
             that splits them into sibling text nodes is a sentence no screen
@@ -94,14 +102,15 @@ export const ConfirmDefinitionChangeDialog = ({
         }</p>
         <p>
           Your other devices receive the finished blocks the usual way; there
-          is nothing to run there. Closing this tab before it finishes leaves
-          the property exactly as it is now.
+          is nothing to run there. Closing this tab before it saves leaves the
+          property exactly as it is now — once it starts saving, it is done.
         </p>
         {kind !== 'rename' && <p>
           Every stored value is re-read under the new type. If any of them
           cannot be, the whole change is refused and nothing is written.
         </p>}
-      </div>
+        </div>
+      </DialogDescription>
       <DialogFooter>
         <Button variant="ghost" onClick={() => cancel()}>Cancel</Button>
         <Button onClick={() => resolve(true)}>{CONFIRM_LABELS[kind]}</Button>
