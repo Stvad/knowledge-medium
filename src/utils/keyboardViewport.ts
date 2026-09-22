@@ -15,14 +15,13 @@
  *    itself shrinks with the keyboard → overlap == 0. The scroller
  *    already shrank, so no extra margin is needed.
  *
- *  NB: `getLayoutViewportKeyboardOverlap` (below) is the SIBLING quantity for
- *  the mobile editing toolbar's `position:fixed` bottom inset — the same
- *  arithmetic over the height a fixed element is actually positioned against
- *  (see there). innerHeight alone is fine here: it feeds ONE input to a
- *  keyboard-up gate (the ≥60 overlap arm, OR-ed with and backstopped by the
- *  editing-toolbar sentinel), where an under-report is tolerable. They stay
- *  two readers, not one parameterized helper — the height source is
- *  load-bearing for the inset and not for the gate. */
+ *  NB: `getKeyboardTop` (below) is the mobile editing toolbar's positioning
+ *  input and deliberately reads NO layout-viewport height: iOS reports that
+ *  height two disagreeing ways, and an inset built on either misplaces a fixed
+ *  element on some device. innerHeight is fine here, where it only feeds a
+ *  keyboard-up gate (why an under-report is tolerable there:
+ *  `keyboardAwareScroll.ts:shouldReassertCaret`).
+ */
 
 import { CallbackSet } from './callbackSet'
 
@@ -38,33 +37,22 @@ const computeOverlap = (): number => {
  *  NOT as a scroll amount: the keyboard itself is the browser's job. */
 export const getKeyboardOverlap = (): number => computeOverlap()
 
-/** Pure: the CSS px of the *layout* viewport hidden below the visible (visual)
- *  viewport — i.e. the bottom inset that lifts a layout-anchored
- *  `position: fixed; bottom: 0` element (the mobile editing toolbar) to just
- *  above the on-screen keyboard. Clamped ≥ 0. Subtracting the visual viewport's
- *  offsetTop tracks the iOS pan as the page scrolls with the keyboard up. */
-export const layoutViewportKeyboardOverlap = (
-  layoutHeight: number,
-  visualViewportHeight: number,
-  visualViewportOffsetTop: number,
-): number =>
-  Math.max(0, Math.round(layoutHeight - visualViewportHeight - visualViewportOffsetTop))
+/** Pure: the layout-viewport y of the on-screen keyboard's top edge — where a
+ *  layout-anchored `position: fixed` element's bottom edge must land. The
+ *  visual viewport's offset and height are both layout-viewport coordinates,
+ *  so the layout viewport's own height never enters; the element's `bottom`
+ *  is then `calc(100% - y)`, resolved by the engine against the same
+ *  containing block it positions with. */
+export const keyboardTop = (visualViewportOffsetTop: number, visualViewportHeight: number): number =>
+  Math.round(visualViewportOffsetTop + visualViewportHeight)
 
-/** Live {@link layoutViewportKeyboardOverlap} read from the DOM — the mobile
- *  editing toolbar's `bottom` inset. A fixed element is positioned against the
- *  layout viewport, and neither reading of its height is reliable alone on
- *  iOS: `window.innerHeight` under-reports on iPad Stage Manager + scroll, and
- *  `documentElement.clientHeight` under-reports in a standalone (home-screen)
- *  app with `viewport-fit=cover`, by the top safe-area inset — which put the
- *  toolbar behind the keyboard's system strip. Each error is a shortfall, so
- *  the larger reading is the true height. On Chromium/Firefox
- *  (interactive-widget=resizes-content) both shrink with the keyboard and no
- *  pan occurs, so this is ~0 and bottom:0 already clears the keyboard. */
-export const getLayoutViewportKeyboardOverlap = (): number => {
-  if (typeof document === 'undefined' || typeof window === 'undefined') return 0
-  const layoutH = Math.max(document.documentElement.clientHeight, window.innerHeight)
-  const vv = window.visualViewport
-  return layoutViewportKeyboardOverlap(layoutH, vv?.height ?? layoutH, vv?.offsetTop ?? 0)
+/** Live {@link keyboardTop}; undefined without a visual viewport (desktop
+ *  engines without the API), where `bottom: 0` is already right. With no
+ *  keyboard the visual viewport fills the layout viewport and the value is
+ *  its height, so `calc(100% - y)` is 0 there too. */
+export const getKeyboardTop = (): number | undefined => {
+  const vv = typeof window === 'undefined' ? undefined : window.visualViewport
+  return vv ? keyboardTop(vv.offsetTop, vv.height) : undefined
 }
 
 /** The visual viewport's current height in CSS px (0 when unavailable). The
