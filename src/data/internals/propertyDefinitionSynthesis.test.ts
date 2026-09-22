@@ -1374,6 +1374,29 @@ describe('flipBlockedBySynthesis', () => {
     expect(flipBlockedBySynthesis(await planFor())).toMatch(/have no definition/)
   })
 
+  it('names the keys a refused workspace is leaving behind', async () => {
+    // The one branch that reported a bare count. On an already-flipped
+    // workspace this text is an advisory rather than a refusal, so it is the
+    // only place the operator is told which keys stay cell-only — and a count
+    // sends them to the CLI audit to find out.
+    await seedWorkspaceRow('e2ee')
+    await rawCell('b1', {'demo:orphan': 'x'})
+    expect(flipBlockedBySynthesis(await planFor())).toMatch(/"demo:orphan"/)
+  })
+
+  it('names a few of the hopeless keys and counts the rest, rather than all of them', async () => {
+    // This text is a toast. Naming every key in a pathological graph produces
+    // one nobody reads at all, so the count carries the scale and the names
+    // are a sample — but the remainder has to be stated, or the sample reads
+    // as the whole list.
+    await rawCell('b1', {'[[a]]': 'x', '[[b]]': 'x', '[[c]]': 'x', '[[d]]': 'x'})
+
+    const message = flipBlockedBySynthesis(await planFor())
+
+    expect(message).toMatch(/4 property key\(s\) cannot be given a definition/)
+    expect(message).toMatch(/and 1 more/)
+  })
+
   it('blocks a refused workspace even with nothing to mint', async () => {
     // An earlier revision let this through, reasoning that the refusal is about
     // minting a dictionary-testable id and there is nothing to mint. That
