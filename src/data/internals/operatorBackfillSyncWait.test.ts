@@ -58,6 +58,7 @@ const makeRepo = async (
     ...repoOptions,
     backfillCompletionClaim: backfillCompletionClaim ?? {
       tryClaim: async () => { events.push('tryClaim'); return 'minted' as const },
+      stillOwned: async () => { events.push('stillOwned'); return true },
       markComplete: async () => { events.push('markComplete') },
       releaseClaim: async () => { events.push('releaseClaim') },
     },
@@ -87,19 +88,21 @@ describe('operator backfill transient sync waits', () => {
   it('resumes after a download gap between committed batches and writes each batch once', async () => {
     const events: string[] = []
     const batches: number[] = []
+    const observedWaitCounts: number[] = []
     const gate = controllableGate()
     const backfill: WorkspaceBackfill = {
       id: BACKFILL_ID,
       trigger: 'operator',
-      run: async ({tx}) => {
+      run: async ctx => {
         for (let index = 0; index < 2; index++) {
-          await tx(async t => {
+          await ctx.tx(async t => {
             batches.push(index)
             await t.create({
               id: `operator-sync-wait-batch-${index}`, workspaceId: WS,
               parentId: null, orderKey: `b${index}`, content: `batch ${index}`,
             })
           }, {description: `batch ${index}`})
+          observedWaitCounts.push(ctx.syncWaitCount)
           if (index === 0) gate.close()
         }
       },
@@ -127,13 +130,14 @@ describe('operator backfill transient sync waits', () => {
     await vi.advanceTimersByTimeAsync(100)
     expect(await running).toMatchObject({outcome: 'ran', undoHistoryCleared: true})
     expect(batches).toEqual([0, 1])
+    expect(observedWaitCounts).toEqual([0, 1])
     expect(await persistedBatchIds()).toEqual([
       'operator-sync-wait-batch-0', 'operator-sync-wait-batch-1',
     ])
     expect(events.filter(event => event === 'markComplete')).toHaveLength(1)
   })
 
-  it('waits at the final completion check while a transient gap remains', async () => {
+  it('does not wait at the final completion check after the scan has finished', async () => {
     const events: string[] = []
     let passFinished = false
     let gapObserved = false
@@ -142,6 +146,7 @@ describe('operator backfill transient sync waits', () => {
       trigger: 'operator',
       run: async () => { passFinished = true },
     }, events)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => {
       if (passFinished) {
         gapObserved = true
@@ -151,14 +156,18 @@ describe('operator backfill transient sync waits', () => {
     })
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await waitFor(() => expect(gapObserved).toBe(true))
-    expect(events).not.toContain('markComplete')
-    expect(events).not.toContain('releaseClaim')
+    await vi.advanceTimersByTimeAsync(30_000)
+    const result = await running
 
-    passFinished = false
-    await vi.advanceTimersByTimeAsync(100)
-    expect(await running).toMatchObject({outcome: 'ran'})
-    expect(events.filter(event => event === 'markComplete')).toHaveLength(1)
+    expect(gapObserved).toBe(true)
+    expect(result).toMatchObject({outcome: 'deferred', retryable: true})
+    expect(result.reason).toContain('download is still running')
+    expect(result.reason).not.toContain('within 30 seconds')
+    expect(events).not.toContain('markComplete')
+    expect(events).toContain('releaseClaim')
+    expect(warn.mock.calls.some(([message]) =>
+      typeof message === 'string' && message.includes('will retry when it clears'))).toBe(false)
+    warn.mockRestore()
   })
 
   it('waits before the inner claim when the outer claim creates the transient gap', async () => {
@@ -175,6 +184,7 @@ describe('operator backfill transient sync waits', () => {
         if (events.filter(event => event === 'tryClaim').length === 1) gap = true
         return 'minted'
       },
+      stillOwned: async () => { events.push('stillOwned'); return true },
       markComplete: async () => { events.push('markComplete') },
       releaseClaim: async () => { events.push('releaseClaim') },
     }})
@@ -210,6 +220,7 @@ describe('operator backfill transient sync waits', () => {
         if (events.filter(event => event === 'tryClaim').length === 1) gap = true
         return 'minted'
       },
+      stillOwned: async () => { events.push('stillOwned'); return true },
       markComplete: async () => { events.push('markComplete') },
       releaseClaim: async () => { events.push('releaseClaim') },
     }})
@@ -230,6 +241,110 @@ describe('operator backfill transient sync waits', () => {
     await vi.advanceTimersByTimeAsync(100)
     expect(await running).toMatchObject({outcome: 'deferred', retryable: false})
     expect(events).toEqual(['tryClaim', 'releaseClaim'])
+  })
+
+  it('rechecks the inner claim after a wait and stops if a peer took it', async () => {
+    const events: string[] = []
+    const batches: number[] = []
+    const gate = controllableGate()
+    let waitWasCleared = false
+    const repo = await makeRepo({
+      id: BACKFILL_ID,
+      trigger: 'operator',
+      run: async ({tx}) => {
+        for (let index = 0; index < 2; index++) {
+          await tx(async t => {
+            batches.push(index)
+            await t.create({
+              id: `operator-sync-wait-batch-${index}`, workspaceId: WS,
+              parentId: null, orderKey: `b${index}`, content: `batch ${index}`,
+            })
+          }, {description: `batch ${index}`})
+          if (index === 0) gate.close()
+        }
+      },
+    }, events, {backfillSyncGate: gate.gate, backfillCompletionClaim: {
+      tryClaim: async () => {
+        events.push('tryClaim')
+        return 'minted'
+      },
+      stillOwned: async () => {
+        events.push('stillOwned')
+        return !waitWasCleared
+      },
+      markComplete: async () => { events.push('markComplete') },
+      releaseClaim: async () => { events.push('releaseClaim') },
+    }})
+    const realWorkspaceViewGap = repo.workspaceViewGap.bind(repo)
+    let sawGap = false
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async (...args) => {
+      const gap = await realWorkspaceViewGap(...args)
+      if (gap?.transient) sawGap = true
+      return gap
+    })
+
+    const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
+    await waitFor(() => expect(sawGap).toBe(true))
+    expect(batches).toEqual([0])
+
+    waitWasCleared = true
+    gate.open()
+    await vi.advanceTimersByTimeAsync(100)
+    expect((await running).outcome).toBe('deferred')
+    expect((await running).reason).toContain('claim is no longer held')
+    expect(batches).toEqual([0])
+    expect(events.filter(event => event === 'tryClaim')).toHaveLength(2)
+    expect(events.filter(event => event === 'stillOwned')).toHaveLength(1)
+    expect(events).not.toContain('markComplete')
+  })
+
+  it('refreshes the schema resolver before the next batch after a wait', async () => {
+    const events: string[] = []
+    const gate = controllableGate()
+    const oldSchema = {version: 'before-sync'}
+    const newSchema = {version: 'after-sync'}
+    let viewIsCurrent = false
+    const seen: unknown[] = []
+    const repo = await makeRepo({
+      id: BACKFILL_ID,
+      trigger: 'operator',
+      run: async ({tx, resolveNameSchema}) => {
+        for (let index = 0; index < 2; index++) {
+          await tx(async t => {
+            if (index === 0) {
+              await t.create({
+                id: 'operator-sync-wait-batch-0', workspaceId: WS,
+                parentId: null, orderKey: 'b0', content: 'batch 0',
+              })
+            } else {
+              seen.push(resolveNameSchema('sample-name'))
+            }
+          }, {description: `batch ${index}`})
+          if (index === 0) gate.close()
+        }
+      },
+    }, events, {backfillSyncGate: gate.gate})
+    const makeResolver = (schema: object): ReturnType<Repo['propertySchemaResolverFor']> => ({
+      resolve: () => ({status: 'resolved', schema}),
+    } as unknown as ReturnType<Repo['propertySchemaResolverFor']>)
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockImplementation(() =>
+      makeResolver(viewIsCurrent ? newSchema : oldSchema))
+    const realWorkspaceViewGap = repo.workspaceViewGap.bind(repo)
+    let sawGap = false
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async (...args) => {
+      const gap = await realWorkspaceViewGap(...args)
+      if (gap?.transient) sawGap = true
+      return gap
+    })
+
+    const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
+    await waitFor(() => expect(sawGap).toBe(true))
+    viewIsCurrent = true
+    gate.open()
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(await running).toMatchObject({outcome: 'ran'})
+    expect(seen).toEqual([newSchema])
   })
 
   it('returns a durable gap immediately after a batch without claiming completion', async () => {

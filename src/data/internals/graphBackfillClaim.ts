@@ -320,6 +320,12 @@ export const releaseStrandedGraphBackfillClaim = async (
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => ({
+  async stillOwned(workspaceId, backfillId) {
+    const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
+    return decideClaim(
+      await readGraphBackfillClaim(deps.db, claimId, workspaceId), deps.claimantId,
+    ) === 'proceed'
+  },
   async tryClaim(workspaceId, backfillId, opts) {
     const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
     // Ensure our own parent rather than trusting bootstrap ordering: a claim

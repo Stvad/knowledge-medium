@@ -3495,26 +3495,29 @@ export class Repo {
     workspaceId: string,
     generation: number,
     waitForSync: boolean,
-  ): Promise<ViewGap | null> {
+  ): Promise<{gap: ViewGap | null; waited: boolean}> {
+    let waited = false
     const deadline = performance.now() + OPERATOR_BACKFILL_SYNC_WAIT_MS
     let gap = await this.workspaceViewGap(workspaceId)
     while (waitForSync && gap?.transient
       && this.workspaceRunStaleReason(workspaceId, generation) === null
       && !this.isReadOnly) {
       if (performance.now() >= deadline) {
-        return {...gap, reason: `sync did not settle within 30 seconds: ${gap.reason}`}
+        return {gap: {...gap, reason: `sync did not settle within 30 seconds: ${gap.reason}`}, waited}
       }
+      waited = true
       await new Promise<void>(resolve => setTimeout(resolve, BACKFILL_SYNC_POLL_MS))
       gap = await this.workspaceViewGap(workspaceId)
     }
-    return gap
+    return {gap, waited}
   }
 
   private async assertBackfillMayWrite(
     workspaceId: string,
     backfill: WorkspaceBackfill,
     generation: number,
-  ): Promise<void> {
+    waitForSync = backfill.trigger === 'operator',
+  ): Promise<boolean> {
     // Re-sampled per transaction, and NOT from inside one. That is now a
     // CHOICE rather than a constraint: `workspaceViewGap` takes a
     // `ViewGapReads`, so a caller holding the lock can pass its transaction
@@ -3524,9 +3527,7 @@ export class Repo {
     // rather than an un-undoable write. Callers run it immediately before
     // opening their transaction and re-assert the synchronous half
     // (`assertBackfillSessionUnchanged`) within.
-    const gap = await this.backfillViewGap(
-      workspaceId, generation, backfill.trigger === 'operator',
-    )
+    const {gap, waited} = await this.backfillViewGap(workspaceId, generation, waitForSync)
     // Waiting can outlive the active workspace or its write access.
     this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
     if (gap !== null) {
@@ -3538,6 +3539,7 @@ export class Repo {
         // same answer `retryableAfter` gives this refusal on the claim path.
       ), {kind: Repo.TRANSIENT, retryable: gap.transient})
     }
+    return waited
   }
 
   /**
@@ -3662,7 +3664,7 @@ export class Repo {
     // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
     // transaction — there is deliberately no cheaper approximation for the hot
     // path, because that split is what let the two answers disagree.
-    const gap = await this.backfillViewGap(workspaceId, generation, claimHeldByCaller)
+    const {gap} = await this.backfillViewGap(workspaceId, generation, claimHeldByCaller)
     // The wait must not authorize a claim for a departed or read-only session.
     const staleNow = runStale()
     if (staleNow !== null) {
@@ -3987,16 +3989,27 @@ export class Repo {
         }
         return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
-      const resolver = this.propertySchemaResolverFor(workspaceId)
+      let resolver = this.propertySchemaResolverFor(workspaceId)
+      let syncWaitCount = 0
+      const assertMayWrite = async (waitForSync = backfill.trigger === 'operator'): Promise<void> => {
+        if (!await this.assertBackfillMayWrite(workspaceId, backfill, generation, waitForSync)) return
+        syncWaitCount += 1
+        // A download can replace the claim and the definition snapshot.
+        // Revalidate both before resuming against the new view.
+        if (!await claim.stillOwned(workspaceId, backfill.id)) {
+          throw Object.assign(new Error(
+            `[workspaceBackfills] "${backfill.id}" aborted: the migration claim is no longer held by this device`,
+          ), {kind: Repo.TRANSIENT, retryable: false})
+        }
+        resolver = this.propertySchemaResolverFor(workspaceId)
+      }
       // Announced once, not per batch: the history is gone either way, and
       // saying so repeatedly for a pass that runs for minutes is noise.
       let announcedUndoClear = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
-        // One resolver for the whole run, through the canonical factory: the
-        // per-call version built a fresh one for every cell key (a pass over
-        // ~650k rows resolves that many times) and bypassed the
-        // previous-registry fallback every other site gets.
+        get syncWaitCount() { return syncWaitCount },
+        // Reuse the snapshot within a batch; refresh after sync may replace it.
         resolveNameSchema: (name) => {
           const resolution = resolver.resolve(name)
           return resolution.status === 'resolved' ? resolution.schema : undefined
@@ -4034,7 +4047,7 @@ export class Repo {
           // that commits between this probe and the write is seen by the NEXT
           // batch's probe instead of this one. The synchronous half stays
           // inside, at both ends, where it costs no connection.
-          await this.assertBackfillMayWrite(workspaceId, backfill, generation)
+          await assertMayWrite()
           const value = await this.tx(async t => {
             this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
             const value = await fn(t)
@@ -4107,9 +4120,10 @@ export class Repo {
         // no candidates — precisely what a partially materialized graph looks
         // like, since the rows are staged and not yet in `blocks` — would
         // otherwise sail through and record its one-shot marker as done.
-        await this.assertBackfillMayWrite(workspaceId, backfill, generation)
+        await assertMayWrite()
         await backfill.run(ctx)
-        await this.assertBackfillMayWrite(workspaceId, backfill, generation)
+        // The scan is over: waiting here could admit rows it never examined.
+        await assertMayWrite(false)
         // Only after a clean run — a thrown backfill leaves the claim unset so
         // the next attempt retries (passes are idempotent per row).
         await claim.markComplete(workspaceId, backfill.id)

@@ -699,6 +699,7 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -734,6 +735,7 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async (_ws, id) => {
           if (claimed.has(id)) return 'declined' as const
           claimed.add(id)
@@ -1164,6 +1166,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       user: {id: 'user-1'},
       backfillSyncGate: neverSettles,
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -1195,6 +1198,7 @@ describe('workspace backfill runner — operator outcomes', () => {
 
   // Records attempts so these can assert the runner never reached the claim.
   const recordingClaim = (attempts: string[]) => ({
+    stillOwned: async () => true,
     tryClaim: async (_ws: string, id: string) => { attempts.push(id); return 'minted' as const },
     markComplete: async () => {},
     releaseClaim: async () => {},
@@ -1284,6 +1288,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -1320,6 +1325,7 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -1358,6 +1364,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
   /** Records the claim seam's calls in order, so a test can assert the claim
    *  came before the body rather than merely that both happened. */
   const spyClaim = (events: string[], {won = true}: {won?: boolean} = {}) => ({
+    stillOwned: async () => true,
     // A win MINTS. `inherited` is a separate axis with its own test below —
     // folding it in here would silence every release assertion at once.
     tryClaim: async () => { events.push('tryClaim'); return won ? 'minted' as const : 'declined' as const },
@@ -1466,6 +1473,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
         markComplete: async () => { events.push('markComplete') },
         releaseClaim: async () => { events.push('releaseClaim') },
@@ -1494,6 +1502,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
         markComplete: async () => { events.push('markComplete') },
         releaseClaim: async () => { events.push('releaseClaim') },
@@ -1577,6 +1586,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => {
           throw new DeterministicIdCrossWorkspaceError('claim-id', 'ws-other', WS)
         },
@@ -1632,6 +1642,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => { throw new Error('claim write failed') },
         markComplete: async () => {},
         releaseClaim: async () => { events.push('releaseClaim') },
