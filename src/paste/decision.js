@@ -1,1 +1,1 @@
-import{CO as e,SO as t}from"../../chunks/app-BEnCoW8U.js";export{t as defaultPasteDecision,e as pasteDecisionVerb};
+import{CO as e,SO as t}from"../../chunks/app-BWoCpsSu.js";export{t as defaultPasteDecision,e as pasteDecisionVerb};
