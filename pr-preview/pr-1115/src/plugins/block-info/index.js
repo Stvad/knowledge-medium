@@ -1,1 +1,1 @@
-import{vu as e}from"../../../chunks/app-D7ucAqUY.js";export{e as blockInfoPlugin};
+import{vu as e}from"../../../chunks/app-CbFvFYOP.js";export{e as blockInfoPlugin};
