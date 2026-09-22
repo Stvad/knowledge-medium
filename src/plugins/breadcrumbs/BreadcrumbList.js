@@ -1,1 +1,1 @@
-import{Ug as e}from"../../../chunks/app-BqMu0Xdu.js";export{e as BreadcrumbList};
+import{Kg as e}from"../../../chunks/app-RK-VWLaY.js";export{e as BreadcrumbList};
