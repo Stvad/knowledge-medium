@@ -45,7 +45,12 @@ vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
   applyPropertyDefinitionSynthesis: async () => ({created: 0, restored: 0, skipped: []}),
   flipBlockedBySynthesis: () => null,
 }))
-vi.mock('@/data/internals/propertyCellBackfill', () => ({
+vi.mock('@/data/internals/propertyCellBackfill', async importOriginal => ({
+  // The REAL one, not a stand-in. It is a pure sum over the progress this file
+  // already emits, and a copy written here would keep these assertions green
+  // with the actual function wrong — which is the whole thing they pin.
+  pendingValueCount: (await importOriginal<
+    typeof import('@/data/internals/propertyCellBackfill')>()).pendingValueCount,
   PROPERTY_CELL_BACKFILL_ID: 'properties:cell-to-children',
   countPropertyCellBackfillCandidates: async () => 7,
   onPropertyCellBackfillProgress: (listener: (p: PropertyCellBackfillProgress) => void) => {
@@ -64,7 +69,8 @@ const THIS_DEVICE = getClientId()
 const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCellBackfillProgress => ({
   blocksScanned: 7, blocksMaterialized: 7, blocksMaterializedTotal: 7,
   valuesMaterialized: 7,
-  valuesMaterializedTotal: 7, sweeps: 2, failures: [], failureCount: 0, ...over,
+  valuesMaterializedTotal: 7, sweeps: 2, failures: [], failureCount: 0,
+  unresolvedNames: [], unresolvedCount: 0, ...over,
 })
 
 /** Is a claim still in flight when the gesture ends? Read from `blocks`, so the
@@ -194,6 +200,25 @@ describe('the migration progress path', () => {
     }))
 
     expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
+  })
+
+  it('keeps the worklist when the run SKIPPED cells no schema resolves', async () => {
+    // The pass excludes an unregistered key from its counters deliberately —
+    // carrying it kept every sweep looking like work — so a cell skipped for
+    // want of a schema raises NO failure. Read as "this run refused nothing",
+    // that cleared a worklist over values nothing had ever attempted.
+    await runReporting(progress({
+      valuesMaterialized: 0, valuesMaterializedTotal: 0,
+      failureCount: 0, failures: [],
+      unresolvedCount: 12, unresolvedNames: ['a-key'],
+    }))
+
+    expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
+    // And says which repair it is: registering a schema, not fixing a value.
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringContaining('no registered schema'),
+      expect.objectContaining({id: expect.any(String)}),
+    )
   })
 
   it('keeps the worklist when the run did not complete', async () => {

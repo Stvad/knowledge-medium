@@ -206,7 +206,7 @@ export interface PropertyCellBackfillProgress {
   /** Property values that could not be materialized this sweep, with the
    *  reason. Reported, never fatal: a cell value its codec refuses is legacy
    *  junk from a raw bag write, and one such key must cost its own key rather
-   *  than every key on the block. Capped at {@link MAX_REPORTED_FAILURES}. */
+   *  than every key on the block. Capped at {@link MAX_REPORTED_DETAIL}. */
   failures: {blockId: string; reason: string}[]
   /** Failures this sweep, including any past the cap. Read with
    *  `valuesMaterializedTotal === 0` to separate "nothing moved" from "some
@@ -215,7 +215,33 @@ export interface PropertyCellBackfillProgress {
    *  than thrown: one junk key on every block would otherwise abort a
    *  migration that in fact wrote every other key. */
   failureCount: number
+  /** DISTINCT property names this sweep skipped because no registered schema
+   *  resolves them. Capped at {@link MAX_REPORTED_DETAIL}. Names rather than
+   *  block ids because the repair is per KEY — register or re-enable whatever
+   *  defines it — and one such key is typically on thousands of blocks. */
+  unresolvedNames: string[]
+  /** Cells skipped for want of a registered schema this sweep, including any
+   *  past the cap on the names above.
+   *
+   *  A separate count from {@link failureCount} because the two ask different
+   *  things of the operator: a refused value is junk to repair, an unresolved
+   *  key is a schema to register — and unlike a refusal it may be permanent
+   *  (an abandoned key no plugin will ever claim again), so folding them would
+   *  put a workspace with dead keys under a failure banner forever. What every
+   *  surface actually wants is the pair, which is {@link pendingValueCount}. */
+  unresolvedCount: number
 }
+
+/** Values this sweep did NOT leave migrated, whatever the reason. THE question
+ *  every operator surface asks — "is there anything left?" — and the one place
+ *  it is answered, so a caller cannot ask it of one category and miss the
+ *  other.
+ *
+ *  It exists because they did: `failureCount` alone reads as zero for a sweep
+ *  that skipped every cell it saw, which told the palette action a run had
+ *  verified an empty worklist and let it clear one that was still live. */
+export const pendingValueCount = (progress: PropertyCellBackfillProgress): number =>
+  progress.failureCount + progress.unresolvedCount
 
 /** A run's counters at zero. Two callers build one — the pass, and the
  *  `WorkspaceBackfill` wrapper that parks the last run for the operator surface
@@ -224,11 +250,13 @@ const emptyProgress = (): PropertyCellBackfillProgress => ({
   blocksScanned: 0, blocksMaterialized: 0, blocksMaterializedTotal: 0,
   valuesMaterialized: 0,
   valuesMaterializedTotal: 0, sweeps: 0, failures: [], failureCount: 0,
+  unresolvedNames: [], unresolvedCount: 0,
 })
 
-/** Cap on retained failure detail. `failureCount` stays exact; this only
- *  bounds what a pathological graph can accumulate in memory and hand back. */
-const MAX_REPORTED_FAILURES = 50
+/** Cap on retained detail, for BOTH lists a sweep hands back. The counts
+ *  beside them stay exact; this only bounds what a pathological graph can
+ *  accumulate in memory. */
+const MAX_REPORTED_DETAIL = 50
 
 /** Sweeps before giving up. A second sweep is normal — it is what proves the
  *  first one converged. Needing a fifth means the workspace is being edited
@@ -248,11 +276,25 @@ const sweep = async (
 ): Promise<void> => {
   const recordFailure = (blockId: string, cause: unknown) => {
     progress.failureCount += 1
-    if (progress.failures.length < MAX_REPORTED_FAILURES) {
+    if (progress.failures.length < MAX_REPORTED_DETAIL) {
       progress.failures.push({
         blockId,
         reason: cause instanceof Error ? cause.message : String(cause),
       })
+    }
+  }
+
+  /** Deduped against what this sweep has already reported: one unregistered
+   *  key is normally on every block that carries it, and the operator needs
+   *  the key once, not once per block. The COUNT stays per cell — it is the
+   *  scale of what was skipped. */
+  const seenUnresolved = new Set<string>()
+  const recordUnresolved = (name: string) => {
+    progress.unresolvedCount += 1
+    if (seenUnresolved.has(name)) return
+    seenUnresolved.add(name)
+    if (progress.unresolvedNames.length < MAX_REPORTED_DETAIL) {
+      progress.unresolvedNames.push(name)
     }
   }
 
@@ -346,10 +388,16 @@ const sweep = async (
         for (const name of Object.keys(owner.properties)) {
           const schema = ctx.resolveNameSchema(name)
           // An unregistered key has no definition to point a field row AT, so
-          // it can never leave the pending set. Excluded rather than carried:
-          // convergence is "a sweep that materialized nothing", and one such
-          // key on one block kept every sweep looking like work.
-          if (schema === undefined) continue
+          // it can never leave the pending set. Excluded from the MATERIALIZED
+          // counts rather than carried: convergence is "a sweep that
+          // materialized nothing", and one such key on one block kept every
+          // sweep looking like work.
+          //
+          // Counted all the same, which it was not. Skipped silently, it left
+          // every surface that asks "is there anything left?" reading a zero
+          // that was not true — including the runbook's stop condition, which
+          // announced a finished migration over cells nothing had attempted.
+          if (schema === undefined) { recordUnresolved(name); continue }
           if (takenByOwner.get(owner.id)?.has(schema.fieldId)) continue
           const encoded = owner.properties[name]
           // PER-NAME ISOLATION, which the row-at-a-time retry loop this
@@ -453,6 +501,8 @@ export const runPropertyCellBackfill = async (
     progress.valuesMaterialized = 0
     progress.failures = []
     progress.failureCount = 0
+    progress.unresolvedNames = []
+    progress.unresolvedCount = 0
     await sweep(ctx, progress, changedOwners, async () => { await onProgress?.(progress) })
     if (progress.valuesMaterialized === 0) {
       // One last notification: everything a subscriber knows arrives through
@@ -521,6 +571,15 @@ export const propertyCellBackfill: WorkspaceBackfill = {
       console.warn(
         `[${PROPERTY_CELL_BACKFILL_ID}] ${progress.failureCount} property value(s) could ` +
         `not be migrated and kept their cell value:`, progress.failures,
+      )
+    }
+    if (progress.unresolvedCount > 0) {
+      console.warn(
+        `[${PROPERTY_CELL_BACKFILL_ID}] ${progress.unresolvedCount} property value(s) were ` +
+        'SKIPPED because no registered schema resolves their key, so they still have no ' +
+        'blocks. Register or re-enable whatever defines these keys and run this again ' +
+        '(`pnpm agent audit-properties` lists every unresolved key in the workspace):',
+        progress.unresolvedNames,
       )
     }
   },

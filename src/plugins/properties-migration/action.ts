@@ -4,6 +4,7 @@ import {
   PROPERTY_CELL_BACKFILL_ID,
   countPropertyCellBackfillCandidates,
   onPropertyCellBackfillProgress,
+  pendingValueCount,
 } from '@/data/internals/propertyCellBackfill'
 import {
   applyPropertyDefinitionSynthesis,
@@ -114,13 +115,38 @@ const FLIP_LANDED =
   'This workspace was switched to property blocks — that part is done, and it ' +
   'applies to everyone in the workspace.'
 
+/** The first few keys, for a sentence a person reads. The console gets the
+ *  whole (capped) list; a toast naming fifty property keys is not read at all. */
+const namesForMessage = (names: readonly string[]): string => {
+  const shown = names.slice(0, 3).join(', ')
+  return names.length > 3 ? `${shown} and ${names.length - 3} more` : shown
+}
+
+/** One sticky worklist, however many kinds of repair it names. Two toasts
+ *  under one id would mean the second silently replacing the first. */
+const joinNotes = (...notes: (string | undefined)[]): string | undefined => {
+  const present = notes.filter((note): note is string => note !== undefined)
+  return present.length > 0 ? present.join(' ') : undefined
+}
+
+/** What a finished run leaves for the operator surfaces to report. Named
+ *  rather than spelled inline at each signature, because the two categories
+ *  below arrived a round apart and the second had to reach every one of them. */
+export interface RunCounts {
+  blocksMaterializedTotal: number
+  valuesMaterializedTotal: number
+  /** Values a codec REFUSED — junk to repair, and the repair worklist. */
+  unmigrated: number
+  /** Cells SKIPPED for want of a registered schema — a different repair (find
+   *  the plugin or seed that owns the key), and possibly a permanent one. */
+  unresolved: number
+  /** The keys behind {@link unresolved}, deduped and capped by the pass. */
+  unresolvedNames: readonly string[]
+}
+
 export const describeOutcome = (
   result: OperatorBackfillResult,
-  counts: {
-    blocksMaterializedTotal: number
-    valuesMaterializedTotal: number
-    unmigrated: number
-  },
+  counts: RunCounts,
   {flipped, undoCleared}: {flipped: boolean; undoCleared: boolean}
     = {flipped: false, undoCleared: false},
 ): {message: string; failed: boolean; followUp?: string} => {
@@ -144,15 +170,26 @@ export const describeOutcome = (
  *  watching when it lands. */
 const describePassOutcome = (
   result: OperatorBackfillResult,
-  counts: {
-    blocksMaterializedTotal: number
-    valuesMaterializedTotal: number
-    unmigrated: number
-  },
+  counts: RunCounts,
   /** Already folded by the caller — the pass's own clear OR the gesture's. */
   cleared: boolean,
 ): {message: string; failed: boolean; followUp?: string} => {
-  const {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated} = counts
+  const {
+    blocksMaterializedTotal, valuesMaterializedTotal, unmigrated,
+    unresolved, unresolvedNames,
+  } = counts
+  // Raised on EVERY `ran` ending rather than only the one that moved nothing:
+  // a run can migrate a thousand values and still have skipped a key whose
+  // schema is gone, and that key is the one thing the operator must act on.
+  // It is also what keeps the worklist alive — a skipped cell raises no
+  // failure, so without this the run reads as "refused nothing" and clears a
+  // list of repairs that never happened.
+  const unresolvedNote = unresolved > 0
+    ? `${unresolved.toLocaleString()} property value(s) were skipped because no `
+      + `registered schema resolves their key (${namesForMessage(unresolvedNames)}) — `
+      + 'they still have no blocks. Register or re-enable whatever defines those keys, '
+      + 'then run this again.'
+    : undefined
   switch (result.outcome) {
     case 'ran':
       // Asked of VALUES, over the whole RUN. "Did anything move" is a question
@@ -180,6 +217,22 @@ const describePassOutcome = (
               'value(s) the pass tried kept their cell value. See the console for which; ' +
               'a re-run reports the same ones until they are repaired.',
             failed: true,
+            // Carried even here, where the banner already reports a problem:
+            // the two repairs are different jobs and the skipped keys are the
+            // only one the banner does not name.
+            followUp: unresolvedNote,
+          }
+        }
+        // Skipped cells are not the stop condition — they were never
+        // attempted. Without this branch the run below announced a finished
+        // migration over them, which is the report an operator STOPS on.
+        if (unresolved > 0) {
+          return {
+            message: `Nothing was migrated — ${unresolved.toLocaleString()} property ` +
+              'value(s) were skipped because no registered schema resolves their key, ' +
+              'and every other value already had its blocks.',
+            failed: true,
+            followUp: unresolvedNote,
           }
         }
         // The runbook's stop condition, and the only report that can carry it.
@@ -192,8 +245,8 @@ const describePassOutcome = (
         // this same run, and the flip may have landed. This says only what it
         // knows, which is that no VALUE needed moving.
         return {
-          message: 'Nothing left to migrate — every property value this pass can move ' +
-            'already has its blocks.',
+          message: 'Nothing left to migrate — every property value already has its ' +
+            'blocks.',
           failed: false,
         }
       }
@@ -203,11 +256,14 @@ const describePassOutcome = (
         // saying otherwise would send an operator looking for a broken run
         // rather than for the handful of values named in the console.
         failed: false,
-        followUp: unmigrated > 0
-          ? `${unmigrated.toLocaleString()} property value(s) could not be migrated and kept ` +
-            'their cell value — see the console for which (first 50 shown). Repair them and ' +
-            'run this again.'
-          : undefined,
+        followUp: joinNotes(
+          unmigrated > 0
+            ? `${unmigrated.toLocaleString()} property value(s) could not be migrated and kept `
+              + 'their cell value — see the console for which (first 50 shown). Repair them '
+              + 'and run this again.'
+            : undefined,
+          unresolvedNote,
+        ),
       }
     case 'deferred':
       return {
@@ -272,9 +328,10 @@ const describePassOutcome = (
  *  only on the `ran` branch, which a refusal cannot reach — spelled out rather
  *  than faked per call site so a future branch that does read them sees zeros
  *  and not a guess. */
-const NOTHING_MIGRATED = {
+const NOTHING_MIGRATED: RunCounts = {
   blocksMaterializedTotal: 0, valuesMaterializedTotal: 0, unmigrated: 0,
-} as const
+  unresolved: 0, unresolvedNames: [],
+}
 
 /** Everything {@link migrateUnderClaim} needs that was decided BEFORE the
  *  claim: the plan and the counts were taken to build the confirmation, and
@@ -450,6 +507,12 @@ const migrateUnderClaim = async (
   // per committed batch, and a run of several minutes with a status line that
   // never moves is indistinguishable from a hung one.
   let unmigrated = 0
+  let unresolved = 0
+  let unresolvedNames: readonly string[] = []
+  /** Everything the run left unmigrated, refused or skipped — asked of the
+   *  pass rather than summed here, so a category it grows reaches this
+   *  gesture without the gesture changing. */
+  let pending = 0
   let valuesMaterializedTotal = 0
   const unsubscribe = onPropertyCellBackfillProgress(progress => {
     // The RUN's total, not this sweep's. They answer different questions: the
@@ -459,6 +522,9 @@ const migrateUnderClaim = async (
     blocksMaterializedTotal = progress.blocksMaterializedTotal
     valuesMaterializedTotal = progress.valuesMaterializedTotal
     unmigrated = progress.failureCount
+    unresolved = progress.unresolvedCount
+    unresolvedNames = progress.unresolvedNames
+    pending = pendingValueCount(progress)
     // Counts are per-sweep, and the sweep number is shown because a second
     // pass over the same blocks is normal — without it the bar restarts from
     // zero for no reason the operator can see.
@@ -472,13 +538,14 @@ const migrateUnderClaim = async (
     const result = await pass.run()
     const {message, failed, followUp} = describeOutcome(
       result,
-      {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated},
+      {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated,
+       unresolved, unresolvedNames},
       {flipped: flipLanded, undoCleared},
     )
     if (failed) banner.fail(message)
     else banner.done(message)
     // Sticky and stable-id, and dismissed ONLY by a run that proved there is
-    // nothing left to repair — a completed pass that refused nothing.
+    // nothing left to repair — a completed pass that left nothing pending.
     //
     // Both halves are load-bearing. Without the dismissal, the run that fixes
     // the values produces no `followUp` at all, so "N could not be migrated,
@@ -488,8 +555,19 @@ const migrateUnderClaim = async (
     // `already-running` and `failed` all verified NOTHING, and so does a `ran`
     // that refused every value — clearing a still-actionable worklist on those
     // loses the only list of what to repair.
+    //
+    // `pending`, not the refusal count: a cell skipped for want of a schema is
+    // unmigrated and raises no failure, so a run that skipped every one of
+    // them reported zero refusals and cleared a worklist nothing had repaired.
+    //
+    // DEFENCE IN DEPTH, and deliberately kept as such: every ending with
+    // skipped cells now also raises a `followUp`, which takes the branch
+    // above, so reverting this to the refusal count fails no test today. It
+    // stays because the two branches would then disagree about what "nothing
+    // left" means, and the next note this gesture stops raising would restore
+    // the bug silently.
     if (followUp) showInfo(followUp, WORKLIST_TOAST)
-    else if (result.outcome === 'ran' && unmigrated === 0) dismissToast(WORKLIST_TOAST.id)
+    else if (result.outcome === 'ran' && pending === 0) dismissToast(WORKLIST_TOAST.id)
   } catch (err) {
     console.error('[properties-migration] failed:', err)
     // The runner can REJECT rather than return an outcome (a claim write that

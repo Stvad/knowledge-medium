@@ -526,6 +526,27 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     expect(progress.sweeps).toBeLessThan(4)
   })
 
+  it('counts the cells it skipped, and names the key once', async () => {
+    // The skip above is deliberate; being SILENT was not. Uncounted, it left
+    // every surface that asks "is anything left?" reading a zero that was not
+    // true — the palette announced the runbook's stop condition over cells it
+    // had never attempted, and cleared the worklist naming them.
+    //
+    // Counted per CELL and named per KEY: one unregistered key is normally on
+    // every block that carries it, while the repair is per key.
+    await create('b1', {'demo:nobody-declares-this': 'x'})
+    await create('b2', {'demo:nobody-declares-this': 'y'})
+    await flip()
+
+    const progress = await runPropertyCellBackfill(makeCtx())
+
+    expect(progress.unresolvedCount).toBe(2)
+    expect(progress.unresolvedNames).toEqual(['demo:nobody-declares-this'])
+    // NOT a failure: there is no value here to repair, and the two send the
+    // operator to different places.
+    expect(progress.failureCount).toBe(0)
+  })
+
   it('does not sweep an owner whose cell has emptied out', async () => {
     // The pass has NO deleting leg, and must not regrow one: an empty bag is
     // not a deleted property, it is an unprojected one — a device holding value
