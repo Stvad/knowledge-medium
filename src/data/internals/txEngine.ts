@@ -67,6 +67,8 @@ import {
 } from '@/data/api'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import { assertCanonicalBlockId, type BlockIdPolicy } from '@/data/blockId'
+import { chunk as chunksOf } from 'lodash-es'
+import { MAX_IDS_PER_IN_CLAUSE, buildInClause } from './sqlBinds'
 import {
   BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
@@ -276,7 +278,7 @@ export interface TxImplContext {
 // live table, never `blocks_synced`.
 const COLUMN_NAMES = BLOCKS_TABLE_COLUMN_NAMES
 const COLUMN_LIST = COLUMN_NAMES.join(', ')
-const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
+const COLUMN_PLACEHOLDERS = buildInClause(COLUMN_NAMES.length)
 
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
@@ -339,18 +341,20 @@ const SELECT_PARENT_WORKSPACE_SQL =
   `SELECT workspace_id, deleted FROM blocks WHERE id = ?`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
 
-/** Rows per multi-row INSERT in {@link TxImpl.createMany}, and ids per parent
- *  lookup. Both keep the bound-parameter count well inside SQLite's
- *  SQLITE_MAX_VARIABLE_NUMBER (32766 on the shipped build) — 200 rows x 15
- *  columns is 3000. */
-const BULK_INSERT_ROWS_PER_STATEMENT = 200
-const BULK_PARENT_LOOKUP_IDS = 400
-
-const chunked = <T>(items: readonly T[], size: number): T[][] => {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
+/** Rows per multi-row INSERT in {@link TxImpl.createMany}.
+ *
+ *  `sqlBinds` does not govern this one: it states the ceiling for `IN (…)`
+ *  READS over a caller-sized id list, and this is an INSERT. Derived from the
+ *  column count so it stays correct when a column is added, and sized against
+ *  SQLITE_MAX_VARIABLE_NUMBER (32766 on the shipped build) with room to spare.
+ *
+ *  EXPORTED because it is a boundary nothing would otherwise cross: the only
+ *  caller batches on a row budget below it, so a test that does not derive its
+ *  fixture from this number never runs the multi-chunk path at all — and that
+ *  path is where the per-chunk `record` and the deferred `pinWorkspace` below
+ *  have any effect. */
+export const BULK_INSERT_ROWS_PER_STATEMENT =
+  Math.floor(3000 / BLOCKS_TABLE_COLUMN_NAMES.length)
 
 const bulkInsertSql = (rowCount: number): string =>
   `INSERT INTO blocks (${COLUMN_LIST}) VALUES `
@@ -477,10 +481,10 @@ export class TxImpl implements Tx {
   async liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {
     if (ids.length === 0) return []
     const out: BlockData[] = []
-    for (const chunk of chunked(ids, BULK_PARENT_LOOKUP_IDS)) {
+    for (const chunk of chunksOf(ids, MAX_IDS_PER_IN_CLAUSE)) {
       const rows = await this.ctx.txDb.getAll<BlockRow>(
         `SELECT ${COLUMN_LIST} FROM blocks
-          WHERE workspace_id = ? AND deleted = 0 AND id IN (${chunk.map(() => '?').join(', ')})`,
+          WHERE workspace_id = ? AND deleted = 0 AND id IN (${buildInClause(chunk.length)})`,
         [workspaceId, ...chunk],
       )
       out.push(...rows.map(parseBlockRow))
@@ -494,14 +498,14 @@ export class TxImpl implements Tx {
   ): Promise<BlockData[]> {
     if (parentIds.length === 0) return []
     const out: BlockData[] = []
-    for (const chunk of chunked(parentIds, BULK_PARENT_LOOKUP_IDS)) {
+    for (const chunk of chunksOf(parentIds, MAX_IDS_PER_IN_CLAUSE)) {
       const rows = await this.ctx.txDb.getAll<BlockRow>(
         // Same INDEXED BY, and the same workspace term to reach it, as
         // `tombstonedPropertyFieldRows` — and for the same reason: every other
         // field-row index is `WHERE deleted = 0`, so letting the planner choose
         // scans the whole database's field rows.
         `SELECT ${COLUMN_LIST} FROM blocks INDEXED BY idx_blocks_any_field_form
-          WHERE workspace_id = ? AND parent_id IN (${chunk.map(() => '?').join(', ')})
+          WHERE workspace_id = ? AND parent_id IN (${buildInClause(chunk.length)})
             AND is_field_form = 1 AND reference_target_id IS NOT NULL
           ORDER BY order_key, id`,
         [workspaceId, ...chunk],
@@ -515,19 +519,11 @@ export class TxImpl implements Tx {
     workspaceId: string,
     parentId: string,
   ): Promise<BlockData[]> {
-    const rows = await this.ctx.txDb.getAll<BlockRow>(
-      // INDEXED BY, and the workspace term exists to reach it: every other
-      // field-row index is `WHERE deleted = 0`, so a tombstone query that let
-      // the planner choose scanned the field rows of the whole DATABASE once
-      // per owner (measured: `SCAN blocks USING INDEX idx_blocks_any_field_form`
-      // as first written). This runs inside the write transaction, per block.
-      `SELECT ${COLUMN_LIST} FROM blocks INDEXED BY idx_blocks_any_field_form
-        WHERE workspace_id = ? AND parent_id = ? AND is_field_form = 1 AND deleted = 1
-          AND reference_target_id IS NOT NULL
-        ORDER BY order_key, id`,
-      [workspaceId, parentId],
-    )
-    return rows.map(parseBlockRow)
+    // Delegated, so the index hint and the reason for it have ONE home. This
+    // reads that owner's live field rows too — a handful of rows — which is
+    // cheaper than a second statement of the same query.
+    const rows = await this.propertyFieldRowsForParents(workspaceId, [parentId])
+    return rows.filter(row => row.deleted)
   }
 
   async deletedChildrenOf(parentId: string): Promise<BlockData[]> {
@@ -674,9 +670,9 @@ export class TxImpl implements Tx {
     // One lookup for every distinct parent not minted in this call. The same
     // two refusals `requireParentInWorkspace` raises, raised on the same rows.
     const seen = new Map<string, {workspace_id: string}>()
-    for (const chunk of chunked([...parentsToCheck], BULK_PARENT_LOOKUP_IDS)) {
+    for (const chunk of chunksOf([...parentsToCheck], MAX_IDS_PER_IN_CLAUSE)) {
       const found = await this.ctx.txDb.getAll<{id: string; workspace_id: string}>(
-        `SELECT id, workspace_id FROM blocks WHERE id IN (${chunk.map(() => '?').join(', ')})`,
+        `SELECT id, workspace_id FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
         chunk,
       )
       for (const row of found) seen.set(row.id, row)
@@ -699,9 +695,9 @@ export class TxImpl implements Tx {
     // commits rows this method never reached `record` for: invisible to the
     // same-tx processors, the snapshot cache, undo and invalidation. One
     // indexed read per 400 ids is the cheaper half of that trade anyway.
-    for (const chunk of chunked(built.map(({id}) => id), BULK_PARENT_LOOKUP_IDS)) {
+    for (const chunk of chunksOf(built.map(({id}) => id), MAX_IDS_PER_IN_CLAUSE)) {
       const taken = await this.ctx.txDb.getAll<{id: string}>(
-        `SELECT id FROM blocks WHERE id IN (${chunk.map(() => '?').join(', ')})`,
+        `SELECT id FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
         chunk,
       )
       if (taken.length > 0) throw new DuplicateIdError(taken[0]!.id)
@@ -714,7 +710,7 @@ export class TxImpl implements Tx {
     // chunk threw — a trigger abort, an alias collision — and a caught error
     // then committed them with no processor having seen them.
     let pinned = false
-    for (const chunk of chunked(built, BULK_INSERT_ROWS_PER_STATEMENT)) {
+    for (const chunk of chunksOf(built, BULK_INSERT_ROWS_PER_STATEMENT)) {
       await this.ctx.txDb.execute(
         bulkInsertSql(chunk.length),
         chunk.flatMap(({row}) => blockToRowParams(row)),

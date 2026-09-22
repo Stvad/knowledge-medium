@@ -1218,8 +1218,10 @@ describe('commit pipeline bookkeeping', () => {
 
 // ──── Block-id shape contract (issue #456) ────
 //
-// The guard is in `buildNewBlockRow`, shared by `tx.create` and
-// `tx.createOrGet` — see `@/data/blockId` for why there. What needs pinning
+// The guard is in `buildNewBlockRow`, which EVERY minting path builds its row
+// through — see `@/data/blockId` for why there. Stated as a property rather
+// than a list of today's paths, and covered that way below, because the list
+// is what went out of date when bulk insert became the third. What needs pinning
 // beyond the predicate itself (blockId.test.ts) is the WIRING, and its
 // polarity in particular: these tests build a Repo the way production does,
 // with `trackTestRepo(new Repo({db, cache, user}))` and no id options at all, so they fail
@@ -1249,6 +1251,34 @@ describe('block id contract (issue #456)', () => {
     const repo = strictRepo()
     await expect(repo.tx(async tx => {
       await tx.create({id: 'my-block', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(InvalidBlockIdError)
+
+    expect(await liveIds()).toEqual([])
+  })
+
+  it('rejects a non-canonical explicit id at tx.createMany too', async () => {
+    const repo = strictRepo()
+    await expect(repo.tx(async tx => {
+      await tx.create({id: VALID_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.createMany([
+        {id: OTHER_VALID_ID, workspaceId: 'ws-1', parentId: VALID_ID, orderKey: 'a1'},
+        {id: 'my-bulk-block', workspaceId: 'ws-1', parentId: VALID_ID, orderKey: 'a2'},
+      ])
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(InvalidBlockIdError)
+
+    expect(await liveIds()).toEqual([])
+  })
+
+  it('rejects a non-canonical id the MINTER produced in a bulk batch', async () => {
+    // The other half of the contract: a Repo wired with a `newId` that mints
+    // something non-canonical is as much a violation as a caller passing one,
+    // and the batch path has to fail the same way rather than writing rows the
+    // guard claims cannot exist.
+    let n = 0
+    const repo = strictRepo({newId: () => `bulk-minted-${++n}`})
+    await expect(repo.tx(async tx => {
+      await tx.create({id: VALID_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.createMany([{workspaceId: 'ws-1', parentId: VALID_ID, orderKey: 'a1'}])
     }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(InvalidBlockIdError)
 
     expect(await liveIds()).toEqual([])

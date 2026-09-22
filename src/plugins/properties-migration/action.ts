@@ -99,6 +99,12 @@ const SYNTHESIS_TOAST = {
   id: 'properties-migration-synthesis', duration: Number.POSITIVE_INFINITY,
 } as const
 
+/** The repair worklist. Its id lives here, beside the advisory's, so the
+ *  showing and the dismissing cannot drift onto different ids. */
+const WORKLIST_TOAST = {
+  id: 'properties-migration-worklist', duration: Number.POSITIVE_INFINITY,
+} as const
+
 /** Prepended to EVERY outcome of a run that flipped, because the flip is
  *  fleet-wide and ONE-WAY while the pass is neither. Without it an operator whose
  *  pass then deferred read "Not started" and walked away believing the graph was
@@ -160,12 +166,16 @@ const describePassOutcome = (
       if (valuesMaterializedTotal === 0) {
         if (unmigrated > 0) {
           return {
-            // Flagged, but deliberately NOT diagnosed as systematic. Nothing
-            // here can separate a broken first run from a converged graph
-            // whose only remaining cells are ones no codec will ever accept —
-            // both write nothing and refuse the same count — and the claim
-            // seam answers `minted | inherited | declined`, so "has this pass
-            // completed before" cannot be asked either.
+            // Flagged, but deliberately NOT diagnosed. What the counters
+            // reach here cannot separate a broken first run from a converged
+            // graph whose only remaining cells are ones no codec will ever
+            // accept: both write nothing and refuse the same count.
+            //
+            // That IS separable — the graph claim carries `completedAt`, and
+            // this gesture already reads the claim before reclaiming it — but
+            // the answer is not threaded into this function, so the message
+            // states what happened and names no cause. Thread it if the
+            // distinction is ever worth the parameter.
             message: `Nothing was migrated — all ${unmigrated.toLocaleString()} property ` +
               'value(s) the pass tried kept their cell value. See the console for which; ' +
               'a re-run reports the same ones until they are repaired.',
@@ -467,13 +477,15 @@ const migrateUnderClaim = async (
     )
     if (failed) banner.fail(message)
     else banner.done(message)
-    // A stable id: the follow-up tells the operator to run this again, and
-    // without one the next run stacks a second sticky toast beside the
-    // first, identical apart from a count that is now wrong.
-    if (followUp) {
-      showInfo(followUp, {id: 'properties-migration-worklist',
-                          duration: Number.POSITIVE_INFINITY})
-    }
+    // Sticky and stable-id, and DISMISSED when this run has no worklist of its
+    // own — the same pairing the synthesis advisory uses, for the same reason.
+    // A stable id alone only covers the run that also has failures; the run
+    // that fixed them produces no `followUp` at all, so without the dismissal
+    // an "N could not be migrated, repair them and run this again" toast
+    // outlives the repair and sits beside a banner saying there is nothing
+    // left to migrate.
+    if (followUp) showInfo(followUp, WORKLIST_TOAST)
+    else dismissToast(WORKLIST_TOAST.id)
   } catch (err) {
     console.error('[properties-migration] failed:', err)
     // The runner can REJECT rather than return an outcome (a claim write that

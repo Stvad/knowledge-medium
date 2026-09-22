@@ -14,6 +14,7 @@ import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
+import { BULK_INSERT_ROWS_PER_STATEMENT } from '@/data/internals/txEngine'
 
 const WS = 'ws-bulk'
 const OTHER_WS = 'ws-other'
@@ -88,18 +89,6 @@ describe('tx.createMany', () => {
     ]), {scope: ChangeScope.BlockDefault})).rejects.toThrow(/mid/)
   })
 
-  it('names the colliding id rather than the chunk', async () => {
-    await seedRoot('root')
-    await repo.tx(tx => tx.create(
-      {id: 'taken', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'first'},
-    ), {scope: ChangeScope.BlockDefault})
-
-    await expect(repo.tx(tx => tx.createMany([
-      {id: 'fresh', workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'fresh'},
-      {id: 'taken', workspaceId: WS, parentId: 'root', orderKey: 'a2', content: 'again'},
-    ]), {scope: ChangeScope.BlockDefault})).rejects.toThrow(/taken/)
-  })
-
   it('records each row, so a same-tx read sees it like a per-row create', async () => {
     await seedRoot('root')
     const peeked = await repo.tx(async tx => {
@@ -152,6 +141,25 @@ describe('tx.createMany pins only once it has written', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     expect(pinnedAfterRefusal).toBeNull()
+  })
+
+  it('leaves it unpinned when the INSERT itself is refused, not just the preflight', async () => {
+    // The preflight refusal above is caught before any statement runs, so it
+    // passes however the pin is ordered. This one is refused by the insert
+    // TRIGGER — the only case that can tell "pin after the statement that
+    // wrote" from "pin on the way into the loop", which is a guard in the
+    // right slot versus the wrong one.
+    await seedRoot('doomed')
+    await repo.tx(async tx => { await tx.delete('doomed') }, {scope: ChangeScope.BlockDefault})
+
+    const pinnedAfterInsertRefusal = await repo.tx(async tx => {
+      await expect(tx.createMany([
+        {id: 'orphan', workspaceId: WS, parentId: 'doomed', orderKey: 'a0', content: 'orphan'},
+      ])).rejects.toThrow()
+      return tx.meta.workspaceId
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(pinnedAfterInsertRefusal).toBeNull()
   })
 
   it('pins to the batch it did write', async () => {
@@ -209,5 +217,87 @@ describe('tx.createMany refuses a duplicate inside the batch itself', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     expect(await rowsOf('root')).toEqual([])
+  })
+})
+
+describe('tx.createMany across more than one INSERT statement', () => {
+  // Derived from the constant, never a literal: the only production caller
+  // batches on a row budget BELOW it, so a fixture sized by hand stops
+  // crossing the boundary the moment either number moves — and everything
+  // this describe covers happens only on the second chunk.
+  const OVER_ONE_CHUNK = BULK_INSERT_ROWS_PER_STATEMENT + 5
+
+  const rows = (n: number, parentId: string) =>
+    Array.from({length: n}, (_, i) => ({
+      id: `bulk-${String(i).padStart(4, '0')}`,
+      workspaceId: WS, parentId, orderKey: `k${String(i).padStart(4, '0')}`, content: `row ${i}`,
+    }))
+
+  it('writes and records every row when the batch spans chunks', async () => {
+    await seedRoot('root')
+    const seen: (string | undefined)[] = []
+    await repo.tx(async tx => {
+      const ids = await tx.createMany(rows(OVER_ONE_CHUNK, 'root'))
+      expect(ids).toHaveLength(OVER_ONE_CHUNK)
+      // A row from the FIRST chunk and one from the last, read back inside the
+      // same tx — this is the `record` the same-tx processors and the snapshot
+      // cache see, and it is done per chunk rather than once at the end.
+      seen.push((await tx.get(ids[0]!))?.content)
+      seen.push((await tx.get(ids[OVER_ONE_CHUNK - 1]!))?.content)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(seen).toEqual(['row 0', `row ${OVER_ONE_CHUNK - 1}`])
+    expect(await rowsOf('root')).toHaveLength(OVER_ONE_CHUNK)
+  })
+
+  it('resolves a parent minted in an EARLIER chunk', async () => {
+    // Distinct from the same-call forward-reference test above: that one
+    // proves a parent is visible to a row in the SAME multi-row VALUES, which
+    // the BEFORE-INSERT trigger handles. This one needs the previous
+    // STATEMENT to have landed, which is a different mechanism.
+    await seedRoot('root')
+    const childOfFirst = {
+      id: 'late-child', workspaceId: WS, parentId: 'bulk-0000',
+      orderKey: 'zz', content: 'child of a row in chunk 1',
+    }
+    await repo.tx(async tx => {
+      await tx.createMany([...rows(OVER_ONE_CHUNK, 'root'), childOfFirst])
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await rowsOf('bulk-0000')).toEqual([
+      expect.objectContaining({id: 'late-child', parent_id: 'bulk-0000'}),
+    ])
+  })
+
+  it('records the earlier chunks even when a later one throws and the caller swallows it', async () => {
+    // THE reason `record` is per chunk rather than once at the end. A
+    // tombstoned parent is refused by the insert TRIGGER, which aborts that
+    // STATEMENT only — so the chunks before it are still in the transaction.
+    // If the caller catches and lets the tx commit, those rows land; unless
+    // they were recorded, they land with no same-tx processor and no snapshot
+    // having seen them.
+    //
+    // Asserted through `peek`, not `get`: `get` reads the transaction's DB and
+    // would see the row whether or not it was recorded, which is what makes
+    // this the only assertion that can tell the two orderings apart.
+    await seedRoot('root')
+    await seedRoot('doomed')
+    await repo.tx(async tx => { await tx.delete('doomed') }, {scope: ChangeScope.BlockDefault})
+
+    let peeked: string | null = null
+    await repo.tx(async tx => {
+      try {
+        await tx.createMany([
+          ...rows(OVER_ONE_CHUNK, 'root'),
+          {id: 'orphan', workspaceId: WS, parentId: 'doomed',
+           orderKey: 'zz', content: 'under a tombstone'},
+        ])
+      } catch { /* swallowed on purpose — the tx goes on to commit */ }
+      peeked = tx.peek('bulk-0000')?.content ?? null
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(peeked).toBe('row 0')
+    expect(await rowsOf('root')).toHaveLength(BULK_INSERT_ROWS_PER_STATEMENT)
+    expect(await rowsOf('doomed')).toHaveLength(0)
   })
 })

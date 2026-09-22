@@ -3,7 +3,7 @@
  *
  * Every block whose `properties_json` holds a registered key gets the field and
  * value CHILD rows that key implies, from the same builders the live dual-write
- * uses — {@link plannedFieldRow} and {@link plannedValueChildRows} — so the two
+ * uses — {@link plannedFieldRow} and {@link valueChildRowsFor} — so the two
  * writers cannot decide differently what a value's children are. Cells are left
  * exactly as they are: this pass ADDS the child representation.
  *
@@ -40,24 +40,21 @@
  * already-has-a-field-row test above is what makes revisiting a block a no-op.
  */
 
-import type { BlockData, NewBlockData, ResolvedPropertySchema } from '@/data/api'
+import type { BlockData, NewBlockData } from '@/data/api'
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
 import { CallbackSet } from '@/utils/callbackSet'
 import {
+  encodedPropertyValueToChildContents,
   getPropertyFieldTargetId,
   propertyCellValueRejection,
 } from '@/data/propertyChildren'
 import {
   plannedFieldRow,
-  plannedValueChildRows,
+  valueChildRowsFor,
   undecodableCellValueError,
 } from './propertyChildrenProcessor'
 
 export const PROPERTY_CELL_BACKFILL_ID = 'properties:cell-to-children'
-
-/** What `ctx.resolveNameSchema` answers with: a schema that also knows the
- *  fieldId its field rows point at. */
-type ResolvedNameSchema = ResolvedPropertySchema<unknown>
 
 /** Rows a writing transaction aims to insert. THE transaction-size knob,
  *  counted in ROWS not blocks — a heavy-property block would multiply a
@@ -211,13 +208,12 @@ export interface PropertyCellBackfillProgress {
    *  junk from a raw bag write, and one such key must cost its own key rather
    *  than every key on the block. Capped at {@link MAX_REPORTED_FAILURES}. */
   failures: {blockId: string; reason: string}[]
-  /** Failures this sweep, including any past the cap. Paired with
-   *  `blocksMaterialized === 0` it is the signal that the run hit something
-   *  SYSTEMATIC — a codec rejecting everything, storage refusing writes —
-   *  rather than a handful of bad values, and the operator must be told that
-   *  rather than shown "migrated 0 blocks" in green. Deliberately not a throw:
-   *  `blocksMaterialized` counts blocks accepted IN FULL, so one junk key on
-   *  every block would abort a migration that in fact wrote most of it. */
+  /** Failures this sweep, including any past the cap. Read with
+   *  `valuesMaterializedTotal === 0` to separate "nothing moved" from "some
+   *  moved and some were refused" — nothing here can say WHY nothing moved,
+   *  and `describePassOutcome` deliberately does not guess. Reported rather
+   *  than thrown: one junk key on every block would otherwise abort a
+   *  migration that in fact wrote every other key. */
   failureCount: number
 }
 
@@ -324,10 +320,26 @@ const sweep = async (
 
       const planned: {
         owner: BlockData
-        schema: ResolvedNameSchema
-        encoded: unknown
         fieldRow: NewBlockData
+        /** Encoded INSIDE the per-key guard below, so a value no codec will
+         *  take costs its own key instead of aborting the batch. */
+        contents: readonly string[]
       }[] = []
+      // Counted into locals and committed to `progress` only once the batch has
+      // WRITTEN. A throw from either `createMany` rolls the transaction back,
+      // and the run parks its progress for the operator surface — so counting
+      // as we plan reported rolled-back rows as migrated. Row-at-a-time, that
+      // was one row; batched, it is the whole batch.
+      let acceptedHere = 0
+      let valuesHere = 0
+      const changedHere: string[] = []
+      const commitCounts = () => {
+        progress.blocksMaterialized += acceptedHere
+        for (const id of changedHere) changedOwners.add(id)
+        progress.blocksMaterializedTotal = changedOwners.size
+        progress.valuesMaterialized += valuesHere
+        progress.valuesMaterializedTotal += valuesHere
+      }
       for (const owner of owners) {
         let materializedHere = 0
         let rejectedHere = 0
@@ -361,14 +373,16 @@ const sweep = async (
             continue
           }
           let fieldRow: NewBlockData
+          let contents: readonly string[]
           try {
             fieldRow = plannedFieldRow(tx, owner, schema.fieldId)
+            contents = encodedPropertyValueToChildContents(schema, encoded)
           } catch (cause) {
             recordFailure(owner.id, cause)
             rejectedHere += 1
             continue
           }
-          planned.push({owner, schema, encoded, fieldRow})
+          planned.push({owner, fieldRow, contents})
           materializedHere += 1
         }
         // "Accepted IN FULL", which is a statement about REJECTIONS alone: an
@@ -376,30 +390,27 @@ const sweep = async (
         // to zero times. Gating this on `materializedHere` instead made a
         // converged sweep — the one that by definition plans nothing — report
         // `0 / blocksScanned`, which is the same reading as a sweep whose every
-        // key was refused, and telling those two apart is the whole job of the
-        // pairing with `failureCount`.
-        if (rejectedHere === 0) progress.blocksMaterialized += 1
+        // key was refused. It surfaces on the pass's own per-sweep console
+        // line; the operator's banner reads the run-wide counters below.
+        if (rejectedHere === 0) acceptedHere += 1
         // The run-wide set answers the other question, "which blocks did this
         // run change", so it counts writes and a partly migrated owner did
         // change.
-        if (materializedHere > 0) {
-          changedOwners.add(owner.id)
-          progress.blocksMaterializedTotal = changedOwners.size
-        }
-        progress.valuesMaterialized += materializedHere
-        progress.valuesMaterializedTotal += materializedHere
+        if (materializedHere > 0) changedHere.push(owner.id)
+        valuesHere += materializedHere
       }
-      if (planned.length === 0) return
+      if (planned.length === 0) { commitCounts(); return }
 
       // Field rows first, in their own call, because the value children need
       // the minted ids to point at. Both calls go through `tx.createMany`, so
       // the rows are workspace- and parent-checked and `record`ed exactly as
       // one-at-a-time creates would be.
       const fieldRowIds = await tx.createMany(planned.map(({fieldRow}) => fieldRow))
-      await tx.createMany(planned.flatMap(({owner, schema, encoded}, index) =>
-        plannedValueChildRows(
-          tx, {id: fieldRowIds[index]!, workspaceId: owner.workspaceId}, schema, encoded,
+      await tx.createMany(planned.flatMap(({owner, contents}, index) =>
+        valueChildRowsFor(
+          tx, {id: fieldRowIds[index]!, workspaceId: owner.workspaceId}, contents,
         )))
+      commitCounts()
     }, {description: 'Migrate properties to child blocks'})
 
     // Awaited so a caller can do real work between batches — the seam a test

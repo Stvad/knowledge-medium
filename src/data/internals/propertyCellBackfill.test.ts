@@ -14,6 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { referencesDataExtension } from '@/plugins/references/dataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -64,6 +65,11 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
+    // The References plugin, so `references_json` is REAL here. Without it the
+    // prefill has no contributor and the pass-vs-live comparison below comes
+    // out `'[]' === '[]'` — proving nothing about the column the whole
+    // create-time prefill exists to fill.
+    referencesDataExtension,
     definitionSeedsFacet.of(noteProp, {source: 'test'}),
     definitionSeedsFacet.of(extraProp, {source: 'test'}),
     definitionSeedsFacet.of(tagsProp, {source: 'test'}),
@@ -714,6 +720,10 @@ describe('the pass and the live writer agree about a value\'s children', () => {
     const migrated = await machineryShape('migrated')
     expect(migrated).toHaveLength(1)
     expect(migrated).toEqual(await machineryShape('live'))
+    // The field row's `references` must be REAL on both sides, or the equality
+    // above is `'[]' === '[]'` and says nothing about the create-time prefill
+    // — which is the whole reason the References plugin is in this runtime.
+    expect(JSON.parse(migrated[0]!.references)).toHaveLength(1)
   })
 })
 
@@ -736,10 +746,10 @@ describe('one key that cannot be planned costs its own key', () => {
   })
 
   it('a partly migrated owner is not counted as accepted in full', async () => {
-    // `blocksMaterialized` is documented as blocks accepted IN FULL, and it is
-    // read paired with the failure count as the systematic-failure signal. The
-    // run-wide set answers the other question — which blocks this run changed
-    // — and a partly migrated owner did change.
+    // `blocksMaterialized` is documented as blocks accepted IN FULL, and it
+    // surfaces on the pass's per-sweep console line. The run-wide set answers
+    // the other question — which blocks this run changed — and a partly
+    // migrated owner did change.
     await create('b1', {'demo:note': 'fine', 'demo:extra': 'broken definition'})
     await flip()
 

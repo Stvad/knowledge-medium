@@ -664,11 +664,12 @@ export const plannedFieldRow = (
 /** The value children a cell value implies under a field row that has NONE —
  *  the create-only case, as DATA.
  *
- *  Emitted rather than written because two callers need it and they must not
- *  be able to disagree about what a value's children are: the live writer
- *  creates them one at a time inside a user's edit, while the one-time pass
- *  hands a whole batch to `tx.createMany`. Everything that decides the ANSWER
- *  — the member split, the content encoding, the order keys — is here once.
+ *  Emitted rather than written so the one-time pass can hand a whole batch to
+ *  `tx.createMany`. The live writer does NOT come through here — it reconciles
+ *  an existing value set row by row (`reconcileFieldValueChildren`) — but both
+ *  routes decide a value's MEMBERS through the same
+ *  `encodedPropertyValueToChildContents`, which is the part they must not be
+ *  able to disagree about.
  *
  *  Only valid when the field row is empty. A field row that already has
  *  children is a reconcile, which is `reconcileFieldValueChildren`'s job and a
@@ -678,8 +679,23 @@ export const plannedValueChildRows = (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   schema: AnyPropertySchema,
   encoded: unknown,
+): NewBlockData[] =>
+  valueChildRowsFor(tx, fieldRow, encodedPropertyValueToChildContents(schema, encoded))
+
+/** The same rows, from contents a caller has ALREADY encoded.
+ *
+ *  Split out for the one-time pass, which must encode inside its per-key
+ *  guard: `encodedPropertyValueToChildContents` throws on a value no codec
+ *  will take, and a key that cannot be planned has to cost its own key rather
+ *  than the batch. Encoding here instead would put that throw outside the
+ *  guard, where it aborts the whole run — safe today only because the pass's
+ *  rejection check happens to call this same encoder first, which is a
+ *  coupling neither site states. */
+export const valueChildRowsFor = (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  contents: readonly string[],
 ): NewBlockData[] => {
-  const contents = encodedPropertyValueToChildContents(schema, encoded)
   const keys = keysBetween(null, null, contents.length)
   return contents.map((content, index) => ({
     workspaceId: fieldRow.workspaceId,

@@ -15,12 +15,13 @@ const progressHandle = {
   addNote: vi.fn(),
 }
 const showInfo = vi.fn()
+const dismissToast = vi.fn()
 let emit: ((progress: PropertyCellBackfillProgress) => void) | null = null
 
 vi.mock('@/utils/dialogs.js', () => ({openDialog: () => openDialog()}))
 vi.mock('@/utils/toast.js', () => ({
   showInfo: (message: string, opts?: unknown) => showInfo(message, opts),
-  dismissToast: vi.fn(),
+  dismissToast: (id: string) => dismissToast(id),
 }))
 vi.mock('../progressReport.ts', () => ({
   reportMigrationProgress: () => progressHandle,
@@ -141,6 +142,7 @@ afterEach(() => {
   progressHandle.settleUnreported.mockReset()
   progressHandle.addNote.mockReset()
   showInfo.mockReset()
+  dismissToast.mockReset()
   emit = null
   claimHeldAfterRun = false
   runHasHappened = false
@@ -157,6 +159,24 @@ describe('the migration progress path', () => {
       expect.stringContaining('3'),
       expect.objectContaining({id: expect.any(String)}),
     )
+  })
+
+  it('dismisses the worklist when the run that follows has nothing to repair', async () => {
+    // A stable id only covers the run that ALSO has failures. The run that
+    // fixed them produces no follow-up at all, so without an explicit dismiss
+    // the "N could not be migrated — repair them and run this again" toast is
+    // sticky (duration Infinity) and outlives the repair, ending up beside a
+    // banner that says there is nothing left to migrate.
+    await runReporting(progress({failureCount: 0, failures: []}))
+
+    expect(showInfo).not.toHaveBeenCalled()
+    expect(dismissToast).toHaveBeenCalledWith('properties-migration-worklist')
+  })
+
+  it('does not dismiss the worklist it just raised', async () => {
+    await runReporting(progress({failureCount: 3, failures: [{blockId: 'b1', reason: 'x'}]}))
+
+    expect(dismissToast).not.toHaveBeenCalledWith('properties-migration-worklist')
   })
 
   it('says the workspace is still locked when THIS device ends still holding it', async () => {
