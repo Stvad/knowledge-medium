@@ -1,1 +1,1 @@
-import{AL as e,jL as t}from"../../../chunks/app-DCjKFrfU.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};
+import{AL as e,jL as t}from"../../../chunks/app-C_iC7CyP.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};
