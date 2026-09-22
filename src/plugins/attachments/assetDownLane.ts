@@ -24,7 +24,7 @@
 import { isRemoteSyncActive } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
 import { getAssetResolverForUser } from './assetResolver.js'
-import { getByteStore } from './byteStore.js'
+import { ENTRY_SETTLE_MS, getByteStore, type ByteStore } from './byteStore.js'
 import { reconcileDownLane } from './downLane.js'
 import { runSingleOwner } from './laneLock.js'
 import { MEDIA_TYPE, mediaHashProp } from './mediaBlock.js'
@@ -77,6 +77,36 @@ export const collectReplicationRequests = async (
   return out
 }
 
+/** Once per (user, workspace) per page: reap the EMPTY entries an older build left in
+ *  the byte store (a `put` that minted the file and then failed to write it). Memoized
+ *  as the in-flight promise, so a second pass arriving mid-sweep awaits the same sweep
+ *  rather than starting another; a failed sweep forgets itself so the next pass
+ *  retries. Cheap (one listing + a size read per entry, one workspace), idempotent, and
+ *  older-than-`ENTRY_SETTLE_MS` only — a younger empty entry may be a put in flight. */
+const sweptScopes = new Map<string, Promise<void>>()
+const sweepEmptyEntriesOnce = (byteStore: ByteStore, userId: string, workspaceId: string): Promise<void> => {
+  const key = `${userId}\n${workspaceId}`
+  const existing = sweptScopes.get(key)
+  if (existing) return existing
+  const run = byteStore
+    .sweepEmpty(userId, workspaceId, { minAgeMs: ENTRY_SETTLE_MS })
+    .then(({ scanned, removed }) => {
+      if (removed > 0) {
+        console.warn(`[media] removed ${removed} empty local asset file(s) left by failed writes (${scanned} scanned)`)
+      }
+    })
+    .catch((err: unknown) => {
+      // A missed repair, not a broken lane: the resolver still refuses the empty entries.
+      sweptScopes.delete(key)
+      console.warn(`[media] byte-store repair sweep failed for ${workspaceId}`, err)
+    })
+  sweptScopes.set(key, run)
+  return run
+}
+
+/** Test seam: forget which (user, workspace) scopes this page already swept. */
+export const resetSweptScopesForTests = (): void => sweptScopes.clear()
+
 /** Run ONE down-lane pass for `workspaceId`, single-owner per (user, workspace) across
  *  tabs. A no-op when: remote sync is off (local-only — nothing to fetch from), signed
  *  out, or another tab already owns THIS workspace's lane this tick (`runSingleOwner`
@@ -92,6 +122,10 @@ export const runDownLaneReconcile = async (repo: Repo, workspaceId: string): Pro
   await runSingleOwner(downLaneLockName(userId, workspaceId), async () => {
     const requests = await collectReplicationRequests(repo, workspaceId)
     if (requests.length === 0) return
+    // The one-time repair of a store an older build poisoned (empty entries a failed
+    // write left behind) goes right before the presence scan, under the same lock: the
+    // scan already omits empties, but until they are gone every pass re-reads them.
+    await sweepEmptyEntriesOnce(getByteStore(), userId, workspaceId)
     // ONE enumeration of what's already on disk, so the steady-state pass costs a single
     // directory scan instead of a has() probe per block (§8). On a read error, leave it
     // undefined → replicate falls back to a per-block has() (correct, just slower).

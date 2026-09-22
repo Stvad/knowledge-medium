@@ -166,9 +166,10 @@ export const writeFileViaSyncHandle = async (
 /** Per-path chain, so two requests for one file never race each other for its lock. */
 const inFlightByPath = new Map<string, Promise<void>>()
 
-/** The worker's per-message handler: never throws, always answers `id`. */
+/** The worker's per-message handler: never throws, always answers `id`. The root is
+ *  opened per request (a request arrives seconds or hours apart, the handle is cheap). */
 export const handleWriteRequest = async (
-  root: FileSystemDirectoryHandle,
+  getRoot: () => Promise<FileSystemDirectoryHandle>,
   request: WriteRequest,
   opts: SyncWriteOptions = {},
 ): Promise<WriteReply> => {
@@ -176,7 +177,7 @@ export const handleWriteRequest = async (
   const previous = inFlightByPath.get(key) ?? Promise.resolve()
   const run = previous
     .catch(() => {})
-    .then(() => writeFileViaSyncHandle(root, request.path, new Uint8Array(request.bytes), opts))
+    .then(async () => writeFileViaSyncHandle(await getRoot(), request.path, new Uint8Array(request.bytes), opts))
   inFlightByPath.set(key, run)
   try {
     await run
@@ -213,7 +214,7 @@ export interface WorkerFileWriterOptions {
   readonly onAbandoned?: (path: readonly string[], byteLength: number) => Promise<void>
 }
 
-export const WRITE_TIMEOUT_MS = 60_000
+const WRITE_TIMEOUT_MS = 60_000
 
 /**
  * The main-thread client: one worker per store, spawned on the first write and

@@ -243,7 +243,7 @@ export interface OpfsByteStoreDeps {
  *  Safari 26+); without it (Safari 16.4–18) only a worker's sync access handle
  *  can write. Read off the prototype, not a probe: `createWritable` on a handle
  *  either exists or is `undefined` — there's no runtime feature switch. */
-export const engineHasWritableStream = (): boolean =>
+const engineHasWritableStream = (): boolean =>
   typeof FileSystemFileHandle !== 'undefined' &&
   typeof (FileSystemFileHandle.prototype as { createWritable?: unknown }).createWritable === 'function'
 
@@ -257,7 +257,8 @@ const spawnRealWriterWorker = (): WriterWorkerLike =>
  */
 export class OpfsByteStore implements ByteStore {
   private readonly getRoot: () => Promise<FileSystemDirectoryHandle>
-  private readonly hasWritableStream: () => boolean
+  /** Decided once: the engine's write API doesn't change under a running page. */
+  private readonly hasWritableStream: boolean
   /** The worker write path, built on first use (never on an engine with the stream API). */
   private workerWriter?: WorkerFileWriter
   private readonly spawnWriterWorker: () => WriterWorkerLike
@@ -273,7 +274,7 @@ export class OpfsByteStore implements ByteStore {
 
   constructor(deps: OpfsByteStoreDeps = {}) {
     this.getRoot = deps.getRoot ?? (() => navigator.storage.getDirectory())
-    this.hasWritableStream = deps.hasWritableStream ?? engineHasWritableStream
+    this.hasWritableStream = (deps.hasWritableStream ?? engineHasWritableStream)()
     this.spawnWriterWorker = deps.spawnWriterWorker ?? spawnRealWriterWorker
     this.writeTimeoutMs = deps.writeTimeoutMs
   }
@@ -342,29 +343,13 @@ export class OpfsByteStore implements ByteStore {
     }
   }
 
-  async put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
-    try {
-      await this.writeFile(userId, workspaceId, contentKey, bytes)
-    } catch {
-      // A cached ws-dir handle may be stale (the dir was removed by a purge or evicted
-      // out-of-band): drop it and retry once from a fresh resolve, which re-creates the chain.
-      this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId))
-      await this.writeFile(userId, workspaceId, contentKey, bytes)
-    }
-  }
-
   /** Either write path resolves only once the bytes are durable, and on failure
-   *  removes the entry (see the module header): the stream path via
-   *  `abort` + `removeEntry` here, the worker path inside the worker. */
-  private async writeFile(
-    userId: string,
-    workspaceId: string,
-    contentKey: string,
-    bytes: Uint8Array<ArrayBuffer>,
-  ): Promise<void> {
-    const dir = await this.workspaceDir(userId, workspaceId, true)
-    const name = encodeSegment(contentKey)
-    if (!this.hasWritableStream()) {
+   *  removes an incomplete entry (see the module header): the stream path via
+   *  `abort` + `removeUnlessComplete` here, the worker path inside the worker. */
+  async put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+    if (!this.hasWritableStream) {
+      // The worker re-walks the path from the root itself — no dir handle to hand it,
+      // and none to go stale.
       this.workerWriter ??= createWorkerFileWriter(this.spawnWriterWorker, {
         timeoutMs: this.writeTimeoutMs,
         onAbandoned: (path, byteLength) => this.removeIfIncomplete(path, byteLength),
@@ -372,6 +357,24 @@ export class OpfsByteStore implements ByteStore {
       await this.workerWriter.write(assetPathSegments(userId, workspaceId, contentKey), bytes)
       return
     }
+    try {
+      await this.writeViaStream(userId, workspaceId, contentKey, bytes)
+    } catch {
+      // A cached ws-dir handle may be stale (the dir was removed by a purge or evicted
+      // out-of-band): drop it and retry once from a fresh resolve, which re-creates the chain.
+      this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId))
+      await this.writeViaStream(userId, workspaceId, contentKey, bytes)
+    }
+  }
+
+  private async writeViaStream(
+    userId: string,
+    workspaceId: string,
+    contentKey: string,
+    bytes: Uint8Array<ArrayBuffer>,
+  ): Promise<void> {
+    const dir = await this.workspaceDir(userId, workspaceId, true)
+    const name = encodeSegment(contentKey)
     const fileHandle = await dir.getFileHandle(name, { create: true })
     try {
       const writable = await fileHandle.createWritable()

@@ -785,11 +785,12 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
   <li><strong>Repairing an already-poisoned store.</strong> A device that ran the pre-fix build holds empty
     entries the presence scans would otherwise count as replicated forever. <code>sweepEmpty(user, ws)</code>
     reaps a workspace's empty entries older than 60&nbsp;s (a younger one may be a <code>put</code> mid-flight
-    — its entry is minted before its bytes land); the down-lane replicator runs it <em>once per (user,
-    workspace) per page</em>, in the same deep-idle slot and <em>before</em> its reconcile pass, so the pass's
-    one-shot presence enumeration already sees the repaired tree. Cheap (one listing + a size read per
-    entry, active workspace only), idempotent, and not gated on remote sync — the entries it reaps predate
-    the session either way. The resolver never depends on it: a defective entry is refused and deleted on
+    — its entry is minted before its bytes land); the down-lane pass runs it <em>once per (user, workspace)
+    per page</em>, under its single-owner lock and right <em>before</em> its one-shot presence enumeration,
+    so the scan sees the repaired tree (a second pass arriving mid-sweep awaits the same sweep). Cheap (one
+    listing + a size read per entry, active workspace only) and idempotent; it rides the down-lane's gating
+    (remote sync on), which is exactly where the entries it reaps came from — a local-only paste never
+    reaches the failing write. The resolver never depends on it: a defective entry is refused and deleted on
     read regardless (§7.3); the sweep is what turns "broken until re-opened" into "healed in the
     background".</li>
   <li><strong>Demand beats prefetch.</strong> The render path and the background replicator call the

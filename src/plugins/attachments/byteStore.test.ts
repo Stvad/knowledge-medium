@@ -211,7 +211,7 @@ class FakeWriterWorker implements WriterWorkerLike {
       })()
       return
     }
-    void handleWriteRequest(asRoot(this.root), message, { sleep: tick }).then((reply) => {
+    void handleWriteRequest(async () => asRoot(this.root), message, { sleep: tick }).then((reply) => {
       if (!this.terminated) this.onmessage?.(new MessageEvent('message', { data: reply }))
     })
   }
@@ -511,11 +511,13 @@ describe('OpfsByteStore — the write path on an engine WITHOUT createWritable (
         return w
       },
     })
-    // put() retries once on failure (a stale ws-dir handle) — the crashed worker is
-    // dropped on the first attempt, so the retry already lands on the fresh worker.
+    // The worker path has no stale-handle retry (the worker walks from the root itself),
+    // so the put the worker died under rejects; the NEXT put spawns a fresh worker.
+    await expect(store.put(U, WS, KEY, bytes(1))).rejects.toThrow(/worker failed/)
+    expect(workers).toHaveLength(1)
+    expect(workers[0].terminated).toBe(true)
     await expect(store.put(U, WS, KEY, bytes(1))).resolves.toBeUndefined()
     expect(workers).toHaveLength(2)
-    expect(workers[0].terminated).toBe(true)
     expect(await store.get(U, WS, KEY)).toEqual(bytes(1))
   })
 
