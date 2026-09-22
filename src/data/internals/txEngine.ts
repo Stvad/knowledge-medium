@@ -694,7 +694,7 @@ export class TxImpl implements Tx {
     // colliding one on the way to the error, and a caller that catches it then
     // commits rows this method never reached `record` for: invisible to the
     // same-tx processors, the snapshot cache, undo and invalidation. One
-    // indexed read per 400 ids is the cheaper half of that trade anyway.
+    // indexed read per chunk is the cheaper half of that trade anyway.
     for (const chunk of chunksOf(built.map(({id}) => id), MAX_IDS_PER_IN_CLAUSE)) {
       const taken = await this.ctx.txDb.getAll<{id: string}>(
         `SELECT id FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,

@@ -29,9 +29,16 @@ import {
 } from '@/data/referenceBlock'
 import { isBlockRefId } from './referenceParser.ts'
 
-/** `undefined` for everything but a bare `((uuid))`, and that direction is the
- *  safe one: content holding prose, a `[[wikilink]]`, or a non-uuid id needs
- *  the alias lookup and seat probe only the full parse does. */
+/** `undefined` unless {@link parseExactReferenceBlockContent} reads the whole
+ *  content as a plain `((id))` span — which it does in BOTH spellings: a bare
+ *  `((uuid))`, and a field row's `::((uuid))`. Both are live callers here, and
+ *  the field form is the high-volume one, so narrowing this to the bare
+ *  spelling would put every field row back on the second write the seam exists
+ *  to remove.
+ *
+ *  `undefined` everywhere else, and that direction is the safe one: content
+ *  holding prose, a `[[wikilink]]`, or a non-uuid id needs the alias lookup and
+ *  seat probe only the full parse does. */
 const derive = (content: string): BlockReference[] | undefined => {
   const parsed = parseExactReferenceBlockContent(content)
   if (!isIdCarryingReference(parsed) || parsed.kind !== 'blockRef') return undefined
@@ -40,8 +47,9 @@ const derive = (content: string): BlockReference[] | undefined => {
   // happily hold `((target-xyz))`), and prefilling from the broader reading
   // writes the reference the parse then strips back out.
   if (!isBlockRefId(parsed.id)) return undefined
-  // The parse aliases a bare `((id))` by the id itself, which is the whole of
-  // the mapping for this shape.
+  // The parse aliases an `((id))` span by the id itself — marked or not, since
+  // the `::` is prose to the inline scanner — which is the whole of the mapping
+  // for this shape.
   return normalizeReferences([{id: parsed.id, alias: parsed.id}])
 }
 
