@@ -1,1 +1,1 @@
-import{aJ as e,iJ as t,oJ as n}from"../../../chunks/app-B8Ok5r31.js";export{t as TxImpl,e as assertNoSeedDefinitionWrites,n as newTxMeta};
+import{aJ as e,iJ as t,oJ as n,sJ as r}from"../../../chunks/app-oJs1SnFQ.js";export{t as BULK_INSERT_ROWS_PER_STATEMENT,e as TxImpl,n as assertNoSeedDefinitionWrites,r as newTxMeta};
