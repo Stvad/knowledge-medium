@@ -1,1 +1,1 @@
-import{Cm as e,Tm as t,wm as n}from"../../../chunks/app-RK-VWLaY.js";export{e as VideoNotesLayout,n as VideoNotesRenderer,t as videoNotesLayoutContribution};
+import{Sm as e,bm as t,xm as n}from"../../../chunks/app-BEnCoW8U.js";export{t as VideoNotesLayout,n as VideoNotesRenderer,e as videoNotesLayoutContribution};

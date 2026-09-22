@@ -1,1 +1,1 @@
-import{Sy as e,by as t,xy as n,yy as r}from"../../chunks/app-RK-VWLaY.js";export{r as CRUMB_MAX_CHARS,t as CRUMB_MAX_SEGMENTS,n as collapseCrumbs,e as crumbsFromAncestors};
+import{_y as e,gy as t,vy as n,yy as r}from"../../chunks/app-BEnCoW8U.js";export{t as CRUMB_MAX_CHARS,e as CRUMB_MAX_SEGMENTS,n as collapseCrumbs,r as crumbsFromAncestors};

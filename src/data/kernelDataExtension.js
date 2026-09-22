@@ -1,1 +1,1 @@
-import{MG as e}from"../../chunks/app-RK-VWLaY.js";export{e as kernelDataExtension};
+import{DG as e}from"../../chunks/app-BEnCoW8U.js";export{e as kernelDataExtension};

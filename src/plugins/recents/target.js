@@ -1,1 +1,1 @@
-import{Kv as e}from"../../../chunks/app-RK-VWLaY.js";export{e as openRecentsPage};
+import{Uv as e}from"../../../chunks/app-BEnCoW8U.js";export{e as openRecentsPage};

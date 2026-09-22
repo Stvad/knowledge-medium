@@ -1,1 +1,1 @@
-import{kA as e}from"../../chunks/app-RK-VWLaY.js";export{e as buildPropertyPanelSections};
+import{wA as e}from"../../chunks/app-BEnCoW8U.js";export{e as buildPropertyPanelSections};
