@@ -1,1 +1,1 @@
-import{Wx as e}from"../../../chunks/app-dxJ6IJns.js";export{e as useCommandPaletteActions};
+import{Wx as e}from"../../../chunks/app-DnZJ_NuE.js";export{e as useCommandPaletteActions};
