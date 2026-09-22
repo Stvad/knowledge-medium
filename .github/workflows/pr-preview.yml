@@ -27,11 +27,8 @@ permissions:
 
 jobs:
   preview:
-    # Skip forks: a fork PR gets neither the VITE_* secrets nor write access to
-    # gh-pages, so it would fail the env check / 403 on push. Every PR to this
-    # repo comes from a same-repo branch, which has both. (If a fork preview is
-    # ever wanted, it needs the pull_request_target hardening dance — out of
-    # scope, and deliberately not enabled here.)
+    # Fork builds need explicit commit approval via approved-pr-preview.yml.
+    # Their trusted close handler lives in remove-approved-pr-preview.yml.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     env:

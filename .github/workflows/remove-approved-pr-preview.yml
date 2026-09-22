@@ -1,0 +1,69 @@
+name: Remove approved PR preview
+
+on:
+  pull_request_target:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Fork PR number whose preview should be removed
+        required: true
+        type: string
+
+permissions: {}
+cache-mode: none
+
+concurrency:
+  group: pr-preview-${{ inputs.pr_number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  remove:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Require the trusted workflow branch
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (context.ref !== 'refs/heads/master') {
+              throw new Error('Run this workflow from master');
+            }
+      # pull_request_target is used ONLY for removal; never fetch the PR head.
+      - name: Checkout trusted removal code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Resolve the fork PR to remove
+        id: resolve
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
+        with:
+          script: |
+            const { parsePrNumber } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/approved-pr-preview.ts`);
+            const number = parsePrNumber(process.env.PR_NUMBER);
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: number });
+            if (pr.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`) {
+              throw new Error('Same-repository previews are managed by PR Preview');
+            }
+            core.setOutput('number', number);
+      - name: Remove preview files
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          pr-number: ${{ steps.resolve.outputs.number }}
+          preview-branch: gh-pages
+          umbrella-dir: pr-preview
+          action: remove
+          comment: false
+      - name: Remove the preview link from the PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          number: ${{ steps.resolve.outputs.number }}
+          header: pr-preview
+          delete: true
