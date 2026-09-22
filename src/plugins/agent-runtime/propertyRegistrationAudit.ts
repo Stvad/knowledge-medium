@@ -17,10 +17,10 @@
  * converter and runs BEFORE the flip, with extension-owned keys claimed by
  * their owner first — the ordering this report exists to make possible, since
  * the sampled types below are the only signal about who owns a key. The
- * migration gesture runs this same scan and names its own buckets on the
- * consent screen, so this is no longer the only way to see them; what it adds
- * is the uncapped list, a fix per key, and provenance for the keys the sample
- * reaches.
+ * migration gesture runs this same scan and names a few keys per bucket on
+ * its consent screen, so this is no longer the only way to see them — but it
+ * is still the only COMPLETE one, and it adds a fix per key plus provenance
+ * for the keys the sample reaches.
  *
  * Deliberately no exemption list. `grainAudit` skips `system:*` / `agent:*`
  * to keep a per-extension report readable; here an exemption would hide keys
