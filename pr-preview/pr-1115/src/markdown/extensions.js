@@ -1,1 +1,1 @@
-import{eA as e,tA as t}from"../../chunks/app-BJxyI2ZE.js";export{e as markdownExtensionsFacet,t as resolveMarkdownRenderConfig};
+import{eA as e,tA as t}from"../../chunks/app-BZqVSGCD.js";export{e as markdownExtensionsFacet,t as resolveMarkdownRenderConfig};

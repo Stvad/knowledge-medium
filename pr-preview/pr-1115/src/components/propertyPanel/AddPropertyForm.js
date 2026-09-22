@@ -1,1 +1,1 @@
-import{LA as e}from"../../../chunks/app-BJxyI2ZE.js";export{e as AddPropertyForm};
+import{LA as e}from"../../../chunks/app-BZqVSGCD.js";export{e as AddPropertyForm};
