@@ -236,6 +236,13 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // the rejected draft, the config editor was not remounted although the
     // comment there promised it would be — and became an unhandled rejection
     // in a void event handler besides.
+    // `guardPassed` is what the CALLBACK got to, `wrote` is what the
+    // TRANSACTION did, and they are not the same moment: the same-tx
+    // processors run after the callback returns, so a fan-out this change
+    // asks for can still refuse it — which is the commonest refusal there
+    // is. Setting success inside the callback reported those as written,
+    // and every caller's cleanup was skipped for a change that rolled back.
+    let guardPassed = false
     let wrote = false
     let refused = false
     try {
@@ -254,8 +261,9 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         if (current === null || parsePropertyDefinitionMetadata(current) === null) return
         if (!stillCurrent(definitionFacts(current.properties))) return
         await write(tx)
-        wrote = true
+        guardPassed = true
       }, {scope: ChangeScope.BlockDefault, description: TX_DESCRIPTIONS[change.kind]})
+      wrote = guardPassed
     } catch (error) {
       refused = true
       // `repo.tx` notifies the user-error channel before it rethrows, so a

@@ -49,17 +49,18 @@ const percentDone = (run: PropertyDefinitionFanoutSnapshot): number | null => {
   return Math.min(100, Math.round((run.done / run.total) * 100))
 }
 
-/** Past the last consumer the transaction is committing, and a commit is not
- *  a step this surface can promise to undo: it lands, then the post-commit
- *  walk over every row it touched runs, and only then does the gesture that
- *  opened this run close it. Closing the tab in that tail does not roll
- *  anything back, so the copy stops saying it does. */
+/** The fan-out says when it is committing, and only it can: past the last
+ *  consumer it still runs the checks that refuse a change which would lose
+ *  stored values, and a rollback is not a step to tell the user cannot be
+ *  stopped. Once it IS committing, the commit lands, the post-commit walk
+ *  over every row it touched runs, and only then does the gesture close this
+ *  run — none of which closing the tab takes back. */
 const isSaving = (run: PropertyDefinitionFanoutSnapshot): boolean =>
-  run.done !== null && run.done >= run.total
+  run.phase === 'committing'
 
 const statusLine = (run: PropertyDefinitionFanoutSnapshot): string => {
-  if (run.done === null) return 'Starting…'
   if (isSaving(run)) return 'Saving the change…'
+  if (run.done === null) return 'Starting…'
   return `${run.done.toLocaleString()} of ${run.total.toLocaleString()} blocks updated`
 }
 
