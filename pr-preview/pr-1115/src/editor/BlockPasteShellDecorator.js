@@ -1,1 +1,1 @@
-import{$C as e,ew as t}from"../../chunks/app-D9Y-kU1q.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
+import{$C as e,ew as t}from"../../chunks/app-CivwVLo5.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
