@@ -166,6 +166,11 @@ workflows use the same per-PR concurrency group, so they cannot publish and
 remove one fork preview concurrently. Same-repository automatic previews remain
 managed by `.github/workflows/pr-preview.yml`.
 
+The automatic workflows acquire their concurrency lock only inside eligible
+jobs, so skipped fork or same-repository events cannot displace real cleanup.
+GitHub retains only the newest pending request in each group. Avoid issuing
+another manual request while one is pending, or it may replace that request.
+
 ## One-time setup (required — the workflows don't work until this is done)
 
 The switch from the Pages *artifact* flow to *branch* serving needs one manual

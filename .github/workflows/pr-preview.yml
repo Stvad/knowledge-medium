@@ -12,14 +12,6 @@ on:
     # `closed` is required so action:auto can remove the preview on merge/close.
     types: [opened, reopened, synchronize, closed]
 
-concurrency:
-  # Per-PR serialization: rapid pushes to the same PR queue instead of racing
-  # the gh-pages push. Kept separate from the production group so previews and
-  # production never fight over a shared queue slot. Not cancel-in-progress —
-  # cancelling mid git-push could corrupt the branch state.
-  group: pr-preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
-
 permissions:
   contents: write # push the preview subtree to the gh-pages branch
   pull-requests: write # post/update the sticky preview-URL comment
@@ -31,6 +23,10 @@ jobs:
     # Their trusted close handler lives in remove-approved-pr-preview.yml.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    concurrency:
+      # Only eligible jobs enter the queue; skipped fork events must not cancel cleanup.
+      group: pr-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     env:
       # Build under the exact subpath the preview is served from, so every
       # asset URL, the service-worker scope, and version.json resolve. This is

@@ -13,14 +13,14 @@ on:
 permissions: {}
 cache-mode: none
 
-concurrency:
-  group: pr-preview-${{ inputs.pr_number || github.event.pull_request.number }}
-  cancel-in-progress: false
-
 jobs:
   remove:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
+    concurrency:
+      # Skipped same-repository close events must not cancel their automatic cleanup.
+      group: pr-preview-${{ inputs.pr_number || github.event.pull_request.number }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
