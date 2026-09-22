@@ -48,7 +48,11 @@ export const getKeyboardTop = (): number | undefined => {
 
 /** The `bottom` of a fixed element whose bottom edge must sit on the keyboard:
  *  `100%` is resolved by the engine against the containing block it positions
- *  the element with, so no viewport height is read here. With no keyboard the
+ *  the element with, so no viewport height is read here. That block is not a
+ *  constant on iOS: it is the full window at rest and shrinks to the
+ *  safe-area-less height while the visual viewport is panned, and the visual
+ *  viewport's offset and height follow the same switch, which is why a JS
+ *  reading of either height cannot stand in for the engine. With no keyboard the
  *  visual viewport fills the layout viewport and this is 0. The `max()` is
  *  defence in depth: an engine that shrinks the layout viewport with the
  *  keyboard can over-measure the visual viewport by a pixel, which would
