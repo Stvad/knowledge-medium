@@ -15,10 +15,12 @@
  * unregistered key is the one class of property data a flipped workspace
  * cannot make child-backed. §9's orphan-definition synthesis is the intended
  * converter and runs BEFORE the flip, with extension-owned keys claimed by
- * their owner first. The migration gesture runs this same scan and names its
- * own buckets on the consent screen, so this is no longer the only way to see
- * them; what it still adds is the uncapped list, and per key the provenance
- * and the fix.
+ * their owner first — the ordering this report exists to make possible, since
+ * the sampled types below are the only signal about who owns a key. The
+ * migration gesture runs this same scan and names its own buckets on the
+ * consent screen, so this is no longer the only way to see them; what it adds
+ * is the uncapped list, a fix per key, and provenance for the keys the sample
+ * reaches.
  *
  * Deliberately no exemption list. `grainAudit` skips `system:*` / `agent:*`
  * to keep a per-extension report readable; here an exemption would hide keys

@@ -1422,6 +1422,27 @@ describe('flipBlockedBySynthesis', () => {
     expect(flipBlockedBySynthesis(plan)).toMatch(/cannot read/)
   })
 
+  it('does not block on a definition that is merely BROKEN', async () => {
+    // The one unresolved-key category that is advisory rather than a blocker,
+    // and the reason prose about this function must not say it refuses over
+    // every hazard the scan finds. A broken definition is usually a preset
+    // from an extension that is not enabled here, so refusing would withhold
+    // the flip from every other key over one that enabling the provider
+    // repairs; the consent screen carries the warning instead.
+    await rawCell('defn', {
+      types: ['property-schema'],
+      'property-schema:name': 'demo:broken',
+      'property-schema:change-scope': 'not-a-real-scope',
+    })
+    await rawCell('b1', {'demo:broken': 'x'})
+
+    const plan = await planFor()
+    // Asserted, not assumed: with the key bucketed anywhere else this would
+    // pass over a scenario that never reached the decision under test.
+    expect(plan.brokenDefinitions.map(b => b.key)).toEqual(['demo:broken'])
+    expect(flipBlockedBySynthesis(plan)).toBeNull()
+  })
+
   it('lets a clean workspace through', async () => {
     await rawCell('b1', {'demo:orphan': 'x'})
     await applyPropertyDefinitionSynthesis(repo, await planFor())
