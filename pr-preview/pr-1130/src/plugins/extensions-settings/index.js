@@ -1,1 +1,0 @@
-import{gt as e,vw as t,yw as n}from"../../../chunks/app-CDArBQsi.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};

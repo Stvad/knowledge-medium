@@ -1,1 +1,0 @@
-import{Rg as e}from"../../../chunks/app-CDArBQsi.js";export{e as usePromotableBreadcrumb};

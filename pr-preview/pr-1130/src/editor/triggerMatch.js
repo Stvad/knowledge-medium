@@ -1,1 +1,0 @@
-import{eR as e}from"../../chunks/app-CDArBQsi.js";export{e as matchCharTrigger};

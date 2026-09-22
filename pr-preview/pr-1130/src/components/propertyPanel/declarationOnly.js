@@ -1,1 +1,0 @@
-import{AA as e,kA as t}from"../../../chunks/app-CDArBQsi.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

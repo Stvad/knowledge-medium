@@ -1,1 +1,0 @@
-import{jw as e}from"../../../chunks/app-CDArBQsi.js";export{e as appUpdatePromptExtension};

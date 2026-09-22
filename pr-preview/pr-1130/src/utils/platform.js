@@ -1,1 +1,0 @@
-import{XM as e,YM as t}from"../../chunks/app-CDArBQsi.js";export{t as isIOS,e as isMacPlatform};
