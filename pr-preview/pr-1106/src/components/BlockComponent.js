@@ -1,1 +1,1 @@
-import{QT as e,ZT as t}from"../../chunks/app-CPNUYoZA.js";export{t as BlockChildren,e as BlockComponent};
+import{QT as e,ZT as t}from"../../chunks/app-Zw7d-BLp.js";export{t as BlockChildren,e as BlockComponent};

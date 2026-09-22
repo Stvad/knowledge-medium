@@ -1,1 +1,1 @@
-import{a1 as e,i1 as t,n1 as n,o1 as r,r1 as i}from"../../chunks/app-CPNUYoZA.js";export{n as hasSupabaseAuthConfig,i as isAuthCallbackUrl,t as readPersistedSession,e as sessionUserToAppUser,r as supabase};
+import{a1 as e,i1 as t,o1 as n,r1 as r,s1 as i}from"../../chunks/app-Zw7d-BLp.js";export{r as hasSupabaseAuthConfig,t as isAuthCallbackUrl,e as readPersistedSession,n as sessionUserToAppUser,i as supabase};
