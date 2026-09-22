@@ -275,6 +275,53 @@ describe('renaming a property with many consumers', () => {
     expect(seen.some(snapshot => snapshot?.done === 1)).toBe(true)
   })
 
+  it('keeps a name typed while the previous rename was still in flight', async () => {
+    // Below the threshold the field stays live through the whole write —
+    // planned, counted, committed — so the user can be typing the next name
+    // when the last one lands. Its own acknowledgement must not read as a
+    // remote edit and take that typing away. HELD IN THE QUEUE so the
+    // in-flight window is deterministic rather than a race with the count.
+    consumersAre(3)
+    renderSchema()
+    let release!: () => void
+    void queueDefinitionChange(() => new Promise<void>(resolve => { release = resolve }))
+    // The queue hands the blocker its turn a microtask later, so `release`
+    // does not exist until the queue has actually reached it.
+    await Promise.resolve()
+
+    fireEvent.change(nameInput(), {target: {value: 'test:first'}})
+    fireEvent.blur(nameInput())
+    fireEvent.change(nameInput(), {target: {value: 'test:second'}})
+    release()
+
+    await waitFor(async () => { expect(await storedName()).toBe('test:first') })
+    expect(nameInput().value).toBe('test:second')
+  })
+
+  it('keeps a newer name when the rename before it turned out to be a no-op', async () => {
+    // Same window, the other ending. A rename RE-AIMS past a peer, so a peer
+    // rename is not what makes one fail — a peer arriving at the very name
+    // this was heading for is: the planner then finds nothing to do. The
+    // cleanup that puts the field back is about THIS request's draft, and
+    // the user has typed past it.
+    consumersAre(3)
+    renderSchema()
+    let release!: () => void
+    void queueDefinitionChange(() => new Promise<void>(resolve => { release = resolve }))
+    await Promise.resolve()
+
+    fireEvent.change(nameInput(), {target: {value: 'test:first'}})
+    fireEvent.blur(nameInput())
+    await repo.tx(tx => tx.setProperty(SCHEMA_ID, propertyNameProp, 'test:first'),
+      {scope: ChangeScope.BlockDefault})
+    fireEvent.change(nameInput(), {target: {value: 'test:second'}})
+    release()
+
+    await waitFor(async () => { expect(await storedName()).toBe('test:first') })
+    expect(nameInput().value).toBe('test:second')
+    expect(showError).not.toHaveBeenCalled()
+  })
+
   it('leaves the property alone when the change is declined, field included', async () => {
     consumersAre(4_000)
     renderSchema()
