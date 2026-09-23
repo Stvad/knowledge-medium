@@ -1,1 +1,0 @@
-import{mS as e}from"../../../chunks/app-CLK2IeQB.js";export{e as CommandPaletteHeaderItem};
