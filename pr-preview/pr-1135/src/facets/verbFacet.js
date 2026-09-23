@@ -1,1 +1,1 @@
-import{oN as e}from"../../chunks/app-BRqqcr3r.js";export{e as defineVerbFacet};
+import{oN as e}from"../../chunks/app-BKFekosz.js";export{e as defineVerbFacet};

@@ -1,1 +1,1 @@
-import{CE as e,wE as t}from"../../../chunks/app-BRqqcr3r.js";export{e as PropertySchemaBlockRenderer,t as PropertySchemaContentRenderer};
+import{CE as e,wE as t}from"../../../chunks/app-BKFekosz.js";export{e as PropertySchemaBlockRenderer,t as PropertySchemaContentRenderer};

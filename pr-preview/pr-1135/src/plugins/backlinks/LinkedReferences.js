@@ -1,1 +1,1 @@
-import{id as e}from"../../../chunks/app-BRqqcr3r.js";export{e as LinkedReferences};
+import{id as e}from"../../../chunks/app-BKFekosz.js";export{e as LinkedReferences};
