@@ -454,13 +454,13 @@ interface ReferenceTargetStampContext {
   readonly resolver: PropertySchemaResolver
 }
 
-/** Why this device's view of a workspace is incomplete — see
+/** Why this device cannot verify a complete local workspace view — see
  *  {@link Repo.workspaceViewGap}. */
 export interface ViewGap {
   /** The CAUSE only; callers state their own consequence. */
   readonly reason: string
   /** Will waiting clear it? True for work in flight or a download still
-   *  running. False for rows this device downloaded and never caught up with,
+   *  running. False for downloaded rows still flagged for local verification,
    *  which nothing is going to retry on its own — so a caller that re-arms
    *  itself on a deferral must not re-arm on this one, and a caller with a
    *  human to tell must not tell them to try again. */
@@ -3321,12 +3321,13 @@ export class Repo {
    * they arrived — workspace not yet unlocked, mode unresolved, a key-store
    * read that failed, ciphertext that would not decode — stay staged while the
    * drain consumes their queue entries, leaving a stable gap that no in-flight
-   * signal reports and no waiting clears.
+   * signal reports and no waiting clears. Conservatively seeded upgrade flags
+   * can also cover already-correct rows; a flag alone does not prove missing data.
    *
    * Supersedes rather than complements `syncViewGap`: it asks that first, so a
    * caller with a workspace in hand needs exactly one of the two. Every arm is
    * cheap — the durable one reads a flag the drain set, off a partial index
-   * holding only unapplied rows — so this is the predicate for BOTH the top of
+   * holding only flagged rows — so this is the predicate for BOTH the top of
    * a one-way pass and its per-transaction re-checks. There is deliberately no
    * cheaper approximation to reach for in the hot path; that split is what let
    * the two answers disagree.
@@ -3367,9 +3368,9 @@ export class Repo {
     // its own, and every caller's answer is the same one, so stating it here
     // beats each of them remembering to.
     return {
-      reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
-        + 'this device — never materialized, or still showing an older version — '
-        + 'and nothing is in flight to change that; run “Repair downloaded workspace data” '
+      reason: `${count} downloaded row(s) of this workspace have not been verified locally — `
+        + 'they may be missing, outdated, or already correct — '
+        + 'and nothing is in flight to check them; run “Repair downloaded workspace data” '
         + 'from the command palette to retry these rows',
       transient: false,
     }
@@ -3380,8 +3381,8 @@ export class Repo {
    *
    * The remedy for {@link workspaceViewGap}'s durable arm: rows that reached
    * the drain, were not applied, and had their queue entry consumed, so nothing
-   * re-delivers them and every one-way pass on the workspace refuses for as
-   * long as they sit there.
+   * re-delivers them. It also rechecks conservatively seeded flags on legacy rows.
+   * Every one-way pass refuses until the drain clears those flags.
    *
    * A DERIVATION pass, not a data migration: it rebuilds this device's `blocks`
    * from rows this device already downloaded, writes with `tx_context.source`

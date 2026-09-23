@@ -3,9 +3,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { Repo } from '@/data/repo'
 import { ChangeScope, seedProperty, type BlockData } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
-import { BLOCKS_SYNCED_RAW_TABLE } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { SEED_STAGING_NEEDS_APPLY_SQL } from '@/data/internals/syncObserver/reconcile'
 import { stagingCiphertextParams } from '@/data/internals/syncObserver/test/harness'
 import { encodeForWire, type Materializability } from '@/sync/transform'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey'
@@ -85,20 +86,36 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-const strandEncrypted = async (encryptionKey = key) => {
+const strandEncrypted = async (encryptionKey = key, legacyLocalCopy = false) => {
   const block: BlockData = {
     id: 'encrypted-block', workspaceId: WS, parentId: null, orderKey: 'a0',
     content: 'Fixture content', properties: {'fixture:note': 'Fixture property'}, references: [],
-    createdAt: 1, updatedAt: 10, userUpdatedAt: 10, createdBy: USER, updatedBy: USER, deleted: false,
+    createdAt: 1, updatedAt: legacyLocalCopy ? 0 : 10, userUpdatedAt: legacyLocalCopy ? 0 : 10,
+    createdBy: USER, updatedBy: USER, deleted: false,
   }
   const wire = await encodeForWire({
     id: block.id, workspace_id: WS, content: block.content,
     properties_json: JSON.stringify(block.properties), references_json: '[]',
   }, 'e2ee', async () => encryptionKey)
-  await shared.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, stagingCiphertextParams(block, wire))
+  await shared.db.writeTransaction(async tx => {
+    if (legacyLocalCopy) {
+      await tx.execute(
+        `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')})
+         VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`, blockToRowParams(block))
+    }
+    await tx.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, stagingCiphertextParams(block, wire))
+    if (legacyLocalCopy) {
+      // Legacy rows have no pending delivery; the upgrade's conservative seed
+      // cannot compare encrypted wire bytes with the equal plaintext row.
+      await tx.execute('DELETE FROM blocks_synced_changes')
+      await tx.execute(SEED_STAGING_NEEDS_APPLY_SQL)
+    }
+  })
   await repo.flushSyncObserver()
   expect(await shared.db.getAll('SELECT id FROM blocks_synced_changes')).toEqual([])
-  expect(await shared.db.getOptional('SELECT id FROM blocks WHERE id = ?', [block.id])).toBeNull()
+  const local = await shared.db.getOptional('SELECT id FROM blocks WHERE id = ?', [block.id])
+  if (legacyLocalCopy) expect(local).toEqual({id: block.id})
+  else expect(local).toBeNull()
   expect(await repo.workspaceViewGap(WS)).toMatchObject({transient: false})
 }
 
@@ -134,6 +151,37 @@ describe('encrypted durable gap through the migration gesture', () => {
       'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0', [field!.id]))
       .toContainEqual({content: 'Fixture property'})
   }, 20_000) // Real SQLite recovery plus migration; allow gate contention.
+
+  it('reapplies an identical legacy encrypted stamp-zero row and clears its unverified flag before consent', async () => {
+    materializability = 'decrypt'
+    await strandEncrypted(key, true)
+    const staged = await shared.db.getOptional<{content: string; updated_at: number; needs_apply: number}>(
+      'SELECT content, updated_at, needs_apply FROM blocks_synced WHERE id = ?', ['encrypted-block'])
+    expect(staged).toMatchObject({updated_at: 0, needs_apply: 1})
+    expect(staged!.content).toMatch(/^enc:v1:/)
+    const localBefore = await shared.db.getOptional('SELECT * FROM blocks WHERE id = ?', ['encrypted-block'])
+    expect(localBefore).toMatchObject({updated_at: 0, content: 'Fixture content'})
+    expect((await repo.workspaceViewGap(WS))?.reason).toMatch(/not been verified/)
+
+    const recovery = vi.spyOn(repo, 'rematerializeWorkspace')
+    const claim = vi.spyOn(repo, 'withOperatorBackfillClaim')
+    ui.confirm.mockResolvedValue(false)
+    await invoke()
+
+    expect(recovery).toHaveBeenCalledExactlyOnceWith(WS, {scope: 'unapplied'})
+    expect(await recovery.mock.results[0]!.value).toMatchObject({
+      scanned: 1, applied: 1, resolved: 1, deferred: 0, quarantined: 0,
+      unappliedBefore: 1, unappliedAfter: 0, remainingGap: null,
+    })
+    expect(await shared.db.getOptional('SELECT needs_apply FROM blocks_synced WHERE id = ?', ['encrypted-block']))
+      .toEqual({needs_apply: 0})
+    expect(await shared.db.getOptional('SELECT * FROM blocks WHERE id = ?', ['encrypted-block']))
+      .toEqual(localBefore)
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+    expect(ui.confirm).toHaveBeenCalledOnce()
+    expect(claim).not.toHaveBeenCalled()
+    expect(ui.flip).not.toHaveBeenCalled()
+  })
 
   it.each(['deferred', 'quarantined'] as const)('reports unresolved encrypted rows (%s) and refuses once', async cause => {
     const encryptedWith = cause === 'quarantined'

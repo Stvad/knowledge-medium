@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { actionsFacet } from '@/extensions/core.js'
+import { resolveAppRuntimeSync } from '@/facets/resolveAppRuntime.js'
+import { actionsFacet, headerItemsFacet } from '@/extensions/core.js'
 
 const mocks = vi.hoisted(() => ({
   recover: vi.fn(),
@@ -11,23 +12,7 @@ vi.mock('@/utils/workspaceRecovery.js', () => ({
 vi.mock('@/utils/toast.js', () => ({showInfo: (...args: unknown[]) => mocks.showInfo(...args)}))
 
 import { systemStatusPlugin } from '../index.ts'
-import { REMATERIALIZE_WORKSPACE_ACTION_ID, rematerializeWorkspaceAction } from '../rematerializeAction.ts'
-
-const findAction = (extension: unknown): unknown => {
-  if (Array.isArray(extension)) {
-    for (const child of extension) {
-      const found = findAction(child)
-      if (found) return found
-    }
-    return undefined
-  }
-  if (!extension || typeof extension !== 'object') return undefined
-  const contribution = extension as {facet?: {id?: string}, value?: {id?: string}}
-  return contribution.facet?.id === actionsFacet.id &&
-    contribution.value?.id === REMATERIALIZE_WORKSPACE_ACTION_ID
-    ? extension
-    : undefined
-}
+import { rematerializeWorkspaceAction } from '../rematerializeAction.ts'
 
 beforeEach(() => {
   mocks.recover.mockReset()
@@ -35,8 +20,13 @@ beforeEach(() => {
 })
 
 describe('system-status rematerialize action', () => {
-  it('is registered with system-status for the command palette', () => {
-    expect(findAction(systemStatusPlugin)).toBeTruthy()
+  it.each(['enabled', 'disabled', 'safe mode'])('keeps repair available with status %s', mode => {
+    const runtime = resolveAppRuntimeSync([systemStatusPlugin], {
+      overrides: new Map([['system:sync-status', mode !== 'disabled']]),
+      safeMode: mode === 'safe mode',
+    })
+    expect(runtime.read(actionsFacet)).toContainEqual(rematerializeWorkspaceAction)
+    expect(runtime.read(headerItemsFacet)).toHaveLength(mode === 'enabled' ? 1 : 0)
   })
 
   it('captures the active workspace and invokes local recovery despite isReadOnly', async () => {
