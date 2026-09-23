@@ -112,12 +112,13 @@ export const ConfirmMigrationDialog = ({
         </p>
         {synthesizedKeys.count > 0 && <p>
           {properties(synthesizedKeys.count)} {agree(synthesizedKeys.count, 'has', 'have')}
-          {' '}no definition. This will infer
-          their types from stored values and create definitions. Review the
-          inferred types in the property panel afterward. <strong>Enable any
-          plugin or extension that owns them first.</strong> Enabling an owner later
-          can cause conflicting definitions or failed writes. Run{' '}
-          <code className="whitespace-nowrap">audit-properties</code> if ownership is unclear.
+          {' '}no definition. The migration will infer a type for each from stored
+          values and show it in the property panel for review. <strong>Check for an owning
+          plugin or extension first.</strong> Enabling it helps only if it
+          registers a schema block; code-only declarations remain invisible even
+          when enabled. A new definition can conflict with that owner or make
+          its writes fail. <code className="whitespace-nowrap">audit-properties</code>
+          {' '}lists unresolved keys but cannot identify code-only owners.
           <KeyNames keys={synthesizedKeys} />
         </p>}
         {repairableKeys.count > 0 && <p className="text-destructive">

@@ -37,6 +37,13 @@ describe('what the consent screen names', () => {
     expect(copy()).toContain('"demo:from-import", "demo:orphan"')
   })
 
+  it('warns that enabling a code-only property owner does not prevent synthesis', () => {
+    show({synthesizedKeys: {count: 1, names: ['demo:from-extension']}})
+
+    expect(copy()).toContain('code-only declarations remain invisible')
+    expect(copy()).toMatch(/audit-properties.*cannot identify code-only owners/)
+  })
+
   it('names the keys with a broken definition', () => {
     show({repairableKeys: {count: 1, names: ['demo:broken']}})
 
