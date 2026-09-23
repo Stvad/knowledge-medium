@@ -89,4 +89,14 @@ describe('what the consent screen names', () => {
 
     expect(copy()).not.toMatch(/no definition|cannot be given|cannot read/)
   })
+
+  it('keeps the migration consequences visible in the shorter consent copy', () => {
+    show({childBacked: false})
+
+    expect(copy()).toMatch(/Offline.*edits can be lost/)
+    expect(copy()).toContain('cannot be undone in the app')
+    expect(copy()).toContain('run it again on this device')
+    expect(copy()).toContain('undo history is cleared')
+    expect(copy()).toContain('Reload other tabs and devices')
+  })
 })
