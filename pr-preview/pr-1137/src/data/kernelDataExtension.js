@@ -1,1 +1,0 @@
-import{MG as e}from"../../chunks/app-ByBPr1Ru.js";export{e as kernelDataExtension};

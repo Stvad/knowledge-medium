@@ -1,1 +1,0 @@
-import{mS as e}from"../../../chunks/app-ByBPr1Ru.js";export{e as CommandPaletteHeaderItem};
