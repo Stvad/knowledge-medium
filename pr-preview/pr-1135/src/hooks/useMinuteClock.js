@@ -1,0 +1,1 @@
+import{Kv as e}from"../../chunks/app-BKUcImbf.js";export{e as useMinuteClock};

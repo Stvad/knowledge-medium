@@ -1,0 +1,1 @@
+import{oN as e}from"../../chunks/app-BKUcImbf.js";export{e as defineVerbFacet};

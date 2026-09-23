@@ -1,0 +1,1 @@
+import{oC as e}from"../../../chunks/app-BKUcImbf.js";export{e as useBlockRefAncestors};

@@ -1,0 +1,1 @@
+import{_ as e}from"../../chunks/app-BKUcImbf.js";export{e as staticAppExtensions};

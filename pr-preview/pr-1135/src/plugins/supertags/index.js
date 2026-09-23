@@ -1,0 +1,1 @@
+import{v as e}from"../../../chunks/app-BKUcImbf.js";export{e as supertagsPlugin};

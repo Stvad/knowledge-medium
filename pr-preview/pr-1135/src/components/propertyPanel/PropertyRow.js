@@ -1,0 +1,1 @@
+import{pA as e}from"../../../chunks/app-BKUcImbf.js";export{e as PropertyRow};

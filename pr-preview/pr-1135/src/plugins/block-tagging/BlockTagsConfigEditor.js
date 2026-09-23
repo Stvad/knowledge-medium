@@ -1,0 +1,1 @@
+import{xs as e}from"../../../chunks/app-BKUcImbf.js";export{e as BlockTagsConfigEditor};

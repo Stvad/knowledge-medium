@@ -1,0 +1,1 @@
+import{sN as e}from"../../chunks/app-BKUcImbf.js";export{e as withMoveTransition};

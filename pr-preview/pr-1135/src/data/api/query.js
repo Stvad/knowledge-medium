@@ -1,0 +1,1 @@
+import{f4 as e}from"../../../chunks/app-BKUcImbf.js";export{e as defineQuery};

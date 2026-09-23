@@ -1,0 +1,1 @@
+import{Jv as e}from"../../../chunks/app-BKUcImbf.js";export{e as openRecentsPage};

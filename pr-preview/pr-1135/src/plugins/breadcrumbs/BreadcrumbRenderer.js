@@ -1,0 +1,1 @@
+import{Gg as e}from"../../../chunks/app-BKUcImbf.js";export{e as BreadcrumbRenderer};

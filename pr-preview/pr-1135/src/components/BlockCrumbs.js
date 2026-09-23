@@ -1,0 +1,1 @@
+import{yy as e}from"../../chunks/app-BKUcImbf.js";export{e as BlockCrumbs};

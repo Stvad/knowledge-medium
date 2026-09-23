@@ -1,0 +1,1 @@
+import{JP as e}from"../../../chunks/app-BKUcImbf.js";export{e as SuspenseFallback};

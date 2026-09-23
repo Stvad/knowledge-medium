@@ -1,0 +1,1 @@
+import{Wg as e}from"../../../chunks/app-BKUcImbf.js";export{e as PromotableBreadcrumbList};

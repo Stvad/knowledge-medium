@@ -1,0 +1,1 @@
+import{az as e,iz as t,rz as n}from"../../../chunks/app-BKUcImbf.js";export{n as charLimitProp,t as charProfileProp,e as charScopeProp};
