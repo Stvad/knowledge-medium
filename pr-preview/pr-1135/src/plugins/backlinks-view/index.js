@@ -1,1 +1,1 @@
-import{Mu as e}from"../../../chunks/app-BKFekosz.js";export{e as backlinksViewPlugin};
+import{Mu as e}from"../../../chunks/app-ZrmzwV8r.js";export{e as backlinksViewPlugin};

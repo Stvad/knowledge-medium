@@ -1,1 +1,1 @@
-import{Iw as e}from"../../../chunks/app-BKFekosz.js";export{e as appUpdatePromptExtension};
+import{Iw as e}from"../../../chunks/app-ZrmzwV8r.js";export{e as appUpdatePromptExtension};
