@@ -19,7 +19,7 @@ export const systemStatusHeaderItem: HeaderItemContribution = {
 // it would silently re-enable the chip for anyone who turned it off and orphan
 // their stored preference. The id is an internal stable key; only the
 // user-facing name changed.
-export const systemStatusPlugin: AppExtension = systemToggle({
+const statusIndicator: AppExtension = systemToggle({
   id: 'system:sync-status',
   name: 'System status',
   description: 'Header status indicator — sync state plus health signals (data integrity, storage, app updates).',
@@ -28,5 +28,10 @@ export const systemStatusPlugin: AppExtension = systemToggle({
     source: 'system-status',
     precedence: 40,
   }),
-  rematerializeWorkspaceActionContribution,
 ])
+
+// Recovery remains reachable when the status indicator is hidden or safe mode is active.
+export const systemStatusPlugin: AppExtension = [
+  statusIndicator,
+  rematerializeWorkspaceActionContribution,
+]
