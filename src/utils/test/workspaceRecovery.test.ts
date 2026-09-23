@@ -55,14 +55,14 @@ describe('rematerializeWorkspaceWithFeedback', () => {
       duration: Number.POSITIVE_INFINITY,
     })
     const outcome = showInfo.mock.calls[1][0] as string
-    expect(outcome).toContain('3 downloaded rows restored locally')
-    expect(outcome).toContain('Rows still waiting to be restored: 7 → 3')
-    expect(outcome).toContain('2 downloaded rows could not be restored')
+    expect(outcome).toContain('3 downloaded rows reapplied locally')
+    expect(outcome).toContain('Rows awaiting local verification: 7 → 3')
+    expect(outcome).toContain('2 downloaded rows could not be applied')
     expect(outcome).toContain('workspace information or encryption keys were unavailable')
-    expect(outcome).toContain('1 downloaded row could not be restored because decryption failed')
+    expect(outcome).toContain('1 downloaded row could not be applied because decryption failed')
     expect(outcome).toContain('retrying alone will not fix this')
-    expect(outcome).toContain('Some downloaded data remains unrestored')
-    expect(outcome).not.toContain('No downloaded data remains unrestored')
+    expect(outcome).toContain('Some downloaded rows remain unverified locally')
+    expect(outcome).not.toContain('No rows remain awaiting local verification')
   })
 
   it('says recovery may be partial after a thrown pass and does not claim migration started', async () => {
@@ -90,9 +90,9 @@ describe('rematerializeWorkspaceWithFeedback', () => {
       remainingGap: null,
     }))
 
-    expect(clean).toContain('0 downloaded rows restored locally')
-    expect(clean).toContain('Rows still waiting to be restored: 0 → 0')
-    expect(clean).toContain('No downloaded data remains unrestored')
+    expect(clean).toContain('0 downloaded rows reapplied locally')
+    expect(clean).toContain('Rows awaiting local verification: 0 → 0')
+    expect(clean).toContain('No rows remain awaiting local verification')
   })
 
   it('reports a transient remaining gap even when no unapplied rows remain', () => {
@@ -106,7 +106,7 @@ describe('rematerializeWorkspaceWithFeedback', () => {
     }))
 
     expect(outcome).toContain('Sync is still catching up or the local view is still rebuilding')
-    expect(outcome).not.toContain('No downloaded data remains unrestored')
+    expect(outcome).not.toContain('No rows remain awaiting local verification')
   })
 
   it('identifies the original workspace after a workspace switch during recovery', async () => {
@@ -115,5 +115,59 @@ describe('rematerializeWorkspaceWithFeedback', () => {
     await rematerializeWorkspaceWithFeedback(repo, 'ws-1')
 
     expect(showInfo.mock.calls[1][0]).toContain('for the workspace you started in')
+  })
+})
+
+
+describe('overlapping workspace repairs', () => {
+  it('shares one repair and one outcome, then permits a fresh pass after completion', async () => {
+    const expected = report()
+    let complete!: (value: WorkspaceRematerialization) => void
+    const pending = new Promise<WorkspaceRematerialization>(resolve => { complete = resolve })
+    const {repo, rematerializeWorkspace} = fakeRepo(expected)
+    rematerializeWorkspace.mockReturnValue(pending)
+    const first = rematerializeWorkspaceWithFeedback(repo, 'ws-1')
+    const second = rematerializeWorkspaceWithFeedback(repo, 'ws-1')
+    complete(expected)
+    expect(await Promise.all([first, second])).toEqual([expected, expected])
+    expect(rematerializeWorkspace).toHaveBeenCalledTimes(1)
+    expect(showInfo).toHaveBeenCalledTimes(2)
+
+    const next = report({applied: 0, unappliedBefore: 3})
+    rematerializeWorkspace.mockResolvedValue(next)
+    expect(await rematerializeWorkspaceWithFeedback(repo, 'ws-1')).toBe(next)
+    expect(rematerializeWorkspace).toHaveBeenCalledTimes(2)
+  })
+
+  it('releases a failed shared repair so a later attempt can run', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let fail!: (error: Error) => void
+    const pending = new Promise<WorkspaceRematerialization>((_resolve, reject) => { fail = reject })
+    const {repo, rematerializeWorkspace} = fakeRepo(report())
+    rematerializeWorkspace.mockReturnValueOnce(pending)
+    const first = rematerializeWorkspaceWithFeedback(repo, 'ws-1')
+    const second = rematerializeWorkspaceWithFeedback(repo, 'ws-1')
+    fail(new Error('fixture failure'))
+    expect(await Promise.all([first, second])).toEqual([null, null])
+    expect(rematerializeWorkspace).toHaveBeenCalledTimes(1)
+    expect(showInfo).toHaveBeenCalledTimes(2)
+
+    expect(await rematerializeWorkspaceWithFeedback(repo, 'ws-1')).not.toBeNull()
+    expect(rematerializeWorkspace).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps distinct workspaces and repositories independent', async () => {
+    const repair = vi.fn(async (workspaceId: string) => report({workspaceId}))
+    const repo = {activeWorkspaceId: 'ws-1', rematerializeWorkspace: repair} as unknown as Repo
+    const other = fakeRepo(report({applied: 6}))
+    const results = await Promise.all([
+      rematerializeWorkspaceWithFeedback(repo, 'ws-1'),
+      rematerializeWorkspaceWithFeedback(repo, 'ws-2'),
+      rematerializeWorkspaceWithFeedback(other.repo, 'ws-1'),
+    ])
+    expect(repair).toHaveBeenCalledTimes(2)
+    expect(other.rematerializeWorkspace).toHaveBeenCalledTimes(1)
+    expect(results.map(value => [value?.workspaceId, value?.applied]))
+      .toEqual([['ws-1', 3], ['ws-2', 3], ['ws-1', 6]])
   })
 })

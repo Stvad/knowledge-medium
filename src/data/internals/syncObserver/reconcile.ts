@@ -299,7 +299,7 @@ export const stagedViewGapReason = async (
 }
 
 /**
- * How many of a workspace's downloaded rows has the drain not applied?
+ * How many downloaded rows remain flagged for local verification?
  *
  * The durable half of the question {@link STAGED_VIEW_GAP_SQL} asks about work
  * in flight. That one reads the QUEUE, so it sees only rows still waiting to be
@@ -310,7 +310,8 @@ export const stagedViewGapReason = async (
  * rows either way. Nothing is then in progress, so no amount of waiting changes
  * the answer.
  *
- * It reads the flag the drain itself sets — see `STAGING_NEEDS_APPLY_COLUMN`,
+ * It reads the flag maintained by the drain or conservatively seeded on upgrade
+ * — see `STAGING_LOCAL_COLUMNS`,
  * which carries the rule. Deliberately NOT a comparison of staged against live
  * rows: the drain already makes exactly this decision per row, with inputs
  * (the upload queue, the decode result) that no query over the two tables can
@@ -324,7 +325,8 @@ export const stagedViewGapReason = async (
  * they would make a long uploading pass refuse on its own progress, which is
  * exactly the bug {@link STAGED_VIEW_GAP_SQL}'s benign-echo exclusion exists to
  * prevent. So the queue arm owns rows the drain has not reached, this one owns
- * rows it reached and could not apply, and the two are disjoint by construction.
+ * flagged rows with no pending delivery, including legacy rows never judged by
+ * the drain. The two sets are disjoint by construction.
  *
  * CHEAP, unlike the join it replaced: `idx_blocks_synced_needs_apply` holds
  * only unapplied rows, so the healthy answer is an empty range. That is what
@@ -403,6 +405,10 @@ const STORAGE_COLUMNS_IDENTICAL = BLOCK_STORAGE_COLUMNS
  *     drain would skip it);
  *   - the row is a tombstone on both sides, invisible to every reader either way;
  *   - every synced column is identical.
+ *
+ * Encrypted stamp-zero rows cannot satisfy stored-column equality against local
+ * plaintext, even when decryption would show identical content. They stay flagged
+ * until the drain can decrypt and judge them; the flag is not proof of data loss.
  *
  * The third does NOT violate I2, and someone will eventually think it does. I2
  * exempts stamp 0 because equal stamps THERE do not imply equal content — two
