@@ -1,1 +1,1 @@
-import{__ as e}from"../../../chunks/app-DjuPw1Cr.js";export{e as WorkspaceSwitcher};
+import{S_ as e}from"../../../chunks/app-BOyKI54s.js";export{e as WorkspaceSwitcher};

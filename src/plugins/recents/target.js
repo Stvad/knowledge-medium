@@ -1,1 +1,1 @@
-import{Uv as e}from"../../../chunks/app-DjuPw1Cr.js";export{e as openRecentsPage};
+import{Jv as e}from"../../../chunks/app-BOyKI54s.js";export{e as openRecentsPage};

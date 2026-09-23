@@ -1,1 +1,1 @@
-import{gw as e,hw as t}from"../../../chunks/app-DjuPw1Cr.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
+import{bw as e,xw as t}from"../../../chunks/app-BOyKI54s.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

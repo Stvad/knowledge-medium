@@ -1,1 +1,1 @@
-import{AQ as e,DQ as t,EQ as n,OQ as r,kQ as i}from"../../chunks/app-DjuPw1Cr.js";export{n as deviceSurface,t as getClientId,r as getDeviceLabel,i as isClientIdPersistent,e as resetClientIdCache};
+import{FQ as e,MQ as t,NQ as n,PQ as r,jQ as i}from"../../chunks/app-BOyKI54s.js";export{i as deviceSurface,t as getClientId,n as getDeviceLabel,r as isClientIdPersistent,e as resetClientIdCache};

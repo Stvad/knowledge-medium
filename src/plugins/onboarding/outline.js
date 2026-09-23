@@ -1,1 +1,1 @@
-import{ah as e,ih as t,oh as n,rh as r,sh as i}from"../../../chunks/app-DjuPw1Cr.js";export{r as EXTENSIONS_PAGE_TITLE,t as TUTORIAL_DEFAULT_TITLE,e as TUTORIAL_VIM_TITLE,n as extensionsPageOutline,i as tutorialOutline};
+import{ch as e,dh as t,fh as n,lh as r,uh as i}from"../../../chunks/app-BOyKI54s.js";export{e as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,t as extensionsPageOutline,n as tutorialOutline};
