@@ -23,7 +23,8 @@ import {
 import { rematerializeWorkspaceWithFeedback } from '@/utils/workspaceRecovery'
 import { getClientId } from '@/utils/clientId'
 import { NAMES_IN_A_SENTENCE, describeNames } from '@/utils/nameList'
-import { readIsChildBackedWorkspace, readWorkspaceOwnerId } from '@/data/workspaceSchema'
+import { parsePropertiesMigration, type WorkspaceRow } from '@/data/workspaceSchema'
+import { isChildBackedPropertiesWorkspace } from '@/types'
 import {
   flipRejectionProvesNoWrite,
   flipWorkspaceToChildBackedProperties,
@@ -83,7 +84,10 @@ const readMigrationEligibility = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<MigrationEligibility> => {
-  const childBacked = await readIsChildBackedWorkspace(repo.db, workspaceId)
+  // Mode and ownership must describe the same workspace-row snapshot.
+  const workspace = await repo.db.getOptional<Pick<WorkspaceRow, 'properties_migration' | 'owner_user_id'>>(
+    'SELECT properties_migration, owner_user_id FROM workspaces WHERE id = ?', [workspaceId])
+  const childBacked = isChildBackedPropertiesWorkspace(parsePropertiesMigration(workspace?.properties_migration))
   if (repo.isReadOnly) return {eligible: false, reason: 'this workspace is read-only', retryable: false}
   if (!childBacked && !isRemoteSyncActive()) {
     return {
@@ -93,15 +97,8 @@ const readMigrationEligibility = async (
       retryable: false,
     }
   }
-  // Ownership lives HERE, with the other preconditions, rather than as its own
-  // check at one point in the sequence: this predicate is re-taken after the
-  // confirmation, and ownership is exactly as capable of changing across that
-  // pause as the sync gap is. A separate check would have to remember to be
-  // re-taken; this one already is.
-  //
-  // Only when the flip is still ahead — an already-flipped workspace needs
-  // nothing from the server, so a non-owner backfilling it is fine.
-  if (!childBacked && await readWorkspaceOwnerId(repo.db, workspaceId) !== repo.user.id) {
+  // Already-flipped workspaces need no server write, so non-owners may backfill.
+  if (!childBacked && workspace?.owner_user_id !== repo.user.id) {
     return {
       eligible: false,
       reason: 'only the workspace owner can switch this workspace to property blocks',
