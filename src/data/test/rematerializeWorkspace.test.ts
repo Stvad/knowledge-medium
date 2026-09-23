@@ -100,7 +100,7 @@ describe('Repo.rematerializeWorkspace', () => {
     // the property that makes this gap durable rather than a slow one.
     await repo.flushSyncObserver()
     expect(await repo.workspaceViewGap(WS)).toEqual({
-      reason: expect.stringMatching(/rematerialize-workspace/), transient: false,
+      reason: expect.stringMatching(/Repair downloaded workspace data/), transient: false,
     })
 
     expect(await repo.rematerializeWorkspace(WS)).toMatchObject({
