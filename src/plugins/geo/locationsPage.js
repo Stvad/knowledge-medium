@@ -1,1 +1,1 @@
-import{UL as e,WL as t}from"../../../chunks/app-BOyKI54s.js";export{e as getOrCreateLocationsPage,t as locationsPageBlockId};
+import{UL as e,WL as t}from"../../../chunks/app-D-YADKEK.js";export{e as getOrCreateLocationsPage,t as locationsPageBlockId};
