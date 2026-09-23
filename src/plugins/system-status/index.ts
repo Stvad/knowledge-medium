@@ -2,6 +2,7 @@ import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { SystemStatusHeaderItem } from './SystemStatusHeaderItem.tsx'
+import { rematerializeWorkspaceActionContribution } from './rematerializeAction.ts'
 
 export const systemStatusHeaderItem: HeaderItemContribution = {
   id: 'system-status.header',
@@ -27,4 +28,5 @@ export const systemStatusPlugin: AppExtension = systemToggle({
     source: 'system-status',
     precedence: 40,
   }),
+  rematerializeWorkspaceActionContribution,
 ])

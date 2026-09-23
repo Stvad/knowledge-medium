@@ -3369,8 +3369,8 @@ export class Repo {
     return {
       reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
         + 'this device — never materialized, or still showing an older version — '
-        + 'and nothing is in flight to change that; the `rematerialize-workspace` '
-        + 'agent verb re-runs the drain over exactly these rows',
+        + 'and nothing is in flight to change that; run “Repair downloaded workspace data” '
+        + 'from the command palette to retry these rows',
       transient: false,
     }
   }

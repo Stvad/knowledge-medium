@@ -1,5 +1,5 @@
 import { FolderTree } from 'lucide-react'
-import type { OperatorBackfillPass, OperatorBackfillResult, Repo } from '@/data/repo'
+import type { OperatorBackfillPass, OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
 import {
   PROPERTY_CELL_BACKFILL_ID,
   flipBlockedByCellValues,
@@ -20,6 +20,7 @@ import {
   readGraphBackfillClaim,
   STRANDED_CLAIM_RECOVERY,
 } from '@/data/internals/graphBackfillClaim'
+import { rematerializeWorkspaceWithFeedback } from '@/utils/workspaceRecovery'
 import { getClientId } from '@/utils/clientId'
 import { NAMES_IN_A_SENTENCE, describeNames } from '@/utils/nameList'
 import { readIsChildBackedWorkspace, readWorkspaceOwnerId } from '@/data/workspaceSchema'
@@ -49,13 +50,13 @@ const withPeriod = (reason: string | undefined): string =>
 const undoNote = (cleared: boolean): string =>
   cleared ? ' Undo history for this workspace was cleared.' : ''
 
-/** The one wording for "a precondition said no and nothing has been written".
+/** The wording for a precondition refusing before migration writes.
  *  Three sinks use it — `showInfo` before the banner exists, `banner.fail`
  *  after, and the runner's own `deferred` outcome — and they must not drift,
  *  because which one fires is an implementation detail of where the check
  *  sits, not something the user can act on differently. */
 const notStarted = (reason: string | undefined, retryable = true): string =>
-  `Not started — ${withPeriod(reason)} Nothing was changed. `
+  `Not started — ${withPeriod(reason)} No properties were migrated. `
   + (retryable
     ? 'Try again shortly.'
     : 'Nothing is working on it either — retrying alone will not clear this.')
@@ -65,6 +66,7 @@ const notStarted = (reason: string | undefined, retryable = true): string =>
 interface Unfitness {
   readonly reason: string
   readonly retryable: boolean
+  readonly gap?: ViewGap
 }
 
 /** Why this device must not start the pass right now, or null. The runner takes
@@ -75,6 +77,13 @@ const passIsUnfit = async (
   {workspaceId, needsFlip}: {workspaceId: string; needsFlip: boolean},
 ): Promise<Unfitness | null> => {
   if (repo.isReadOnly) return {reason: 'this workspace is read-only', retryable: false}
+  if (needsFlip && !isRemoteSyncActive()) {
+    return {
+      reason: 'this session is local-only, so the workspace cannot be switched to '
+        + 'property blocks — that step needs remote sync',
+      retryable: false,
+    }
+  }
   // Ownership lives HERE, with the other preconditions, rather than as its own
   // check at one point in the sequence: this predicate is re-taken after the
   // confirmation, and ownership is exactly as capable of changing across that
@@ -96,7 +105,7 @@ const passIsUnfit = async (
   // this sentence — told "try again shortly" about a gap nothing will clear,
   // they retry forever.
   const gap = await repo.workspaceViewGap(workspaceId)
-  return gap === null ? null : {reason: gap.reason, retryable: gap.transient}
+  return gap === null ? null : {reason: gap.reason, retryable: gap.transient, gap}
 }
 
 /** The synthesis advisory is sticky and re-runnable, so it needs a stable id or
@@ -667,17 +676,6 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     )
     // Un-flipped: flip, then backfill. Already flipped: backfill alone.
     const childBacked = await readIsChildBackedWorkspace(repo.db, workspaceId)
-    // Only the FLIP needs the server, and `supabase` is built from BUILD-time
-    // env while local-only is a RUNTIME choice — so the client is non-null and
-    // the PATCH really would go out. Refused rather than flipped locally:
-    // local-only is a session choice, not a property of the workspace, so a
-    // locally-written column loses to the next sync from that account and
-    // leaves a workspace reading un-flipped over children it already has.
-    if (!childBacked && !isRemoteSyncActive()) {
-      showInfo('This session is local-only, so the workspace cannot be switched to ' +
-        'property blocks — that step needs remote sync.')
-      return
-    }
     // ANOTHER CLIENT already owns this workspace's run. Refused here rather
     // than at the claim, which is after the confirmation: that dialog asks
     // consent for a one-way fleet-wide flip and says nothing about a migration
@@ -699,7 +697,15 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // for something the runner is about to refuse — including asking a
     // non-owner to consent to a flip the server will never let them make.
     // Re-taken after the dialog; this is the cheap early exit, not the guard.
-    const ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+    let ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+    if (repo.activeWorkspaceId !== workspaceId) return
+    // Recovery belongs only to this pre-dialog check, never to a writing transaction.
+    if (ineligible?.gap?.transient === false) {
+      const recovered = await rematerializeWorkspaceWithFeedback(repo, workspaceId)
+      if (recovered === null) return
+      ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+      if (repo.activeWorkspaceId !== workspaceId) return
+    }
     if (ineligible !== null) {
       showInfo(notStarted(ineligible.reason, ineligible.retryable))
       return
@@ -712,8 +718,8 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       plan = await planPropertyDefinitionSynthesis(repo, workspaceId)
     } catch (err) {
       console.error('[properties-migration] could not plan definition synthesis:', err)
-      showInfo('Could not check which properties still need a definition, so nothing was ' +
-        `changed: ${err instanceof Error ? err.message : String(err)}`)
+      showInfo('Could not check which properties still need a definition, so no properties were ' +
+        `migrated: ${err instanceof Error ? err.message : String(err)}`)
       return
     }
     const flipBlocked = flipBlockedBySynthesis(plan)
@@ -745,7 +751,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     } catch (err) {
       console.error('[properties-migration] could not survey stored cell values:', err)
       showInfo('Could not check whether every stored property value can be carried as ' +
-        `blocks, so nothing was changed: ${err instanceof Error ? err.message : String(err)}`)
+        `blocks, so no properties were migrated: ${err instanceof Error ? err.message : String(err)}`)
       return
     }
     const valuesBlocked = flipBlockedByCellValues(survey)
@@ -796,8 +802,8 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // outcomes below are reported on paths where no claim was ever taken.
     const banner = reportMigrationProgress(workspaceId, 'Migrating properties to blocks…')
     try {
-      // ABOVE the synthesis block, not below it: below, the "Nothing was changed"
-      // this prints is false the moment synthesis commits.
+      // Before synthesis: once definitions are written, a pre-migration refusal
+      // would conceal the writes already made.
       //
       // Caught, because these are database reads and nothing else is watching
       // this await: a transient failure here would leave the gesture with no
