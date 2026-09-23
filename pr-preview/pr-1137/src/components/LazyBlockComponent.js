@@ -1,0 +1,1 @@
+import{iE as e}from"../../chunks/app-XpQNXrhh.js";export{e as LazyBlockComponent};
