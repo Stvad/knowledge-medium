@@ -15,16 +15,9 @@
  *    itself shrinks with the keyboard → overlap == 0. The scroller
  *    already shrank, so no extra margin is needed.
  *
- *  NB: `getLayoutViewportKeyboardOverlap` (below) is the SIBLING quantity for
- *  the mobile editing toolbar's `position:fixed` bottom inset — the same
- *  arithmetic, but it reads `documentElement.clientHeight` for the
- *  layout-viewport height instead of `window.innerHeight`. innerHeight is fine
- *  here (fed only as ONE input to a keyboard-up gate — the ≥60 overlap arm,
- *  OR-ed with and backstopped by the editing-toolbar sentinel — where its iOS
- *  Stage-Manager under-reporting is tolerable) but WRONG for positioning a
- *  layout-anchored fixed element, which needs the reliable clientHeight. They
- *  stay two readers, not one parameterized helper — the height-source
- *  difference is load-bearing. */
+ *  NB: innerHeight only feeds a keyboard-up gate here, where an under-report
+ *  is tolerable (`keyboardAwareScroll.ts:shouldReassertCaret`).
+ */
 
 import { CallbackSet } from './callbackSet'
 
@@ -40,31 +33,27 @@ const computeOverlap = (): number => {
  *  NOT as a scroll amount: the keyboard itself is the browser's job. */
 export const getKeyboardOverlap = (): number => computeOverlap()
 
-/** Pure: the CSS px of the *layout* viewport hidden below the visible (visual)
- *  viewport — i.e. the bottom inset that lifts a layout-anchored
- *  `position: fixed; bottom: 0` element (the mobile editing toolbar) to just
- *  above the on-screen keyboard. Clamped ≥ 0. Subtracting the visual viewport's
- *  offsetTop tracks the iOS pan as the page scrolls with the keyboard up. */
-export const layoutViewportKeyboardOverlap = (
-  layoutHeight: number,
-  visualViewportHeight: number,
-  visualViewportOffsetTop: number,
-): number =>
-  Math.max(0, Math.round(layoutHeight - visualViewportHeight - visualViewportOffsetTop))
-
-/** Live {@link layoutViewportKeyboardOverlap} read from the DOM — the mobile
- *  editing toolbar's `bottom` inset. Uses `documentElement.clientHeight` (NOT
- *  `window.innerHeight`, which under-reports on iOS Stage Manager + scroll) for
- *  the layout-viewport height, since a fixed element is positioned against the
- *  layout viewport. On Chromium/Firefox (interactive-widget=resizes-content)
- *  clientHeight and vv.height shrink together with no pan, so this is ~0 and
- *  bottom:0 already clears the keyboard. */
-export const getLayoutViewportKeyboardOverlap = (): number => {
-  if (typeof document === 'undefined') return 0
-  const layoutH = document.documentElement.clientHeight
+/** Live layout-viewport y of the on-screen keyboard's top edge — where a
+ *  layout-anchored `position: fixed` element's bottom edge must land. The
+ *  visual viewport's offset and height are both layout-viewport coordinates,
+ *  so no layout-viewport height is read. Undefined without a visual viewport
+ *  (desktop engines without the API), where `bottom: 0` is already right. */
+export const getKeyboardTop = (): number | undefined => {
   const vv = typeof window === 'undefined' ? undefined : window.visualViewport
-  return layoutViewportKeyboardOverlap(layoutH, vv?.height ?? layoutH, vv?.offsetTop ?? 0)
+  return vv ? Math.round(vv.offsetTop + vv.height) : undefined
 }
+
+/** The `bottom` of a fixed element whose bottom edge must sit on the keyboard.
+ *  `100%` is resolved by the engine against the containing block it positions
+ *  the element with, and on iOS that block is not a constant: it is the full
+ *  window at rest and the safe-area-less height while the visual viewport is
+ *  panned, with the visual viewport's offset and height switching along with
+ *  it. No JS reading of a layout height can stand in for the engine here. The
+ *  `max()` is defence in depth: an engine that shrinks the layout viewport with
+ *  the keyboard can over-measure the visual viewport by a pixel, which would
+ *  otherwise sink the bar that pixel below the fold. */
+export const keyboardBottomStyle = (keyboardTop: number | undefined): string =>
+  keyboardTop === undefined ? '0px' : `max(0px, calc(100% - ${keyboardTop}px))`
 
 /** The visual viewport's current height in CSS px (0 when unavailable). The
  *  geometry signal keyboardAwareScroll compares to tell a keyboard open/close
