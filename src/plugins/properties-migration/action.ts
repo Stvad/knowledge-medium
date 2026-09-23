@@ -79,16 +79,6 @@ const passIsUnfit = async (
   repo: Repo,
   {workspaceId, needsFlip}: {workspaceId: string; needsFlip: boolean},
 ): Promise<Unfitness | null> => {
-  // Peer-held claims refuse consent; our own claim may resume. Re-read with
-  // every eligibility check because recovery can reveal a previously unseen claim.
-  const owner = await readMigrationClaim(repo, workspaceId)
-  if (claimHoldsGraph(owner) && owner.claimantId !== getClientId()) {
-    return {
-      reason: 'Another client is already migrating this workspace. Wait for it to finish; '
-        + 'the dialog it puts up on every device is where you can release its claim.',
-      retryable: true,
-    }
-  }
   if (repo.isReadOnly) return {reason: 'this workspace is read-only', retryable: false}
   if (needsFlip && !isRemoteSyncActive()) {
     return {
@@ -118,7 +108,18 @@ const passIsUnfit = async (
   // this sentence — told "try again shortly" about a gap nothing will clear,
   // they retry forever.
   const gap = await repo.workspaceViewGap(workspaceId)
-  return gap === null ? null : {reason: gap.reason, retryable: gap.transient, gap}
+  if (gap !== null) return {reason: gap.reason, retryable: gap.transient, gap}
+  // Claims come from the materialized view: a durable gap can hide either a
+  // peer claim or its completion. Trust them only after the view is verified.
+  const owner = await readMigrationClaim(repo, workspaceId)
+  if (claimHoldsGraph(owner) && owner.claimantId !== getClientId()) {
+    return {
+      reason: 'Another client is already migrating this workspace. Wait for it to finish; '
+        + 'the dialog it puts up on every device is where you can release its claim.',
+      retryable: true,
+    }
+  }
+  return null
 }
 
 /** The synthesis advisory is sticky and re-runnable, so it needs a stable id or

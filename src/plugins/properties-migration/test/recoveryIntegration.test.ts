@@ -89,6 +89,9 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
+const INSERT_LOCAL_BLOCK_SQL = `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')})
+  VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
+
 const strandEncrypted = async (encryptionKey = key, legacyLocalCopy = false, overrides: Partial<BlockData> = {}) => {
   const block: BlockData = {
     id: 'encrypted-block', workspaceId: WS, parentId: null, orderKey: 'a0',
@@ -103,8 +106,7 @@ const strandEncrypted = async (encryptionKey = key, legacyLocalCopy = false, ove
   await shared.db.writeTransaction(async tx => {
     if (legacyLocalCopy) {
       await tx.execute(
-        `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')})
-         VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`, blockToRowParams(block))
+        INSERT_LOCAL_BLOCK_SQL, blockToRowParams(block))
     }
     await tx.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, stagingCiphertextParams(block, wire))
     if (legacyLocalCopy) {
@@ -120,6 +122,7 @@ const strandEncrypted = async (encryptionKey = key, legacyLocalCopy = false, ove
   if (legacyLocalCopy) expect(local).toEqual({id: block.id})
   else expect(local).toBeNull()
   expect(await repo.workspaceViewGap(WS)).toMatchObject({transient: false})
+  return block
 }
 
 const invoke = () => migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
@@ -215,6 +218,50 @@ describe('encrypted durable gap through the migration gesture', () => {
       expect(ui.confirm).toHaveBeenCalledOnce()
     }
   })
+
+  it.each(['completed', 'running', 'deferred', 'quarantined'] as const)(
+    'repairs before trusting a stale local peer claim when its staged state is %s', async state => {
+      const claimId = graphBackfillClaimBlockId(WS, PROPERTY_CELL_BACKFILL_ID)
+      const liveClaim = {'migration:claimant': 'peer-client', 'migration:claimed-at': 1}
+      const encryptedWith = state === 'quarantined'
+        ? await importWorkspaceKey(generateWorkspaceKeyBytes()) : key
+      const downloaded = await strandEncrypted(encryptedWith, false, {
+        id: claimId,
+        properties: {...liveClaim, ...(state === 'running' ? {} : {'migration:completed-at': 2})},
+      })
+      await shared.db.execute(INSERT_LOCAL_BLOCK_SQL, blockToRowParams({
+        ...downloaded, updatedAt: 1, userUpdatedAt: 1, properties: liveClaim,
+      }))
+      expect(await readGraphBackfillClaim(repo.db, claimId, WS))
+        .toEqual({claimantId: 'peer-client', claimedAt: 1})
+      expect(await shared.db.getAll('SELECT id FROM blocks_synced_changes')).toEqual([])
+      expect(await repo.workspaceViewGap(WS)).toMatchObject({transient: false})
+      materializability = state === 'deferred' ? 'defer' : 'decrypt'
+      const repair = vi.spyOn(repo, 'rematerializeWorkspace')
+      const claim = vi.spyOn(repo, 'withOperatorBackfillClaim')
+      ui.confirm.mockResolvedValue(false)
+
+      await invoke()
+
+      expect(repair).toHaveBeenCalledExactlyOnceWith(WS, {scope: 'unapplied'})
+      expect(claim).not.toHaveBeenCalled()
+      expect(ui.flip).not.toHaveBeenCalled()
+      const result = await repair.mock.results[0]!.value
+      if (state === 'completed') {
+        expect(result).toMatchObject({applied: 1, unappliedAfter: 0, remainingGap: null})
+        expect(await readGraphBackfillClaim(repo.db, claimId, WS))
+          .toEqual({claimantId: 'peer-client', claimedAt: 1, completedAt: 2})
+        expect(ui.confirm).toHaveBeenCalledOnce()
+      } else {
+        expect(ui.confirm).not.toHaveBeenCalled()
+        if (state === 'running') {
+          expect(result.remainingGap).toBeNull()
+          expect(ui.info).toHaveBeenCalledWith(expect.stringContaining('Another client is already migrating'))
+        } else {
+          expect(result).toMatchObject({applied: 0, unappliedAfter: 1, [state]: 1})
+        }
+      }
+    })
 
   it.each(['deferred', 'quarantined'] as const)('reports unresolved encrypted rows (%s) and refuses once', async cause => {
     const encryptedWith = cause === 'quarantined'
