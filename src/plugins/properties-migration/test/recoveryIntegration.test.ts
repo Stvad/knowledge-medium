@@ -6,6 +6,9 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { BLOCKS_SYNCED_RAW_TABLE, BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { graphBackfillClaimBlockId, readGraphBackfillClaim } from '@/data/internals/graphBackfillClaim'
+import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
+import { getClientId } from '@/utils/clientId'
 import { SEED_STAGING_NEEDS_APPLY_SQL } from '@/data/internals/syncObserver/reconcile'
 import { stagingCiphertextParams } from '@/data/internals/syncObserver/test/harness'
 import { encodeForWire, type Materializability } from '@/sync/transform'
@@ -86,12 +89,12 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-const strandEncrypted = async (encryptionKey = key, legacyLocalCopy = false) => {
+const strandEncrypted = async (encryptionKey = key, legacyLocalCopy = false, overrides: Partial<BlockData> = {}) => {
   const block: BlockData = {
     id: 'encrypted-block', workspaceId: WS, parentId: null, orderKey: 'a0',
     content: 'Fixture content', properties: {'fixture:note': 'Fixture property'}, references: [],
     createdAt: 1, updatedAt: legacyLocalCopy ? 0 : 10, userUpdatedAt: legacyLocalCopy ? 0 : 10,
-    createdBy: USER, updatedBy: USER, deleted: false,
+    createdBy: USER, updatedBy: USER, deleted: false, ...overrides,
   }
   const wire = await encodeForWire({
     id: block.id, workspace_id: WS, content: block.content,
@@ -181,6 +184,36 @@ describe('encrypted durable gap through the migration gesture', () => {
     expect(ui.confirm).toHaveBeenCalledOnce()
     expect(claim).not.toHaveBeenCalled()
     expect(ui.flip).not.toHaveBeenCalled()
+  })
+
+  it.each(['peer', 'own', 'completed'] as const)('rechecks a %s claim revealed by encrypted recovery before consent', async kind => {
+    const claimId = graphBackfillClaimBlockId(WS, PROPERTY_CELL_BACKFILL_ID)
+    await strandEncrypted(key, false, {
+      id: claimId,
+      properties: {
+        'migration:claimant': kind === 'own' ? getClientId() : 'peer-client',
+        'migration:claimed-at': 1,
+        ...(kind === 'completed' ? {'migration:completed-at': 2} : {}),
+      },
+    })
+    expect(await readGraphBackfillClaim(repo.db, claimId, WS)).toBeNull()
+    materializability = 'decrypt'
+    const recovery = vi.spyOn(repo, 'rematerializeWorkspace')
+    const claim = vi.spyOn(repo, 'withOperatorBackfillClaim')
+    ui.confirm.mockResolvedValue(false)
+
+    await invoke()
+
+    expect(recovery).toHaveBeenCalledOnce()
+    expect(await readGraphBackfillClaim(repo.db, claimId, WS)).not.toBeNull()
+    expect(claim).not.toHaveBeenCalled()
+    expect(ui.flip).not.toHaveBeenCalled()
+    if (kind === 'peer') {
+      expect(ui.confirm).not.toHaveBeenCalled()
+      expect(ui.info).toHaveBeenCalledWith(expect.stringContaining('Another client is already migrating'))
+    } else {
+      expect(ui.confirm).toHaveBeenCalledOnce()
+    }
   })
 
   it.each(['deferred', 'quarantined'] as const)('reports unresolved encrypted rows (%s) and refuses once', async cause => {

@@ -183,6 +183,19 @@ describe('a workspace another client is already migrating', () => {
       expect.stringContaining('Another client is already migrating'))
   })
 
+  it('lets a completed peer claim through because it no longer holds the workspace', async () => {
+    const {repo, getOptional, runPass} = makeRepo()
+    const read = getOptional.getMockImplementation()!
+    getOptional.mockImplementation(async sql => sql.includes('properties_json')
+      ? {properties_json: JSON.stringify({
+        'migration:claimant': 'peer', 'migration:claimed-at': 1, 'migration:completed-at': 2,
+      })} as never
+      : read(sql))
+    await invoke(repo)
+    expect(openDialog).toHaveBeenCalledOnce()
+    expect(runPass).toHaveBeenCalledOnce()
+  })
+
   it('lets OUR OWN claimant through, because that is what a resume is', async () => {
     // An inherited claim is the state "run this again to resume it" starts
     // from — the advice the gesture's own report gives after an interrupted
@@ -1589,6 +1602,41 @@ describe('pre-dialog recovery of a durable workspace gap', () => {
     await invoke(repo)
     expect(planSynthesis).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
+  })
+
+  it('refuses a peer claim recovered into the local view before planning', async () => {
+    const {repo, workspaceViewGap, rematerializeWorkspace, getOptional} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED).mockResolvedValue(null)
+    const recover = rematerializeWorkspace.getMockImplementation()!
+    const read = getOptional.getMockImplementation()!
+    rematerializeWorkspace.mockImplementation(async () => {
+      getOptional.mockImplementation(async sql => sql.includes('properties_json')
+        ? {properties_json: JSON.stringify({'migration:claimant': 'peer', 'migration:claimed-at': 1})} as never
+        : read(sql))
+      return recover()
+    })
+    await invoke(repo)
+    expect(rematerializeWorkspace).toHaveBeenCalledOnce()
+    expect(planSynthesis).not.toHaveBeenCalled()
+    expect(surveyCells).not.toHaveBeenCalled()
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Another client is already migrating'))
+  })
+
+  it('rechecks peer claims after consent before any migration write', async () => {
+    const {repo, getOptional, runPass} = makeRepo()
+    const read = getOptional.getMockImplementation()!
+    openDialog.mockImplementation(async () => {
+      getOptional.mockImplementation(async sql => sql.includes('properties_json')
+        ? {properties_json: JSON.stringify({'migration:claimant': 'peer', 'migration:claimed-at': 1})} as never
+        : read(sql))
+      return true
+    })
+    await invoke(repo)
+    expect(applySynthesis).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringContaining('Another client is already migrating'))
   })
 
   it('does not recover a gap that appears after the confirmation', async () => {

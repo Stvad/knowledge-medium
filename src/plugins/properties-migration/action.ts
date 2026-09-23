@@ -69,13 +69,26 @@ interface Unfitness {
   readonly gap?: ViewGap
 }
 
-/** Why this device must not start the pass right now, or null. The runner takes
- *  these checks itself — but only after the claim, and in the flip case only
- *  after an irreversible server write. */
+const readMigrationClaim = (repo: Repo, workspaceId: string) => readGraphBackfillClaim(
+  repo.db, graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID), workspaceId,
+)
+
+/** Eligibility before planning, after recovery, and after consent. The claim
+ *  and per-transaction checks remain authoritative for migration writes. */
 const passIsUnfit = async (
   repo: Repo,
   {workspaceId, needsFlip}: {workspaceId: string; needsFlip: boolean},
 ): Promise<Unfitness | null> => {
+  // Peer-held claims refuse consent; our own claim may resume. Re-read with
+  // every eligibility check because recovery can reveal a previously unseen claim.
+  const owner = await readMigrationClaim(repo, workspaceId)
+  if (claimHoldsGraph(owner) && owner.claimantId !== getClientId()) {
+    return {
+      reason: 'Another client is already migrating this workspace. Wait for it to finish; '
+        + 'the dialog it puts up on every device is where you can release its claim.',
+      retryable: true,
+    }
+  }
   if (repo.isReadOnly) return {reason: 'this workspace is read-only', retryable: false}
   if (needsFlip && !isRemoteSyncActive()) {
     return {
@@ -667,32 +680,8 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
   handler: async () => {
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
-    // This workspace's claim row, read fresh each call — the pre-flight check
-    // below and the post-run re-read in `finally` each need their own read.
-    const readOurClaim = () => readGraphBackfillClaim(
-      repo.db,
-      graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID),
-      workspaceId,
-    )
     // Un-flipped: flip, then backfill. Already flipped: backfill alone.
     const childBacked = await readIsChildBackedWorkspace(repo.db, workspaceId)
-    // ANOTHER CLIENT already owns this workspace's run. Refused here rather
-    // than at the claim, which is after the confirmation: that dialog asks
-    // consent for a one-way fleet-wide flip and says nothing about a migration
-    // already under way, so a user reaching the palette through the gate's own
-    // modal would be shown the whole irreversible-change screen for a gesture
-    // `tryClaim` is about to decline anyway. Not a guard — the claim is still
-    // the arbiter — just a screen they should not be asked to read.
-    //
-    // OUR OWN claimant is deliberately let through: an inherited claim is
-    // exactly the state a resume starts from, and "run this again to resume it"
-    // is what the gesture's own report tells the operator to do.
-    const owner = await readOurClaim()
-    if (claimHoldsGraph(owner) && owner.claimantId !== getClientId()) {
-      showInfo('Another client is already migrating this workspace. Wait for it to finish; '
-        + 'the dialog it puts up on every device is where you can release its claim.')
-      return
-    }
     // Before the count and the confirmation: the dialog must not ask consent
     // for something the runner is about to refuse — including asking a
     // non-owner to consent to a flip the server will never let them make.
@@ -882,7 +871,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // outcome is already painted: a throw here would replace the gesture's
       // own exit with an unrelated one, and drop the note exactly when the read
       // that produces it is failing.
-      const held = await readOurClaim().catch((err: unknown) => {
+      const held = await readMigrationClaim(repo, workspaceId).catch((err: unknown) => {
         console.error('[properties-migration] could not re-read the claim:', err)
         return null
       })
