@@ -1026,7 +1026,7 @@ describe('the orphan-definition step', () => {
   it('re-checks ownership after the confirmation, which is a user-length pause', async () => {
     // Ownership can change out of band, or the change can simply reach this
     // replica during the dialog. It is re-taken because it lives in
-    // `passIsUnfit`, which is re-taken — the whole point of putting it there.
+    // `readMigrationEligibility`, which is re-taken — the whole point of putting it there.
     planSynthesis.mockResolvedValue(plan(2))
     const {repo, runPass, getOptional} = makeRepo()
     let reads = 0
@@ -1602,6 +1602,43 @@ describe('pre-dialog recovery of a durable workspace gap', () => {
     await invoke(repo)
     expect(planSynthesis).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
+  })
+
+  it.each(['owner', 'non-owner', 'local-only'])(
+    'uses the mode received during recovery for a %s client', async client => {
+      const {repo, getOptional, workspaceViewGap, rematerializeWorkspace, runPass} = makeRepo()
+      workspaceViewGap.mockResolvedValueOnce(STRANDED).mockResolvedValue(null)
+      const read = getOptional.getMockImplementation()!
+      const recover = rematerializeWorkspace.getMockImplementation()!
+      rematerializeWorkspace.mockImplementation(async () => {
+        getOptional.mockImplementation(async sql => {
+          if (sql.includes('properties_migration')) return {properties_migration: 'children'} as never
+          if (sql.includes('owner_user_id') && client === 'non-owner') return {owner_user_id: 'other'} as never
+          return read(sql)
+        })
+        if (client === 'local-only') remoteSyncActive.mockReturnValue(false)
+        return recover()
+      })
+      await invoke(repo)
+      expect(rematerializeWorkspace).toHaveBeenCalledOnce()
+      expect(openDialog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({childBacked: true}))
+      expect(runPass).toHaveBeenCalledOnce()
+      expect(flipWorkspace).not.toHaveBeenCalled()
+      expect(beginHistoryDrop).not.toHaveBeenCalled()
+    })
+
+  it('uses the mode received during consent for the remaining migration path', async () => {
+    const {repo, getOptional, runPass} = makeRepo()
+    const read = getOptional.getMockImplementation()!
+    openDialog.mockImplementation(async () => {
+      getOptional.mockImplementation(async sql => sql.includes('properties_migration')
+        ? {properties_migration: 'children'} as never : read(sql))
+      return true
+    })
+    await invoke(repo)
+    expect(runPass).toHaveBeenCalledOnce()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(beginHistoryDrop).not.toHaveBeenCalled()
   })
 
   it('refuses a peer claim recovered into the local view before planning', async () => {

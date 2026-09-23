@@ -69,19 +69,25 @@ interface Unfitness {
   readonly gap?: ViewGap
 }
 
+type MigrationEligibility =
+  | {readonly eligible: true; readonly childBacked: boolean}
+  | (Unfitness & {readonly eligible: false})
+
 const readMigrationClaim = (repo: Repo, workspaceId: string) => readGraphBackfillClaim(
   repo.db, graphBackfillClaimBlockId(workspaceId, PROPERTY_CELL_BACKFILL_ID), workspaceId,
 )
 
 /** Eligibility before planning, after recovery, and after consent. The claim
  *  and per-transaction checks remain authoritative for migration writes. */
-const passIsUnfit = async (
+const readMigrationEligibility = async (
   repo: Repo,
-  {workspaceId, needsFlip}: {workspaceId: string; needsFlip: boolean},
-): Promise<Unfitness | null> => {
-  if (repo.isReadOnly) return {reason: 'this workspace is read-only', retryable: false}
-  if (needsFlip && !isRemoteSyncActive()) {
+  workspaceId: string,
+): Promise<MigrationEligibility> => {
+  const childBacked = await readIsChildBackedWorkspace(repo.db, workspaceId)
+  if (repo.isReadOnly) return {eligible: false, reason: 'this workspace is read-only', retryable: false}
+  if (!childBacked && !isRemoteSyncActive()) {
     return {
+      eligible: false,
       reason: 'this session is local-only, so the workspace cannot be switched to '
         + 'property blocks — that step needs remote sync',
       retryable: false,
@@ -95,8 +101,9 @@ const passIsUnfit = async (
   //
   // Only when the flip is still ahead — an already-flipped workspace needs
   // nothing from the server, so a non-owner backfilling it is fine.
-  if (needsFlip && await readWorkspaceOwnerId(repo.db, workspaceId) !== repo.user.id) {
+  if (!childBacked && await readWorkspaceOwnerId(repo.db, workspaceId) !== repo.user.id) {
     return {
+      eligible: false,
       reason: 'only the workspace owner can switch this workspace to property blocks',
       retryable: false,
     }
@@ -108,18 +115,19 @@ const passIsUnfit = async (
   // this sentence — told "try again shortly" about a gap nothing will clear,
   // they retry forever.
   const gap = await repo.workspaceViewGap(workspaceId)
-  if (gap !== null) return {reason: gap.reason, retryable: gap.transient, gap}
+  if (gap !== null) return {eligible: false, reason: gap.reason, retryable: gap.transient, gap}
   // Claims come from the materialized view: a durable gap can hide either a
   // peer claim or its completion. Trust them only after the view is verified.
   const owner = await readMigrationClaim(repo, workspaceId)
   if (claimHoldsGraph(owner) && owner.claimantId !== getClientId()) {
     return {
+      eligible: false,
       reason: 'Another client is already migrating this workspace. Wait for it to finish; '
         + 'the dialog it puts up on every device is where you can release its claim.',
       retryable: true,
     }
   }
-  return null
+  return {eligible: true, childBacked}
 }
 
 /** The synthesis advisory is sticky and re-runnable, so it needs a stable id or
@@ -681,25 +689,24 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
   handler: async () => {
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
-    // Un-flipped: flip, then backfill. Already flipped: backfill alone.
-    const childBacked = await readIsChildBackedWorkspace(repo.db, workspaceId)
     // Before the count and the confirmation: the dialog must not ask consent
     // for something the runner is about to refuse — including asking a
     // non-owner to consent to a flip the server will never let them make.
     // Re-taken after the dialog; this is the cheap early exit, not the guard.
-    let ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+    let eligibility = await readMigrationEligibility(repo, workspaceId)
     if (repo.activeWorkspaceId !== workspaceId) return
     // Recovery belongs only to this pre-dialog check, never to a writing transaction.
-    if (ineligible?.gap?.transient === false) {
+    if (!eligibility.eligible && eligibility.gap?.transient === false) {
       const recovered = await rematerializeWorkspaceWithFeedback(repo, workspaceId)
       if (recovered === null) return
-      ineligible = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+      eligibility = await readMigrationEligibility(repo, workspaceId)
       if (repo.activeWorkspaceId !== workspaceId) return
     }
-    if (ineligible !== null) {
-      showInfo(notStarted(ineligible.reason, ineligible.retryable))
+    if (!eligibility.eligible) {
+      showInfo(notStarted(eligibility.reason, eligibility.retryable))
       return
     }
+    const {childBacked} = eligibility
     // §9 orphan synthesis, planned before the confirmation because this is the
     // step that can REFUSE — consent must not be asked for a migration that is
     // then declined.
@@ -798,24 +805,26 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       // Caught, because these are database reads and nothing else is watching
       // this await: a transient failure here would leave the gesture with no
       // outcome to report, over a pass that never started.
-      let unfit: Unfitness | null
+      let current: MigrationEligibility
       try {
-        unfit = await passIsUnfit(repo, {workspaceId, needsFlip: !childBacked})
+        current = await readMigrationEligibility(repo, workspaceId)
       } catch (err) {
         console.error('[properties-migration] could not re-check eligibility:', err)
         // Retryable: a read that threw says nothing about whether the underlying
         // precondition holds, and a transient DB failure is exactly the kind that
         // clears on its own.
-        unfit = {
+        current = {
+          eligible: false,
           reason: `this device could not check whether the pass may run (${
             err instanceof Error ? err.message : String(err)})`,
           retryable: true,
         }
       }
-      if (unfit !== null) {
-        banner.fail(notStarted(unfit.reason, unfit.retryable))
+      if (!current.eligible) {
+        banner.fail(notStarted(current.reason, current.retryable))
         return
       }
+      const currentChildBacked = current.childBacked
       // The claim is taken HERE: after the last precondition, before SYNTHESIS
       // (this gesture's first write), and not inside the pass (its last). What
       // two unclaimed devices produce is a definition for the same orphan key at
@@ -831,7 +840,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
       const gesture = await repo.withOperatorBackfillClaim(
         workspaceId, PROPERTY_CELL_BACKFILL_ID,
         pass => migrateUnderClaim(
-          {repo, workspaceId, childBacked, plan, willSynthesize, blockCount, banner}, pass),
+          {repo, workspaceId, childBacked: currentChildBacked, plan, willSynthesize, blockCount, banner}, pass),
       )
       if (!gesture.claimed) {
         // The same reporter the pass's own outcomes go through. Which step

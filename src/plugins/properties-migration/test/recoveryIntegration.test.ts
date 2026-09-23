@@ -158,6 +158,29 @@ describe('encrypted durable gap through the migration gesture', () => {
       .toContainEqual({content: 'Fixture property'})
   }, 20_000) // Real SQLite recovery plus migration; allow gate contention.
 
+  it('backfills recovered encrypted values when the workspace flips during recovery', async () => {
+    await strandEncrypted()
+    materializability = 'decrypt'
+    const recover = repo.rematerializeWorkspace.bind(repo)
+    const recovery = vi.spyOn(repo, 'rematerializeWorkspace').mockImplementationOnce(async (...args) => {
+      const result = await recover(...args)
+      await shared.db.execute("UPDATE workspaces SET properties_migration = 'children' WHERE id = ?", [WS])
+      return result
+    })
+    await invoke()
+    expect(recovery).toHaveBeenCalledOnce()
+    expect(ui.confirm).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({childBacked: true}))
+    expect(ui.flip).not.toHaveBeenCalled()
+    expect(ui.fail).not.toHaveBeenCalled()
+    expect(ui.done).toHaveBeenCalledWith(expect.stringContaining('Migrated properties on'))
+    const field = await shared.db.getOptional<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND is_field_form = 1 AND deleted = 0', ['encrypted-block'])
+    expect(field).not.toBeNull()
+    expect(await shared.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0', [field!.id]))
+      .toContainEqual({content: 'Fixture property'})
+  }, 20_000) // Real SQLite recovery plus migration; allow gate contention.
+
   it('reapplies an identical legacy encrypted stamp-zero row and clears its unverified flag before consent', async () => {
     materializability = 'decrypt'
     await strandEncrypted(key, true)
