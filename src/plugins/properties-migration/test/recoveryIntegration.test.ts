@@ -152,7 +152,7 @@ describe('encrypted durable gap through the migration gesture', () => {
     } finally {
       reads.mockRestore()
     }
-  }, 20_000) // Real SQLite recovery plus migration; allow gate contention.
+  })
 
   it('recovers ciphertext before consent and migrates its actual property value after confirmation', async () => {
     await strandEncrypted()
@@ -182,7 +182,7 @@ describe('encrypted durable gap through the migration gesture', () => {
     expect(await shared.db.getAll<{content: string}>(
       'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0', [field!.id]))
       .toContainEqual({content: 'Fixture property'})
-  }, 20_000) // Real SQLite recovery plus migration; allow gate contention.
+  })
 
   it('backfills recovered encrypted values when the workspace flips during recovery', async () => {
     await strandEncrypted()
@@ -205,7 +205,7 @@ describe('encrypted durable gap through the migration gesture', () => {
     expect(await shared.db.getAll<{content: string}>(
       'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0', [field!.id]))
       .toContainEqual({content: 'Fixture property'})
-  }, 20_000) // Real SQLite recovery plus migration; allow gate contention.
+  })
 
   it('reapplies an identical legacy encrypted stamp-zero row and clears its unverified flag before consent', async () => {
     materializability = 'decrypt'
