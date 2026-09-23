@@ -1,1 +1,1 @@
-import{yy as e}from"../../chunks/app-Bm7Q-o6G.js";export{e as BlockCrumbs};
+import{yy as e}from"../../chunks/app-oP_GuMWd.js";export{e as BlockCrumbs};
