@@ -1543,7 +1543,7 @@ describe('pre-dialog recovery of a durable workspace gap', () => {
         owner: cause === 'non-owner' ? 'another-user' : USER,
         claimedBy: cause === 'peer claim' ? 'another-client' : undefined,
       })
-      workspaceViewGap.mockResolvedValue(cause === 'transient' ? DRAINING : STRANDED)
+      workspaceViewGap.mockResolvedValue(cause === 'transient' ? DRAINING : cause === 'peer claim' ? null : STRANDED)
       if (cause === 'read-only') Object.defineProperty(repo, 'isReadOnly', {value: true})
       if (cause === 'local-only') remoteSyncActive.mockReturnValue(false)
       await invoke(repo)
