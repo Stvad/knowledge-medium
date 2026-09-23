@@ -128,6 +128,32 @@ const strandEncrypted = async (encryptionKey = key, legacyLocalCopy = false, ove
 const invoke = () => migratePropertiesToBlocksAction({repo}).handler({} as never, {} as never)
 
 describe('encrypted durable gap through the migration gesture', () => {
+  it('does not combine an old mode with a new owner during eligibility', async () => {
+    await strandEncrypted()
+    materializability = 'decrypt'
+    const read = shared.db.getOptional.bind(shared.db)
+    let updated = false
+    const reads = vi.spyOn(shared.db, 'getOptional').mockImplementation(async (sql, params) => {
+      const row = await read(sql, params)
+      if (!updated && sql.includes('properties_migration') && sql.includes('workspaces')) {
+        updated = true
+        await shared.db.execute(
+          "UPDATE workspaces SET properties_migration = 'children', owner_user_id = 'other' WHERE id = ?", [WS])
+      }
+      return row
+    })
+    try {
+      await invoke()
+      expect(updated).toBe(true)
+      expect(ui.confirm).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({childBacked: true}))
+      expect(ui.flip).not.toHaveBeenCalled()
+      expect(ui.fail).not.toHaveBeenCalled()
+      expect(ui.done).toHaveBeenCalledWith(expect.stringContaining('Migrated properties on'))
+    } finally {
+      reads.mockRestore()
+    }
+  }, 20_000) // Real SQLite recovery plus migration; allow gate contention.
+
   it('recovers ciphertext before consent and migrates its actual property value after confirmation', async () => {
     await strandEncrypted()
     materializability = 'decrypt'

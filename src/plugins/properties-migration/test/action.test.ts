@@ -123,9 +123,7 @@ const makeRepo = (
     scanned: 3, applied: 0, deferred: 2, quarantined: 1, skippedStale: 0,
     resolved: 0, reflagged: 0, remainingGap: STRANDED,
   }))
-  // Two readers of the `workspaces` row now — the flip state and the owner.
   const getOptional = vi.fn(async (sql: string) => {
-    if (sql.includes('owner_user_id')) return {owner_user_id: owner}
     if (sql.includes('properties_json')) {
       return claimedBy === undefined ? null : {
         properties_json: JSON.stringify({
@@ -133,7 +131,7 @@ const makeRepo = (
         }),
       }
     }
-    return {properties_migration: flipped ? 'children' : 'cell'}
+    return {properties_migration: flipped ? 'children' : 'cell', owner_user_id: owner}
   })
   const repo = {
     activeWorkspaceId: 'ws-1',
@@ -1024,15 +1022,13 @@ describe('the orphan-definition step', () => {
   })
 
   it('re-checks ownership after the confirmation, which is a user-length pause', async () => {
-    // Ownership can change out of band, or the change can simply reach this
-    // replica during the dialog. It is re-taken because it lives in
-    // `readMigrationEligibility`, which is re-taken — the whole point of putting it there.
     planSynthesis.mockResolvedValue(plan(2))
     const {repo, runPass, getOptional} = makeRepo()
+    const read = getOptional.getMockImplementation()!
     let reads = 0
     getOptional.mockImplementation(async (sql: string) => sql.includes('owner_user_id')
-      ? {owner_user_id: ++reads === 1 ? USER : 'someone-else'}
-      : {properties_migration: 'cell'})
+      ? {properties_migration: 'cell', owner_user_id: ++reads === 1 ? USER : 'someone-else'}
+      : read(sql))
 
     await invoke(repo)
 
@@ -1612,8 +1608,9 @@ describe('pre-dialog recovery of a durable workspace gap', () => {
       const recover = rematerializeWorkspace.getMockImplementation()!
       rematerializeWorkspace.mockImplementation(async () => {
         getOptional.mockImplementation(async sql => {
-          if (sql.includes('properties_migration')) return {properties_migration: 'children'} as never
-          if (sql.includes('owner_user_id') && client === 'non-owner') return {owner_user_id: 'other'} as never
+          if (sql.includes('workspaces')) return {
+            properties_migration: 'children', owner_user_id: client === 'non-owner' ? 'other' : USER,
+          } as never
           return read(sql)
         })
         if (client === 'local-only') remoteSyncActive.mockReturnValue(false)
@@ -1632,7 +1629,7 @@ describe('pre-dialog recovery of a durable workspace gap', () => {
     const read = getOptional.getMockImplementation()!
     openDialog.mockImplementation(async () => {
       getOptional.mockImplementation(async sql => sql.includes('properties_migration')
-        ? {properties_migration: 'children'} as never : read(sql))
+        ? {properties_migration: 'children', owner_user_id: USER} as never : read(sql))
       return true
     })
     await invoke(repo)
