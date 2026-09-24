@@ -317,7 +317,7 @@ export const queryRegressions = (
 /** The costliest query in a session, by the p95 the comparison actually reads:
  *  the one measured with the DB connection pool free.
  *
- *  Lives HERE, beside `invalidationsPerWrite`, for that function's reason: a
+ *  Lives HERE, beside `reResolvesPerWrite`, for that function's reason: a
  *  table charting a different number than the alarm fires on is worse than no
  *  table, and two definitions of "the slowest query" is how they would come to
  *  differ.
@@ -344,27 +344,51 @@ export const slowestQuery = (
   return worst
 }
 
-/** Handle invalidations per write — catches a bug latency can't see: an
+/** Writes a session needs before its fan-out rate is compared. Below this the
+ *  rate is not a noisier sample of an editing session's but a different
+ *  population — idle sessions sit well under editing ones — and a median over
+ *  both measures the mix. */
+export const MIN_FANOUT_WRITES = 100
+
+/** Loader re-resolves per write — catches a bug latency can't see: an
  *  over-broad invalidation dep re-resolves on writes that don't concern it,
- *  so p95 never moves. `loaderInvalidations`, not `loaderRuns`, which a cold `load()` also bumps. */
-export const invalidationsPerWrite = (r: InteractionComparable): number | null =>
-  r.writes > 0 ? (r.fanout.loaderInvalidations ?? 0) / r.writes : null
+ *  so p95 never moves.
+ *
+ *  The re-resolves the synchronous invalidation walk STARTED — the only ones a
+ *  write can be charged with, since `fanout` is measured across that walk
+ *  alone. Anything a load's settle decides is left out, ACCEPTED: a rerun a
+ *  write queued behind a load in flight runs or is dropped by who is subscribed
+ *  THEN, and a change matched against a dep declared after the write was not a
+ *  dep when it landed. A write that finds the handle idle — the common case —
+ *  is counted against every dep the handle has registered, over-broad or not.
+ *  An exact count of queued reruns needs the handle store to count subscribed
+ *  invalidations at the write; not done, since records without that counter
+ *  could not be told from sessions where it never moved.
+ *
+ *  Not `loaderInvalidations`: an invalidation that finds no subscriber only
+ *  marks the handle stale, and how many such handles are alive moves with the
+ *  session, not the code. Not the page-wide `loaderRuns` either, which a
+ *  mount's cold `load()` also bumps; none lands inside the walk. */
+export const reResolvesPerWrite = (r: InteractionComparable): number | null =>
+  r.writes >= MIN_FANOUT_WRITES ? (r.fanout.loaderRuns ?? 0) / r.writes : null
 
 export const fanoutRegression = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
 ): TrendResult => {
-  const perWrite = invalidationsPerWrite
-  const now = perWrite(current)
-  // No writes means no rate to compare — a missing CURRENT sample, not short
+  const now = reResolvesPerWrite(current)
+  // Too few writes means no rate to compare — a missing CURRENT sample, not short
   // history: more stored sessions can't supply this session's rate, though a live edit can.
   if (now === null) return NO_CURRENT_SAMPLE
-  const rate = (rs: readonly InteractionComparable[]) =>
-    rs.map(perWrite).filter((v): v is number => v !== null)
+  // Filtered BEFORE windowing: light sessions are routine, and sliced first, one
+  // among the last two leaves the recent side short and the metric unjudged.
+  // Within the loaded window only: reaching past `HISTORY_LIMIT` for more
+  // editing sessions would judge against builds the recency cap exists to drop.
+  const rates = history.map(reResolvesPerWrite).filter((v): v is number => v !== null)
   return trendRegression(
-    { metric: 'fanout:invalidationsPerWrite', label: 'handle invalidations per write', unit: 'ratio', minAbsolute: 0 },
-    [now, ...rate(history.slice(0, RECENT_WINDOW - 1))],
-    rate(baselineWindow(history)),
+    { metric: 'fanout:reResolvesPerWrite', label: 're-resolves per write', unit: 'ratio', minAbsolute: 0 },
+    [now, ...rates.slice(0, RECENT_WINDOW - 1)],
+    baselineWindow(rates),
   )
 }
 
