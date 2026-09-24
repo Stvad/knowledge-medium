@@ -24,10 +24,8 @@ import {
   roundToProp,
 } from './schema'
 
-/** The Strength Plan v2 outline root from the handoff. A default only —
- *  overridable via the settings block's `plan-root`, and resolvable by the
- *  "Strength Plan v2" alias when neither points anywhere live. */
-export const DEFAULT_PLAN_ROOT_ID = 'ed2e8053-ea55-4130-9207-01409192a4aa'
+/** Resolves the plan outline when the settings block's `plan-root` points
+ *  nowhere live. */
 export const PLAN_ALIAS = 'Strength Plan v2'
 
 const read = <T>(block: BlockData | null, schema: PropertySchema<T>): T => {
@@ -53,10 +51,9 @@ const resolvePlanRoot = async (
   settings: BlockData | null,
 ): Promise<string | null> => {
   const configured = read(settings, planRootProp)
-  const candidates = [configured, DEFAULT_PLAN_ROOT_ID].filter(id => id.length > 0)
-  for (const id of candidates) {
-    const block = await repo.block(id).load()
-    if (block && !block.deleted) return id
+  if (configured.length > 0) {
+    const block = await repo.block(configured).load()
+    if (block && !block.deleted) return configured
   }
   const aliased = await repo.runQuery<{id: string} | null>('core.aliasLookup', {
     alias: PLAN_ALIAS,
